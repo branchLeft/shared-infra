@@ -1,0 +1,204 @@
+---
+# Test setup only, never part of the role. It makes the instance look as an app host does
+# after first boot and after the deploy tooling: the CI deploy account with a bash shell,
+# its sudoers grant, the host-level key installed as a line of `restrict` and nothing
+# else, a stand-in for the deploy wrapper that records what it is called with, and the
+# stack directories of two stacks the host already runs. It also starts a real sshd of
+# its own on a local port, so the verify play can connect with each key and see what the
+# forced command lets through. The key pairs are made here, inside the container, for
+# this run only: no key leaves it except the public halves the converge reads.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    # sudo is already in the image; naming it makes the build stop here, with its own
+    # message, on an image that ever drops it.
+    - name: Install the SSH server, its client and sudo
+      ansible.builtin.apt:
+        name:
+          - openssh-server
+          - openssh-client
+          - sudo
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # Shell, home and an unlocked-but-unusable password, as first boot leaves them:
+    # sshd's own account check passes it, and a password cannot be used.
+    - name: Make the CI deploy account
+      ansible.builtin.user:
+        name: deploy
+        comment: CI deploy account
+        shell: /bin/bash
+        create_home: true
+        password: '*'
+      no_log: true
+
+    - name: Put the sudoers drop-in in place as first boot does
+      ansible.builtin.copy:
+        content: "deploy ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-deploy\n"
+        dest: /etc/sudoers.d/50-branchleft-deploy
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -cf %s
+
+    - name: Make the directory the stand-in wrapper records into
+      ansible.builtin.file:
+        path: '{{ scenario_record_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The real wrapper is deploy_tooling's. This one does only what the cases need to see:
+    # how many arguments it got, which, and what arrived on its standard input.
+    - name: Put a stand-in for the deploy wrapper in place
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          record={{ scenario_record_dir }}
+          printf '%s\n' "$#" > "$record/argc"
+          : > "$record/argv"
+          for argument in "$@"; do printf '%s\n' "$argument" >> "$record/argv"; done
+          cat > "$record/stdin"
+        dest: /usr/local/sbin/branchleft-deploy
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Make the directory the key pairs are made in
+      ansible.builtin.file:
+        path: '{{ scenario_key_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    # No module in the pinned collections makes an SSH key pair, so the command is used
+    # (ANS-9). The creates argument makes it report truthfully.
+    - name: Make one throwaway key pair for each key the scenario uses
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - 'PLACEHOLDER_{{ item }}'
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - host
+        - a
+        - a2
+        - b
+        - adopted
+        - canary
+      no_log: true
+
+    - name: Read the host-level public key
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/host.pub'
+      register: deploy_slot_keys_scenario_prepare_host_public
+      no_log: true
+
+    - name: Make the account's .ssh directory as first boot makes it
+      ansible.builtin.file:
+        path: /home/deploy/.ssh
+        state: directory
+        owner: deploy
+        group: deploy
+        mode: '0700'
+
+    # The host-level key with `restrict` and no forced command, as the platform's first
+    # boot installs it. It is the key the website's deploy still uses, so the role must
+    # leave it byte for byte as it is.
+    - name: Put the host-level key in place
+      ansible.builtin.copy:
+        content: "restrict {{ deploy_slot_keys_scenario_prepare_host_public.content | b64decode | trim }}\n"
+        dest: /home/deploy/.ssh/authorized_keys
+        owner: deploy
+        group: deploy
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Keep the host-level line to compare after the role
+      ansible.builtin.copy:
+        src: /home/deploy/.ssh/authorized_keys
+        dest: '{{ scenario_record_dir }}/host-line'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Make the stack directories of the stacks the host already runs
+      ansible.builtin.file:
+        path: '/opt/branchleft/{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop: '{{ scenario_existing_stacks }}'
+
+    - name: Make the directory sshd separates privileges in
+      ansible.builtin.file:
+        path: /run/sshd
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Make the SSH server's host keys
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -A
+        creates: /etc/ssh/ssh_host_ed25519_key
+
+    # Close to the Debian defaults: key authentication only, StrictModes on, the default
+    # AuthorizedKeysFile, and the sftp subsystem present so a refused one can be seen. Only
+    # the port and the address are the test's, and PAM is off because a container has no
+    # login session for it to open. The real app host's own sshd configuration is read on
+    # the first live run.
+    - name: Put the test SSH server's configuration in place
+      ansible.builtin.copy:
+        content: |
+          Port {{ scenario_ssh_port }}
+          ListenAddress 127.0.0.1
+          HostKey /etc/ssh/ssh_host_ed25519_key
+          PidFile /run/sshd-slot-test.pid
+          UsePAM no
+          PasswordAuthentication no
+          KbdInteractiveAuthentication no
+          PubkeyAuthentication yes
+          StrictModes yes
+          AllowUsers deploy
+          Subsystem sftp /usr/lib/openssh/sftp-server
+        dest: /etc/ssh/sshd_config_slot_test
+        owner: root
+        group: root
+        mode: '0644'
+        validate: /usr/sbin/sshd -t -f %s
+
+    - name: Start the test SSH server
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sshd
+          - -f
+          - /etc/ssh/sshd_config_slot_test
+          - -E
+          - '{{ scenario_record_dir }}/sshd.log'
+        creates: /run/sshd-slot-test.pid
+
+    - name: Wait for the test SSH server to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: '{{ scenario_ssh_port }}'
+        timeout: 30

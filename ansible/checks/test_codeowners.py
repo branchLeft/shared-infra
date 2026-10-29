@@ -94,6 +94,11 @@ PULL_ROLE_PATHS = [
     "ansible/roles/ansible_runtime/tasks/main.yml",
     "ansible/roles/broker_deploy/tasks/_sudoers.yml",
     "ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2",
+    "ansible/roles/deploy_slot_keys/tasks/main.yml",
+    "ansible/roles/deploy_slot_keys/library/deploy_slot_keys_reconcile.py",
+    "ansible/roles/deploy_slot_keys/tests/unit/test_deploy_slot_keys_reconcile.py",
+    "ansible/roles/deploy_slot_keys/README.md",
+    "ansible/checks/test_deploy_slot_keys_single_home.py",
 ]
 
 # The loader of every pulled host's private role inputs is the owner's alone (owner ruling,
