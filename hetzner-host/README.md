@@ -222,15 +222,14 @@ than a caret range: the provider version is part of every resource's URN, so
 a consumer resolving a different version than this package's own resources
 use would put one topology behind two provider instances. Install your own
 `@pulumi/hcloud` at the exact version this package's `peerDependencies`
-names; npm refuses the install otherwise rather than silently nesting a
-second copy.
+names, so the install resolves one copy rather than nesting a second.
 
 ## Local development
 
 ```bash
-nvm use && npm ci
-npm run typecheck
-npm test
+nvm use && pnpm install --frozen-lockfile
+pnpm run typecheck
+pnpm run test
 ```
 
 ## Notes kept from the source

@@ -7,7 +7,7 @@ file modes and uid/gid on the host — while every container in both stacks read
 its config through a bind mount **as the container-side user**, not as root.
 
 That combination broke a real deploy. `prometheus.yml` is written by
-`npm run render` (a Vitest file snapshot), which left it `0600` in one
+`pnpm run render` (a Vitest file snapshot), which left it `0600` in one
 workstation checkout. Git records `100644` and cannot see the difference — it
 tracks only the executable bit — so the mode is invisible to review, to
 `git status`, and to CI, which checks out its own copy at `0644`. `rsync -av`

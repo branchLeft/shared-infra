@@ -65,7 +65,7 @@ on:
   merge_group:
     types: [checks_requested]
 
-# `packages: read` is what lets `npm ci` fetch @branchleft/* from GitHub
+# `packages: read` is what lets `pnpm install` fetch @branchleft/* from GitHub
 # Packages. The registry rejects anonymous requests even for a public package,
 # so the run's own GITHUB_TOKEN is passed as NODE_AUTH_TOKEN below; no
 # long-lived credential is involved.
@@ -93,23 +93,26 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       - name: Format check
-        run: npm run format:check
+        run: pnpm run format:check
 
   mail-typecheck:
     name: Type check (mail)
@@ -131,21 +134,24 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: mail/.nvmrc
-          cache: npm
-          cache-dependency-path: mail/package-lock.json
+          cache: pnpm
+          cache-dependency-path: mail/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
   mail-provision-checks:
     name: Lint + test (mail/provision)
@@ -190,16 +196,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -212,13 +221,13 @@ jobs:
       # fails as `Tsconfig not found`, which reads like a missing file rather
       # than a missing install.
       - name: Install the repository root's dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         working-directory: .
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       # estate.ts constructs resources at module scope, so it is not
       # unit-testable here -- `pulumi preview` is what covers it. network.ts
@@ -229,11 +238,11 @@ jobs:
       # @branchleft/hetzner-host, whose own CI job below runs their suite.
       # hetznerHost.test.ts is what remains here: it constructs a `Host` from
       # that package under mocks and proves this project can actually resolve
-      # and use it -- the `file:` dependency's own build has to have worked
+      # and use it -- the `link:` dependency's own build has to have worked
       # for this step to pass, which is exactly the failure mode a version
       # mismatch or a broken package boundary would produce.
       - name: Unit tests
-        run: npm test
+        run: pnpm run test
 
   hetzner-host-typecheck:
     name: Type check + test (hetzner-host)
@@ -257,21 +266,24 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: hetzner-host/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner-host/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner-host/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       # cloudInit.ts renders the one document that grants the CI deploy
       # account its sudo rule, from a value that arrives as stack config;
@@ -279,7 +291,7 @@ jobs:
       # at all. Both are create-time-only and in `ignoreChanges`, so a wrong
       # answer is permanent and appears in no later diff.
       - name: Unit tests
-        run: npm test
+        run: pnpm run test
 
   hetzner-provision-checks:
     name: Lint + test (hetzner/provision)
@@ -483,7 +495,7 @@ jobs:
         # `chmod a+r` first: these images run as a non-root user, and a bind
         # mount is read as that container-side user regardless of who wrote
         # the file. A fresh checkout here is 0644, but a workstation checkout
-        # need not be -- `npm run render` rewrites prometheus.yml in place and
+        # need not be -- `pnpm run render` rewrites prometheus.yml in place and
         # left it 0600 once, which git cannot see (it tracks only the exec
         # bit) and which `rsync -av` then copied faithfully onto the host,
         # crash-looping Prometheus. This step cannot catch that, because it
@@ -952,7 +964,7 @@ jobs:
               - 'mail/Pulumi.yaml'
               - 'mail/Pulumi.production.yaml'
               - 'mail/package.json'
-              - 'mail/package-lock.json'
+              - 'mail/pnpm-lock.yaml'
               - 'mail/.nvmrc'
               - 'mail/tsconfig.json'
               - 'scripts/assert-no-hetzner-deletes.py'
@@ -966,7 +978,7 @@ jobs:
               - 'hetzner/Pulumi.yaml'
               - 'hetzner/Pulumi.production.yaml'
               - 'hetzner/package.json'
-              - 'hetzner/package-lock.json'
+              - 'hetzner/pnpm-lock.yaml'
               - 'hetzner/.nvmrc'
               - 'hetzner/tsconfig.json'
               - 'hetzner-host/**'
@@ -978,7 +990,7 @@ jobs:
               - 'hetzner/projects.ts'
               - 'hetzner/estate/**'
               - 'hetzner/package.json'
-              - 'hetzner/package-lock.json'
+              - 'hetzner/pnpm-lock.yaml'
               - 'hetzner/.nvmrc'
               - 'hetzner/tsconfig.json'
               - 'hetzner-host/**'
@@ -1078,16 +1090,19 @@ jobs:
             fi
           done
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: mail/.nvmrc
-          cache: npm
-          cache-dependency-path: mail/package-lock.json
+          cache: pnpm
+          cache-dependency-path: mail/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1230,16 +1245,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: mail/.nvmrc
-          cache: npm
-          cache-dependency-path: mail/package-lock.json
+          cache: pnpm
+          cache-dependency-path: mail/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1391,16 +1409,19 @@ jobs:
             fi
           done
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1598,16 +1619,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1799,12 +1823,15 @@ jobs:
             fi
           done
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       # The estate project shares hetzner/'s node_modules by design — its
@@ -1812,7 +1839,7 @@ jobs:
       # @pulumi/hcloud (see estate.ts's header).
       - name: Install dependencies
         working-directory: hetzner
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1998,17 +2025,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
         working-directory: hetzner
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -572,8 +572,8 @@ interoperate across the boundary — see the file's own comment for why that is
 not guaranteed for free.
 
 ```bash
-nvm use && npm test          # from hetzner/ (hetznerHost.test.ts)
-nvm use && npm test          # from hetzner-host/ (cloudInit.ts, host.ts)
+nvm use && pnpm run test         # from hetzner/ (hetznerHost.test.ts)
+nvm use && pnpm run test         # from hetzner-host/ (cloudInit.ts, host.ts)
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
@@ -597,11 +597,11 @@ renderer, its tests, and the directory those tests produce.
   committed copy no longer matches the registry:
 
 ```bash
-nvm use && npm run render    # from hetzner/, rewrites edge/stack/
-nvm use && npm test          # from hetzner/, fails if it is stale
+nvm use && pnpm run render    # from hetzner/, rewrites edge/stack/
+nvm use && pnpm run test         # from hetzner/, fails if it is stale
 ```
 
-Both need the **repository root's** `npm ci` to have been run as well as this
+Both need the **repository root's** `pnpm install --frozen-lockfile` to have been run as well as this
 project's. The suite imports the root's `sites.ts`, Vitest loads the tsconfig
 nearest to that file to transform it, and that tsconfig extends a package that
 only resolves from a `node_modules` beside it. Without the root install the

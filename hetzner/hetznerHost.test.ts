@@ -3,9 +3,9 @@ import * as pulumi from '@pulumi/pulumi';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 /**
- * `@branchleft/hetzner-host` is a `file:` dependency, not an npm workspace, so
+ * `@branchleft/hetzner-host` is a `link:` dependency, not a workspace member, so
  * it resolves its *own* `@pulumi/pulumi` and `@pulumi/hcloud` from its own
- * `node_modules` rather than being hoisted into this project's. `npm ls`
+ * `node_modules` rather than being hoisted into this project's. `pnpm ls`
  * confirms two physically separate copies of each package (both at the
  * identical pinned version). Pulumi's SDK is built to tolerate that — `Output`
  * uses a marker property rather than `instanceof` specifically so consumers
