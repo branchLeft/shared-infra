@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 from check_enrolment import HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
 
-ENROLLED = ("edge1", "ops1", "app1")
+ENROLLED = ("edge1", "ops1", "app1", "db1")
 SECOND_PLAY = "- name: Second play\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n"
 # Each text is one more key of the play, at the play's indent, appended after `roles`.
 EXTRA_PLAY_KEYS = {
@@ -137,6 +137,14 @@ class HostRoleLists(unittest.TestCase):
         self._list_file(text.replace("  - status_page\n", "", 1))
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
+    # db1's first enrolment is pull-only: its playbook applies the two pull roles and none of the
+    # database roles on its list, which R9 allows because a playbook may apply a subset.
+    def test_db1_applies_only_the_pull_roles(self) -> None:
+        text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
+        names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
+        self.assertEqual(names, ["ansible_runtime", "pull_trigger"])
+        self.assertEqual(check(ROOT), [])
+
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
     # Most of these roles have no directory on main, so a name with no role behind it passes too.
     def test_every_listed_role_is_accepted_for_its_host(self) -> None:
@@ -149,7 +157,12 @@ class HostRoleLists(unittest.TestCase):
 
     # Rule: a role that is on no list is refused, on each host.
     def test_an_unlisted_role_is_refused(self) -> None:
-        for host, name in (("edge1", "made_up"), ("ops1", "signer_override"), ("app1", "x9")):
+        for host, name in (
+            ("edge1", "made_up"),
+            ("ops1", "signer_override"),
+            ("app1", "x9"),
+            ("db1", "made_up"),
+        ):
             with self.subTest(host=host, role=name):
                 self._playbook(host, _entry(name))
                 self._assert_refused(host, f"role {name} is not on {host}'s list")
@@ -164,6 +177,9 @@ class HostRoleLists(unittest.TestCase):
             ("app1", "website_app1", "      become: false\n"),
             ("app1", "deploy_tooling", "      environment:\n        A: b\n"),
             ("app1", "host_baseline", "      delegate_to: elsewhere\n"),
+            ("db1", "db1_stack", "      vars:\n        db1_stack_exporter_password: x\n"),
+            ("db1", "db1_grants", "      vars:\n        db1_grants_tenants: [x]\n"),
+            ("db1", "db1_grants", "      when: false\n"),
         )
         for host, name, extra in cases:
             with self.subTest(host=host, role=name, extra=extra):
@@ -323,6 +339,9 @@ class HostRoleLists(unittest.TestCase):
             ("ops1", "monitoring_stack"),
             ("app1", "breakglass_mint_host"),
             ("app1", "control_plane"),
+            ("ops1", "db1_stack"),
+            ("db1", "control_plane"),
+            ("db1", "host_baseline"),
         )
         for host, name in cases:
             with self.subTest(host=host, role=name):
