@@ -8,7 +8,8 @@ This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 `roles/ansible_runtime` and `roles/pull_trigger`) and `db1` (`playbooks/db1.yml`, which applies
-the same two pull roles; `roles/db1_stack` and `roles/db1_grants` are left out of it);
+the same two pull roles and then `roles/host_inputs`, the loader of the host's private inputs;
+`roles/db1_stack` and `roles/db1_grants` are left out of it);
 the other trees hold only what those hosts need.
 The break-glass roles `roles/breakglass_mint_host` (for ops1) and
 `roles/breakglass_grant_host` (for app1) are not yet applied by any playbook: they
@@ -566,8 +567,9 @@ oversight. Each is a decision the standard assigns to later work.
   merge on its own.
 - **Delivery.** Each of edge1, db1, app1 and ops1 has a playbook under `playbooks/`.
   edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
-  playbook applies the same two pull roles, and its trust file is empty until the owner
-  rules the signer, so db1 refuses every run until then. ANS-17 describes the only approved path. The trigger is
+  playbook applies the same two pull roles and then `roles/host_inputs`, which refuses the
+  run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
+  its trust file is empty until the owner rules the signer, so db1 refuses every run until then. ANS-17 describes the only approved path. The trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
   nothing in this repo calls that workflow yet.
 - **Reuse by other repositories.** The harness is code another repository may

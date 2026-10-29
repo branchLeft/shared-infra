@@ -17,6 +17,8 @@ from check_enrolment import ROOT, check
 
 # A playbook that applies the pull on edge1: it is refused in any name the pull cannot read.
 EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
+# The loader's entry in db1's playbook, as it stands on main.
+LOADER_LINE = "    - role: ../roles/host_inputs # noqa: role-name[path]\n"
 
 
 class RealTree(unittest.TestCase):
@@ -185,6 +187,47 @@ class Sabotage(unittest.TestCase):
             "        db1_stack_exporter_password: x\n",
         )
         self._assert_rule("R2 db1.yml")
+
+    # R10: the loader of a host's private inputs is the first role after the pull roles, so no
+    # role runs before the inputs are loaded or the run is refused. The positive control first:
+    # a role after the loader passes, so a check that refused every extra role would not pass.
+    def test_r10_a_role_after_the_loader_passes(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            LOADER_LINE,
+            LOADER_LINE + "    - role: ../roles/db1_stack # noqa: role-name[path]\n",
+        )
+        self.assertEqual(check(self.root), [])
+
+    # R10, the sabotage: a role before the loader is refused by name.
+    def test_r10_a_role_before_the_loader_is_refused(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            LOADER_LINE,
+            "    - role: ../roles/db1_stack # noqa: role-name[path]\n" + LOADER_LINE,
+        )
+        findings = self._assert_rule("R10 db1.yml")
+        self.assertTrue(any("must be the first role after the pull roles" in f for f in findings))
+
+    # R10, the sabotage: the loader behind two roles is refused too, not only behind one.
+    def test_r10_the_loader_last_of_three_is_refused(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            LOADER_LINE,
+            "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
+            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
+        )
+        self._assert_rule("R10 db1.yml")
+
+    # R2: the loader is on db1's list only, so another host cannot apply it.
+    def test_r10_the_loader_on_another_host_is_refused(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._assert_rule("R2 edge1.yml: role host_inputs is not on edge1's list")
 
     # R5: a trust file holds a key other than the signer list.
     def test_r5_trust_file_holds_a_second_key(self) -> None:

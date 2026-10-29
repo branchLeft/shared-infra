@@ -96,6 +96,17 @@ PULL_ROLE_PATHS = [
     "ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2",
 ]
 
+# The loader of every pulled host's private role inputs is the owner's alone (owner ruling,
+# option A, branchLeft/workspace#2739): its tasks, its per-host rows, its molecule proof of the
+# refusals, and its README all sit under one path.
+HOST_INPUTS_PATHS = [
+    "ansible/roles/host_inputs/tasks/main.yml",
+    "ansible/roles/host_inputs/vars/main.yml",
+    "ansible/roles/host_inputs/meta/argument_specs.yml",
+    "ansible/roles/host_inputs/molecule/default/verify.yml",
+    "ansible/roles/host_inputs/README.md",
+]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -162,6 +173,9 @@ class CodeownersTests(unittest.TestCase):
     def test_the_pull_roles_and_sudoers_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(PULL_ROLE_PATHS)
 
+    def test_the_host_inputs_loader_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(HOST_INPUTS_PATHS)
+
     def test_the_standards_template_paths_are_owned_by_the_owner(self) -> None:
         self.assert_owned(
             [
@@ -188,7 +202,7 @@ class CodeownersTests(unittest.TestCase):
             "hetzner/scripts/anything.sh",
             "ansible/harness/anything.py",
         }
-        for path in ESTATE_PATHS + GATE_PATHS + PULL_ROLE_PATHS + UNOWNED_PATHS:
+        for path in ESTATE_PATHS + GATE_PATHS + PULL_ROLE_PATHS + HOST_INPUTS_PATHS + UNOWNED_PATHS:
             if path in stands_for_more:
                 continue
             with self.subTest(path=path):
