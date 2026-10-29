@@ -1,0 +1,304 @@
+---
+# The compose template unit retries a failed start, a bounded number of times,
+# and a deploy still sees the failure. The probe instance runs the installed
+# template with its real Restart=, RestartSec= and StartLimit*= (no override
+# shortens them, so the waits below are the unit's own seconds). The docker
+# stand-in fails `compose up` while the counter file holds a number above zero,
+# using one up per call, so every failure is exactly one start attempt.
+#
+# Each scenario ends in one RETRY-OBSERVED line of what was seen, which the CI
+# step that reads the log depends on.
+#
+#   recovery   two failed attempts then success: no start is issued after the first
+#   exhausted  every attempt fails: the unit stops retrying, ends failed, and the
+#              restart that began it exits non-zero
+#   deploy     the wrapper's two explicit restarts after an earlier retry: the
+#              second is not refused as repeated too quickly
+- name: Read the stand-in docker command
+  ansible.builtin.slurp:
+    src: /usr/bin/docker
+  register: deploy_tooling_scenario_docker_standin
+
+# The path is written in prepare.yml and here, so a change in only one fails now
+# and does not leave the scenarios failing nothing.
+- name: Assert the stand-in docker command reads the counter file
+  ansible.builtin.assert:
+    that:
+      - "'/var/tmp/molecule-docker-up-failures' in (deploy_tooling_scenario_docker_standin.content | b64decode)"
+    fail_msg: The docker stand-in does not read /var/tmp/molecule-docker-up-failures.
+    quiet: true
+
+- name: Put the probe instance at rest
+  ansible.builtin.include_tasks: probe_reset.yml
+
+- name: Read the probe instance before any scenario
+  ansible.builtin.include_tasks: probe_read.yml
+
+- name: Assert the installed unit retries and bounds the retries
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_probe.Restart == 'on-failure'
+      - deploy_tooling_scenario_probe.StartLimitBurst | int >= 3
+    fail_msg: 'The installed compose unit does not carry the retry: {{ deploy_tooling_scenario_probe }}'
+    quiet: true
+
+- name: Keep the limit the unit sets
+  ansible.builtin.set_fact:
+    deploy_tooling_scenario_burst: '{{ deploy_tooling_scenario_probe.StartLimitBurst | int }}'
+
+- name: Scenarios of the retry case
+  block:
+    # Recovery: the first two `compose up` calls fail, the third succeeds.
+    - name: Recovery, make the next two starts fail
+      ansible.builtin.copy:
+        content: "2\n"
+        dest: /var/tmp/molecule-docker-up-failures
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Recovery, start the probe instance once
+      ansible.builtin.command:
+        argv: [systemctl, start, 'branchleft-compose@Molecule-Probe.service']
+      register: deploy_tooling_scenario_recovery_start
+      changed_when: false
+      failed_when: false
+
+    - name: Recovery, wait with no further start for the unit to recover
+      ansible.builtin.include_tasks: probe_wait.yml
+      vars:
+        deploy_tooling_scenario_wait_state: active
+        deploy_tooling_scenario_wait_restarts: 0
+        deploy_tooling_scenario_wait_polls: 30
+
+    - name: Recovery, read the probe instance
+      ansible.builtin.include_tasks: probe_read.yml
+
+    - name: Recovery, read what is left of the counter
+      ansible.builtin.slurp:
+        src: /var/tmp/molecule-docker-up-failures
+      register: deploy_tooling_scenario_recovery_counter
+
+    - name: Recovery, report what was observed
+      ansible.builtin.debug:
+        msg: >-
+          RETRY-OBSERVED scenario=recovery start_rc={{ deploy_tooling_scenario_recovery_start.rc }}
+          ActiveState={{ deploy_tooling_scenario_probe.ActiveState }}
+          SubState={{ deploy_tooling_scenario_probe.SubState }}
+          Result={{ deploy_tooling_scenario_probe.Result }}
+          NRestarts={{ deploy_tooling_scenario_probe.NRestarts }}
+          StartLimitBurst={{ deploy_tooling_scenario_burst }}
+          failures_left={{ deploy_tooling_scenario_recovery_counter.content | b64decode | trim }}
+
+    - name: Recovery, assert two failed attempts and then success with no hand
+      ansible.builtin.assert:
+        that:
+          - deploy_tooling_scenario_probe.ActiveState == 'active'
+          - deploy_tooling_scenario_probe.SubState == 'exited'
+          - deploy_tooling_scenario_probe.Result == 'success'
+          - deploy_tooling_scenario_probe.NRestarts == '2'
+          - (deploy_tooling_scenario_recovery_counter.content | b64decode | trim) == '0'
+        fail_msg: 'The probe did not recover on its own: {{ deploy_tooling_scenario_probe }}'
+        quiet: true
+
+    # Exhausted: every attempt fails.
+    - name: Exhausted, put the probe instance at rest
+      ansible.builtin.include_tasks: probe_reset.yml
+
+    - name: Exhausted, make every start fail
+      ansible.builtin.copy:
+        content: "1000\n"
+        dest: /var/tmp/molecule-docker-up-failures
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Exhausted, restart the probe instance as the deploy wrapper does
+      ansible.builtin.command:
+        argv: [systemctl, restart, 'branchleft-compose@Molecule-Probe.service']
+      register: deploy_tooling_scenario_exhausted_restart
+      changed_when: false
+      failed_when: false
+
+    - name: Exhausted, wait for the retries to stop
+      ansible.builtin.include_tasks: probe_wait.yml
+      vars:
+        deploy_tooling_scenario_wait_state: failed
+        deploy_tooling_scenario_wait_restarts: '{{ deploy_tooling_scenario_burst | int - 1 }}'
+        deploy_tooling_scenario_wait_polls: 40
+
+    - name: Exhausted, read the probe instance
+      ansible.builtin.include_tasks: probe_read.yml
+
+    - name: Exhausted, keep the state as first read
+      ansible.builtin.set_fact:
+        deploy_tooling_scenario_exhausted_first: '{{ deploy_tooling_scenario_probe }}'
+
+    # A retry still pending would fire inside this wait.
+    - name: Exhausted, wait longer than the pause between retries
+      ansible.builtin.wait_for:
+        timeout: 35
+
+    - name: Exhausted, read the probe instance again
+      ansible.builtin.include_tasks: probe_read.yml
+
+    - name: Exhausted, read what is left of the counter
+      ansible.builtin.slurp:
+        src: /var/tmp/molecule-docker-up-failures
+      register: deploy_tooling_scenario_exhausted_counter
+
+    - name: Exhausted, read the failed units
+      ansible.builtin.command:
+        argv: [systemctl, list-units, --failed, --plain, --no-legend, --no-pager]
+      register: deploy_tooling_scenario_exhausted_failed_units
+      changed_when: false
+
+    - name: Exhausted, report what was observed
+      ansible.builtin.debug:
+        msg: >-
+          RETRY-OBSERVED scenario=exhausted restart_rc={{ deploy_tooling_scenario_exhausted_restart.rc }}
+          ActiveState={{ deploy_tooling_scenario_probe.ActiveState }}
+          SubState={{ deploy_tooling_scenario_probe.SubState }}
+          Result={{ deploy_tooling_scenario_probe.Result }}
+          NRestarts={{ deploy_tooling_scenario_probe.NRestarts }}
+          StartLimitBurst={{ deploy_tooling_scenario_burst }}
+          attempts={{ 1000 - (deploy_tooling_scenario_exhausted_counter.content | b64decode | trim | int) }}
+          listed_failed={{ 'branchleft-compose@Molecule-Probe.service' in deploy_tooling_scenario_exhausted_failed_units.stdout }}
+          restart_stderr={{ deploy_tooling_scenario_exhausted_restart.stderr_lines | join(' | ') }}
+
+    - name: Exhausted, assert the retries stop, the unit stays failed and the restart still fails
+      ansible.builtin.assert:
+        that:
+          - deploy_tooling_scenario_exhausted_restart.rc != 0
+          - deploy_tooling_scenario_probe.ActiveState == 'failed'
+          - deploy_tooling_scenario_probe.Result in ['start-limit-hit', 'exit-code']
+          - deploy_tooling_scenario_probe.NRestarts | int <= deploy_tooling_scenario_burst | int
+          - deploy_tooling_scenario_probe.NRestarts == deploy_tooling_scenario_exhausted_first.NRestarts
+          - deploy_tooling_scenario_probe.InvocationID == deploy_tooling_scenario_exhausted_first.InvocationID
+          - 1000 - (deploy_tooling_scenario_exhausted_counter.content | b64decode | trim | int) <= deploy_tooling_scenario_burst | int
+          - "'branchleft-compose@Molecule-Probe.service' in deploy_tooling_scenario_exhausted_failed_units.stdout"
+        fail_msg: >-
+          The retries did not stop as bounded: restart rc {{ deploy_tooling_scenario_exhausted_restart.rc }},
+          {{ deploy_tooling_scenario_probe }}, failed units {{ deploy_tooling_scenario_exhausted_failed_units.stdout_lines }}
+        quiet: true
+
+    # Deploy: an earlier failed start that retried, then the wrapper's new-pin
+    # restart (fails) and its rollback restart (the stand-in has failed once, so
+    # it succeeds).
+    - name: Deploy, put the probe instance at rest
+      ansible.builtin.include_tasks: probe_reset.yml
+
+    - name: Deploy, make the next start fail once
+      ansible.builtin.copy:
+        content: "1\n"
+        dest: /var/tmp/molecule-docker-up-failures
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Deploy, start the probe instance, whose first start fails and whose retry succeeds
+      ansible.builtin.command:
+        argv: [systemctl, start, 'branchleft-compose@Molecule-Probe.service']
+      register: deploy_tooling_scenario_deploy_start
+      changed_when: false
+      failed_when: false
+
+    - name: Deploy, wait for the retry to bring the unit up
+      ansible.builtin.include_tasks: probe_wait.yml
+      vars:
+        deploy_tooling_scenario_wait_state: active
+        deploy_tooling_scenario_wait_restarts: 0
+        deploy_tooling_scenario_wait_polls: 20
+
+    - name: Deploy, make the next start fail once more
+      ansible.builtin.copy:
+        content: "1\n"
+        dest: /var/tmp/molecule-docker-up-failures
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Deploy, restart for the new pin
+      ansible.builtin.command:
+        argv: [systemctl, restart, 'branchleft-compose@Molecule-Probe.service']
+      register: deploy_tooling_scenario_deploy_new_pin
+      changed_when: false
+      failed_when: false
+
+    - name: Deploy, restart for the rollback
+      ansible.builtin.command:
+        argv: [systemctl, restart, 'branchleft-compose@Molecule-Probe.service']
+      register: deploy_tooling_scenario_deploy_rollback
+      changed_when: false
+      failed_when: false
+
+    - name: Deploy, read the probe instance after the rollback
+      ansible.builtin.include_tasks: probe_read.yml
+
+    - name: Deploy, keep the state after the rollback
+      ansible.builtin.set_fact:
+        deploy_tooling_scenario_deploy_after_rollback: '{{ deploy_tooling_scenario_probe }}'
+
+    # A timer left pending by the failed new-pin start would start the unit once
+    # more inside this wait, and the invocation would change.
+    - name: Deploy, wait longer than the pause between retries
+      ansible.builtin.wait_for:
+        timeout: 40
+
+    - name: Deploy, read the probe instance after the wait
+      ansible.builtin.include_tasks: probe_read.yml
+
+    - name: Deploy, report what was observed
+      ansible.builtin.debug:
+        msg: >-
+          RETRY-OBSERVED scenario=deploy start_rc={{ deploy_tooling_scenario_deploy_start.rc }}
+          new_pin_rc={{ deploy_tooling_scenario_deploy_new_pin.rc }}
+          rollback_rc={{ deploy_tooling_scenario_deploy_rollback.rc }}
+          ActiveState={{ deploy_tooling_scenario_probe.ActiveState }}
+          SubState={{ deploy_tooling_scenario_probe.SubState }}
+          Result={{ deploy_tooling_scenario_probe.Result }}
+          NRestarts={{ deploy_tooling_scenario_probe.NRestarts }}
+          StartLimitBurst={{ deploy_tooling_scenario_burst }}
+          timer_cancelled={{ deploy_tooling_scenario_probe.InvocationID == deploy_tooling_scenario_deploy_after_rollback.InvocationID }}
+          new_pin_stderr={{ deploy_tooling_scenario_deploy_new_pin.stderr_lines | join(' | ') }}
+          rollback_stderr={{ deploy_tooling_scenario_deploy_rollback.stderr_lines | join(' | ') }}
+
+    - name: Deploy, assert the wrapper's two restarts were accepted and the rollback held
+      ansible.builtin.assert:
+        that:
+          - deploy_tooling_scenario_deploy_new_pin.rc != 0
+          - deploy_tooling_scenario_deploy_rollback.rc == 0
+          - "'repeated too quickly' not in deploy_tooling_scenario_deploy_new_pin.stderr"
+          - "'repeated too quickly' not in deploy_tooling_scenario_deploy_rollback.stderr"
+          - deploy_tooling_scenario_deploy_after_rollback.ActiveState == 'active'
+          - deploy_tooling_scenario_probe.ActiveState == 'active'
+          - deploy_tooling_scenario_probe.SubState == 'exited'
+          - deploy_tooling_scenario_probe.Result == 'success'
+        fail_msg: >-
+          The wrapper's restarts were not both accepted: new pin rc {{ deploy_tooling_scenario_deploy_new_pin.rc }}
+          {{ deploy_tooling_scenario_deploy_new_pin.stderr }}, rollback rc {{ deploy_tooling_scenario_deploy_rollback.rc }}
+          {{ deploy_tooling_scenario_deploy_rollback.stderr }}, {{ deploy_tooling_scenario_probe }}
+        quiet: true
+  always:
+    - name: Take the failure counter away so the docker stand-in succeeds again
+      ansible.builtin.file:
+        path: /var/tmp/molecule-docker-up-failures
+        state: absent
+
+    - name: Put the probe instance at rest again
+      ansible.builtin.include_tasks: probe_reset.yml
+
+- name: Run the docker stand-in's compose up
+  ansible.builtin.command:
+    argv: [/usr/bin/docker, compose, up, -d]
+  changed_when: false
+
+- name: Read the probe instance after the case
+  ansible.builtin.include_tasks: probe_read.yml
+
+- name: Assert the probe instance is at rest
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_probe.ActiveState == 'inactive'
+    fail_msg: 'The retry case left the probe instance as {{ deploy_tooling_scenario_probe }}'
+    quiet: true
