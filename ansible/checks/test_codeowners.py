@@ -33,8 +33,8 @@ STANDARDS_TEMPLATE = [
 ]
 
 # Estate files the merge script refuses at gate 6: mail/ runs under plan credentials, and every
-# credentialed plan job installs from these lockfiles, pnpm-workspace.yaml files and .npmrc files. A directory path stands
-# for a file under it.
+# credentialed plan job installs from these lockfiles, pnpm-workspace.yaml files and .npmrc files.
+# A directory path stands for a file under it.
 ESTATE_PATHS = [
     "mail/index.ts",
     "pnpm-lock.yaml",
