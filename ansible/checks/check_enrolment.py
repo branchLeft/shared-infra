@@ -1,6 +1,6 @@
 """Check the host playbooks under the gated pull.
 
-Rules R0 to R10, and what each one does not see, are in ansible/checks/README.md. A
+Rules R0 to R11, and what each one does not see, are in ansible/checks/README.md. A
 failure names the rule and the file. This check catches a protected key set outside
 its one file. It does not judge a role edit: nothing here gates one (see checks/README.md).
 """
@@ -109,6 +109,7 @@ ROLE_PATH = "../roles/"
 ROLE_NAME = re.compile(r"[a-z][a-z0-9_]*")
 HOST_NAME = re.compile(r"[a-z][a-z0-9]*")
 PULL_ROLES = frozenset(("ansible_runtime", "pull_trigger"))
+LOADER_ROLE = "host_inputs"
 EXPECTED_COMMON = {
     REMOTE_KEY: REMOTE_URL,
     PLAYBOOK_KEY: DERIVED_PLAYBOOK,
@@ -221,6 +222,11 @@ def _check_roles(label: str, stem: str, roles: object, listed: list[str], out: l
             out.append(f"{label}: role {name} is applied twice")
         else:
             seen.append(name)
+    if LOADER_ROLE in seen and seen[0] != LOADER_ROLE:
+        out.append(
+            f"R11 {stem}.yml: role {LOADER_ROLE} must be the first role after the pull roles, "
+            f"so no role runs before the host's inputs are loaded or refused"
+        )
 
 
 def _check_enrolled(
