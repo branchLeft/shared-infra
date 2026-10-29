@@ -37,6 +37,10 @@ host_inputs_required_by_host:
     - db1_stack_exporter_password
     - db1_grants_tenants
     - db1_grants_ops1_host
+  ops1:
+    - control_plane_app_image
+    - control_plane_env_content
+    - control_plane_masterkey
 
 # A value that is only white space counts as empty. Matched from the start, so
 # \s*\Z holds for the empty string and for blanks and nothing else.

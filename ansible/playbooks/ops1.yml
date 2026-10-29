@@ -1,7 +1,9 @@
 ---
-# ops1: the gated pull. Three roles, in order: the Ansible toolchain this
-# playbook runs with, the trigger that runs it, then the status page, the first
-# service the pull applies to this host. Only this host's name is set
+# ops1: the gated pull. Five roles, in order: the Ansible toolchain this
+# playbook runs with, the trigger that runs it, the loader of the host's private
+# inputs (host_inputs), which stops the run until the owner's root-only file is in
+# place, the status page, then the control plane, which reads its image pin and
+# its two secrets from what the loader sets. Only this host's name is set
 # here; the remote, the playbook allowlist and the signer list come from the shared
 # includes and the one trust file, all loaded through vars_files.
 #
@@ -27,4 +29,6 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/status_page # noqa: role-name[path]
+    - role: ../roles/control_plane # noqa: role-name[path]

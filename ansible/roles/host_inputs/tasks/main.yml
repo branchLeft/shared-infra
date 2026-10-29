@@ -183,6 +183,9 @@
     db1_stack_exporter_password: "{{ host_inputs_doc['db1_stack_exporter_password'] | default(omit) }}"
     db1_grants_tenants: "{{ host_inputs_doc['db1_grants_tenants'] | default(omit) }}"
     db1_grants_ops1_host: "{{ host_inputs_doc['db1_grants_ops1_host'] | default(omit) }}"
+    control_plane_app_image: "{{ host_inputs_doc['control_plane_app_image'] | default(omit) }}"
+    control_plane_env_content: "{{ host_inputs_doc['control_plane_env_content'] | default(omit) }}"
+    control_plane_masterkey: "{{ host_inputs_doc['control_plane_masterkey'] | default(omit) }}"
   no_log: true
   diff: false
 
