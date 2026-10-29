@@ -1,0 +1,37 @@
+---
+# Plants one compose override file in the project directory, applies the role
+# and asserts it was refused with the override check's own message. The file is
+# removed whatever happens. The caller sets override_name.
+- name: Refuse one override file
+  block:
+    - name: Plant the override file
+      ansible.builtin.copy:
+        content: |
+          services: {}
+        dest: '/opt/branchleft/status/{{ override_name }}'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.status_page
+
+    - name: Fail because the role accepted the override file
+      ansible.builtin.fail:
+        msg: The role accepted a project directory with a compose override file.
+  rescue:
+    - name: Assert the override check refused the directory
+      ansible.builtin.assert:
+        that:
+          - "'holds a compose override file' in ansible_failed_result.msg"
+          - override_name in ansible_failed_result.msg
+        quiet: true
+        fail_msg: >-
+          {{ override_name }}: the role did not refuse the directory with the override check.
+          It stopped with: {{ ansible_failed_result.msg }}
+  always:
+    - name: Remove the override file
+      ansible.builtin.file:
+        path: '/opt/branchleft/status/{{ override_name }}'
+        state: absent
