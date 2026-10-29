@@ -54,6 +54,17 @@ REFUSE_LINE = "      ansible.builtin.include_tasks: includes/refuse_other_hosts.
 SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml\n"
 
 
+TRIGGER_LINE = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+# The roles a playbook on main applies after the pull roles. The sabotage cases below start from
+# the pull roles alone, so they strip these first; one test holds the real playbook to them.
+APPLIED_ON_MAIN = {"ops1": ["status_page"]}
+
+
+def _pull_roles_only(text: str) -> str:
+    """Return a playbook without the roles it applies after the trigger."""
+    return text[: text.index(TRIGGER_LINE) + len(TRIGGER_LINE)]
+
+
 def _entry(name: str, extra: str = "") -> str:
     return f"    - role: ../roles/{name}\n{extra}"
 
@@ -66,7 +77,9 @@ class HostRoleLists(unittest.TestCase):
         shutil.copytree(ROOT / "ansible", self.root / "ansible", symlinks=True)
         self.ansible = self.root / "ansible"
         self.original = {
-            host: (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
+            host: _pull_roles_only(
+                (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
+            )
             for host in ENROLLED
         }
         listed = yaml.safe_load((self.ansible / HOST_ROLES_FILE).read_text(encoding="utf-8"))
@@ -101,6 +114,28 @@ class HostRoleLists(unittest.TestCase):
 
     def test_the_real_tree_passes(self) -> None:
         self.assertEqual(check(ROOT), [])
+
+    # The playbooks on main apply exactly the roles named in APPLIED_ON_MAIN after the pull roles.
+    def test_the_playbooks_on_main_apply_the_expected_roles(self) -> None:
+        for host in ENROLLED:
+            text = (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
+            after = text[text.index(TRIGGER_LINE) + len(TRIGGER_LINE) :]
+            expected = "".join(
+                f"    - role: ../roles/{name} # noqa: role-name[path]\n"
+                for name in APPLIED_ON_MAIN.get(host, [])
+            )
+            with self.subTest(host=host):
+                self.assertEqual(after, expected)
+
+    # Safety class: the page is published by a role the owner lists. Take it off ops1's list and the
+    # playbook that applies it is refused. Red with the line removed from the list, green with it.
+    def test_the_status_page_needs_its_place_on_ops1_list(self) -> None:
+        path = self.ansible / HOST_ROLES_FILE
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("  - status_page\n", text, "the sabotage matched nothing")
+        self.assertEqual(self._findings("R2 ops1.yml"), [])
+        self._list_file(text.replace("  - status_page\n", "", 1))
+        self._assert_refused("ops1", "role status_page is not on ops1's list")
 
     # db1's first enrolment is pull-only: its playbook applies the two pull roles and none of the
     # database roles on its list, which R9 allows because a playbook may apply a subset.
