@@ -28,3 +28,4 @@
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
     - role: ../roles/status_page # noqa: role-name[path]
+    - role: ../roles/nextcloud_stack # noqa: role-name[path]
