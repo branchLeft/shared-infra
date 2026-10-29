@@ -1,0 +1,68 @@
+---
+# One refusal case (the loop variable is case, from vars/cases.yml). The host is
+# put in the case's state, the role runs, and it must stop with the case's own code
+# at the front of its message: a refusal for some other reason, a mistyped role name
+# included, does not count as the refusal under test. Whatever happens, the host is
+# put back as the owner leaves it. Every task that handles a sentinel has no_log.
+- name: Run the role in the case's state
+  block:
+    - name: Put the host in the case's state
+      ansible.builtin.include_tasks: 'place_{{ case.kind }}.yml'
+
+    - name: Run the role as the case's enrolled host (db1 unless the case names another)
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      vars:
+        enrolled_host: '{{ case.host | default("db1") }}'
+      when: not (case.no_host | default(false))
+
+    - name: Run the role with no enrolled host
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      when: case.no_host | default(false)
+
+    - name: Fail if the role accepted the state
+      ansible.builtin.fail:
+        msg: The role went on in a state it must refuse.
+  rescue:
+    - name: Record the message the run stopped with
+      ansible.builtin.set_fact:
+        host_inputs_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+  always:
+    - name: Put the host back as the owner leaves it
+      ansible.builtin.include_tasks: restore.yml
+
+- name: Assert the role stopped with this case's own code
+  ansible.builtin.assert:
+    that:
+      - "host_inputs_verify_message.startswith('host_inputs[' ~ case.code ~ ']: ')"
+    fail_msg: >-
+      Case {{ case.name }}: expected a refusal starting host_inputs[{{ case.code }}];
+      got {{ host_inputs_verify_message | truncate(200) }}
+    quiet: true
+
+- name: Assert the message gives the name of the input that is missing
+  ansible.builtin.assert:
+    that:
+      - case.names in host_inputs_verify_message
+    fail_msg: 'Case {{ case.name }}: the message does not name {{ case.names }}.'
+    quiet: true
+  when: case.names is defined
+
+# Every check completes before the first input is set, so a refusal sets none. The
+# facts are asserted undefined, so a value is never in the expression.
+- name: Assert the refusal set no input
+  ansible.builtin.assert:
+    that:
+      - db1_stack_exporter_password is not defined
+      - db1_grants_tenants is not defined
+      - db1_grants_ops1_host is not defined
+    fail_msg: 'Case {{ case.name }}: an input was set although the run was refused.'
+    quiet: true
+
+- name: Assert the refusal message holds no sentinel
+  ansible.builtin.assert:
+    that:
+      - (host_inputs_verify_message | regex_search(host_inputs_verify_pattern)) is none
+    fail_msg: 'Case {{ case.name }}: the refusal message holds a value from the file.'
+    quiet: true

@@ -28,6 +28,7 @@ app1:
   - breakglass_grant_host
   - host_baseline
 db1:
+  - host_inputs
   - db1_stack
   - db1_grants
   - db1_backup_timers
