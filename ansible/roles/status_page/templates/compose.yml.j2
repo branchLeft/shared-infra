@@ -1,0 +1,32 @@
+name: {{ status_page_project_name }}
+
+services:
+  gatus:
+    image: '{{ status_page_image }}'
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    ports:
+      - '{{ status_page_listen_address }}:{{ status_page_port }}:8080'
+    volumes:
+      - ./stack/config.yaml:/config/config.yaml:ro
+      - status-data:/data
+
+  status-test-target:
+    image: '{{ status_page_image }}'
+    restart: unless-stopped
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    volumes:
+      - ./stack/target.yaml:/config/config.yaml:ro
+
+volumes:
+  status-data: {}

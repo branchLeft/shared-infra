@@ -1,0 +1,5 @@
+---
+# The owner's values for the roles edge1 applies. check_enrolment.py (R10) allows these two
+# keys and no others. With the flag false the role leaves the account's keys alone.
+ci_login_manage_keys: false
+ci_login_keys: []

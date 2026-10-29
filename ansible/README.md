@@ -8,9 +8,10 @@ This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1`, `ops1`, `app1` and `db1`. Each has a playbook
 enrolled in the gated pull. `edge1`, `ops1` and `app1` apply `roles/ansible_runtime` and
-`roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` stops there,
-`playbooks/ops1.yml` adds `roles/breakglass_mint_host` and `playbooks/app1.yml` adds
-`roles/breakglass_grant_host`. `playbooks/db1.yml` applies the two pull roles only;
+`roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` adds
+`roles/ci_login`, `playbooks/ops1.yml` adds `roles/breakglass_mint_host` and then
+`roles/status_page`, and `playbooks/app1.yml` adds `roles/breakglass_grant_host`.
+`playbooks/db1.yml` applies the two pull roles only;
 `roles/db1_stack` and `roles/db1_grants` are left out of it. The other trees hold only
 what those hosts need.
 
@@ -31,6 +32,7 @@ what those hosts need.
 | `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |
 | `playbooks/includes/` | The shared pull values and refusals, each defined once.                |
 | `trust/`              | One signer file per host under the pull, loaded only by its playbook.  |
+| `owner_vars/`         | The owner's values for a host's roles, one file per host, owner-held.  |
 | `pyproject.toml`      | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
 | `../.ansible-lint`    | The lint floor, production profile (ANS-5). Not editable by a role PR. |
 | `../.yamllint`        | The YAML floor (ANS-6). Not editable by a role PR.                     |

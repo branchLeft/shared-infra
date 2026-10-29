@@ -1,0 +1,39 @@
+---
+# Not part of the interface: role vars outrank inventory vars, so a caller cannot change these.
+ci_login_user: ansible-ci
+ci_login_sudoers_name: ansible-ci
+ci_login_shell: /bin/bash
+# The trigger program has one home, in pull_trigger. This copy is held equal to it by a test.
+ci_login_program: /usr/local/sbin/pull-trigger
+# The one key per mode, and nothing else, that the account may hold.
+ci_login_modes:
+  - apply
+  - check
+
+# A shell whose last path word is one of these cannot run a forced command.
+ci_login_refused_shell_names:
+  - nologin
+  - 'false'
+# The password field of a locked account starts with one of these characters.
+ci_login_locked_pattern: '^[*!]'
+
+# Exactly two commands, and the line that keeps the request text through sudo.
+ci_login_sudoers_lines:
+  - 'Defaults!{{ ci_login_program }} env_keep += "SSH_ORIGINAL_COMMAND"'
+  - '{{ ci_login_user }} ALL=(root) NOPASSWD: {{ ci_login_program }} --mode apply, {{ ci_login_program }} --mode check'
+
+# restrict switches off forwarding, a terminal, the agent and the user rc file.
+ci_login_key_options: restrict
+
+# Copied from the sudoers_and_keys pattern and held equal to it by a test.
+ci_login_key_shapes:
+  - 'ssh-ed25519 [A-Za-z0-9+/]{68}'
+  - 'ecdsa-sha2-nistp256 [A-Za-z0-9+/]{139}='
+  - 'ecdsa-sha2-nistp384 [A-Za-z0-9+/]{182}=='
+  - 'ecdsa-sha2-nistp521 [A-Za-z0-9+/]{230}=='
+  - 'ssh-rsa [A-Za-z0-9+/]{200,}={0,2}'
+  - 'sk-ssh-ed25519@openssh\.com [A-Za-z0-9+/]{90,}={0,2}'
+  - 'sk-ecdsa-sha2-nistp256@openssh\.com [A-Za-z0-9+/]{160,}={0,2}'
+# One public key on one line: a known type, a body of its length, an optional printable-ASCII
+# comment, and nothing in front. \Z, not $, so a trailing line break does not pass.
+ci_login_key_pattern: '^({{ ci_login_key_shapes | join("|") }})( [ -~]*)?\Z'

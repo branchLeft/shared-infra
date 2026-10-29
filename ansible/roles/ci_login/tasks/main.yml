@@ -1,0 +1,11 @@
+---
+- name: Make sure the pipeline account exists, locked, with a real shell
+  ansible.builtin.import_tasks: _account.yml
+
+- name: Install the sudoers file of the pipeline account
+  ansible.builtin.import_tasks: _sudoers.yml
+
+# With the flag false the keys are not read, not checked and not touched.
+- name: Keep the two key lines of the pipeline account
+  ansible.builtin.import_tasks: _keys.yml
+  when: ci_login_manage_keys | bool
