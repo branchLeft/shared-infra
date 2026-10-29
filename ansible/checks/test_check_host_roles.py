@@ -102,12 +102,12 @@ class HostRoleLists(unittest.TestCase):
     def test_the_real_tree_passes(self) -> None:
         self.assertEqual(check(ROOT), [])
 
-    # db1's first enrolment is pull-only: its playbook applies the two pull roles and none of the
-    # database roles on its list, which R9 allows because a playbook may apply a subset.
-    def test_db1_applies_only_the_pull_roles(self) -> None:
+    # db1 applies the two pull roles, then the host baseline, and none of the database roles on
+    # its list, which R9 allows because a playbook may apply a subset.
+    def test_db1_applies_the_pull_roles_then_the_baseline(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
-        self.assertEqual(names, ["ansible_runtime", "pull_trigger"])
+        self.assertEqual(names, ["ansible_runtime", "pull_trigger", "host_baseline"])
         self.assertEqual(check(ROOT), [])
 
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
@@ -306,7 +306,7 @@ class HostRoleLists(unittest.TestCase):
             ("app1", "control_plane"),
             ("ops1", "db1_stack"),
             ("db1", "control_plane"),
-            ("db1", "host_baseline"),
+            ("db1", "egress_nat"),
         )
         for host, name in cases:
             with self.subTest(host=host, role=name):

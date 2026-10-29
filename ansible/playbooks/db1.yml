@@ -1,6 +1,7 @@
 ---
-# db1: the database host under the gated pull. Two roles, in order: the Ansible
-# toolchain the host runs this playbook with, then the trigger that runs it. The
+# db1: the database host under the gated pull. Three roles, in order: the Ansible
+# toolchain the host runs this playbook with, the trigger that runs it, then the host
+# baseline (sshd, updates, fail2ban, Docker). The
 # database roles (db1_stack, db1_grants) return once the owner rules how their
 # private inputs reach a host that pulls; nothing on the pull route supplies them.
 #
@@ -27,3 +28,4 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
