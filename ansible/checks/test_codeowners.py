@@ -96,6 +96,17 @@ PULL_ROLE_PATHS = [
     "ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2",
 ]
 
+# ci_login grants the pipeline account root-run sudo and writes its authorized_keys; the owner's
+# values for edge1's roles are in owner_vars. Both are the owner's alone.
+CI_LOGIN_PATHS = [
+    "ansible/roles/ci_login/tasks/main.yml",
+    "ansible/roles/ci_login/tasks/_sudoers.yml",
+    "ansible/roles/ci_login/tasks/_keys.yml",
+    "ansible/roles/ci_login/templates/authorized_keys.j2",
+    "ansible/roles/ci_login/vars/main.yml",
+    "ansible/owner_vars/edge1.yml",
+]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -162,6 +173,9 @@ class CodeownersTests(unittest.TestCase):
     def test_the_pull_roles_and_sudoers_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(PULL_ROLE_PATHS)
 
+    def test_the_ci_login_role_and_the_owner_vars_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(CI_LOGIN_PATHS)
+
     def test_the_standards_template_paths_are_owned_by_the_owner(self) -> None:
         self.assert_owned(
             [
@@ -188,7 +202,7 @@ class CodeownersTests(unittest.TestCase):
             "hetzner/scripts/anything.sh",
             "ansible/harness/anything.py",
         }
-        for path in ESTATE_PATHS + GATE_PATHS + PULL_ROLE_PATHS + UNOWNED_PATHS:
+        for path in ESTATE_PATHS + GATE_PATHS + PULL_ROLE_PATHS + CI_LOGIN_PATHS + UNOWNED_PATHS:
             if path in stands_for_more:
                 continue
             with self.subTest(path=path):

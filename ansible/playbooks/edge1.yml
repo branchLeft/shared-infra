@@ -1,10 +1,11 @@
 ---
-# edge1: the first host under the gated pull. Two roles, in order: the
-# Ansible toolchain the host runs this playbook with, then the trigger that runs it.
+# edge1: the first host under the gated pull. Three roles, in order: the
+# Ansible toolchain the host runs this playbook with, the trigger that runs it, then
+# the pipeline account the trigger is reached through.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
-# from vars_files: the shared includes and edge1's own trust file. The one-time
+# from vars_files: the shared includes, edge1's own trust file and its owner_vars file. The one-time
 # bootstrap loads the same files the same way. Run against more than one host, the
 # refusal in includes/refuse_other_hosts.yml stops the play.
 - name: Bring edge1 under the pull
@@ -15,6 +16,7 @@
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/edge1.yml'
+    - '{{ playbook_dir }}/../owner_vars/edge1.yml'
   pre_tasks:
     - name: Refuse a run that is not edge1's
       ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
@@ -27,3 +29,4 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/ci_login # noqa: role-name[path]
