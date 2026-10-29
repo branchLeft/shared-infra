@@ -1,6 +1,6 @@
 """Check the host playbooks under the gated pull.
 
-Rules R0 to R10, and what each one does not see, are in ansible/checks/README.md. A
+Rules R0 to R11, and what each one does not see, are in ansible/checks/README.md. A
 failure names the rule and the file. This check catches a protected key set outside
 its one file. It does not judge a role edit: nothing here gates one (see checks/README.md).
 """
@@ -34,11 +34,18 @@ LOADED_DIRS = frozenset(
         "handlers",
         "playbooks",
         "trust",
+        "owner_vars",
         "inventories",
     )
 )
 TASK_SUFFIXES = (".yml", ".yaml")
-TREES = ("playbooks", "trust")
+TREES = ("playbooks", "trust", "owner_vars")
+TREE_RULES = {"playbooks": "R2", "trust": "R5", "owner_vars": "R10"}
+OWNER_VARS_DIR = "owner_vars"
+# The keys a host's owner_vars file holds, exactly. A host named nowhere here may have no file.
+OWNER_VARS_KEYS = {"edge1": frozenset(("ci_login_keys", "ci_login_manage_keys"))}
+OWNER_KEY_ENTRY = frozenset(("key", "mode"))
+OWNER_KEY_MODES = frozenset(("apply", "check"))
 README_EXCEPTIONS = frozenset(("playbooks/README.md", "trust/README.md"))
 INCLUDE_VARS = frozenset(
     ("include_vars", "ansible.builtin.include_vars", "ansible.legacy.include_vars")
@@ -217,13 +224,17 @@ def _check_roles(label: str, stem: str, roles: object, listed: list[str], out: l
             seen.append(name)
     if LOADER_ROLE in seen and seen[0] != LOADER_ROLE:
         out.append(
-            f"R10 {stem}.yml: role {LOADER_ROLE} must be the first role after the pull roles, "
+            f"R11 {stem}.yml: role {LOADER_ROLE} must be the first role after the pull roles, "
             f"so no role runs before the host's inputs are loaded or refused"
         )
 
 
 def _check_enrolled(
-    stem: str, plays: list[dict[str, object]], listed: list[str], findings: list[str]
+    stem: str,
+    plays: list[dict[str, object]],
+    listed: list[str],
+    has_owner_vars: bool,
+    findings: list[str],
 ) -> None:
     label = f"R2 {stem}.yml"
     if len(plays) != 1:
@@ -238,6 +249,8 @@ def _check_enrolled(
     if play.get("vars") != expected_vars:
         findings.append(f"{label}: vars must be exactly {expected_vars}")
     expected_files = [COMMON_INCLUDE, f"{{{{ playbook_dir }}}}/../trust/{stem}.yml"]
+    if has_owner_vars:
+        expected_files.append(f"{{{{ playbook_dir }}}}/../{OWNER_VARS_DIR}/{stem}.yml")
     if play.get("vars_files") != expected_files:
         findings.append(f"{label}: vars_files must be exactly {expected_files}")
     _check_roles(label, stem, play.get("roles"), listed, findings)
@@ -569,16 +582,18 @@ def _in_place(tree: str, inside: tuple[str, ...]) -> bool:
 
 
 def _check_names(ansible: Path, findings: list[str]) -> None:
-    """Shared by R2, R4 and R5: the one name rule for playbooks/ and trust/, at any depth.
+    """Shared by R2, R4, R5 and R10: the one name rule for playbooks/, trust/ and owner_vars/.
 
     Every entry that is not a directory is refused unless it is a link-free exact .yml placed
-    where Ansible reads it, or one of the two README paths named exactly. A link is refused
-    whatever its name, so the check never follows one. Any other name, case or depth is
-    refused, so R6 reads every file the pull can load from these two trees.
+    where Ansible reads it, or one of the two README paths named exactly (owner_vars/ has
+    none). A link is refused whatever its name, so the check never follows one. Any other
+    name, case or depth is refused, so R6 reads every file the pull can load from these trees.
     """
     for tree in TREES:
-        rule = "R5" if tree == "trust" else "R2"
+        rule = TREE_RULES[tree]
         base = ansible / tree
+        if not base.is_dir():
+            continue
         for path in sorted(base.rglob("*")):
             inside = path.relative_to(base)
             label = f"{rule} {inside.as_posix()}"
@@ -598,7 +613,51 @@ def _check_names(ansible: Path, findings: list[str]) -> None:
 
 def _yml_files(directory: Path) -> list[Path]:
     """The top-level .yml files of a tree. _check_names has already refused every other name."""
+    if not directory.is_dir():
+        return []
     return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix == ".yml")
+
+
+def _owner_key_problems(doc: dict[str, object]) -> list[str]:
+    """What is wrong with the values of an owner_vars file, by key. A missing key is reported
+    by the caller, which compares the key set."""
+    problems: list[str] = []
+    if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
+        problems.append("ci_login_manage_keys must be a bool")
+    keys = doc.get("ci_login_keys", [])
+    if not isinstance(keys, list):
+        problems.append("ci_login_keys must be a list of {key, mode} entries")
+        return problems
+    for entry in keys:
+        if not isinstance(entry, dict) or set(entry) != OWNER_KEY_ENTRY:
+            problems.append(f"a ci_login_keys entry must hold exactly {sorted(OWNER_KEY_ENTRY)}")
+            continue
+        mode = entry["mode"]
+        if not isinstance(entry["key"], str) or not isinstance(mode, str):
+            problems.append("a ci_login_keys entry needs a text key and a text mode")
+        elif mode not in OWNER_KEY_MODES:
+            problems.append(f"a ci_login_keys mode must be one of {sorted(OWNER_KEY_MODES)}")
+    return problems
+
+
+def _check_owner_vars(directory: Path, enrolled: set[str], findings: list[str]) -> None:
+    """R10: an owner_vars file exists only for an enrolled host, and holds exactly the keys its
+    host is allowed (OWNER_VARS_KEYS), with values of the right shape. The name rule is shared
+    (_check_names). A protected key in one of these files is refused by R6, whose allowed set
+    for this tree is empty."""
+    for path in _yml_files(directory):
+        label = f"R10 {OWNER_VARS_DIR}/{path.name}"
+        if path.stem not in enrolled:
+            findings.append(f"{label}: has no enrolled playbook")
+            continue
+        allowed = OWNER_VARS_KEYS.get(path.stem)
+        if allowed is None:
+            findings.append(f"{label}: this host has no owner_vars keys, so it may have no file")
+            continue
+        doc = _mapping(_load(path, findings, label))
+        if set(doc) != allowed:
+            findings.append(f"{label}: must hold exactly {sorted(allowed)}")
+        findings.extend(f"{label}: {problem}" for problem in _owner_key_problems(doc))
 
 
 def check(root: Path) -> list[str]:
@@ -629,9 +688,12 @@ def check(root: Path) -> list[str]:
     if not enrolled:
         findings.append("R1 no top-level playbook applies the pull_trigger role")
     host_roles = _read_host_roles(ansible, findings)
+    owner_vars = ansible / OWNER_VARS_DIR
+    owner_stems = {path.stem for path in _yml_files(owner_vars)}
     for stem, plays in sorted(enrolled.items()):
-        _check_enrolled(stem, plays, host_roles.get(stem, []), findings)
+        _check_enrolled(stem, plays, host_roles.get(stem, []), stem in owner_stems, findings)
     _check_derivation(includes, findings)
+    _check_owner_vars(owner_vars, set(enrolled), findings)
 
     trust_files = _yml_files(trust)
     trust_stems = {path.stem for path in trust_files}

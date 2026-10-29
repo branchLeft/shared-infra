@@ -85,7 +85,7 @@ braces or `{%` in a string are not evaluated a second time.
 - Target: any Linux host with Python 3, run as root.
 - A row for the host in `vars/main.yml`, the host's entry in `checks/host_roles.yml`
   listing `host_inputs`, and the loader as the first role after the two pull roles in
-  the host's playbook (`check_enrolment` R10).
+  the host's playbook (`check_enrolment` R11).
 
 ## What it changes on a host
 
