@@ -213,7 +213,7 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_three_db1_inputs(self) -> None:
+    def test_the_rows_name_the_db1_and_ops1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
@@ -222,7 +222,19 @@ class RealTree(unittest.TestCase):
                     "db1_stack_exporter_password",
                     "db1_grants_tenants",
                     "db1_grants_ops1_host",
-                ]
+                ],
+                "ops1": [
+                    "backup_worker_db_host",
+                    "backup_worker_db_user",
+                    "backup_worker_db_password",
+                    "backup_worker_db_ca_pem",
+                    "backup_worker_bucket",
+                    "backup_worker_s3_endpoint",
+                    "backup_worker_s3_region",
+                    "backup_worker_s3_access_key_id",
+                    "backup_worker_s3_secret_access_key",
+                    "backup_worker_tenants",
+                ],
             },
         )
 
@@ -234,12 +246,18 @@ class Mutations(unittest.TestCase):
         self.ansible = Path(temp.name) / "ansible"
         real = ROOT / "ansible"
         leave_out = shutil.ignore_patterns("molecule", "tests", "files", "templates")
-        for role in (LOADER, "db1_stack", "db1_grants", "db1_backup_timers", "tunnel_account"):
-            shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
-        (self.ansible / "checks").mkdir()
+        (self.ansible / "checks").mkdir(parents=True)
         shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
         (self.ansible / "playbooks").mkdir()
-        shutil.copy(real / "playbooks" / "db1.yml", self.ansible / "playbooks" / "db1.yml")
+        # Every host with a row, its playbook and the roles on its list, so the copy passes
+        # before a mutation whichever hosts have rows.
+        listed = _mapping(_read(real / HOST_ROLES_FILE))
+        roles = {LOADER}
+        for host in rows_of(real):
+            shutil.copy(real / "playbooks" / f"{host}.yml", self.ansible / "playbooks")
+            roles.update(r for r in _names(listed.get(host)) if (real / "roles" / r).is_dir())
+        for role in sorted(roles):
+            shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
 
     def _edit(self, relative: str, old: str, new: str) -> None:
         path = self.ansible / relative
@@ -302,7 +320,7 @@ class Mutations(unittest.TestCase):
         self._expect("pull_trigger_signers is a protected or internal name")
 
     def test_a_host_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
-        self._edit("checks/host_roles.yml", "  - host_inputs\n", "")
+        self._edit("checks/host_roles.yml", "db1:\n  - host_inputs\n", "db1:\n")
         self._expect("host_inputs is not on db1's list")
 
     def test_a_host_playbook_that_does_not_apply_the_loader_is_found(self) -> None:

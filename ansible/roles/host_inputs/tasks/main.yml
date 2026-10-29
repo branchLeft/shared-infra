@@ -183,6 +183,16 @@
     db1_stack_exporter_password: "{{ host_inputs_doc['db1_stack_exporter_password'] | default(omit) }}"
     db1_grants_tenants: "{{ host_inputs_doc['db1_grants_tenants'] | default(omit) }}"
     db1_grants_ops1_host: "{{ host_inputs_doc['db1_grants_ops1_host'] | default(omit) }}"
+    backup_worker_db_host: "{{ host_inputs_doc['backup_worker_db_host'] | default(omit) }}"
+    backup_worker_db_user: "{{ host_inputs_doc['backup_worker_db_user'] | default(omit) }}"
+    backup_worker_db_password: "{{ host_inputs_doc['backup_worker_db_password'] | default(omit) }}"
+    backup_worker_db_ca_pem: "{{ host_inputs_doc['backup_worker_db_ca_pem'] | default(omit) }}"
+    backup_worker_bucket: "{{ host_inputs_doc['backup_worker_bucket'] | default(omit) }}"
+    backup_worker_s3_endpoint: "{{ host_inputs_doc['backup_worker_s3_endpoint'] | default(omit) }}"
+    backup_worker_s3_region: "{{ host_inputs_doc['backup_worker_s3_region'] | default(omit) }}"
+    backup_worker_s3_access_key_id: "{{ host_inputs_doc['backup_worker_s3_access_key_id'] | default(omit) }}"
+    backup_worker_s3_secret_access_key: "{{ host_inputs_doc['backup_worker_s3_secret_access_key'] | default(omit) }}"
+    backup_worker_tenants: "{{ host_inputs_doc['backup_worker_tenants'] | default(omit) }}"
   no_log: true
   diff: false
 
