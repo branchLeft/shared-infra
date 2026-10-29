@@ -37,6 +37,17 @@ host_inputs_required_by_host:
     - db1_stack_exporter_password
     - db1_grants_tenants
     - db1_grants_ops1_host
+  ops1:
+    - backup_restore_state_copy_recipient
+    - backup_restore_state_copy_dest_access_key_id
+    - backup_restore_state_copy_estate_bucket
+    - backup_restore_state_copy_estate_endpoint
+    - backup_restore_state_copy_estate_region
+    - backup_restore_state_copy_estate_access_key_id
+    - backup_restore_state_copy_tenant_bucket
+    - backup_restore_state_copy_tenant_endpoint
+    - backup_restore_state_copy_tenant_region
+    - backup_restore_state_copy_tenant_access_key_id
 
 # A value that is only white space counts as empty. Matched from the start, so
 # \s*\Z holds for the empty string and for blanks and nothing else.

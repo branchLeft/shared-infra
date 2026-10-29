@@ -183,6 +183,16 @@
     db1_stack_exporter_password: "{{ host_inputs_doc['db1_stack_exporter_password'] | default(omit) }}"
     db1_grants_tenants: "{{ host_inputs_doc['db1_grants_tenants'] | default(omit) }}"
     db1_grants_ops1_host: "{{ host_inputs_doc['db1_grants_ops1_host'] | default(omit) }}"
+    backup_restore_state_copy_recipient: "{{ host_inputs_doc['backup_restore_state_copy_recipient'] | default(omit) }}"
+    backup_restore_state_copy_dest_access_key_id: "{{ host_inputs_doc['backup_restore_state_copy_dest_access_key_id'] | default(omit) }}"
+    backup_restore_state_copy_estate_bucket: "{{ host_inputs_doc['backup_restore_state_copy_estate_bucket'] | default(omit) }}"
+    backup_restore_state_copy_estate_endpoint: "{{ host_inputs_doc['backup_restore_state_copy_estate_endpoint'] | default(omit) }}"
+    backup_restore_state_copy_estate_region: "{{ host_inputs_doc['backup_restore_state_copy_estate_region'] | default(omit) }}"
+    backup_restore_state_copy_estate_access_key_id: "{{ host_inputs_doc['backup_restore_state_copy_estate_access_key_id'] | default(omit) }}"
+    backup_restore_state_copy_tenant_bucket: "{{ host_inputs_doc['backup_restore_state_copy_tenant_bucket'] | default(omit) }}"
+    backup_restore_state_copy_tenant_endpoint: "{{ host_inputs_doc['backup_restore_state_copy_tenant_endpoint'] | default(omit) }}"
+    backup_restore_state_copy_tenant_region: "{{ host_inputs_doc['backup_restore_state_copy_tenant_region'] | default(omit) }}"
+    backup_restore_state_copy_tenant_access_key_id: "{{ host_inputs_doc['backup_restore_state_copy_tenant_access_key_id'] | default(omit) }}"
   no_log: true
   diff: false
 
