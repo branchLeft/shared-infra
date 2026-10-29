@@ -19,7 +19,7 @@
     that:
       - control_plane_db_config_dir_stat.stat.exists
       - control_plane_db_config_dir_stat.stat.isdir
-      - control_plane_db_config_dir_stat.stat.pw_name == 'root'
+      - (control_plane_db_config_dir_stat.stat.pw_name | default('')) == 'root'
       - control_plane_db_config_dir_stat.stat.mode in ['0750', '0700']
     quiet: true
     fail_msg: 'REFUSED: {{ control_plane_db_config_dir }} must exist, be a directory of root and have mode 0750 or 0700 before this role builds under it.'

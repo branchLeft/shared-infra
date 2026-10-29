@@ -16,7 +16,7 @@
     that:
       - control_plane_db_input_dir_stat.stat.exists
       - control_plane_db_input_dir_stat.stat.isdir
-      - control_plane_db_input_dir_stat.stat.pw_name == control_plane_db_input_owner
+      - (control_plane_db_input_dir_stat.stat.pw_name | default('')) == control_plane_db_input_owner
       - control_plane_db_input_dir_stat.stat.gid == control_plane_db_input_gid
       - control_plane_db_input_dir_stat.stat.mode == control_plane_db_input_dir_mode
     quiet: true
@@ -36,7 +36,7 @@
     that:
       - item.stat.exists
       - item.stat.isreg
-      - item.stat.pw_name == control_plane_db_input_owner
+      - (item.stat.pw_name | default('')) == control_plane_db_input_owner
       - item.stat.gid == control_plane_db_input_gid
       - item.stat.mode == control_plane_db_input_mode
       - item.stat.size > 0

@@ -308,7 +308,7 @@ class PrivilegeTests(unittest.TestCase):
         text = _text("_inputs.yml")
         for needle in (
             "item.stat.isreg",
-            "item.stat.pw_name == control_plane_db_input_owner",
+            "(item.stat.pw_name | default('')) == control_plane_db_input_owner",
             "item.stat.gid == control_plane_db_input_gid",
             "item.stat.mode == control_plane_db_input_mode",
             "item.stat.size > 0",
