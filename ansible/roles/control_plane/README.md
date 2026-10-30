@@ -71,6 +71,14 @@ and `control_plane_masterkey`. The two secrets carry `no_log: true`. Two switche
 `control_plane_bring_up` and `control_plane_start_units`, default to `true`.
 `vars/main.yml` holds the paths of the stack. They are not inputs.
 
+On ops1 the three required inputs come from the `host_inputs` loader, which reads
+the owner's root-only `/etc/branchleft/host-inputs.json` and sets each key as a host
+fact under the name of the argument it feeds (see that role's README). The file holds
+exactly those three keys: the digest-pinned image, which is not secret, and the
+two secrets. A release is an edit of the image key. Until the owner has placed the
+file, every pull of ops1 stops at the loader, before this role and before the status
+page.
+
 ## Requirements
 
 - ansible-core at the version pinned in `ansible/requirements.txt`; the role's

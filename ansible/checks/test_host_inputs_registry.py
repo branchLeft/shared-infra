@@ -149,6 +149,18 @@ def _check_rows(ansible: Path, rows: dict[str, list[str]], findings: list[str]) 
             findings.append(f"{label}: playbooks/{host}.yml does not apply {LOADER}")
         elif set(applied[: applied.index(LOADER)]) - PULL_ROLES:
             findings.append(f"{label}: playbooks/{host}.yml applies a role before {LOADER}")
+        # The converse: a role the playbook applies with a required argument that has no default
+        # fails every pull at argument validation unless the row supplies it. The pull roles take
+        # theirs from the shared includes and the trust file, not from the owner's file.
+        for role in applied:
+            if role == LOADER or role in PULL_ROLES:
+                continue
+            for name, needed in sorted(_required_options(ansible, role).items()):
+                if needed and name not in names:
+                    findings.append(
+                        f"{label}: playbooks/{host}.yml applies {role}, whose required argument "
+                        f"{name} has no default and is not in the row, so every pull would fail"
+                    )
 
 
 def _mapping_list(doc: object) -> list[dict[str, object]]:
@@ -213,7 +225,7 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_three_db1_inputs(self) -> None:
+    def test_the_rows_name_the_db1_and_ops1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
@@ -222,7 +234,12 @@ class RealTree(unittest.TestCase):
                     "db1_stack_exporter_password",
                     "db1_grants_tenants",
                     "db1_grants_ops1_host",
-                ]
+                ],
+                "ops1": [
+                    "control_plane_app_image",
+                    "control_plane_env_content",
+                    "control_plane_masterkey",
+                ],
             },
         )
 
@@ -234,12 +251,18 @@ class Mutations(unittest.TestCase):
         self.ansible = Path(temp.name) / "ansible"
         real = ROOT / "ansible"
         leave_out = shutil.ignore_patterns("molecule", "tests", "files", "templates")
-        for role in (LOADER, "db1_stack", "db1_grants", "db1_backup_timers", "tunnel_account"):
-            shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
-        (self.ansible / "checks").mkdir()
+        (self.ansible / "checks").mkdir(parents=True)
         shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
         (self.ansible / "playbooks").mkdir()
-        shutil.copy(real / "playbooks" / "db1.yml", self.ansible / "playbooks" / "db1.yml")
+        # Every host with a row, its playbook and the roles on its list, so the copy passes
+        # before a mutation whichever hosts have rows.
+        listed = _mapping(_read(real / HOST_ROLES_FILE))
+        roles = {LOADER}
+        for host in rows_of(real):
+            shutil.copy(real / "playbooks" / f"{host}.yml", self.ansible / "playbooks")
+            roles.update(r for r in _names(listed.get(host)) if (real / "roles" / r).is_dir())
+        for role in sorted(roles):
+            shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
 
     def _edit(self, relative: str, old: str, new: str) -> None:
         path = self.ansible / relative
@@ -293,6 +316,31 @@ class Mutations(unittest.TestCase):
         )
         self._expect("role db1_stack gives db1_stack_exporter_password a default")
 
+    def test_a_required_argument_of_an_applied_role_that_the_row_lacks_is_found(self) -> None:
+        # The failure that stopped the first wiring of ops1: a role applied with an input that
+        # nothing supplies. Add a required argument to the copy of control_plane.
+        self._edit(
+            "roles/control_plane/meta/argument_specs.yml",
+            "      control_plane_bring_up:\n",
+            "      control_plane_extra:\n        type: str\n        required: true\n"
+            "      control_plane_bring_up:\n",
+        )
+        self._expect("control_plane, whose required argument control_plane_extra has no default")
+
+    def test_a_row_that_lacks_a_required_argument_of_an_applied_role_is_found(self) -> None:
+        # Drop the image pin from ops1's row and from the loader's task together, so only the
+        # converse check can see that control_plane is left without it.
+        self._edit("roles/host_inputs/vars/main.yml", "    - control_plane_app_image\n", "")
+        self._edit(
+            "roles/host_inputs/tasks/main.yml",
+            "    control_plane_app_image: \"{{ host_inputs_doc['control_plane_app_image']"
+            ' | default(omit) }}"\n',
+            "",
+        )
+        self._expect(
+            "control_plane, whose required argument control_plane_app_image has no default"
+        )
+
     def test_a_protected_name_in_a_row_is_found(self) -> None:
         self._edit(
             "roles/host_inputs/vars/main.yml",
@@ -302,7 +350,7 @@ class Mutations(unittest.TestCase):
         self._expect("pull_trigger_signers is a protected or internal name")
 
     def test_a_host_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
-        self._edit("checks/host_roles.yml", "  - host_inputs\n", "")
+        self._edit("checks/host_roles.yml", "db1:\n  - host_inputs\n", "db1:\n")
         self._expect("host_inputs is not on db1's list")
 
     def test_a_host_playbook_that_does_not_apply_the_loader_is_found(self) -> None:
