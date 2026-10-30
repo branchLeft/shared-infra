@@ -119,6 +119,18 @@
           when: not ansible_check_mode
           no_log: true
 
+        # The shared Compose unit allows five starts in fifteen minutes (StartLimitBurst in
+        # hetzner/provision/branchleft-compose@.service), and this scenario starts the spool
+        # unit once per case that stops it. Without this the later restores are refused by
+        # systemd with "attempted too often", which fails the restore and not the refusal under
+        # test. This clears the counter the test itself ran up. It changes nothing the role
+        # asserts.
+        - name: Clear the start counter the earlier cases ran up on the spool unit
+          ansible.builtin.command:
+            argv: [systemctl, reset-failed, 'branchleft-compose@mail-spool.service']
+          changed_when: false
+          when: not ansible_check_mode and (converge_case.restore | default([]) | length > 0)
+
         - name: Run the commands that undo the state
           ansible.builtin.command:
             argv: '{{ item }}'
