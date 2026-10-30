@@ -1,8 +1,9 @@
 ---
-# edge1: the first host under the gated pull. Four roles, in order: the
-# Ansible toolchain the host runs this playbook with, the trigger that runs it, the
-# pipeline account the trigger is reached through, then the deploy tooling (as class
-# gateway, which installs the common targets only).
+# edge1: the first host under the gated pull. Two pull roles, in order: the
+# Ansible toolchain the host runs this playbook with, then the trigger that runs it.
+# After them, the roles on edge1's list in checks/host_roles.yml that this playbook wires:
+# the host baseline, the pipeline account the trigger is reached through, then the deploy
+# tooling (as class gateway, which installs the common targets only).
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
@@ -31,5 +32,6 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/ci_login # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]

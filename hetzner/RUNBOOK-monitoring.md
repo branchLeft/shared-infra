@@ -135,7 +135,7 @@ both stacks reads its config through a bind mount **as the container-side
 user**, not as root.
 
 That combination has already broken a deploy. `hetzner/monitoring/stack/prometheus/prometheus.yml`
-is written by `npm run render` (a Vitest file snapshot), which left it `0600` in
+is written by `pnpm run render` (a Vitest file snapshot), which left it `0600` in
 one workstation checkout. Git records `100644` and cannot see the difference --
 it tracks only the executable bit -- so the mode is invisible to review, to
 `git status` and to CI, which checks out its own copy at `0644`. `rsync -av`
@@ -659,6 +659,15 @@ and `blackbox_mail`'s labels are what catch the exporter itself being down --
 a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
+
+`blackbox_object_storage` is one target: the Hetzner Object Storage endpoint
+`hel1.your-objectstorage.com`, probed over HTTPS through blackbox_exporter's
+`http_object_storage` module. It carries `expected_up: 'true'` and should read
+`up`. The module counts a 403 from the bare endpoint as up, because the service
+refuses anonymous requests there by design. A `down` here means the connection
+was refused or timed out, which `ObjectStorageProbeFailed` pages on after 15
+minutes.
+
 Only `node` for `app1`, `node` for `db1` and `node` for `ops1` are expected
 `down`: `app1`/`db1`'s exporters are not provisioned yet, and `ops1`'s carries
 `expected_up: 'false'` until §15 below confirms it live and flips that label
@@ -1217,7 +1226,7 @@ exactly the gap that hid `db1`'s four-day `mysqld_exporter` crash loop
 carries the full account). Once 15d's `1` is confirmed:
 
 1. Change `ops1`'s `expectedUp: false` to `true` in `MONITORED_NODE_HOSTS`.
-2. `npm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.
+2. `pnpm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.
 3. Open a PR for that diff alone, citing this section and 15d's read-back.
 4. Once merged, redeploy per 15c again — this second redeploy is the one that
    actually arms `HostOrServiceDown`/`ServiceFlapping` for `ops1`.

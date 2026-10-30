@@ -5,11 +5,13 @@
 # by a word in a file name, so ordinary role work is not owner-gated by its name.
 # A new gate file is added here by its path, in the pull request that adds it.
 
-# Estate files the merge script refuses at gate 6: mail/ runs under plan credentials on push, and every credentialed plan job installs from the lockfiles and .npmrc files below.
+# Estate files the merge script refuses at gate 6: mail/ runs under plan credentials on push, and every credentialed plan job installs from the lockfiles, pnpm-workspace.yaml files (which hold allowBuilds) and .npmrc files below.
 /mail/                                   @branchLeft/branchleft-admin
-/package-lock.json                       @branchLeft/branchleft-admin
-/hetzner/package-lock.json               @branchLeft/branchleft-admin
-/hetzner-host/package-lock.json          @branchLeft/branchleft-admin
+/pnpm-lock.yaml                          @branchLeft/branchleft-admin
+/hetzner/pnpm-lock.yaml                  @branchLeft/branchleft-admin
+/hetzner-host/pnpm-lock.yaml             @branchLeft/branchleft-admin
+/hetzner/pnpm-workspace.yaml             @branchLeft/branchleft-admin
+/hetzner-host/pnpm-workspace.yaml        @branchLeft/branchleft-admin
 /.npmrc                                  @branchLeft/branchleft-admin
 /hetzner/.npmrc                          @branchLeft/branchleft-admin
 /hetzner-host/.npmrc                     @branchLeft/branchleft-admin

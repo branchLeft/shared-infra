@@ -174,7 +174,7 @@ is not loaded there.
   The check does not judge a key's text; the `ci_login` role does. The directory is the
   owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
 - **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
-  (owner ruling, option A, branchLeft/workspace#2739), it is the first role after the two
+  (owner ruling, option A), it is the first role after the two
   pull roles, so no role runs before the inputs are loaded or refused. A host that does not
   apply it is unaffected. `test_host_inputs_registry.py` holds the loader's row table, the
   literal keys of its input task, `host_roles.yml`, the playbook and the role argument specs
@@ -230,8 +230,11 @@ run needs, from the event and the files it changed. The rules, in the order they
   from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
   as it does in a pull request. An entry stacked on another is tested on that one's tree
   and diffed from it; if the earlier entry leaves the queue, the later one is tested again;
-- a changed file that is part of the harness, the checks, the lock or the lint config
+- a changed file that is part of the harness, the lock, the lint config, or one of the three
+  checks files the shards read (`ci_select.py`, `check_pins.py`, `pip-requirements.txt`)
   executes every shard, because it decides what every role is held to;
+- any other file in `ansible/checks/` runs the lint job only, because lint runs its tests and
+  no shard reads it;
 - a changed file under `ansible/` that nothing here recognises executes every shard,
   because a new kind of file must be named in the program before it may skip a shard;
 - a changed file in a role or pattern executes that role's or pattern's shards, and the

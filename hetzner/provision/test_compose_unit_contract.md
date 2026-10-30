@@ -81,7 +81,7 @@ Every git-tracked file under the tree the scan is allowed to see, before filteri
     Was an `os.walk`, pruning UNSCANNED_DIRECTORIES as it descended. A
     filesystem walk cannot tell an authored file from one nobody committed:
     `hetzner-host/dist/` is gitignored build output, `git status` stays
-    clean after an ordinary `npm run build` fills it with generated
+    clean after an ordinary `pnpm run build` fills it with generated
     `.js`/`.map` files, and the walk reported them as native to the tree it
     audits -- there is no suffix that could excuse them here without also
     excusing a hand-authored file of the same suffix.
