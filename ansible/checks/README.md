@@ -227,8 +227,11 @@ run needs, from the event and the files it changed. The rules, in the order they
   from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
   as it does in a pull request. An entry stacked on another is tested on that one's tree
   and diffed from it; if the earlier entry leaves the queue, the later one is tested again;
-- a changed file that is part of the harness, the checks, the lock or the lint config
+- a changed file that is part of the harness, the lock, the lint config, or one of the three
+  checks files the shards read (`ci_select.py`, `check_pins.py`, `pip-requirements.txt`)
   executes every shard, because it decides what every role is held to;
+- any other file in `ansible/checks/` runs the lint job only, because lint runs its tests and
+  no shard reads it;
 - a changed file under `ansible/` that nothing here recognises executes every shard,
   because a new kind of file must be named in the program before it may skip a shard;
 - a changed file in a role or pattern executes that role's or pattern's shards, and the

@@ -26,9 +26,14 @@ PUSH = "push"
 
 # A path ending in "/" names everything under it; any other entry names one file.
 # What decides the verdict of every role: a change to any of these executes every shard.
+# The three checks files are named one by one, because the shards read them and the rest of
+# ansible/checks/ is lint-only. The order matters: needed_units tests EVERY_SHARD before
+# LINT_ONLY, so these three win over the folder entry in LINT_ONLY below.
 EVERY_SHARD = (
     "ansible/harness/",
-    "ansible/checks/",
+    "ansible/checks/ci_select.py",
+    "ansible/checks/check_pins.py",
+    "ansible/checks/pip-requirements.txt",
     "ansible/pyproject.toml",
     "ansible/requirements.in",
     "ansible/requirements.txt",
@@ -40,6 +45,7 @@ EVERY_SHARD = (
 # Under ansible/ but read by no shard: the lint job runs the tests that read them.
 LINT_ONLY = (
     "ansible/README.md",
+    "ansible/checks/",
     "ansible/inventories/",
     "ansible/playbooks/",
     "ansible/tools/",
