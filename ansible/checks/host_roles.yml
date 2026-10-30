@@ -14,6 +14,7 @@ edge1:
   - host_baseline
   - egress_nat
   - ci_login
+  - deploy_tooling
 ops1:
   - control_plane
   - nextcloud_stack

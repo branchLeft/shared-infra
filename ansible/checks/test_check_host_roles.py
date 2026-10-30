@@ -58,7 +58,15 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_LINE = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a playbook on main applies after the pull roles. The sabotage cases below start from
 # the pull roles alone, so they strip these first; one test holds the real playbook to them.
-APPLIED_ON_MAIN = {"edge1": ["ci_login"], "ops1": ["status_page"], "db1": ["host_inputs"]}
+APPLIED_ON_MAIN = {
+    "edge1": ["ci_login", "deploy_tooling"],
+    "ops1": ["status_page"],
+    "db1": ["host_inputs"],
+}
+
+
+# The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
+PINNED_PLAY_VARS = {"edge1": "    deploy_tooling_host_class: gateway\n"}
 
 
 def _pull_roles_only(text: str) -> str:
@@ -315,7 +323,8 @@ class HostRoleLists(unittest.TestCase):
     # Rule: `vars` must also still hold the host name, and nothing else when it is empty or absent.
     def test_vars_without_the_host_name_is_refused(self) -> None:
         for host in ENROLLED:
-            line = f"  vars:\n    enrolled_host: {host}\n"
+            # The whole vars block, so edge1's pinned class line goes with it (HOST_PLAY_VARS).
+            line = f"  vars:\n    enrolled_host: {host}\n{PINNED_PLAY_VARS.get(host, '')}"
             for kind, new in (
                 ("absent", ""),
                 ("empty", "  vars: {}\n"),
