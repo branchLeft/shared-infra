@@ -142,8 +142,8 @@ class Sabotage(unittest.TestCase):
     def test_r5_db1_trust_file_holds_a_second_key(self) -> None:
         self._edit(
             "trust/db1.yml",
-            "pull_trigger_signers: []\n",
-            "pull_trigger_signers: []\ndb1_stack_exporter_password: x\n",
+            "pull_trigger_signers:\n",
+            "db1_stack_exporter_password: x\npull_trigger_signers:\n",
         )
         self._assert_rule("R5 trust/db1.yml")
 
@@ -233,8 +233,8 @@ class Sabotage(unittest.TestCase):
     def test_r5_trust_file_holds_a_second_key(self) -> None:
         self._edit(
             "trust/ops1.yml",
-            "pull_trigger_signers: []\n",
-            "pull_trigger_signers: []\npull_trigger_remote_url: https://example.invalid/x.git\n",
+            "pull_trigger_signers:\n",
+            "pull_trigger_remote_url: https://example.invalid/x.git\npull_trigger_signers:\n",
         )
         self._assert_rule("R5 trust/ops1.yml")
 
