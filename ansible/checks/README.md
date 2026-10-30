@@ -171,7 +171,7 @@ is not loaded there.
   The check does not judge a key's text; the `ci_login` role does. The directory is the
   owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
 - **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
-  (owner ruling, option A, branchLeft/workspace#2739), it is the first role after the two
+  (owner ruling, option A), it is the first role after the two
   pull roles, so no role runs before the inputs are loaded or refused. A host that does not
   apply it is unaffected. `test_host_inputs_registry.py` holds the loader's row table, the
   literal keys of its input task, `host_roles.yml`, the playbook and the role argument specs
