@@ -570,9 +570,9 @@ oversight. Each is a decision the standard assigns to later work.
   edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
   playbook applies the same two pull roles, then `roles/host_inputs`, then `roles/db1_stack`; `roles/host_inputs` refuses the
   run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
-  its trust file is empty until the owner rules the signer, so db1 refuses every run until then. ANS-17 describes the only approved path. The trigger is
+  its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. ANS-17 describes the only approved path. The trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
-  nothing in this repo calls that workflow yet.
+  `.github/workflows/ansible-delivery.yml` calls that workflow.
 - **Reuse by other repositories.** The harness is code another repository may
   one day run. It is not to be copied between repositories (ANS-13). The
   reusable CI work in the github-workflows repository is where it will be

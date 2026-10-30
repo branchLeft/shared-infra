@@ -58,7 +58,11 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_LINE = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a playbook on main applies after the pull roles. The sabotage cases below start from
 # the pull roles alone, so they strip these first; one test holds the real playbook to them.
-APPLIED_ON_MAIN = {"edge1": ["ci_login"], "ops1": ["status_page"], "db1": ["host_inputs", "db1_stack"]}
+APPLIED_ON_MAIN = {
+    "edge1": ["ci_login"],
+    "ops1": ["status_page"],
+    "db1": ["host_inputs", "db1_stack"],
+}
 
 
 def _pull_roles_only(text: str) -> str:
@@ -154,9 +158,7 @@ class HostRoleLists(unittest.TestCase):
     def test_db1_applies_the_pull_roles_then_the_loader(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
-        self.assertEqual(
-            names, ["ansible_runtime", "pull_trigger", "host_inputs", "db1_stack"]
-        )
+        self.assertEqual(names, ["ansible_runtime", "pull_trigger", "host_inputs", "db1_stack"])
         for held_back in ("db1_grants", "db1_backup_timers", "tunnel_account"):
             self.assertNotIn(held_back, names)
         self.assertEqual(check(ROOT), [])
