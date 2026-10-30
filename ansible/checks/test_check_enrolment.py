@@ -19,6 +19,8 @@ from check_enrolment import ROOT, check
 EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
 # The loader's entry in db1's playbook, as it stands on main.
 LOADER_LINE = "    - role: ../roles/host_inputs # noqa: role-name[path]\n"
+# The stack's entry in db1's playbook, after the loader, as it stands on main.
+STACK_LINE = "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
 
 
 class RealTree(unittest.TestCase):
@@ -180,11 +182,8 @@ class Sabotage(unittest.TestCase):
     def test_r2_db1_role_entry_carries_an_input(self) -> None:
         self._edit(
             "playbooks/db1.yml",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
-            "      vars:\n"
-            "        db1_stack_exporter_password: x\n",
+            STACK_LINE,
+            STACK_LINE + "      vars:\n        db1_stack_exporter_password: x\n",
         )
         self._assert_rule("R2 db1.yml")
 
@@ -195,7 +194,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            LOADER_LINE + "    - role: ../roles/db1_stack # noqa: role-name[path]\n",
+            LOADER_LINE + "    - role: ../roles/db1_grants # noqa: role-name[path]\n",
         )
         self.assertEqual(check(self.root), [])
 
@@ -204,7 +203,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
         )
         findings = self._assert_rule("R11 db1.yml")
         self.assertTrue(any("must be the first role after the pull roles" in f for f in findings))
@@ -214,8 +213,8 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
-            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/db1_grants # noqa: role-name[path]\n"
+            "    - role: ../roles/db1_backup_timers # noqa: role-name[path]\n" + LOADER_LINE,
         )
         self._assert_rule("R11 db1.yml")
 
