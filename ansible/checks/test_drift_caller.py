@@ -175,7 +175,7 @@ class DriftCallerTests(unittest.TestCase):
     def test_reference_is_an_exact_tag_not_a_sha_branch_or_major(self) -> None:
         base = "branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@"
         sha = "0123456789abcdef0123456789abcdef01234567"
-        self.assertEqual([], self.weakened(lambda doc: self.job(doc).update(uses=base + "v1.0.16")))
+        self.assertEqual([], self.weakened(lambda doc: self.job(doc).update(uses=base + "v1.0.18")))
         for ref in (sha, "main", "v1", "v1.0"):
             with self.subTest(ref=ref):
 
@@ -187,7 +187,7 @@ class DriftCallerTests(unittest.TestCase):
 
     def test_a_pin_below_the_jump_release_is_named(self) -> None:
         base = "branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@"
-        for ref in ("v1.0.15", "v1.0.13", "v0.9.99"):
+        for ref in ("v1.0.15", "v1.0.17", "v1.0.13", "v0.9.99"):
             with self.subTest(ref=ref):
 
                 def point_at(doc: dict[str, object], uses: str = base + ref) -> None:

@@ -27,6 +27,9 @@
 - name: Case, the role never touches a compose instance
   ansible.builtin.include_tasks: case_compose_probe.yml
 
+- name: Case, the compose unit retries a failed start and a deploy still sees the failure
+  ansible.builtin.include_tasks: case_compose_retry.yml
+
 - name: Case, a changed policy program is applied by the handler
   ansible.builtin.include_tasks: case_program_changed.yml
 

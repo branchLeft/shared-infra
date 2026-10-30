@@ -71,6 +71,8 @@
 # The broker deploy role's sudoers task and template decide which commands the deploy user may run as root: sudoers is a safety class, so the owner reviews it.
 /ansible/roles/broker_deploy/tasks/_sudoers.yml                    @branchLeft/branchleft-admin
 /ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2  @branchLeft/branchleft-admin
+# deploy_slot_keys writes the deploy account's authorized_keys, which decides who may run a stack's deploy command as root, and its module pins the shape of every line it writes. Both are a safety class, so the whole role is the owner's to review.
+/ansible/roles/deploy_slot_keys/         @branchLeft/branchleft-admin
 # Each host's trusted signer list is the trust anchor of the pull. An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root. The reusable gated apply exists in branchLeft/github-workflows, but nothing here calls it, so no gate on a role edit is wired.
 /ansible/trust/                          @branchLeft/branchleft-admin
 

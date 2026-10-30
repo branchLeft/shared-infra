@@ -1,0 +1,47 @@
+---
+# Order matters. The slot program is installed first, because the module loads that
+# installed copy and runs it as root. The module then validates every declared entry
+# before it reads the host, plans from the host as it is, applies through the program's
+# own grant and revoke, and reads the result back against the shape it pins itself.
+#
+# Check mode (ANS-10). The module supports it and changes nothing. The one task skipped
+# in check mode is the module, and only while the program it would load is not yet on the
+# host (the copy above would change it), because a plan made by a program that is not
+# installed would be a plan made by nothing.
+#
+# The slots are private tenant data (stack names and public keys). The module task hides
+# its result and its diff (ANS-16) and the module returns counts only. A refusal is a
+# rule name and an entry number, read out by the assertion after the module, so the cause
+# of a stop shows in the log without a name or a key.
+
+- name: Install the slot provisioning program
+  ansible.builtin.copy:
+    src: '{{ deploy_slot_keys_programs_dir }}/{{ deploy_slot_keys_program_source }}'
+    dest: '{{ deploy_slot_keys_program_path }}'
+    owner: root
+    group: root
+    mode: '{{ deploy_slot_keys_program_mode }}'
+  register: deploy_slot_keys_program
+
+- name: Make the deploy slots exactly the declared list
+  deploy_slot_keys_reconcile:
+    program_path: '{{ deploy_slot_keys_program_path }}'
+    slots: '{{ deploy_slot_keys_slots }}'
+  register: deploy_slot_keys_result
+  failed_when: false
+  no_log: true
+  diff: false
+  when: not (ansible_check_mode and deploy_slot_keys_program is changed)
+
+# The module's own message is the rule that broke, never a value, so it is safe to show
+# although the task above is hidden. A run that stops here has changed nothing the module
+# could not undo: it validates before it writes and restores authorized_keys on a failed
+# read-back. failed_when: false makes the result's failed flag false, so a refusal is read
+# from the message: only a failure carries one, and a success has none.
+- name: Stop if the module refused
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_result is skipped or deploy_slot_keys_result.msg is not defined
+    fail_msg: >-
+      {{ deploy_slot_keys_result.msg | default('the slot module returned no result') }}
+    quiet: true

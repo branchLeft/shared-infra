@@ -68,10 +68,25 @@
         group: root
         mode: '0644'
 
-    - name: Put a docker command that succeeds in place
+    # The command succeeds, except while the counter file holds a number above
+    # zero: each `compose up` then uses one up and fails with the message docker
+    # gives when containerd restarts under it. Only `up` fails, so a pull still
+    # succeeds and each failure is one start attempt. The retry case writes and
+    # removes the file; with no file this is a command that succeeds, as before,
+    # and the case asserts it reads this path.
+    - name: Put a docker command that succeeds in place, unless the retry case says otherwise
       ansible.builtin.copy:
         content: |
           #!/bin/sh
+          counter=/var/tmp/molecule-docker-up-failures
+          if [ "$1" = compose ] && [ "$2" = up ] && [ -f "$counter" ]; then
+            remaining=$(cat "$counter")
+            if [ "$remaining" -gt 0 ]; then
+              echo $((remaining - 1)) > "$counter"
+              echo 'failed to create task for container: Unavailable: error reading from server: EOF' >&2
+              exit 1
+            fi
+          fi
           exit 0
         dest: /usr/bin/docker
         owner: root
