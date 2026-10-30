@@ -51,8 +51,19 @@ default, which means no deploy and no smoke test.
 ## Where the secrets come from
 
 The role does not decide where the SMTP values come from. That is the owner's decision
-(see `ansible/patterns/secrets_and_no_log/README.md`). Until it is made, no play in this
-repository supplies them, and the role must not be run with invented values.
+(see `ansible/patterns/secrets_and_no_log/README.md`). On app1 they come from the host's
+inputs file: the `host_inputs` role, which runs before this one in `playbooks/app1.yml`,
+reads `/etc/branchleft/host-inputs.json` (root:root, `0600`, placed by the owner by hand)
+and sets the four `website_app1_smtp_*` values, so no value is in the repository. The role
+must not be run with invented values.
+
+## How it is delivered
+
+It is applied by app1's pulled playbook (ANS-17), after the two pull roles and `host_inputs`.
+The play gives it no image, so `website_app1_image` stays empty: the role writes the
+environment file and the compose file, enables the unit, and does not deploy, restart, smoke
+test or write a stamp. The image is still delivered by the website repository's CI deploy
+job until that route is retired in a follow-up.
 
 ## What is different, and why
 

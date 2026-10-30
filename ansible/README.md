@@ -9,7 +9,8 @@ test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
 `roles/ansible_runtime`, `roles/pull_trigger` and `roles/ci_login`) and `db1` (`playbooks/db1.yml`, which applies
 the same two pull roles and then `roles/host_inputs`, the loader of the host's private inputs;
-`roles/db1_stack` and `roles/db1_grants` are left out of it);
+`roles/db1_stack` and `roles/db1_grants` are left out of it) and `app1` (`playbooks/app1.yml`, which applies
+the same two pull roles, then `roles/host_inputs`, then `roles/website_app1`);
 the other trees hold only what those hosts need.
 The break-glass roles `roles/breakglass_mint_host` (for ops1) and
 `roles/breakglass_grant_host` (for app1) are not yet applied by any playbook: they
@@ -570,7 +571,9 @@ oversight. Each is a decision the standard assigns to later work.
   edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
   playbook applies the same two pull roles and then `roles/host_inputs`, which refuses the
   run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
-  its trust file is empty until the owner rules the signer, so db1 refuses every run until then. ANS-17 describes the only approved path. The trigger is
+  its trust file is empty until the owner rules the signer, so db1 refuses every run until then. app1's
+  playbook applies `roles/host_inputs` and then `roles/website_app1`, and refuses the run the same way
+  until the owner has placed app1's own `/etc/branchleft/host-inputs.json`. ANS-17 describes the only approved path. The trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
   nothing in this repo calls that workflow yet.
 - **Reuse by other repositories.** The harness is code another repository may
