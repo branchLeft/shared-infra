@@ -42,13 +42,12 @@ run on the hosts. Until then, do not run either script on a host this role manag
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares every input, and
-[`defaults/main.yml`](defaults/main.yml) holds the one default. Ansible checks the
-inputs when the role starts.
+neither has a default. Ansible checks the inputs when the role starts.
 
-| Variable                        | Default          | Meaning                                                                                                                     |
-| ------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `deploy_tooling_host_class`     | none, required   | `app` or `gateway`.                                                                                                         |
-| `deploy_tooling_policy_variant` | `not_applicable` | `standard` or `protected_no_db`. Required for class `app` (the role refuses `not_applicable` there); ignored for `gateway`. |
+| Variable                        | Default        | Meaning                                                                                                                                      |
+| ------------------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy_tooling_host_class`     | none, required | `app` or `gateway`.                                                                                                                          |
+| `deploy_tooling_policy_variant` | none, required | `standard` or `protected_no_db` for class `app` (the role refuses `not_applicable` there); `not_applicable` for `gateway`, which ignores it. |
 
 The variant is the role's **expectation**, never an input to the policy program. The
 program decides for itself from the host's own address, and the read-back fails when the
@@ -144,11 +143,11 @@ image does not have.
 Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode, the
 approval of the protected environment, a pull of that exact commit on the host, and a
 second run that must report zero changes. Nothing in this repository applies the role by
-hand, and an author's local run is the container test. No host plays the role yet: the
-per-host role list will carry it, with each host's class
-and variant, is a follow-up, and capturing the real `iptables -S INPUT` and
-`iptables -S DOCKER-USER` (and the IPv6 pair) from a real app host is a precondition of
-it (see "Named limits").
+hand, and an author's local run is the container test. `ansible/playbooks/app1.yml`
+applies the role after `host_inputs`, which sets the host's class and variant from the
+owner's root-only file on the host (`roles/host_inputs/README.md`). Capturing the real
+`iptables -S INPUT` and `iptables -S DOCKER-USER` (and the IPv6 pair) from app1 stays a
+precondition of its first live run (see "Named limits").
 
 ## How to change it safely
 

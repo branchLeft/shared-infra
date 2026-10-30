@@ -1,6 +1,6 @@
 ---
 # Runs the role once. run_class is the host class and run_variant the policy
-# variant (the role's own default, not applicable, when a case passes none);
+# variant (not applicable when a case passes none);
 # run_check true runs the role in check mode. A case that needs the role told
 # something else has its own file beside this one.
 - name: Apply the role

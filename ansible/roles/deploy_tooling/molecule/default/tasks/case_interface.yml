@@ -17,6 +17,14 @@
     expect_task: '^Validating arguments'
     run_class: edge
 
+- name: Run the role with no variant at all
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: no policy variant
+    expect_msg: 'deploy_tooling_policy_variant'
+    expect_task: '^Validating arguments'
+    run_tasks: run_role_no_variant.yml
+
 - name: Run the role for an app host with no variant
   ansible.builtin.include_tasks: expect_role_failure.yml
   vars:

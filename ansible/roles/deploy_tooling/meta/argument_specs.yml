@@ -24,7 +24,7 @@ argument_specs:
           for this: a host that is not told its class is not guessed.
       deploy_tooling_policy_variant:
         type: str
-        default: not_applicable
+        required: true
         choices:
           - standard
           - protected_no_db
@@ -36,5 +36,6 @@ argument_specs:
           the protected-port drops and no database exception). The policy program
           decides for itself from the host's own address, so this is never an input
           to it; the read-back fails when the host's chain is not the one named
-          here. Required for class app (the role refuses not_applicable there) and
-          ignored for class gateway.
+          here. Always required, with no default: a host of class app names standard
+          or protected_no_db (the role refuses not_applicable there), and a host of
+          class gateway names not_applicable.

@@ -1,0 +1,8 @@
+---
+# Runs the role told its class and not its variant, which is how a play that
+# forgot the variable runs it.
+- name: Apply the role with no policy variant
+  ansible.builtin.include_role:
+    name: branchleft.deploy_tooling
+  vars:
+    deploy_tooling_host_class: app

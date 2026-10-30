@@ -183,6 +183,8 @@
     db1_stack_exporter_password: "{{ host_inputs_doc['db1_stack_exporter_password'] | default(omit) }}"
     db1_grants_tenants: "{{ host_inputs_doc['db1_grants_tenants'] | default(omit) }}"
     db1_grants_ops1_host: "{{ host_inputs_doc['db1_grants_ops1_host'] | default(omit) }}"
+    deploy_tooling_host_class: "{{ host_inputs_doc['deploy_tooling_host_class'] | default(omit) }}"
+    deploy_tooling_policy_variant: "{{ host_inputs_doc['deploy_tooling_policy_variant'] | default(omit) }}"
   no_log: true
   diff: false
 
