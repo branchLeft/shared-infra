@@ -587,16 +587,18 @@ Then:
 
 1. In a branch, set `rateLimit: 'enforcing'` in `hetzner/edge/posture.ts`, with
    `RATE_LIMIT_EVENTS` at the derived value.
-2. `cd hetzner && npm run render` — this rewrites `hetzner/edge/stack/Caddyfile`.
-3. Commit both files together and open a pull request. `npm test` fails if the
+2. `cd hetzner && pnpm run render` — this rewrites `hetzner/edge/stack/Caddyfile`.
+3. Commit both files together and open a pull request. `pnpm run test` fails if the
    rendered file and the posture disagree, so they cannot land apart.
 4. After merge, on an up-to-date checkout of `main`, repeat step 4 (`rsync`) and
-   then restart, which needs no new image:
+   then reload Caddy in place, which needs no new image. The reload hands the
+   new configuration to the running process and keeps its listeners, so the blog
+   keeps answering while it happens. Use it for every Caddyfile or snippet
+   change, including the posture flips in this section.
 
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'docker restart $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy)'
-```
+   A successful reload prints nothing: it exits `0` and writes no line. Caddy
+   v2.11.4 (the pinned version) returns an error and keeps the previous
+   configuration running when the new one fails to load.
 
 **Not `systemctl restart branchleft-compose@edge`.** That unit carries no
 `ExecStop` since `hetzner/provision/branchleft-compose@.service` changed, so a
@@ -612,10 +614,11 @@ The `edge` instance is deliberately **not** given the blanket
 `--force-recreate` that the monitoring instance gets: recreating this stack
 wholesale on every unit restart would also recreate CrowdSec, and
 `branchleft-deploy` restarts this unit for image bumps where a selective
-recreate is the correct behaviour. So the recreate is explicit here, at the one
-step that needs it.
+recreate is the correct behaviour. A Caddyfile change therefore goes through
+the reload below, which needs no recreate. The recreate survives only as the
+fallback in step 4.
 
-**Validate before restarting.** The copy is already on disk at this point, so
+**Validate before reloading.** The copy is already on disk at this point, so
 the running container can parse it without adopting it:
 
 ```bash
@@ -626,15 +629,90 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
 Expect `Valid configuration`. CI validates the file in the repository; this
 validates the bytes that survived the `rsync`, in the pinned binary, with the
 file where Caddy will actually read it. Caddy terminates TLS for every hostname
-this edge serves, so restarting onto a config it cannot parse is an outage.
+this edge serves, so a reload onto a config it cannot parse fails and leaves the
+previous configuration running. Validate first anyway, so the error is seen
+before the reload rather than in its output.
+
+**Check the mount before reloading.** The Caddyfile is a single-file bind mount,
+and `rsync` writes a new file and renames it over the old one. A container that
+was started before that copy can keep the file it was created with, and a reload
+would then load bytes that are not the ones in the repository. The two hashes
+below must match:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a
+  sha256sum Caddyfile | cut -c1-64
+  docker compose exec -T caddy cat /etc/caddy/Caddyfile | sha256sum | cut -c1-64'
+```
+
+Expect two identical 64-character lines. Different lines: do not reload; use the
+fallback below.
+
+**Reload, with the probe running across it.** The probe loop starts before the
+reload, so it samples the edge before, during and after:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a
+  ( for i in $(seq 1 60); do
+      curl -s -o /dev/null -w "%{http_code}\n" -H "Host: edge-probe.invalid" http://127.0.0.1:8080/
+      sleep 0.5
+    done | sort | uniq -c > /tmp/edge-reload-probe.txt ) &
+  LOOP=$!
+  docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
+  RELOAD=$?
+  wait $LOOP
+  echo "reload exit $RELOAD"
+  cat /tmp/edge-reload-probe.txt'
+```
+
+Expect `reload exit 0`, and the probe lines `60 204` and nothing else. Any `000`
+or `5xx` line is an outage during the reload: stop and report it before going
+further.
+
+**The blog's continuity.** Until `blog.branchleft.co.uk` resolves to edge1
+(§11 step 4), the probe loop is the only path this runbook can take through the
+edge, so it is the blog's continuity check too. Once the hostname resolves here,
+run the same loop from the workstation against `https://blog.branchleft.co.uk/`
+in a second terminal while the reload runs, and expect only the blog's normal
+success code, `200`.
+
+**Read-back that the new rule is live.** Step 5 reads the rate-limit rule through
+§8a's loop. This marker shows the host-qualified site block is the one answering
+after the reload. It spends one event of the magic-link budget, so leave 60
+seconds before the §8 checks:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  curl -s -o /dev/null -D - -X POST -H "Host: edge-probe.invalid" \
+    http://127.0.0.1:8080/members/api/send-magic-link | tr -d "\r" | grep -i "^x-edge-probe"'
+```
+
+Expect `X-Edge-Probe: host-routed`.
+
+**Fallback: restart.** Use a restart only if the reload exits non-zero and
+`caddy validate` above still passes, or the mount hashes differ. A restart drops
+every site for a few seconds, which is why it is not the first choice. Re-create
+the container so it binds the file on disk; a plain `docker restart` is not the
+fallback, because it keeps the mount the container was created with:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a &&
+  docker compose up -d --force-recreate caddy'
+```
+
+Then run the §7 check. Expect `Up (healthy)` for the Caddy container.
 
 5. Confirm it took, with §8a's loop. Expect roughly `200 204` followed by
    `50 429` rather than `250 204` — the inverse of what §8a asserts today, and
    the point at which §8a's expected output must be updated in this file.
 
-**Counters are in-memory and per-process, so this restart resets every client's
-budget.** Harmless, and the reason sustained-attack behaviour cannot be reasoned
-about across a deploy.
+**Counters are in-memory and per-process.** This runbook has not observed whether
+a reload resets them, so read §8a's figures after the reload rather than assuming
+a fresh budget for every client. The reason sustained-attack behaviour cannot be
+reasoned about across a deploy still holds.
 
 **Neither the flip nor its verification runs itself:** merging the posture
 change does not deploy it, and does not run the loop. Both are steps 4 and 5
@@ -690,8 +768,8 @@ One registry entry, then a re-render. Nothing else.
    `sites.ts` (`host` is a name from the estate address plan, not an address;
    an unknown name fails the render rather than producing a config that proxies
    to nothing).
-2. `cd hetzner && npm run render`, commit both files, open a pull request.
-3. After merge: `rsync` (step 4) and restart (step 10a.4).
+2. `cd hetzner && pnpm run render`, commit both files, open a pull request.
+3. After merge: `rsync` (step 4) and reload (step 10a.4).
 4. **Only then** cut the hostname's DNS at IONOS to `46.225.95.167`. The order
    is forced: Caddy issues its certificate over HTTP-01, which cannot succeed
    until the hostname resolves here, and it will not attempt issuance at all
@@ -721,15 +799,20 @@ rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
   hetzner/edge/stack/ root@"$EDGE1_IPV4":/opt/branchleft/edge/ &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/edge/ &&
-   docker restart $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy)'
+   cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a &&
+   docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile'
 ```
 
-**The recreate matters more here than on the forward path.** A rollback is
-reached for during an outage, and `systemctl restart branchleft-compose@edge`
-would restore the previous file to disk and leave the broken configuration
-running in memory — exit 0, containers healthy, nothing fixed, and the one
-signal saying the rollback worked pointing the wrong way. See §10a.4 for why
-the unit no longer recreates on a bind-mount content change.
+Then run §10a.4's mount check and probe read-back in full, and expect the same
+results.
+
+**A rollback is applied by the reload, not by the unit.** A rollback is reached
+for during an outage, and `systemctl restart branchleft-compose@edge` would
+restore the previous file to disk and leave the broken configuration running in
+memory — exit 0, containers healthy, nothing fixed, and the one signal saying the
+rollback worked pointing the wrong way. The reload is what loads the restored
+file. If it fails, Caddy keeps the broken configuration running; use the fallback
+in §10a.4 step 4.
 
 Then `git checkout HEAD -- hetzner/edge/stack` on the workstation, so the
 checkout stops describing a state the repository does not hold.
