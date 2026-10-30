@@ -10,7 +10,7 @@ need no change.
 
 This README is written for a maintainer who is new to the repository. It follows
 the order the standard sets for a role README (ANS-14). The decision it carries out
-is the owner's, option A on branchLeft/workspace#2739: one root-only file per host,
+is the owner's, option A: one root-only file per host,
 written by the owner at bootstrap and edited by hand to rotate, read at run time by
 one shared loader.
 

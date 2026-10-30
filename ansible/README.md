@@ -6,14 +6,14 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. Its real hosts are `edge1` (`playbooks/edge1.yml`, which applies
-`roles/ansible_runtime`, `roles/pull_trigger` and `roles/ci_login`) and `db1` (`playbooks/db1.yml`, which applies
-the same two pull roles, then `roles/host_inputs`, the loader of the host's private inputs, then `roles/db1_stack`;
-`roles/db1_grants` is left out of it);
-the other trees hold only what those hosts need.
-The break-glass roles `roles/breakglass_mint_host` (for ops1) and
-`roles/breakglass_grant_host` (for app1) are not yet applied by any playbook: they
-reach their hosts through the per-host role list, in a later wiring change.
+the skeleton. Its real hosts are `edge1`, `ops1`, `app1` and `db1`. Each has a playbook
+enrolled in the gated pull. `edge1`, `ops1` and `app1` apply `roles/ansible_runtime` and
+`roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` adds
+`roles/ci_login`, `playbooks/ops1.yml` adds `roles/breakglass_mint_host` and then
+`roles/status_page`, and `playbooks/app1.yml` adds `roles/breakglass_grant_host`.
+`playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
+the host's private inputs, then `roles/db1_stack`; `roles/db1_grants` is left out of it.
+The other trees hold only what those hosts need.
 
 ## Layout
 

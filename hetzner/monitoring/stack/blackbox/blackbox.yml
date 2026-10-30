@@ -14,6 +14,21 @@ modules:
       tls_config:
         insecure_skip_verify: false
 
+  # Object Storage answers an anonymous request to its bare endpoint with an
+  # S3 AccessDenied (403): the service is up and refusing the request, which
+  # is the liveness signal this probe wants. Only a connection failure,
+  # timeout or a 5xx from the endpoint is an outage, so those stay failures.
+  http_object_storage:
+    prober: http
+    timeout: 10s
+    http:
+      valid_status_codes: [200, 403]
+      method: GET
+      preferred_ip_protocol: ip4
+      follow_redirects: true
+      tls_config:
+        insecure_skip_verify: false
+
   # A scan-banned or dead-backend connection still completes the TCP
   # handshake and then EOFs, so a plain tcp_connect check reads as healthy
   # through exactly the outage it exists to catch. This module reads the

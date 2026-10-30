@@ -1,0 +1,81 @@
+---
+# Internal to the role. Installs the egress program and its unit, enables the
+# unit and runs the program again when either file changed. The program builds
+# the two policy chains and puts the jump into DOCKER-USER; this role never
+# writes a firewall rule itself. Each file is fetched on its own from the one
+# home of the programs and held to its pinned sha256, so a digit flipped in a
+# pin, or a file changed at the commit, stops the role at the download.
+
+# Mode 0755 and root ownership are load-bearing: systemd runs this file as root
+# at every boot, so a group- or world-writable copy is a root shell for
+# whoever can write it. The program is on disk before the unit that names it.
+- name: Install the egress program, held to its pinned sha256
+  ansible.builtin.get_url:
+    url: '{{ demo1_egress_spool_source_base_url }}/{{ demo1_egress_spool_egress_script_src }}'
+    dest: '{{ demo1_egress_spool_egress_script_dest }}'
+    checksum: 'sha256:{{ demo1_egress_spool_egress_script_sha }}'
+    owner: root
+    group: root
+    mode: '0755'
+  register: demo1_egress_spool_script
+
+- name: Install the egress unit, held to its pinned sha256
+  ansible.builtin.get_url:
+    url: '{{ demo1_egress_spool_source_base_url }}/{{ demo1_egress_spool_egress_unit_src }}'
+    dest: '{{ demo1_egress_spool_egress_unit_dest }}'
+    checksum: 'sha256:{{ demo1_egress_spool_egress_unit_sha }}'
+    owner: root
+    group: root
+    mode: '0644'
+  register: demo1_egress_spool_unit_file
+  notify: Reload systemd manager
+
+- name: Make systemd read the unit before it is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file, so on a fresh host systemd cannot know the
+# unit and the tasks below would fail. stat runs in check mode as in a real
+# run, so they run whenever the unit file is really on disk, and the skip on a
+# fresh host is the stated reason (ANS-10).
+- name: Read back the unit file of the egress policy
+  ansible.builtin.stat:
+    path: '{{ demo1_egress_spool_egress_unit_dest }}'
+    follow: false
+  register: demo1_egress_spool_unit_now
+
+- name: Enable the egress unit for boot
+  ansible.builtin.systemd_service:
+    name: '{{ demo1_egress_spool_egress_unit_name }}'
+    enabled: true
+  register: demo1_egress_spool_unit_enable
+  when: demo1_egress_spool_unit_now.stat.exists
+
+# restart, not start. The unit is a RemainAfterExit oneshot, so once it has
+# succeeded systemd counts it as active and a start does nothing, which would
+# leave a freshly installed program unrun until the next boot. Done only when a
+# file changed, so that a second run changes nothing.
+- name: Run the egress program again because a file changed
+  ansible.builtin.systemd_service:
+    name: '{{ demo1_egress_spool_egress_unit_name }}'
+    state: restarted
+  when: demo1_egress_spool_unit_now.stat.exists and (demo1_egress_spool_script.changed or demo1_egress_spool_unit_file.changed)
+
+# A unit that failed on an earlier run is not active and nothing above touched
+# it, so this starts it, which runs the program again. On an active unit it
+# does nothing.
+- name: Start the egress unit if it is not active
+  ansible.builtin.systemd_service:
+    name: '{{ demo1_egress_spool_egress_unit_name }}'
+    state: started
+  register: demo1_egress_spool_unit_start
+  when: demo1_egress_spool_unit_now.stat.exists
+
+# What a real run would still change. The read-back asserts the loaded policy,
+# which a plan on a host that has not been given the program cannot show.
+- name: Work out whether this run changes the egress policy
+  ansible.builtin.set_fact:
+    demo1_egress_spool_egress_pending: >-
+      {{ demo1_egress_spool_script.changed or demo1_egress_spool_unit_file.changed
+      or not demo1_egress_spool_unit_now.stat.exists
+      or (demo1_egress_spool_unit_enable.changed | default(false))
+      or (demo1_egress_spool_unit_start.changed | default(false)) }}
