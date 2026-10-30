@@ -1,0 +1,164 @@
+---
+# Test scaffolding, not role tasks. What the demo host has before the role runs, as the host
+# baseline and the owner's steps leave it: iptables with Docker's DOCKER-USER chain in both
+# families, a running docker.service, the shared Compose unit template, the owner's drain
+# token file, and stand-ins for the programs the role and that unit call. The stand-ins prove
+# wiring only (README, "Named limits"). The iptables rules are real, in the container's own
+# network namespace.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install iptables, which loads the policy, iproute2, which lists listeners, and the certificates the downloads need
+      ansible.builtin.apt:
+        name:
+          - iptables
+          - iproute2
+          - ca-certificates
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the directories the host baseline and the host build leave
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /opt/branchleft
+
+    # Docker creates DOCKER-USER with one RETURN rule and sends FORWARD to it. There is no
+    # Docker here, so the chain is made the same way in each family, once.
+    - name: Look for the DOCKER-USER chain in each family
+      ansible.builtin.command:
+        argv: ['{{ item }}', -t, filter, -S, DOCKER-USER]
+      loop: [iptables, ip6tables]
+      register: demo1_egress_spool_standin_chain
+      changed_when: false
+      failed_when: false
+
+    - name: Create the DOCKER-USER chain where it is missing
+      ansible.builtin.command:
+        argv: ['{{ item.item }}', -t, filter, -N, DOCKER-USER]
+      loop: '{{ demo1_egress_spool_standin_chain.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+      changed_when: true
+      when: item.rc != 0
+
+    - name: Give a new DOCKER-USER chain the one rule Docker gives it
+      ansible.builtin.command:
+        argv: ['{{ item.item }}', -t, filter, -A, DOCKER-USER, -j, RETURN]
+      loop: '{{ demo1_egress_spool_standin_chain.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+      changed_when: true
+      when: item.rc != 0
+
+    # PartOf docker.service and WantedBy docker.service in the egress unit, and Requires in
+    # the shared Compose unit, need a unit of that name that is active.
+    - name: Install a stand-in for docker.service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Test stand-in for docker.service
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/docker.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install a stand-in for docker
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../default/files/standin-docker.sh'
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the log of the stand-in's calls, empty
+      ansible.builtin.copy:
+        content: ''
+        dest: /var/log/docker-standin.calls
+        owner: root
+        group: root
+        mode: '0644'
+        force: false
+
+    - name: Create the directory the stand-in docker reads its answers from
+      ansible.builtin.file:
+        path: /var/lib/standin-docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the directory of the stand-in drain endpoint
+      ansible.builtin.file:
+        path: /usr/local/lib/standin
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the stand-in drain endpoint
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../default/files/drain-stub.py'
+        dest: /usr/local/lib/standin/drain-stub.py
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install the unit that runs the stand-in drain endpoint
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Test stand-in for the spool's drain endpoint
+          [Service]
+          EnvironmentFile=-/etc/standin-drain-stub.env
+          ExecStart=/usr/bin/python3 /usr/local/lib/standin/drain-stub.py
+        dest: /etc/systemd/system/standin-drain-stub.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    # The shared Compose unit template the host baseline hand-installs, taken from the
+    # repository so the test runs the role against the real unit and not against a copy.
+    - name: Install the shared Compose unit template
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../../../../../hetzner/provision/branchleft-compose@.service'
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Start the stand-in for docker.service
+      ansible.builtin.systemd_service:
+        name: docker.service
+        state: started
+
+    - name: Write the answers of the healthy spool
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/standin_state.yml'
+
+    # The owner places this file once; the role only asserts it. The value is a sentinel,
+    # not a secret: it goes into a throwaway container.
+    - name: Place the drain token file the way the owner does
+      ansible.builtin.copy:
+        content: "SHIM_DRAIN_TOKEN=test-sentinel-drain-token-0001\n"
+        dest: /etc/branchleft/mail-spool.env
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true

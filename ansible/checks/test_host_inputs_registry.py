@@ -234,10 +234,21 @@ class RealTree(unittest.TestCase):
 
     def test_app1_applies_the_loader_then_the_website_role_after_the_pull_roles(self) -> None:
         # The order is the point: the loader sets the four SMTP facts the role requires, so the
-        # role must follow it, and both must follow the two pull roles (check_enrolment R11).
+        # role must follow it, and both must follow the two pull roles (check_enrolment R11). The
+        # host baseline installs Docker, which the role needs, so it too sits before the role.
         playbook = _mapping_list(_read(ROOT / "ansible" / "playbooks" / "app1.yml"))
         applied = [Path(str(entry.get("role", entry))).name for entry in playbook]
-        self.assertEqual(applied, ["ansible_runtime", "pull_trigger", LOADER, "website_app1"])
+        self.assertEqual(
+            applied,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                LOADER,
+                "host_baseline",
+                "breakglass_grant_host",
+                "website_app1",
+            ],
+        )
 
 
 class Mutations(unittest.TestCase):
