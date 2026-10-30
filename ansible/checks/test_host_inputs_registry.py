@@ -237,9 +237,7 @@ class RealTree(unittest.TestCase):
         # role must follow it, and both must follow the two pull roles (check_enrolment R11).
         playbook = _mapping_list(_read(ROOT / "ansible" / "playbooks" / "app1.yml"))
         applied = [Path(str(entry.get("role", entry))).name for entry in playbook]
-        self.assertEqual(
-            applied, ["ansible_runtime", "pull_trigger", LOADER, "website_app1"]
-        )
+        self.assertEqual(applied, ["ansible_runtime", "pull_trigger", LOADER, "website_app1"])
 
 
 class Mutations(unittest.TestCase):
@@ -262,7 +260,9 @@ class Mutations(unittest.TestCase):
         shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
         (self.ansible / "playbooks").mkdir()
         for host in ("db1", "app1"):
-            shutil.copy(real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml")
+            shutil.copy(
+                real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
+            )
 
     def _edit(self, relative: str, old: str, new: str) -> None:
         path = self.ansible / relative
@@ -357,9 +357,7 @@ class Mutations(unittest.TestCase):
         self._expect("playbooks/app1.yml applies a role before host_inputs")
 
     def test_an_app1_input_the_loader_sets_with_no_row_is_found(self) -> None:
-        self._edit(
-            "roles/host_inputs/vars/main.yml", "    - website_app1_smtp_user\n", ""
-        )
+        self._edit("roles/host_inputs/vars/main.yml", "    - website_app1_smtp_user\n", "")
         self._expect("the input task sets")
 
     def test_a_host_playbook_that_does_not_apply_the_loader_is_found(self) -> None:
