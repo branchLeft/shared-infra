@@ -30,8 +30,8 @@ import { HOST_IPS } from '@branchleft/hetzner-host';
 /**
  * The file-snapshot assertions at the bottom are not snapshots in the usual
  * sense: `stack/` is what gets copied onto `edge1`, so those files *are* the
- * deployment, same discipline as `../edge/render.test.ts`. `npm run render`
- * updates them; `npm test` fails if they drift.
+ * deployment, same discipline as `../edge/render.test.ts`. `pnpm run render`
+ * updates them; `pnpm run test` fails if they drift.
  */
 
 const site = (overrides: Partial<EdgeSite> = {}): EdgeSite => ({

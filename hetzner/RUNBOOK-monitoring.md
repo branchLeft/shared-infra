@@ -135,7 +135,7 @@ both stacks reads its config through a bind mount **as the container-side
 user**, not as root.
 
 That combination has already broken a deploy. `hetzner/monitoring/stack/prometheus/prometheus.yml`
-is written by `npm run render` (a Vitest file snapshot), which left it `0600` in
+is written by `pnpm run render` (a Vitest file snapshot), which left it `0600` in
 one workstation checkout. Git records `100644` and cannot see the difference --
 it tracks only the executable bit -- so the mode is invisible to review, to
 `git status` and to CI, which checks out its own copy at `0644`. `rsync -av`
@@ -1226,7 +1226,7 @@ exactly the gap that hid `db1`'s four-day `mysqld_exporter` crash loop
 carries the full account). Once 15d's `1` is confirmed:
 
 1. Change `ops1`'s `expectedUp: false` to `true` in `MONITORED_NODE_HOSTS`.
-2. `npm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.
+2. `pnpm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.
 3. Open a PR for that diff alone, citing this section and 15d's read-back.
 4. Once merged, redeploy per 15c again — this second redeploy is the one that
    actually arms `HostOrServiceDown`/`ServiceFlapping` for `ops1`.

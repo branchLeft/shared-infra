@@ -61,8 +61,8 @@ which only the reviewer App answers, and any plan the gate cannot read stays in
 mechanically, the reviewer catches the plan that is green and still wrong.
 
 ```bash
-npm ci
-npx tsc --noEmit                              # what CI type-checks with
+pnpm install --frozen-lockfile
+pnpm exec tsc --noEmit                        # what CI type-checks with
 ```
 
 ## Related documents

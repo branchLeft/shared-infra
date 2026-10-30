@@ -3,6 +3,7 @@
   "version": "0.4.0",
   "private": false,
   "license": "SEE LICENSE IN LICENSE",
+  "packageManager": "pnpm@11.17.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
