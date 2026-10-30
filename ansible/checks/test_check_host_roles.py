@@ -59,13 +59,13 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host).
+# breakglass_grant_host), then db1's host_baseline (after the loader, which goes first).
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": ["host_baseline", "ci_login"],
     "ops1": ["host_baseline", "breakglass_mint_host", "status_page"],
     "app1": ["host_baseline", "breakglass_grant_host"],
-    "db1": ["host_inputs"],
+    "db1": ["host_inputs", "host_baseline"],
 }
 
 
@@ -194,13 +194,13 @@ class HostRoleLists(unittest.TestCase):
         self._list_file(text.replace("  - status_page\n", "", 1))
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
-    # db1 applies the two pull roles, then the loader of its private inputs, and none of the
-    # database roles on its list, which R9 allows because a playbook may apply a subset. The
-    # database roles return once the file the loader reads is on the host.
-    def test_db1_applies_the_pull_roles_then_the_loader(self) -> None:
+    # db1 applies the two pull roles, the loader of its private inputs, then the host baseline,
+    # and none of the database roles on its list, which R9 allows because a playbook may apply a
+    # subset. The database roles return once the file the loader reads is on the host.
+    def test_db1_applies_the_pull_roles_the_loader_then_the_baseline(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
-        self.assertEqual(names, ["ansible_runtime", "pull_trigger", "host_inputs"])
+        self.assertEqual(names, ["ansible_runtime", "pull_trigger", "host_inputs", "host_baseline"])
         self.assertEqual(check(ROOT), [])
 
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
@@ -408,7 +408,7 @@ class HostRoleLists(unittest.TestCase):
             ("app1", "control_plane"),
             ("ops1", "db1_stack"),
             ("db1", "control_plane"),
-            ("db1", "host_baseline"),
+            ("db1", "egress_nat"),
         )
         for host, name in cases:
             with self.subTest(host=host, role=name):
