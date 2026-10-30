@@ -87,6 +87,7 @@ backend = systemd
 maxretry = 5
 findtime = 10m
 bantime = 1h
+ignoreip = 127.0.0.1/8 ::1 10.20.1.10
 EOF
 if [[ -f "$JAIL_LOCAL" ]] && cmp -s "$TMP" "$JAIL_LOCAL"; then
     echo "10-harden-updates-fail2ban: $JAIL_LOCAL already up to date, no-op"
