@@ -15,6 +15,8 @@
     verify_masterkey_file: /etc/branchleft/control-plane/zitadel-masterkey
     # The image the stand-in for docker reports as running; the scenario's pin ends in 2s.
     verify_running_image: example.invalid/example-app@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    # The digest in the deploy wrapper's record in the record cases.
+    verify_recorded_image: example.invalid/example-app@sha256:4444444444444444444444444444444444444444444444444444444444444444
     verify_stack_files:
       - compose.yml
       - compose.init.yml
@@ -520,6 +522,70 @@
             quiet: true
             fail_msg: A given pin was not used as given, or the role called docker although nothing needed it.
 
+        # No pin, and the deploy wrapper's record holds a digest: that digest is used, ahead
+        # of the running container, and docker is not called.
+        - name: Put a digest in the deploy wrapper's record
+          ansible.builtin.copy:
+            content: "IMAGE={{ verify_recorded_image }}\n"
+            dest: /etc/branchleft/control-plane.image.env
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Apply the role with no image given and a record
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_app_image: ''
+
+        - name: Read what the stand-in was asked after the run with a record
+          ansible.builtin.slurp:
+            src: /var/lib/docker-stub/calls
+          register: control_plane_verify_calls_record
+
+        - name: Assert the recorded digest was used and docker was not called
+          ansible.builtin.assert:
+            that:
+              - control_plane_effective_image == verify_recorded_image
+              - (control_plane_verify_calls_record.content | ansible.builtin.b64decode) == ''
+            quiet: true
+            fail_msg: The role did not take the digest in the wrapper's record, or it called docker although the record held one.
+
+        # A record that is not a digest is not used: the running container decides.
+        - name: Put a tag in the deploy wrapper's record
+          ansible.builtin.copy:
+            content: "IMAGE=example.invalid/example-app:latest\n"
+            dest: /etc/branchleft/control-plane.image.env
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Apply the role with no image given and a record that is a tag
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_app_image: ''
+
+        - name: Assert the record that is a tag was passed over for the running image
+          ansible.builtin.assert:
+            that:
+              - control_plane_effective_image == verify_running_image
+            quiet: true
+            fail_msg: A record that is not a digest was used, or the running image was not.
+
+        - name: Remove the deploy wrapper's record and empty the stand-in's call log
+          ansible.builtin.copy:
+            content: ''
+            dest: /var/lib/docker-stub/calls
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Remove the deploy wrapper's record
+          ansible.builtin.file:
+            path: /etc/branchleft/control-plane.image.env
+            state: absent
+
         # No pin: the image is the one the running portal container was created from.
         - name: Apply the role with no image given
           ansible.builtin.include_role:
@@ -624,6 +690,7 @@
           loop:
             - /usr/local/bin/docker
             - /var/lib/docker-stub
+            - /etc/branchleft/control-plane.image.env
           loop_control:
             label: '{{ item }}'
 

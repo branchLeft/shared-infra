@@ -1,21 +1,15 @@
 """Unit tests for the order and the gates of the control_plane role's tasks.
 
-The role writes each secret in two steps. Each file is created empty at its final
-owner and mode, then the owner, group and mode of both files are set on every run,
-and only then is each file's content written into the file. A fill writes through
-the existing file, which keeps the owner and mode it has, so an attribute task that
-runs after a fill leaves the content in a file that is still wide. These tests read
-tasks/main.yml as text and fail when one of the five tasks is missing, or when the
-attribute task is not between the two create-empty tasks and the two fills.
-
-The role also settles its inputs before it writes anything, and leaves the containers of
-a deployed stack to the unit. They fail when an input refusal comes after the first write,
-when a task that runs Compose directly is not gated on a stack that is not yet deployed,
-when a read of the running stack can change something or is skipped in check mode, or when
-a task uses the given image instead of the one the role settled on.
+Each secret is written in two steps: created empty at its final owner and mode, then
+filled. The attribute task must sit between the create-empty tasks and the fills, or a
+fill leaves content in a file that is still wide. The role also settles its inputs before
+its first write and leaves a deployed stack's containers to the unit. These tests read
+tasks/main.yml and fail when that order or those gates are lost.
 """
 
+import importlib.util
 import re
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -39,7 +33,6 @@ INPUT_REFUSALS = (
     "Refuse a run with no image to deploy",
     "Refuse an image that is not pinned by digest",
 )
-REFUSAL_CODES = ("env-missing", "masterkey-missing", "image-missing", "image-not-pinned")
 REFUSAL_CODES = ("env-missing", "masterkey-missing", "image-missing", "image-not-pinned")
 DOCKER_READS = (
     "Look for the portal container of the stack",
@@ -174,6 +167,32 @@ class InputTests(unittest.TestCase):
             self.assertNotIn(
                 "control_plane_app_image", used, f"{task.get('name')!r} uses the image as given"
             )
+
+
+class WrapperRecordTests(unittest.TestCase):
+    """The role reads the deploy wrapper's record, so the path and the key come from its source."""
+
+    def setUp(self) -> None:
+        source = ROLE.parents[2] / "hetzner" / "provision" / "branchleft_deploy.py"
+        spec = importlib.util.spec_from_file_location("branchleft_deploy", source)
+        if spec is None or spec.loader is None:
+            self.fail(f"cannot load {source}")
+        self.wrapper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.wrapper)
+
+    def test_the_role_reads_the_file_the_wrapper_writes(self) -> None:
+        variables = yaml.safe_load((ROLE / "vars" / "main.yml").read_text(encoding="utf-8"))
+        self.assertEqual(
+            variables["control_plane_image_record"], self.wrapper.image_env_path("control-plane")
+        )
+
+    def test_the_wrapper_writes_the_key_the_role_reads(self) -> None:
+        image = "example.invalid/app@sha256:" + "a" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control-plane.image.env"
+            self.wrapper.write_image_env(str(path), image)
+            self.assertEqual(path.read_text(encoding="utf-8"), f"IMAGE={image}\n")
+        self.assertIn("^IMAGE=", TASKS.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

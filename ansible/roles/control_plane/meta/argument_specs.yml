@@ -27,9 +27,10 @@ argument_specs:
           Image of the applications, pinned by digest as NAME@sha256:64 lower-case
           hex digits. Passed to Compose as IMAGE for the bring-up and to the deploy
           wrapper. A reference without a digest is refused. Not a secret. When it is
-          not given, the role reads the image the stack's running portal container was
-          created from and deploys that, so a run changes no image; giving a pin is the
-          upgrade. With no pin and no running portal container the run stops.
+          not given, the role deploys the digest in the deploy wrapper's record of its last
+          pin (/etc/branchleft/control-plane.image.env) if there is one, else the image the
+          stack's running portal container was created from, so a run changes no image; giving
+          a pin is the upgrade. With none of the three the run stops.
       control_plane_env_content:
         type: str
         required: false

@@ -92,12 +92,15 @@ An empty string counts as not given.
   path and never a value. A host that already runs the stack needs neither input.
   A fresh host needs both, once.
 - **The image** is not a secret. When `control_plane_app_image` is given it is used
-  as given: it is the way to upgrade. When it is not given, the role reads the image
+  as given: it is the way to upgrade. When it is not given, the role takes the digest
+  in the deploy wrapper's record of its last pin, `/etc/branchleft/control-plane.image.env`
+  (one line, `IMAGE=<reference>`), if the file holds one. Otherwise it reads the image
   the stack's running portal container was created from, with two read-only
   commands (`docker ps` filtered on the Compose project `control-plane`, the service
   `portal` and `oneoff=False`, then `docker inspect` of that container), which run
   in check mode too and change nothing. The image used is then the one already
-  running, so a run changes no image. The host is the source of truth for the image
+  deployed, so a run changes no image. A running tag is not a dead end: the record, which
+  the wrapper only writes as a digest, is read first. The host is the source of truth for the image
   until a pin is given. With no pin and no portal container the run stops with
   `control_plane[image-missing]`; an image that is not `NAME@sha256:` and 64 hex digits
   stops it with `control_plane[image-not-pinned]`, as the deploy wrapper would.
@@ -141,9 +144,12 @@ database and the sign-in service exist.
   created once, with their content written once. On every run their owner, group
   and mode are set back to these values, and their content is not changed.
 - `/opt/branchleft/control-plane` (`0755`) and its three files (`0644`).
-- Containers: the database and the sign-in service are started and healthy;
-  the init phase runs once on a fresh database.
-- The stack's unit is enabled and active; the deploy wrapper writes its image pin.
+- Containers: on a fresh host only, the database and the sign-in service are started
+  and healthy and the init phase runs once. On a host where the stack runs, the role
+  starts no container itself.
+- The stack's unit is enabled and active; the deploy wrapper writes its image pin. On
+  every run the role restarts the unit through the wrapper, which costs one registry pull
+  and one start against the unit's start limit (five starts in fifteen minutes).
 - `/usr/local/sbin/branchleft-docker-user-policy` (`0755`) and
   `/etc/systemd/system/branchleft-docker-user-policy.service` (`0644`). The
   policy is applied when either changed, and at every boot after.
