@@ -11,6 +11,7 @@ a role reads is outside the filter.
 from __future__ import annotations
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -113,6 +114,68 @@ class WatchedPathsTest(unittest.TestCase):
                 ["hetzner/monitoring/systemd/monitoring.override.conf"],
             ),
         )
+
+
+class CommentsAreNotReadsTest(unittest.TestCase):
+    # A path named in a comment tells the reader something; it does not make the role read
+    # it, so the filter must not be widened to cover it.
+    def test_whole_line_yaml_comment_is_not_a_read(self) -> None:
+        text = "# Mirrors hetzner/provision/test_compose_unit_contract.py.\n"
+        self.assertEqual(set(), ci_select.outside_reads(text))
+
+    def test_trailing_yaml_comment_is_not_a_read(self) -> None:
+        text = "verify_repo: ROOT  # mirrors hetzner/provision/branchleft-nat.service\n"
+        self.assertEqual(set(), ci_select.outside_reads(text))
+
+    def test_shell_comments_are_not_reads(self) -> None:
+        whole = "    # cp hetzner/provision/x.service /etc\n"
+        trailing = "cp a b  # hetzner/provision/x.service\n"
+        self.assertEqual(set(), ci_select.outside_reads(whole))
+        self.assertEqual(set(), ci_select.outside_reads(trailing))
+
+    def test_joined_path_in_a_comment_is_not_a_read(self) -> None:
+        text = '# ROOT / "hetzner" / "provision" / "x.service"\n'
+        self.assertEqual(set(), ci_select.outside_reads(text))
+
+    def test_a_real_read_on_a_line_with_a_comment_still_counts(self) -> None:
+        text = "src: '{{ verify_repo }}/hetzner/provision/x.service'  # the unit file\n"
+        self.assertEqual({"hetzner/provision/x.service"}, ci_select.outside_reads(text))
+
+    def test_a_real_read_after_a_hash_inside_quotes_still_counts(self) -> None:
+        text = 'marker: " # "; src: "hetzner/provision/x.service"\n'
+        self.assertEqual({"hetzner/provision/x.service"}, ci_select.outside_reads(text))
+
+    def test_a_real_read_after_an_escaped_quote_still_counts(self) -> None:
+        text = 'note: "a \\" b # c"; src: "hetzner/provision/x.service"\n'
+        self.assertEqual({"hetzner/provision/x.service"}, ci_select.outside_reads(text))
+
+    def test_a_comment_only_fixture_reads_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vars_dir = root / "ansible" / "roles" / "backup_restore"
+            vars_dir = vars_dir / "molecule" / "default" / "vars"
+            vars_dir.mkdir(parents=True)
+            (vars_dir / "test.yml").write_text(
+                "# Mirrors hetzner/provision/test_compose_unit_contract.py.\n"
+                "verify_repo: ROOT  # and hetzner/provision/branchleft-nat.service\n",
+                encoding="utf-8",
+            )
+            self.assertEqual({}, ci_select.reads_by_path(root))
+
+    def test_a_real_read_fixture_is_still_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vars_dir = root / "ansible" / "roles" / "backup_restore"
+            vars_dir = vars_dir / "molecule" / "default" / "vars"
+            vars_dir.mkdir(parents=True)
+            (vars_dir / "test.yml").write_text(
+                "# Mirrors hetzner/provision/test_compose_unit_contract.py.\n"
+                "verify_repo: '{{ root }}/hetzner/provision/x.service'  # the unit\n",
+                encoding="utf-8",
+            )
+            self.assertIn("hetzner/provision/x.service", ci_select.reads_by_path(root))
+            reads = ci_select.reads_by_path(root)
+            self.assertNotIn("hetzner/provision/test_compose_unit_contract.py", reads)
 
 
 if __name__ == "__main__":

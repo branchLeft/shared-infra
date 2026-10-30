@@ -1,0 +1,32 @@
+---
+# The container-only test of a host that takes its commit as a git bundle on standard input
+# (ANS-15). The harness in ansible/harness sets ROLE_TEST_RUN_ID, so the instance name is unique
+# to one run and a destroy can only ever remove this run's container.
+#
+# The host never initiates a connection, so this scenario has no network once it is set up:
+# prepare.yml refreshes the apt index over the container's one network, and as its last task
+# disconnects the container from that network, from the controller, with `docker network
+# disconnect`. Everything after it, the role's converge and every case of verify.yml, runs with
+# no network at all, and verify.yml proves that first with a connect that must fail. The cases
+# need no network of their own, so nothing here widens the container's reach: the container
+# only ever loses a network.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # The same third-party test base as the default scenario, trusted by digest (see the role
+    # README). No privileged mode, no added capabilities, no network or volume key.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    pre_build_image: true
+    command: sleep infinity
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+verifier:
+  name: ansible

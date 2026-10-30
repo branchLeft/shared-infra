@@ -1,0 +1,39 @@
+---
+# Internal to the role: included first from main.yml. The inputs are refused
+# before anything is downloaded or written. The argument spec has already run;
+# it coerces a wrong type rather than rejecting it, so these reject the shapes.
+- name: Refuse a source commit that is not a full sha
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_source_sha is string
+      - demo1_egress_spool_source_sha is match(demo1_egress_spool_sha_pattern)
+    quiet: true
+    fail_msg: The source commit must be a full 40-character lower-case sha.
+
+- name: Refuse a base URL that is not a plain https URL without a credential
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_source_base_url is string
+      - demo1_egress_spool_source_base_url is match(demo1_egress_spool_base_url_pattern)
+    quiet: true
+    fail_msg: The base URL must be a plain https URL of letters, digits, dots, hyphens and slashes, with no credential and no port.
+
+- name: Refuse a file list that is not the three pinned files, each once, with a sha256
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_files is sequence
+      - demo1_egress_spool_files | map(attribute='path') | sort | list == demo1_egress_spool_required_paths | sort | list
+      - demo1_egress_spool_files | map(attribute='sha256') | select('match', demo1_egress_spool_checksum_pattern) | list | length == 3
+    quiet: true
+    fail_msg: >-
+      The file list must name the egress program, the egress unit and the rendered Compose file,
+      each once, with a 64-character lower-case sha256 for every file.
+
+- name: Refuse a drain port that is not an unprivileged TCP port
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_drain_port is integer
+      - demo1_egress_spool_drain_port >= 1024
+      - demo1_egress_spool_drain_port <= 65535
+    quiet: true
+    fail_msg: The drain port must be a whole number from 1024 to 65535.

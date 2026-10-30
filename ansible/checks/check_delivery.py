@@ -31,10 +31,11 @@ REUSABLE = re.compile(
     r"branchLeft/github-workflows/\.github/workflows/ansible-gated-apply\.yml@v(\d+)\.(\d+)\.(\d+)",
     re.ASCII,
 )
-# The oldest release of the reusable workflows that declares the jump secrets. A call that
-# passes a secret the called workflow does not declare fails on GitHub, so a pin below this
-# is a broken delivery. The drift caller's test imports it: this is its one home.
-MIN_RELEASE = (1, 0, 16)
+# The oldest release of the reusable workflows a caller may pin: it declares the jump secrets and
+# the shard-timeout-minutes input. A call that passes a secret or an input the called workflow
+# does not declare fails on GitHub, so a pin below this is a broken delivery. The drift caller's
+# test imports it: this is its one home.
+MIN_RELEASE = (1, 0, 18)
 ROLE_DIRECTORIES = ["roles/*", "patterns/*"]
 # The one expression C4 reads in an environment name, and it reads this shape alone:
 #   ${{ needs.<job>.outputs.<name> == '<A>' && '<A>' || '<B>' }}
@@ -82,6 +83,7 @@ INPUT_KEYS = frozenset(
         "role-test-command",
         SKIP_INPUT,
         CHECK_NAME_INPUT,
+        "shard-timeout-minutes",
     }
 )
 # The delivery may skip its lint and Molecule re-run only on the answer of the proof job, which

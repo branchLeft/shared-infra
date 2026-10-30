@@ -33,13 +33,15 @@ STANDARDS_TEMPLATE = [
 ]
 
 # Estate files the merge script refuses at gate 6: mail/ runs under plan credentials, and every
-# credentialed plan job installs from these lockfiles and .npmrc files. A directory path stands
-# for a file under it.
+# credentialed plan job installs from these lockfiles, pnpm-workspace.yaml files and .npmrc files.
+# A directory path stands for a file under it.
 ESTATE_PATHS = [
     "mail/index.ts",
-    "package-lock.json",
-    "hetzner/package-lock.json",
-    "hetzner-host/package-lock.json",
+    "pnpm-lock.yaml",
+    "hetzner/pnpm-lock.yaml",
+    "hetzner-host/pnpm-lock.yaml",
+    "hetzner/pnpm-workspace.yaml",
+    "hetzner-host/pnpm-workspace.yaml",
     ".npmrc",
     "hetzner/.npmrc",
     "hetzner-host/.npmrc",
@@ -94,6 +96,11 @@ PULL_ROLE_PATHS = [
     "ansible/roles/ansible_runtime/tasks/main.yml",
     "ansible/roles/broker_deploy/tasks/_sudoers.yml",
     "ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2",
+    "ansible/roles/deploy_slot_keys/tasks/main.yml",
+    "ansible/roles/deploy_slot_keys/library/deploy_slot_keys_reconcile.py",
+    "ansible/roles/deploy_slot_keys/tests/unit/test_deploy_slot_keys_reconcile.py",
+    "ansible/roles/deploy_slot_keys/README.md",
+    "ansible/checks/test_deploy_slot_keys_single_home.py",
 ]
 
 # The loader of every pulled host's private role inputs is the owner's alone (owner ruling,

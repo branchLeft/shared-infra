@@ -1,0 +1,260 @@
+---
+# What the applied role must leave, read independently of the role's own read-back: the
+# firewall is asked with -C and -L, which do not share the role's reading of -S, and the
+# expected values are written out here, not read from the role, so a role that left a
+# different state is a failure and not a test that agrees with it.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the egress program, its unit, the Compose file, the pin file, the token file, the override and the drop-in
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - /usr/local/sbin/branchleft-demo-egress
+        - /etc/systemd/system/branchleft-demo-egress.service
+        - /opt/branchleft/mail-spool/compose.yml
+        - /etc/branchleft/mail-spool.image.env
+        - /etc/branchleft/mail-spool.env
+        - /opt/branchleft/mail-spool/compose.override.yml
+        - /etc/systemd/system/branchleft-compose@mail-spool.service.d/10-egress-first.conf
+      register: demo1_egress_spool_verify_files
+
+    - name: Assert each is a regular file owned by root with the mode the role sets
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == ['0755', '0644', '0644', '0600', '0600', '0644', '0644'][ansible_loop.index0]
+        quiet: true
+        fail_msg: '{{ item.item }} is not a regular file owned by root with the expected mode.'
+      loop: '{{ demo1_egress_spool_verify_files.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+        extended: true
+
+    - name: Assert the token file is exactly as the owner placed it
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_verify_files.results[4].stat.checksum == ("SHIM_DRAIN_TOKEN=test-sentinel-drain-token-0001\n" | hash('sha256'))
+        quiet: true
+        fail_msg: The role changed the drain token file. The owner is its only writer.
+
+    - name: Read the pin file, which the deploy wrapper moved
+      ansible.builtin.slurp:
+        src: /etc/branchleft/mail-spool.image.env
+      register: demo1_egress_spool_verify_pin
+
+    - name: Assert the role left the bumped pin alone
+      ansible.builtin.assert:
+        that:
+          - (demo1_egress_spool_verify_pin.content | b64decode) == "IMAGE=" ~ standin_bumped_pin ~ "\n"
+        quiet: true
+        fail_msg: The role rewrote the image pin file the deploy wrapper owns.
+
+    - name: Read the Compose file, its override and the drop-in
+      ansible.builtin.slurp:
+        src: '{{ item.path }}'
+      loop:
+        - path: /opt/branchleft/mail-spool/compose.yml
+          name: compose
+        - path: /opt/branchleft/mail-spool/compose.override.yml
+          name: override
+        - path: /etc/systemd/system/branchleft-compose@mail-spool.service.d/10-egress-first.conf
+          name: dropin
+      loop_control:
+        label: '{{ item.path }}'
+      register: demo1_egress_spool_verify_slurped
+
+    - name: Name what was read
+      ansible.builtin.set_fact:
+        demo1_egress_spool_verify_compose: '{{ demo1_egress_spool_verify_slurped.results[0] }}'
+        demo1_egress_spool_verify_override: '{{ demo1_egress_spool_verify_slurped.results[1] }}'
+        demo1_egress_spool_verify_dropin: '{{ demo1_egress_spool_verify_slurped.results[2] }}'
+
+    - name: Assert the Compose file carries the golden's image digest, port and drain network
+      ansible.builtin.assert:
+        that:
+          - >-
+            'ghcr.io/branchleft/mailgun-shim@sha256:c32a32e93025aeb2b397b5dbf8e8b17e59256f56e3e881ffc49c71f6b8965571'
+            in (demo1_egress_spool_verify_compose.content | b64decode)
+          - "'127.0.0.1:8095:8081' in (demo1_egress_spool_verify_compose.content | b64decode)"
+          - "'branchleft-mail-spool-drain' in (demo1_egress_spool_verify_compose.content | b64decode)"
+        quiet: true
+        fail_msg: The Compose file on the host is not the golden of the renderer.
+
+    - name: Assert the override and the drop-in say what the design needs and nothing more
+      ansible.builtin.assert:
+        that:
+          - (demo1_egress_spool_verify_override.content | b64decode) == expected_override
+          - (demo1_egress_spool_verify_dropin.content | b64decode) == expected_dropin
+        quiet: true
+        fail_msg: The override beside the Compose file, or the drop-in beside the spool's unit, is not as expected.
+      vars:
+        expected_override: "services:\n  mail-spool:\n    image: ${IMAGE:?the image pin file /etc/branchleft/mail-spool.image.env names no image}\n"
+        expected_dropin: "[Unit]\nRequires=branchleft-demo-egress.service\nAfter=branchleft-demo-egress.service\n"
+
+    # What the container reports is what the stand-in docker was started with. The wrapper's
+    # restart moved the pin, so the image the container reports is the bumped one and not the
+    # Compose file's own.
+    - name: Ask the stand-in docker for the container
+      ansible.builtin.command:
+        argv: [docker, inspect, mail-spool-mail-spool-1]
+      register: demo1_egress_spool_verify_container
+      changed_when: false
+
+    - name: Assert the container runs the image the pin file names
+      ansible.builtin.assert:
+        that:
+          - (demo1_egress_spool_verify_container.stdout | from_json)[0].Config.Image == standin_bumped_pin
+        quiet: true
+        fail_msg: The container does not run the image the image pin file names.
+
+    - name: Ask systemd for the spool's unit
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@mail-spool.service
+      register: demo1_egress_spool_verify_spool_unit
+
+    - name: Assert the spool's unit is ordered after, and bound to, the egress unit
+      ansible.builtin.assert:
+        that:
+          - "'branchleft-demo-egress.service' in demo1_egress_spool_verify_spool_unit.status.After.split()"
+          - "'branchleft-demo-egress.service' in demo1_egress_spool_verify_spool_unit.status.Requires.split()"
+        quiet: true
+        fail_msg: The spool's unit does not wait for the egress policy.
+
+    # -C exits 0 when the rule exists. The jump is the first rule in each family.
+    - name: Ask each family whether the jumps and the reject rules are in place
+      ansible.builtin.command:
+        argv: '{{ item.argv }}'
+      loop:
+        - argv: [iptables, -t, filter, -C, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+        - argv: [ip6tables, -t, filter, -C, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+        - argv: [iptables, -t, filter, -C, INPUT, -i, docker0, -j, BRANCHLEFT-DEMO-INPUT]
+        - argv: [iptables, -t, filter, -C, INPUT, -i, br-+, -j, BRANCHLEFT-DEMO-INPUT]
+        - argv: [ip6tables, -t, filter, -C, INPUT, -i, docker0, -j, BRANCHLEFT-DEMO-INPUT]
+        - argv: [ip6tables, -t, filter, -C, INPUT, -i, br-+, -j, BRANCHLEFT-DEMO-INPUT]
+        - argv:
+            [
+              iptables,
+              -t,
+              filter,
+              -C,
+              BRANCHLEFT-DEMO-EGRESS,
+              -i,
+              docker0,
+              '!',
+              -o,
+              docker0,
+              -j,
+              REJECT,
+            ]
+        - argv:
+            [iptables, -t, filter, -C, BRANCHLEFT-DEMO-EGRESS, -i, br-+, '!', -o, br-+, -j, REJECT]
+        - argv:
+            [ip6tables, -t, filter, -C, BRANCHLEFT-DEMO-EGRESS, -i, br-+, '!', -o, br-+, -j, REJECT]
+        - argv: [iptables, -t, filter, -C, BRANCHLEFT-DEMO-INPUT, -j, REJECT]
+        - argv: [ip6tables, -t, filter, -C, BRANCHLEFT-DEMO-INPUT, -j, REJECT]
+      loop_control:
+        label: '{{ item.argv | join(" ") }}'
+      changed_when: false
+
+    - name: List DOCKER-USER with rule numbers in each family
+      ansible.builtin.command:
+        argv: ['{{ item }}', -t, filter, -L, DOCKER-USER, -n, --line-numbers]
+      loop: [iptables, ip6tables]
+      register: demo1_egress_spool_verify_user
+      changed_when: false
+
+    - name: Assert the jump is rule 1, ahead of Docker's own RETURN
+      ansible.builtin.assert:
+        that:
+          - item.stdout_lines[2] is match('^1\s+BRANCHLEFT-DEMO-EGRESS\s')
+          - item.stdout_lines[3] is match('^2\s+RETURN\s')
+        quiet: true
+        fail_msg: DOCKER-USER does not have the jump to BRANCHLEFT-DEMO-EGRESS as rule 1 in {{ item.item }}.
+      loop: '{{ demo1_egress_spool_verify_user.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Ask systemd about the units
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+      loop:
+        - branchleft-demo-egress.service
+        - branchleft-compose@mail-spool.service
+      register: demo1_egress_spool_verify_units
+
+    - name: Assert both are active and enabled
+      ansible.builtin.assert:
+        that:
+          - item.status.ActiveState == 'active'
+          - item.status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: '{{ item.item }} is not active and enabled.'
+      loop: '{{ demo1_egress_spool_verify_units.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Look at the queue volume's data directory
+      ansible.builtin.stat:
+        path: /var/lib/docker/volumes/branchleft-mail-spool-data/_data
+        follow: false
+      register: demo1_egress_spool_verify_volume
+
+    - name: Assert it belongs to the spool's account
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_verify_volume.stat.isdir
+          - demo1_egress_spool_verify_volume.stat.uid == 31000
+          - demo1_egress_spool_verify_volume.stat.gid == 31000
+          - demo1_egress_spool_verify_volume.stat.mode == '0755'
+        quiet: true
+        fail_msg: The queue volume's data directory is not 31000:31000, mode 0755.
+
+    - name: Read the listeners on the drain port
+      ansible.builtin.command:
+        argv: [ss, -H, -ltn, 'sport = :8095']
+      register: demo1_egress_spool_verify_listeners
+      changed_when: false
+
+    - name: Assert there is one listener, on 127.0.0.1
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_verify_listeners.stdout_lines | length == 1
+          - demo1_egress_spool_verify_listeners.stdout_lines[0] is search('127\.0\.0\.1:8095\s')
+        quiet: true
+        fail_msg: The drain port has a listener that is not on 127.0.0.1 alone.
+
+    - name: Call the drain endpoint with no token
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8095/drain
+        use_proxy: false
+        status_code: [200, 401]
+      register: demo1_egress_spool_verify_call
+
+    - name: Assert the call was refused
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_verify_call.status == 401
+        quiet: true
+        fail_msg: The drain endpoint answered a call with no token.
+
+    - name: Read the stand-in docker's call log
+      ansible.builtin.slurp:
+        src: /var/log/docker-standin.calls
+      register: demo1_egress_spool_verify_calls
+
+    # The pin bump above reached the host before the role's second apply. A role that
+    # restarted the spool for it, or made the volume twice, shows in this log.
+    - name: Assert the volume was made once and the spool started once and never taken down
+      ansible.builtin.assert:
+        that:
+          - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker volume create ') | list | length == 1
+          - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker compose up ') | list | length == 1
+          - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker compose down') | list | length == 0
+        quiet: true
+        fail_msg: The role made the volume more than once, restarted the spool when nothing it owns had changed, or took it down.

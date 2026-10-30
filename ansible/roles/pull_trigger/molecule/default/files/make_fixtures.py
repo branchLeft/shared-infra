@@ -172,8 +172,14 @@ def make_gpg_key(name: str) -> tuple[Path, str, str]:
     return home, fingerprint, run([*base, "--armor", "--export", fingerprint]) + "\n"
 
 
-def main() -> int:
-    """Build the fixtures and write ``fixtures.json``."""
+def main(push: bool = False) -> int:
+    """Build the fixtures and write ``fixtures.json``.
+
+    With ``push`` the history is the one a host that takes bundles is tested with, and the
+    bundles of its commits are written beside it (see ``push_fixtures``).
+    """
+    if push:
+        return push_fixtures()
     shutil.rmtree(ROOT, ignore_errors=True)
     (ROOT / "keys").mkdir(parents=True, mode=0o755)
     work, remote = ROOT / "work", ROOT / "remote.git"
@@ -241,5 +247,108 @@ def main() -> int:
     return 0
 
 
+BUNDLES = ROOT / "bundles"
+
+
+def run_bytes(argv: list[str], cwd: Path, data: bytes) -> str:
+    """Run a command that takes binary standard input and return its stripped output."""
+    done = subprocess.run(  # noqa: S603 - argument lists, no shell, fixed programs
+        argv, cwd=cwd, env=ENVIRONMENT, input=data, capture_output=True, check=True
+    )
+    return done.stdout.decode().strip()
+
+
+def malformed_commit(work: Path, parent: str, signer: Signer) -> str:
+    """Return a signed commit whose tree holds an object git's own object check refuses.
+
+    The tree is made with ``hash-object --literally``, so its hash is right and a bundle that
+    carries it passes ``git bundle verify``. One entry has a zero-padded mode.
+    """
+    empty = run(["git", "hash-object", "-t", "tree", "-w", "--stdin"], cwd=work)
+    subtree = run(["git", "rev-parse", f"{parent}:ansible"], cwd=work)
+    raw = b"40000 ansible\0" + bytes.fromhex(subtree) + b"040000 junk\0" + bytes.fromhex(empty)
+    tree = run_bytes(
+        ["git", "hash-object", "-t", "tree", "--literally", "-w", "--stdin"], work, raw
+    )
+    settings, extra = signer.arguments()
+    argv = ["git", *settings[:-1], "commit-tree", *settings[-1:], "-p", parent, "-m", "malformed"]
+    return run([*argv, tree], cwd=work, extra=extra)
+
+
+def make_bundle(work: Path, sha: str, name: str) -> Path:
+    """Write a bundle of the commit the way the pushing workflow does: of a detached HEAD."""
+    run(["git", "update-ref", "--no-deref", "HEAD", sha], cwd=work)
+    path = BUNDLES / f"{name}.bundle"
+    run(["git", "bundle", "create", str(path), "HEAD"], cwd=work)
+    return path
+
+
+def push_fixtures() -> int:
+    """Build the history a host that takes bundles is tested with, and a bundle of each commit.
+
+    One OpenPGP key stands in for GitHub's signing key, the only key the host trusts. The
+    history is a line c0, c1, c2 (the floor starts at c0), with branches off it: signed by
+    untrusted keys, unsigned, altered after signing, a sibling not descending from c1, an
+    unrelated history, a commit with no playbook, a playbook that is a link, and an object
+    git refuses. ``fork`` and ``main_next`` are two commits on c2: a web-editor commit on a
+    fork, and the next real commit of main. Bundles not of a commit (truncated, text, one
+    needing a missing commit) are written too.
+    """
+    shutil.rmtree(ROOT, ignore_errors=True)
+    (ROOT / "keys").mkdir(parents=True, mode=0o755)
+    BUNDLES.mkdir(mode=0o755)
+    work = ROOT / "work"
+    run(["git", "init", "-q", "-b", "main", str(work)])
+    web = make_gpg_key("web-flow-stand-in")
+    other_pgp = make_gpg_key("other")
+    other_ssh = make_ssh_key("other-ssh")
+    w = Signer(gpg_home=web[0], gpg_id=web[1])
+    ids: dict[str, str] = {}
+
+    def add(name: str, parent: str | None, signer: Signer = w) -> None:
+        ids[name] = commit(work, {PLAYBOOK: playbook(name.upper())}, parent, name, signer)
+
+    add("c0", None)
+    add("c1", ids["c0"])
+    add("c2", ids["c1"])
+    add("unsigned", ids["c1"], Signer())
+    add("by_ssh", ids["c1"], Signer(ssh_key=other_ssh))
+    add("by_other_pgp", ids["c1"], Signer(gpg_home=other_pgp[0], gpg_id=other_pgp[1]))
+    signed = commit(work, {PLAYBOOK: playbook("TAMPERED")}, ids["c1"], "to be tampered", w)
+    text = run(["git", "cat-file", "commit", signed], cwd=work)
+    ids["tampered"] = run_bytes(
+        ["git", "hash-object", "-t", "commit", "-w", "--stdin"],
+        work,
+        (text.replace("\n\nto be tampered", "\n\ntampered after signing") + "\n").encode(),
+    )
+    add("side", ids["c0"])
+    add("orphan", None)
+    add("fork", ids["c2"])
+    add("main_next", ids["c2"])
+    ids["no_playbook"] = commit(work, {PLAYBOOK: None}, ids["c2"], "no playbook", w)
+    ids["symlink"] = commit(work, {PLAYBOOK: "->../../../etc/hostname"}, ids["c2"], "link", w)
+    ids["malformed"] = malformed_commit(work, ids["c2"], w)
+    for name, sha in ids.items():
+        make_bundle(work, sha, name)
+    whole = (BUNDLES / "c1.bundle").read_bytes()
+    (BUNDLES / "truncated.bundle").write_bytes(whole[: len(whole) * 2 // 3])
+    (BUNDLES / "junk.bundle").write_text("this is not a bundle\n" * 50, encoding="utf-8")
+    run(["git", "update-ref", "--no-deref", "HEAD", ids["c2"]], cwd=work)
+    run(
+        ["git", "bundle", "create", str(BUNDLES / "partial.bundle"), "HEAD", f"^{ids['c1']}"],
+        cwd=work,
+    )
+    for home, _, _ in (web, other_pgp):
+        run(["gpgconf", "--homedir", str(home), "--kill", "all"])
+    fixtures = {
+        "pgp_key": web[2],
+        "commits": ids,
+        "bundles": str(BUNDLES),
+        "seed": ids["c0"],
+    }
+    (ROOT / "fixtures.json").write_text(json.dumps(fixtures, indent=2) + "\n", encoding="utf-8")
+    return 0
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(push="--push" in sys.argv[1:]))

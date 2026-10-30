@@ -3,7 +3,7 @@
 # db1:3306 (skipped on hosts in NO_DB_EXCEPTION_ADDRESSES), and refuses
 # everything a container on the mail spool's drain bridge opens, over IPv4 and
 # IPv6. On ops1 alone it also refuses every source but the gateway to the
-# published control-plane ports 8301 and 8302. Installed by app-host-isolation.sh, re-run at boot by its unit with no
+# published control-plane ports 8300, 8301 and 8302. Installed by app-host-isolation.sh, re-run at boot by its unit with no
 # arguments or environment. Refuses to run on edge1. Idempotent.
 # Procedures (re-run, read-back, undo) live in ghost-platform-docs, not here.
 set -euo pipefail
@@ -25,14 +25,14 @@ GATEWAY_PRIVATE_IP="${BRANCHLEFT_DOCKER_USER_POLICY_GATEWAY_IP:-10.20.1.10}"
 # that, and not an env var a caller passes once, is what has to decide this.
 NO_DB_EXCEPTION_ADDRESSES="${BRANCHLEFT_DOCKER_USER_POLICY_NO_DB_EXCEPTION_ADDRESSES:-10.20.1.50}"
 
-# ops1's published control-plane ports (the tenant portal and the owner
-# console): reachable from the gateway alone. A host holding
+# ops1's published control-plane ports (the sign-in service, the tenant portal
+# and the owner console): reachable from the gateway alone. A host holding
 # PROTECTED_ADDRESS gets one drop per port for every source but the gateway;
 # any other host gets none. ops1's address and these ports are
 # hetzner/control-plane/stack/compose.yml's publishes and sites.ts's
 # privateUpstream ports; the three move together.
 PROTECTED_ADDRESS="${BRANCHLEFT_DOCKER_USER_POLICY_PROTECTED_ADDRESS:-10.20.1.50}"
-PROTECTED_PORTS="${BRANCHLEFT_DOCKER_USER_POLICY_PROTECTED_PORTS:-8301 8302}"
+PROTECTED_PORTS="${BRANCHLEFT_DOCKER_USER_POLICY_PROTECTED_PORTS:-8300 8301 8302}"
 
 # The spool's one non-internal network, a bridge with this fixed name so a
 # host rule can match it (render-core's MAIL_SPOOL_DRAIN_BRIDGE). Docker needs
