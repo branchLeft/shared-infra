@@ -1,0 +1,28 @@
+---
+# The order is the order the host needs. The inputs and the host are checked
+# before anything is written. The egress policy is installed and read back
+# before the spool is delivered, because a spool container must never run on a
+# host whose policy is not loaded. The spool is read back last, from the
+# running container.
+#
+# Each step is its own internal tasks file, named for what it does. The role
+# applies nothing outside this host's egress policy and mail spool: it does not
+# install Docker, write the drain token or the shared Compose template unit,
+# open a port or reboot the host.
+- name: Check the inputs
+  ansible.builtin.include_tasks: _inputs.yml
+
+- name: Check the host and what the role relies on and does not own
+  ansible.builtin.include_tasks: _preconditions.yml
+
+- name: Install the egress program and its unit
+  ansible.builtin.include_tasks: _egress.yml
+
+- name: Read the egress policy back
+  ansible.builtin.include_tasks: _readback_egress.yml
+
+- name: Deliver the mail spool
+  ansible.builtin.include_tasks: _spool.yml
+
+- name: Read the running spool back
+  ansible.builtin.include_tasks: _readback_spool.yml

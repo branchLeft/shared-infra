@@ -27,10 +27,10 @@ __pycache__/
 /.venv/
 
 
-# This repo tracks package-lock.json and CI runs `npm ci`; a pnpm install
-# here is a mistake, and its lockfile must not get committed.
-pnpm-lock.yaml
-pnpm-workspace.yaml
+# This repo tracks one pnpm-lock.yaml per package and CI runs
+# `pnpm install --frozen-lockfile`; an npm install here is a mistake, and its
+# lockfile must not get committed.
+package-lock.json
 
 # Unguarded intermediates from CLOUD-ARMOR-BASELINE.md's reproduction steps
 # -- a raw `gcloud` read, before the normalizer's redaction guard has run.

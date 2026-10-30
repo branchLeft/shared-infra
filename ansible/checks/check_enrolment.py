@@ -89,7 +89,10 @@ REMOTE_URL = "https://github.com/branchLeft/shared-infra.git"
 SIGNERS_EXPR = "{{ pull_trigger_signers }}"
 REMOTE_EXPR = "{{ pull_trigger_remote_url }}"
 CONFIG_DEST = "{{ pull_trigger_config_path }}"
-CONFIG_CONTENT = "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
+CONFIG_CONTENT = (
+    "{{ pull_trigger_config | ansible.builtin.combine(pull_trigger_config_source)"
+    " | ansible.builtin.to_nice_json }}\n"
+)
 CONFIG_MENTION = re.compile(r"pull_trigger_config(\b|_path\b)")
 REFUSE_ASSERT = [
     "ansible_play_hosts_all | length == 1",

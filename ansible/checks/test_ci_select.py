@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -19,6 +20,15 @@ import ci_select
 
 ROOT = Path(__file__).resolve().parents[2]
 LIST_SHARDS = ROOT / "ansible" / "harness" / "list_shards.py"
+# A file of the checks folder, as the shard job names it in a line of its own script.
+CHECKS_FILE = re.compile(r"ansible/checks/[A-Za-z0-9_.-]+")
+# The three checks files named one by one in EVERY_SHARD. Only the first two are shard inputs;
+# check_pins.py is no shard's input, and stays every-shard as the issue asks.
+SHARD_READS = (
+    "ansible/checks/ci_select.py",
+    "ansible/checks/check_pins.py",
+    "ansible/checks/pip-requirements.txt",
+)
 
 
 def real_shards() -> list[dict[str, str]]:
@@ -189,6 +199,88 @@ class SelectionTest(unittest.TestCase):
         for entry in ci_select.LINT_ONLY:
             with self.subTest(entry=entry):
                 self.assertTrue((ROOT / entry).exists(), entry)
+
+    def test_a_role_file_change_still_runs_that_roles_shard(self) -> None:
+        # The narrowing the issue says works for roles must keep working, on both events.
+        path = "ansible/roles/egress_nat/tasks/main.yml"
+        own = [shard for shard in self.shards if shard["path"] == "ansible/roles/egress_nat"]
+        self.assertTrue(own, "egress_nat has no shard to test")
+        self.assertEqual(own, self.pull_request(path))
+        self.assertEqual(own, self.queue_entry(path))
+
+    def test_host_roles_and_playbooks_keep_their_pinned_behaviour(self) -> None:
+        # host_roles.yml is read by the lint job's tests, not by a shard, so it selects none.
+        # It selected every shard before, only because it sat under ansible/checks/. A playbook
+        # selects none, as it did before.
+        for path in (
+            "ansible/checks/host_roles.yml",
+            "ansible/playbooks/app1.yml",
+            "ansible/playbooks/edge1.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual([], self.pull_request(path))
+        own = [shard for shard in self.shards if shard["path"] == "ansible/roles/egress_nat"]
+        chosen = self.pull_request(
+            "ansible/roles/egress_nat/tasks/main.yml", "ansible/checks/host_roles.yml"
+        )
+        self.assertEqual(own, chosen)
+
+    def test_the_three_checks_files_the_shards_read_run_every_shard(self) -> None:
+        # A shard that is wrongly left out is a gate that passes without running. Each file is
+        # shown alone and beside a role file, on both events.
+        for path in SHARD_READS:
+            with self.subTest(path=path):
+                self.assertEqual(self.shards, self.pull_request(path))
+                self.assertEqual(self.shards, self.queue_entry(path))
+                self.assertEqual(
+                    self.shards, self.pull_request("ansible/roles/egress_nat/tasks/main.yml", path)
+                )
+
+    def test_an_unrecognised_ansible_path_outside_checks_runs_every_shard(self) -> None:
+        # The folder rule is a path with its slash, so a sibling whose name starts the same way
+        # is not in the folder, and runs every shard.
+        for path in (
+            "ansible/new_dir/x.yml",
+            "ansible/ansible.cfg",
+            "ansible/roles/README.md",
+            "ansible/checks_old/x.py",
+            "ansible/checks.py",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(self.shards, self.pull_request(path))
+
+    def test_the_rest_of_the_checks_folder_runs_no_shard(self) -> None:
+        # Every file in ansible/checks/ but the three named above runs the lint job only. The
+        # files are listed from the tree, so a file added later is covered too.
+        rest = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in (ROOT / "ansible" / "checks").rglob("*")
+            if path.is_file() and "__pycache__" not in path.parts
+        )
+        # A control: an empty listing would pass for nothing.
+        self.assertGreater(len(rest), len(SHARD_READS))
+        for path in [*rest, "ansible/checks/a_file_added_later.py"]:
+            if path in SHARD_READS:
+                continue
+            with self.subTest(path=path):
+                self.assertEqual([], self.pull_request(path))
+
+    def test_every_checks_file_the_shard_job_names_runs_every_shard(self) -> None:
+        # The fail-open guard: a checks file the shard job starts to read must run every shard,
+        # or the selector would under-select without a sign. The shard job is the text from its
+        # header to the next job's header; comment lines are not reads.
+        workflow = (ROOT / ".github" / "workflows" / "ansible.yml").read_text(encoding="utf-8")
+        start = workflow.index("\n  shard:\n")
+        end = workflow.index("\n  roles:\n", start)
+        named: set[str] = set()
+        for line in workflow[start:end].splitlines():
+            if not line.lstrip().startswith("#"):
+                named.update(CHECKS_FILE.findall(line))
+        # A control: the job names its pin, so an empty scan would pass for nothing.
+        self.assertIn("ansible/checks/pip-requirements.txt", named)
+        for path in sorted(named):
+            with self.subTest(path=path):
+                self.assertEqual(self.shards, self.pull_request(path))
 
     def test_a_role_that_another_names_runs_with_it(self) -> None:
         chosen = self.pull_request("ansible/roles/backup_worker/tasks/main.yml")

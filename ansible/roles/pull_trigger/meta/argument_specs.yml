@@ -54,6 +54,15 @@ argument_specs:
         type: int
         description: How many runs' output files to keep in the log directory, from 1 to 1000.
         default: 50
+      pull_trigger_floor_seed:
+        type: str
+        description: >-
+          For the one-off bootstrap of a host that takes bundles (a host named in the role's
+          constant list, taken from the play's enrolled_host): the 40-digit commit it is brought
+          up at, passed with -e and never by the pull route. It is written as the rollback floor
+          only when the host has none, and never over one. Empty writes nothing. A host that
+          takes bundles with no floor refuses every request.
+        default: ''
       pull_trigger_steps:
         type: list
         elements: dict

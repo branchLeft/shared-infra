@@ -55,23 +55,63 @@ REFUSE_LINE = "      ansible.builtin.include_tasks: includes/refuse_other_hosts.
 SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml\n"
 
 
-TRIGGER_LINE = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-# The roles a playbook on main applies after the pull roles. The sabotage cases below start from
-# the pull roles alone, so they strip these first; one test holds the real playbook to them.
+# The last pull role in every enrolled playbook. Whatever follows it is the host's own roles.
+TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+# The roles a real playbook applies after the pull roles: host_baseline (this change) and the
+# roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
+# breakglass_grant_host).
+# One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
-    "edge1": ["ci_login"],
-    "ops1": ["status_page", "nextcloud_stack"],
+    "edge1": ["host_baseline", "ci_login"],
+    "ops1": ["host_baseline", "breakglass_mint_host", "status_page", "nextcloud_stack"],
+    "app1": ["host_baseline", "breakglass_grant_host"],
     "db1": ["host_inputs"],
 }
 
 
-def _pull_roles_only(text: str) -> str:
-    """Return a playbook without the roles it applies after the trigger."""
-    return text[: text.index(TRIGGER_LINE) + len(TRIGGER_LINE)]
-
-
 def _entry(name: str, extra: str = "") -> str:
     return f"    - role: ../roles/{name}\n{extra}"
+
+
+class TriggerEntryCountError(ValueError):
+    """The playbook text does not hold exactly one pull_trigger entry."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(f"expected one pull_trigger entry, found {count}")
+
+
+def _pull_roles_only(text: str) -> str:
+    """A real playbook cut after its pull_trigger entry, so the roles wired after it drop away.
+
+    The fixtures add roles of their own to this text. Built on the whole real file, a fixture
+    would apply a role twice, or put it before the trigger, once the real file applies it too.
+
+    Raises:
+        TriggerEntryCountError: the text holds no pull_trigger entry, or more than one.
+    """
+    count = text.count(TRIGGER_ENTRY)
+    if count != 1:
+        raise TriggerEntryCountError(count)
+    return text[: text.index(TRIGGER_ENTRY) + len(TRIGGER_ENTRY)]
+
+
+class PullRolesOnly(unittest.TestCase):
+    PLAYBOOK = "  roles:\n    - role: ../roles/ansible_runtime\n" + TRIGGER_ENTRY
+
+    def test_the_roles_after_the_trigger_are_dropped(self) -> None:
+        wired = self.PLAYBOOK + _entry("host_baseline") + _entry("breakglass_mint_host")
+        self.assertEqual(_pull_roles_only(wired), self.PLAYBOOK)
+
+    def test_a_playbook_ending_at_the_trigger_is_unchanged(self) -> None:
+        self.assertEqual(_pull_roles_only(self.PLAYBOOK), self.PLAYBOOK)
+
+    def test_no_trigger_entry_fails_loudly(self) -> None:
+        with self.assertRaisesRegex(ValueError, "found 0"):
+            _pull_roles_only("  roles:\n" + _entry("host_baseline"))
+
+    def test_two_trigger_entries_fail_loudly(self) -> None:
+        with self.assertRaisesRegex(ValueError, "found 2"):
+            _pull_roles_only(self.PLAYBOOK + TRIGGER_ENTRY)
 
 
 def _applied_roles(playbook: str) -> list[str]:
@@ -87,18 +127,21 @@ class HostRoleLists(unittest.TestCase):
         self.root = Path(temp.name)
         shutil.copytree(ROOT / "ansible", self.root / "ansible", symlinks=True)
         self.ansible = self.root / "ansible"
-        self.original = {
-            host: _pull_roles_only(
-                (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
-            )
+        # `real` is each playbook as it is on main, with whatever it applies after the pull
+        # roles. `original` is the same text cut after pull_trigger: the base every fixture
+        # builds on, so a role wired into a real playbook cannot collide with a fixture's own.
+        self.real = {
+            host: (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
             for host in ENROLLED
         }
+        self.original = {host: _pull_roles_only(text) for host, text in self.real.items()}
         listed = yaml.safe_load((self.ansible / HOST_ROLES_FILE).read_text(encoding="utf-8"))
         self.listed: dict[str, list[str]] = listed
 
     def _playbook(self, host: str, extra: str, bare: bool = False) -> None:
-        """Put every enrolled playbook back as it is on main, then add text to one. With bare,
-        that one is first stripped of the loader entry it carries, so its roles can be re-listed."""
+        """Put every enrolled playbook back to its pull roles only, then add text to one. With
+        bare, that one is first stripped of the loader entry it carries, so its roles can be
+        re-listed."""
         for name, text in self.original.items():
             if bare and name == host:
                 text = text.replace(LOADER_ENTRY, "")
@@ -106,7 +149,7 @@ class HostRoleLists(unittest.TestCase):
             (self.ansible / "playbooks" / f"{name}.yml").write_text(text + added, encoding="utf-8")
 
     def _replace_in(self, host: str, old: str, new: str) -> None:
-        """Put every enrolled playbook back as it is on main, then change one text in one."""
+        """Put every enrolled playbook back to its pull roles only, then change one text in one."""
         self._playbook(host, "")
         path = self.ansible / "playbooks" / f"{host}.yml"
         text = path.read_text(encoding="utf-8")
@@ -133,7 +176,7 @@ class HostRoleLists(unittest.TestCase):
     def test_the_playbooks_on_main_apply_the_expected_roles(self) -> None:
         for host in ENROLLED:
             text = (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
-            after = text[text.index(TRIGGER_LINE) + len(TRIGGER_LINE) :]
+            after = text[text.index(TRIGGER_ENTRY) + len(TRIGGER_ENTRY) :]
             expected = "".join(
                 f"    - role: ../roles/{name} # noqa: role-name[path]\n"
                 for name in APPLIED_ON_MAIN.get(host, [])
@@ -371,6 +414,21 @@ class HostRoleLists(unittest.TestCase):
             with self.subTest(host=host, role=name):
                 self.assertNotIn(name, self.listed[host], "the case is not another host's role")
                 self._playbook(host, _entry(name))
+                self._assert_refused(host, f"role {name} is not on {host}'s list")
+
+    # Rule: the roles a real playbook applies after the pull roles are held to the list too. The
+    # fixtures above cut the real file after pull_trigger, so this is the case that keeps the
+    # real wired tail under test: the whole real file, plus one role from another host's list.
+    def test_an_off_list_role_after_the_wired_roles_is_refused(self) -> None:
+        cases = (("ops1", "egress_nat"), ("edge1", "tunnel_account"), ("app1", "control_plane"))
+        for host, name in cases:
+            with self.subTest(host=host, role=name):
+                self.assertNotIn(name, self.listed[host], "the case is not another host's role")
+                for other, text in self.real.items():
+                    (self.ansible / "playbooks" / f"{other}.yml").write_text(text, "utf-8")
+                self.assertEqual(check(self.root), [], "the real playbooks must pass first")
+                path = self.ansible / "playbooks" / f"{host}.yml"
+                path.write_text(self.real[host] + _entry(name), encoding="utf-8")
                 self._assert_refused(host, f"role {name} is not on {host}'s list")
 
     # Rule: a role is applied once. The pull roles are never listed, so they cannot be added back.

@@ -100,7 +100,7 @@ Every block from here runs in one zsh session. Close it at the end.
 ```bash
 cd ~/branchLeft/shared-infra/hetzner
 nvm use
-npm ci
+pnpm install --frozen-lockfile
 export AWS_REGION=hel1
 export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
 ```
@@ -120,7 +120,7 @@ read -rs "HCLOUD_TOKEN?dns project (16139783) Read & Write token: "; echo; expor
 The provider reads `HCLOUD_TOKEN` from the environment, so the token is never
 written to `Pulumi.production.yaml` at all.
 
-Expected: `npm ci` ends without errors; the three reads print nothing.
+Expected: `pnpm install` ends without errors; the three reads print nothing.
 
 ### 3. Create the stack
 

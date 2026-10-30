@@ -32,7 +32,7 @@ import {
  * files *are* the deployment. Writing them through Vitest is what makes
  * "regenerate" and "prove the committed copy is current" the same mechanism,
  * with no second tool to install and nothing that can render on one machine and
- * not another. `npm run render` updates them; `npm test` fails if they drift.
+ * not another. `pnpm run render` updates them; `pnpm run test` fails if they drift.
  */
 
 const DETECT_ONLY: EdgePosture = {
