@@ -6,7 +6,7 @@
 # that handle key material keep both (ANS-16).
 - name: Install the sudoers file of the pipeline account
   ansible.builtin.copy:
-    content: "{{ ci_login_sudoers_lines | join('\n') }}\n"
+    content: "{{ ci_login_sudoers_lines | first }}\n"
     dest: '/etc/sudoers.d/{{ ci_login_sudoers_name }}'
     owner: root
     group: root
