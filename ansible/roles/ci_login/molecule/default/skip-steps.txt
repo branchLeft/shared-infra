@@ -1,4 +1,0 @@
-# Reproduction of branchLeft/shared-infra#502, removed again before merge: leave out the
-# check-mode run with --diff, so the scenario runs the way `molecule test` runs it (delivery
-# at github-workflows v1.0.16), with no run that asks for a diff.
-check-fresh
