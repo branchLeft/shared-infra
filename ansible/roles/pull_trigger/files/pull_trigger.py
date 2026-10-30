@@ -1,20 +1,13 @@
 #!/usr/bin/python3 -I
 """Apply one exact, verified commit of main to this host.
 
-The role installs this file as one root-owned program, the only thing the CI key
-can run. The caller supplies one commit id of 40 lowercase hex digits, or, for a
-step request on the separate step key, that commit and one step id and one typed
-confirmation word; every other value comes from a root-owned configuration file.
+The role installs this file as the only root-owned program the CI key can run. The caller
+gives a commit id (40 lowercase hex digits), and on the step key a step id and a typed word;
+all else is root-owned config. Steps and exit codes: the role README.
 
-The steps, their order and the exit codes are in the role README. ``Exit`` names
-the exit statuses.
-
-A host has one of two sources for the commit it applies, chosen by its root-owned
-configuration and never by the caller. The ``remote`` source (every host today) fetches
-``main`` from a read-only remote. The ``bundle`` source takes a git bundle on standard
-input, from a host that is never allowed to initiate a connection, and admits it through a
-quarantine repository; everything after the commit is in hand (the signature check, the
-rollback floor, the playbook checks and the run) is the same code.
+Commits come from the ``remote`` source (main from a read-only remote, every host today) or
+the ``bundle`` source (a git bundle on stdin, from a host that may not initiate connections,
+admitted via a quarantine repo). Config, never the caller, picks it; the rest is the same code.
 """
 
 import contextlib
@@ -629,11 +622,9 @@ def require_mode_fits(mode: Mode, request: Request) -> None:
 def resolve_bundle_request(arguments: Arguments, environ: Mapping[str, str]) -> BundleRequest:
     """Return what the caller asked of a host that takes bundles, or refuse.
 
-    The text is ``<mode> <commit> <playbook>`` in ``SSH_ORIGINAL_COMMAND`` and nowhere
-    else: the bundle itself is the only other input and is read later. The mode root fixed on
-    the command line must not be ``step``, and the word the caller sent must be ``apply`` or
-    ``check``. Whether the two agree is a separate refusal (``mode-mismatch``), made once the
-    commit has been named, so the line can say which commit was refused.
+    The text is ``<mode> <commit> <playbook>`` in ``SSH_ORIGINAL_COMMAND`` and nowhere else; the
+    bundle is read later. The key's mode must not be ``step``, and the word must be ``apply`` or
+    ``check``. Agreement is checked once the commit is named (``mode-mismatch``).
 
     Raises:
         BadRequestError: The text is not three words of the right shapes, comes some other way,
@@ -1163,11 +1154,9 @@ class Quarantine(Repository):
     def admit(self, bundle: Path, commit: str) -> None:
         """Unpack the bundle here and require its HEAD to be the requested commit.
 
-        The bundle must have the header of a bundle, must verify (a complete history, as a
-        repository with no objects checks it), and its objects must unpack and pass git's
-        object check. The check is made twice, once by the fetch (``transfer.fsckObjects``,
-        which a git before 2.4x ignores for a bundle) and once by ``git fsck``, so the guard
-        does not depend on the git version.
+        The bundle needs a bundle header and must verify (a complete history). Its objects must
+        unpack and pass git's object check, made by the fetch and by ``git fsck``, so the guard
+        does not depend on the git version (older gits ignore ``transfer.fsckObjects`` here).
 
         Raises:
             BadBundleError: Any of those fails; each has its own sentence.
@@ -1696,10 +1685,9 @@ def require_playbook_in_checkout(checkout: Path, playbook: str) -> None:
 def spool_stream(spool_dir: Path, receiving: Receiving) -> Path:
     """Copy the descriptor to a new private file in ``spool_dir`` and return its path.
 
-    The read is bounded in size and in time. Each wait is a ``select`` on the descriptor against
-    one monotonic deadline for the whole upload, so a sender that sends nothing, or one byte at
-    a time, is given up on at the deadline; a blocking read could not be cancelled. The file is
-    removed again if the read fails.
+    The read is bounded in size and time: each wait is a ``select`` against one monotonic
+    deadline for the whole upload, so a sender that stalls or trickles is given up on (a
+    blocking read could not be cancelled). The file is removed if the read fails.
 
     Raises:
         BadBundleError: More than the byte limit arrives, the deadline passes before the end of
@@ -1861,13 +1849,7 @@ class Trigger:
     def _guarded_bundle(self, mode: Mode, request: BundleRequest) -> Verdict:
         """Check the request against the key and the configuration, take the bundle, then run.
 
-        The order is part of the contract, and every check but the last two is made before
-        anything is read from standard input:
-
-        1. the mode word equals the mode the key is fixed to;
-        2. the playbook in the request is the configured one, and that is on the allowlist;
-        3. the bundle is read, bounded in size and time, into a private spool file;
-        4. only then is the single-flight lock taken, so a slow upload never blocks a run.
+        Mode and playbook are checked before standard input is read (order: role README).
 
         Raises:
             ModeMismatchError: The request asks for a mode other than the key's.
@@ -1894,11 +1876,7 @@ class Trigger:
     def _admitted_bundle(self, mode: Mode, commit: str, spool: Path) -> Verdict:
         """Admit the bundle into a quarantine, then verify and run as the pull route does.
 
-        The order after the bundle is admitted: the signature, then the floor. A host with no
-        floor refuses everything (``no-floor``), so a bootstrap that forgot to seed the floor
-        fails closed. The floor is a commit this host applied or was seeded with; a commit is
-        accepted when it is that commit or descends from it, and a floor the bundle does not
-        contain is a history that does not descend from it.
+        The signature is checked, then the floor; the role README gives the floor rules.
 
         Raises:
             BadBundleError: The bundle is refused by the quarantine.

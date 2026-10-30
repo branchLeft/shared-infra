@@ -286,14 +286,13 @@ def make_bundle(work: Path, sha: str, name: str) -> Path:
 def push_fixtures() -> int:
     """Build the history a host that takes bundles is tested with, and a bundle of each commit.
 
-    One OpenPGP key stands in for GitHub's own signing key, and it is the only key the host
-    trusts. The history is a straight line c0, c1, c2 (the floor starts at c0), with branches
-    off it: signed by keys the host does not trust, unsigned, altered after signing, a sibling
-    that does not descend from c1, an unrelated history, a commit with no playbook, one whose
-    playbook is a link, and one holding an object git's own check refuses. ``fork`` and
-    ``main_next`` are two commits on c2, standing for a web-editor commit on a fork and the real
-    next commit of main. The bundles that are not of a commit (a truncated one, text, one that
-    needs a commit it does not carry) are written too.
+    One OpenPGP key stands in for GitHub's signing key, the only key the host trusts. The
+    history is a line c0, c1, c2 (the floor starts at c0), with branches off it: signed by
+    untrusted keys, unsigned, altered after signing, a sibling not descending from c1, an
+    unrelated history, a commit with no playbook, a playbook that is a link, and an object
+    git refuses. ``fork`` and ``main_next`` are two commits on c2: a web-editor commit on a
+    fork, and the next real commit of main. Bundles not of a commit (truncated, text, one
+    needing a missing commit) are written too.
     """
     shutil.rmtree(ROOT, ignore_errors=True)
     (ROOT / "keys").mkdir(parents=True, mode=0o755)

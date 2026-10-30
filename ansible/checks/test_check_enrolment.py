@@ -875,7 +875,8 @@ class Sabotage(unittest.TestCase):
     def test_r8_writer_content_is_a_literal(self) -> None:
         self._edit(
             "roles/pull_trigger/tasks/main.yml",
-            '    content: "{{ pull_trigger_config | ansible.builtin.combine(pull_trigger_config_source)'
+            '    content: "{{ pull_trigger_config | ansible.builtin.combine('
+            "pull_trigger_config_source)"
             ' | ansible.builtin.to_nice_json }}\\n"',
             "    content: 'x'",
         )
