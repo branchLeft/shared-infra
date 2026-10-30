@@ -49,7 +49,7 @@
       A configuration file name is a relative path of at most one directory, each part
       starting with a letter or digit. Found {{ compose_stack_config_files | ansible.builtin.map(attribute='name') | ansible.builtin.list }}.
   vars:
-    compose_stack_name_pattern: '^.*\Z'
+    compose_stack_name_pattern: '^[A-Za-z0-9][A-Za-z0-9_.-]*(/[A-Za-z0-9][A-Za-z0-9_.-]*)?\Z'
 
 # Compose merges a compose.override.yaml that sits next to the compose file,
 # unless the files are named on the command line. Every call below names the
