@@ -43,6 +43,16 @@ variable cannot move them. The image is Gatus v5.37.0, pinned by its index diges
 image is a scratch image with no shell, so it cannot carry a Compose healthcheck, which is
 why the health check runs from the host.
 
+## Where its recipe comes from
+
+The tasks are a copy of the `compose_stack` pattern's recipe in `ansible/patterns/compose_stack`
+with this page's names, its template, its two configuration files and its endpoint check. A role
+may not apply another role (ANS-12), so a change to the recipe is carried here by hand, and the
+pattern's widened contract (named configuration files, the optional endpoint check) is what this
+copy uses. The stamp covers the compose file and both configuration files with their modes, so
+the first apply after a change to this copy brings the stack up once, recreating its two
+containers; the `status-data` volume is kept.
+
 ## Requirements
 
 The host has Docker with the Compose plugin, and the `community.docker` collection from the

@@ -1,0 +1,31 @@
+---
+# The widened recipe's own test (ANS-15): the caller's compose file, configuration in a
+# directory of its own, no secret, a named compose file, and the optional endpoint check.
+# The harness in ansible/harness sets ROLE_TEST_RUN_ID, so the instance name is unique to
+# one run and a destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # The same pinned Debian 13 test base as the default scenario.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    pre_build_image: true
+    keep_volumes: false
+    # Nothing here uses systemd, so the container just stays up for Ansible to connect to.
+    command: sleep infinity
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        # The caller's image, read by the caller's template in templates/. Never pulled: the
+        # stand-in runs no container. The digest is made up and the .invalid domain never resolves.
+        widened_image: example.invalid/widened@sha256:3333333333333333333333333333333333333333333333333333333333333333
+verifier:
+  name: ansible
