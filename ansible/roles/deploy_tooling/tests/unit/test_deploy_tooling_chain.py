@@ -48,6 +48,10 @@ V4_PROTECTED_DELETIONS: Mapping[str, str] = {
         "-A DOCKER-USER ! -s 10.20.1.10/32 -p tcp -m conntrack --ctorigdst 10.20.1.50 "
         "--ctorigdstport 8301 -j DROP"
     ),
+    "protected-port drop 8300": (
+        "-A DOCKER-USER ! -s 10.20.1.10/32 -p tcp -m conntrack --ctorigdst 10.20.1.50 "
+        "--ctorigdstport 8300 -j DROP"
+    ),
     "subnet drop": V4_STANDARD_DELETIONS["subnet drop"],
     "metadata drop": V4_STANDARD_DELETIONS["metadata drop"],
 }
@@ -267,7 +271,7 @@ class PassingTests(unittest.TestCase):
 
     def test_the_protected_chain_without_a_database_passes(self) -> None:
         found = check(PROTECTED)
-        self.assertEqual((found.owned_rules, found.foreign_rules), (6 + 2 + 2 + 1, 2))
+        self.assertEqual((found.owned_rules, found.foreign_rules), (7 + 2 + 2 + 1, 2))
 
     def test_a_host_with_no_ipv6_docker_user_chain_passes(self) -> None:
         no_chain = v6_listing(lambda lines: [line for line in lines if "DOCKER-USER" not in line])
@@ -365,6 +369,16 @@ class OrderTests(unittest.TestCase):
     def test_protected_ports_in_the_wrong_order_fail(self) -> None:
         first = V4_PROTECTED_DELETIONS["protected-port drop 8302"]
         second = V4_PROTECTED_DELETIONS["protected-port drop 8301"]
+
+        def swap(lines: list[str]) -> list[str]:
+            return [second if ln == first else first if ln == second else ln for ln in lines]
+
+        with self.assertRaises(chain.RuleMisplacedError):
+            check(PROTECTED, v4=listing(PROTECTED, swap))
+
+    def test_the_two_lowest_protected_ports_in_the_wrong_order_fail(self) -> None:
+        first = V4_PROTECTED_DELETIONS["protected-port drop 8301"]
+        second = V4_PROTECTED_DELETIONS["protected-port drop 8300"]
 
         def swap(lines: list[str]) -> list[str]:
             return [second if ln == first else first if ln == second else ln for ln in lines]

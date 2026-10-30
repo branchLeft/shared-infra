@@ -13,3 +13,10 @@ pull_trigger_packages:
   - gpg
   - gpgconf
   - openssh-client
+# The hosts that take their commit as a git bundle on standard input rather than by fetching main.
+# The program is told which by the `source` key of its configuration, which this role writes for
+# these hosts and for no others, so every other host keeps a configuration byte for byte as it
+# was. The source is chosen here, by the host's name, and never by an inventory or a caller: role
+# vars outrank inventory vars, and the name is the play's own `enrolled_host`.
+pull_trigger_bundle_hosts:
+  - demo1

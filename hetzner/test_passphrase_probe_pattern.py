@@ -4,52 +4,41 @@
 Narrative, the ALLOWLIST rules and the known limits: hetzner/test_passphrase_probe_pattern.md.
 """
 
+import contextlib
 import pathlib
+import re
 import subprocess
+import sys
+import tempfile
 import unittest
 from collections import defaultdict
+from unittest import mock
 
 HETZNER = pathlib.Path(__file__).resolve().parent
 REPO_ROOT = HETZNER.parent
 
 
-def runbooks() -> list[pathlib.Path]:
-    """Find all RUNBOOK-*.md files: hetzner/, mail/, and the repo root.
-
-    Scope rationale: hetzner/test_passphrase_probe_pattern.md, section SCAN SCOPE.
-    """
-    found: set[pathlib.Path] = set()
-    for base in (HETZNER, REPO_ROOT / "mail", REPO_ROOT):
-        if base.exists():
-            found.update(base.glob("RUNBOOK-*.md"))
-    return sorted(found)
-
-
-_SCAN_EXTENSIONS = (".py", ".sh", ".yml", ".yaml")
-
-# This module's own path is excluded from the scan below; the reason is in
-# hetzner/test_passphrase_probe_pattern.md, section SCAN SCOPE.
 _SELF_PATH = str(pathlib.Path(__file__).resolve().relative_to(pathlib.Path(__file__).resolve().parent.parent))
 
 
-def _tracked_scan_files() -> list[pathlib.Path]:
-    """Every git-tracked .py/.sh/.yml/.yaml file in the repo, except this file.
+def scanned_files() -> list[pathlib.Path]:
+    """Every git-tracked file in the repo, except this module.
 
+    Every tracked file, not a set of extensions or a RUNBOOK-* glob: a live
+    anti-pattern in a Markdown file with any name, at any depth, is a finding.
     Scope rationale: hetzner/test_passphrase_probe_pattern.md, section SCAN SCOPE.
     """
     result = subprocess.run(
-        ["git", "ls-files"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+        ["git", "ls-files", "-z"], cwd=REPO_ROOT, capture_output=True, check=True
     )
-    return [
+    # is_file() skips a tracked symlink to a directory (its real files are tracked
+    # and scanned under their own paths) and a tracked submodule gitlink.
+    paths = [
         REPO_ROOT / rel
-        for rel in result.stdout.splitlines()
-        if rel != _SELF_PATH and rel.endswith(_SCAN_EXTENSIONS)
+        for rel in result.stdout.decode("utf-8").split("\0")
+        if rel and rel != _SELF_PATH
     ]
-
-
-def scanned_files() -> list[pathlib.Path]:
-    """Every file this guard inspects for the literal `--show-secrets` flag."""
-    return runbooks() + _tracked_scan_files()
+    return [path for path in paths if path.is_file()]
 
 
 def show_secrets_occurrences() -> list[tuple[pathlib.Path, int, str]]:
@@ -59,7 +48,9 @@ def show_secrets_occurrences() -> list[tuple[pathlib.Path, int, str]]:
     """
     found = []
     for path in scanned_files():
-        text = path.read_text(encoding="utf-8")
+        # strict decoding: a tracked file that is not UTF-8 text fails the test
+        # instead of being skipped.
+        text = path.read_bytes().decode("utf-8")
         for lineno, line in enumerate(text.splitlines(), start=1):
             if "--show-secrets" in line:
                 found.append((path, lineno, line.strip()))
@@ -113,14 +104,103 @@ ALLOWLIST: dict[tuple[str, str], tuple[int, str]] = {
         "scripts/verify-archive-passphrase.py",
         "# An export taken with --show-secrets. It is not wrapped at all, so it",
     ): (1, "comment describing what a fixture's data represents, not a live command"),
+    (
+        'hetzner/test_passphrase_probe_pattern.md',
+        '`pulumi stack export --show-secrets` exits 0 even under a wrong passphrase (observed',
+    ): (1, "prose in this guard's own narrative document describing the anti-pattern"),
+    (
+        'hetzner/test_passphrase_probe_pattern.md',
+        'Detection here is deny-by-default on the literal `--show-secrets` flag,',
+    ): (1, "prose in this guard's own narrative document describing the anti-pattern"),
+    (
+        'scripts/audit-pulumi-secrets.md',
+        'and this script cannot detect it. `pulumi stack export --show-secrets`',
+    ): (1, 'prose warning that the audit script cannot detect the anti-pattern'),
+    (
+        'scripts/pulumi-stack-inventory.json',
+        '"evidence": "pulumi stack change-secrets-provider passphrase completed (\\"Migrating old configuration and state to new secrets provider\\") and pulumi stack export --show-secrets succeeded afterwards; secrets_providers read back from the gs://branchleft-pulumi-state checkpoint: passphrase, salt prefix v1:v6UAjuKhH, 12 resources. Wrapped by ghost-platform\'s existing repo-level passphrase; the stored copy was independently re-typed from the password manager and verified against the live checkpoint."',
+    ): (1, 'recorded past-tense evidence of a completed re-wrap, data not a command or instruction'),
+    (
+        'scripts/pulumi-stack-inventory.json',
+        '"evidence": "Re-wrapped the same way as branchleft-ghost-provisioning/blog; pulumi stack export --show-secrets succeeded afterwards. secrets_providers read back from the gs://branchleft-blog-pulumi-state checkpoint: passphrase, salt prefix v1:rLDLxMTFD, matching the value placed in the PULUMI_SALT_BLOG repository secret, 33 resources. Wrapped by a newly minted 32-character passphrase, escrowed in the platform owner\'s password manager and set as PULUMI_CONFIG_PASSPHRASE on branchLeft/ghost-tenant-blog before the re-wrap; the stored copy was independently re-typed and verified. Post-merge deploy green: \\"Restore the stack\'s encryption salt\\" and the delete-guard both passed, and Apply reported 31 unchanged with no creates, updates, deletes or replaces."',
+    ): (1, 'recorded past-tense evidence of a completed re-wrap, data not a command or instruction'),
 }
 
 
+LIVE_LINE = "pulumi stack export --show-secrets --stack <stack> --file out.json"
+
+EXISTING_STACK_RUNBOOK = "hetzner/RUNBOOK-existing-stack-migration.md"
+# A live decrypt gate is a line that runs `pulumi preview --stack` as a command.
+# Prose mentions are not counted. The pinned count is the four live gates the
+# runbook carries: three in the A.2 per-stack sequence (steps 4, 6 and 7) and
+# one in the B.1 move sequence (step 5). Replacing one with another command
+# lowers the count; adding one raises it. Either change must update this pin.
+DECRYPT_GATE = re.compile(r"^\s*pulumi preview --stack\b", re.MULTILINE)
+EXPECTED_DECRYPT_GATES = 4
+
+
+def decrypt_gate_problems(text: str) -> list[str]:
+    """Empty when the runbook carries exactly the pinned number of live decrypt gates."""
+    found = len(DECRYPT_GATE.findall(text))
+    if found != EXPECTED_DECRYPT_GATES:
+        return [
+            f"{EXISTING_STACK_RUNBOOK}: found {found} live `pulumi preview --stack` "
+            f"decrypt gate(s), expected {EXPECTED_DECRYPT_GATES}; a gate replaced by "
+            f"another command (e.g. `pulumi stack ls`) is not a decrypt proof"
+        ]
+    return []
+
+
+@contextlib.contextmanager
+def repo_with(files: dict[str, str]):
+    """A throwaway git repo holding exactly `files`, with REPO_ROOT pointed at it."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        for rel, text in files.items():
+            path = root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=root, check=True)
+        with mock.patch.object(sys.modules[__name__], "REPO_ROOT", root):
+            yield root
+
+
+def flagged_paths() -> set[str]:
+    return {str(p.relative_to(REPO_ROOT)) for p, _, _ in show_secrets_occurrences()}
+
+
 class ShowSecretsAllowlistTests(unittest.TestCase):
-    def test_runbooks_found(self):
-        """Sanity check: the flag scan must have files to scan in the first place."""
-        found = runbooks()
-        self.assertGreater(len(found), 0, "No RUNBOOK-*.md files found")
+    def test_markdown_outside_runbook_glob_is_scanned(self):
+        """Gap 1: a live instruction in a non-RUNBOOK Markdown file must be seen."""
+        with repo_with({"PULUMI-BACKEND-INVENTORY.md": LIVE_LINE + "\n"}):
+            self.assertIn("PULUMI-BACKEND-INVENTORY.md", flagged_paths())
+
+    def test_nested_runbook_is_scanned(self):
+        """Gap 2: the RUNBOOK glob is not recursive, so a nested runbook must be seen."""
+        with repo_with({"hetzner/docs/RUNBOOK-nested.md": LIVE_LINE + "\n"}):
+            self.assertIn("hetzner/docs/RUNBOOK-nested.md", flagged_paths())
+
+    def test_unglobbed_markdown_name_is_scanned(self):
+        """Gap 2: a Markdown file whose name does not match RUNBOOK-* must be seen."""
+        with repo_with({"hetzner/MIGRATION-GUIDE.md": LIVE_LINE + "\n"}):
+            self.assertIn("hetzner/MIGRATION-GUIDE.md", flagged_paths())
+
+    def test_existing_stack_runbook_keeps_its_decrypt_gates(self):
+        """Gap 3: the good gate must be present, not only the bad string absent."""
+        text = (REPO_ROOT / EXISTING_STACK_RUNBOOK).read_text(encoding="utf-8")
+        self.assertEqual(decrypt_gate_problems(text), [])
+
+    def test_gate_replaced_by_stack_ls_is_caught(self):
+        """Gap 3 proof: swapping one live gate for `pulumi stack ls` must fail."""
+        text = (REPO_ROOT / EXISTING_STACK_RUNBOOK).read_text(encoding="utf-8")
+        mutated = text.replace(
+            "pulumi preview --stack <stack> > /dev/null && echo 'decrypt OK'",
+            "pulumi stack ls --stack <stack> > /dev/null && echo 'decrypt OK'",
+            1,
+        )
+        self.assertNotEqual(mutated, text, "sabotage text not found in the runbook")
+        self.assertNotEqual(decrypt_gate_problems(mutated), [])
 
     def test_show_secrets_is_allowlisted_everywhere_it_appears(self):
         """Deny-by-default: every `--show-secrets` occurrence must be on ALLOWLIST.

@@ -27,8 +27,11 @@ mail/RUNBOOK-mx1-prometheus-metrics.md:
   steps: 6
   reason: pending-role
   role: mail_stalwart
+# Five, not three: the two steps that wire the DNSBL check to Healthchecks.io are owner-run
+# provisioning on mx1 (writing its root-only credential file, then a fire drill that runs and
+# removes a file there). They are hand-only until mail_stalwart takes the runbook.
 mail/RUNBOOK-mx1-provision.md:
-  steps: 3
+  steps: 5
   reason: pending-role
   role: mail_stalwart
 mail/RUNBOOK-mx1-reboot.md:

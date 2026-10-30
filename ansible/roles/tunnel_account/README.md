@@ -37,8 +37,11 @@ names its path. The same files serve a check run and the nightly run alike.
 | `from_address`      | `replica` | db1's public NAT egress address, as the replica host sees it. The key is accepted only from it. Private.         |
 | `db1_public_key`    | `replica` | db1's one-line `ssh-ed25519` public key, copied from the `db1_key` run output. Public data.                      |
 
-Every value is refused before any file changes when its shape is wrong: an
-address must be public and made of four octets from 0 to 255 with no leading
+Every value is refused before the file it feeds changes when its shape is wrong.
+On db1 that is not before any change: `db1_key` runs first and may create the
+account and db1's key before the inputs are read, so a refused input leaves those
+in place. The target file, the pin and the unit are not written until every input
+has passed. An address must be public and made of four octets from 0 to 255 with no leading
 zero (`from_address`, `replica_host`), a subnet prefix private, a key one
 `ssh-ed25519` line with at most a plain comment. Each pattern ends at the line
 break (`\Z`), so a second line is refused, and a second line in `from_address`
@@ -95,8 +98,11 @@ The drop-in and the authorized key are what the ghost-platform program
 (`db/tunnel/tunnel_account.py`, commit 5e52f78427cab104438057164e4baa16b329875c)
 renders for the same inputs. That was checked once, by rendering both with the
 program and diffing. The authorized key line is byte for byte the program's.
-The drop-in differs in three recorded ways: a different header comment, the
-`AuthorizedKeysFile` path (the role keeps the keys outside the key directory
+The drop-in differs in four recorded ways: its file name (the program writes
+`60-branchleft-db-tunnel.conf`, the role `50-branchleft-db-tunnel.conf`), a different
+header comment, the
+`AuthorizedKeysFile` path (the program writes `/etc/branchleft/db-tunnel/authorized_keys`,
+the role `/etc/ssh/branchleft-db-tunnel/authorized_keys`, outside the key directory
 that holds the inputs), and a closing `Match all`. The two golden files in
 `molecule/default/files/golden/` hold those outputs, and `verify` compares what
 the role wrote with them. Until the program's tunnel duties are removed (a
@@ -166,7 +172,8 @@ converge, idempotence, verify. Verify does these things, in order:
 - The container has no `ssh` binary and is not privileged. The unit is installed,
   enabled and loaded by systemd, and systemd accepts its start. That the process
   runs, connects and holds the tunnel is not proven here.
-- Molecule runs on arm64 Docker Desktop only. amd64 is not proven.
+- Molecule runs in CI on the amd64 `ubuntu-24.04` runner, and it has also been run
+  on arm64 Docker Desktop. Other architectures are not separately proven.
 - The second run's zero-change result and the nightly drift check need the live hosts.
 - Teardown leaves the key directory itself, because it holds the inputs.
 - The unit file carries a header comment that names the legacy installer
