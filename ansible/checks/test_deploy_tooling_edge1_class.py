@@ -1,14 +1,10 @@
 """Check that edge1 plays the deploy_tooling role as class gateway, and only edge1 does.
 
-The role takes `deploy_tooling_host_class` with no default (ANS-7). The pull route has no
-channel for a role input, so edge1's playbook sets it in the play's vars and the enrolment
-checker pins that value per host in `HOST_PLAY_VARS` (R2). The value is therefore stated
-twice by design: the playbook carries it and the checker's table decides it. This test reads
-the real files and holds the two to each other and to the host's list in `host_roles.yml`, so a
-change to one alone fails here.
-
-The gateway class belongs to the gateway host. Other hosts may name their own class in their own
-playbooks and table rows; none may name gateway.
+The role takes `deploy_tooling_host_class` with no default (ANS-7). The playbook sets it in
+the play's vars and the enrolment checker pins it per host in `HOST_PLAY_VARS` (R2), so the
+value is stated twice by design. This test holds the playbook, the table and the host's list
+in `host_roles.yml` to each other, so a change to one alone fails here. Other hosts may name
+their own class; none may name gateway.
 """
 
 from __future__ import annotations
