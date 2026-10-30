@@ -305,8 +305,10 @@ jobs:
       # the role's directory, so that pyproject.toml is the one the tools read. The program
       # is the code a host runs as root, so such a role with no files/ fails here: tests
       # with nothing under them would pass in silence. The step covers every such role and
-      # has no list to edit. A role with a library/ is checked by the step below; a role
-      # whose pyproject.toml names no files/ path is covered by neither.
+      # has no list to edit. The tests of these programs are run by the step "Run every role's
+      # unit tests" below, from the same directory with files/ on the path, so this step runs
+      # only the type check and the lint. A role with a library/ is checked by the step below; a
+      # role whose pyproject.toml names no files/ path is covered by neither.
       - name: Check each role's own program in files/
         run: |
           set -euo pipefail
@@ -328,7 +330,6 @@ jobs:
               "$bin/mypy" --strict files tests/unit
               "$bin/ruff" check files tests
               "$bin/ruff" format --check files tests
-              PYTHONPATH=files "$bin/python" -m unittest discover -b -s tests/unit -p "test_*.py"
             )
             echo "::endgroup::"
             checked=$((checked + 1))
