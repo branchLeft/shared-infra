@@ -5,7 +5,9 @@ the order a person would follow by hand: the host configuration directories,
 the environment file and the master key (each written once), the stack's
 files, the database, the one-off init phase of the sign-in service, the sign-in
 service, the stack's unit, the deploy wrapper, and the DOCKER-USER isolation
-policy. It is the second service role built on the monitoring stack's shape
+policy. On a host where the stack already runs it starts nothing itself and
+leaves the containers to the unit (see "A host where the stack already runs").
+It is the second service role built on the monitoring stack's shape
 (`ansible/roles/monitoring_stack`), and the differences from that role are
 listed below.
 
@@ -15,13 +17,18 @@ This README follows the order the standard sets for a role README (ANS-14).
 
 It does these, in order:
 
+0. Settles its inputs before it writes anything (see "Inputs"): a secret file
+   that holds no value needs its content given, and an image is read from the
+   running stack when none is given. A missing input that is needed stops the run
+   here, with nothing written.
 1. Creates three directories: `/etc/branchleft`, `/etc/branchleft/control-plane`
    and the sign-in service's state directory. Their owners and modes are in
    `vars/main.yml`.
 2. Writes `/etc/branchleft/control-plane.env` and the sign-in service's master
    key, each only while the file is absent or empty. The content comes from the
    inputs `control_plane_env_content` and `control_plane_masterkey`, both secrets
-   supplied at run time. A file that holds a value is never replaced. How the
+   supplied at run time, and needed only for a file that holds no value. A file
+   that holds a value is never replaced, and its input is then never read. How the
    file is written without a window of wider access is under "Writing a secret
    without an exposure window" below. On every run it also sets the owner, group
    and mode of both files back to the values in `control_plane_secret_files`
@@ -30,12 +37,14 @@ It does these, in order:
 3. Copies `compose.yml`, `compose.init.yml` and `pg_hba.conf` from
    `hetzner/control-plane/stack/` into `/opt/branchleft/control-plane`, as
    `root:root` mode `0644` in a `0755` directory.
-4. Starts the database alone and waits until it is healthy.
-5. Runs the sign-in service's init phase once, when the stamp file
-   `/etc/branchleft/control-plane/zitadel-init.done` is absent, and then writes
-   the stamp. The init phase is the only place the database administrator's
-   credential is used.
-6. Starts the sign-in service alone and waits until it is healthy.
+4. Only where the stack is not yet deployed: starts the database alone and
+   waits until it is healthy.
+5. Only where the stack is not yet deployed: runs the sign-in service's init
+   phase once, when the stamp file `/etc/branchleft/control-plane/zitadel-init.done`
+   is absent, and then writes the stamp. The init phase is the only place the
+   database administrator's credential is used.
+6. Only where the stack is not yet deployed: starts the sign-in service alone and
+   waits until it is healthy.
 7. Enables `branchleft-compose@control-plane.service`, runs the deploy wrapper
    with the pinned image, and fails if the unit is not `active` afterwards.
 8. Installs the DOCKER-USER isolation reconciler and its unit byte for byte from
@@ -65,19 +74,48 @@ container. The sign-in service's data lives in a Docker volume, and
 
 ## Interface
 
-`meta/argument_specs.yml` declares the inputs. The required ones are
-`control_plane_app_image` (a digest-pinned reference), `control_plane_env_content`
-and `control_plane_masterkey`. The two secrets carry `no_log: true`. Two switches,
-`control_plane_bring_up` and `control_plane_start_units`, default to `true`.
-`vars/main.yml` holds the paths of the stack. They are not inputs.
+`meta/argument_specs.yml` declares the inputs. None is required. They are
+`control_plane_app_image` (a digest-pinned reference, not a secret),
+`control_plane_env_content` and `control_plane_masterkey` (secrets, `no_log: true`).
+Two switches, `control_plane_bring_up` and `control_plane_start_units`, default to
+`true`. `vars/main.yml` holds the paths of the stack. They are not inputs.
 
-On ops1 the three required inputs come from the `host_inputs` loader, which reads
-the owner's root-only `/etc/branchleft/host-inputs.json` and sets each key as a host
-fact under the name of the argument it feeds (see that role's README). The file holds
-exactly those three keys: the digest-pinned image, which is not secret, and the
-two secrets. A release is an edit of the image key. Until the owner has placed the
-file, every pull of ops1 stops at the loader, before this role and before the status
-page.
+### Inputs
+
+An empty string counts as not given.
+
+- **The two secrets** are write-once, so the role needs a value only for a file that
+  holds none. If `/etc/branchleft/control-plane.env` (or the master key file) is absent
+  or empty and its content was not given, the run stops first with
+  `control_plane[env-missing]` (or `control_plane[masterkey-missing]`), before any
+  directory, file or container is touched. The message names the input and the
+  path and never a value. A host that already runs the stack needs neither input.
+  A fresh host needs both, once.
+- **The image** is not a secret. When `control_plane_app_image` is given it is used
+  as given: it is the way to upgrade. When it is not given, the role reads the image
+  the stack's running portal container was created from, with two read-only
+  commands (`docker ps` filtered on the Compose project `control-plane`, the service
+  `portal` and `oneoff=False`, then `docker inspect` of that container), which run
+  in check mode too and change nothing. The image used is then the one already
+  running, so a run changes no image. The host is the source of truth for the image
+  until a pin is given. With no pin and no portal container the run stops with
+  `control_plane[image-missing]`; an image that is not `NAME@sha256:` and 64 hex digits
+  stops it with `control_plane[image-not-pinned]`, as the deploy wrapper would.
+
+### A host where the stack already runs
+
+A stack is deployed when its portal container exists. Then the role does not run
+Compose itself: no `up` of the database, no init phase, no `up` of the sign-in service.
+The deploy wrapper restarts the stack's unit, and the unit starts the stack with its
+own environment: the `EnvironmentFile` pair of `branchleft-compose@.service` read by
+systemd, the project name in `compose.yml` and the project directory. That is by
+construction the configuration the containers were started with, so Compose finds
+every container unchanged and recreates none. The role's own `docker compose
+--env-file` reads the same file with Compose's parser, and a password with a `$`, a `#`
+or a quote in it parses differently there. That would be a changed config and Compose
+would recreate the database, so the role leaves a running stack to the unit. A fresh host
+still uses the direct commands, because the unit cannot start the applications before the
+database and the sign-in service exist.
 
 ## Requirements
 
@@ -140,12 +178,10 @@ and mode from that list too, so the values are not written twice.
 
 ### Differences from the runbook
 
-- The first run on the existing ops1 host repeats the init phase once. No stamp
-  file exists there, so the role runs `compose.init.yml` once. The runbook calls
-  that phase idempotent, so this is safe. It writes the stamp, and later runs
-  skip it.
-- The init phase runs only when the stamp is absent. The runbook skipped it on
-  an initialised host by hand; the stamp does the same check.
+- On a host where the stack already runs (ops1 today) the init phase is not run
+  and no stamp is written: the stack's existence is the evidence that it ran.
+  Where the stack is not deployed, the init phase runs when the stamp is absent,
+  which is the check the runbook made by hand.
 - The isolation reconciler is restarted only when it or its unit changed. The
   installer the runbook ran restarted it on every run. The unit reasserts the
   policy at boot and after a Docker restart either way.
@@ -179,7 +215,21 @@ converge is the idempotence step. `verify.yml` checks:
   the declared values, with the first values still in place;
 - the interrupted run: both files are emptied by hand, the role is applied
   again, and both must be filled with the new values at the same owner and mode;
+- the optional secrets: a run given empty contents leaves both files as they were;
+- the refusals: with a secret file absent and its content not given, the run stops
+  with its own code naming the input, and a stack file removed beforehand is still
+  absent, so nothing was written;
+- the image cases, with a stand-in for the `docker` command that answers the two reads:
+  a given pin is used as given and `docker` is not called; with no image the one the
+  stand-in reports is used, and the calls carry the project, service and one-off
+  filters; with no portal container the run stops with `control_plane[image-missing]`;
+  with a running image that is a tag it stops with `control_plane[image-not-pinned]`;
 - that no throwaway value, from any apply, appears in the run's log.
+
+`tests/unit/` reads `tasks/main.yml` and holds the structure the safety depends on:
+every input refusal is before the first write, every task that runs Compose directly
+is gated on a stack that is not yet deployed, the two reads of the running stack run in
+check mode and change nothing, and no task uses the image as given.
 
 The container does not run Docker, so the bring-up tasks, the stack's health and
 the isolation policy's effect on the firewall are not proven by this scenario.
@@ -187,7 +237,15 @@ the isolation policy's effect on the firewall are not proven by this scenario.
 ## Named limits
 
 - **The Docker bring-up is not exercised.** No container of the stack is started
-  in the test. The first live run through the gated pull is the proof.
+  in the test, and the reads of the running stack are answered by a stand-in, so
+  the real output of `docker inspect` is not seen. The first live run through the
+  gated pull is the proof.
+- **Check mode does not run the deploy.** The compose commands and the deploy
+  wrapper are `command` tasks that check mode skips; it shows the owner, group and mode
+  corrections, the stack files and the isolation files only.
+- **The host is the source of the image until a pin is given.** With no pin the role
+  deploys whatever the portal container runs, so it cannot upgrade or roll back the
+  image. A pin does.
 - **The owner and mode of the secret files are corrected at each run, not
   continuously.** A file widened between two runs stays wider until the next run
   that reaches this role.

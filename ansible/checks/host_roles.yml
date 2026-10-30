@@ -15,7 +15,6 @@ edge1:
   - egress_nat
   - ci_login
 ops1:
-  - host_inputs
   - control_plane
   - nextcloud_stack
   - backup_worker

@@ -60,7 +60,7 @@ TRIGGER_LINE = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # the pull roles alone, so they strip these first; one test holds the real playbook to them.
 APPLIED_ON_MAIN = {
     "edge1": ["ci_login"],
-    "ops1": ["host_inputs", "status_page", "control_plane"],
+    "ops1": ["status_page", "control_plane"],
     "db1": ["host_inputs"],
 }
 

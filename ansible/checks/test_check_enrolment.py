@@ -219,7 +219,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R11 db1.yml")
 
-    # R2: a host without the loader on its list cannot apply it.
+    # R2: the loader is on db1's list only, so another host cannot apply it.
     def test_r10_the_loader_on_another_host_is_refused(self) -> None:
         self._edit(
             "playbooks/edge1.yml",

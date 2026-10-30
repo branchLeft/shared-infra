@@ -115,10 +115,19 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. Today db1's and ops1's playbooks apply it. The first db1 apply that includes it
+nothing else. Today only db1's playbook applies it. The first db1 apply that includes it
 stops here until the owner has placed the file, which proves the file on the host before
 the database roles depend on it. db1 also needs its signer in `ansible/trust/db1.yml`
 before any pull runs.
+
+## Bootstrap and rotation
+
+The owner places the file once, on the host, by hand: one JSON object whose keys are exactly
+the names in the host's row in `vars/main.yml`, written with `json.dumps` (never typed into a
+command line), owned by root:root with mode `0600`, in directories only root can write. The
+role never writes it. To rotate a value the owner edits the file by hand the same way, and the
+next pull reads it. A run before the file exists stops at `host_inputs[file-missing]`, which is
+how the first pull proves the file is in place before the roles that need it run.
 
 ## How to change it safely
 
