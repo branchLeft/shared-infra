@@ -8,12 +8,14 @@ and imported from a temporary directory: this repository keeps no copy. The READ
 import ast
 import atexit
 import hashlib
+import http.client
 import importlib
 import json
 import re
 import shutil
 import sys
 import tempfile
+import time
 import unittest
 import urllib.request
 from pathlib import Path
@@ -36,14 +38,35 @@ def render(expression: str, **context: object) -> str:
     return jinja2.Environment(undefined=jinja2.StrictUndefined).from_string(expression).render(**context)
 
 
+FETCH_ATTEMPTS = 3
+FETCH_BACKOFF_SECONDS = 2
+
+
+def read_url(url: str) -> bytes:
+    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - a fixed https URL
+        return response.read()
+
+
+def fetch_bytes(url: str) -> bytes:
+    """Return the bytes at a fixed URL. A transport error (a reset, a timeout, an HTTP error) is retried,
+    FETCH_ATTEMPTS times in all. The digest check belongs to the caller and is never retried."""
+    for attempt in range(1, FETCH_ATTEMPTS):
+        try:
+            body = read_url(url)
+        except (OSError, http.client.HTTPException):
+            time.sleep(FETCH_BACKOFF_SECONDS * attempt)
+        else:
+            return body
+    return read_url(url)
+
+
 def fetch_programs() -> Path:
     """Fetch each pinned program from its one home into a temporary directory; refuse bytes that are not pinned."""
     directory = Path(tempfile.mkdtemp(prefix="db1-grants-programs-"))
     atexit.register(shutil.rmtree, directory, ignore_errors=True)
     base = render(VARS["db1_grants_source_raw_base"], db1_grants_source_commit=VARS["db1_grants_source_commit"])
     for name, digest in VARS["db1_grants_program_sha256"].items():
-        with urllib.request.urlopen(f"{base}/{name}", timeout=60) as response:  # noqa: S310 - a fixed https URL
-            body = response.read()
+        body = fetch_bytes(f"{base}/{name}")
         if hashlib.sha256(body).hexdigest() != digest:
             raise AssertionError(f"{name} fetched from {base} is not the pinned bytes; nothing was imported")
         (directory / name).write_bytes(body)

@@ -66,7 +66,7 @@ one of the three Docker commands in their exact shapes, word for word. The shape
 the playbook that applies the role (its play keys, its `roles` entry, its tasks) is
 not tested here: the per-host role list check holds each playbook to the roles it
 lists. Extra vars on the pull command line are not read by this check
-and are outside it: they are held by the gated pull's approval (ws#2483).
+and are outside it: they are held by the gated pull's approval.
 
 ## Requirements
 

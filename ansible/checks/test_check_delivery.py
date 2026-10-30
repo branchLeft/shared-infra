@@ -220,7 +220,7 @@ class CallerTests(unittest.TestCase):
                 job_of(document)["uses"] = workflow + ref
 
             self.assert_names(self.weakened(set_uses), "exact tag")
-        for ref in ("@v1.0.16", "@v2.3.4"):
+        for ref in ("@v1.0.18", "@v2.3.4"):
 
             def set_good(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
@@ -230,7 +230,7 @@ class CallerTests(unittest.TestCase):
     def test_a_pin_below_the_jump_release_is_named(self) -> None:
         # The call passes the jump secrets, and a release that does not declare them fails it.
         workflow = "branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml"
-        for ref in ("@v1.0.15", "@v1.0.0", "@v0.9.99"):
+        for ref in ("@v1.0.15", "@v1.0.17", "@v1.0.0", "@v0.9.99"):
 
             def set_old(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref

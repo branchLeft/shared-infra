@@ -1,0 +1,7 @@
+---
+# deploy_slot_keys_slots has no default (ANS-7): a host that is not told its slots is not
+# given any, and the interface check fails the run when it is absent. The slots are tenant
+# stack names and public keys, which are private: they are supplied at run time and never
+# committed (ANS-16). Nothing else is an input; the fixed values are in vars/main.yml and
+# in the module.
+{}
