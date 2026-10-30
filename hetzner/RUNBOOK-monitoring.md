@@ -659,6 +659,15 @@ and `blackbox_mail`'s labels are what catch the exporter itself being down --
 a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
+
+`blackbox_object_storage` is one target: the Hetzner Object Storage endpoint
+`hel1.your-objectstorage.com`, probed over HTTPS through blackbox_exporter's
+`http_object_storage` module. It carries `expected_up: 'true'` and should read
+`up`. The module counts a 403 from the bare endpoint as up, because the service
+refuses anonymous requests there by design. A `down` here means the connection
+was refused or timed out, which `ObjectStorageProbeFailed` pages on after 15
+minutes.
+
 Only `node` for `app1`, `node` for `db1` and `node` for `ops1` are expected
 `down`: `app1`/`db1`'s exporters are not provisioned yet, and `ops1`'s carries
 `expected_up: 'false'` until §15 below confirms it live and flips that label
