@@ -24,6 +24,7 @@ ops1:
   - status_page
 app1:
   - deploy_tooling
+  - deploy_slot_keys
   - website_app1
   - breakglass_grant_host
   - host_baseline

@@ -94,7 +94,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -132,7 +132,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: mail/.nvmrc
           cache: npm
@@ -191,7 +191,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
           cache: npm
@@ -258,7 +258,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner-host/.nvmrc
           cache: npm
@@ -302,7 +302,7 @@ jobs:
       # A managed Python, so the YAML parser the stack-keys check uses can be
       # installed without touching the system interpreter.
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -756,7 +756,7 @@ jobs:
       # text match misses a quoted key. The control case must exit 1 exactly,
       # so a checker that stopped matching cannot pass the step silently.
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -788,7 +788,7 @@ jobs:
       # A managed Python, so the YAML parser the workflow-concurrency test reads
       # workflows with can be installed without touching the system interpreter.
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -812,7 +812,7 @@ jobs:
       # The no-op gate's contract is checked by the shared action, which reads
       # only this workflow file, so this repo keeps no test of its own for it.
       - name: Check the no-op gate contract
-        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@e10620f2deb20f30673917351761466eb47a9cb4 # v1.0.11
         with:
           workflow: .github/workflows/ci.yml
           pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply
@@ -846,7 +846,7 @@ jobs:
       # The scripts suite imports the YAML parser the workflow-concurrency test
       # reads workflows with, so this job installs it the way scripts-tests does.
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -1079,7 +1079,7 @@ jobs:
           done
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: mail/.nvmrc
           cache: npm
@@ -1152,7 +1152,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@e10620f2deb20f30673917351761466eb47a9cb4 # v1.0.11
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1231,7 +1231,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: mail/.nvmrc
           cache: npm
@@ -1392,7 +1392,7 @@ jobs:
           done
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
           cache: npm
@@ -1498,7 +1498,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@e10620f2deb20f30673917351761466eb47a9cb4 # v1.0.11
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1599,7 +1599,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
           cache: npm
@@ -1800,7 +1800,7 @@ jobs:
           done
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
           cache: npm
@@ -1903,7 +1903,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@e10620f2deb20f30673917351761466eb47a9cb4 # v1.0.11
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1999,7 +1999,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
           cache: npm
