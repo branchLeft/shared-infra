@@ -4,7 +4,7 @@
   task that renders it can keep its result out of the log and the assertion
   after it can still say which entry is wrong.
 -#}
-{%- set found = {'name': [], 'duplicate': [], 'source': [], 'text': [], 'path': [], 'env': []} -%}
+{%- set found = {'name': [], 'duplicate': [], 'source': [], 'text': [], 'path': [], 'env': [], 'env_name': []} -%}
 {%- set seen = [] -%}
 {%- for entry in secrets_and_no_log_secrets -%}
   {%- set name = entry['name'] | default('') | string -%}
@@ -17,6 +17,9 @@
     {%- set _ = found['duplicate'].append(loop.index) -%}
   {%- endif -%}
   {%- set _ = seen.append(name) -%}
+  {%- if secrets_and_no_log_env_name != '' and name == secrets_and_no_log_env_name -%}
+    {%- set _ = found['env_name'].append(loop.index) -%}
+  {%- endif -%}
   {%- if (value != '') == (source != '') -%}
     {%- set _ = found['source'].append(loop.index) -%}
   {%- endif -%}
