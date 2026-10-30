@@ -1,0 +1,900 @@
+---
+# What the role must leave true for a host that takes its commit as a git bundle on standard
+# input, with no network. Every task name states a behaviour, so a red line names the case it
+# broke. Everything runs in the test container against throwaway keys and a signed history that
+# prepare.yml built (see make_fixtures.py --push). The program is run as the forced command runs
+# it: the request in SSH_ORIGINAL_COMMAND, the bundle on standard input.
+#
+# A control that cannot fail is not a control, so the cases come in pairs: the installed program
+# gives the documented answer, and a copy of it with that one check cut out gives the other
+# one. The copies are made by sabotage.yml from the installed text; each edit must match, so a
+# program that changes under the test fails here and does not leave a case testing nothing.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_program: /usr/local/sbin/pull-trigger
+    verify_installed_config: /etc/pull-trigger/config.json
+    verify_state: /var/lib/pull-trigger
+    verify_logs: /var/log/pull-trigger
+    verify_marker: /var/tmp/ptt/applied-marker
+    verify_role_directory: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+    pull_trigger_pr_playbook: ansible/playbooks/host.yml
+    # The line the workflow that pushes to a host reads. Every line the program prints on this
+    # source has to match it, with a digit for changed on every outcome.
+    pull_trigger_pr_line_pattern: >-
+      ^push-receiver verdict=([a-z-]+) exit=([0-9]+) reason=([a-z-]+) mode=(check|apply)
+      commit=([0-9a-f]{40}) playbook=[A-Za-z0-9_./-]+ changed=([0-9]+)$
+    # The one command the owner is asked to run to read the result, held word for word in the
+    # role README and in the runbook. Its output is exactly the facts to compare.
+    verify_result_command: |-
+      sudo sh -c 'printf "floor=%s\n" "$(cat /var/lib/pull-trigger/last-applied)"; \
+        tail -n 1 /var/log/pull-trigger/pull-trigger.log | grep -oE "(verdict|exit|changed)=[a-z0-9-]+" | paste -sd" " -'
+  tasks:
+    # ------------------------------------------------------------ set up
+    - name: Read the fixtures
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/fixtures.json
+      register: pull_trigger_pr_fixtures_file
+
+    - name: Read the configuration the role wrote
+      ansible.builtin.slurp:
+        src: '{{ verify_installed_config }}'
+      register: pull_trigger_pr_config_file
+
+    - name: Keep both as data, and name the commits
+      ansible.builtin.set_fact:
+        pull_trigger_pr_fixtures: '{{ pull_trigger_pr_fixtures_file.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'
+        pull_trigger_pr_base_config: '{{ pull_trigger_pr_config_file.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'
+
+    - name: Name the commits and the bundles
+      ansible.builtin.set_fact:
+        pull_trigger_pr_commits: '{{ pull_trigger_pr_fixtures.commits }}'
+        pull_trigger_pr_bundles: '{{ pull_trigger_pr_fixtures.bundles }}'
+
+    - name: Make the directories the test configurations and the changed programs live in
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/tmp/ptt/cfg
+        - /var/tmp/ptt/mut
+
+    # ---------------------------------------------- there is no network
+    # The control for every case below: they all ran with no network because the container was
+    # cut off in prepare.yml. A connect to a public address must fail, and so must a name lookup.
+    - name: A connection to a public address fails, so the container has no network
+      ansible.builtin.command:
+        argv:
+          - timeout
+          - '5'
+          - bash
+          - -c
+          - exec 3<>/dev/tcp/1.1.1.1/443
+      register: pull_trigger_pr_public_connect
+      changed_when: false
+      failed_when: pull_trigger_pr_public_connect.rc == 0
+
+    - name: A name lookup fails too
+      ansible.builtin.command:
+        argv:
+          - getent
+          - hosts
+          - github.com
+      register: pull_trigger_pr_public_lookup
+      changed_when: false
+      failed_when: pull_trigger_pr_public_lookup.rc == 0
+
+    # ------------------------------------------- what the role installed
+    - name: The configuration says the host takes bundles
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_base_config.source == 'bundle'
+          - pull_trigger_pr_base_config.signers | length == 1
+          - pull_trigger_pr_base_config.signers[0].format == 'openpgp'
+          - "'PRIVATE KEY' not in (pull_trigger_pr_config_file.content | ansible.builtin.b64decode)"
+        fail_msg: the configuration is not a bundle host's
+        success_msg: the configuration names the bundle source and one public key
+
+    - name: Look at the floor the bootstrap seeded
+      ansible.builtin.stat:
+        path: '{{ verify_state }}/last-applied'
+      register: pull_trigger_pr_seeded_floor
+
+    - name: Read the floor
+      ansible.builtin.slurp:
+        src: '{{ verify_state }}/last-applied'
+      register: pull_trigger_pr_floor_file
+
+    - name: The bootstrap wrote the seed as the floor, readable by root only
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_seeded_floor.stat.mode == '0600'
+          - pull_trigger_pr_seeded_floor.stat.pw_name == 'root'
+          - (pull_trigger_pr_floor_file.content | ansible.builtin.b64decode) == pull_trigger_pr_commits.c0 ~ "\n"
+        fail_msg: the floor was not seeded as it must be
+        success_msg: the floor is the seed
+
+    # ----------------------------------------------------- the floor seed
+    - name: A different seed does not move a floor that exists
+      ansible.builtin.include_role:
+        name: branchleft.pull_trigger
+        tasks_from: _floor_seed
+      vars:
+        pull_trigger_floor_seed: '{{ pull_trigger_pr_commits.c2 }}'
+
+    - name: Read the floor again
+      ansible.builtin.slurp:
+        src: '{{ verify_state }}/last-applied'
+      register: pull_trigger_pr_floor_again
+
+    - name: The floor is still the first seed
+      ansible.builtin.assert:
+        that:
+          - (pull_trigger_pr_floor_again.content | ansible.builtin.b64decode) == pull_trigger_pr_commits.c0 ~ "\n"
+        fail_msg: a seed moved a floor that existed
+        success_msg: a seed never moves a floor
+
+    - name: Make a host with a floor, for the seed cases
+      ansible.builtin.include_tasks: tasks/scene.yml
+      vars:
+        scene_name: seed
+        scene_floor: '{{ pull_trigger_pr_commits.c1 }}'
+
+    - name: A seed that is not exactly one commit id is refused before anything is written
+      block:
+        - name: Seed a host that has no floor with something that is not a commit
+          ansible.builtin.include_role:
+            name: branchleft.pull_trigger
+            tasks_from: _floor_seed
+          vars:
+            pull_trigger_floor_seed: not-a-commit-id
+            pull_trigger_state_dir: /var/tmp/ptt/st-malformed
+        - name: The malformed seed was accepted, which it must not be
+          ansible.builtin.fail:
+            msg: a malformed seed was accepted
+      rescue:
+        - name: Look for a floor the refused seed might have written
+          ansible.builtin.stat:
+            path: /var/tmp/ptt/st-malformed/last-applied
+          register: pull_trigger_pr_malformed_floor
+        - name: The refusal came from the seed check and nothing was written
+          ansible.builtin.assert:
+            that:
+              - not pull_trigger_pr_malformed_floor.stat.exists
+              - "'must be exactly 40 lowercase hex digits' in ansible_failed_result.msg | default('')"
+            fail_msg: 'the malformed seed was not refused for its shape: {{ ansible_failed_result | default({}) }}'
+            success_msg: the malformed seed was refused and nothing was written
+
+    - name: A seed over a floor that exists leaves it, with the real task file
+      ansible.builtin.include_role:
+        name: branchleft.pull_trigger
+        tasks_from: _floor_seed
+      vars:
+        pull_trigger_floor_seed: '{{ pull_trigger_pr_commits.c2 }}'
+        pull_trigger_state_dir: /var/tmp/ptt/st-seed
+
+    - name: Read the floor of the seed host
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/st-seed/last-applied
+      register: pull_trigger_pr_seed_floor
+
+    - name: The floor of the seed host is unchanged
+      ansible.builtin.assert:
+        that:
+          - (pull_trigger_pr_seed_floor.content | ansible.builtin.b64decode) == pull_trigger_pr_commits.c1 ~ "\n"
+        fail_msg: the real task moved a floor
+        success_msg: the real task leaves a floor alone
+
+    # The control: the same task file with force: false turned into force: true, made on the
+    # controller where the task files are read from, moves the floor.
+    - name: Make a copy of the task file with the guard cut out, on the controller
+      ansible.builtin.copy:
+        src: '{{ verify_role_directory }}/tasks/_floor_seed.yml'
+        dest: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/floor_seed_forced.yml"
+        mode: '0644'
+      delegate_to: localhost
+
+    - name: Cut out the guard
+      ansible.builtin.replace:
+        path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/floor_seed_forced.yml"
+        regexp: '^(\s+)force: false$'
+        replace: '\1force: true'
+      delegate_to: localhost
+      register: pull_trigger_pr_forced_copy
+
+    - name: The copy lost the guard
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_forced_copy.changed
+        fail_msg: the task file no longer matches the line this test changes; update the test
+        success_msg: the guard was cut out of the copy
+
+    - name: Run the task file without the guard over a floor that exists
+      ansible.builtin.include_tasks: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/floor_seed_forced.yml"
+      vars:
+        pull_trigger_floor_seed: '{{ pull_trigger_pr_commits.c2 }}'
+        pull_trigger_state_dir: /var/tmp/ptt/st-seed
+
+    - name: Read the floor after the task file without its guard
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/st-seed/last-applied
+      register: pull_trigger_pr_seed_floor_forced
+
+    - name: Without the guard the seed moves the floor, so the guard is what holds it
+      ansible.builtin.assert:
+        that:
+          - (pull_trigger_pr_seed_floor_forced.content | ansible.builtin.b64decode) == pull_trigger_pr_commits.c2 ~ "\n"
+        fail_msg: the floor did not move without the guard, so the test proves nothing
+        success_msg: red without the guard, green with it
+
+    # ---------------------------------- the installed program, end to end
+    - name: Check mode of a commit that descends from the floor
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a check of the next commit
+        request_mode: check
+        request_text: 'check {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
+        request_input: '{{ pull_trigger_pr_bundles }}/c1.bundle'
+
+    - name: A check reports that an apply would change something, and says so in the line
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 11
+          - pull_trigger_pr_result.stdout | trim is match(pull_trigger_pr_line_pattern)
+          - >-
+            ('push-receiver verdict=would-change exit=11 reason=ok mode=check commit=' ~ pull_trigger_pr_commits.c1 ~
+            ' playbook=' ~ pull_trigger_pr_playbook ~ ' changed=1') == pull_trigger_pr_result.stdout | trim
+        fail_msg: 'the check answered wrongly: rc={{ pull_trigger_pr_result.rc }} {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: the check reported a change
+
+    - name: Look for anything the check may have left that applying would leave
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_marker }}'
+        - '{{ verify_state }}/current'
+      register: pull_trigger_pr_after_check
+
+    - name: The check wrote no marker and no current checkout, and left the floor at the seed
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: 'the check left {{ item.item }}'
+        success_msg: 'the check left no {{ item.item }}'
+      loop: '{{ pull_trigger_pr_after_check.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Apply the next commit
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: an apply of the next commit
+        request_text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
+        request_input: '{{ pull_trigger_pr_bundles }}/c1.bundle'
+
+    - name: The apply ran the playbook of that commit and said so in a line the workflow can read
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 10
+          - pull_trigger_pr_result.stdout | trim is match(pull_trigger_pr_line_pattern)
+          - >-
+            ('push-receiver verdict=applied exit=10 reason=ok mode=apply commit=' ~ pull_trigger_pr_commits.c1 ~
+            ' playbook=' ~ pull_trigger_pr_playbook ~ ' changed=1') == pull_trigger_pr_result.stdout | trim
+        fail_msg: 'the apply answered wrongly: rc={{ pull_trigger_pr_result.rc }} {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: the apply ran
+
+    - name: Read the marker the playbook wrote
+      ansible.builtin.slurp:
+        src: '{{ verify_marker }}'
+      register: pull_trigger_pr_marker
+
+    - name: The marker is that commit's, and the floor is that commit
+      ansible.builtin.assert:
+        that:
+          - (pull_trigger_pr_marker.content | ansible.builtin.b64decode) == "C1\n"
+        fail_msg: the playbook that ran was not that commit's
+        success_msg: the commit's own playbook ran
+
+    - name: Read the result the way the owner reads it
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: '{{ verify_result_command }}'
+      register: pull_trigger_pr_result_first
+      changed_when: false
+
+    - name: The result is exactly the floor and the verdict, with no timestamp
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result_first.stdout == "floor=" ~ pull_trigger_pr_commits.c1 ~ "\nverdict=applied exit=10 changed=1"
+        fail_msg: 'the result command printed something else: {{ pull_trigger_pr_result_first.stdout }}'
+        success_msg: the result reads as documented after the first apply
+
+    - name: Apply the same commit again, which the delivery workflow's second pass does
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: the second pass of the same commit
+        request_text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
+        request_input: '{{ pull_trigger_pr_bundles }}/c1.bundle'
+
+    - name: The second pass is accepted as not older than the floor, and reports nothing to change
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 0
+          - >-
+            ('push-receiver verdict=unchanged exit=0 reason=ok mode=apply commit=' ~ pull_trigger_pr_commits.c1 ~
+            ' playbook=' ~ pull_trigger_pr_playbook ~ ' changed=0') == pull_trigger_pr_result.stdout | trim
+        fail_msg: 'the second pass answered wrongly: rc={{ pull_trigger_pr_result.rc }} {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: the second pass reported unchanged
+
+    - name: Read the result again
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: '{{ verify_result_command }}'
+      register: pull_trigger_pr_result_second
+      changed_when: false
+
+    - name: The result after the second pass is the floor and unchanged
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result_second.stdout == "floor=" ~ pull_trigger_pr_commits.c1 ~ "\nverdict=unchanged exit=0 changed=0"
+        fail_msg: 'the result command printed something else: {{ pull_trigger_pr_result_second.stdout }}'
+        success_msg: the result reads as documented after the second pass
+
+    - name: Apply a later commit of the same line
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a later commit
+        request_text: 'apply {{ pull_trigger_pr_commits.c2 }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
+        request_input: '{{ pull_trigger_pr_bundles }}/c2.bundle'
+
+    - name: A later commit is applied and the floor moves up to it
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 10
+        fail_msg: 'the later commit was refused: {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: the later commit was applied
+
+    # The named limit, shown by running it. A commit signed by the trusted key that is on no
+    # branch of main, newer than the floor, IS applied; afterwards the real next commit of main
+    # is refused as a rollback, never applied. Only a reset of the floor, a runbook step, ends it.
+    - name: Apply a commit that is signed by the trusted key and is not on main
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: a merge-signed commit that is not on main
+        request_text: 'apply {{ pull_trigger_pr_commits.fork }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
+        request_input: '{{ pull_trigger_pr_bundles }}/fork.bundle'
+
+    - name: It is applied, because the receiver cannot tell where a validly signed commit came from
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 10
+        fail_msg: 'the limit is not as documented: {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: the named limit is as documented
+
+    - name: Ask for the real next commit of main
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: the real next commit of main, after the floor left main
+        request_text: 'apply {{ pull_trigger_pr_commits.main_next }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
+        request_input: '{{ pull_trigger_pr_bundles }}/main_next.bundle'
+
+    - name: The real commit of main is refused as a rollback and is never applied
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 20
+          - "'reason=rollback' in pull_trigger_pr_result.stdout"
+        fail_msg: 'main_next was not refused: {{ pull_trigger_pr_result.stdout }}'
+        success_msg: a refusal, never a silent apply
+
+    - name: Read the marker after the refusal
+      ansible.builtin.slurp:
+        src: '{{ verify_marker }}'
+      register: pull_trigger_pr_marker_after
+
+    - name: The playbook of the refused commit did not run
+      ansible.builtin.assert:
+        that:
+          - (pull_trigger_pr_marker_after.content | ansible.builtin.b64decode) == "FORK\n"
+        fail_msg: the refused commit's playbook ran
+        success_msg: only the fork's playbook ran
+
+    # -------------------------------------------------- refusals, each
+    - name: Refuse every request that must not run, each leaving the host byte for byte as it was
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      loop:
+        - name: the request asks for apply and the key is fixed to check
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          mode: check
+          bundle: c1
+          rc: 20
+          reason: mode-mismatch
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+        - name: the request asks for check and the key is fixed to apply
+          text: 'check {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          mode: apply
+          bundle: c1
+          rc: 20
+          reason: mode-mismatch
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+        - name: a playbook other than the configured one
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} ansible/playbooks/other.yml'
+          bundle: c1
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+        - name: the configured playbook is not on the allowlist
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          bundle: c1
+          overrides:
+            playbooks: [ansible/playbooks/elsewhere.yml]
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+        - name: an unsigned commit
+          text: 'apply {{ pull_trigger_pr_commits.unsigned }} {{ pull_trigger_pr_playbook }}'
+          bundle: unsigned
+          rc: 20
+          reason: unsigned
+          commit: '{{ pull_trigger_pr_commits.unsigned }}'
+        - name: a commit signed by an SSH key that is not on the allowlist
+          text: 'apply {{ pull_trigger_pr_commits.by_ssh }} {{ pull_trigger_pr_playbook }}'
+          bundle: by_ssh
+          rc: 20
+          reason: signer-not-allowed
+          commit: '{{ pull_trigger_pr_commits.by_ssh }}'
+        - name: a commit signed by an OpenPGP key that is not on the allowlist
+          text: 'apply {{ pull_trigger_pr_commits.by_other_pgp }} {{ pull_trigger_pr_playbook }}'
+          bundle: by_other_pgp
+          rc: 20
+          reason: signer-not-allowed
+          commit: '{{ pull_trigger_pr_commits.by_other_pgp }}'
+        - name: a commit whose message was changed after it was signed
+          text: 'apply {{ pull_trigger_pr_commits.tampered }} {{ pull_trigger_pr_playbook }}'
+          bundle: tampered
+          rc: 20
+          reason: bad-signature
+          commit: '{{ pull_trigger_pr_commits.tampered }}'
+        - name: a commit older than the floor
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          floor: '{{ pull_trigger_pr_commits.c2 }}'
+          bundle: c1
+          rc: 20
+          reason: rollback
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+        - name: a commit that does not descend from the floor
+          text: 'apply {{ pull_trigger_pr_commits.side }} {{ pull_trigger_pr_playbook }}'
+          floor: '{{ pull_trigger_pr_commits.c1 }}'
+          bundle: side
+          rc: 20
+          reason: rollback
+          commit: '{{ pull_trigger_pr_commits.side }}'
+        - name: a bundle of an unrelated history
+          text: 'apply {{ pull_trigger_pr_commits.orphan }} {{ pull_trigger_pr_playbook }}'
+          floor: '{{ pull_trigger_pr_commits.c1 }}'
+          bundle: orphan
+          rc: 20
+          reason: rollback
+          commit: '{{ pull_trigger_pr_commits.orphan }}'
+        - name: a host with no floor, in apply mode
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          floor: ''
+          bundle: c1
+          rc: 20
+          reason: no-floor
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+        - name: a host with no floor, in check mode
+          text: 'check {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          mode: check
+          floor: ''
+          bundle: c1
+          rc: 20
+          reason: no-floor
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+        - name: a commit with no playbook in it
+          text: 'apply {{ pull_trigger_pr_commits.no_playbook }} {{ pull_trigger_pr_playbook }}'
+          bundle: no_playbook
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_pr_commits.no_playbook }}'
+        - name: a commit whose playbook is a symbolic link
+          text: 'apply {{ pull_trigger_pr_commits.symlink }} {{ pull_trigger_pr_playbook }}'
+          bundle: symlink
+          rc: 20
+          reason: playbook-not-allowed
+          commit: '{{ pull_trigger_pr_commits.symlink }}'
+        - name: standard input that is not a bundle
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          bundle: junk
+          rc: 20
+          reason: bad-bundle
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+          detail: standard input is not a git bundle
+        - name: an empty standard input
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          rc: 20
+          reason: bad-bundle
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+          detail: standard input is not a git bundle
+        - name: a truncated bundle
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          bundle: truncated
+          rc: 20
+          reason: bad-bundle
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+          detail: could not be unpacked
+        - name: a bundle whose HEAD is not the requested commit
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          bundle: c2
+          rc: 20
+          reason: bad-bundle
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+          detail: the bundle's HEAD is not the requested commit
+        - name: a bundle that needs a commit it does not carry
+          text: 'apply {{ pull_trigger_pr_commits.c2 }} {{ pull_trigger_pr_playbook }}'
+          bundle: partial
+          rc: 20
+          reason: bad-bundle
+          commit: '{{ pull_trigger_pr_commits.c2 }}'
+          detail: the bundle does not verify
+        - name: a bundle with an object git's own object check refuses, which passes bundle verify
+          text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
+          bundle: malformed
+          rc: 20
+          reason: bad-bundle
+          commit: '{{ pull_trigger_pr_commits.malformed }}'
+          detail: object check
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    - name: Refuse every malformed request, each leaving the host byte for byte as it was
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      loop:
+        - name: malformed - a bare commit
+          text: '{{ pull_trigger_pr_commits.c1 }}'
+          rc: 20
+          reason: bad-request
+        - name: malformed - the step word
+          text: 'step {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          rc: 20
+          reason: bad-request
+        - name: malformed - a playbook that climbs out of the playbook directory
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} ansible/playbooks/../../etc/passwd'
+          rc: 20
+          reason: bad-request
+        - name: malformed - uppercase hex
+          text: 'apply {{ pull_trigger_pr_commits.c1 | upper }} {{ pull_trigger_pr_playbook }}'
+          rc: 20
+          reason: bad-request
+        - name: malformed - a trailing word
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }} extra'
+          rc: 20
+          reason: bad-request
+        - name: malformed - a mode word that is not a mode
+          text: 'plan {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          rc: 20
+          reason: bad-request
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    # ----------------------------------- the limits on the stream, each
+    # These need a limit shorter than the real one, which a test cannot wait for, so each runs a
+    # copy of the program that differs from the installed one in one constant. The constant is
+    # the only difference, and each copy is made by an edit that must match.
+    - name: Copy the program with a byte limit smaller than a bundle
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: small-limit
+        sabotage_edits:
+          - regexp: '^MAX_BUNDLE_BYTES: Final = .*$'
+            replace: 'MAX_BUNDLE_BYTES: Final = 512'
+
+    - name: Copy the program with a deadline of three seconds
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: short-deadline
+        sabotage_edits:
+          - regexp: '^BUNDLE_DEADLINE_SECONDS: Final = .*$'
+            replace: 'BUNDLE_DEADLINE_SECONDS: Final = 3'
+
+    - name: Refuse a bundle over the byte limit, and a stream that stalls
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      loop:
+        - name: a bundle over the byte limit
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          bundle: c1
+          program: /var/tmp/ptt/mut/small-limit
+          rc: 20
+          reason: bad-bundle
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+          detail: the bundle is larger than the limit
+        - name: a stream that sends a little and then nothing
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          input: '<({ head -c 100 /var/tmp/ptt/bundles/c1.bundle; sleep 15; } 2>/dev/null)'
+          program: /var/tmp/ptt/mut/short-deadline
+          wrapper: timeout 12
+          rc: 20
+          reason: bad-bundle
+          commit: '{{ pull_trigger_pr_commits.c1 }}'
+          detail: the bundle was not received in time
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    # ------------------------------------------- the controls, each red
+    # Each case below runs a copy of the program with one check cut out, and must be answered the
+    # other way: the request the installed program refuses is applied (or hangs), and the floor
+    # moves. Run on the installed program, the same requests are the refusals above.
+    - name: Cut out the comparison of the request's mode word with the mode the key is fixed to
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-mode-compare
+        sabotage_edits:
+          - regexp: '^(\s+)if request\.mode is not mode:$'
+            replace: '\1if False:'
+
+    - name: Without the mode comparison an apply word under the check key is not refused as a mismatch
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: key fixed to check, word apply, no mode comparison
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          mode: check
+          bundle: c1
+          program: /var/tmp/ptt/mut/no-mode-compare
+          rc: 11
+          not_reason: mode-mismatch
+
+    - name: Without the mode comparison a check word under the apply key applies, and moves the floor
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: key fixed to apply, word check, no mode comparison
+          text: 'check {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          mode: apply
+          bundle: c1
+          program: /var/tmp/ptt/mut/no-mode-compare
+          rc: 10
+          not_reason: mode-mismatch
+          floor_after: '{{ pull_trigger_pr_commits.c1 }}'
+
+    - name: Cut out the test that an absent floor refuses
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-floor-test
+        sabotage_edits:
+          - regexp: '^(\s+)if floor is None:\n\s+raise NoFloorError\(Why\.FLOOR_ABSENT\)\n\s+if floor != commit and not \($'
+            replace: '\1if floor is not None and floor != commit and not ('
+
+    - name: Without the no-floor test a host with no floor applies, as the pull route does
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: no floor, no floor test
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          floor: ''
+          bundle: c1
+          program: /var/tmp/ptt/mut/no-floor-test
+          rc: 10
+          not_reason: no-floor
+          floor_after: '{{ pull_trigger_pr_commits.c1 }}'
+
+    - name: Cut out the check of the signature
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-signature-check
+        sabotage_edits:
+          - regexp: '^(\s+)judge_signature\(signed, status, \(signing_key, primary_key\), allowed\)$'
+            replace: '\1pass'
+
+    - name: Without the signature check an unsigned commit is applied
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: unsigned, no signature check
+          text: 'apply {{ pull_trigger_pr_commits.unsigned }} {{ pull_trigger_pr_playbook }}'
+          bundle: unsigned
+          program: /var/tmp/ptt/mut/no-signature-check
+          rc: 10
+          not_reason: unsigned
+          floor_after: '{{ pull_trigger_pr_commits.unsigned }}'
+
+    - name: Without the signature check a commit signed by an untrusted key is applied
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: untrusted signer, no signature check
+          text: 'apply {{ pull_trigger_pr_commits.by_other_pgp }} {{ pull_trigger_pr_playbook }}'
+          bundle: by_other_pgp
+          program: /var/tmp/ptt/mut/no-signature-check
+          rc: 10
+          not_reason: signer-not-allowed
+          floor_after: '{{ pull_trigger_pr_commits.by_other_pgp }}'
+
+    - name: Without the signature check an altered commit is applied
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: altered after signing, no signature check
+          text: 'apply {{ pull_trigger_pr_commits.tampered }} {{ pull_trigger_pr_playbook }}'
+          bundle: tampered
+          program: /var/tmp/ptt/mut/no-signature-check
+          rc: 10
+          not_reason: bad-signature
+          floor_after: '{{ pull_trigger_pr_commits.tampered }}'
+
+    - name: Cut out the comparison with the floor
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-floor-compare
+        sabotage_edits:
+          - regexp: '^(\s+)if floor != commit and not \($'
+            replace: '\1if False and not ('
+
+    - name: Without the comparison a commit that does not descend from the floor is applied
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: a sibling of the floor, no comparison
+          text: 'apply {{ pull_trigger_pr_commits.side }} {{ pull_trigger_pr_playbook }}'
+          floor: '{{ pull_trigger_pr_commits.c1 }}'
+          bundle: side
+          program: /var/tmp/ptt/mut/no-floor-compare
+          rc: 10
+          not_reason: rollback
+          floor_after: '{{ pull_trigger_pr_commits.side }}'
+
+    - name: Cut out the comparison of the request's playbook with the configured one
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-playbook-compare
+        sabotage_edits:
+          - regexp: '^(\s+)request\.playbook != self\._config\.playbook$'
+            replace: '\1False'
+
+    - name: Without the comparison another playbook's name is not refused
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: another playbook, no comparison
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} ansible/playbooks/other.yml'
+          bundle: c1
+          program: /var/tmp/ptt/mut/no-playbook-compare
+          rc: 10
+          not_reason: playbook-not-allowed
+          floor_after: '{{ pull_trigger_pr_commits.c1 }}'
+
+    - name: Cut out the test that the bundle's HEAD is the requested commit
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-head-test
+        sabotage_edits:
+          - regexp: '^(\s+)if head\.returncode != 0 or head\.stdout\.strip\(\) != commit:$'
+            replace: '\1if False:'
+
+    - name: Without the test a bundle of another head is accepted for the requested commit
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: another head, no test
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          bundle: c2
+          program: /var/tmp/ptt/mut/no-head-test
+          rc: 10
+          not_reason: bad-bundle
+          floor_after: '{{ pull_trigger_pr_commits.c1 }}'
+
+    - name: Cut out git's object check, both the setting and the explicit one
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-object-check
+        sabotage_edits:
+          - regexp: '^\s+"transfer\.fsckObjects=true",\n'
+            replace: ''
+          - regexp: '^(\s+)if self\._git\.attempt\("fsck", .*\)\.returncode != 0:$'
+            replace: '\1if False:'
+
+    - name: Without the object check the bundle with a malformed object is not refused as bad
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: a malformed object, no object check
+          text: 'apply {{ pull_trigger_pr_commits.malformed }} {{ pull_trigger_pr_playbook }}'
+          bundle: malformed
+          program: /var/tmp/ptt/mut/no-object-check
+          rc: 10
+          not_reason: bad-bundle
+          floor_after: '{{ pull_trigger_pr_commits.malformed }}'
+
+    - name: Cut out the byte limit, on top of the small one
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-byte-limit
+        sabotage_edits:
+          - regexp: '^MAX_BUNDLE_BYTES: Final = .*$'
+            replace: 'MAX_BUNDLE_BYTES: Final = 512'
+          - regexp: '^(\s+)if total > receiving\.max_bytes:$'
+            replace: '\1if False:'
+
+    - name: Without the byte test a bundle over the limit is received and applied
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: over the byte limit, no byte test
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          bundle: c1
+          program: /var/tmp/ptt/mut/no-byte-limit
+          rc: 10
+          not_reason: bad-bundle
+          floor_after: '{{ pull_trigger_pr_commits.c1 }}'
+
+    - name: Replace the bounded wait on the stream with a blocking read, on top of the short deadline
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: blocking-read
+        sabotage_edits:
+          - regexp: '^BUNDLE_DEADLINE_SECONDS: Final = .*$'
+            replace: 'BUNDLE_DEADLINE_SECONDS: Final = 3'
+          - regexp: '^(\s+)ready, _, _ = select\.select\(\[descriptor\], \[\], \[\], remaining\)$'
+            replace: '\1ready = [descriptor]'
+
+    - name: With a blocking read a stalled stream holds the program until something kills it
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: a stalled stream, a blocking read
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          input: '<({ head -c 100 /var/tmp/ptt/bundles/c1.bundle; sleep 15; } 2>/dev/null)'
+          wrapper: timeout 8
+          program: /var/tmp/ptt/mut/blocking-read
+          rc: 124
+
+    # ------------------------------------------------ no network, the red leg
+    # The cases above passed with no network. This is the control for that: a copy of the
+    # program that fetches over https on the bundle path, with the transport allowed, cannot
+    # pass here, so a program that reached for the network would fail this scenario.
+    - name: Make a copy of the program that fetches the bundle's commit over https
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: fetches-over-https
+        sabotage_edits:
+          - regexp: '^(\s+)str\(bundle\),$'
+            replace: '\1"https://github.com/branchLeft/shared-infra",'
+          - regexp: 'protocols="file"'
+            replace: 'protocols="https:file"'
+
+    - name: A program that reaches for the network fails the offline run
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: a fetch over https with no network
+          text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
+          bundle: c1
+          program: /var/tmp/ptt/mut/fetches-over-https
+          wrapper: timeout 100
+          rc: 20
+          not_reason: ok
+
+    # ----------------------------------------- the pull route's files
+    - name: Look for what only a host that pulls has
+      ansible.builtin.stat:
+        path: '{{ verify_state }}/repo.git/FETCH_HEAD'
+      register: pull_trigger_pr_fetch_head
+
+    - name: This host never fetched from anywhere
+      ansible.builtin.assert:
+        that:
+          - not pull_trigger_pr_fetch_head.stat.exists
+        fail_msg: a host that takes bundles fetched from a remote
+        success_msg: no fetch was ever made
