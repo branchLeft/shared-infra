@@ -1,0 +1,164 @@
+---
+# One connection to the container's own sshd with one key, and what the stand-in wrapper
+# saw. Inputs: attempt_key, the key pair's name; attempt_expect, one of slot (the key's
+# forced command ran, with attempt_slot as its only argument), denied (the key did not
+# authenticate) or blocked (it authenticated, and the request was refused); attempt_command,
+# the remote command (sent after a double dash), left out when the case asks for none;
+# attempt_options, more ssh options; attempt_input, what is sent on standard input;
+# attempt_expect_stdin, true unless false, whether the input must arrive;
+# attempt_sshd_log_contains, a line sshd must log during this connection (read before and
+# after, so an older line cannot count); attempt_stdout_excludes, text the client must not
+# receive. The marker file below is what every hostile command tries to make.
+- name: Clear what the stand-in wrapper recorded and the marker
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ scenario_record_dir }}/argc'
+    - '{{ scenario_record_dir }}/argv'
+    - '{{ scenario_record_dir }}/stdin'
+    - /tmp/EXAMPLE_MARKER
+
+- name: Look at what the test SSH server had logged before the connection
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/sshd.log'
+  register: deploy_slot_keys_scenario_attempt_log_before
+  check_mode: false
+  when: attempt_sshd_log_contains is defined
+
+- name: Connect with the key
+  ansible.builtin.command:
+    argv: '{{ attempt_base + (attempt_options | default([])) + ["deploy@127.0.0.1"] + attempt_remote }}'
+    stdin: '{{ attempt_input | default("EXAMPLE_IMAGE_REFERENCE") }}'
+    stdin_add_newline: false
+  vars:
+    # The stand-in wrapper reads its input to the end, so a client that waits for it would
+    # wait for ever: timeout turns that into a failure (124, or 137 once killed) that the
+    # assertion below names.
+    attempt_base:
+      - timeout
+      - --kill-after=5
+      - '60'
+      - ssh
+      - -o
+      - ConnectTimeout=10
+      - -i
+      - '{{ scenario_key_dir }}/{{ attempt_key }}'
+      - -p
+      - '{{ scenario_ssh_port }}'
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - LogLevel=ERROR
+    attempt_remote: '{{ ["--", attempt_command] if attempt_command is defined else [] }}'
+  register: deploy_slot_keys_scenario_attempt_result
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Look at what the stand-in wrapper recorded
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/{{ item }}'
+  loop:
+    - argc
+    - argv
+    - stdin
+  register: deploy_slot_keys_scenario_attempt_record
+  failed_when: false
+  check_mode: false
+
+- name: Look for the marker a hostile command would make
+  ansible.builtin.stat:
+    path: /tmp/EXAMPLE_MARKER
+  register: deploy_slot_keys_scenario_attempt_marker
+  check_mode: false
+
+- name: Look at what the test SSH server has logged since
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/sshd.log'
+  register: deploy_slot_keys_scenario_attempt_log_after
+  check_mode: false
+  when: attempt_sshd_log_contains is defined
+
+- name: Assert the client was not left waiting
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_attempt_result.rc not in [124, 137]
+    fail_msg: 'The client hung and was killed: {{ attempt_key }} {{ attempt_command | default("") }}'
+    quiet: true
+
+- name: Assert nothing the client asked for ran
+  ansible.builtin.assert:
+    that:
+      - not deploy_slot_keys_scenario_attempt_marker.stat.exists
+    fail_msg: 'A command the client asked for ran: {{ attempt_key }} {{ attempt_command | default("") }}'
+    quiet: true
+
+- name: Assert the key's forced command ran with its own slot and the image on its input
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_attempt_record.results | selectattr('content', 'defined') | list | length == 3
+      - (deploy_slot_keys_scenario_attempt_record.results[0].content | b64decode | trim) == '2'
+      - (deploy_slot_keys_scenario_attempt_record.results[1].content | b64decode).splitlines() == ['--slot', attempt_slot]
+      - >-
+        (not (attempt_expect_stdin | default(true) | bool))
+        or ((deploy_slot_keys_scenario_attempt_record.results[2].content | b64decode)
+        == (attempt_input | default('EXAMPLE_IMAGE_REFERENCE')))
+    fail_msg: >-
+      The forced command of {{ attempt_key }} did not run as its slot's alone for
+      {{ attempt_command | default('(no command)') }}: it was called with
+      {{ deploy_slot_keys_scenario_attempt_record.results[1].content | default('') | b64decode | default('nothing') }}
+    quiet: true
+  when: attempt_expect == 'slot'
+
+- name: Assert a key that is not authorised was turned away before anything ran
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_attempt_result.rc != 0
+      - deploy_slot_keys_scenario_attempt_record.results | selectattr('content', 'defined') | list | length == 0
+    fail_msg: 'The key {{ attempt_key }} was not turned away.'
+    quiet: true
+  when: attempt_expect == 'denied'
+
+- name: Assert a refused request ended the connection without the command running
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_attempt_result.rc != 0
+      - deploy_slot_keys_scenario_attempt_record.results | selectattr('content', 'defined') | list | length == 0
+    fail_msg: 'The request was not refused for {{ attempt_key }}.'
+    quiet: true
+  when: attempt_expect == 'blocked'
+
+- name: Assert the client was told what it asked for was refused
+  ansible.builtin.assert:
+    that:
+      - attempt_stderr_contains in deploy_slot_keys_scenario_attempt_result.stderr
+    fail_msg: 'The client was not told: {{ attempt_stderr_contains }}. It was told: {{ deploy_slot_keys_scenario_attempt_result.stderr }}'
+    quiet: true
+  when: attempt_stderr_contains is defined
+
+# split leaves one more piece than the line occurs, so more pieces after than before means
+# the line was logged during this connection.
+- name: Assert the test SSH server logged the refusal during this connection
+  ansible.builtin.assert:
+    that:
+      - >-
+        (deploy_slot_keys_scenario_attempt_log_after.content | b64decode).split(attempt_sshd_log_contains) | length
+        > (deploy_slot_keys_scenario_attempt_log_before.content | b64decode).split(attempt_sshd_log_contains) | length
+    fail_msg: 'The test SSH server did not log: {{ attempt_sshd_log_contains }}'
+    quiet: true
+  when: attempt_sshd_log_contains is defined
+
+- name: Assert nothing the key was not to reach came back on the client's output
+  ansible.builtin.assert:
+    that:
+      - attempt_stdout_excludes not in deploy_slot_keys_scenario_attempt_result.stdout
+    fail_msg: 'The client received {{ attempt_stdout_excludes }}: the request was served.'
+    quiet: true
+  when: attempt_stdout_excludes is defined

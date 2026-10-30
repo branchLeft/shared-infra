@@ -213,8 +213,10 @@
 
     # ANS-16. The scenario sets verbosity 1 and a log path (molecule.yml), so a task that
     # handles key material without no_log prints it into this log. The sudoers task has no
-    # no_log on purpose: the gated plan shows the owner its diff, so the first check-mode run
-    # of the converge must have put the sudoers lines into this log. The scan runs last, so it
+    # no_log on purpose: the gated plan shows the owner its diff, so the sudoers lines must
+    # be in this log through that diff. molecule.yml sets ANSIBLE_DIFF_ALWAYS, so the first
+    # run that changes the host prints them whether or not the caller ran a --diff step
+    # (the harness's check-fresh does; `molecule test` does not). The scan runs last, so it
     # covers the refused runs too. The canary and the task names show the
     # scan reads the output of the converge, so "nothing found" cannot mean "nothing read".
     - name: Read the log of this scenario's Ansible runs

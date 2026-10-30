@@ -1,0 +1,24 @@
+---
+# Polls the probe instance until its ActiveState is deploy_tooling_scenario_wait_state
+# and its NRestarts is at least deploy_tooling_scenario_wait_restarts, for at most
+# deploy_tooling_scenario_wait_polls polls five seconds apart. It never fails on a
+# timeout: the case reads the state afterwards and its assertion names what it saw.
+- name: Wait for the probe instance to reach the state
+  ansible.builtin.command:
+    argv:
+      [
+        systemctl,
+        show,
+        'branchleft-compose@Molecule-Probe.service',
+        '--property=ActiveState,NRestarts',
+      ]
+  register: deploy_tooling_scenario_probe_poll
+  changed_when: false
+  failed_when: false
+  until:
+    - "('ActiveState=' ~ deploy_tooling_scenario_wait_state) in deploy_tooling_scenario_probe_poll.stdout_lines"
+    - >-
+      deploy_tooling_scenario_probe_poll.stdout_lines | select('match', '^NRestarts=') | first | split('=') | last | int
+      >= deploy_tooling_scenario_wait_restarts | int
+  retries: '{{ deploy_tooling_scenario_wait_polls }}'
+  delay: 5
