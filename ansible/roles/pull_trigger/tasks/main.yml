@@ -33,14 +33,19 @@
 # No secret reaches this file: the signers are public keys and the step words are
 # typing guards in a public inventory file. The diff is left on because an approver
 # must see a key or a step added to an allowlist.
+#
+# The `source` key is written for a host that takes bundles and for no other: a host that pulls
+# keeps a file byte for byte as it was, so a program rolled back to before the key existed still
+# parses it. The key is chosen by the host's name in the play and a constant list in vars/main.yml.
 - name: Write the configuration
   ansible.builtin.copy:
-    content: "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
+    content: "{{ pull_trigger_config | ansible.builtin.combine(pull_trigger_config_source) | ansible.builtin.to_nice_json }}\n"
     dest: '{{ pull_trigger_config_path }}'
     owner: root
     group: root
     mode: '0644'
   vars:
+    pull_trigger_config_source: "{{ {'source': 'bundle'} if (enrolled_host | default('')) in pull_trigger_bundle_hosts else {} }}"
     pull_trigger_config:
       remote_url: '{{ pull_trigger_remote_url }}'
       signers: '{{ pull_trigger_signers }}'
@@ -68,3 +73,6 @@
     owner: root
     group: root
     mode: '0700'
+
+- name: Seed the rollback floor of a host that takes bundles, at its bootstrap
+  ansible.builtin.import_tasks: _floor_seed.yml
