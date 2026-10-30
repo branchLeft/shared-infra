@@ -70,7 +70,7 @@ jobs:
 
   delivery:
     needs: [queue-proof]
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.17
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.18
     with:
       environment: ansible-hosts
       role-directories: |
@@ -80,6 +80,7 @@ jobs:
       role-test-command: harness/run_harness.py
       skip-rerun-after-merge-group: ${{ needs.queue-proof.outputs.tested == 'true' }}
       merge-group-check-name: Lint and test the Ansible roles
+      shard-timeout-minutes: 45 # the edge_stack Molecule shard takes up to 39 minutes
     secrets:
       ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
