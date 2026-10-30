@@ -36,6 +36,12 @@ provisioner:
     # lacks no_log shows the key in the log, and verify fails (ANS-16).
     ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
     ANSIBLE_VERBOSITY: '1'
+    # Print the diff of every run, not only of a run started with --diff. verify reads the
+    # sudoers diff from the log, and a caller that runs `molecule test` has no --diff run
+    # (delivery at github-workflows v1.0.16 ran it that way and the assertion failed).
+    # A task that handles key material hides its diff with diff: false (ANS-16), and the
+    # scan for key bodies in verify reads these diffs too.
+    ANSIBLE_DIFF_ALWAYS: 'true'
   inventory:
     # The values the scenario runs with, read by the prepare, converge and verify
     # plays. The keys are made by prepare.yml for this run only.
