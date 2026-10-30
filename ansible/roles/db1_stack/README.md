@@ -43,11 +43,9 @@ compose override file or a `.env` file sits beside `compose.yml`. It refuses whe
 but that check runs after the compose file is rendered and before the unit is
 enabled (see "The database image pin" for why, and for the bootstrap order).
 
-The role has not been applied to the host. The live run waits on the owner's signer
-ruling, the channel for the role's inputs and the host's one-time bootstrap (see
-"How it is delivered"). After it is applied, the hand-run prerequisites script
-must not be run again: it would put back the repository entry the role removes
-(see "What it changes on a host").
+The role is applied to the host by the gated pull (see "How it is delivered"). Once
+it is applied, the hand-run prerequisites script must not be run again: it would put
+back the repository entry the role removes (see "What it changes on a host").
 
 It does not decide where the exporter password comes from, create the database
 account the password belongs to, or rotate the password in the database. The
@@ -179,11 +177,10 @@ the approval of the protected environment, a pull of that exact commit of `main`
 on the host, and a second run that must report zero changes. Nothing in this
 repository applies the role by hand, and an author's local run is the container
 test. `playbooks/db1.yml` refuses any host but `db1` through the shared include,
-refuses an empty signer list and applies the two pull roles only; this role and
-`db1_grants` are not in that playbook, because nothing on the pull route supplies
-their inputs. The live run is waiting on the owner's signer ruling, the channel for
-this role's inputs and the host's one-time bootstrap; until then this role is tested
-and not delivered.
+refuses an empty signer list and applies the two pull roles, then `host_inputs`, then
+this role. `host_inputs` reads the one root-only file the owner places on the host and
+sets this role's input (`db1_stack_exporter_password`) as a fact, so the playbook
+carries no value for it. `db1_grants` is not in that playbook yet.
 
 The first live apply on the database host must not recreate or restart the
 running MySQL. The role does not do either, so the check-mode plan of that run is
@@ -588,9 +585,9 @@ bot sees it.
   healthcheck needs it. On a rebuilt database host the role still converges, but the
   exporter cannot report `mysql_up 1` until section 4 is run by hand, so the stack's
   healthcheck gate fails. Running section 4 is an owner's live step.
-- The role is not applied to db1 until the owner rules the signer. When it is, the exporter password the role is given must be the
-  password of the exporter account in the database; a mismatch makes the exporter's
-  healthcheck fail, not the role.
+- The exporter password the role is given must be the password of the exporter
+  account in the database; a mismatch makes the exporter's healthcheck fail, not the
+  role.
 - The plan limit on a host that was never applied: on a host whose apt index has
   never held the MySQL repository, the task that installs the named packages
   from the index fails even under `--check`, because the package is not known to
@@ -599,8 +596,8 @@ bot sees it.
   database host already has the packages, so its plan works.
 - The containers ran on one machine type (arm64 Docker Desktop). The role is not
   tested on an amd64 host.
-- The role has not been applied to the host. After it is, the hand-run
-  prerequisites script must not be run again.
+- Once the role is applied to the host, the hand-run prerequisites script must not
+  be run again.
 - The source check is a closed set, not a check of every argument. It does not
   restrict where a `copy`, a `template` or a `file` task that does not remove
   writes: the destination can be any path, the database's data volume and
