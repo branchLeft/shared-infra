@@ -145,8 +145,8 @@ for the tool and the image stay as the fallback.
   `query`, `q` or `pipe`, since those run on the controller. A `set_fact` and an
   `include_vars` in a task, which would outrank the role's `vars/main.yml`, call
   modules that the allow-list does not name, so the guard refuses them. Extra vars
-  on the pull command are not read by this test and sit outside it; ws#2483 is where
-  that pull path is examined.
+  on the pull command are not read by this test and sit outside it; that pull path
+  is examined in a separate ticket.
 - **The playbook is not tested here.** The shape of the playbook that applies the
   role (its play keys, its `roles` entry and its tasks, including an entry's `vars`,
   `tasks_from` or `vars_from`, which outrank the role's `vars/main.yml`) is held by
@@ -154,9 +154,9 @@ for the tool and the image stay as the fallback.
   other role has its own test. What the test cannot prove is that
   a deliberate edit does not read the key: every role is root code, so a check on its
   text cannot stop one. The control for that is review plus the deployment approval
-  of the gated workflow that applies the role to the host; ws#2483 is where the
-  trust in that approval is examined, and it has no ruling yet. The check catches an
-  accident, not an edit made on purpose.
+  of the gated workflow that applies the role to the host; the trust in that approval
+  is examined in a separate ticket, and that ticket has no ruling yet. The check
+  catches an accident, not an edit made on purpose.
 - **Nothing in the role runs on the controller.** Under `ansible-pull` the
   controller is the host, so a `lookup`, `query`, `q` or `pipe` could read the key
   without a module the checks above see, in a quiet `assert` that prints nothing.
