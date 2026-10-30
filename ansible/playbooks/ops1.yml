@@ -1,8 +1,8 @@
 ---
 # ops1: the gated pull. Two pull roles, in order: the Ansible toolchain this
 # playbook runs with, then the trigger that runs it. After them, the host baseline,
-# the break-glass mint, then the status page, the first service the pull applies to this
-# host. Only this host's name is set
+# the break-glass mint, the status page, then the Nextcloud stack. Only this host's
+# name is set
 # here; the remote, the playbook allowlist and the signer list come from the shared
 # includes and the one trust file, all loaded through vars_files.
 #
@@ -31,3 +31,4 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/breakglass_mint_host # noqa: role-name[path]
     - role: ../roles/status_page # noqa: role-name[path]
+    - role: ../roles/nextcloud_stack # noqa: role-name[path]

@@ -63,7 +63,7 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": ["host_baseline", "ci_login"],
-    "ops1": ["host_baseline", "breakglass_mint_host", "status_page"],
+    "ops1": ["host_baseline", "breakglass_mint_host", "status_page", "nextcloud_stack"],
     "app1": ["host_baseline", "breakglass_grant_host"],
     "db1": ["host_inputs"],
 }
