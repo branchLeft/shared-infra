@@ -1,0 +1,164 @@
+---
+# What the refusal cases must leave behind: the host as the first play delivered it. The
+# expected values are written out here, not read from the role, so a case that left the
+# host changed is a failure and not a test that agrees with it.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the files the cases edited, replaced or moved
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - /etc/branchleft/mail-spool.env
+        - /etc/branchleft/mail-spool.image.env
+        - /opt/branchleft/mail-spool/compose.yml
+        - /usr/local/sbin
+      register: demo1_egress_spool_verify_files
+
+    - name: Assert the token file, the pin file and the Compose file are as delivered, and the sbin directory is 0755
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_verify_files.results[0].stat.mode == '0600'
+          - demo1_egress_spool_verify_files.results[0].stat.checksum == ("SHIM_DRAIN_TOKEN=test-sentinel-drain-token-0001\n" | hash('sha256'))
+          - demo1_egress_spool_verify_files.results[1].stat.mode == '0600'
+          - demo1_egress_spool_verify_files.results[2].stat.mode == '0644'
+          - demo1_egress_spool_verify_files.results[3].stat.mode == '0755'
+        quiet: true
+        fail_msg: A refusal case left a file or a directory changed.
+
+    - name: Read the pin file and the Compose file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/branchleft/mail-spool.image.env
+        - /opt/branchleft/mail-spool/compose.yml
+      register: demo1_egress_spool_verify_text
+
+    - name: Assert the pin file is the golden's image and the Compose file carries its port, token and tag-free image
+      ansible.builtin.assert:
+        that:
+          - >-
+            (demo1_egress_spool_verify_text.results[0].content | b64decode)
+            == "IMAGE=ghcr.io/branchleft/mailgun-shim@sha256:c32a32e93025aeb2b397b5dbf8e8b17e59256f56e3e881ffc49c71f6b8965571\n"
+          - "'127.0.0.1:8095:8081' in (demo1_egress_spool_verify_text.results[1].content | b64decode)"
+          - "'SHIM_DRAIN_TOKEN:?' in (demo1_egress_spool_verify_text.results[1].content | b64decode)"
+          - "'branchleft-mail-30007' in (demo1_egress_spool_verify_text.results[1].content | b64decode)"
+        quiet: true
+        fail_msg: A refusal case left the pin file or the Compose file changed.
+
+    # -C exits 0 when the rule exists.
+    - name: Ask each family whether the jumps and the reject rules are back in place
+      ansible.builtin.command:
+        argv: '{{ item.argv }}'
+      loop:
+        - argv: [iptables, -t, filter, -C, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+        - argv: [ip6tables, -t, filter, -C, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+        - argv: [iptables, -t, filter, -C, INPUT, -i, br-+, -j, BRANCHLEFT-DEMO-INPUT]
+        - argv: [ip6tables, -t, filter, -C, INPUT, -i, br-+, -j, BRANCHLEFT-DEMO-INPUT]
+        - argv:
+            [iptables, -t, filter, -C, BRANCHLEFT-DEMO-EGRESS, -i, br-+, '!', -o, br-+, -j, REJECT]
+        - argv:
+            [
+              ip6tables,
+              -t,
+              filter,
+              -C,
+              BRANCHLEFT-DEMO-EGRESS,
+              -i,
+              docker0,
+              '!',
+              -o,
+              docker0,
+              -j,
+              REJECT,
+            ]
+        - argv: [iptables, -t, filter, -C, BRANCHLEFT-DEMO-INPUT, -j, REJECT]
+        - argv: [ip6tables, -t, filter, -C, BRANCHLEFT-DEMO-INPUT, -j, REJECT]
+      loop_control:
+        label: '{{ item.argv | join(" ") }}'
+      changed_when: false
+
+    - name: Count the rules of each policy chain, and list DOCKER-USER, in each family
+      ansible.builtin.command:
+        argv: ['{{ item.0 }}', -t, filter, -S, '{{ item.1 }}']
+      loop: "{{ ['iptables', 'ip6tables'] | product(['BRANCHLEFT-DEMO-EGRESS', 'BRANCHLEFT-DEMO-INPUT', 'DOCKER-USER']) | list }}"
+      loop_control:
+        label: '{{ item.0 }} {{ item.1 }}'
+      register: demo1_egress_spool_verify_chains
+      changed_when: false
+
+    # The forward chain holds a return and two rejects, the input chain a return and a reject,
+    # and DOCKER-USER the jump and Docker's own return, each once: a case that left a copy
+    # behind, or a restore that doubled a rule, shows in these counts (-S adds a line for
+    # the chain itself).
+    - name: Assert each chain holds exactly its rules, once
+      ansible.builtin.assert:
+        that:
+          - item.stdout_lines | select('match', '^-A ') | list | length == verify_rule_counts[item.item.1]
+          - >-
+            item.stdout_lines | select('match', '^-A DOCKER-USER ') | list | first | default(verify_jump)
+            == verify_jump
+        quiet: true
+        fail_msg: '{{ item.item.1 }} in {{ item.item.0 }} does not hold exactly its rules once after the cases.'
+      vars:
+        verify_rule_counts:
+          BRANCHLEFT-DEMO-EGRESS: 3
+          BRANCHLEFT-DEMO-INPUT: 2
+          DOCKER-USER: 2
+        verify_jump: -A DOCKER-USER -j BRANCHLEFT-DEMO-EGRESS
+      loop: '{{ demo1_egress_spool_verify_chains.results }}'
+      loop_control:
+        label: '{{ item.item.0 }} {{ item.item.1 }}'
+
+    - name: Ask systemd about the units
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+      loop:
+        - docker.service
+        - branchleft-demo-egress.service
+        - branchleft-compose@mail-spool.service
+      register: demo1_egress_spool_verify_units
+
+    - name: Assert all three are active, and the two the role owns are enabled
+      ansible.builtin.assert:
+        that:
+          - item.status.ActiveState == 'active'
+          - item.item == 'docker.service' or item.status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: '{{ item.item }} is not active, or is not enabled.'
+      loop: '{{ demo1_egress_spool_verify_units.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read the stand-in answers the cases changed
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /var/lib/standin-docker/port.txt
+        - /etc/standin-drain-stub.env
+      register: demo1_egress_spool_verify_standin
+
+    - name: Assert the stand-ins are back to the healthy spool
+      ansible.builtin.assert:
+        that:
+          - (demo1_egress_spool_verify_standin.results[0].content | b64decode) == "8081/tcp -> 127.0.0.1:8095\n"
+          - (demo1_egress_spool_verify_standin.results[1].content | b64decode) == "STUB_BIND=127.0.0.1\nSTUB_OPEN=0\n"
+        quiet: true
+        fail_msg: A refusal case left a stand-in answer changed.
+
+    - name: Call the drain endpoint with no token
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8095/drain
+        use_proxy: false
+        status_code: [200, 401]
+      register: demo1_egress_spool_verify_call
+
+    - name: Assert the call was refused
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_verify_call.status == 401
+        quiet: true
+        fail_msg: The drain endpoint answers a call with no token after the cases.

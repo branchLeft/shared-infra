@@ -1,0 +1,44 @@
+---
+# The control that matters most for the egress policy: Docker evaluates DOCKER-USER before its
+# own rules, so a policy that no rule there jumps to denies nothing, however correct its chains
+# are. The jump is taken out of the real chain and the role's read-back must refuse the host by
+# the first-rule message. The control case is the one converge.yml runs just before this play
+# ("Accept the egress policy as delivered"): the same read-back on the chain with the jump in
+# place, which must be accepted, so a read-back that refused everything would not pass here.
+#
+# The jump is put back first in every outcome. The case is skipped by Molecule's idempotence
+# step (the tag below), and a plan makes no change, so a check run skips it.
+- name: Refuse a DOCKER-USER chain with no jump to the policy
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  tasks:
+    - name: Prove a chain with no jump is refused
+      when: not ansible_check_mode
+      block:
+        - name: Take the jump to the policy out of DOCKER-USER
+          ansible.builtin.command:
+            argv: [iptables, -t, filter, -D, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+          changed_when: true
+
+        - name: Read the egress policy back with the jump gone
+          ansible.builtin.include_role:
+            name: branchleft.demo1_egress_spool
+            tasks_from: _readback_egress.yml
+          vars:
+            demo1_egress_spool_egress_pending: false
+
+        - name: Fail if the read-back accepted the chain
+          ansible.builtin.fail:
+            msg: The role accepted a ruleset with no jump.
+      rescue:
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
+          vars:
+            expect_phrase: 'as its first rule'
+      always:
+        - name: Put the jump back as the first rule
+          ansible.builtin.command:
+            argv: [iptables, -t, filter, -I, DOCKER-USER, '1', -j, BRANCHLEFT-DEMO-EGRESS]
+          changed_when: true
+          when: not ansible_check_mode

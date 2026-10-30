@@ -172,6 +172,14 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "write one path). It is registered because the scan reads the path as a "
         "stack name. No Compose file exists for it anywhere."
     ),
+    "mail-spool": (
+        "An instance of the template on the demo host, and its Compose text is "
+        "rendered by branchLeft/ghost-platform's render-core and committed there "
+        "as a golden file, never here. The ansible/roles/demo1_egress_spool role "
+        "of this repository fetches that golden at a pinned commit and checks the "
+        "posture the host depends on, so the health signal of the service is "
+        "declared in that repository and nothing here reads it."
+    ),
     "status": (
         "Not an instance of the template: `/opt/branchleft/status` is the project "
         "directory of the Gatus status page, which the ansible/roles/status_page "
