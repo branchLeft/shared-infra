@@ -7,22 +7,24 @@
 # that directory, so a name may be listed before its role merges. A host with no
 # entry may apply the two pull roles and nothing else. Planned, not listed: control_plane_db.
 edge1:
-  - monitoring_stack
-  - exporters_and_collectors
-  - ntfy_pager
+  - host_inputs
   - host_baseline
   - egress_nat
   - ci_login
   - deploy_tooling
   - edge_stack
+  - exporters_and_collectors
+  - ntfy_pager
+  - monitoring_stack
 ops1:
+  - host_inputs
+  - host_baseline
+  - breakglass_mint_host
+  - status_page
   - control_plane
   - nextcloud_stack
   - backup_worker
   - backup_restore
-  - breakglass_mint_host
-  - host_baseline
-  - status_page
 app1:
   - host_inputs
   - deploy_tooling

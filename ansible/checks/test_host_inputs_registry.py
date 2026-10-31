@@ -213,11 +213,46 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_db1_and_app1_inputs(self) -> None:
+    def test_the_rows_name_the_edge1_ops1_db1_and_app1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
             {
+                "edge1": [
+                    "monitoring_stack_smtp_username",
+                    "monitoring_stack_smtp_password",
+                    "monitoring_stack_healthchecks_ping_url",
+                    "monitoring_stack_alert_recipient_email",
+                    "monitoring_stack_mailhost_ping_url",
+                    "monitoring_stack_grafana_admin_password",
+                    "monitoring_stack_snds_data_url",
+                    "ntfy_pager_pager_token",
+                    "ntfy_pager_watcher_token",
+                    "ntfy_pager_owner_password_hash",
+                    "ntfy_pager_machine_password_hash",
+                ],
+                "ops1": [
+                    "backup_worker_db_host",
+                    "backup_worker_db_user",
+                    "backup_worker_db_password",
+                    "backup_worker_db_ca_pem",
+                    "backup_worker_bucket",
+                    "backup_worker_s3_endpoint",
+                    "backup_worker_s3_region",
+                    "backup_worker_s3_access_key_id",
+                    "backup_worker_s3_secret_access_key",
+                    "backup_worker_tenants",
+                    "backup_restore_state_copy_recipient",
+                    "backup_restore_state_copy_dest_access_key_id",
+                    "backup_restore_state_copy_estate_bucket",
+                    "backup_restore_state_copy_estate_endpoint",
+                    "backup_restore_state_copy_estate_region",
+                    "backup_restore_state_copy_estate_access_key_id",
+                    "backup_restore_state_copy_tenant_bucket",
+                    "backup_restore_state_copy_tenant_endpoint",
+                    "backup_restore_state_copy_tenant_region",
+                    "backup_restore_state_copy_tenant_access_key_id",
+                ],
                 "db1": [
                     "db1_stack_exporter_password",
                     "db1_grants_tenants",
@@ -272,12 +307,18 @@ class Mutations(unittest.TestCase):
             "website_app1",
             "deploy_tooling",
             "deploy_slot_keys",
+            "monitoring_stack",
+            "ntfy_pager",
+            "exporters_and_collectors",
+            "nextcloud_stack",
+            "backup_worker",
+            "backup_restore",
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
         shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
         (self.ansible / "playbooks").mkdir()
-        for host in ("db1", "app1"):
+        for host in ("db1", "app1", "edge1", "ops1"):
             shutil.copy(
                 real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
             )
@@ -406,6 +447,52 @@ class Mutations(unittest.TestCase):
             "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
         )
         self._expect("playbooks/app1.yml applies a role before host_inputs")
+
+    # Safety class (secrets): the ops1 and edge1 rows are the whole of what their files may hold.
+    # Each is red when a key is dropped from the row or a role is applied ahead of the loader, and
+    # green on the real tree (test_the_copy_passes_before_any_mutation).
+    def test_an_ops1_input_the_loader_sets_with_no_row_is_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - backup_worker_db_password\n", "")
+        self._expect("the input task sets")
+
+    def test_an_edge1_input_the_loader_sets_with_no_row_is_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - ntfy_pager_pager_token\n", "")
+        self._expect("the input task sets")
+
+    def test_an_ops1_row_name_that_is_no_roles_required_argument_is_found(self) -> None:
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "    - backup_restore_state_copy_recipient\n",
+            "    - backup_restore_state_copy_recipeint\n",
+        )
+        self._expect("backup_restore_state_copy_recipeint is not a required argument")
+
+    def test_a_default_for_an_edge1_input_is_found(self) -> None:
+        path = self.ansible / "roles" / "monitoring_stack" / "defaults" / "main.yml"
+        path.write_text("---\nmonitoring_stack_smtp_password: x\n", encoding="utf-8")
+        self._expect("role monitoring_stack gives monitoring_stack_smtp_password a default")
+
+    def test_ops1_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
+        self._edit("checks/host_roles.yml", "ops1:\n  - host_inputs\n", "ops1:\n")
+        self._expect("host_inputs is not on ops1's list")
+
+    def test_a_backup_role_applied_before_the_loader_on_ops1_is_found(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/backup_worker # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/ops1.yml applies a role before host_inputs")
+
+    def test_the_monitoring_stack_applied_before_the_loader_on_edge1_is_found(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/monitoring_stack # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/edge1.yml applies a role before host_inputs")
 
     def test_a_host_playbook_that_does_not_apply_the_loader_is_found(self) -> None:
         self._edit(

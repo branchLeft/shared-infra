@@ -1,0 +1,52 @@
+---
+# A clean slate for one section: no marker, no input, no output, no recorded call,
+# the stand-in in its ok mode, and the directories and the token as prepare.yml made
+# them. A section starts here so that it can be run alone.
+- name: Remove everything a step leaves or reads
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - /var/lib/branchleft/control-plane-db
+    - /var/lib/branchleft/control-plane/reconciler-work
+    - /var/tmp/fake-docker/calls.jsonl
+    - /var/tmp/fake-docker/mode
+    - /var/tmp/verify-target
+    - /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat
+    - /etc/branchleft/control-plane/portal-database-url
+    - /etc/branchleft/control-plane/console-database-url
+    - /etc/branchleft/control-plane/identity-outputs.json
+    - /etc/branchleft/control-plane/provision/admin-url
+    - /etc/branchleft/control-plane/provision/tenant-password
+    - /etc/branchleft/control-plane/provision/owner-password
+    - /etc/branchleft/control-plane/provision/provisioner-password
+
+- name: Put the directories and the token back as prepare.yml made them
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: '{{ item.state }}'
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+  loop:
+    - path: /etc/branchleft/control-plane
+      state: directory
+      owner: root
+      group: root
+      mode: '0750'
+    - path: /etc/branchleft/control-plane/provision
+      state: directory
+      owner: root
+      group: '1000'
+      mode: '0750'
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Write the service account token as the sign-in service writes it
+  ansible.builtin.copy:
+    content: "THROWAWAY-TOKEN-{{ scenario_run }}\n"
+    dest: /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat
+    owner: '1000'
+    group: '1000'
+    mode: '0600'
+  no_log: true
