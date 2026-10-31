@@ -1,0 +1,23 @@
+---
+# Two cases on their own: the directory that holds a target is root's to change alone, and
+# the read-back against the firewall chains. Each applies the role many times, so with the
+# sudoers cases they are the largest part of the cases' time. The case files are the default
+# scenario's, run from there: they are not copied, and
+# ansible/checks/test_deploy_tooling_cases_covered.py fails if either is run by two scenarios
+# or by none.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the cases are built from the same constants the role
+  # installs.
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    - name: Apply the role to a host of class app, standard variant, and read it back
+      ansible.builtin.include_tasks: ../default/tasks/start_standard.yml
+
+    - name: Case, the directory that holds a target is root's to change alone
+      ansible.builtin.include_tasks: ../default/tasks/case_parent_directories.yml
+
+    - name: Case, the read-back against the firewall chains
+      ansible.builtin.include_tasks: ../default/tasks/case_chain.yml

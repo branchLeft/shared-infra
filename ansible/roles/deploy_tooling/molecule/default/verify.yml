@@ -5,8 +5,10 @@
 # did, with an ordinary ip, which is what the second converge and the check-mode
 # run that follow verify see.
 #
-#   i     class app, standard variant, ordinary ip: assertions, then every control
-#         that needs a configured host, each restoring what it changed
+#   i     class app, standard variant, ordinary ip: assertions, then the controls
+#         that need a configured host and are this scenario's, each restoring what
+#         it changed (the retry, sudoers and chains_parents scenarios run the rest of
+#         them, each from the same start: tasks/start_standard.yml)
 #   ii    teardown
 #   iii   class gateway: the wrapper and the template only
 #   iv    teardown
