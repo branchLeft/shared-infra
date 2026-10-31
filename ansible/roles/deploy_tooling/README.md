@@ -145,10 +145,13 @@ Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode
 approval of the protected environment, a pull of that exact commit on the host, and a
 second run that must report zero changes. Nothing in this repository applies the role by
 hand, and an author's local run is the container test. The gateway host plays the role as
-class gateway, named in that host's play vars and pinned by the enrolment check. No app
-host plays it yet: listing it with the app class and variant is a follow-up, and
-capturing the real `iptables -S INPUT` and `iptables -S DOCKER-USER` (and the IPv6 pair)
-from a real app host is a precondition of it (see "Named limits").
+class gateway, named in that host's play vars and pinned by the enrolment check. `app1`
+plays it as class app with the standard variant, named in its play vars and pinned the same way,
+after the website role and before `deploy_slot_keys`. The first apply on app1 re-applies the
+Docker firewall policy on a live app host: installing the policy program and its unit notifies
+the "Restart the policy unit" handler. The owner reads the plan job before approving. The real `iptables -S INPUT` and
+`iptables -S DOCKER-USER` (and the IPv6 pair) have still not been captured from a real app
+host (see "Named limits").
 
 ## How to change it safely
 
@@ -372,9 +375,9 @@ stayed clean; the harness run that follows them is the green.
   address that makes a host the gateway, or the control-plane host, is a file the test
   writes.
 - **The role has not been applied to a host.** The gateway's apply is waiting on the gated
-  workflow being available for this repository, and no app host is wired. The ticket is
-  unfinished on both halves until each has run live and a second run of the same commit has
-  reported no change.
+  workflow being available for this repository, and app1's playbook now applies it but no
+  gated run has applied it yet. The ticket is unfinished on both halves until each has run
+  live and a second run of the same commit has reported no change.
 - **The unit tests of the module read the real program.** They parse
   `hetzner/provision/branchleft_docker_user_policy.sh` itself, so a change to a literal in
   the program changes what the module expects; they do not pin a copy of it.
