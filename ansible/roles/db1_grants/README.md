@@ -188,7 +188,9 @@ on the host, and a second run that must report zero changes. The playbook is
 [`playbooks/db1.yml`](../../playbooks/db1.yml): it refuses any host but `db1` (or the
 `localhost` the trigger names) through the shared include, refuses an empty signer list
 and applies the two pull roles, then `host_inputs`, then `host_baseline`, then
-`db1_stack`, then `db1_backup_timers`. This role is not in that playbook yet. The role has not been applied to the live host.
+`db1_stack`, then `db1_backup_timers`, then this role, last. The `host_inputs` loader
+sets this role's two inputs (`db1_grants_tenants`, `db1_grants_ops1_host`) as facts, so
+the playbook carries no value for them. The role has not been applied to the live host.
 
 ## How to change it safely
 
@@ -269,11 +271,14 @@ The role must not be applied to the live host until each of these is true.
 3. The socket's owner on the live host is uid 999. The role refuses otherwise.
 4. Every tenant's grant on `db1` is already escaped. The escape is a by-hand
    runbook; the role refuses an unescaped grant and never rewrites it.
-5. The channel that delivers the two private inputs to a host that pulls its
-   commit exists. This is the owner's decision; until it is made nothing supplies
-   them.
-6. The `db1_backup_timers` role is in the tree and in the playbook before this one,
-   so the dump code is delivered before the dump account changes.
+5. The two private inputs reach the host through the `host_inputs` loader: the
+   owner places `/etc/branchleft/host-inputs.json` (root-owned, mode `0600`) with
+   `db1_grants_tenants` and `db1_grants_ops1_host` among its keys.
+6. The `db1_backup_timers` role is in the playbook before this one, so the dump
+   code (`naming.py`, `dump_nightly.py`) is delivered before the dump account
+   changes. No role delivers `provision_tenant_db.py`: until one does, the owner
+   places it by hand (blocker 1), or this role stops with `program-missing`,
+   in check mode too.
 
 ## Differences from the family base
 
