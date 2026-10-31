@@ -337,7 +337,7 @@ Wiring a host is not done by this role or by its pull request. Adding the
 `control_plane` and `control_plane_db` roles to `playbooks/ops1.yml`, setting
 `pull_trigger_steps` for ops1, and writing the shared-infra caller of the reusable
 `ansible-gated-apply.yml` with the github-workflows tag it pins, are one ticket,
-[ISSUE branchLeft/workspace#2531](https://github.com/branchLeft/workspace/issues/2531).
+[ISSUE branchLeft/workspace#2351](https://github.com/branchLeft/workspace/issues/2351).
 The ops1 enrolment ticket (branchLeft/workspace#2340) does not do them. Until that ticket
 is done the default empty list allows no step on any host. The first live run also waits
 on [ISSUE branchLeft/workspace#2483](https://github.com/branchLeft/workspace/issues/2483)

@@ -63,12 +63,12 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # host_baseline and the compose unit and deploy wrapper that the deploy tooling installs),
 # app1's host_inputs (the loader goes first, R11) and website_app1 (last, after host_baseline
 # has installed Docker), db1's host_baseline, db1_stack and db1_backup_timers (after the
-# loader, which goes first; db1_grants would follow the timers and is not applied), and
-# demo1's two build roles.
+# loader, which goes first; db1_grants would follow the timers and is not applied), ops1's
+# control_plane after the status page, and demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": ["host_baseline", "ci_login", "deploy_tooling", "edge_stack"],
-    "ops1": ["host_baseline", "breakglass_mint_host", "status_page"],
+    "ops1": ["host_baseline", "breakglass_mint_host", "status_page", "control_plane"],
     "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
     "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
     "demo1": ["demo1_build", "demo1_egress_spool"],

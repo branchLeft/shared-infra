@@ -136,6 +136,15 @@ the first app1 run after this change stops here with `host_inputs[file-missing]`
 the website role starts, until the owner has placed `/etc/branchleft/host-inputs.json` on
 app1 (root:root, `0600`, the four keys above).
 
+## Bootstrap and rotation
+
+The owner places the file once, on the host, by hand: one JSON object whose keys are exactly
+the names in the host's row in `vars/main.yml`, written with `json.dumps` (never typed into a
+command line), owned by root:root with mode `0600`, in directories only root can write. The
+role never writes it. To rotate a value the owner edits the file by hand the same way, and the
+next pull reads it. A run before the file exists stops at `host_inputs[file-missing]`, which is
+how the first pull proves the file is in place before the roles that need it run.
+
 ## How to change it safely
 
 1. A new host, or a new input for a host, is one edit to its row in `vars/main.yml`, one

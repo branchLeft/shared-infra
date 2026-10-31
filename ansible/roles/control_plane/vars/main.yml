@@ -48,6 +48,30 @@ control_plane_masterkey_secret: >-
 
 control_plane_project_dir: /opt/branchleft/control-plane
 
+# The Compose project of the stack: the `name:` of compose.yml, which the unit and
+# the deploy wrapper also use. The labels Compose puts on a container are read with it.
+control_plane_project_name: control-plane
+
+# Whether the caller gave an image pin. The image and the two secret contents are
+# optional inputs; an empty string counts as not given.
+control_plane_image_given: >-
+  {{ (control_plane_app_image | default('', true) | string | length) > 0 }}
+
+# The deploy wrapper's record of the last pin it wrote: one line IMAGE=<reference>, in
+# /etc/branchleft/<stack>.image.env, which the stack's unit reads (branchleft_deploy.py).
+control_plane_image_record: /etc/branchleft/control-plane.image.env
+
+# Docker is read for the portal container where something uses it (the bring-up, the
+# deploy wrapper), or where no pin was given and the wrapper's record holds none.
+control_plane_reads_docker: >-
+  {{ (control_plane_bring_up | ansible.builtin.bool)
+     or (control_plane_start_units | ansible.builtin.bool)
+     or not ((control_plane_image_given | ansible.builtin.bool)
+             or (control_plane_recorded_image | default('') | length > 0)) }}
+
+# The shape the deploy wrapper accepts: a name and a sha256 digest.
+control_plane_image_pattern: '\A[a-z0-9][^\s@]*@sha256:[0-9a-f]{64}\Z'
+
 # The files of the stack directory the role carries. compose.init.yml is
 # carried but never read by the unit: it is the second -f file of the one-off
 # init run, and the unit does not read it.
