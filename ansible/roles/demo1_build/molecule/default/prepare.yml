@@ -24,6 +24,20 @@
         update_cache: true
         cache_valid_time: 3600
 
+    # The role's source URL is a file URL in this scenario (molecule.yml). The ten
+    # programs are the test's own copy of the commit the role pins, at the same
+    # paths, so get_url reads them and holds each to its sha256 as it does from
+    # GitHub. A copy that does not match its pin fails the role's download. Imported
+    # by plan and refusals as well, so this is the one place the copy is staged.
+    - name: Stage the test copy of the pinned programs the role downloads
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../default/files/ghost-platform/'
+        dest: /opt/branchleft-test-fixtures/ghost-platform/
+        owner: root
+        group: root
+        mode: '0644'
+        directory_mode: '0755'
+
     - name: Create the configuration and state directories, as broker_deploy does
       ansible.builtin.file:
         path: '{{ item }}'

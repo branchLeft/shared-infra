@@ -29,7 +29,7 @@ argument_specs:
         description: >-
           The URL prefix each release file is appended to. The default is the
           raw URL at the pinned commit; the container test points it at a
-          local copy only when it needs to.
+          local copy of those files (molecule.yml).
         default: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ demo1_build_source_sha }}'
       demo1_build_release_files:
         type: list
