@@ -86,7 +86,7 @@ def role_with_test(ansible: Path, name: str, text: str) -> Path:
 
 
 def fake_python(directory: Path, lines: list[str]) -> Path:
-    """An interpreter that prints the given lines and exits 0, for summaries a real run cannot print."""
+    """An interpreter that prints the given lines and exits 0, for summaries no real run prints."""
     path = directory / "fake-python"
     body = "".join(f"printf '%s\\n' {shlex.quote(line)}\n" for line in lines)
     write(path, f"#!/bin/sh\n{body}exit 0\n")
@@ -197,6 +197,21 @@ class RoleUnitTestScript(unittest.TestCase):
         result = self.run_with_summary(["Ran 1 test in 0.000s", "", "FAILED (failures=1)", "OK"])
         self.assert_red(result)
         self.assertIn("shimmed: unit suites reported FAILED", result.stdout)
+
+    def test_a_zero_run_followed_by_ok_fails(self) -> None:
+        result = self.run_with_summary(["Ran 0 tests in 0.000s", "", "OK"])
+        self.assert_red(result)
+        self.assertIn("shimmed: the unit suites ran zero tests", result.stdout)
+
+    def test_no_ran_line_at_all_fails(self) -> None:
+        result = self.run_with_summary(["OK"])
+        self.assert_red(result)
+        self.assertIn("no unittest summary", result.stdout)
+
+    def test_a_result_line_that_is_not_ok_or_failed_fails(self) -> None:
+        result = self.run_with_summary(["Ran 1 test in 0.000s", "", "OKAY"])
+        self.assert_red(result)
+        self.assertIn("no OK or FAILED result line", result.stdout)
 
     def test_a_role_library_and_its_files_are_on_the_path(self) -> None:
         role = role_with_test(self.ansible, "typed", LIBRARY_PASSING)
