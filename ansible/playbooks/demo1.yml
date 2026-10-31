@@ -1,34 +1,44 @@
 ---
-# demo1: the demo host's build. Two roles, in order: the slots, and the host's
-# egress policy with the mail spool. The broker's own install (the broker_deploy
-# role) comes first on the host and is not applied from here: its inputs are the
-# owner's built bundle and public key, which have no home in a pulled commit yet,
-# and applying it from this playbook would repoint a broker the owner installed
-# by hand. demo1_build checks, read-only, that broker_deploy has run, and refuses
-# the host when it has not.
+# demo1: the demo host's build, under the signed route. Four roles, in order: the Ansible
+# toolchain the host runs this playbook with, the trigger that runs it, then the slots, and
+# the host's egress policy with the mail spool. The host never fetches: its commit arrives
+# by push, a git bundle that CI sends through edge1 and the trigger checks against this
+# host's trust file (pull_trigger_bundle_hosts in roles/pull_trigger/vars/main.yml is the one
+# place that says so). The broker's own install (the broker_deploy role) comes first on the
+# host and is not applied from here: its inputs are the owner's built bundle and public key,
+# which have no home in a pushed commit yet, and applying it from this playbook would
+# repoint a broker the owner installed by hand. demo1_build checks, read-only, that
+# broker_deploy has run, and refuses the host when it has not.
 
 # host_baseline is not applied here. The egress role needs Docker's DOCKER-USER
 # chain and refuses the host, by name, when Docker is not running; the host's
 # baseline is its own step, under its own enrolment decision. egress_nat is not
 # applied here either: this host's containers must not reach the network, and a
-# NAT rule would give them a way.
+# NAT rule would give them a way. The per-host role list in checks/host_roles.yml
+# holds both of these, and broker_deploy, off this playbook.
 
-# The roles have no secret and no required input, so this playbook loads no
-# variables file. The inventory entry for the host, the trigger that pulls this
-# playbook and the nightly drift check are the host's enrolment, which is not in
-# this file.
+# The roles have no secret and no required input, so the only variables file is the
+# shared pull values and the host's trust file, which hold the signer list and nothing
+# else. The inventory has no entry for the host: a playbook and its trust file enrol it.
 - name: Build demo1
   hosts: all
   gather_facts: false
+  vars:
+    enrolled_host: demo1
+  vars_files:
+    - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
+    - '{{ playbook_dir }}/../trust/demo1.yml'
   pre_tasks:
-    - name: Refuse any host but demo1
-      ansible.builtin.assert:
-        that:
-          - inventory_hostname in ['demo1', 'localhost']
-        fail_msg: This playbook is demo1's. Limit the run to demo1.
-        quiet: true
-  # The roles live in ansible/roles/ (ANS-13), one level above this directory, and a
-  # playbook finds roles only beside itself unless a path is given. One suppression per line.
+    - name: Refuse a run that is not demo1's
+      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
+    - name: Refuse an empty signer list
+      ansible.builtin.include_tasks: includes/require_signers.yml
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory. A
+  # path works from any directory, which the host trigger and the lint do not share.
   roles:
+    - role: ../roles/ansible_runtime # noqa: role-name[path]
+      vars:
+        ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
+    - role: ../roles/pull_trigger # noqa: role-name[path]
     - role: ../roles/demo1_build # noqa: role-name[path]
     - role: ../roles/demo1_egress_spool # noqa: role-name[path]
