@@ -11,17 +11,23 @@ import json
 import re
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import cast
 
 import jinja2
-import yaml
+from ruamel.yaml import YAML
 
 ROLE = Path(__file__).resolve().parents[2]
 TEMPLATE = (ROLE / "templates" / "problems.j2").read_text(encoding="utf-8")
-VARS: dict[str, Any] = yaml.safe_load((ROLE / "vars" / "main.yml").read_text(encoding="utf-8"))
-TASKS: list[dict[str, Any]] = yaml.safe_load(
-    (ROLE / "tasks" / "main.yml").read_text(encoding="utf-8")
-)
+
+
+def load_yaml(path: Path) -> object:
+    # ruamel.yaml is typed; PyYAML ships no stubs, so mypy cannot check what it returns.
+    loaded: object = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+    return loaded
+
+
+VARS = cast("dict[str, object]", load_yaml(ROLE / "vars" / "main.yml"))
+TASKS = cast("list[dict[str, object]]", load_yaml(ROLE / "tasks" / "main.yml"))
 
 # Values made for the test run: none is a real secret.
 THROWAWAY_VALUE = "THROWAWAY_VALUE_0001"  # noqa: S105
@@ -39,26 +45,31 @@ def make_env() -> jinja2.Environment:
 ENV = make_env()
 
 
-def render_problems(secrets: list[dict[str, Any]], env_name: str) -> dict[str, list[int]]:
+def render_problems(secrets: list[dict[str, str]], env_name: str) -> dict[str, list[int]]:
     context = dict(VARS)
     context["secrets_and_no_log_secrets"] = secrets
     context["secrets_and_no_log_env_name"] = env_name
-    return json.loads(ENV.from_string(TEMPLATE).render(context))
+    return cast("dict[str, list[int]]", json.loads(ENV.from_string(TEMPLATE).render(context)))
+
+
+def assertions_of(task: dict[str, object]) -> list[str]:
+    block = cast("dict[str, object]", task["ansible.builtin.assert"])
+    return cast("list[str]", block["that"])
 
 
 def source_assertion() -> list[str]:
     for task in TASKS:
         if str(task.get("name", "")).startswith("Refuse a source file that is missing"):
-            return list(task["ansible.builtin.assert"]["that"])
+            return assertions_of(task)
     raise AssertionError("no task refuses a source file that is missing or not plain")  # noqa: TRY003
 
 
-def source_passes(stat: dict[str, Any]) -> bool:
+def source_passes(stat: dict[str, object]) -> bool:
     item = {"item": "/root/EXAMPLE_SOURCE", "stat": stat}
     return all(bool(ENV.compile_expression(expr)(item=item)) for expr in source_assertion())
 
 
-PLAIN_ROOT_FILE: dict[str, Any] = {
+PLAIN_ROOT_FILE: dict[str, object] = {
     "exists": True,
     "isreg": True,
     "uid": 0,
@@ -99,7 +110,7 @@ def refusal_passes(exprs: list[str], problems: dict[str, list[int]]) -> bool:
 def task_assertion(name_prefix: str) -> list[str]:
     for task in TASKS:
         if str(task.get("name", "")).startswith(name_prefix):
-            return list(task["ansible.builtin.assert"]["that"])
+            return assertions_of(task)
     raise AssertionError(f"no task named {name_prefix!r}")  # noqa: TRY003
 
 
@@ -111,7 +122,7 @@ class EnvironmentFileNameWiringTest(unittest.TestCase):
 
     def test_the_refusal_passes_when_no_secret_has_the_environment_file_name(self) -> None:
         exprs = task_assertion("Refuse an environment file that has the name of a secret")
-        problems = {"env_name": []}
+        problems: dict[str, list[int]] = {"env_name": []}
         self.assertTrue(refusal_passes(exprs, problems))
 
 

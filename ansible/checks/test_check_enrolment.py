@@ -62,7 +62,7 @@ class Sabotage(unittest.TestCase):
 
     # R1: an empty enrolled set fails, it does not pass over nothing.
     def test_r1_no_enrolled_playbook(self) -> None:
-        for host in ("edge1", "ops1", "app1", "db1"):
+        for host in ("edge1", "ops1", "app1", "db1", "demo1"):
             (self.ansible / "playbooks" / f"{host}.yml").unlink()
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
@@ -132,8 +132,50 @@ class Sabotage(unittest.TestCase):
 
     # R4: a trust file has no enrolled playbook.
     def test_r4_trust_file_without_playbook(self) -> None:
-        self._write("trust/demo1.yml", "---\npull_trigger_signers: []\n")
-        self._assert_rule("R4 trust/demo1.yml")
+        self._write("trust/mx9.yml", "---\npull_trigger_signers: []\n")
+        self._assert_rule("R4 trust/mx9.yml")
+
+    # R4: demo1 is enrolled, so its playbook needs its trust file. Without it the real tree is red.
+    def test_r4_demo1_playbook_without_trust_file(self) -> None:
+        (self.ansible / "trust" / "demo1.yml").unlink()
+        self._assert_rule("R4 demo1.yml is enrolled but has no trust/demo1.yml")
+
+    # R2, fail closed: demo1 without the signer refusal would run on an empty trust list.
+    def test_r2_demo1_signer_include_removed(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "    - name: Refuse an empty signer list\n"
+            "      ansible.builtin.include_tasks: includes/require_signers.yml\n",
+            "",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R2: demo1 without the host refusal could be applied to any host.
+    def test_r2_demo1_refusal_include_removed(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml\n",
+            "",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R2: demo1's play loads its own trust file, not another host's.
+    def test_r2_demo1_vars_files_points_at_another_hosts_trust_file(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "'{{ playbook_dir }}/../trust/demo1.yml'",
+            "'{{ playbook_dir }}/../trust/db1.yml'",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R5: demo1's trust file holds the signer list and nothing else.
+    def test_r5_demo1_trust_file_holds_a_second_key(self) -> None:
+        self._edit(
+            "trust/demo1.yml",
+            "pull_trigger_signers:\n",
+            "pull_trigger_remote_url: https://example.invalid/x.git\npull_trigger_signers:\n",
+        )
+        self._assert_rule("R5 trust/demo1.yml")
 
     # R4: db1 is enrolled, so its playbook needs its trust file. Without it the real tree is red.
     def test_r4_db1_playbook_without_trust_file(self) -> None:
@@ -269,12 +311,12 @@ class Sabotage(unittest.TestCase):
 
     # R7: a playbook that is not enrolled names the trust path, so a partial enrolment hides.
     def test_r7_unenrolled_playbook_names_a_trust_file(self) -> None:
-        self._edit(
-            "playbooks/demo1.yml",
-            "---\n",
-            "---\n# A partial enrolment would name trust/demo1.yml here.\n",
+        self._write(
+            "playbooks/mx9.yml",
+            "---\n# A partial enrolment would name trust/mx9.yml here.\n"
+            "- name: Not enrolled\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n",
         )
-        self._assert_rule("R7 demo1.yml")
+        self._assert_rule("R7 mx9.yml")
 
     # R2: a top-level .yaml playbook that applies pull_trigger is refused, not skipped.
     def test_r2_top_level_yaml_playbook_is_refused(self) -> None:
@@ -973,8 +1015,13 @@ class Sabotage(unittest.TestCase):
 
     # R10: a file for a host that is not enrolled.
     def test_r10_owner_vars_file_without_an_enrolled_playbook(self) -> None:
+        self._write("owner_vars/mx9.yml", "---\nci_login_keys: []\n")
+        self._assert_one("R10 owner_vars/mx9.yml: has no enrolled playbook")
+
+    # R10: demo1's roles take no owner keys, so it may have no file either.
+    def test_r10_owner_vars_file_for_demo1(self) -> None:
         self._write("owner_vars/demo1.yml", "---\nci_login_keys: []\n")
-        self._assert_one("R10 owner_vars/demo1.yml: has no enrolled playbook")
+        self._assert_one("R10 owner_vars/demo1.yml: this host has no owner_vars keys")
 
     # R10 and R2: an enrolled host that has no owner_vars keys may have no file, and its
     # playbook, which does not load it, disagrees with the file.

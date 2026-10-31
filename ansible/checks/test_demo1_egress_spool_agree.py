@@ -3,7 +3,8 @@
 The role is the only owner of the egress program, its unit, the mail spool's Compose file, its
 image pin file and the drain token path. The slot networks it lets the spool join are the slot
 table of demo1_build, written separately. The playbook that applies the role does not apply
-egress_nat to the demo host, whose containers must not reach the network. The cross-role
+egress_nat to the demo host, whose containers must not reach the network, nor host_baseline or
+broker_deploy, which are the host's own steps. The cross-role
 references are not allowed (ANS-12), so each copy stays and this test keeps them in step.
 """
 
@@ -37,6 +38,13 @@ OWNED = (
     "demo1_egress_spool_token_path",
 )
 NAT_ROLE = "egress_nat"
+# The roles demo1's playbook must not apply, with the reason each is held off. The list in
+# checks/host_roles.yml holds the same three off a pushed playbook (R2); this keeps the reasons.
+EXCLUDED = {
+    NAT_ROLE: "which would give the demo containers a route out",
+    "host_baseline": "which is the host's own step, under its own enrolment decision",
+    "broker_deploy": "which would repoint a broker the owner installed by hand",
+}
 ORDER = (BUILD, ROLE)
 
 
@@ -178,10 +186,11 @@ def disagreements(f: dict[str, object]) -> list[str]:
             f"but the {BUILD} slot table gives {expected!r}"
         )
     applied = cast("list[str]", f["playbook_roles"])
-    if NAT_ROLE in applied:
-        found.append(
-            f"demo1.yml applies {NAT_ROLE}, which would give the demo containers a route out"
-        )
+    found.extend(
+        f"demo1.yml applies {role}, {reason}"
+        for role, reason in EXCLUDED.items()
+        if role in applied
+    )
     for role in ORDER:
         if applied.count(role) != 1:
             times = applied.count(role)
@@ -240,11 +249,13 @@ class SpoolAgreeTest(unittest.TestCase):
                 found = disagreements(dict(base, **{key: value}))
                 self.assertTrue(any("slot_networks" in line for line in found), found)
 
-    def test_egress_nat_on_demo1_is_named(self) -> None:
+    def test_a_role_held_off_demo1_is_named(self) -> None:
         base = facts()
-        roles = [*cast("list[str]", base["playbook_roles"]), NAT_ROLE]
-        found = disagreements(dict(base, playbook_roles=roles))
-        self.assertTrue(any(NAT_ROLE in line for line in found), found)
+        for role in EXCLUDED:
+            with self.subTest(role=role):
+                roles = [*cast("list[str]", base["playbook_roles"]), role]
+                found = disagreements(dict(base, playbook_roles=roles))
+                self.assertTrue(any(f"applies {role}" in line for line in found), found)
 
     def test_the_roles_in_the_wrong_order_or_missing_are_named(self) -> None:
         base = facts()

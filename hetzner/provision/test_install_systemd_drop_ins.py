@@ -13,6 +13,9 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
+
+from runbook_sections import runbook_section
 
 HETZNER = pathlib.Path(__file__).resolve().parent.parent
 SCRIPT = HETZNER / "provision" / "install-systemd-drop-ins.sh"
@@ -225,11 +228,7 @@ class RunbookInvokesTheScriptTests(unittest.TestCase):
 
     @staticmethod
     def _step_5_body() -> str:
-        text = RUNBOOK.read_text(encoding="utf-8")
-        lines = text.splitlines()
-        start = next(i for i, line in enumerate(lines) if line.startswith("## 5. "))
-        end = next(i for i in range(start + 1, len(lines)) if lines[i].startswith("## 6. "))
-        return "\n".join(lines[start:end])
+        return runbook_section(RUNBOOK, "## 5. Install the systemd cgroup drop-ins")
 
     def test_step_5_names_the_role_and_keeps_the_script_as_the_runnable_path(self):
         """Since workspace#2343 part 2, step 5 names the monitoring_stack role, which
@@ -271,9 +270,7 @@ class ProvisionHostRunbookInvokesTheScriptTests(unittest.TestCase):
 
     @staticmethod
     def _step_body() -> str:
-        text = PROVISION_RUNBOOK.read_text(encoding="utf-8")
-        section = text.split("### 4. Install the systemd cgroup drop-ins", 1)[1]
-        return section.split("### 5.", 1)[0]
+        return runbook_section(PROVISION_RUNBOOK, "### 4. Install the systemd cgroup drop-ins")
 
     def test_step_invokes_install_systemd_drop_ins(self):
         body = self._step_body()
@@ -288,6 +285,56 @@ class ProvisionHostRunbookInvokesTheScriptTests(unittest.TestCase):
         """A doc that names a path with nothing behind it would still pass
         the two assertions above."""
         self.assertTrue(SCRIPT.exists())
+
+
+class NeighbouringEditsDoNotMoveAStep(unittest.TestCase):
+    """A step is found by its own heading, so editing the heading of the step after
+    it must not change what the step's own extraction returns. Before the fix both
+    extractors ended on the neighbour's literal heading: dropping that heading's
+    number made the slice run on to the end of the runbook, and renaming the
+    neighbour's `##` heading made the lookup raise with nothing naming the cause."""
+
+    @staticmethod
+    def _runbook_copy(source, old, new):
+        text = pathlib.Path(source).read_text(encoding="utf-8")
+        assert text.count(old) == 1, f"{old!r} must occur once in {source.name}"
+        directory = tempfile.TemporaryDirectory()
+        copy = pathlib.Path(directory.name) / source.name
+        copy.write_text(text.replace(old, new, 1), encoding="utf-8")
+        return directory, copy
+
+    def test_dropping_the_number_of_the_next_provision_step_leaves_step_4_unchanged(self):
+        original = ProvisionHostRunbookInvokesTheScriptTests._step_body()
+        directory, edited = self._runbook_copy(
+            PROVISION_RUNBOOK,
+            "### 5. Provision a host that has no public address",
+            "### Provision a host that has no public address",
+        )
+        self.addCleanup(directory.cleanup)
+        with mock.patch(f"{__name__}.PROVISION_RUNBOOK", edited):
+            self.assertEqual(ProvisionHostRunbookInvokesTheScriptTests._step_body(), original)
+
+    def test_renaming_the_next_monitoring_step_leaves_step_5_unchanged(self):
+        original = RunbookInvokesTheScriptTests._step_5_body()
+        directory, edited = self._runbook_copy(
+            RUNBOOK,
+            "## 6. Restart the edge stack",
+            "## Restart the edge stack",
+        )
+        self.addCleanup(directory.cleanup)
+        with mock.patch(f"{__name__}.RUNBOOK", edited):
+            self.assertEqual(RunbookInvokesTheScriptTests._step_5_body(), original)
+
+    def test_a_step_whose_own_heading_is_gone_fails_naming_that_heading(self):
+        directory, edited = self._runbook_copy(
+            PROVISION_RUNBOOK,
+            "### 4. Install the systemd cgroup drop-ins",
+            "### 4. Install the drop-ins",
+        )
+        self.addCleanup(directory.cleanup)
+        with mock.patch(f"{__name__}.PROVISION_RUNBOOK", edited):
+            with self.assertRaisesRegex(AssertionError, "Install the systemd cgroup drop-ins"):
+                ProvisionHostRunbookInvokesTheScriptTests._step_body()
 
 
 if __name__ == "__main__":

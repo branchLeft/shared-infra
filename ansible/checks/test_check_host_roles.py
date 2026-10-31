@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 from check_enrolment import HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
 
-ENROLLED = ("edge1", "ops1", "app1", "db1")
+ENROLLED = ("edge1", "ops1", "app1", "db1", "demo1")
 SECOND_PLAY = "- name: Second play\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n"
 # Each text is one more key of the play, at the play's indent, appended after `roles`.
 EXTRA_PLAY_KEYS = {
@@ -62,14 +62,16 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # breakglass_grant_host), then edge1's deploy_tooling and edge_stack (last: it needs Docker from
 # host_baseline and the compose unit and deploy wrapper that the deploy tooling installs),
 # app1's host_inputs (the loader goes first, R11) and website_app1 (last, after host_baseline
-# has installed Docker), and db1's host_baseline, db1_stack and db1_backup_timers (after the
-# loader, which goes first; db1_grants would follow the timers and is not applied).
+# has installed Docker), db1's host_baseline, db1_stack and db1_backup_timers (after the
+# loader, which goes first; db1_grants would follow the timers and is not applied), and
+# demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": ["host_baseline", "ci_login", "deploy_tooling", "edge_stack"],
     "ops1": ["host_baseline", "breakglass_mint_host", "status_page"],
     "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
     "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
+    "demo1": ["demo1_build", "demo1_egress_spool"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {"edge1": "    deploy_tooling_host_class: gateway\n"}
@@ -244,6 +246,33 @@ class HostRoleLists(unittest.TestCase):
         )
         self.assertEqual(check(ROOT), [])
 
+    # Safety class: demo1 is held off host_baseline, egress_nat and broker_deploy by its own
+    # list in host_roles.yml. Green first: the real playbook applies exactly the pull roles then
+    # its two build roles and the real tree passes. Red: each of the three roles added to the real
+    # playbook is refused by name, and with demo1's line deleted from the list both build roles are.
+    def test_demo1_applies_only_its_build_roles(self) -> None:
+        text = (ROOT / "ansible" / "playbooks" / "demo1.yml").read_text(encoding="utf-8")
+        names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
+        self.assertEqual(
+            names, ["ansible_runtime", "pull_trigger", "demo1_build", "demo1_egress_spool"]
+        )
+        self.assertEqual(check(ROOT), [])
+        for name in ("host_baseline", "egress_nat", "broker_deploy"):
+            with self.subTest(role=name):
+                self.assertNotIn(name, self.listed["demo1"], "the case is a role on demo1's list")
+                path = self.ansible / "playbooks" / "demo1.yml"
+                path.write_text(self.real["demo1"] + _entry(name), encoding="utf-8")
+                self._assert_refused("demo1", f"role {name} is not on demo1's list")
+        (self.ansible / "playbooks" / "demo1.yml").write_text(self.real["demo1"], encoding="utf-8")
+        path = self.ansible / HOST_ROLES_FILE
+        listed = path.read_text(encoding="utf-8")
+        line = "demo1:\n  - demo1_build\n  - demo1_egress_spool\n"
+        self.assertIn(line, listed, "the sabotage matched nothing")
+        self._list_file(listed.replace(line, "", 1))
+        for name in ("demo1_build", "demo1_egress_spool"):
+            with self.subTest(role=name, list="deleted"):
+                self._assert_refused("demo1", f"role {name} is not on demo1's list")
+
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
     # Most of these roles have no directory on main, so a name with no role behind it passes too.
     # The loader is the one role whose place is fixed (R11): it goes first in every order.
@@ -264,6 +293,7 @@ class HostRoleLists(unittest.TestCase):
             ("ops1", "signer_override"),
             ("app1", "x9"),
             ("db1", "made_up"),
+            ("demo1", "made_up"),
         ):
             with self.subTest(host=host, role=name):
                 self._playbook(host, _entry(name))
@@ -282,6 +312,8 @@ class HostRoleLists(unittest.TestCase):
             ("db1", "db1_stack", "      vars:\n        db1_stack_exporter_password: x\n"),
             ("db1", "db1_grants", "      vars:\n        db1_grants_tenants: [x]\n"),
             ("db1", "db1_grants", "      when: false\n"),
+            ("demo1", "demo1_build", "      vars:\n        demo1_build_slot_names: ['0']\n"),
+            ("demo1", "demo1_egress_spool", "      when: false\n"),
         )
         for host, name, extra in cases:
             with self.subTest(host=host, role=name, extra=extra):
@@ -451,6 +483,8 @@ class HostRoleLists(unittest.TestCase):
             ("ops1", "db1_stack"),
             ("db1", "control_plane"),
             ("db1", "egress_nat"),
+            ("demo1", "host_baseline"),
+            ("demo1", "control_plane"),
         )
         for host, name in cases:
             with self.subTest(host=host, role=name):

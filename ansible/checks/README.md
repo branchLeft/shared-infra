@@ -329,6 +329,14 @@ unreadable, truncated or malformed answer is `false` too.
 job's name in `ansible.yml`). The reusable workflow then checks the queue's check run and suite
 itself and refuses the delivery if they disagree, so a skip needs both to agree.
 
+`check_delivery.py` also fixes the push route of both callers. The push list is the
+`ANSIBLE_PUSH_HOSTS` repository secret, passed as `ssh_push_hosts` (the owner creates it; an unset
+secret is empty, and empty means every host is pulled). The `push-playbook` input is the one path
+`PUSH_PLAYBOOK`, defined once in `check_delivery.py` and imported by `test_drift_caller.py`. The
+release floor `MIN_RELEASE` is `v1.0.19`, the first release of `branchLeft/github-workflows` that
+declares both: a call that passes a key the called workflow does not declare fails on GitHub. A
+`push-dry-run-stub` is not an allowed input.
+
 After a lock-file merge (for example Dependabot), dispatch the Ansible workflow, because the
 venv cache stays cold until the Monday sweep.
 

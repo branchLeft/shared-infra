@@ -15,43 +15,14 @@ import subprocess
 import tempfile
 import unittest
 
+from runbook_sections import runbook_section
+
 SCRIPT = os.path.join(os.path.dirname(__file__), "branchleft_nat.sh")
 UNIT = os.path.join(os.path.dirname(__file__), "branchleft-nat.service")
 RUNBOOK = os.path.join(
     os.path.dirname(__file__), "..", "RUNBOOK-provision-host.md"
 )
 
-
-def _runbook_section(heading):
-    """The text of RUNBOOK-provision-host.md under `heading`, up to the next
-    heading of the same or a higher level. A section is found by its own
-    heading, so a neighbour's wording or number can change without moving
-    it. Lines inside a code fence are not headings: the grant procedure's
-    bash blocks carry `# 1.`-style comments."""
-    with open(RUNBOOK, encoding="utf-8") as handle:
-        lines = handle.read().splitlines()
-    level = len(heading) - len(heading.lstrip("#"))
-    start = None
-    in_fence = False
-    for index, line in enumerate(lines):
-        if line.startswith("```"):
-            in_fence = not in_fence
-            continue
-        if in_fence:
-            continue
-        if start is None:
-            if line == heading:
-                start = index + 1
-            continue
-        match = re.match(r"(#{1,6}) ", line)
-        if match and len(match.group(1)) <= level:
-            return "\n".join(lines[start:index]) + "\n"
-    if start is None:
-        raise AssertionError(
-            f"RUNBOOK-provision-host.md has no heading {heading!r}; "
-            "its section structure changed"
-        )
-    return "\n".join(lines[start:]) + "\n"
 
 FAKE_IP = """#!/usr/bin/env bash
 for arg in "$@"; do
@@ -350,7 +321,7 @@ def _extract_gateway_check_patterns():
     """Pull the three `grep` invocations out of RUNBOOK-provision-host.md's
     "Confirm the gateway is forwarding" block, so the test below runs the
     exact command an operator pastes rather than a paraphrase of it."""
-    section = _runbook_section("### 3. Confirm the gateway is forwarding")
+    section = runbook_section(RUNBOOK, "### 3. Confirm the gateway is forwarding")
     block = section.split("```bash", 1)[1].split("```", 1)[0]
     matches = re.findall(r'grep( -E)? -- "([^"]+)"', block)
     if len(matches) != 3:
@@ -444,7 +415,7 @@ class RunbookRestartCheckTests(unittest.TestCase):
     than only in this repo's memory of having written it."""
 
     def setUp(self):
-        self.section = _runbook_section("### 3. Confirm the gateway is forwarding")
+        self.section = runbook_section(RUNBOOK, "### 3. Confirm the gateway is forwarding")
 
     def test_restarts_docker_before_reverifying(self):
         self.assertIn("systemctl restart docker.service", self.section)
@@ -462,7 +433,7 @@ def _extract_restart_check_script():
     block in §3, the same way _extract_gateway_check_patterns does for the
     boot-time block -- so the test below runs the operator's paste, not a
     paraphrase of it."""
-    section = _runbook_section("### 3. Confirm the gateway is forwarding")
+    section = runbook_section(RUNBOOK, "### 3. Confirm the gateway is forwarding")
     blocks = section.split("```bash")[1:]
     restart_blocks = [b for b in blocks if "systemctl restart docker.service" in b]
     if len(restart_blocks) != 1:
