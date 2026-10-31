@@ -8,7 +8,7 @@ hetzner/RUNBOOK-edge.md:
   reason: pending-role
   role: edge_stack
 hetzner/RUNBOOK-monitoring.md:
-  steps: 17
+  steps: 16
   reason: pending-role
   role: monitoring_stack
 hetzner/RUNBOOK-nextcloud.md:

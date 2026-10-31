@@ -299,8 +299,9 @@ its own line, leaving the other keys in place:
   `ALERT_RECIPIENT_EMAIL`, `MAILHOST_PING_URL`, `GRAFANA_ADMIN_PASSWORD`
   (a change to any of these restarts the stack, if it is enabled)
 - `SNDS_DATA_URL` (read by the SNDS collector only; a change does not restart
-  the stack). Until a gated run replaces it, step 14 still writes this key by
-  hand, and that hand write is the one that remains.
+  the stack). It comes from the `monitoring_stack_snds_data_url` key of
+  `/etc/branchleft/host-inputs.json`; step 14 rotates it there, and nothing
+  writes this line by hand.
 
 The owner supplies each value from the password manager. Nothing generates
 one. `GRAFANA_ADMIN_PASSWORD` is read by Grafana only when it first creates its
@@ -333,7 +334,7 @@ are unchanged. The role's README, "Restart", has the detail.
 
 **The role does not yet run on a host, so these hand paths stay the runnable
 ones until the first gated converge.** No playbook in this repository runs
-either role yet. Each interim hand block in steps 3, 4, 5, 13 and 14 is marked with
+either role yet. Each interim hand block in steps 3, 4, 5 and 13 is marked with
 an `interim-hand-block` comment and listed in
 `hetzner/provision/test_runbook_monitoring_hand_blocks.py`, which fails on a hand
 block that is not listed. They are retired together, after the first gated
@@ -910,15 +911,14 @@ section is everything specific to it on top of that: the automated-access
 URL, node-exporter's textfile-collector mount, and the systemd timer that
 actually runs it.
 
-**Two writers of `SNDS_DATA_URL`: read this before you rotate the URL.** The
-`monitoring_stack` role (`ansible/roles/monitoring_stack`) writes this key from
-its input on every run, and it does not restart the stack, so nothing signals a
-conflict. The hand write in this section is the other writer. Once the role runs
-on a host, the next run puts back the value it was given. A rotation changes the
-role's input and this key, in that order, before the role runs again (the role's
-README, "Secrets"). Until a gated path exists for the rotation, this section is the
-one that rotates the key. An operator who rotates here alone loses the change on
-the next gated run, and the collector then fails without warning.
+**One writer of `SNDS_DATA_URL`: read this before you rotate the URL.** The
+`monitoring_stack` role (`ansible/roles/monitoring_stack`) writes the
+`SNDS_DATA_URL` line of `/etc/branchleft/monitoring.env` from the
+`monitoring_stack_snds_data_url` key of `/etc/branchleft/host-inputs.json` on
+every gated apply, and it restarts nothing for that line. That key is the only
+place a rotation changes. Nothing writes the line in `monitoring.env` by hand any
+more: the next apply would put back whatever the key holds, and the collector
+would then fail without warning.
 
 **First, generate an automated-access URL.** Sign in to the SNDS portal at
 `https://sendersupport.olc.protection.outlook.com/snds/` as the registered
@@ -940,109 +940,66 @@ person can actually keep.
 
 **The URL is the credential.** It grants download of the account's SNDS data
 to anyone holding it, so it is handled exactly like the passwords beside it:
-written straight into `/etc/branchleft/monitoring.env` as `SNDS_DATA_URL`
-(§3's table) on the host, never pasted into a terminal that logs, an issue, a
-PR, or a chat. The collector never prints it -- every error path redacts both
-the whole URL and the key alone before anything reaches the journal.
-`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it first
-if you are entering this section independently -- every command below reuses
-it.
+typed at a hidden prompt on the host, never pasted into a terminal that logs, an
+issue, a PR, or a chat; kept in `/etc/branchleft/host-inputs.json` (`root:root`,
+`0600`); and delivered into `monitoring.env` by the role. The collector never
+prints it -- every error path redacts both the whole URL and the key alone before
+anything reaches the journal. `$EDGE1_IPV4` is set under "What has to be true
+first" above; re-set it first if you are entering this section independently --
+every command below reuses it.
 
-Paste the URL when the shell prompts, so it never enters shell history, and
-let it reach the host **on stdin** rather than on a command line. The new file is
-built beside the old one and checked before it is moved over, so a failed run
-leaves the old file untouched and removes its temporary file:
-
-<!-- interim-hand-block: s14-snds-write -->
+Run the seeding tool on edge1. It asks for the URL at a hidden prompt (`-t` gives
+it a terminal), so the URL never reaches a command line, shell history or `ps`,
+on either machine. The tool is in the checkout the host's last apply pulled, at
+`/var/lib/pull-trigger/current`; before the commit that added the tool has
+applied, the pull request that added it carries the step that copies it to the
+host.
 
 ```bash
-read -rs SNDS_URL
-printf '%s' "$SNDS_URL" | ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
-  umask 077
-  f=/etc/branchleft/monitoring.env
-  t=$f.tmp
-  trap "rm -f $t" EXIT
-  url=$(cat)
-  if [ -z "$url" ]; then echo "FAILED: refusing to write an empty SNDS_DATA_URL" >&2; exit 1; fi
-  if [ ! -f "$f" ]; then echo "FAILED: $f is absent; write it with step 3 first" >&2; exit 1; fi
-  { grep -v "^SNDS_DATA_URL=" "$f" || [ $? -eq 1 ]; } > "$t" &&
-    printf "SNDS_DATA_URL=%s\n" "$url" >> "$t" &&
-    [ "$(grep -c "^SNDS_DATA_URL=" "$t")" = 1 ] &&
-    [ "$(sed -n "s/^SNDS_DATA_URL=//p" "$t" | wc -c | tr -d " ")" = "$(( $(printf %s "$url" | wc -c) + 1 ))" ] &&
-    mv "$t" "$f" &&
-    echo "OK: SNDS_DATA_URL replaced, $(printf %s "$url" | wc -c | tr -d " ") bytes, exactly one line" ||
-    { echo "FAILED: monitoring.env was NOT updated -- see the error above" >&2; exit 1; }'
-unset SNDS_URL
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
+  python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py \
+  --host edge1 --set monitoring_stack_snds_data_url
 ```
 
-Expect `OK: SNDS_DATA_URL replaced, N bytes, exactly one line` **and exit
-0**. `OK` is printed only after the move succeeded. Anything else means the file
-was not updated and the collector is still using the old link -- which, if you
-have just re-enabled automated access, is already invalidated. Do not proceed on
-the message alone: `echo $?`.
+Expect `set monitoring_stack_snds_data_url (N bytes) in
+/etc/branchleft/host-inputs.json` **and exit 0**. Check `N` against the URL's
+real length in bytes: it is the one confirmation that does not involve printing
+the credential back, and it catches a truncated paste. Any failure before the
+rename means the file was not changed and the key still holds the old link -- which, if you have
+just re-enabled automated access, is already invalidated. The tool changes only
+this key. It refuses a file that is missing, not `root:root 0600`, not one JSON
+object or holding a key outside edge1's row, and it refuses an empty answer; it
+writes the new file beside the old one, renames it over the old one, then reads
+the result back. A failed read-back is the one exception to the line above: the
+new file is already in place and the old one is not restored. The tool prints
+`inspect it` and exits non-zero, so inspect the file before the apply. It never prints the
+value, and it prints the key name only. Do not run it with `--replace` or without
+`--set` between a rotation and the apply that delivers it: that fills the file
+from the live `monitoring.env`, which still holds the old URL.
 
-Check `N` against the URL's real length in bytes, since that is the one
-confirmation that does not involve printing the credential back.
+**The new URL reaches the collector at the next gated apply, not at once.** The
+apply of edge1 runs on a push to `main` and waits for approval; no manual or
+scheduled run reaches a host. Until it has run, `monitoring.env` and the
+collector keep the old link. The apply restarts nothing for this line:
+`snds-collector.service` reads the file fresh on its next scheduled run, unlike
+Alertmanager's secrets, which need a stack restart. A stale or absent URL fails
+only that one run. Three alerts cover the gap, and they fire at different times on
+purpose: `SNDSCollectorFailing` within the hour (off
+`snds_collector_last_run_success`, rewritten every run);
+`SNDSAccessLinkExpiringSoon` at 25 days, _before_ the link dies; and
+`SNDSCollectorStale` at 36 hours as the backstop for a collector that is not
+running at all. §8's target-verification list has no entry for any of them, since
+this does not run as a Prometheus scrape target -- see "What this stack
+deliberately does not do" below.
 
-**Three things this deliberately does not do, each of which corrupts the
-credential when written the obvious way.**
-
-1. **It does not pass the URL through `sed`'s replacement text.** An `&`
-   there expands to the whole matched line, and the portal's URLs carry more
-   than one query parameter. Measured, with a two-parameter URL:
-
-   ```
-   SNDS_DATA_URL=https://…/data.aspx?key=NEWSECRETSNDS_DATA_URL=https://old.example/snds/data.aspx?key=OLDSECRETformat=csv
-   ```
-
-   The new key is truncated and **the just-invalidated old credential is
-   written back into the file**. The symptom is an HTTP 400, whose own
-   message blames a truncated paste -- so the diagnosis points at the
-   operator rather than at this command. Quoting does not fix it: `&` is a
-   `sed` metacharacter, not a shell one.
-
-2. **It does not interpolate the URL into the `ssh` command line**, where it
-   would be visible to `ps` on both machines and defeat the `read -rs`
-   above. `url=$(cat)` takes it from stdin, and `printf '%s'` writes it
-   without interpreting backslashes the way `echo` would.
-3. **It rewrites the whole file** rather than appending on a conditional, so
-   a failed edit cannot leave two `SNDS_DATA_URL=` lines with the stale one
-   winning.
-
-4. **It reports failure as failure.** Every step is chained with `&&` and
-   the result is read back -- exactly one `SNDS_DATA_URL=` line, and its
-   stored length matching what was sent. An earlier version of this command
-   printed `wrote SNDS_DATA_URL (N characters)` from the shell variable, after
-   an unchecked `mv`: against an unwritable directory every write failed, the
-   file kept the old credential, and it still printed success and exited 0.
-   The count is read from the file, never from the variable.
-
-Checked against four cases before being written down here: a URL containing
-`&`, `%2F`, `%2B` and `%3D` (round-trips byte-identically, old line gone,
-exactly one `SNDS_DATA_URL=` line, other secrets untouched, result `0600`);
-an unwritable target (fails, exits 1, leaves the old value in place); empty
-input (refuses, exits 1, leaves the old value in place); and a first-time
-write into a file with no `SNDS_DATA_URL=` line yet (appends, preserves the
-rest).
-
-This does not restart anything -- `snds-collector.service` reads the file
-fresh on its next scheduled run, unlike Alertmanager's secrets, which need a
-stack restart. A stale or absent URL fails only that one run. Three alerts
-cover it, and they fire at different times on purpose:
-`SNDSCollectorFailing` within the hour (off `snds_collector_last_run_success`,
-rewritten every run); `SNDSAccessLinkExpiringSoon` at 25 days, _before_ the
-link dies; and `SNDSCollectorStale` at 36 hours as the backstop for a
-collector that is not running at all. §8's target-verification list has no
-entry for any of them, since this does not run as a Prometheus scrape target
--- see "What this stack deliberately does not do" below.
-
-**Rotating it, every 30 days.** Disable and re-enable automated access on
-that same portal page (Microsoft issues a new link only that way; re-enabling
-immediately invalidates the old one), then re-run the command above with the
-new URL. Nothing else needs updating: the collector notices the URL changed,
-restarts its own 30-day clock, and `SNDSAccessLinkExpiringSoon` clears on the
-next scrape. It tracks this by storing a SHA-256 of the URL -- never the URL
--- in `snds-link-state.json` beside the textfile output.
+**Rotating it, every 30 days.** Disable and re-enable automated access on that
+same portal page (Microsoft issues a new link only that way; re-enabling
+immediately invalidates the old one), run the command above with the new URL, and
+make sure a push to `main` and the approval of edge1's apply follow, because that
+apply is what delivers it. Nothing else needs updating: the collector notices the
+URL changed, restarts its own 30-day clock, and `SNDSAccessLinkExpiringSoon`
+clears on the next scrape. It tracks this by storing a SHA-256 of the URL --
+never the URL -- in `snds-link-state.json` beside the textfile output.
 
 **Then install the timer.** Not covered by step 5's
 `install-systemd-drop-ins.sh` -- that script only installs `*.override.conf`
@@ -1448,18 +1405,20 @@ this platform cannot see (spam-trap hits, volume trends, complaint history).
 **`SNDSAccessLinkExpiringSoon`** -- a chore, not an incident, and the only
 one of these that arrives _before_ anything breaks. The automated-access URL
 is 25 days old and Microsoft kills it at 30. Rotate it per §14 (disable and
-re-enable automated access in the portal, then write the new URL into
-`/etc/branchleft/monitoring.env`); the collector restarts its own clock when
-it sees the new URL and the alert clears on the next scrape. Left alone, it
-becomes `SNDSCollectorFailing` in five days.
+re-enable automated access in the portal, then run §14's command, which puts
+the new URL into `/etc/branchleft/host-inputs.json`; the next gated apply
+delivers it); the collector restarts its own clock when it sees the new URL and
+the alert clears on the next scrape. Left alone, it becomes
+`SNDSCollectorFailing` in five days.
 
 **`SNDSCollectorFailing`** -- the collector ran and failed, read straight off
 `snds_collector_last_run_success`. `journalctl -u snds-collector.service -n
 20` names the cause on the last line. The one that matters:
 
 - `HTTP 400 -- SNDS rejected the automated-access link as malformed`. A
-  truncated paste into `monitoring.env` is the usual cause; re-do §14's
-  write step.
+  truncated paste at the hidden prompt is the usual cause; re-run §14's
+  command (it prints the byte length to check against the URL's real length),
+  and the next gated apply delivers the corrected URL.
 
 **A 404 is deliberately NOT a failure and never reaches this alert.** See
 "When SNDS has no data at all" below.

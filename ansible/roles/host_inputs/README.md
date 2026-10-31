@@ -36,7 +36,8 @@ In this order, and each step before the first input is set:
 
 It never writes a file, never prints, diffs or defaults a value, and never sets a
 name that is not in the row of the host it runs on. It does not create the file or
-rotate a value: the owner does, by hand, as root, on the host. It does not check that a
+rotate a value: the owner does, as root, on the host, with `ansible/tools/seed_host_inputs.py`
+(see "Bootstrap and rotation"). It does not check that a
 value is right for the role that takes it; that role's own input check does.
 
 A refusal names a path, or the name of an input from the row, and never a value. Each
@@ -72,8 +73,8 @@ The file is one JSON object, for db1:
 }
 ```
 
-JSON, not YAML, so that no value is coerced to another type and the owner writes it with
-`json.dumps` from values read into the shell, never typed into a command line. For app1
+JSON, not YAML, so that no value is coerced to another type and the file is written with
+`json.dumps`, never from a value typed into a command line. For app1
 the file is one JSON object of four strings, the port included (`"587"`, not `587`,
 because the website role's argument is a string):
 
@@ -83,6 +84,55 @@ because the website role's argument is a string):
   "website_app1_smtp_port": "<string>",
   "website_app1_smtp_user": "<string>",
   "website_app1_smtp_password": "<string>"
+}
+```
+
+For edge1 the file is one JSON object of eleven keys, each the name of a required argument
+of `monitoring_stack` (seven) or `ntfy_pager` (four). The values must equal what is live on
+the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env` with others:
+
+```text
+{
+  "monitoring_stack_smtp_username": "<string>",
+  "monitoring_stack_smtp_password": "<string>",
+  "monitoring_stack_healthchecks_ping_url": "<string>",
+  "monitoring_stack_alert_recipient_email": "<string>",
+  "monitoring_stack_mailhost_ping_url": "<string>",
+  "monitoring_stack_grafana_admin_password": "<string>",
+  "monitoring_stack_snds_data_url": "<string>",
+  "ntfy_pager_pager_token": "<string>",
+  "ntfy_pager_watcher_token": "<string>",
+  "ntfy_pager_owner_password_hash": "<string>",
+  "ntfy_pager_machine_password_hash": "<string>"
+}
+```
+
+For ops1 the file is one JSON object of twenty keys, each the name of a required argument of
+`backup_worker` (ten) or `backup_restore` (ten). `backup_worker_tenants` is a list; the rest
+are strings:
+
+```text
+{
+  "backup_worker_db_host": "<string>",
+  "backup_worker_db_user": "<string>",
+  "backup_worker_db_password": "<string>",
+  "backup_worker_db_ca_pem": "<string>",
+  "backup_worker_bucket": "<string>",
+  "backup_worker_s3_endpoint": "<string>",
+  "backup_worker_s3_region": "<string>",
+  "backup_worker_s3_access_key_id": "<string>",
+  "backup_worker_s3_secret_access_key": "<string>",
+  "backup_worker_tenants": [{"slug": "<slug>", "recipient": "<public key>"}],
+  "backup_restore_state_copy_recipient": "<string>",
+  "backup_restore_state_copy_dest_access_key_id": "<string>",
+  "backup_restore_state_copy_estate_bucket": "<string>",
+  "backup_restore_state_copy_estate_endpoint": "<string>",
+  "backup_restore_state_copy_estate_region": "<string>",
+  "backup_restore_state_copy_estate_access_key_id": "<string>",
+  "backup_restore_state_copy_tenant_bucket": "<string>",
+  "backup_restore_state_copy_tenant_endpoint": "<string>",
+  "backup_restore_state_copy_tenant_region": "<string>",
+  "backup_restore_state_copy_tenant_access_key_id": "<string>"
 }
 ```
 
@@ -128,22 +178,52 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. Today db1's and app1's playbooks apply it. The first db1 apply that includes
+nothing else. Today the playbooks of edge1, ops1, db1 and app1 apply it. On edge1 the loader is
+followed by the roles up to `edge_stack` and then the monitoring roles, and on ops1 by the roles
+up to `control_plane` and then the backup roles; on both, the first run after this change stops
+here with `host_inputs[file-missing]`, before anything else is applied, until the owner has placed
+`/etc/branchleft/host-inputs.json` (root:root, `0600`, the keys above). The first db1 apply that includes
 it stops here until the owner has placed the file, which proves the file on the host before
 the database roles depend on it. db1 also needs its signer in `ansible/trust/db1.yml`
 before any pull runs. On app1 the loader is followed by `website_app1`, and the same holds:
 the first app1 run after this change stops here with `host_inputs[file-missing]`, before
 the website role starts, until the owner has placed `/etc/branchleft/host-inputs.json` on
-app1 (root:root, `0600`, the four keys above).
+app1 (root:root, `0600`, the four keys above). The tool places it: `seed_host_inputs.py --host
+app1` reads the four keys from the `website.env` that the website role's env file holds (the
+same four `CONTACT_SMTP_*` lines), so the values equal what is live.
 
 ## Bootstrap and rotation
 
-The owner places the file once, on the host, by hand: one JSON object whose keys are exactly
-the names in the host's row in `vars/main.yml`, written with `json.dumps` (never typed into a
-command line), owned by root:root with mode `0600`, in directories only root can write. The
-role never writes it. To rotate a value the owner edits the file by hand the same way, and the
-next pull reads it. A run before the file exists stops at `host_inputs[file-missing]`, which is
-how the first pull proves the file is in place before the roles that need it run.
+The owner places the file once, on the host, as root: one JSON object whose keys are exactly
+the names in the host's row in `vars/main.yml`, owned by root:root with mode `0600`, in
+directories only root can write. The role never writes it. For edge1, ops1 and app1 the writer is
+`ansible/tools/seed_host_inputs.py --host edge1` (or `ops1`, or `app1`), which:
+
+- takes each key's value from the live file the hand install wrote (its one table of
+  key-to-file is held by a test to this row and to the roles that write those files), so the
+  values equal what is live and the first apply changes nothing;
+- asks a hidden prompt only for a key it cannot find live, and writes nothing at all if any key
+  is still missing;
+- writes the file in one atomic step, refuses to overwrite an existing file unless `--replace`,
+  and prints key names only, never a value.
+
+db1 is not seeded by the tool: its file exists already and there is no live file to read, so it is
+written with `json.dumps` from values read into the shell, never typed into a command line.
+
+To rotate one value, `seed_host_inputs.py --host H --set KEY` asks for the new value at a hidden
+prompt and changes that key only. It writes a new file beside the old one, renames it over the old
+one, then reads the result back. If the read-back fails, the tool prints "inspect it" and exits
+non-zero; the new file stays in place and the old one is not restored. The loader refuses a file
+that is not regular `root:root` 0600, is not one JSON object, or whose keys are not exactly the
+row's; it does not check values, so the owner inspects the file after a failed read-back. The
+next pull reads it, and the role that takes the input delivers it at the next gated apply. Do
+not run the fill step again (`--replace`) between a `--set` and the apply that delivers it: it
+fills from the live files, which still hold the old value. After the first apply of a commit that
+holds the tool, it is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` on the
+host; before that, the pull request that adds the tool carries the step that copies it there.
+
+A run before the file exists stops at `host_inputs[file-missing]`, which is how the first pull
+proves the file is in place before the roles that need it run.
 
 ## How to change it safely
 
