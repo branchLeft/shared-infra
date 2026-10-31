@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml  # type: ignore[import-untyped]
 from check_enrolment import HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
 
-ENROLLED = ("edge1", "ops1", "app1", "db1")
+ENROLLED = ("edge1", "ops1", "app1", "db1", "demo1")
 SECOND_PLAY = "- name: Second play\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n"
 # Each text is one more key of the play, at the play's indent, appended after `roles`.
 EXTRA_PLAY_KEYS = {
@@ -55,19 +55,71 @@ REFUSE_LINE = "      ansible.builtin.include_tasks: includes/refuse_other_hosts.
 SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml\n"
 
 
-TRIGGER_LINE = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-# The roles a playbook on main applies after the pull roles. The sabotage cases below start from
-# the pull roles alone, so they strip these first; one test holds the real playbook to them.
-APPLIED_ON_MAIN = {"edge1": ["ci_login"], "ops1": ["status_page"], "db1": ["host_inputs"]}
-
-
-def _pull_roles_only(text: str) -> str:
-    """Return a playbook without the roles it applies after the trigger."""
-    return text[: text.index(TRIGGER_LINE) + len(TRIGGER_LINE)]
+# The last pull role in every enrolled playbook. Whatever follows it is the host's own roles.
+TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+# The roles a real playbook applies after the pull roles: host_baseline (this change) and the
+# roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
+# breakglass_grant_host), then edge1's deploy_tooling and edge_stack (last: it needs Docker from
+# host_baseline and the compose unit and deploy wrapper that the deploy tooling installs),
+# app1's host_inputs (the loader goes first, R11) and website_app1 (last, after host_baseline
+# has installed Docker), db1's host_baseline, db1_stack and db1_backup_timers (after the
+# loader, which goes first; db1_grants would follow the timers and is not applied), ops1's
+# control_plane after the status page, and demo1's two build roles.
+# One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
+APPLIED_ON_MAIN = {
+    "edge1": ["host_baseline", "ci_login", "deploy_tooling", "edge_stack"],
+    "ops1": ["host_baseline", "breakglass_mint_host", "status_page", "control_plane"],
+    "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
+    "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
+    "demo1": ["demo1_build", "demo1_egress_spool"],
+}
+# The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
+PINNED_PLAY_VARS = {"edge1": "    deploy_tooling_host_class: gateway\n"}
 
 
 def _entry(name: str, extra: str = "") -> str:
     return f"    - role: ../roles/{name}\n{extra}"
+
+
+class TriggerEntryCountError(ValueError):
+    """The playbook text does not hold exactly one pull_trigger entry."""
+
+    def __init__(self, count: int) -> None:
+        super().__init__(f"expected one pull_trigger entry, found {count}")
+
+
+def _pull_roles_only(text: str) -> str:
+    """A real playbook cut after its pull_trigger entry, so the roles wired after it drop away.
+
+    The fixtures add roles of their own to this text. Built on the whole real file, a fixture
+    would apply a role twice, or put it before the trigger, once the real file applies it too.
+
+    Raises:
+        TriggerEntryCountError: the text holds no pull_trigger entry, or more than one.
+    """
+    count = text.count(TRIGGER_ENTRY)
+    if count != 1:
+        raise TriggerEntryCountError(count)
+    return text[: text.index(TRIGGER_ENTRY) + len(TRIGGER_ENTRY)]
+
+
+class PullRolesOnly(unittest.TestCase):
+    PLAYBOOK = "  roles:\n    - role: ../roles/ansible_runtime\n" + TRIGGER_ENTRY
+
+    def test_the_roles_after_the_trigger_are_dropped(self) -> None:
+        wired = self.PLAYBOOK + _entry("host_baseline") + _entry("breakglass_mint_host")
+        self.assertEqual(_pull_roles_only(wired), self.PLAYBOOK)
+
+    def test_a_playbook_ending_at_the_trigger_is_unchanged(self) -> None:
+        self.assertEqual(_pull_roles_only(self.PLAYBOOK), self.PLAYBOOK)
+
+    def test_no_trigger_entry_fails_loudly(self) -> None:
+        with self.assertRaisesRegex(ValueError, "found 0"):
+            _pull_roles_only("  roles:\n" + _entry("host_baseline"))
+
+    def test_two_trigger_entries_fail_loudly(self) -> None:
+        with self.assertRaisesRegex(ValueError, "found 2"):
+            _pull_roles_only(self.PLAYBOOK + TRIGGER_ENTRY)
 
 
 def _applied_roles(playbook: str) -> list[str]:
@@ -83,18 +135,21 @@ class HostRoleLists(unittest.TestCase):
         self.root = Path(temp.name)
         shutil.copytree(ROOT / "ansible", self.root / "ansible", symlinks=True)
         self.ansible = self.root / "ansible"
-        self.original = {
-            host: _pull_roles_only(
-                (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
-            )
+        # `real` is each playbook as it is on main, with whatever it applies after the pull
+        # roles. `original` is the same text cut after pull_trigger: the base every fixture
+        # builds on, so a role wired into a real playbook cannot collide with a fixture's own.
+        self.real = {
+            host: (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
             for host in ENROLLED
         }
+        self.original = {host: _pull_roles_only(text) for host, text in self.real.items()}
         listed = yaml.safe_load((self.ansible / HOST_ROLES_FILE).read_text(encoding="utf-8"))
         self.listed: dict[str, list[str]] = listed
 
     def _playbook(self, host: str, extra: str, bare: bool = False) -> None:
-        """Put every enrolled playbook back as it is on main, then add text to one. With bare,
-        that one is first stripped of the loader entry it carries, so its roles can be re-listed."""
+        """Put every enrolled playbook back to its pull roles only, then add text to one. With
+        bare, that one is first stripped of the loader entry it carries, so its roles can be
+        re-listed."""
         for name, text in self.original.items():
             if bare and name == host:
                 text = text.replace(LOADER_ENTRY, "")
@@ -102,7 +157,7 @@ class HostRoleLists(unittest.TestCase):
             (self.ansible / "playbooks" / f"{name}.yml").write_text(text + added, encoding="utf-8")
 
     def _replace_in(self, host: str, old: str, new: str) -> None:
-        """Put every enrolled playbook back as it is on main, then change one text in one."""
+        """Put every enrolled playbook back to its pull roles only, then change one text in one."""
         self._playbook(host, "")
         path = self.ansible / "playbooks" / f"{host}.yml"
         text = path.read_text(encoding="utf-8")
@@ -129,7 +184,7 @@ class HostRoleLists(unittest.TestCase):
     def test_the_playbooks_on_main_apply_the_expected_roles(self) -> None:
         for host in ENROLLED:
             text = (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
-            after = text[text.index(TRIGGER_LINE) + len(TRIGGER_LINE) :]
+            after = text[text.index(TRIGGER_ENTRY) + len(TRIGGER_ENTRY) :]
             expected = "".join(
                 f"    - role: ../roles/{name} # noqa: role-name[path]\n"
                 for name in APPLIED_ON_MAIN.get(host, [])
@@ -147,14 +202,76 @@ class HostRoleLists(unittest.TestCase):
         self._list_file(text.replace("  - status_page\n", "", 1))
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
-    # db1 applies the two pull roles, then the loader of its private inputs, and none of the
-    # database roles on its list, which R9 allows because a playbook may apply a subset. The
-    # database roles return once the file the loader reads is on the host.
-    def test_db1_applies_the_pull_roles_then_the_loader(self) -> None:
+    # Safety class: db1 is the production database host. It applies the two pull roles, the loader
+    # of its private inputs, the host baseline, the stack, then the backup timers, and none of the
+    # other roles on its list, which R9 allows because a playbook may apply a subset. Red when any
+    # role is added or moved, green with the six named in this order. db1_grants is held back and
+    # would have to follow the timers.
+    def test_db1_applies_the_pull_roles_the_loader_the_baseline_the_stack_then_the_timers(
+        self,
+    ) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
-        self.assertEqual(names, ["ansible_runtime", "pull_trigger", "host_inputs"])
+        self.assertEqual(
+            names,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "host_inputs",
+                "host_baseline",
+                "db1_stack",
+                "db1_backup_timers",
+            ],
+        )
+        for held_back in ("db1_grants", "tunnel_account"):
+            self.assertNotIn(held_back, names)
         self.assertEqual(check(ROOT), [])
+
+    # edge1 applies the edge stack last: after the baseline (Docker), the CI login and the deploy
+    # tooling, which installs the compose unit and deploy wrapper the stack uses. Red when the
+    # stack moves earlier or is dropped, green with the six named in this order.
+    def test_edge1_applies_the_edge_stack_after_the_baseline_and_the_deploy_tooling(self) -> None:
+        text = (ROOT / "ansible" / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
+        names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
+        self.assertEqual(
+            names,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "host_baseline",
+                "ci_login",
+                "deploy_tooling",
+                "edge_stack",
+            ],
+        )
+        self.assertEqual(check(ROOT), [])
+
+    # Safety class: demo1 is held off host_baseline, egress_nat and broker_deploy by its own
+    # list in host_roles.yml. Green first: the real playbook applies exactly the pull roles then
+    # its two build roles and the real tree passes. Red: each of the three roles added to the real
+    # playbook is refused by name, and with demo1's line deleted from the list both build roles are.
+    def test_demo1_applies_only_its_build_roles(self) -> None:
+        text = (ROOT / "ansible" / "playbooks" / "demo1.yml").read_text(encoding="utf-8")
+        names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
+        self.assertEqual(
+            names, ["ansible_runtime", "pull_trigger", "demo1_build", "demo1_egress_spool"]
+        )
+        self.assertEqual(check(ROOT), [])
+        for name in ("host_baseline", "egress_nat", "broker_deploy"):
+            with self.subTest(role=name):
+                self.assertNotIn(name, self.listed["demo1"], "the case is a role on demo1's list")
+                path = self.ansible / "playbooks" / "demo1.yml"
+                path.write_text(self.real["demo1"] + _entry(name), encoding="utf-8")
+                self._assert_refused("demo1", f"role {name} is not on demo1's list")
+        (self.ansible / "playbooks" / "demo1.yml").write_text(self.real["demo1"], encoding="utf-8")
+        path = self.ansible / HOST_ROLES_FILE
+        listed = path.read_text(encoding="utf-8")
+        line = "demo1:\n  - demo1_build\n  - demo1_egress_spool\n"
+        self.assertIn(line, listed, "the sabotage matched nothing")
+        self._list_file(listed.replace(line, "", 1))
+        for name in ("demo1_build", "demo1_egress_spool"):
+            with self.subTest(role=name, list="deleted"):
+                self._assert_refused("demo1", f"role {name} is not on demo1's list")
 
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
     # Most of these roles have no directory on main, so a name with no role behind it passes too.
@@ -176,6 +293,7 @@ class HostRoleLists(unittest.TestCase):
             ("ops1", "signer_override"),
             ("app1", "x9"),
             ("db1", "made_up"),
+            ("demo1", "made_up"),
         ):
             with self.subTest(host=host, role=name):
                 self._playbook(host, _entry(name))
@@ -194,6 +312,8 @@ class HostRoleLists(unittest.TestCase):
             ("db1", "db1_stack", "      vars:\n        db1_stack_exporter_password: x\n"),
             ("db1", "db1_grants", "      vars:\n        db1_grants_tenants: [x]\n"),
             ("db1", "db1_grants", "      when: false\n"),
+            ("demo1", "demo1_build", "      vars:\n        demo1_build_slot_names: ['0']\n"),
+            ("demo1", "demo1_egress_spool", "      when: false\n"),
         )
         for host, name, extra in cases:
             with self.subTest(host=host, role=name, extra=extra):
@@ -315,7 +435,8 @@ class HostRoleLists(unittest.TestCase):
     # Rule: `vars` must also still hold the host name, and nothing else when it is empty or absent.
     def test_vars_without_the_host_name_is_refused(self) -> None:
         for host in ENROLLED:
-            line = f"  vars:\n    enrolled_host: {host}\n"
+            # The whole vars block, so edge1's pinned class line goes with it (HOST_PLAY_VARS).
+            line = f"  vars:\n    enrolled_host: {host}\n{PINNED_PLAY_VARS.get(host, '')}"
             for kind, new in (
                 ("absent", ""),
                 ("empty", "  vars: {}\n"),
@@ -361,12 +482,29 @@ class HostRoleLists(unittest.TestCase):
             ("app1", "control_plane"),
             ("ops1", "db1_stack"),
             ("db1", "control_plane"),
-            ("db1", "host_baseline"),
+            ("db1", "egress_nat"),
+            ("demo1", "host_baseline"),
+            ("demo1", "control_plane"),
         )
         for host, name in cases:
             with self.subTest(host=host, role=name):
                 self.assertNotIn(name, self.listed[host], "the case is not another host's role")
                 self._playbook(host, _entry(name))
+                self._assert_refused(host, f"role {name} is not on {host}'s list")
+
+    # Rule: the roles a real playbook applies after the pull roles are held to the list too. The
+    # fixtures above cut the real file after pull_trigger, so this is the case that keeps the
+    # real wired tail under test: the whole real file, plus one role from another host's list.
+    def test_an_off_list_role_after_the_wired_roles_is_refused(self) -> None:
+        cases = (("ops1", "egress_nat"), ("edge1", "tunnel_account"), ("app1", "control_plane"))
+        for host, name in cases:
+            with self.subTest(host=host, role=name):
+                self.assertNotIn(name, self.listed[host], "the case is not another host's role")
+                for other, text in self.real.items():
+                    (self.ansible / "playbooks" / f"{other}.yml").write_text(text, "utf-8")
+                self.assertEqual(check(self.root), [], "the real playbooks must pass first")
+                path = self.ansible / "playbooks" / f"{host}.yml"
+                path.write_text(self.real[host] + _entry(name), encoding="utf-8")
                 self._assert_refused(host, f"role {name} is not on {host}'s list")
 
     # Rule: a role is applied once. The pull roles are never listed, so they cannot be added back.

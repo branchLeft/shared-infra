@@ -1,8 +1,11 @@
 # Trust files
 
-Each host under the gated pull has one file here, `HOST.yml`, that holds its
-trusted signer list (`pull_trigger_signers`). The list is the trust anchor of the
-pull: a commit of `main` signed by a key on it is applied to the host as root.
+Each host on the signed route has one file here, `HOST.yml`, that holds its
+trusted signer list (`pull_trigger_signers`). The list is the trust anchor of that
+route: a commit signed by a key on it is applied to the host as root. On a pulled
+host that commit is a commit of `main`. demo1 is not pulled: its commit arrives by
+push, so a commit of `main` is not what it applies. The limit for demo1 is in
+`trust/demo1.yml`.
 
 - The file is loaded by exactly one playbook, `playbooks/HOST.yml`, through
   `vars_files`. `group_vars/all` and every other group never hold a signer list.

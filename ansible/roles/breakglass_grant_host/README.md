@@ -66,7 +66,7 @@ one of the three Docker commands in their exact shapes, word for word. The shape
 the playbook that applies the role (its play keys, its `roles` entry, its tasks) is
 not tested here: the per-host role list check holds each playbook to the roles it
 lists. Extra vars on the pull command line are not read by this check
-and are outside it: they are held by the gated pull's approval (ws#2483).
+and are outside it: they are held by the gated pull's approval.
 
 ## Requirements
 
@@ -179,9 +179,10 @@ The test reads the role and runs it. It does not read or run any playbook.
 ## How it is delivered
 
 A role reaches a host only through the gated pull (ANS-17), never by running
-`ansible-playbook` by hand. No playbook applies this role yet: it reaches the
-application host through the per-host role list, in a later wiring change. Until
-then a merge of this role changes no host.
+`ansible-playbook` by hand. `playbooks/app1.yml` applies this role after
+`host_baseline`, which is after the two pull roles, as a plain entry the per-host role
+list allows. A merge changes no host. The role reaches the application host only when
+that host is under the pull and an approved delivery run applies the playbook.
 
 ## How to change it safely
 

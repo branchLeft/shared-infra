@@ -1,0 +1,51 @@
+---
+# One application of the role. The caller sets phase_title, phase_specs (the tenants) and
+# phase_expected (how many starts each stack must have had), and may set phase_spool_port
+# (the spool's published port) or phase_no_spool. Counting is skipped in check mode, where
+# nothing is started.
+- name: Count the starts before this application
+  ansible.builtin.include_tasks: starts.yml
+
+- name: Remember the counts before
+  ansible.builtin.set_fact:
+    tenant_compose_scenario_counts_before: '{{ tenant_compose_scenario_start_counts }}'
+
+- name: Build the tenants' stacks
+  ansible.builtin.include_tasks: build.yml
+
+- name: Build the spool's text
+  ansible.builtin.set_fact:
+    tenant_compose_scenario_spool_text: "{{ '' if (phase_no_spool | default(false)) else lookup('ansible.builtin.template', 'spool.compose.yml.j2') }}"
+  vars:
+    spool_port: '{{ phase_spool_port | default(8095) }}'
+
+- name: Apply the role
+  ansible.builtin.include_role:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml.
+    name: branchleft.tenant_compose
+  vars:
+    tenant_compose_stacks: '{{ tenant_compose_scenario_stacks }}'
+    tenant_compose_mail_spool_text: '{{ tenant_compose_scenario_spool_text }}'
+
+- name: Count the starts after this application
+  ansible.builtin.include_tasks: starts.yml
+
+- name: Assert each stack was started exactly as often as its content changed
+  ansible.builtin.assert:
+    that:
+      - (tenant_compose_scenario_start_counts[item.key] | int) - (tenant_compose_scenario_counts_before[item.key] | int) == item.value | int
+    quiet: true
+    fail_msg: >-
+      {{ phase_title }}: expected {{ item.value }} start(s) of {{ item.key }}, the stand-in recorded
+      {{ (tenant_compose_scenario_start_counts[item.key] | int) - (tenant_compose_scenario_counts_before[item.key] | int) }}.
+  loop: '{{ tenant_compose_scenario_expected_defaults | combine(phase_expected | default({})) | dict2items }}'
+  loop_control:
+    label: '{{ item.key }}'
+  vars:
+    tenant_compose_scenario_expected_defaults:
+      tenant-a: 0
+      tenant-b: 0
+      tenant-c: 0
+      mail-spool: 0
+  when: not ansible_check_mode

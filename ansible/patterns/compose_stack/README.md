@@ -28,13 +28,35 @@ whose stack needs any of those has another role for it (ANS-12).
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables, and
-[`defaults/main.yml`](defaults/main.yml) holds their defaults. A variable with no
-default must be supplied: the image, which must carry a digest, and the list of secret
-files. The argument specification is the authority for which variables are required.
-The only secret is `compose_stack_secret_files[].content`. It is supplied at run time,
-has no default (ANS-16) and is marked `no_log` in the specification. The compose file
-refers to the secret files by name, so a service role that renames one renames it in
-`templates/compose.yaml.j2` too.
+[`defaults/main.yml`](defaults/main.yml) holds their defaults. The argument specification
+is the authority for which variables are required; none is required now, and the defaults
+are the one-application recipe: `compose.yaml.j2` renders the compose file, and one
+configuration file, `app.conf`, is rendered from `app.conf.j2`.
+
+The contract a stack with more than one service, or with its own images, needs:
+
+- `compose_stack_compose_template` names the template, in the role's `templates/`, the
+  compose file is rendered from, and `compose_stack_compose_file` names the file in the
+  project directory. Every image the file names must carry a digest, whatever the template.
+- `compose_stack_config_files` is a list of `name`, `content` and `mode`. A name is a
+  relative path of at most one directory level, each part starting with a letter or
+  digit, so it cannot climb out of the project directory; a name that does not match is
+  refused before anything is written. A file in a directory of its own gets that directory
+  first, with `compose_stack_project_mode`. The default `mode` is `0640`.
+- `compose_stack_secret_files` is optional and defaults to none. The only secret is
+  `compose_stack_secret_files[].content`. It is supplied at run time, has no default
+  (ANS-16) and is marked `no_log` in the specification. The compose file refers to the
+  secret files by name, so a service role that renames one renames it in its template too.
+- `compose_stack_http_check_url`, optional, is an endpoint the host asks with `GET` until it
+  answers `200` within `compose_stack_wait_timeout`. Empty, the default, means no such check.
+  The compose health check always runs and is not optional: a service with no container, one
+  not running, or one whose healthcheck is not healthy fails the run.
+- The stamp is written only after both checks pass, so a run that fails at either is followed
+  by one that tries again.
+
+The image variable `compose_stack_app_image` is used by the default template only. The
+stamp covers the rendered compose file, every configuration file's name, mode and content,
+and the secret files' names and content.
 
 `compose_stack_services` is the list of services to recreate when a file changes; empty
 means every service in the project. It exists so that a stack with a database next to
@@ -304,9 +326,14 @@ From the repository root, with Docker running locally and Python 3.12 or later.
 python3 -m venv .venv
 # Install the lock with the one recipe: ansible/README.md, "Install, and install with no network".
 .venv/bin/python ansible/harness/run_harness.py ansible/patterns/compose_stack
+.venv/bin/python ansible/harness/run_harness.py ansible/patterns/compose_stack --scenario widened
 ```
 
-The harness lints the role and runs the scenario in `molecule/default/` on one
+The first scenario is the one-application recipe. `molecule/widened/` is the caller's
+contract: its own template, a configuration file in a directory of its own, a named compose
+file, no secret, and the endpoint check. It refuses a configuration file name that climbs out
+of the project directory, and an endpoint that does not answer; each refusal is asserted by
+its own rescue. The harness lints the role and runs the scenario in `molecule/default/` on one
 container, and exits non-zero if any step fails. It removes its container when it
 finishes. There is no systemd in this scenario, so it takes none of the cgroup settings
 `files_and_units` needs (the reason for each platform key is in `molecule.yml`).

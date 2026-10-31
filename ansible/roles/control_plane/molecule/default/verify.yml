@@ -13,6 +13,10 @@
     verify_project_dir: /opt/branchleft/control-plane
     verify_env_file: /etc/branchleft/control-plane.env
     verify_masterkey_file: /etc/branchleft/control-plane/zitadel-masterkey
+    # The image the stand-in for docker reports as running; the scenario's pin ends in 2s.
+    verify_running_image: example.invalid/example-app@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    # The digest in the deploy wrapper's record in the record cases.
+    verify_recorded_image: example.invalid/example-app@sha256:4444444444444444444444444444444444444444444444444444444444444444
     verify_stack_files:
       - compose.yml
       - compose.init.yml
@@ -312,6 +316,383 @@
         quiet: true
         fail_msg: An empty secret file was not filled, or it was filled at the wrong owner or mode.
       no_log: true
+
+    # ---- Inputs the role needs only where a file or a running stack is missing ----
+    # A file that holds a value needs no content given. Both contents are given as empty
+    # strings, which count as not given, and both files must keep the values they hold.
+    - name: Apply the role again with no secret content given
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+      vars:
+        control_plane_env_content: ''
+        control_plane_masterkey: ''
+
+    - name: Read the secrets after the run that was given no content
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_masterkey_file }}'
+      register: control_plane_verify_ungiven
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+
+    - name: Assert the run that was given no content left both files as they were
+      ansible.builtin.assert:
+        that:
+          - (control_plane_verify_ungiven.results[0].content | ansible.builtin.b64decode) == ('CONTROL_PLANE_DB_ADMIN_PASSWORD=SECOND-' ~ scenario_secret)
+          - (control_plane_verify_ungiven.results[1].content | ansible.builtin.b64decode) == ('MASTERKEY-SECOND-' ~ scenario_secret)
+        quiet: true
+        fail_msg: A run given no secret content changed a file that held a value.
+      no_log: true
+
+    # A file that is absent, with no content given, stops the run before anything is
+    # written. A stack file is removed too: a run that got as far as the delivery would
+    # put it back, so its absence afterwards shows that nothing was written.
+    - name: Remove the environment file and a stack file
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_project_dir }}/compose.yml'
+
+    - name: Run the role with no environment content, where the file is absent
+      block:
+        - name: Apply the role with an empty environment content
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_env_content: ''
+        - name: Fail if the role went on
+          ansible.builtin.fail:
+            msg: The role went on without the environment content.
+      rescue:
+        - name: Record the message the run stopped with
+          ansible.builtin.set_fact:
+            control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+    - name: Assert the run stopped with its own code and named the input
+      ansible.builtin.assert:
+        that:
+          - "control_plane_verify_message.startswith('control_plane[env-missing]: ')"
+          - "'control_plane_env_content' in control_plane_verify_message"
+          - "'THROWAWAY-' not in control_plane_verify_message"
+        quiet: true
+        fail_msg: 'The refusal was not the missing-environment refusal: {{ control_plane_verify_message | truncate(200) }}'
+
+    - name: Look at the two files the refused run must not have written
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_project_dir }}/compose.yml'
+      register: control_plane_verify_refused_env
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the refused run wrote nothing
+      ansible.builtin.assert:
+        that:
+          - not control_plane_verify_refused_env.results[0].stat.exists
+          - not control_plane_verify_refused_env.results[1].stat.exists
+        quiet: true
+        fail_msg: A run that was refused for want of the environment content still wrote a file.
+
+    - name: Put the environment file and the stack file back
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+
+    - name: Remove the master key and a stack file
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ verify_masterkey_file }}'
+        - '{{ verify_project_dir }}/compose.yml'
+
+    - name: Run the role with no master key, where the file is absent
+      block:
+        - name: Apply the role with an empty master key
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_masterkey: ''
+        - name: Fail if the role went on
+          ansible.builtin.fail:
+            msg: The role went on without the master key.
+      rescue:
+        - name: Record the message the run stopped with
+          ansible.builtin.set_fact:
+            control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+    - name: Assert the run stopped with its own code and named the input
+      ansible.builtin.assert:
+        that:
+          - "control_plane_verify_message.startswith('control_plane[masterkey-missing]: ')"
+          - "'control_plane_masterkey' in control_plane_verify_message"
+          - "'THROWAWAY-' not in control_plane_verify_message"
+        quiet: true
+        fail_msg: 'The refusal was not the missing-master-key refusal: {{ control_plane_verify_message | truncate(200) }}'
+
+    - name: Look at the two files the refused run must not have written
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ verify_masterkey_file }}'
+        - '{{ verify_project_dir }}/compose.yml'
+      register: control_plane_verify_refused_key
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert the refused run wrote nothing
+      ansible.builtin.assert:
+        that:
+          - not control_plane_verify_refused_key.results[0].stat.exists
+          - not control_plane_verify_refused_key.results[1].stat.exists
+        quiet: true
+        fail_msg: A run that was refused for want of the master key still wrote a file.
+
+    - name: Put the master key and the stack file back
+      ansible.builtin.include_role:
+        name: branchleft.control_plane
+
+    # The image. The instance has no Docker, so a stand-in for the docker command answers
+    # the two reads the role makes (the portal container's id, then the image it was
+    # created from) from files and records every call it gets. It is removed at the end.
+    - name: Run the image cases with a stand-in for the docker command
+      block:
+        - name: Create the stand-in's directory
+          ansible.builtin.file:
+            path: /var/lib/docker-stub
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Install the stand-in for the docker command
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              printf '%s\n' "$*" >> /var/lib/docker-stub/calls
+              case "$1" in
+                ps) cat /var/lib/docker-stub/ps ;;
+                inspect) cat /var/lib/docker-stub/inspect ;;
+                *) echo "unexpected docker call: $*" >&2; exit 1 ;;
+              esac
+            dest: /usr/local/bin/docker
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Say what the running stack looks like
+          ansible.builtin.copy:
+            content: '{{ item.content }}'
+            dest: '/var/lib/docker-stub/{{ item.name }}'
+            owner: root
+            group: root
+            mode: '0644'
+          loop:
+            - name: ps
+              content: "0123456789ab\n"
+            - name: inspect
+              content: "{{ verify_running_image }}\n"
+            - name: calls
+              content: ''
+          loop_control:
+            label: '{{ item.name }}'
+
+        # A pin given, and nothing that uses Docker switched on: the role asks the stand-in
+        # nothing and uses the pin as given.
+        - name: Apply the role with the pin given
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+
+        - name: Read what the stand-in was asked
+          ansible.builtin.slurp:
+            src: /var/lib/docker-stub/calls
+          register: control_plane_verify_calls_pinned
+
+        - name: Assert a given pin was used as given and docker was not called
+          ansible.builtin.assert:
+            that:
+              - control_plane_effective_image == control_plane_app_image
+              - (control_plane_verify_calls_pinned.content | ansible.builtin.b64decode) == ''
+            quiet: true
+            fail_msg: A given pin was not used as given, or the role called docker although nothing needed it.
+
+        # No pin, and the deploy wrapper's record holds a digest: that digest is used, ahead
+        # of the running container, and docker is not called.
+        - name: Put a digest in the deploy wrapper's record
+          ansible.builtin.copy:
+            content: "IMAGE={{ verify_recorded_image }}\n"
+            dest: /etc/branchleft/control-plane.image.env
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Apply the role with no image given and a record
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_app_image: ''
+
+        - name: Read what the stand-in was asked after the run with a record
+          ansible.builtin.slurp:
+            src: /var/lib/docker-stub/calls
+          register: control_plane_verify_calls_record
+
+        - name: Assert the recorded digest was used and docker was not called
+          ansible.builtin.assert:
+            that:
+              - control_plane_effective_image == verify_recorded_image
+              - (control_plane_verify_calls_record.content | ansible.builtin.b64decode) == ''
+            quiet: true
+            fail_msg: The role did not take the digest in the wrapper's record, or it called docker although the record held one.
+
+        # A record that is not a digest is not used: the running container decides.
+        - name: Put a tag in the deploy wrapper's record
+          ansible.builtin.copy:
+            content: "IMAGE=example.invalid/example-app:latest\n"
+            dest: /etc/branchleft/control-plane.image.env
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Apply the role with no image given and a record that is a tag
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_app_image: ''
+
+        - name: Assert the record that is a tag was passed over for the running image
+          ansible.builtin.assert:
+            that:
+              - control_plane_effective_image == verify_running_image
+            quiet: true
+            fail_msg: A record that is not a digest was used, or the running image was not.
+
+        - name: Remove the deploy wrapper's record and empty the stand-in's call log
+          ansible.builtin.copy:
+            content: ''
+            dest: /var/lib/docker-stub/calls
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Remove the deploy wrapper's record
+          ansible.builtin.file:
+            path: /etc/branchleft/control-plane.image.env
+            state: absent
+
+        # No pin: the image is the one the running portal container was created from.
+        - name: Apply the role with no image given
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+          vars:
+            control_plane_app_image: ''
+
+        - name: Read what the stand-in was asked after the run with no image
+          ansible.builtin.slurp:
+            src: /var/lib/docker-stub/calls
+          register: control_plane_verify_calls_read
+
+        - name: Assert the running image was used and it was read from the stack's portal container
+          ansible.builtin.assert:
+            that:
+              - control_plane_effective_image == verify_running_image
+              - control_plane_deployed | ansible.builtin.bool
+              - "'label=com.docker.compose.project=control-plane' in verify_calls"
+              - "'label=com.docker.compose.service=portal' in verify_calls"
+              - "'label=com.docker.compose.oneoff=False' in verify_calls"
+              - "'inspect ' in verify_calls"
+              - "'0123456789ab' in verify_calls"
+            quiet: true
+            fail_msg: The role did not take the image of the stack's running portal container.
+          vars:
+            verify_calls: '{{ control_plane_verify_calls_read.content | ansible.builtin.b64decode }}'
+
+        # No pin and no running portal container: the run stops.
+        - name: Say that no portal container exists
+          ansible.builtin.copy:
+            content: ''
+            dest: /var/lib/docker-stub/ps
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Run the role with no image, where no portal container exists
+          block:
+            - name: Apply the role with no image given
+              ansible.builtin.include_role:
+                name: branchleft.control_plane
+              vars:
+                control_plane_app_image: ''
+            - name: Fail if the role went on
+              ansible.builtin.fail:
+                msg: The role went on with no image.
+          rescue:
+            - name: Record the message the run stopped with
+              ansible.builtin.set_fact:
+                control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the run stopped with its own code and named the input
+          ansible.builtin.assert:
+            that:
+              - "control_plane_verify_message.startswith('control_plane[image-missing]: ')"
+              - "'control_plane_app_image' in control_plane_verify_message"
+            quiet: true
+            fail_msg: 'The refusal was not the missing-image refusal: {{ control_plane_verify_message | truncate(200) }}'
+
+        # The running image is a tag, not a digest: the wrapper would refuse it, and so does the role.
+        - name: Say that the running portal container was created from a tag
+          ansible.builtin.copy:
+            content: '{{ item.content }}'
+            dest: '/var/lib/docker-stub/{{ item.name }}'
+            owner: root
+            group: root
+            mode: '0644'
+          loop:
+            - name: ps
+              content: "0123456789ab\n"
+            - name: inspect
+              content: "example.invalid/example-app:latest\n"
+          loop_control:
+            label: '{{ item.name }}'
+
+        - name: Run the role with no image, where the running image is a tag
+          block:
+            - name: Apply the role with no image given
+              ansible.builtin.include_role:
+                name: branchleft.control_plane
+              vars:
+                control_plane_app_image: ''
+            - name: Fail if the role went on
+              ansible.builtin.fail:
+                msg: The role went on with an image that is not pinned.
+          rescue:
+            - name: Record the message the run stopped with
+              ansible.builtin.set_fact:
+                control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the run stopped with its own code
+          ansible.builtin.assert:
+            that:
+              - "control_plane_verify_message.startswith('control_plane[image-not-pinned]: ')"
+            quiet: true
+            fail_msg: 'The refusal was not the not-pinned refusal: {{ control_plane_verify_message | truncate(200) }}'
+      always:
+        - name: Remove the stand-in for the docker command
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /usr/local/bin/docker
+            - /var/lib/docker-stub
+            - /etc/branchleft/control-plane.image.env
+          loop_control:
+            label: '{{ item }}'
 
     - name: Read the isolation reconciler and its unit on the instance
       ansible.builtin.slurp:

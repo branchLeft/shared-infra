@@ -1,0 +1,382 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - ../../vars/main.yml
+  vars:
+    # The placeholder tenants. Names, uids and ports are made up; no real tenant is named.
+    scenario_a: { slug: tenant-a, uid: 30901, port: 3901 }
+    scenario_b: { slug: tenant-b, uid: 30902, port: 3902 }
+  tasks:
+    # The control for the secret scan in verify.yml: this loop prints its item, because it
+    # does not set no_log. If the scan cannot find this value in the run's log, the scan
+    # cannot see a leak either, and verify fails.
+    - name: Print a value the log scan must be able to find
+      ansible.builtin.assert:
+        that: item | length > 0
+        quiet: true
+      loop:
+        - LOG-SCAN-CONTROL-VALUE
+
+    - name: Read whether a stack is already on the instance
+      ansible.builtin.stat:
+        path: '{{ tenant_compose_stack_root }}/tenant-a/compose.yml'
+      register: tenant_compose_converge_existing
+
+    # An instance with no stack stands for a host about to be set up, then edited one stack
+    # at a time. Every phase ends in the state the next one starts from, and the last is the
+    # scenario's own values, so a second converge starts from the end and changes nothing.
+    # The phases are skipped in check mode: nothing is written there to edit.
+    - name: First application, with the first values of three stacks
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: First application
+        phase_specs:
+          - '{{ scenario_a | combine({"secret": "EARLIER-" ~ scenario_secret}) }}'
+          - '{{ scenario_b | combine({"memory": "512m"}) }}'
+        phase_spool_port: 8094
+        phase_expected: { tenant-a: 1, tenant-b: 1, mail-spool: 1 }
+      when: not tenant_compose_converge_existing.stat.exists
+
+    - name: Edit the first tenant's secrets only
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Secrets edited
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b | combine({"memory": "512m"}) }}'
+        phase_spool_port: 8094
+        phase_expected: { tenant-a: 1 }
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Edit the second tenant's compose file only
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Compose file edited
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        phase_spool_port: 8094
+        phase_expected: { tenant-b: 1 }
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Edit the spool's compose file only
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Spool edited
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        phase_expected: { mail-spool: 1 }
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # The deploy wrapper advances a tenant's pin on its own. A run of the role with the
+    # pin it was rendered with must neither put the old pin back nor restart the stack.
+    - name: Advance the first tenant's pin as the deploy wrapper does
+      ansible.builtin.copy:
+        content: "IMAGE={{ scenario_newer_image }}\n"
+        dest: '{{ tenant_compose_config_root }}/tenant-a.image.env'
+        owner: root
+        group: root
+        mode: '0600'
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Apply the first values of the pin again
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Pin advanced by the deploy wrapper
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        phase_expected: {}
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Read the first tenant's pin
+      ansible.builtin.slurp:
+        src: '{{ tenant_compose_config_root }}/tenant-a.image.env'
+      register: tenant_compose_converge_pin
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Assert the role left the advanced pin as it was
+      ansible.builtin.assert:
+        that:
+          - (tenant_compose_converge_pin.content | b64decode) == tenant_compose_converge_newer_pin
+        quiet: true
+        fail_msg: A run of the role replaced a pin the deploy wrapper had advanced.
+      vars:
+        tenant_compose_converge_newer_pin: "IMAGE={{ scenario_newer_image }}\n"
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # A run that fails after its files are delivered must be followed by a run that
+    # restarts the stack, though no file changes that time.
+    - name: Make the stack fail to come up
+      ansible.builtin.file:
+        path: /var/lib/standin/up_fails
+        state: touch
+        mode: '0644'
+        modification_time: preserve
+        access_time: preserve
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Edit the first tenant's compose file while its stack cannot come up
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Restart fails
+        refuse_specs:
+          - '{{ scenario_a | combine({"memory": "700m"}) }}'
+          - '{{ scenario_b }}'
+        refuse_expect: branchleft-compose@tenant-a.service
+        refuse_started: { tenant-a: 1 }
+        refuse_watch: []
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Let the stack come up
+      ansible.builtin.file:
+        path: /var/lib/standin/up_fails
+        state: absent
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Apply the same values after the failed restart
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Retried after a failed restart
+        phase_specs:
+          - '{{ scenario_a | combine({"memory": "700m"}) }}'
+          - '{{ scenario_b }}'
+        phase_expected: { tenant-a: 1 }
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Apply the same values once more, with the retry done
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Settled after the retry
+        phase_specs:
+          - '{{ scenario_a | combine({"memory": "700m"}) }}'
+          - '{{ scenario_b }}'
+        phase_expected: {}
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Edit the first tenant's compose file back
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Compose file edited back
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        phase_expected: { tenant-a: 1 }
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # A tenant that drops out of the list is left as it is, and when it returns with the
+    # content it had, nothing restarts.
+    - name: Apply with the second tenant missing from the list
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Tenant dropped out of the list
+        phase_specs:
+          - '{{ scenario_a }}'
+        phase_expected: {}
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Apply with the second tenant back
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Tenant back in the list
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        phase_expected: {}
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # What the role refuses. Each case leaves the first tenant's compose file edited in the
+    # same run, to show a refusal on one stack stops the whole run before anything is written.
+    - name: Refuse an image that is not the pin variable
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Image tag
+        refuse_specs:
+          - '{{ scenario_a | combine({"memory": "900m"}) }}'
+          - '{{ scenario_b | combine({"service_image": "example.invalid/app:latest"}) }}'
+        refuse_expect: 'tenant-b: service app image is not exactly ${IMAGE}'
+        refuse_watch: ['{{ tenant_compose_stack_root }}/tenant-a/compose.yml']
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Refuse a port published on every address
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Wildcard publish
+        refuse_specs:
+          - '{{ scenario_a | combine({"memory": "900m"}) }}'
+          - '{{ scenario_b | combine({"publish": "0.0.0.0"}) }}'
+        refuse_expect: 'tenant-b: service app publishes a port without binding one address'
+        refuse_watch: ['{{ tenant_compose_stack_root }}/tenant-a/compose.yml']
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Refuse a secrets file that lacks a key the compose file needs
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Missing secret key
+        refuse_specs:
+          - '{{ scenario_a | combine({"memory": "900m"}) }}'
+          - '{{ scenario_b | combine({"drop_secret": true}) }}'
+        refuse_expect: 'tenant-b: secrets file has no key GHOST_MAIL_PASSWORD'
+        refuse_watch: ['{{ tenant_compose_stack_root }}/tenant-a/compose.yml']
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Refuse a uid another tenant already holds
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Uid claimed by another tenant
+        refuse_specs:
+          - { slug: tenant-c, uid: 30901, port: 3903 }
+        refuse_expect: 'tenant-c: uid 30901 is already claimed by tenant-a'
+        refuse_watch: ['{{ tenant_compose_stack_root }}/tenant-a/compose.yml']
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Refuse a list that names a uid twice
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Uid named twice
+        refuse_specs:
+          - '{{ scenario_a | combine({"memory": "900m"}) }}'
+          - { slug: tenant-c, uid: 30901, port: 3903 }
+        refuse_expect: A slug or a uid is named by two stacks
+        refuse_watch: ['{{ tenant_compose_stack_root }}/tenant-a/compose.yml']
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # The spool is refused while its drain bridge's rules are not in the firewall. The rule
+    # is taken out, the run is refused, and the rule is put back.
+    - name: Take the host drop for the drain bridge out
+      ansible.builtin.command:
+        argv:
+          - '{{ tenant_compose_iptables }}'
+          - -t
+          - filter
+          - -D
+          - INPUT
+          - -i
+          - '{{ tenant_compose_spool_bridge }}'
+          - -j
+          - DROP
+      changed_when: true
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Refuse the spool while its bridge is not fenced in
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Isolation absent
+        refuse_specs:
+          - '{{ scenario_a | combine({"memory": "900m"}) }}'
+          - '{{ scenario_b }}'
+        refuse_spool_port: 8096
+        refuse_expect: 'mail-spool: INPUT does not drop what br-mailspool sends to the host'
+        refuse_watch:
+          - '{{ tenant_compose_stack_root }}/mail-spool/compose.yml'
+          - '{{ tenant_compose_stack_root }}/tenant-a/compose.yml'
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Put the host drop for the drain bridge back
+      ansible.builtin.command:
+        argv:
+          - '{{ tenant_compose_iptables }}'
+          - -t
+          - filter
+          - -A
+          - INPUT
+          - -i
+          - '{{ tenant_compose_spool_bridge }}'
+          - -j
+          - DROP
+      changed_when: true
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # With the rules back at the end of the chain the accept is still first of the bridge's
+    # rules, so the spool is delivered again.
+    - name: Apply the spool again with its rules back
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Isolation back
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        phase_spool_port: 8096
+        phase_expected: { mail-spool: 1 }
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Edit the spool back
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Spool edited back
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        phase_expected: { mail-spool: 1 }
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # The volume program belongs to another role. Without it the run is refused whole.
+    - name: Move the volume program aside
+      ansible.builtin.command:
+        argv:
+          [mv, '{{ tenant_compose_volume_program }}', '{{ tenant_compose_volume_program }}.aside']
+      changed_when: true
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Refuse a host without the volume program
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Volume program absent
+        refuse_specs:
+          - '{{ scenario_a | combine({"memory": "900m"}) }}'
+        refuse_expect: onboarding role installs it
+        refuse_watch: ['{{ tenant_compose_stack_root }}/tenant-a/compose.yml']
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Put the volume program back
+      ansible.builtin.command:
+        argv:
+          [mv, '{{ tenant_compose_volume_program }}.aside', '{{ tenant_compose_volume_program }}']
+      changed_when: true
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # A stack whose unit is not active is a failure even when nothing changed.
+    - name: Stop the first tenant's unit by hand
+      ansible.builtin.command:
+        argv:
+          [
+            '{{ tenant_compose_systemctl }}',
+            stop,
+            '{{ tenant_compose_unit_prefix }}@tenant-a.service',
+          ]
+      changed_when: true
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Refuse a stack that is not active
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Unit stopped by hand
+        refuse_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        refuse_expect: branchleft-compose@tenant-a.service is inactive, not active
+        refuse_watch: []
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Start the first tenant's unit again, under the deploy lock
+      ansible.builtin.command:
+        argv:
+          - '{{ tenant_compose_flock }}'
+          - '{{ tenant_compose_config_root }}/tenant-a.deploy.lock'
+          - '{{ tenant_compose_systemctl }}'
+          - start
+          - '{{ tenant_compose_unit_prefix }}@tenant-a.service'
+      changed_when: true
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Apply the scenario's values with nothing edited
+      ansible.builtin.include_tasks: tasks/apply.yml
+      vars:
+        phase_title: Nothing edited
+        phase_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+        phase_expected: {}

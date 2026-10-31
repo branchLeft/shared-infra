@@ -2,11 +2,11 @@
 
 ``caller`` reads .github/workflows/ansible-delivery.yml and fails on anything that
 would let a pull request, a schedule or a manual run reach a host, float on a moved
-workflow, hand the call any secret but the six it names, share an approval
-with the Pulumi applies, or widen the token. ``environment`` reads the answers of three
-read-only GitHub calls and fails unless the deployment environment is protected as the
-reusable workflow assumes, because that workflow cannot read the protection itself and a
-missing environment is created unprotected by the first run that names it.
+workflow, hand the call any secret but the seven it names, pass a push playbook other than the
+one fixed here, share an approval with the Pulumi applies, or widen the token. ``environment``
+reads the answers of three read-only GitHub calls and fails unless the deployment environment
+is protected as the reusable workflow assumes, because that workflow cannot read the protection
+itself and a missing environment is created unprotected by the first run that names it.
 """
 
 from __future__ import annotations
@@ -31,10 +31,16 @@ REUSABLE = re.compile(
     r"branchLeft/github-workflows/\.github/workflows/ansible-gated-apply\.yml@v(\d+)\.(\d+)\.(\d+)",
     re.ASCII,
 )
-# The oldest release of the reusable workflows that declares the jump secrets. A call that
-# passes a secret the called workflow does not declare fails on GitHub, so a pin below this
-# is a broken delivery. The drift caller's test imports it: this is its one home.
-MIN_RELEASE = (1, 0, 16)
+# The oldest release of the reusable workflows a caller may pin: the first that declares the
+# ssh_push_hosts secret and the push-playbook input (the jump secrets and the
+# shard-timeout-minutes input came before it). A call that passes a secret or an input the called
+# workflow does not declare fails on GitHub, so a pin below this is a broken delivery. The drift
+# caller's test imports it: this is its one home.
+MIN_RELEASE = (1, 0, 19)
+# The playbook the receiver of a pushed host runs, a path from the repository root. One value for
+# every pushed host (the workflow takes one path), held here once: both callers pass it and the
+# drift caller's test imports it.
+PUSH_PLAYBOOK = "ansible/playbooks/demo1.yml"
 ROLE_DIRECTORIES = ["roles/*", "patterns/*"]
 # The one expression C4 reads in an environment name, and it reads this shape alone:
 #   ${{ needs.<job>.outputs.<name> == '<A>' && '<A>' || '<B>' }}
@@ -64,6 +70,9 @@ SECRETS = {
     "ssh_known_hosts": "${{ secrets.ANSIBLE_KNOWN_HOSTS }}",
     "ssh_check_key": "${{ secrets.ANSIBLE_CHECK_KEY }}",
     "ssh_apply_key": "${{ secrets.SSH_APPLY_KEY }}",
+    # The hosts reached by a push, one user@host per line, a subset of ssh_hosts. An unset
+    # repository secret is empty, and empty means every host is pulled.
+    "ssh_push_hosts": "${{ secrets.ANSIBLE_PUSH_HOSTS }}",
     # Both or neither: an unset repository secret is empty, and empty means no jump.
     "ssh_jump_host": "${{ secrets.SSH_JUMP_HOST }}",
     "ssh_jump_key": "${{ secrets.SSH_JUMP_KEY }}",
@@ -74,6 +83,7 @@ WORKFLOW_KEYS = frozenset({"name", "on", "permissions", "jobs"})
 JOB_KEYS = frozenset({"uses", "with", "secrets", "needs"})
 SKIP_INPUT = "skip-rerun-after-merge-group"
 CHECK_NAME_INPUT = "merge-group-check-name"
+PUSH_PLAYBOOK_INPUT = "push-playbook"
 INPUT_KEYS = frozenset(
     {
         "environment",
@@ -82,6 +92,8 @@ INPUT_KEYS = frozenset(
         "role-test-command",
         SKIP_INPUT,
         CHECK_NAME_INPUT,
+        "shard-timeout-minutes",
+        PUSH_PLAYBOOK_INPUT,
     }
 )
 # The delivery may skip its lint and Molecule re-run only on the answer of the proof job, which
@@ -201,23 +213,28 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
             f"with.{CHECK_NAME_INPUT} must be {GATE_CHECK_NAME!r}, the gate job of ansible.yml, "
             f"got {given.get(CHECK_NAME_INPUT)!r}"
         )
+    if given.get(PUSH_PLAYBOOK_INPUT) != PUSH_PLAYBOOK:
+        findings.append(
+            f"with.{PUSH_PLAYBOOK_INPUT} must be {PUSH_PLAYBOOK!r}, the playbook the receiver of "
+            f"a pushed host runs, got {given.get(PUSH_PLAYBOOK_INPUT)!r}"
+        )
     return findings
 
 
 def secret_findings(secrets: object) -> list[str]:
-    """Check the call names its six secrets one by one, the apply key and the jump pair too."""
+    """Check the call names its seven secrets one by one: apply key, push list and jump pair."""
     if secrets == "inherit":
         return [
-            "secrets: inherit passes every secret of the repository to the call: name the six "
+            "secrets: inherit passes every secret of the repository to the call: name the seven "
             "secrets"
         ]
     given = as_mapping(secrets)
     if given is None:
-        return [f"secrets must be a mapping of the six named secrets, got {secrets!r}"]
+        return [f"secrets must be a mapping of the seven named secrets, got {secrets!r}"]
     findings = []
     for key in sorted(given):
         if key not in SECRETS:
-            findings.append(f"secrets passes {key}, which is not one of the six named secrets")
+            findings.append(f"secrets passes {key}, which is not one of the seven named secrets")
     findings.extend(
         f"secrets.{key} must be {expected}, got {given.get(key)!r}"
         for key, expected in SECRETS.items()
@@ -304,7 +321,8 @@ def job_findings(jobs: object, other_environments: frozenset[str]) -> list[str]:
         floor = ".".join(str(part) for part in MIN_RELEASE)
         findings.append(
             f"job {JOB} calls {uses!r}, older than v{floor}, the first release that declares the "
-            "jump secrets: a call that passes a secret the workflow does not declare fails"
+            "push list secret and the push-playbook input: a call that passes a secret or an "
+            "input the workflow does not declare fails"
         )
     findings.extend(input_findings(job.get("with"), other_environments))
     findings.extend(secret_findings(job.get("secrets")))

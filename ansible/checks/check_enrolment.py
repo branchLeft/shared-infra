@@ -89,7 +89,10 @@ REMOTE_URL = "https://github.com/branchLeft/shared-infra.git"
 SIGNERS_EXPR = "{{ pull_trigger_signers }}"
 REMOTE_EXPR = "{{ pull_trigger_remote_url }}"
 CONFIG_DEST = "{{ pull_trigger_config_path }}"
-CONFIG_CONTENT = "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
+CONFIG_CONTENT = (
+    "{{ pull_trigger_config | ansible.builtin.combine(pull_trigger_config_source)"
+    " | ansible.builtin.to_nice_json }}\n"
+)
 CONFIG_MENTION = re.compile(r"pull_trigger_config(\b|_path\b)")
 REFUSE_ASSERT = [
     "ansible_play_hosts_all | length == 1",
@@ -103,6 +106,11 @@ EXPECTED_ROLES = [
     },
     {"role": "../roles/pull_trigger"},
 ]
+# The play vars a host's playbook carries beside enrolled_host, pinned per host and exactly. The
+# owner merges every edit here, so the value is decided by this table and not by the playbook.
+# A host not in the table gets enrolled_host alone. deploy_tooling_host_class has no default in
+# the role (ANS-7), so a host that applies the role must name its class here.
+HOST_PLAY_VARS: dict[str, dict[str, str]] = {"edge1": {"deploy_tooling_host_class": "gateway"}}
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
 HOST_ROLES_FILE = "checks/host_roles.yml"
 ROLE_PATH = "../roles/"
@@ -245,7 +253,7 @@ def _check_enrolled(
         findings.append(f"{label}: play key {key} is not allowed, only {sorted(PLAY_KEYS)}")
     if play.get("hosts") != "all":
         findings.append(f"{label}: hosts must be all")
-    expected_vars = {HOST_KEY: stem}
+    expected_vars = {HOST_KEY: stem, **HOST_PLAY_VARS.get(stem, {})}
     if play.get("vars") != expected_vars:
         findings.append(f"{label}: vars must be exactly {expected_vars}")
     expected_files = [COMMON_INCLUDE, f"{{{{ playbook_dir }}}}/../trust/{stem}.yml"]

@@ -24,6 +24,7 @@
       first_tenant: '{{ host_inputs_test_tenants[0] }}'
       second_tenant: '{{ host_inputs_test_tenants[1] }}'
       ops1_host: '{{ host_inputs_test_ops1_host }}'
+      smtp_password: '{{ host_inputs_test_smtp_password }}'
   tasks:
     # ---- The refusal cases ------------------------------------------------------
     # Run first, so a fact left by an earlier success cannot be mistaken for one
@@ -104,6 +105,37 @@
         that:
           - db1_stack_exporter_password == host_inputs_test_template_text
         fail_msg: A value with template syntax in it was changed on its way to the play.
+        quiet: true
+
+    # ---- app1's file ------------------------------------------------------------
+    # The same shape for app1's four SMTP inputs. The port is a JSON string, and the
+    # role's argument spec types it as a string, so the loader must pass it on as one.
+    - name: Write the app1 file as the operator would for app1
+      ansible.builtin.copy:
+        content: '{{ host_inputs_test_app1_doc | to_json }}'
+        dest: '{{ host_inputs_test_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Run the role on the app1 file
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      vars:
+        enrolled_host: app1
+
+    - name: Assert the app1 inputs reached the play as the owner typed them
+      ansible.builtin.assert:
+        that:
+          - website_app1_smtp_host == host_inputs_test_smtp_host
+          - website_app1_smtp_port == host_inputs_test_smtp_port
+          - website_app1_smtp_port is string
+          - website_app1_smtp_user == host_inputs_test_smtp_user
+          - website_app1_smtp_password == host_inputs_test_smtp_password
+          - website_app1_smtp_password is string
+        fail_msg: An app1 input did not reach the play as the file gave it.
         quiet: true
 
     - name: Put the good file back

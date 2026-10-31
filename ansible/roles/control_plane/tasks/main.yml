@@ -1,8 +1,135 @@
 ---
-# The runbook's order, step for step: host directories, the environment file and
-# the master key (each written only when absent), the stack's files, the bring-up
-# of the database and then the sign-in service, the stack's unit and the deploy
-# wrapper, and last the DOCKER-USER isolation policy.
+# The runbook's order, step for step: what the run needs, settled before anything is
+# written; host directories, the environment file and the master key (each written
+# only when absent), the stack's files, the bring-up of the database and then the
+# sign-in service (only on a host where the stack is not yet deployed), the stack's
+# unit and the deploy wrapper, and last the DOCKER-USER isolation policy.
+
+# ----- What the run needs, settled before anything is written -----
+# The two secrets are write-once, so a file that already holds a value never needs its
+# content given. A file that is absent or empty does, and without it the run stops here,
+# before a directory, a file or a container is touched. The refusals name an input and a
+# path and never a value.
+- name: Look at the environment file before anything is written
+  ansible.builtin.stat:
+    path: '{{ control_plane_env_file }}'
+    get_checksum: false
+  register: control_plane_env_before
+
+- name: Look at the master key before anything is written
+  ansible.builtin.stat:
+    path: '{{ control_plane_masterkey_file }}'
+    get_checksum: false
+  register: control_plane_masterkey_before
+
+- name: Refuse an absent or empty environment file when no content was given
+  ansible.builtin.assert:
+    that:
+      - (control_plane_env_before.stat.size | default(0)) > 0 or (control_plane_env_content | default('', true) | string | length) > 0
+    quiet: true
+    fail_msg: >-
+      control_plane[env-missing]: {{ control_plane_env_file }} is absent or empty on this host and
+      control_plane_env_content was not given. Nothing was written. A file that holds a value is
+      never rewritten, so the content is needed only for a host that has none.
+
+- name: Refuse an absent or empty master key when no content was given
+  ansible.builtin.assert:
+    that:
+      - (control_plane_masterkey_before.stat.size | default(0)) > 0 or (control_plane_masterkey | default('', true) | string | length) > 0
+    quiet: true
+    fail_msg: >-
+      control_plane[masterkey-missing]: {{ control_plane_masterkey_file }} is absent or empty on this
+      host and control_plane_masterkey was not given. Nothing was written. A file that holds a value
+      is never rewritten, so the key is needed only for a host that has none.
+
+# The image is not a secret. When none is given, the role takes, in this order, the
+# deploy wrapper's record of its last pin if that is a digest, then the image the running
+# portal container was created from, so a first run keeps the image. Every read only
+# reads, so it runs in check mode too and changes nothing.
+- name: Look at the deploy wrapper's record of the last pinned image
+  ansible.builtin.stat:
+    path: '{{ control_plane_image_record }}'
+    get_checksum: false
+  register: control_plane_record_stat
+
+- name: Read the deploy wrapper's record of the last pinned image
+  ansible.builtin.slurp:
+    src: '{{ control_plane_image_record }}'
+  register: control_plane_record
+  when:
+    - not (control_plane_image_given | ansible.builtin.bool)
+    - control_plane_record_stat.stat.exists
+
+# The wrapper writes one line, IMAGE=<reference>. Only a line that is a digest counts.
+- name: Take the recorded image if it is pinned by digest
+  ansible.builtin.set_fact:
+    control_plane_recorded_image: >-
+      {{ (control_plane_record.content | default('') | ansible.builtin.b64decode).splitlines()
+      | select('match', '^IMAGE=') | map('regex_replace', '^IMAGE=', '') | map('trim')
+      | select('match', control_plane_image_pattern) | first | default('') }}
+
+- name: Look for the portal container of the stack
+  ansible.builtin.command:
+    argv:
+      - docker
+      - ps
+      - --all
+      - --quiet
+      - --filter
+      - 'label=com.docker.compose.project={{ control_plane_project_name }}'
+      - --filter
+      - 'label=com.docker.compose.service=portal'
+      - --filter
+      - 'label=com.docker.compose.oneoff=False'
+  register: control_plane_portal_ids
+  changed_when: false
+  check_mode: false
+  when: control_plane_reads_docker | ansible.builtin.bool
+
+- name: Read the image the portal container was created from
+  ansible.builtin.command:
+    argv:
+      - docker
+      - inspect
+      - --format
+      - '{% raw %}{{.Config.Image}}{% endraw %}'
+      - '{{ control_plane_portal_ids.stdout_lines | first }}'
+  register: control_plane_portal_image
+  changed_when: false
+  check_mode: false
+  when:
+    - control_plane_reads_docker | ansible.builtin.bool
+    - control_plane_portal_ids.stdout_lines | length > 0
+
+# A stack is deployed when its portal container exists. The image used is the one given,
+# else the wrapper's record, else the one that container runs.
+- name: Work out whether the stack is deployed and which image this run uses
+  ansible.builtin.set_fact:
+    control_plane_deployed: '{{ (control_plane_portal_ids.stdout_lines | default([])) | length > 0 }}'
+    control_plane_effective_image: >-
+      {{ control_plane_app_image if (control_plane_image_given | ansible.builtin.bool)
+      else (control_plane_recorded_image if (control_plane_recorded_image | length > 0)
+      else ((control_plane_portal_image.stdout | default('')) | trim)) }}
+
+- name: Refuse a run with no image to deploy
+  ansible.builtin.assert:
+    that:
+      - control_plane_effective_image | length > 0
+    quiet: true
+    fail_msg: >-
+      control_plane[image-missing]: control_plane_app_image was not given, {{ control_plane_image_record }}
+      holds no digest, and no portal container of the stack {{ control_plane_project_name }} exists to read
+      the running image from. Nothing was written.
+      Give the digest-pinned image for a host that has no running stack.
+
+- name: Refuse an image that is not pinned by digest
+  ansible.builtin.assert:
+    that:
+      - control_plane_effective_image is ansible.builtin.match(control_plane_image_pattern)
+    quiet: true
+    fail_msg: >-
+      control_plane[image-not-pinned]: the image '{{ control_plane_effective_image }}' is not NAME@sha256:
+      followed by 64 lower-case hex digits, which the deploy wrapper requires. Nothing was written.
 
 - name: Create the host configuration directories of the control plane
   ansible.builtin.file:
@@ -130,6 +257,16 @@
     mode: '0644'
   loop: '{{ control_plane_stack_files }}'
 
+# The next four tasks (the database start, the init phase and its stamp, the sign-in
+# service start) are for a host where the stack is not yet deployed: they start the database
+# and the sign-in service before the unit can start the applications. Where the stack
+# already runs they are skipped, and the deploy wrapper below is the only thing that touches
+# the containers. The wrapper restarts the unit, and the unit reads the project with its own
+# environment: the EnvironmentFile pair of branchleft-compose@.service, read by systemd, the
+# project name in compose.yml and the project directory. A direct `docker compose --env-file`
+# here reads the same env file with Compose's own parser, and a value it parses differently
+# (a $, a # or a quote in a password) is a changed config, which Compose answers by recreating
+# the container. On a running stack that would be a database restart for nothing.
 - name: Start the database and wait until it is healthy
   ansible.builtin.command:
     argv:
@@ -143,7 +280,7 @@
       - db
     chdir: '{{ control_plane_project_dir }}'
   environment:
-    IMAGE: '{{ control_plane_app_image }}'
+    IMAGE: '{{ control_plane_effective_image }}'
   # Compose itself reports the containers it started or left alone, and --wait
   # fails the task when the database is not healthy. The task reports no change
   # so that a second apply of the same commit reports zero changes. no_log: Compose
@@ -151,7 +288,9 @@
   # hold a value.
   changed_when: false
   no_log: true
-  when: control_plane_bring_up | ansible.builtin.bool
+  when:
+    - control_plane_bring_up | ansible.builtin.bool
+    - not (control_plane_deployed | ansible.builtin.bool)
 
 - name: Read whether the sign-in service's init phase has run
   ansible.builtin.stat:
@@ -177,11 +316,12 @@
       - zitadel
     chdir: '{{ control_plane_project_dir }}'
   environment:
-    IMAGE: '{{ control_plane_app_image }}'
+    IMAGE: '{{ control_plane_effective_image }}'
   changed_when: true
   no_log: true
   when:
     - control_plane_bring_up | ansible.builtin.bool
+    - not (control_plane_deployed | ansible.builtin.bool)
     - not control_plane_init_stat.stat.exists
 
 - name: Record that the init phase has completed
@@ -193,6 +333,7 @@
     mode: '0600'
   when:
     - control_plane_bring_up | ansible.builtin.bool
+    - not (control_plane_deployed | ansible.builtin.bool)
     - not control_plane_init_stat.stat.exists
 
 - name: Start the sign-in service and wait until it is healthy
@@ -208,12 +349,14 @@
       - zitadel
     chdir: '{{ control_plane_project_dir }}'
   environment:
-    IMAGE: '{{ control_plane_app_image }}'
+    IMAGE: '{{ control_plane_effective_image }}'
   # As for the database: --wait fails the task when the service is not healthy,
   # and the task reports no change so a second apply reports zero changes.
   changed_when: false
   no_log: true
-  when: control_plane_bring_up | ansible.builtin.bool
+  when:
+    - control_plane_bring_up | ansible.builtin.bool
+    - not (control_plane_deployed | ansible.builtin.bool)
 
 - name: Enable the stack's unit
   ansible.builtin.systemd_service:
@@ -229,7 +372,7 @@
     argv:
       - '{{ control_plane_deploy_wrapper }}'
       - control-plane
-      - '{{ control_plane_app_image }}'
+      - '{{ control_plane_effective_image }}'
   changed_when: false
   when: control_plane_start_units | ansible.builtin.bool
 

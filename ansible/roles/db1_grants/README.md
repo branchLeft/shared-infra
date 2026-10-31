@@ -187,9 +187,8 @@ the approval of the protected environment, a pull of that exact commit of `main`
 on the host, and a second run that must report zero changes. The playbook is
 [`playbooks/db1.yml`](../../playbooks/db1.yml): it refuses any host but `db1` (or the
 `localhost` the trigger names) through the shared include, refuses an empty signer list
-and applies the two pull roles only. `db1_stack` and this role are not in that playbook
-yet, because nothing on the pull route supplies their inputs. The role has not been
-applied to the live host.
+and applies the two pull roles, then `host_inputs`, then `host_baseline`, then
+`db1_stack`, then `db1_backup_timers`. This role is not in that playbook yet. The role has not been applied to the live host.
 
 ## How to change it safely
 

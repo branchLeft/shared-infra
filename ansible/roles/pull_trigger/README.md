@@ -86,6 +86,7 @@ role starts.
 | `pull_trigger_timeout_seconds`  | Time after which a playbook run is stopped (default 3600).                                                   |
 | `pull_trigger_keep_runs`        | How many runs' output files to keep (default 50).                                                            |
 | `pull_trigger_steps`            | The step allow-list: a list of `{id, tag, word}` (default empty, which allows no step). See "Step requests". |
+| `pull_trigger_floor_seed`       | A commit id written to the rollback floor only if the host has none (default empty). See "Push receiver".    |
 
 No variable is a secret. The signers are public keys, and the configuration is
 world-readable by design, so the role leaves the diff of the configuration
@@ -120,7 +121,9 @@ lives beneath it and a Unix socket path has a short limit.
 - `/etc/pull-trigger/` (root, 0755) and `config.json` in it (root, 0644).
 - `/var/lib/pull-trigger/` (root, 0700): the cache, work directories, the
   rollback floor (`last-applied`), the lock and the `current` link, all made by
-  the program on its first run.
+  the program on its first run. On a bundle host also the `spool` and `quarantine`
+  directories, empty between requests, and a floor written by the role itself from
+  `pull_trigger_floor_seed` if there is none (never replaced if there is one).
 - `/var/log/pull-trigger/` (root, 0700): `pull-trigger.log` (one line per run)
   and `runs/` (the playbook output of each run, newest `keep_runs` kept).
 
@@ -334,7 +337,7 @@ Wiring a host is not done by this role or by its pull request. Adding the
 `control_plane` and `control_plane_db` roles to `playbooks/ops1.yml`, setting
 `pull_trigger_steps` for ops1, and writing the shared-infra caller of the reusable
 `ansible-gated-apply.yml` with the github-workflows tag it pins, are one ticket,
-[ISSUE branchLeft/workspace#2531](https://github.com/branchLeft/workspace/issues/2531).
+[ISSUE branchLeft/workspace#2351](https://github.com/branchLeft/workspace/issues/2351).
 The ops1 enrolment ticket (branchLeft/workspace#2340) does not do them. Until that ticket
 is done the default empty list allows no step on any host. The first live run also waits
 on [ISSUE branchLeft/workspace#2483](https://github.com/branchLeft/workspace/issues/2483)
@@ -357,6 +360,101 @@ second is meant to report none. A change count is also reached by an `always`-ta
 that changed something (see the top of this section), so read the run's output for the
 step's own named tasks changing, not the count alone.
 
+### Push receiver (the bundle source)
+
+A host that has no route to the remote cannot pull, so one host, `demo1`, takes its
+commit pushed to it instead. It is the same program and the same checks, with a second
+way to get the commit: the caller sends a full-history git bundle on standard input and
+the program unpacks it into a throwaway repository instead of fetching `main`. The way
+the commit arrives is a root-owned configuration value, `source` (`remote`, the
+default, or `bundle`). The role writes the key only for a host named in
+`pull_trigger_bundle_hosts` (a constant of the role, `demo1` only), matched against the
+play's `enrolled_host`; every other host's configuration file is byte for byte what it
+was, and a unit test and the default scenario both show it has no `source` key. A host
+with the bundle source never fetches, and a host with the remote source never reads
+standard input.
+
+The request is the whole of `SSH_ORIGINAL_COMMAND`, three words:
+
+```text
+apply 0123456789abcdef0123456789abcdef01234567 ansible/playbooks/demo1.yml
+```
+
+The first word is `apply` or `check` and must equal the mode fixed on the key's
+`command=` side; a different word is refused as `mode-mismatch` before anything is read
+from standard input, so a key that may only check cannot be made to apply. The third
+word must be the host's configured playbook, which must be on the allowlist
+(`playbook-not-allowed` otherwise). The step mode is not offered on this source.
+
+The order of the checks on this source, each before the next and none after a change:
+
+1. The request has exactly the three words, and the first equals the key's mode.
+2. The playbook equals the configured one and is allowlisted.
+3. Standard input is read, with a limit of 200 MiB and a deadline of 300 seconds,
+   into a root-owned spool file. The deadline is a monotonic clock read in a `select`
+   loop, so a sender that stops sending cannot hold the program: it ends the request as
+   `bad-bundle`. The single-flight lock is taken only after the read, so a stalled
+   upload never makes another request answer `busy`.
+4. The spool is admitted in a quarantine repository: the header must be a git bundle
+   header, `git bundle verify` must pass (a bundle that needs history it does not carry
+   is refused), the objects are fetched from the file into the quarantine, an explicit
+   `git fsck --strict` runs over them (so the object check does not depend on the git
+   version), and the bundle's `HEAD` must be exactly the requested commit. Any failure
+   is `bad-bundle`, with its own sentence on standard error. Nothing in the quarantine
+   is trusted until the next steps pass, and the quarantine and the spool are removed
+   whatever the outcome.
+5. The signature, the allowlist of signers, the floor and the playbook are checked by
+   the same code as the pull route, over the quarantine in place of the cache.
+6. Checkout from the quarantine, then the run, as for a pull.
+
+Two checks differ from the pull route, and both are stated here because they are the
+point of this source:
+
+- **The floor reads "equal or descends".** The pushed commit must equal the floor or
+  descend from it, which is the pull rule. Strictly newer would refuse the apply
+  workflow's mandatory second pass of the same commit (it must report 0 `unchanged`)
+  and the nightly drift check of the live commit. A host with no floor at all refuses
+  every request as `no-floor` (exit 20, and nothing is checked out): the role writes the
+  floor once, from `pull_trigger_floor_seed`, only if the file is absent, and never
+  moves one that exists. The seed is a reviewed commit id in the host's playbook.
+- **There is no "ancestor of `main`" test.** The host has no `main` to compare with.
+  A commit signed by an allowlisted key and descending from the floor is accepted
+  whether or not it is on `main`. The signer on the host is the hosting platform's web
+  signing key, and that key also signs commits made in the web interface on branches
+  other than `main`. This is the named limit of the owner's ruling
+  (the check is "signed by that key, not older than the floor, playbook allowlisted"):
+  a non-`main` commit that descends from the floor is applied, and a later `main`
+  commit that does not descend from it is then refused as `rollback`. The way out is the
+  floor reset in the operator runbook (in `ghost-platform-docs`), which a person runs.
+  The unit tests and the push scenario both run this case.
+
+The summary line has the same fixed fields as the pull route, with its own prefix and
+with `changed` always a digit on this source, so the workflow that reads it can match
+the whole line:
+
+```text
+push-receiver verdict=applied exit=10 reason=ok mode=apply commit=<40 hex> playbook=<path> changed=1
+```
+
+A refusal that happens before a commit could be named prints `commit=-`; a unit test
+matches every line that names a commit against the judge expression the pushing
+workflow uses. The line is printed even when the sender has already hung up: a write
+that fails on a closed standard output or error is dropped, the line is still written to
+the log, and the exit status is returned.
+
+To read the result on the host, one command prints the floor and the last verdict and
+nothing that changes between runs (no time):
+
+```bash
+sudo sh -c 'printf "floor=%s\n" "$(cat /var/lib/pull-trigger/last-applied)"; \
+  tail -n 1 /var/log/pull-trigger/pull-trigger.log | grep -oE "(verdict|exit|changed)=[a-z0-9-]+" | paste -sd" " -'
+```
+
+After a first apply it prints the commit as `floor=<40 hex>` and then
+`verdict=applied exit=10 changed=1`; after the second pass of the same commit,
+`verdict=unchanged exit=0 changed=0`. A unit test compares this block with the command
+the push scenario runs, so the two cannot differ.
+
 ### Exit codes
 
 | Exit | Verdict        | Meaning                                                                                                                        |
@@ -374,7 +472,12 @@ The `reason` field of exit 20 is one of `bad-request`, `not-on-main`, `rollback`
 `unsigned`, `bad-signature`, `signer-not-allowed`, `playbook-not-allowed`, and for
 step requests `step-mode-only` (a step with `--mode apply` or `--mode check`),
 `step-not-allowed` (the id is not on the host's allow-list, which may be empty) and
-`confirm-mismatch` (the word is not that step's word).
+`confirm-mismatch` (the word is not that step's word). On the bundle source (see "Push
+receiver") there are three more: `mode-mismatch` (the request's mode word is not the key's),
+`no-floor` (the host has no rollback floor) and `bad-bundle` (standard input is not a
+bundle that stands alone, passes the object check and has the requested commit as its
+`HEAD`, or it was too large or too slow); a refusal of the bundle source also prints
+`changed=0`.
 
 Exit 40 usually means the playbook was never reached, but `io-error` and
 `internal-error` can also follow a playbook that ran to its end (for example a full
@@ -415,8 +518,12 @@ itself, and a repeated request is never skipped as "already done".
   runs is the file that was signed. That claim stops at the playbook file and its
   path: the program checks no other path, so a link elsewhere in the signed tree
   (in a role, an include or a template) can make the playbook read or run a file of
-  the host. The signed tree is trusted for what it contains. A repository's
-  `ansible.cfg` under `ansible/` is read from the checkout.
+  the host. The signed tree is trusted for what it contains. The program sets
+  `ANSIBLE_CONFIG` to an empty private file and sets no variable that names a plugin or
+  module path, so the checkout's `ansible.cfg` is not read. Ansible still loads code from
+  the loader directories beside a playbook, in an imported playbook's directory and in a
+  role, with no config; those directories are owner-only in `.github/CODEOWNERS` and in
+  the delivery register.
 
 ## Refusals leave the host untouched
 
@@ -485,6 +592,21 @@ unit test makes each of them.
   to, but anyone who can write as root can change what it does.
 - **The playbook is what is trusted.** The program makes sure that the signed
   playbook is the one that runs. It does not judge what the playbook does.
+- **The push receiver accepts a commit that is not on `main`.** It checks the signer, the
+  floor and the playbook, and has no `main` to compare with (see "Push receiver"). A commit
+  made in the web interface on another branch and signed by the same key is applied if it
+  descends from the floor. This is the owner's ruling, and the floor reset is a person's
+  step in the operator runbook.
+- **The floor of a bundle host is a seed.** The first floor comes from
+  `pull_trigger_floor_seed`, a commit id chosen when the host is enrolled; the receiver
+  refuses everything before then. A wrong seed that is newer than the commits to be pushed
+  refuses them as `rollback`.
+- **The push scenario cuts the container off the network, not off loopback.** It shows the
+  receiver needs no network; it does not show what a host's firewall allows. The size limit
+  (200 MiB) and the deadline (300 s) are constants of the program, not settings.
+- **A read of standard input holds the connection.** A sender that dribbles bytes is cut at
+  the deadline, but until then the SSH session is open and the spool holds what was sent.
+  The spool and the quarantine are swept at the start of the next request.
 
 The eight limits found at review of the first version, each with its state:
 
@@ -585,6 +707,23 @@ which control broke:
 The harness runs the role twice, so the second converge must report no change
 (the fixtures are made once, in `prepare.yml`).
 
+The push receiver has a scenario of its own, `molecule/push/`, run with
+`python3 ansible/harness/run_harness.py ansible/roles/pull_trigger --scenario push`
+(CI runs every scenario). It converges the role with `enrolled_host: demo1` and a floor seed,
+then, in `prepare.yml` and before the role runs, removes the container from every Docker
+network, so everything after the package refresh runs with no network at all. A control
+connect from the container must fail. It then sends real bundles to the installed program on
+standard input: a check and an apply, the second pass of the same commit (`unchanged`), a later
+commit, a signed commit that is not on `main` (applied, and the named limit shown by running
+it), then a `main` commit that does not descend from it (refused as `rollback`). It sends the
+refusals (a mode word that is not the key's, a playbook that is not the configured one, no
+floor, a commit older than the floor or not descending from it, an unrelated history, a truncated bundle, junk, a bundle that is not stand-alone,
+a bundle whose `HEAD` is another commit, an unsigned, tampered or unlisted-key commit) and
+checks each leaves the host and the spool as they were. Then the ten red cases of P1 to P10
+run against copies of the program, and a seed copy with `force: true` shows the floor seed's
+guard. The read-the-result command above is run for the first apply and the second pass and
+its output is compared with the documented text.
+
 The unit tests (`tests/unit/test_pull_trigger.py`) use the standard library only,
 and make real git repositories with real SSH and OpenPGP signatures. They include a
 table of hostile requests and seeded property tests of the argument validator. They
@@ -656,6 +795,33 @@ the refusals is a change to a root program, and the owner reviews it.
 The `command=` text and the key restrictions of the step key are reviewed, not tested
 (no SSH server in the harness). A9 proves the sudo lines in this README, not the file
 the `sudoers_and_keys` pattern writes on a host.
+
+### The controls of the push receiver, and how each is shown to fail
+
+Each control below has a unit test that names it and, for P1 to P10, a red case in the push
+scenario that CI runs. The scenario works on Debian 13 with the program as installed: it
+copies the program, changes one check with a replacement that must match, and runs a request
+that the installed program refuses. The copy must answer the red way (the refusal is gone) and
+the installed program must still give the refusal, which is the green side.
+
+| Control                                              | Broken by                                       | Fails in                                                                           |
+| ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------- |
+| P1 the request's mode word must equal the key's      | removing the comparison                         | `test_request_mode_word_must_equal_key_mode`, scenario `no-mode-compare`           |
+| P2 a host with no floor applies nothing              | removing the no-floor refusal                   | `test_a_host_with_no_floor_applies_nothing...`, scenario `no-floor-test`           |
+| P3 a commit older than the floor is refused          | removing the floor comparison                   | `test_a_commit_older_than_the_floor...`, scenario `no-floor-compare`               |
+| P4 the signature is checked on a pushed commit       | removing the signature check                    | `test_an_unsigned_commit_is_refused`, scenario `no-signature-check`                |
+| P5 the request's playbook must be the configured one | removing the comparison                         | `test_the_playbook_in_the_request...`, scenario `no-playbook-compare`              |
+| P6 the bundle's HEAD must be the requested commit    | removing the HEAD test                          | `test_a_bundle_whose_head_is_not...`, scenario `no-head-test`                      |
+| P7 the objects are checked with `fsck --strict`      | removing the explicit check                     | `test_an_object_that_fails_git_s_object_check...`, scenario `no-object-check`      |
+| P8 standard input is limited in bytes                | removing the limit                              | `test_a_bundle_over_the_byte_limit...`, scenario `no-byte-limit`                   |
+| P9 standard input is read against a deadline         | a blocking read in place of the `select` loop   | `test_a_stalled_stream_ends_at_the_deadline...`, scenario `blocking-read`          |
+| P10 the quarantine takes nothing over the network    | allowing `https` in the quarantine's git        | `test_the_quarantine_may_use_the_file_transport...`, scenario `fetches-over-https` |
+| P11 the floor seed never moves an existing floor     | `force: true` on the seed copy                  | the push scenario's seed check                                                     |
+| P12 the receiver needs no network                    | none: the container has no network when it runs | the push scenario's control connect, which must fail                               |
+
+The playbook-link, checkout and lock controls are those of the pull route and are shown
+by the default scenario and in "How to test it". `check` on this source changes nothing
+and does not move the floor (a unit test and the push scenario).
 
 ## How to change it safely
 

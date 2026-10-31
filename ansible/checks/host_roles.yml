@@ -10,10 +10,11 @@ edge1:
   - monitoring_stack
   - exporters_and_collectors
   - ntfy_pager
-  - edge_stack
   - host_baseline
   - egress_nat
   - ci_login
+  - deploy_tooling
+  - edge_stack
 ops1:
   - control_plane
   - nextcloud_stack
@@ -23,13 +24,19 @@ ops1:
   - host_baseline
   - status_page
 app1:
+  - host_inputs
   - deploy_tooling
+  - deploy_slot_keys
   - website_app1
   - breakglass_grant_host
   - host_baseline
 db1:
   - host_inputs
   - db1_stack
-  - db1_grants
   - db1_backup_timers
+  - db1_grants
   - tunnel_account
+  - host_baseline
+demo1:
+  - demo1_build
+  - demo1_egress_spool

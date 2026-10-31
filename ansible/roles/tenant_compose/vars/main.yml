@@ -1,0 +1,36 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. Each is a path or a
+# name the host's other programs already agree on, so a caller cannot move one.
+
+# Where a stack's files live. The unit reads the compose file from the stack
+# directory (its WorkingDirectory) and its environment from the two files in the
+# configuration directory. Both directories are made by the deploy tooling.
+tenant_compose_stack_root: /opt/branchleft
+tenant_compose_config_root: /etc/branchleft
+
+# The template unit that runs a stack. A restart of an instance reruns its
+# `docker compose up --wait`, which is the health gate.
+tenant_compose_unit_prefix: branchleft-compose
+
+# The program that makes a tenant's volumes and keeps the register of uids. Another
+# role installs it; this one only calls it and fails closed when it is absent.
+tenant_compose_volume_program: /root/platform-provision/provision_tenant_volume.py
+
+# The deploy wrapper takes this lock around its read-modify-write-restart of a
+# stack, and waits for it this long. A restart here takes the same lock for the
+# same time, so the two never overlap.
+tenant_compose_lock_wait_seconds: 1260
+
+# The one mail spool of a host: its stack name and the bridge its drain network
+# is given, which the host's firewall rules are written against.
+tenant_compose_spool_slug: mail-spool
+tenant_compose_spool_bridge: br-mailspool
+
+# The name of the file that records the content last brought up healthy. A dot
+# keeps it out of the way of the compose file's own directory listing.
+tenant_compose_stamp_name: .tenant_compose_stamp
+
+# The programs the role runs.
+tenant_compose_flock: /usr/bin/flock
+tenant_compose_systemctl: /usr/bin/systemctl
+tenant_compose_iptables: /usr/sbin/iptables

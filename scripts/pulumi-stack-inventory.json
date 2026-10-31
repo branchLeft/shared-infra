@@ -233,6 +233,12 @@
       "backend": "shared"
     },
     {
+      "path": "hetzner/test_passphrase_probe_pattern.py",
+      "kind": "tooling",
+      "backend": "shared",
+      "note": "Recorded decrypt-evidence strings in test fixtures name the shared and tenant_blog checkpoints. Asserted-on data, not a login step."
+    },
+    {
       "path": "scripts/pulumi-stack-inventory.json",
       "kind": "inventory",
       "backend": "shared"

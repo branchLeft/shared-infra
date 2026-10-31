@@ -1,0 +1,60 @@
+---
+# Make one host's state and configuration for a case: its own state and log directories, so that
+# one case never disturbs another, a floor if the case has one, and a copy of the installed
+# configuration with any overrides. Takes scene_name, and optionally scene_floor (a commit id;
+# none leaves the host with no floor) and scene_overrides.
+- name: 'Remove the scene directories: {{ scene_name }}'
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '/var/tmp/ptt/st-{{ scene_name }}'
+    - '/var/tmp/ptt/log-{{ scene_name }}'
+
+- name: 'Make the state directory, private to root: {{ scene_name }}'
+  ansible.builtin.file:
+    path: '/var/tmp/ptt/st-{{ scene_name }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# The directories and the lock file a first run would make, made here, so that a snapshot taken
+# before a request and one taken after it differ only by what the request changed.
+- name: 'Make the directories a first run makes: {{ scene_name }}'
+  ansible.builtin.file:
+    path: '/var/tmp/ptt/st-{{ scene_name }}/{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop: [repo.git, work, tmp, home, spool, quarantine]
+
+- name: 'Make the lock file a first run makes: {{ scene_name }}'
+  ansible.builtin.copy:
+    content: ''
+    dest: '/var/tmp/ptt/st-{{ scene_name }}/lock'
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: 'Write the floor: {{ scene_name }}'
+  ansible.builtin.copy:
+    content: "{{ scene_floor }}\n"
+    dest: '/var/tmp/ptt/st-{{ scene_name }}/last-applied'
+    owner: root
+    group: root
+    mode: '0600'
+  when: scene_floor | default('') | length > 0
+
+- name: 'Write the configuration: {{ scene_name }}'
+  ansible.builtin.copy:
+    content: >-
+      {{ pull_trigger_pr_base_config
+      | ansible.builtin.combine({'state_dir': '/var/tmp/ptt/st-' ~ scene_name, 'log_dir': '/var/tmp/ptt/log-' ~ scene_name})
+      | ansible.builtin.combine(scene_overrides | default({}))
+      | ansible.builtin.to_nice_json }}
+    dest: '/var/tmp/ptt/cfg/{{ scene_name }}.json'
+    owner: root
+    group: root
+    mode: '0644'

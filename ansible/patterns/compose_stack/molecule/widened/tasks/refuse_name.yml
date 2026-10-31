@@ -1,0 +1,42 @@
+---
+# A configuration file name that climbs out of the project directory is refused before
+# anything is written, so the file it names is never created outside the project.
+- name: Refuse a configuration file name that climbs out
+  block:
+    - name: Apply the role with a name that climbs out of the project directory
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+      vars:
+        compose_stack_project_dir: /opt/compose_widened
+        compose_stack_project_name: widened
+        compose_stack_project_mode: '0755'
+        compose_stack_compose_template: '{{ playbook_dir }}/templates/widened.yaml.j2'
+        compose_stack_compose_file: widened.yml
+        compose_stack_config_files:
+          - name: ../escape.conf
+            content: "escaped\n"
+            mode: '0644'
+        compose_stack_wait_timeout: 30
+
+    - name: Fail because the role accepted a name that climbs out
+      ansible.builtin.fail:
+        msg: The role accepted a configuration file name that climbs out of the project directory.
+  rescue:
+    - name: Assert the name check refused it with its own message
+      ansible.builtin.assert:
+        that:
+          - "'relative path' in ansible_failed_result.msg"
+        quiet: true
+        fail_msg: 'The name check did not refuse the name. It stopped with: {{ ansible_failed_result.msg }}'
+
+    - name: Read the file the name would have written
+      ansible.builtin.stat:
+        path: /opt/escape.conf
+      register: widened_escape
+
+    - name: Assert nothing was written outside the project directory
+      ansible.builtin.assert:
+        that:
+          - not widened_escape.stat.exists
+        quiet: true
+        fail_msg: A configuration file was written outside the project directory.

@@ -37,6 +37,11 @@ host_inputs_required_by_host:
     - db1_stack_exporter_password
     - db1_grants_tenants
     - db1_grants_ops1_host
+  app1:
+    - website_app1_smtp_host
+    - website_app1_smtp_port
+    - website_app1_smtp_user
+    - website_app1_smtp_password
 
 # A value that is only white space counts as empty. Matched from the start, so
 # \s*\Z holds for the empty string and for blanks and nothing else.

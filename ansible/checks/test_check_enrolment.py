@@ -19,6 +19,8 @@ from check_enrolment import ROOT, check
 EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
 # The loader's entry in db1's playbook, as it stands on main.
 LOADER_LINE = "    - role: ../roles/host_inputs # noqa: role-name[path]\n"
+# The stack's entry in db1's playbook, after the loader, as it stands on main.
+STACK_LINE = "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
 
 
 class RealTree(unittest.TestCase):
@@ -60,7 +62,7 @@ class Sabotage(unittest.TestCase):
 
     # R1: an empty enrolled set fails, it does not pass over nothing.
     def test_r1_no_enrolled_playbook(self) -> None:
-        for host in ("edge1", "ops1", "app1", "db1"):
+        for host in ("edge1", "ops1", "app1", "db1", "demo1"):
             (self.ansible / "playbooks" / f"{host}.yml").unlink()
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
@@ -130,8 +132,50 @@ class Sabotage(unittest.TestCase):
 
     # R4: a trust file has no enrolled playbook.
     def test_r4_trust_file_without_playbook(self) -> None:
-        self._write("trust/demo1.yml", "---\npull_trigger_signers: []\n")
-        self._assert_rule("R4 trust/demo1.yml")
+        self._write("trust/mx9.yml", "---\npull_trigger_signers: []\n")
+        self._assert_rule("R4 trust/mx9.yml")
+
+    # R4: demo1 is enrolled, so its playbook needs its trust file. Without it the real tree is red.
+    def test_r4_demo1_playbook_without_trust_file(self) -> None:
+        (self.ansible / "trust" / "demo1.yml").unlink()
+        self._assert_rule("R4 demo1.yml is enrolled but has no trust/demo1.yml")
+
+    # R2, fail closed: demo1 without the signer refusal would run on an empty trust list.
+    def test_r2_demo1_signer_include_removed(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "    - name: Refuse an empty signer list\n"
+            "      ansible.builtin.include_tasks: includes/require_signers.yml\n",
+            "",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R2: demo1 without the host refusal could be applied to any host.
+    def test_r2_demo1_refusal_include_removed(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml\n",
+            "",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R2: demo1's play loads its own trust file, not another host's.
+    def test_r2_demo1_vars_files_points_at_another_hosts_trust_file(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "'{{ playbook_dir }}/../trust/demo1.yml'",
+            "'{{ playbook_dir }}/../trust/db1.yml'",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R5: demo1's trust file holds the signer list and nothing else.
+    def test_r5_demo1_trust_file_holds_a_second_key(self) -> None:
+        self._edit(
+            "trust/demo1.yml",
+            "pull_trigger_signers:\n",
+            "pull_trigger_remote_url: https://example.invalid/x.git\npull_trigger_signers:\n",
+        )
+        self._assert_rule("R5 trust/demo1.yml")
 
     # R4: db1 is enrolled, so its playbook needs its trust file. Without it the real tree is red.
     def test_r4_db1_playbook_without_trust_file(self) -> None:
@@ -142,8 +186,8 @@ class Sabotage(unittest.TestCase):
     def test_r5_db1_trust_file_holds_a_second_key(self) -> None:
         self._edit(
             "trust/db1.yml",
-            "pull_trigger_signers: []\n",
-            "pull_trigger_signers: []\ndb1_stack_exporter_password: x\n",
+            "pull_trigger_signers:\n",
+            "db1_stack_exporter_password: x\npull_trigger_signers:\n",
         )
         self._assert_rule("R5 trust/db1.yml")
 
@@ -180,11 +224,8 @@ class Sabotage(unittest.TestCase):
     def test_r2_db1_role_entry_carries_an_input(self) -> None:
         self._edit(
             "playbooks/db1.yml",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
-            "      vars:\n"
-            "        db1_stack_exporter_password: x\n",
+            STACK_LINE,
+            STACK_LINE + "      vars:\n        db1_stack_exporter_password: x\n",
         )
         self._assert_rule("R2 db1.yml")
 
@@ -195,7 +236,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            LOADER_LINE + "    - role: ../roles/db1_stack # noqa: role-name[path]\n",
+            LOADER_LINE + "    - role: ../roles/db1_grants # noqa: role-name[path]\n",
         )
         self.assertEqual(check(self.root), [])
 
@@ -204,7 +245,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
         )
         findings = self._assert_rule("R11 db1.yml")
         self.assertTrue(any("must be the first role after the pull roles" in f for f in findings))
@@ -214,8 +255,8 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
-            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/db1_grants # noqa: role-name[path]\n"
+            "    - role: ../roles/tunnel_account # noqa: role-name[path]\n" + LOADER_LINE,
         )
         self._assert_rule("R11 db1.yml")
 
@@ -233,8 +274,8 @@ class Sabotage(unittest.TestCase):
     def test_r5_trust_file_holds_a_second_key(self) -> None:
         self._edit(
             "trust/ops1.yml",
-            "pull_trigger_signers: []\n",
-            "pull_trigger_signers: []\npull_trigger_remote_url: https://example.invalid/x.git\n",
+            "pull_trigger_signers:\n",
+            "pull_trigger_remote_url: https://example.invalid/x.git\npull_trigger_signers:\n",
         )
         self._assert_rule("R5 trust/ops1.yml")
 
@@ -270,12 +311,12 @@ class Sabotage(unittest.TestCase):
 
     # R7: a playbook that is not enrolled names the trust path, so a partial enrolment hides.
     def test_r7_unenrolled_playbook_names_a_trust_file(self) -> None:
-        self._edit(
-            "playbooks/demo1.yml",
-            "---\n",
-            "---\n# A partial enrolment would name trust/demo1.yml here.\n",
+        self._write(
+            "playbooks/mx9.yml",
+            "---\n# A partial enrolment would name trust/mx9.yml here.\n"
+            "- name: Not enrolled\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n",
         )
-        self._assert_rule("R7 demo1.yml")
+        self._assert_rule("R7 mx9.yml")
 
     # R2: a top-level .yaml playbook that applies pull_trigger is refused, not skipped.
     def test_r2_top_level_yaml_playbook_is_refused(self) -> None:
@@ -875,7 +916,9 @@ class Sabotage(unittest.TestCase):
     def test_r8_writer_content_is_a_literal(self) -> None:
         self._edit(
             "roles/pull_trigger/tasks/main.yml",
-            '    content: "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\\n"',
+            '    content: "{{ pull_trigger_config | ansible.builtin.combine('
+            "pull_trigger_config_source)"
+            ' | ansible.builtin.to_nice_json }}\\n"',
             "    content: 'x'",
         )
         self._assert_rule("R8 ansible/roles/pull_trigger/tasks/main.yml")
@@ -972,8 +1015,13 @@ class Sabotage(unittest.TestCase):
 
     # R10: a file for a host that is not enrolled.
     def test_r10_owner_vars_file_without_an_enrolled_playbook(self) -> None:
+        self._write("owner_vars/mx9.yml", "---\nci_login_keys: []\n")
+        self._assert_one("R10 owner_vars/mx9.yml: has no enrolled playbook")
+
+    # R10: demo1's roles take no owner keys, so it may have no file either.
+    def test_r10_owner_vars_file_for_demo1(self) -> None:
         self._write("owner_vars/demo1.yml", "---\nci_login_keys: []\n")
-        self._assert_one("R10 owner_vars/demo1.yml: has no enrolled playbook")
+        self._assert_one("R10 owner_vars/demo1.yml: this host has no owner_vars keys")
 
     # R10 and R2: an enrolled host that has no owner_vars keys may have no file, and its
     # playbook, which does not load it, disagrees with the file.
@@ -1022,6 +1070,51 @@ class Sabotage(unittest.TestCase):
             "    - '{{ playbook_dir }}/../owner_vars/other.yml'\n",
         )
         self._assert_one("R2 edge1.yml: vars_files must be exactly")
+
+    # R2: edge1 may set one play var beside enrolled_host, the deploy_tooling class, pinned by
+    # HOST_PLAY_VARS. The positive control first: the real edge1 play carries it and the tree
+    # is green, so a check that refused every extra var would not pass.
+    def test_r2_pinned_play_var_passes_on_edge1(self) -> None:
+        text = (self.ansible / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
+        self.assertIn("    deploy_tooling_host_class: gateway\n", text)
+        self.assertEqual(check(self.root), [])
+
+    # R2: the pinned value is exact, so a different class is refused (sabotage a).
+    def test_r2_pinned_play_var_with_another_class(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "deploy_tooling_host_class: gateway",
+            "deploy_tooling_host_class: app",
+        )
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R2: dropping the pinned var is refused too, the pin is the whole value (sabotage b).
+    def test_r2_pinned_play_var_removed(self) -> None:
+        self._edit("playbooks/edge1.yml", "    deploy_tooling_host_class: gateway\n", "")
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R2: a host with no row in the table keeps the exact pin (sabotage c).
+    def test_r2_pinned_play_var_on_a_host_with_no_row(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    enrolled_host: ops1\n",
+            "    enrolled_host: ops1\n    deploy_tooling_host_class: gateway\n",
+        )
+        self._assert_one("R2 ops1.yml: vars must be exactly")
+
+    # R2: an extra key beside the pinned one is refused (sabotage d).
+    def test_r2_pinned_play_var_with_an_extra_key(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "    deploy_tooling_host_class: gateway\n",
+            "    deploy_tooling_host_class: gateway\n    deploy_tooling_extra: x\n",
+        )
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R9 through R2: the role is applied only while it is on edge1's list (sabotage e).
+    def test_r2_deploy_tooling_off_the_list(self) -> None:
+        self._edit("checks/host_roles.yml", "  - ci_login\n  - deploy_tooling\n", "  - ci_login\n")
+        self._assert_one("R2 edge1.yml: role deploy_tooling is not on edge1's list")
 
 
 if __name__ == "__main__":

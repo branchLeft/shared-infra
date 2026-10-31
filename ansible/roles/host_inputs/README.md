@@ -10,7 +10,7 @@ need no change.
 
 This README is written for a maintainer who is new to the repository. It follows
 the order the standard sets for a role README (ANS-14). The decision it carries out
-is the owner's, option A on branchLeft/workspace#2739: one root-only file per host,
+is the owner's, option A: one root-only file per host,
 written by the owner at bootstrap and edited by hand to rotate, read at run time by
 one shared loader.
 
@@ -73,7 +73,20 @@ The file is one JSON object, for db1:
 ```
 
 JSON, not YAML, so that no value is coerced to another type and the owner writes it with
-`json.dumps` from values read into the shell, never typed into a command line. A value
+`json.dumps` from values read into the shell, never typed into a command line. For app1
+the file is one JSON object of four strings, the port included (`"587"`, not `587`,
+because the website role's argument is a string):
+
+```text
+{
+  "website_app1_smtp_host": "<string>",
+  "website_app1_smtp_port": "<string>",
+  "website_app1_smtp_user": "<string>",
+  "website_app1_smtp_password": "<string>"
+}
+```
+
+A value
 is set exactly as the file gave it: a string stays a string, a list stays a list, and
 braces or `{%` in a string are not evaluated a second time.
 
@@ -115,10 +128,22 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. Today only db1's playbook applies it. The first db1 apply that includes it
-stops here until the owner has placed the file, which proves the file on the host before
+nothing else. Today db1's and app1's playbooks apply it. The first db1 apply that includes
+it stops here until the owner has placed the file, which proves the file on the host before
 the database roles depend on it. db1 also needs its signer in `ansible/trust/db1.yml`
-before any pull runs.
+before any pull runs. On app1 the loader is followed by `website_app1`, and the same holds:
+the first app1 run after this change stops here with `host_inputs[file-missing]`, before
+the website role starts, until the owner has placed `/etc/branchleft/host-inputs.json` on
+app1 (root:root, `0600`, the four keys above).
+
+## Bootstrap and rotation
+
+The owner places the file once, on the host, by hand: one JSON object whose keys are exactly
+the names in the host's row in `vars/main.yml`, written with `json.dumps` (never typed into a
+command line), owned by root:root with mode `0600`, in directories only root can write. The
+role never writes it. To rotate a value the owner edits the file by hand the same way, and the
+next pull reads it. A run before the file exists stops at `host_inputs[file-missing]`, which is
+how the first pull proves the file is in place before the roles that need it run.
 
 ## How to change it safely
 

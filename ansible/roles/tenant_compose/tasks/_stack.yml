@@ -1,0 +1,184 @@
+---
+# Internal to the role: delivers one stack, a tenant's or the host's mail spool. The caller
+# sets tenant_compose_stack (slug, compose_text, secrets_env_text), tenant_compose_verdict
+# (the module's judgement of it) and tenant_compose_is_spool. The verdict has passed: every
+# refusal was settled before the first stack was written.
+#
+# No task here notifies a handler. A notification is lost when a later task fails, and the
+# next run would then find every file in place and never restart the stack. The stamp,
+# written last and only once the unit is active, is what remembers that it was not.
+
+- name: Work out where this stack's files are
+  ansible.builtin.set_fact:
+    tenant_compose_project_dir: '{{ tenant_compose_stack_root }}/{{ tenant_compose_stack.slug }}'
+    tenant_compose_env_path: '{{ tenant_compose_config_root }}/{{ tenant_compose_stack.slug }}.env'
+    tenant_compose_image_env_path: '{{ tenant_compose_config_root }}/{{ tenant_compose_stack.slug }}.image.env'
+    tenant_compose_lock_path: '{{ tenant_compose_config_root }}/{{ tenant_compose_stack.slug }}.deploy.lock'
+    tenant_compose_unit: '{{ tenant_compose_unit_prefix }}@{{ tenant_compose_stack.slug }}.service'
+
+- name: Create the stack's directory
+  ansible.builtin.file:
+    path: '{{ tenant_compose_project_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The volume program is idempotent, but the role asks it only for a uid it does not list,
+# so a second run reports nothing. It makes the volumes, owns them by the uid and writes the
+# claim. Skipped in check mode with a stated reason (ANS-10): a command is not run in a
+# plan, and the plan shows the claim state in the line below.
+- name: Say that this plan would make the tenant's volumes
+  ansible.builtin.debug:
+    msg: The volume program would make the volumes of {{ tenant_compose_stack.slug }} in an apply.
+  when:
+    - ansible_check_mode
+    - not (tenant_compose_is_spool | bool)
+    - tenant_compose_verdict.claim_state == 'unclaimed'
+
+- name: Make the tenant's volumes, once, through the volume program
+  ansible.builtin.command:
+    argv:
+      - '{{ tenant_compose_volume_program }}'
+      - --uid
+      - '{{ tenant_compose_stack.uid }}'
+      - '{{ tenant_compose_stack.slug }}'
+  changed_when: true
+  when:
+    - not (tenant_compose_is_spool | bool)
+    - tenant_compose_verdict.claim_state == 'unclaimed'
+
+# The compose file is not a secret: it names the variables the unit's environment fills.
+# It is not checked with `docker compose config`, because the variables it names are not
+# set outside the unit.
+- name: Deliver the compose file
+  ansible.builtin.copy:
+    content: '{{ tenant_compose_stack.compose_text }}'
+    dest: '{{ tenant_compose_project_dir }}/compose.yml'
+    owner: root
+    group: root
+    mode: '0644'
+  register: tenant_compose_compose_delivery
+
+# A new file is moved into place with the mode the umask allows and only then given its
+# own, so a secret written into a new file would be readable for a moment. The file is made
+# empty and closed first, and the content then goes into the existing file, which keeps its
+# owner and mode while the content moves.
+- name: Create the secrets file empty and closed, if it is absent
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ tenant_compose_env_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  when: not (tenant_compose_is_spool | bool)
+
+- name: Deliver the secrets file
+  ansible.builtin.copy:
+    content: '{{ tenant_compose_stack.secrets_env_text }}'
+    dest: '{{ tenant_compose_env_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  register: tenant_compose_secrets_delivery
+  no_log: true
+  diff: false
+  when: not (tenant_compose_is_spool | bool)
+
+# A tenant's pin is created once and never replaced: the deploy wrapper is the only writer
+# that advances it, so a run of this role can never roll an image back. The spool has no
+# `${IMAGE}`; its pin is derived from the digest in its compose file, so it is always
+# replaced with it.
+- name: Deliver the image pin
+  ansible.builtin.copy:
+    content: '{{ tenant_compose_verdict.image_env }}'
+    dest: '{{ tenant_compose_image_env_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+    force: '{{ tenant_compose_is_spool | bool }}'
+  register: tenant_compose_image_delivery
+
+- name: Enable the stack's unit
+  ansible.builtin.systemd_service:
+    name: '{{ tenant_compose_unit }}'
+    enabled: true
+
+- name: Read the checksum of the recorded stamp
+  ansible.builtin.stat:
+    path: '{{ tenant_compose_project_dir }}/{{ tenant_compose_stamp_name }}'
+    checksum_algorithm: sha256
+  register: tenant_compose_recorded_stamp
+
+# The stamp covers the compose file and the secrets, which are what a running stack was
+# started from. It leaves out the image pin, which the deploy wrapper advances on its own.
+# The stack is restarted when its content is not the content last recorded healthy, which
+# covers a first run, an edit and a run that failed before the stamp was written, and when
+# a delivery changed a file in this run, which covers a file edited by hand and put back.
+- name: Work out whether the stack must be restarted
+  ansible.builtin.set_fact:
+    tenant_compose_restart_needed: >-
+      {{ tenant_compose_compose_delivery is changed
+      or tenant_compose_secrets_delivery is changed
+      or tenant_compose_image_delivery is changed
+      or not (tenant_compose_recorded_stamp.stat.exists
+      and tenant_compose_recorded_stamp.stat.checksum == (tenant_compose_verdict.stamp | hash('sha256'))) }}
+  no_log: true
+
+- name: Say that this plan would restart the stack
+  ansible.builtin.debug:
+    msg: >-
+      {{ tenant_compose_unit }} would be restarted in an apply: what it runs on differs from the content
+      last recorded healthy, or a file changed.
+  when:
+    - ansible_check_mode
+    - tenant_compose_restart_needed | bool
+
+# The restart takes the deploy wrapper's own lock for the same time the wrapper waits for
+# it, so the two never restart the stack together. The unit's `up --wait` is the health
+# gate: it fails the restart when a service is not running and healthy, and the failure
+# stops the role before the stamp is written. No module takes a lock around a restart,
+# so this is a command (ANS-9), and it states its change.
+- name: Restart the stack under the deploy lock
+  ansible.builtin.command:
+    argv:
+      - '{{ tenant_compose_flock }}'
+      - --wait
+      - '{{ tenant_compose_lock_wait_seconds }}'
+      - '{{ tenant_compose_lock_path }}'
+      - '{{ tenant_compose_systemctl }}'
+      - restart
+      - '{{ tenant_compose_unit }}'
+  changed_when: true
+  when: tenant_compose_restart_needed | bool
+
+# A plan that would restart the stack has no unit state to read yet, and says so above.
+- name: Read the stack's unit as systemd holds it
+  ansible.builtin.systemd_service:
+    name: '{{ tenant_compose_unit }}'
+  register: tenant_compose_unit_state
+  when: not (ansible_check_mode and (tenant_compose_restart_needed | bool))
+
+- name: Refuse a stack whose unit is not active
+  ansible.builtin.assert:
+    that:
+      - tenant_compose_unit_state.status.ActiveState == 'active'
+    quiet: true
+    fail_msg: >-
+      {{ tenant_compose_unit }} is {{ tenant_compose_unit_state.status.ActiveState }}, not active. Nothing is
+      recorded as healthy, so the next run restarts it. A unit whose image pin file is missing is inactive, not failed.
+  when: not (ansible_check_mode and (tenant_compose_restart_needed | bool))
+
+# Last, and only reached when the restart and the unit's state have passed: a run that
+# fails anywhere above leaves the old stamp. The stamp is derived from the secrets, so the
+# task hides it.
+- name: Record the content as brought up and active
+  ansible.builtin.copy:
+    content: '{{ tenant_compose_verdict.stamp }}'
+    dest: '{{ tenant_compose_project_dir }}/{{ tenant_compose_stamp_name }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false

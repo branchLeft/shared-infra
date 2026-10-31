@@ -183,6 +183,10 @@
     db1_stack_exporter_password: "{{ host_inputs_doc['db1_stack_exporter_password'] | default(omit) }}"
     db1_grants_tenants: "{{ host_inputs_doc['db1_grants_tenants'] | default(omit) }}"
     db1_grants_ops1_host: "{{ host_inputs_doc['db1_grants_ops1_host'] | default(omit) }}"
+    website_app1_smtp_host: "{{ host_inputs_doc['website_app1_smtp_host'] | default(omit) }}"
+    website_app1_smtp_port: "{{ host_inputs_doc['website_app1_smtp_port'] | default(omit) }}"
+    website_app1_smtp_user: "{{ host_inputs_doc['website_app1_smtp_user'] | default(omit) }}"
+    website_app1_smtp_password: "{{ host_inputs_doc['website_app1_smtp_password'] | default(omit) }}"
   no_log: true
   diff: false
 

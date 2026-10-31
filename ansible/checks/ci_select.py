@@ -26,9 +26,14 @@ PUSH = "push"
 
 # A path ending in "/" names everything under it; any other entry names one file.
 # What decides the verdict of every role: a change to any of these executes every shard.
+# The three checks files are named one by one, because the shards read them and the rest of
+# ansible/checks/ is lint-only. The order matters: needed_units tests EVERY_SHARD before
+# LINT_ONLY, so these three win over the folder entry in LINT_ONLY below.
 EVERY_SHARD = (
     "ansible/harness/",
-    "ansible/checks/",
+    "ansible/checks/ci_select.py",
+    "ansible/checks/check_pins.py",
+    "ansible/checks/pip-requirements.txt",
     "ansible/pyproject.toml",
     "ansible/requirements.in",
     "ansible/requirements.txt",
@@ -40,6 +45,7 @@ EVERY_SHARD = (
 # Under ansible/ but read by no shard: the lint job runs the tests that read them.
 LINT_ONLY = (
     "ansible/README.md",
+    "ansible/checks/",
     "ansible/inventories/",
     "ansible/playbooks/",
     "ansible/tools/",
@@ -69,7 +75,11 @@ def inside(path: str, entries: Sequence[str]) -> bool:
 
 
 def outside_reads(text: str) -> set[str]:
-    """Return the paths outside ansible/ that a file names, with no trailing slash or dot."""
+    """Return the paths outside ansible/ that a file names, with no trailing slash or dot.
+
+    A path only a comment names is not a read, so the comments are removed first.
+    """
+    text = without_comments(text)
     found: set[str] = set()
     for match in LITERAL.finditer(text):
         found.add(match.group(1).rstrip("/."))
@@ -97,6 +107,35 @@ def outside_links(unit: Path, root: Path) -> set[str]:
         if relative.parts and relative.parts[0] != "ansible":
             found.add(relative.as_posix())
     return found
+
+
+def strip_comment(line: str) -> str:
+    """Return ``line`` without its comment, if it has one.
+
+    A ``#`` starts a comment only at the start of a line or after a space, and only outside a
+    quoted string. A quote left open by an apostrophe in prose keeps the rest of the line
+    quoted, so a comment missed that way is still scanned: the failure is a false positive.
+    """
+    quote = ""
+    escaped = False
+    for index, char in enumerate(line):
+        if quote:
+            if escaped:
+                escaped = False
+            elif quote == '"' and char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif char in "\"'":
+            quote = char
+        elif char == "#" and (index == 0 or line[index - 1].isspace()):
+            return line[:index]
+    return line
+
+
+def without_comments(text: str) -> str:
+    """Return ``text`` with every YAML, shell or Python comment removed, line by line."""
+    return "\n".join(strip_comment(line) for line in text.splitlines())
 
 
 def unit_text(unit: Path, areas: tuple[str, ...]) -> str:
@@ -145,7 +184,7 @@ def reads_by_path(root: Path) -> dict[str, set[str]]:
     for unit in units(root):
         tokens = outside_reads(unit_text(unit, ("molecule", "tests")))
         tokens |= outside_links(unit, root)
-        everything = unit_text(unit, ("molecule", "tests", "vars", "defaults"))
+        everything = without_comments(unit_text(unit, ("molecule", "tests", "vars", "defaults")))
         for token in list(tokens):
             directory = root / token
             if directory.is_dir():

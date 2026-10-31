@@ -54,18 +54,18 @@ The harness prints one line per step, with the reason beneath each failed step. 
 
 CHANGE_ROLE_INTRO_TEXT
 
-These paths are owner-only in `.github/CODEOWNERS`: `ansible/checks/`, `ansible/harness/`, `ansible/trust/`, `ansible/roles/pull_trigger/`, `ansible/roles/ansible_runtime/`, `.ansible-lint`, `ansible/pyproject.toml`, `ansible/requirements.in`, `ansible/requirements.txt` and `ansible/requirements.yml`.
+These paths are owner-only in `.github/CODEOWNERS`: `ansible/checks/`, `ansible/harness/`, `ansible/trust/`, `ansible/roles/pull_trigger/`, `ansible/roles/ansible_runtime/`, `.ansible-lint`, `ansible/pyproject.toml`, `ansible/requirements.in`, `ansible/requirements.txt` and `ansible/requirements.yml`. The Ansible loader directories are owner-only as well, at each level Ansible loads from: `library/`, `module_utils/`, `filter_plugins/` and the other loader names, at the top of `ansible/`, beside a playbook in `ansible/playbooks/`, in an imported playbook's directory, and in each role under `ansible/roles/`.
 
 ## The gate
 
 GATE_INTRO_TEXT
 
-| Event            | Workflow                                          | What runs                                                                                                              |
-| ---------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Pull request     | `.github/workflows/ansible.yml`                   | Lint, then the shards of changed roles. Required check: `Lint and test the Ansible roles`.                             |
-| Merge queue      | `.github/workflows/ansible.yml`                   | Lint and every shard.                                                                                                  |
-| Push to `main`   | `.github/workflows/ansible-delivery.yml`          | Calls `branchLeft/github-workflows` `ansible-gated-apply.yml` at `v1.0.16`, then waits on environment `ansible-hosts`. |
-| Daily, 05:41 UTC | `.github/workflows/ansible-environment-probe.yml` | Reads the protection of `ansible-hosts` and judges it with `ansible/checks/check_delivery.py environment`.             |
+| Event            | Workflow                                          | What runs                                                                                                                                                                                                                    |
+| ---------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Pull request     | `.github/workflows/ansible.yml`                   | Lint, then the shards of changed roles. Required check: `Lint and test the Ansible roles`.                                                                                                                                   |
+| Merge queue      | `.github/workflows/ansible.yml`                   | Lint and every shard.                                                                                                                                                                                                        |
+| Push to `main`   | `.github/workflows/ansible-delivery.yml`          | Calls `branchLeft/github-workflows` `ansible-gated-apply.yml` at `v1.0.19`, then waits on environment `ansible-hosts`. The optional `ANSIBLE_PUSH_HOSTS` secret lists the hosts pushed to; empty means every host is pulled. |
+| Daily, 05:41 UTC | `.github/workflows/ansible-environment-probe.yml` | Reads the protection of `ansible-hosts` and judges it with `ansible/checks/check_delivery.py environment`.                                                                                                                   |
 
 The delivery workflow re-runs lint and Molecule over every role and pattern, unless the merge queue already tested the same commit (`ansible/checks/merge_group_proof.py`). Each host is asked, in check mode, what the commit would change, before the environment approval.
 
@@ -78,11 +78,11 @@ PULL_INTRO_TEXT
 | Path                          | Contents                                                                            |
 | ----------------------------- | ----------------------------------------------------------------------------------- |
 | `ansible/roles/pull_trigger/` | Installs `/usr/local/sbin/pull-trigger`, config in `/etc/pull-trigger/config.json`. |
-| `ansible/playbooks/HOST.yml`  | One playbook per host under the pull: `edge1`, `app1`, `db1`, `ops1`.               |
+| `ansible/playbooks/HOST.yml`  | One playbook per host on the signed route: `edge1`, `app1`, `db1`, `ops1`, `demo1`. |
 | `ansible/trust/HOST.yml`      | Signer list for that host. Empty list means the host refuses every run.             |
 | `ansible/playbooks/includes/` | Shared pull values and refusals, defined once.                                      |
 
-`ansible/playbooks/demo1.yml` applies `ansible/roles/demo1_build` and has no pull roles and no trust file.
+`ansible/playbooks/demo1.yml` is enrolled like the others: the two pull roles, its trust file `ansible/trust/demo1.yml`, then `ansible/roles/demo1_build` and `ansible/roles/demo1_egress_spool`. demo1 never fetches: its commit arrives by push, as a git bundle CI sends through edge1, and the trigger checks it against the same trust file. That sending arrives with shared-infra#511, which is not yet merged, so no bundle reaches demo1 until it lands. `host_baseline`, `egress_nat` and `broker_deploy` are not applied to it.
 
 The program's steps for one request, from `ansible/roles/pull_trigger/README.md`:
 
@@ -101,9 +101,9 @@ The program prints one summary line, `pull-trigger verdict=... exit=... reason=.
 
 DRIFT_INTRO_TEXT
 
-| Workflow                                    | Trigger              | Behaviour                                                                                                                                  |
-| ------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `.github/workflows/ansible-drift-check.yml` | `17 3 * * *`, manual | Calls `branchLeft/github-workflows` `ansible-drift-check.yml` at `v1.0.16` with host label `ansible-estate`. No environment, no apply key. |
+| Workflow                                    | Trigger              | Behaviour                                                                                                                                                                                                      |
+| ------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.github/workflows/ansible-drift-check.yml` | `17 3 * * *`, manual | Calls `branchLeft/github-workflows` `ansible-drift-check.yml` at `v1.0.19` with host label `ansible-estate`. The optional `ANSIBLE_PUSH_HOSTS` secret lists the hosts pushed to. No environment, no apply key. |
 
 The reusable workflow asks each host in check mode what an apply would change. It goes red on drift or on a refusal, and opens or comments on one issue. `ansible/checks/test_drift_caller.py` checks the caller's shape.
 

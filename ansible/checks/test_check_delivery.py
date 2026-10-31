@@ -220,17 +220,18 @@ class CallerTests(unittest.TestCase):
                 job_of(document)["uses"] = workflow + ref
 
             self.assert_names(self.weakened(set_uses), "exact tag")
-        for ref in ("@v1.0.16", "@v2.3.4"):
+        for ref in ("@v1.0.19", "@v2.3.4"):
 
             def set_good(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
 
             self.assertEqual([], self.weakened(set_good))
 
-    def test_a_pin_below_the_jump_release_is_named(self) -> None:
-        # The call passes the jump secrets, and a release that does not declare them fails it.
+    def test_a_pin_below_the_push_release_is_named(self) -> None:
+        # The call passes the push list and playbook, and a release that does not declare them
+        # fails it.
         workflow = "branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml"
-        for ref in ("@v1.0.15", "@v1.0.0", "@v0.9.99"):
+        for ref in ("@v1.0.15", "@v1.0.17", "@v1.0.18", "@v1.0.0", "@v0.9.99"):
 
             def set_old(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
@@ -295,6 +296,55 @@ class CallerTests(unittest.TestCase):
                     section(job_of(document), "secrets")[name] = value
 
                 self.assert_names(self.weakened(set_secret), f"secrets.{name} must be")
+
+    def test_the_push_list_secret_and_playbook_are_fixed(self) -> None:
+        # The control: each line is weakened from the committed caller, which is green. The push
+        # list must be the ANSIBLE_PUSH_HOSTS secret, the playbook the one constant, and the
+        # pin a release that declares them (a call that passes a key the workflow does not
+        # declare fails on GitHub).
+        self.assertEqual([], self.weakened(lambda document: None))
+
+        def drop_secret(document: dict[str, object]) -> None:
+            del section(job_of(document), "secrets")["ssh_push_hosts"]
+
+        def drop_playbook(document: dict[str, object]) -> None:
+            del section(job_of(document), "with")[check_delivery.PUSH_PLAYBOOK_INPUT]
+
+        def pin_without_push_keys(document: dict[str, object]) -> None:
+            job_of(document)["uses"] = GOOD_TAG.replace("@v1.0.11", "@v1.0.18")
+
+        for change, mechanism in (
+            (drop_secret, "secrets.ssh_push_hosts must be"),
+            (drop_playbook, "with.push-playbook must be"),
+            (pin_without_push_keys, "the first release that declares"),
+        ):
+            with self.subTest(change=change.__name__):
+                self.assert_names(self.weakened(change), mechanism)
+        for value in (
+            "",
+            "literal-value",
+            "${{ secrets.ANSIBLE_HOSTS }}",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+            "${{ secrets.SSH_APPLY_KEY }}",
+        ):
+            with self.subTest(secret=value):
+
+                def set_secret(document: dict[str, object], value: str = value) -> None:
+                    section(job_of(document), "secrets")["ssh_push_hosts"] = value
+
+                self.assert_names(self.weakened(set_secret), "secrets.ssh_push_hosts must be")
+        for path in ("ansible/playbooks/edge1.yml", "../ansible/playbooks/demo1.yml", "", None):
+            with self.subTest(playbook=path):
+
+                def set_playbook(document: dict[str, object], path: object = path) -> None:
+                    section(job_of(document), "with")[check_delivery.PUSH_PLAYBOOK_INPUT] = path
+
+                self.assert_names(self.weakened(set_playbook), "with.push-playbook must be")
+
+    def test_the_push_playbook_is_a_playbook_of_this_repository(self) -> None:
+        playbook = ROOT / check_delivery.PUSH_PLAYBOOK
+        self.assertTrue(playbook.is_file(), check_delivery.PUSH_PLAYBOOK)
+        self.assertEqual((ROOT / "ansible" / "playbooks").resolve(), playbook.resolve().parent)
 
     def test_another_secret_or_a_swapped_secret_is_named(self) -> None:
         def add_secret(document: dict[str, object]) -> None:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -400,6 +401,38 @@ def _read_bootstrap_password() -> str:
     )
 
 
+def _write_credentials_file(username: str, secret: str) -> None:
+    """Save the credentials at CREDENTIALS_PATH, never readable by anyone but the owner.
+
+    The text is written to a uniquely named sibling created with O_EXCL at mode 0600
+    and then moved over CREDENTIALS_PATH, so a re-run over an existing file replaces
+    it atomically and a leftover from an earlier crash can never block a later run.
+
+    Raises:
+        OSError: the temporary file could not be created, written or moved into place.
+    """
+    directory = os.path.dirname(CREDENTIALS_PATH) or "."
+    temporary_path = os.path.join(
+        directory, f".stalwart-admin-credentials.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    )
+    # The mode is set at creation, not with a later chmod, so the secret is never
+    # readable under the process umask, even for the moment before a chmod would run.
+    descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(f"{username}:{secret}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, CREDENTIALS_PATH)
+    except BaseException:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def _complete_bootstrap() -> tuple[str, str]:
     """Finishes Stalwart's setup wizard with its own inferred defaults
     (hostname/domain/storage -- all already correct from the
@@ -413,13 +446,10 @@ def _complete_bootstrap() -> tuple[str, str]:
     updated = result["updated"]["singleton"]
     username, secret = updated["username"], updated["secret"]
 
+    # The secret is shown only once, so neither a failed restart nor a readiness-poll
+    # timeout may lose it; it is saved before anything else can fail.
+    _write_credentials_file(username, secret)
     subprocess.run(["docker", "restart", "stalwart"], check=True, capture_output=True)
-
-    # Written before the readiness poll: the secret is shown only once, so a
-    # poll timeout must not lose it.
-    with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-        f.write(f"{username}:{secret}\n")
-    os.chmod(CREDENTIALS_PATH, 0o600)
     _wait_for_stalwart_ready((username, secret))
     print(f"configure_stalwart: bootstrap complete, credential written to {CREDENTIALS_PATH}")
     return username, secret

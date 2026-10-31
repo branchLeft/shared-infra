@@ -1,0 +1,86 @@
+---
+# One case that must be answered with a documented exit and reason, and must leave the host
+# byte for byte as it was. Takes the dictionary `case`: name, text, rc, reason, and optionally
+# commit (default -), mode (the key's, default apply), config, floor (a commit id, default the
+# seed), bundle (a file in the bundles directory) or input (a shell fragment for standard
+# input), program, wrapper, detail (a sentence the refusal must give on standard error).
+- name: 'Make the host for: {{ case.name }}'
+  ansible.builtin.include_tasks: scene.yml
+  vars:
+    scene_name: '{{ case.scene | default("case") }}'
+    scene_floor: '{{ case.floor | default(pull_trigger_pr_commits.c0) }}'
+    scene_overrides: '{{ case.overrides | default({}) }}'
+
+- name: 'Snapshot before: {{ case.name }}'
+  ansible.builtin.include_tasks: snapshot.yml
+  vars:
+    snap_state: '/var/tmp/ptt/st-{{ case.scene | default("case") }}'
+
+- name: 'Keep the snapshot taken before: {{ case.name }}'
+  ansible.builtin.set_fact:
+    pull_trigger_pr_refuse_before: '{{ pull_trigger_snapshot_result.stdout }}'
+
+- name: 'Request: {{ case.name }}'
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request_name: '{{ case.name }}'
+    request_text: '{{ case.text }}'
+    request_mode: '{{ case.mode | default("apply") }}'
+    request_config: '/var/tmp/ptt/cfg/{{ case.scene | default("case") }}.json'
+    request_program: '{{ case.program | default(verify_program) }}'
+    request_wrapper: '{{ case.wrapper | default("") }}'
+    request_input: "{{ case.input | default(pull_trigger_pr_bundles ~ '/' ~ case.bundle ~ '.bundle' if case.bundle is defined else '/dev/null') }}"
+
+- name: 'Snapshot after: {{ case.name }}'
+  ansible.builtin.include_tasks: snapshot.yml
+  vars:
+    snap_state: '/var/tmp/ptt/st-{{ case.scene | default("case") }}'
+
+- name: 'Refused with the documented exit and reason: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_pr_result.rc == case.rc
+      - >-
+        ('push-receiver verdict=' ~ case.verdict | default('refused') ~ ' exit=' ~ case.rc ~ ' reason=' ~ case.reason ~ ' mode=' ~
+        (case.mode | default('apply')) ~ ' commit=' ~ (case.commit | default('-')) ~ ' playbook=ansible/playbooks/host.yml changed=0')
+        == pull_trigger_pr_result.stdout | trim
+    fail_msg: >-
+      wrong answer for {{ case.name }}: rc={{ pull_trigger_pr_result.rc }}
+      stdout={{ pull_trigger_pr_result.stdout }} stderr={{ pull_trigger_pr_result.stderr }}
+    success_msg: 'refused as expected: {{ case.name }}'
+
+- name: 'The line has the shape the pushing workflow reads, when it names a commit: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_pr_result.stdout | trim is match(pull_trigger_pr_line_pattern)
+    fail_msg: 'the workflow could not read this line: {{ pull_trigger_pr_result.stdout }}'
+    success_msg: 'the line matches the judge: {{ case.name }}'
+  when: case.commit is defined
+
+- name: 'Refused by the guard the case names: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - case.detail in pull_trigger_pr_result.stderr
+    fail_msg: 'the refusal did not come from the expected guard: {{ pull_trigger_pr_result.stderr }}'
+    success_msg: 'refused by the expected guard: {{ case.name }}'
+  when: case.detail is defined
+
+- name: 'The host and the previous checkout are byte for byte unchanged: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_snapshot_result.stdout == pull_trigger_pr_refuse_before
+    fail_msg: 'the refusal changed the host: {{ case.name }}'
+    success_msg: 'nothing changed: {{ case.name }}'
+
+- name: 'Nothing is left in the spool or the quarantine: {{ case.name }}'
+  ansible.builtin.command:
+    argv:
+      - find
+      - '/var/tmp/ptt/st-{{ case.scene | default("case") }}/spool'
+      - '/var/tmp/ptt/st-{{ case.scene | default("case") }}/quarantine'
+      - -mindepth
+      - '1'
+  register: pull_trigger_pr_leftovers
+  changed_when: false
+  failed_when: pull_trigger_pr_leftovers.stdout | length > 0
+  when: case.after_bundle | default(true)
