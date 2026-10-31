@@ -7,7 +7,14 @@ the three mitigations that ride with that collocation: cgroup bounds on both
 compose stacks' containers, Grafana bound to the private address only, and a
 heartbeat wired to an external dead-man's switch.
 
-`edge1` is `46.225.95.167` (private `10.20.1.10`), a `cx23` in `nbg1`. Every
+`edge1` lives in the estate Hetzner project (`org` in `hetzner/projects.ts`,
+console name "branchLeft estate"). A `hcloud` context reaches only the project
+its token was minted in, so every `hcloud` lookup below names that project's
+context. `ESTATE_HCLOUD_CONTEXT` is that context's name, which
+`hcloud context list` shows (read-only). It is not written in this repository:
+set it by hand before you run the lookup.
+
+`edge1` is a `cx23` in `nbg1`. Every
 `ssh`/`scp` below uses the platform owner's key, `~/.ssh/id_ed25519_hetzner`.
 Run every workstation command from the root of a `branchLeft/shared-infra`
 checkout, same convention as `RUNBOOK-edge.md`.
@@ -20,14 +27,19 @@ second Compose stack beside it, does not create the host, and assumes
 are already installed.
 
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+EDGE1_IPV4=$(hcloud --context ESTATE_HCLOUD_CONTEXT server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])") &&
+test -n "$EDGE1_IPV4" &&
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active branchleft-compose@edge &&
   test -x /usr/bin/python3 &&
   echo ready'
 ```
 
-Expect `active` then `ready`. `python3` is what
+Expect `active` then `ready`. The lookup must print edge1's public IPv4 into
+`EDGE1_IPV4`. If `hcloud` reports an error, or the lookup returns nothing, the
+chain stops before `ssh` runs: the context named by `ESTATE_HCLOUD_CONTEXT` does
+not reach the estate project that holds edge1. Fix the context. Do not
+substitute an address typed by hand. `python3` is what
 `stack/render_alertmanager_config.py` runs under -- see "Colocation cgroup
 bounds" below for why that script exists at all.
 
@@ -448,6 +460,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'chown -R root:root /opt/branchleft/monitoring/'
 ```
 
+The sync prints the deletion of `prometheus/mx1-metrics-password`: that is expected, because the restart's `ExecStartPre` in step 7 regenerates it, and step 7 reads it back.
+
 **This copy alone changes nothing in the running stack.** Prometheus and
 Alertmanager both read their config only from what is on disk when their
 container starts. Prometheus's reload endpoint is disabled outright -- this
@@ -487,12 +501,13 @@ is read as the container-side user, so a root-owned file becomes unreadable.
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering here independently.
 
-The `monitoring_stack` role installs both drop-ins: `monitoring.override.conf`
-into `branchleft-compose@monitoring.service.d/` and `edge.override.conf` into
-`branchleft-compose@edge.service.d/`, each as `override.conf`, `root:root` mode
-`0644`, and it reloads systemd when either changed. The role is not yet wired
-to a host (step 3), so until the first gated converge this script is the
-runnable path, and it installs the same two files:
+Each drop-in has one role that owns it. The `edge_stack` role installs
+`edge.override.conf` into `branchleft-compose@edge.service.d/` as `override.conf`,
+and the `monitoring_stack` role installs `monitoring.override.conf` into
+`branchleft-compose@monitoring.service.d/` as `override.conf`, for its own unit
+only. Each is `root:root` mode `0644`, and each role reloads systemd when its own
+file changed. Neither role is yet wired to a host, so until the first gated
+converge this script is the runnable path, and it installs the same two files:
 
 <!-- interim-hand-block: s5-script-call -->
 
@@ -585,6 +600,18 @@ true first" above; re-set it first if you are entering here independently.
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'systemctl restart branchleft-compose@monitoring'
 ```
+
+Read back the scrape credential that step 4's sync deleted. The read prints
+only `present` or nothing, never the value:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
+  'test -s /opt/branchleft/monitoring/prometheus/mx1-metrics-password && echo present'
+```
+
+Expect `present`. Nothing printed means `STALWART_PROMETHEUS_SECRET` is unset in
+`/etc/branchleft/monitoring.env`, the one case where the renderer removes the
+file on purpose; set it and restart again.
 
 Once the `monitoring_stack` role runs on a host, the role does this restart
 itself: it restarts the enabled unit when the fingerprint of its inputs differs
@@ -748,10 +775,14 @@ publishes Grafana on `10.20.1.10:3000` only, and `10.20.1.10` does not route
 from the public internet.
 
 ```bash
-EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
+EDGE1_PRIVATE_IPV4=$(hcloud --context ESTATE_HCLOUD_CONTEXT server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
 ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:"$EDGE1_PRIVATE_IPV4":3000 root@"$EDGE1_IPV4" -N &
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 ```
+
+Before the tunnel, expect `EDGE1_PRIVATE_IPV4` to hold edge1's private address
+(non-empty). If it is empty, the `hcloud` context is wrong, as in section 1
+above: stop, because the tunnel would otherwise be opened to nothing.
 
 Expect `200`, reached only through the tunnel. Confirm the registry side too:
 
@@ -1406,7 +1437,8 @@ mx1 delivers locally, so they cost no sending reputation. Two kinds carry it:
   mail it reports on.
 
 **Every `severity: warning` alert also routes to `email-on-host`.** The
-off-host mailbox receives critical alerts only, with no resolved notices,
+off-host mailbox receives critical alerts, and the `owner_action` alerts
+below, with no resolved notices,
 `group_interval: 1h` and `repeat_interval: 24h`, because repeated unread
 machine mail to Gmail is what spent mx1's reputation. Three `inhibit_rules`
 mute an alert whose cause is already firing (`ServiceFlapping` under
@@ -1415,10 +1447,41 @@ three mail-delivery rules under `MailHostDown`). The route tree is proven by
 CI's `Test the Alertmanager routing` step; amtool cannot test inhibition, so
 read it back from `/api/v2/status` on the host after a deploy.
 
-Read these in the on-host mailbox, not the off-host one. CI's
-`Test the Alertmanager routing` step proves the route tree delivers each to
-exactly the receiver it names; `MailHostDown` keeps its off-host path, since
-it fires precisely when mx1 cannot deliver anything.
+Read the `notify: on-host` alerts in the on-host mailbox, not the off-host one.
+The `owner_action` alerts are the exception, and they arrive in both (see the
+next section). CI's `Test the Alertmanager routing` step proves the route tree
+delivers each to exactly the receiver it names; `MailHostDown` keeps its
+off-host path, since it fires precisely when mx1 cannot deliver anything.
+
+### Alerts that carry `owner_action` (`owner_action: "true"`)
+
+The `owner_action` label marks an alert whose fix needs the owner's own hands:
+a spend, a portal visit or a dated expiry. In the rendered Alertmanager config,
+a non-critical alert with that label matches the route `owner_action = "true"`
+with `severity != "critical"`, which sends it to the receiver `email` (the
+off-host mailbox) and continues the walk. The walk then reaches
+`email-on-host` through the `notify = "on-host"` route or the
+`severity = "warning"` route, so each of these alerts also reaches the on-host
+mailbox. Six rules carry the label, and every one is `severity: warning`:
+
+- **`HostMemoryPressure`**: an app host has used over 75% of its memory for 24
+  hours. The `doc 14` section 4 trigger to provision the next host, which is a
+  spend.
+- **`HostDiskSpaceLow`**: a filesystem is over 70% full. The `doc 14` section 4
+  trigger to grow the volume, which is a spend.
+- **`MySQLConnectionsHigh`**: db1 is using over 70% of its
+  `max_connections`. The `doc 14` section 4 trigger to escalate the database
+  rung.
+- **`TLSCertificateExpiringSoon`**: a public HTTPS certificate expires in under
+  14 days. Caddy renews automatically, so this fires only when a renewal has
+  failed and there is still time to fix it.
+- **`MailCertificateExpiringSoon`**: the mail TLS certificate on ports 465 and
+  993 expires in under 14 days. Stalwart renews automatically, so the same
+  reasoning applies.
+- **`SNDSAccessLinkExpiringSoon`**: the SNDS automated-access link is 25 days
+  old, five days short of its 30-day expiry. Rotating it is a portal visit and
+  one line in `monitoring.env` (section 14). This rule also carries
+  `notify: on-host`, so it reaches `email-on-host` through that route as well.
 
 ## Responding to the SNDS complaint-rate alerts
 
