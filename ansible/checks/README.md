@@ -78,7 +78,9 @@ a role edit is not gated by anything here. The control on a role edit is the own
 deploy approval of the gated apply, which is not yet wired. Which files the reviewer App
 may merge alone is not yet decided by the owner.
 
-Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` (no other variable: a
+Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (today one row: edge1's `deploy_tooling_host_class`,
+which the role takes with no default; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
@@ -125,7 +127,8 @@ is not loaded there.
   runs only the derived `.yml` path, and `ansible-playbook` would run any other name, so
   R6 must read every file in the tree. Each enrolled `HOST.yml` has one play, with no key
   but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`, `pre_tasks` and `roles`, on
-  `hosts: all`, `vars` exactly `enrolled_host: HOST` and nothing else, `vars_files` exactly the shared
+  `hosts: all`, `vars` exactly `enrolled_host: HOST` plus that host's row in `HOST_PLAY_VARS`
+  and nothing else, `vars_files` exactly the shared
   include and `../trust/HOST.yml`, then `../owner_vars/HOST.yml` if and only if that file
   exists (the playbook and the file must agree both ways), `roles` the runtime entry then the bare trigger as the
   first two entries and nothing attached to either, then only plain entries from that

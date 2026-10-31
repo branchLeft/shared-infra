@@ -59,16 +59,18 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host), then app1's host_inputs (the loader goes first, R11) and website_app1
-# (last, after host_baseline has installed Docker), and db1's host_baseline and db1_stack (after
-# the loader, which goes first).
+# breakglass_grant_host), then edge1's deploy_tooling, app1's host_inputs (the loader goes first,
+# R11) and website_app1 (last, after host_baseline has installed Docker), and db1's host_baseline
+# and db1_stack (after the loader, which goes first).
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
-    "edge1": ["host_baseline", "ci_login"],
+    "edge1": ["host_baseline", "ci_login", "deploy_tooling"],
     "ops1": ["host_baseline", "breakglass_mint_host", "status_page"],
     "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
     "db1": ["host_inputs", "host_baseline", "db1_stack"],
 }
+# The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
+PINNED_PLAY_VARS = {"edge1": "    deploy_tooling_host_class: gateway\n"}
 
 
 def _entry(name: str, extra: str = "") -> str:
@@ -370,7 +372,8 @@ class HostRoleLists(unittest.TestCase):
     # Rule: `vars` must also still hold the host name, and nothing else when it is empty or absent.
     def test_vars_without_the_host_name_is_refused(self) -> None:
         for host in ENROLLED:
-            line = f"  vars:\n    enrolled_host: {host}\n"
+            # The whole vars block, so edge1's pinned class line goes with it (HOST_PLAY_VARS).
+            line = f"  vars:\n    enrolled_host: {host}\n{PINNED_PLAY_VARS.get(host, '')}"
             for kind, new in (
                 ("absent", ""),
                 ("empty", "  vars: {}\n"),
