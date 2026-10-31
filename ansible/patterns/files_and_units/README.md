@@ -133,7 +133,7 @@ oneshot.
 ### The validator on a unit file
 
 `validate: systemd-analyze verify %s` is not set on the units. It was tried by
-hand on 2026-10-17, and it behaves like this:
+hand, and it behaves like this:
 
 - Run by hand on a path with no unit suffix it fails:
   `systemd-analyze verify /tmp/validate_probe_unit` prints
@@ -184,7 +184,7 @@ What each part of the scenario does:
 - `check-configured` and `molecule-check`: the configured instance shows no drift.
 
 What breaks which step. Each row was done by an edit, one harness run, and a
-restore, on 2026-10-17. The rows for `notify`, `flush_handlers`, owner and group,
+restore. The rows for `notify`, `flush_handlers`, owner and group,
 invalid JSON, the always-changed task and the timer's `enabled` were re-run on the
 Debian 13 image; the other rows are carried from the Debian 12 runs and were not
 run again on trixie:
@@ -219,15 +219,18 @@ run again on trixie:
 - `check-fresh` skips the enable and start (see (c)), and the harness does not catch
   a silent skip. This section is the review of it.
 - CI runs this scenario. The Ansible workflow (`.github/workflows/ansible.yml`) runs
-  the harness over each role and pattern in its own shard, and
-  [`ansible/checks/README.md`](../../checks/README.md) says which shards a change runs.
-  The merge-queue run that passed this pattern's shard is
-  https://github.com/branchLeft/shared-infra/actions/runs/40208435018 (job
-  `Harness: ansible/patterns/files_and_units`, conclusion `success`).
+  the harness over each role and pattern in its own shard. A pull request or a
+  merge-queue entry runs this shard when its diff changes this pattern or a shared
+  file (the harness, the lock, or the checks that select shards); the weekly sweep runs
+  every shard; a push to `main` runs none, because the merge queue has already tested
+  the tree. [`ansible/checks/README.md`](../../checks/README.md) gives the rules. The
+  green run on `main` that ran this pattern's shard is
+  https://github.com/branchLeft/shared-infra/actions/runs/40191479010 (job
+  `Harness: ansible/patterns/files_and_units`, conclusion `success`, commit `7cd0d26`).
 - The settings in `molecule.yml` are measured on two hosts: Docker Desktop (the
   owner's machine) and a GitHub `ubuntu-24.04` runner (cgroup v2, Docker 28.0.4), where
   the full harness passed with `cgroupns_mode: host` in place. The CI evidence for this
-  pattern is the merge-queue run named above.
+  pattern is the push run named above.
 - The Ansible workflow's harness jobs run on `ubuntu-24.04`, not `ubuntu-latest`. Its
   `runs-on` line carries the comment "Pinned until the harness is verified on the next
   Ubuntu LTS image" (`.github/workflows/ansible.yml`, the harness job).
@@ -287,13 +290,13 @@ the owner reviews.
   names `schedule` as the trigger), so `latest` moves every week; the digest does
   not.
 - Source: the public repository `geerlingguy/docker-debian13-ansible` on GitHub
-  (MIT licence, last pushed 2025-07-31), built `FROM debian:trixie`. Its Dockerfile
+  (MIT licence), built `FROM debian:trixie`. Its Dockerfile
   installs `systemd` and `systemd-sysv`, Python, `pip` and build tools from Debian's
   repositories, then `ansible` and `cryptography` from PyPI without version pins, with
   `--break-system-packages`. The image's own Ansible is not used: Molecule runs the
   controller's pinned Ansible against the container.
-- Trixie differences, read from the image and from the harness run on 2026-10-17. The
-  harness passed on this image with no change to the role. Python on the image is 3.13
+- Trixie differences, read from the image and from a harness run on it. The harness
+  passed on this image with no change to the role. Python on the image is 3.13
   (the Dockerfile's `rm -f /usr/lib/python3.11/EXTERNALLY-MANAGED` names a 3.11 path, so
   it does not remove the marker on this image; the pip install therefore relies on
   `--break-system-packages`). This is a base-image fact, named as a limit below.
@@ -306,20 +309,21 @@ the owner reviews.
   one to record the result): the harness passes with the `name:tag@sha256:digest`
   form, every step, on the Docker Desktop below.
 
-What the container needs to run systemd, measured on 2026-10-17 on Docker Desktop
-with its Linux engine (cgroup v2), by creating the container and asking
-`systemctl is-system-running`:
+What the container needs to run systemd, measured on the pinned image on Docker
+Desktop (engine 29.8.2, linux/arm64, cgroup v2), by creating the container and asking
+`systemctl is-system-running --wait`:
 
-| Settings                                                                      | Result                                 |
-| ----------------------------------------------------------------------------- | -------------------------------------- |
-| cgroup mount read-write, `/run` and `/run/lock` tmpfs, command (the scenario) | `running`; the full harness passes     |
-| the same with `cgroupns_mode: host` added                                     | `running`                              |
-| `cgroupns_mode: host` and the mounts, without the tmpfs                       | the container exits (code 255, no log) |
-| `cgroupns_mode: host` and the tmpfs, without the cgroup mount                 | the container exits                    |
+| Settings                                                                                  | Result on the pinned image                                               |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| cgroup mount read-write, `/run` and `/run/lock` tmpfs, command (default cgroup namespace) | `degraded`; the container runs (`tmp.mount` and the journald units fail) |
+| the same with `cgroupns_mode: host` added (the scenario)                                  | `degraded`; the container runs (`tmp.mount` fails)                       |
+| `cgroupns_mode: host` and the mounts, without the tmpfs                                   | the container exits (code 255, no log)                                   |
+| `cgroupns_mode: host` and the tmpfs, without the cgroup mount                             | the container exits (code 255, no log)                                   |
 
-The first row is the scenario, and it is measured on the pinned Debian 13 image: the
-full harness passes on it. The other three rows were measured on the Debian 12 image
-and were not measured again on Debian 13.
+Every row is measured on the pinned Debian 13 image. The scenario's container reports
+`degraded`, not `running`. The harness reads no system state (no file under
+`ansible/harness` or `ansible/checks` asks systemd for it), so this fails no step, and
+the full harness passes on the scenario in the push run named above.
 
 So the scenario sets no `privileged` and no capabilities. It sets `cgroupns_mode: host`
 because on the GitHub `ubuntu-24.04` runner (cgroup v2) a private cgroup namespace over
@@ -327,9 +331,9 @@ the read-write mount made systemd exit at once, and the full harness passed with
 host namespace. The host namespace is a stated exception (ANS-15): it gives the
 container the host's cgroup view and, with the read-write mount, write access to the
 host cgroup tree. The test image is trusted by digest and the job holds no credentials.
-The Docker Desktop daemon used is version 4.32.0, engine 27.0.3, linux/arm64. The
-table above predates the runner evidence and shows the private namespace working on
-Docker Desktop; the runner result is the reason for the key.
+The Docker Desktop used for the table is engine 29.8.2, linux/arm64. The table's first
+row shows the private namespace keeping the container running on Docker Desktop; the
+runner result is the reason for the key.
 
 Named limit: the image is trusted by its digest and by review. It is not built by
 this repository, and its unpinned PyPI installs were resolved once, at its build and
