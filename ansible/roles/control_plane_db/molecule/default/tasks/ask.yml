@@ -1,0 +1,26 @@
+---
+# Run request.yml on the controller against the instance, the way the gated pull
+# runs the host's playbook: the step's tag on the command line and the step id in
+# an extra variable. A refusal is an answer, not a fault, so the exit status is kept
+# for the assertion that follows. The run is verbose, so a task whose result carries
+# a secret and has no no_log would print it, and no throwaway may be in the output.
+#
+# Takes ask_name and ask_tags, and optionally ask_extra (a mapping) and ask_check.
+- name: 'Request: {{ ask_name }}'
+  ansible.builtin.command:
+    argv: >-
+      {{ ['ansible-playbook', '-vv', '-i', lookup('ansible.builtin.env', 'MOLECULE_INVENTORY_FILE'),
+          playbook_dir ~ '/request.yml', '--tags', ask_tags]
+         + (['-e', ask_extra | ansible.builtin.to_json] if (ask_extra | default({})) | length > 0 else [])
+         + (['--check'] if ask_check | default(false) else []) }}
+  delegate_to: localhost
+  register: control_plane_db_ask_result
+  failed_when: false
+  changed_when: false
+
+- name: 'No throwaway secret in the output of: {{ ask_name }}'
+  ansible.builtin.assert:
+    that:
+      - scenario_needles | select('in', control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr) | list | length == 0
+    quiet: true
+    fail_msg: A throwaway secret appeared in the output of a request, so a task that handles it is missing no_log.

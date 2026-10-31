@@ -59,17 +59,37 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host), then edge1's deploy_tooling and edge_stack (last: it needs Docker from
-# host_baseline and the compose unit and deploy wrapper that the deploy tooling installs),
-# app1's host_inputs (the loader goes first, R11) and website_app1 (last, after host_baseline
-# has installed Docker), db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after
-# the loader, which goes first; db1_grants follows the timers, which deliver the dump programs
-# it checks), ops1's
-# control_plane after the status page, and demo1's two build roles.
+# breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), deploy_tooling and
+# edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
+# the deploy tooling installs), then edge1's three monitoring roles after the edge stack
+# (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs and
+# website_app1 (last, after host_baseline has installed Docker), db1's host_baseline, db1_stack,
+# db1_backup_timers and db1_grants (after the loader, which goes first; db1_grants follows the
+# timers, which deliver the dump programs it checks), ops1's host_inputs (first), control_plane
+# after the status page, then nextcloud_stack, backup_worker and backup_restore (the restore reads
+# the worker's variables, so it follows), and demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
-    "edge1": ["host_baseline", "ci_login", "deploy_tooling", "edge_stack"],
-    "ops1": ["host_baseline", "breakglass_mint_host", "status_page", "control_plane"],
+    "edge1": [
+        "host_inputs",
+        "host_baseline",
+        "ci_login",
+        "deploy_tooling",
+        "edge_stack",
+        "exporters_and_collectors",
+        "ntfy_pager",
+        "monitoring_stack",
+    ],
+    "ops1": [
+        "host_inputs",
+        "host_baseline",
+        "breakglass_mint_host",
+        "status_page",
+        "control_plane",
+        "nextcloud_stack",
+        "backup_worker",
+        "backup_restore",
+    ],
     "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
     "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers", "db1_grants"],
     "demo1": ["demo1_build", "demo1_egress_spool"],
@@ -231,10 +251,13 @@ class HostRoleLists(unittest.TestCase):
             self.assertNotIn(held_back, names)
         self.assertEqual(check(ROOT), [])
 
-    # edge1 applies the edge stack last: after the baseline (Docker), the CI login and the deploy
-    # tooling, which installs the compose unit and deploy wrapper the stack uses. Red when the
-    # stack moves earlier or is dropped, green with the six named in this order.
-    def test_edge1_applies_the_edge_stack_after_the_baseline_and_the_deploy_tooling(self) -> None:
+    # edge1 applies the loader first, then the edge stack after the baseline (Docker), the CI login
+    # and the deploy tooling, which installs the compose unit and deploy wrapper the stack uses,
+    # then the three monitoring roles: the collectors, the pager, and the monitoring stack last
+    # (it hashes the pager's files and decides the one restart of its unit). The edge stack is
+    # ahead of the monitoring roles so that a monitoring failure cannot hold the edge delivery.
+    # Red when any role moves or is dropped, green with the ten named in this order.
+    def test_edge1_applies_the_edge_stack_then_the_pager_before_the_monitoring_stack(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
         self.assertEqual(
@@ -242,12 +265,50 @@ class HostRoleLists(unittest.TestCase):
             [
                 "ansible_runtime",
                 "pull_trigger",
+                "host_inputs",
                 "host_baseline",
                 "ci_login",
                 "deploy_tooling",
                 "edge_stack",
+                "exporters_and_collectors",
+                "ntfy_pager",
+                "monitoring_stack",
             ],
         )
+        self.assertLess(names.index("ntfy_pager"), names.index("monitoring_stack"))
+        self.assertEqual(names[-1], "monitoring_stack")
+        for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
+            self.assertLess(names.index("edge_stack"), names.index(monitoring))
+        self.assertNotIn("egress_nat", names)
+        self.assertEqual(check(ROOT), [])
+
+    # ops1 applies the loader first (R11), the roles it had before (control_plane keeps its place
+    # after the status page, #530), then the three roles that take the loader's inputs or adopt
+    # a hand copy, last, so their failure holds nothing else back. The restore reads the worker's
+    # variables in the same play, so it follows the worker. Red when any role moves or is
+    # dropped, green with the ten named in this order.
+    def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
+        self,
+    ) -> None:
+        text = (ROOT / "ansible" / "playbooks" / "ops1.yml").read_text(encoding="utf-8")
+        names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
+        self.assertEqual(
+            names,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "host_inputs",
+                "host_baseline",
+                "breakglass_mint_host",
+                "status_page",
+                "control_plane",
+                "nextcloud_stack",
+                "backup_worker",
+                "backup_restore",
+            ],
+        )
+        self.assertLess(names.index("backup_worker"), names.index("backup_restore"))
+        self.assertEqual(names[2], "host_inputs")
         self.assertEqual(check(ROOT), [])
 
     # Safety class: demo1 is held off host_baseline, egress_nat and broker_deploy by its own

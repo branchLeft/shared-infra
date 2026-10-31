@@ -126,8 +126,8 @@ and each is why:
   verify step starts `snds-collector.service` by hand to read its first output.
   The timer starts it on its own schedule, so the role does not start it.
 - **The collector's access URL.** It lives in `/etc/branchleft/monitoring.env`,
-  written by hand (monitoring runbook section 14). The role never reads or writes
-  that file.
+  written by `monitoring_stack` from the host's inputs file (monitoring runbook
+  section 14 rotates it there). This role never reads or writes that file.
 - **The disk check's threshold for molecule.** The test sets it to 100 because the
   container's mounts belong to the test host, not to db1.
 
