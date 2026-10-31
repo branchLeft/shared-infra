@@ -4,8 +4,8 @@ This reads .github/CODEOWNERS the way GitHub does (the last matching line wins) 
 when a file that must be the owner's is not. It covers the standards template's lines being
 the file's final lines (SYNC-1), the estate and gate files, the pull-role paths, and the pin
 gate's install program (check_pins.py loads the lock reader from it and keeps no copy), and
-that a host playbook is not the owner's, and that every Ansible loader directory is the owner's
-at each level it can sit in.
+that a host playbook is not the owner's, and that every Ansible loader directory, and a bare
+file or symlink of its name, is the owner's at each level it can sit in.
 """
 
 from __future__ import annotations
@@ -264,10 +264,12 @@ class CodeownersTests(unittest.TestCase):
         patterns = {pattern for pattern, _ in self.rules}
         top_and_playbooks = LOADER_DIRS | {COLLECTIONS_DIR}
         expected = {"/ansible/ansible.cfg"}
-        expected |= {f"/ansible/{name}/" for name in top_and_playbooks}
-        expected |= {f"/ansible/playbooks/{name}/" for name in top_and_playbooks}
-        expected |= {f"/ansible/playbooks/**/{name}/" for name in LOADER_DIRS}
-        expected |= {f"/ansible/roles/*/{name}/" for name in LOADER_DIRS}
+        # No trailing slash: a pattern with one matches a directory only, so a symlink (a file
+        # in git) named like a loader directory would be unowned while Ansible follows it.
+        expected |= {f"/ansible/{name}" for name in top_and_playbooks}
+        expected |= {f"/ansible/playbooks/{name}" for name in top_and_playbooks}
+        expected |= {f"/ansible/playbooks/**/{name}" for name in LOADER_DIRS}
+        expected |= {f"/ansible/roles/*/{name}" for name in LOADER_DIRS}
         self.assertEqual([], sorted(expected - patterns))
 
     def test_each_loader_directory_is_owned_at_every_level(self) -> None:
@@ -278,6 +280,15 @@ class CodeownersTests(unittest.TestCase):
                 [f"ansible/playbooks/includes/{name}/x.py", f"ansible/roles/r/{name}/x.py"]
             )
         self.assert_owned(["ansible/ansible.cfg"])
+
+    def test_a_bare_file_named_like_a_loader_directory_is_owned_at_every_level(self) -> None:
+        # A symlink committed as library, filter_plugins and so on is a file in git, and Ansible
+        # follows it to a directory it loads code from, so the bare name is the owner's too.
+        for name in sorted(LOADER_DIRS | {COLLECTIONS_DIR}):
+            self.assert_owned([f"ansible/{name}", f"ansible/playbooks/{name}"])
+        for name in sorted(LOADER_DIRS):
+            self.assert_owned([f"ansible/playbooks/includes/{name}", f"ansible/roles/r/{name}"])
+        self.assert_owned(["ansible/roles/x/library", "ansible/playbooks/filter_plugins"])
 
     def test_the_paths_beside_a_loader_directory_stay_unowned(self) -> None:
         # A molecule scenario's library, a directory that is not a loader and a role's tasks are
