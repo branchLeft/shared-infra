@@ -1,0 +1,13 @@
+---
+# Test scaffolding, not role tasks. Included from a rescue section with expect_phrase set:
+# asserts the step failed for the reason the case is for. The whole failed result is
+# searched, not its msg alone, because a task that loops reports "One or more items failed"
+# in its msg and each item's own message in its results.
+- name: Assert the refusal was the one this case is for
+  ansible.builtin.assert:
+    that:
+      - expect_phrase in (ansible_failed_result | to_json)
+    quiet: true
+    fail_msg: >-
+      The step failed for a reason other than the one this case is for. Expected
+      '{{ expect_phrase }}'; the failed result was: {{ ansible_failed_result | to_json }}

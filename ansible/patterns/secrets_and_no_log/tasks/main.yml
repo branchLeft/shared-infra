@@ -49,6 +49,16 @@
       Secret entry number {{ secrets_and_no_log_problems['duplicate'] | join(', ') }}
       repeats the name of an earlier entry. A name is a file name, so each is used once.
 
+- name: Refuse an environment file that has the name of a secret
+  ansible.builtin.assert:
+    that:
+      - secrets_and_no_log_problems['env_name'] | length == 0
+    quiet: true
+    fail_msg: >-
+      The environment file name is the name of secret entry number
+      {{ secrets_and_no_log_problems['env_name'] | join(', ') }}. The environment
+      file would replace that secret's file, so the two names must differ.
+
 - name: Refuse a secret that is not given as exactly one of value and source_file
   ansible.builtin.assert:
     that:
@@ -113,10 +123,11 @@
       - item.stat.isreg | default(false)
       - item.stat.uid == 0
       - item.stat.mode | int(base=8) % 64 == 0
+      - item.stat.size | default(0) > 0
     quiet: true
     fail_msg: >-
-      The source file {{ item.item }} must be an existing plain file owned by root
-      with no group or other permission.
+      The source file {{ item.item }} must be an existing, non-empty plain file
+      owned by root with no group or other permission.
   loop: '{{ secrets_and_no_log_sources.results }}'
   loop_control:
     label: '{{ item.item }}'

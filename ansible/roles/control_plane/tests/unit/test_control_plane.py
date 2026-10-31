@@ -8,7 +8,7 @@ tasks/main.yml and fail when that order or those gates are lost.
 """
 
 import importlib.util
-import re
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,13 +18,15 @@ import yaml
 
 ROLE = Path(__file__).resolve().parents[2]
 TASKS = ROLE / "tasks" / "main.yml"
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests" / "support"))
+
+from role_tasks import task_lines  # noqa: E402
 
 CREATE_ENV = "Create the environment file empty, if it is absent"
 CREATE_KEY = "Create the master key empty, if it is absent"
 ATTRIBUTES = "Set the owner, group and mode of each secret file on every run"
 FILL_ENV = "Write the environment file's content while the file is empty"
 FILL_KEY = "Write the master key's content while the file is empty"
-
 
 FIRST_WRITE = "Create the host configuration directories of the control plane"
 INPUT_REFUSALS = (
@@ -55,19 +57,9 @@ def _conditions(task: dict[str, Any]) -> list[str]:
     return [str(item) for item in (when if isinstance(when, list) else [when])]
 
 
-def _task_names() -> list[str]:
-    """Return the name of every task in tasks/main.yml, in file order, read as text."""
-    names: list[str] = []
-    for line in TASKS.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"^- name: (.+)$", line)
-        if match:
-            names.append(match.group(1).strip())
-    return names
-
-
 class TaskOrderTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.names = _task_names()
+        self.names = [name for name, _ in task_lines(TASKS)]
 
     def _position(self, name: str) -> int:
         self.assertEqual(
@@ -108,7 +100,7 @@ class TaskOrderTests(unittest.TestCase):
 
 class InputTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.names = _task_names()
+        self.names = [name for name, _ in task_lines(TASKS)]
 
     def test_every_input_refusal_comes_before_the_first_write(self) -> None:
         first_write = self.names.index(FIRST_WRITE)

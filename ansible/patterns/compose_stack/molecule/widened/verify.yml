@@ -1,0 +1,110 @@
+---
+# What the widened contract must have left on the instance after converge: the files at the
+# names and modes the caller gave, no secret file, a compose file under the caller's name, the
+# stamp, the up calls and nothing that removes data.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_dir: /opt/compose_widened
+    verify_state: /var/lib/compose_stack_standin
+    # The shape of a real up call with the caller's names: the module adds the first flags, the
+    # role's task sets the others. The compose file is named, so an override file is never read.
+    # The wait is 30 seconds, or 2 for the application made while the endpoint did not answer.
+    verify_up_pattern: >-
+      ^--host \S+ compose --ansi never --progress json --project-directory /opt/compose_widened
+      --project-name widened --file widened.yml up --detach --no-color --quiet-pull --force-recreate
+      --no-build --wait --wait-timeout (30|2)( --)?$
+    verify_allowed:
+      - '^--host \S+ version --format \{\{ json \. \}\}$'
+      - '^--host \S+ compose version --format json$'
+      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name widened --file widened.yml ps --format json --all --no-trunc$'
+      - '^--host \S+ compose --ansi never --progress json --project-directory \S+ --project-name widened --file widened.yml images --format json$'
+      - '^compose --project-directory \S+ --file \S+ config --quiet$'
+  tasks:
+    - name: Read the project directory, the stack directory and the delivered files
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ verify_dir }}'
+        - '{{ verify_dir }}/stack'
+        - '{{ verify_dir }}/widened.yml'
+        - '{{ verify_dir }}/stack/config.yaml'
+        - '{{ verify_dir }}/.compose_stack_stamp'
+        - '{{ verify_dir }}/app.conf'
+        - '{{ verify_dir }}/app.secret.env'
+      register: widened_verify_files
+      loop_control:
+        label: '{{ item }}'
+
+    - name: Assert each has its owner, group and mode, and that no default-recipe file exists
+      ansible.builtin.assert:
+        that:
+          - widened_verify_files.results[0].stat.mode == '0755'
+          - widened_verify_files.results[1].stat.isdir and widened_verify_files.results[1].stat.mode == '0755'
+          - widened_verify_files.results[2].stat.mode == '0644'
+          - widened_verify_files.results[3].stat.mode == '0644'
+          - widened_verify_files.results[4].stat.mode == '0600'
+          - widened_verify_files.results[4].stat.pw_name == 'root'
+          - widened_verify_files.results[5].stat.exists == false
+          - widened_verify_files.results[6].stat.exists == false
+        quiet: true
+        fail_msg: A delivered file has the wrong mode, or a file of the default recipe was written.
+
+    - name: Assert the configuration file is the content the caller gave
+      ansible.builtin.assert:
+        that:
+          - widened_verify_files.results[3].stat.checksum == ("greeting = FINAL\n" | ansible.builtin.hash('sha256'))
+        quiet: true
+        fail_msg: The configuration file in the subdirectory is not the content the caller gave.
+
+    - name: Read the compose file the caller's template rendered
+      ansible.builtin.slurp:
+        src: '{{ verify_dir }}/widened.yml'
+      register: widened_verify_compose_raw
+
+    - name: Assert the compose file has the caller's one service, pinned by digest and with no healthcheck
+      ansible.builtin.assert:
+        that:
+          - verify_compose.services.keys() | ansible.builtin.list == ['web']
+          - verify_compose.services.web.image is ansible.builtin.match('^[^\s@]+@sha256:[0-9a-f]{64}\Z')
+          - verify_compose.services.web.healthcheck is ansible.builtin.undefined
+        quiet: true
+        fail_msg: The compose file is not the caller's template as rendered.
+      vars:
+        verify_compose: '{{ widened_verify_compose_raw.content | ansible.builtin.b64decode | ansible.builtin.from_yaml }}'
+
+    - name: Read the calls the stand-in has logged
+      ansible.builtin.command:
+        argv: [cat, '{{ verify_state }}/argv.log']
+      register: widened_verify_argv
+      changed_when: false
+
+    - name: Assert the stack was brought up once for each change and no call was unexpected
+      ansible.builtin.assert:
+        that:
+          - verify_ups | ansible.builtin.length == 3
+          - verify_ups | ansible.builtin.reject('ansible.builtin.match', verify_up_pattern) | ansible.builtin.list | ansible.builtin.length == 0
+          - verify_removing | ansible.builtin.length == 0
+          - verify_unexpected | ansible.builtin.length == 0
+        quiet: true
+        fail_msg: >-
+          Expected three bring-ups with the caller's names and nothing that removes data. Ups: {{ verify_ups }}.
+          Removing: {{ verify_removing }}. Unexpected: {{ verify_unexpected }}
+      vars:
+        verify_ups: "{{ widened_verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search', ' up --detach') | ansible.builtin.list }}"
+        verify_removing: >-
+          {{ widened_verify_argv.stdout_lines | ansible.builtin.select('ansible.builtin.search',
+          '(--volumes|--remove-orphans|--renew-anon-volumes|--rmi| down | rm | volume | prune| -V )')
+          | ansible.builtin.list }}
+        verify_unexpected: >-
+          {{ widened_verify_argv.stdout_lines
+          | ansible.builtin.reject('ansible.builtin.match', '(' ~ (verify_allowed + [verify_up_pattern])
+          | ansible.builtin.join('|') ~ ')') | ansible.builtin.list }}
+
+    - name: Ask the endpoint for its health, as the role does
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8304/health
+        status_code: 200
+      changed_when: false

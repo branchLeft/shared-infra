@@ -587,8 +587,8 @@ Then:
 
 1. In a branch, set `rateLimit: 'enforcing'` in `hetzner/edge/posture.ts`, with
    `RATE_LIMIT_EVENTS` at the derived value.
-2. `cd hetzner && npm run render` — this rewrites `hetzner/edge/stack/Caddyfile`.
-3. Commit both files together and open a pull request. `npm test` fails if the
+2. `cd hetzner && pnpm run render` — this rewrites `hetzner/edge/stack/Caddyfile`.
+3. Commit both files together and open a pull request. `pnpm run test` fails if the
    rendered file and the posture disagree, so they cannot land apart.
 4. After merge, on an up-to-date checkout of `main`, repeat step 4 (`rsync`) and
    then reload Caddy in place, which needs no new image. The reload hands the
@@ -768,7 +768,7 @@ One registry entry, then a re-render. Nothing else.
    `sites.ts` (`host` is a name from the estate address plan, not an address;
    an unknown name fails the render rather than producing a config that proxies
    to nothing).
-2. `cd hetzner && npm run render`, commit both files, open a pull request.
+2. `cd hetzner && pnpm run render`, commit both files, open a pull request.
 3. After merge: `rsync` (step 4) and reload (step 10a.4).
 4. **Only then** cut the hostname's DNS at IONOS to `46.225.95.167`. The order
    is forced: Caddy issues its certificate over HTTP-01, which cannot succeed

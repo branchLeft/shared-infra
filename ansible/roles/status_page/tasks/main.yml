@@ -1,7 +1,20 @@
 ---
-# The first refusal of an address that would expose ops1. The argument
-# specification has already refused any value but 127.0.0.1; this holds if that
-# validation is ever switched off, and it also reads the compose file as
+# The compose file is rendered once from the role's template and parsed, not
+# searched, so a tag in quotes or a comment is judged by what YAML says it is. A
+# service that builds its own image has no digest to pin, so it is refused too.
+- name: Render the compose file from the role's template
+  ansible.builtin.set_fact:
+    status_page_compose_text: "{{ lookup('ansible.builtin.template', 'compose.yml.j2') }}"
+
+- name: Parse the rendered compose file
+  ansible.builtin.set_fact:
+    status_page_rendered: '{{ status_page_compose_text | ansible.builtin.from_yaml }}'
+
+# This role is a copy of the compose_stack pattern's recipe (ANS-12: a role does not
+# apply another role), with the status page's own names, its own template and its
+# two configuration files. The first refusal of an address that would expose ops1.
+# The argument specification has already refused any value but 127.0.0.1; this holds
+# if that validation is ever switched off, and it also reads the compose file as
 # rendered, so a published port that does not start with the loopback address is
 # refused whatever put it there. It runs before anything is written to the host.
 - name: Refuse a published port that is not on loopback
@@ -17,14 +30,11 @@
       127.0.0.1 and the only published port of the compose file must start with
       that address; found {{ status_page_listen_address }} and {{ status_page_published }}.
   vars:
-    status_page_rendered: "{{ lookup('ansible.builtin.template', 'compose.yml.j2') | ansible.builtin.from_yaml }}"
+    status_page_rendered: '{{ status_page_compose_text | ansible.builtin.from_yaml }}'
     status_page_published: >-
       {{ status_page_rendered.services.values() | ansible.builtin.map(attribute='ports', default=[])
       | ansible.builtin.flatten | ansible.builtin.list }}
 
-# The rendered compose file is parsed, not searched, so a tag in quotes or a
-# comment is judged by what YAML says it is. A service that builds its own image
-# has no digest to pin, so it is refused too.
 - name: Refuse a compose file whose images are not all pinned by digest
   ansible.builtin.assert:
     that:
@@ -41,7 +51,6 @@
       hex digits. No service may build an image or extend another, and the file may
       not include another. A tag alone can move.
   vars:
-    status_page_rendered: "{{ lookup('ansible.builtin.template', 'compose.yml.j2') | ansible.builtin.from_yaml }}"
     status_page_service_list: '{{ status_page_rendered.services.values() | ansible.builtin.list }}'
     status_page_images: "{{ status_page_service_list | ansible.builtin.map(attribute='image') | ansible.builtin.list }}"
     status_page_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
@@ -76,25 +85,30 @@
       merge into the stack without the digest check. Remove it:
       {{ status_page_overrides.files | ansible.builtin.default([]) | ansible.builtin.map(attribute='path') | ansible.builtin.list }}.
 
-# The stamp is one digest of everything the stack is made of: the compose file as
-# rendered and the two configuration files as the repository holds them. It is a
-# function of the inputs, not of the host, so it is worked out in check mode too.
-- name: Start the record of the stack files as the repository holds them
+# The two configuration files as the repository holds them, read byte for byte
+# (rstrip and lstrip off), so the copy on the host is the file in the repository.
+# The list starts empty on every run: a fact persists across a second include of
+# the role in the same play, and a list that was not reset would grow.
+- name: Start the list of configuration files
   ansible.builtin.set_fact:
-    status_page_stack_texts: {}
+    status_page_config_files: []
 
-- name: Read each stack file from the repository
+- name: Read each configuration file from the repository
   ansible.builtin.set_fact:
-    status_page_stack_texts: "{{ status_page_stack_texts | ansible.builtin.combine({item: lookup('ansible.builtin.file', 'stack/' ~ item)}) }}"
+    status_page_config_files: >-
+      {{ status_page_config_files + [{'name': 'stack/' ~ item,
+      'content': lookup('ansible.builtin.file', 'stack/' ~ item, rstrip=false, lstrip=false),
+      'mode': '0644'}] }}
   loop: '{{ status_page_stack_files }}'
 
+# One digest of everything the stack is made of: the compose file as rendered and
+# the two configuration files as the repository holds them. It is a function of the
+# inputs, not of the host, so it is worked out in check mode too.
 - name: Work out the stamp of the content this run delivers
   ansible.builtin.set_fact:
     status_page_stamp: >-
-      {{ {'compose': status_page_compose_text, 'stack': status_page_stack_texts}
+      {{ {'compose': status_page_compose_text, 'config': status_page_config_files}
       | ansible.builtin.to_json(sort_keys=True) | ansible.builtin.hash('sha256') }}
-  vars:
-    status_page_compose_text: "{{ lookup('ansible.builtin.template', 'compose.yml.j2') }}"
 
 - name: Create the project directory
   ansible.builtin.file:
@@ -117,20 +131,20 @@
 # below is what remembers that the stack was never brought up.
 - name: Deliver the configuration files
   ansible.builtin.copy:
-    src: 'stack/{{ item }}'
-    dest: '{{ status_page_project_dir }}/stack/{{ item }}'
+    content: '{{ item.content }}'
+    dest: '{{ status_page_project_dir }}/{{ item.name }}'
     owner: root
     group: root
-    mode: '0644'
-  loop: '{{ status_page_stack_files }}'
+    mode: '{{ item.mode }}'
+  loop: '{{ status_page_config_files }}'
   register: status_page_stack_delivery
 
 # Last of the deliveries, so the files it points at are already on disk when
 # the validator reads them. The validator runs on a temporary copy before the
 # file replaces the old one.
 - name: Deliver the compose file
-  ansible.builtin.template:
-    src: compose.yml.j2
+  ansible.builtin.copy:
+    content: '{{ status_page_compose_text }}'
     dest: '{{ status_page_project_dir }}/compose.yml'
     owner: root
     group: root
@@ -215,9 +229,7 @@
       {{ status_page_missing }}. Not running: {{ status_page_not_running }}.
   vars:
     status_page_containers: '{{ status_page_state.containers }}'
-    status_page_declared: >-
-      {{ (lookup('ansible.builtin.template', 'compose.yml.j2') | ansible.builtin.from_yaml).services.keys()
-      | ansible.builtin.list }}
+    status_page_declared: '{{ status_page_rendered.services.keys() | ansible.builtin.list }}'
     status_page_missing: >-
       {{ status_page_declared | ansible.builtin.difference(status_page_containers
       | ansible.builtin.map(attribute='Service') | ansible.builtin.list) }}

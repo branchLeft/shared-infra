@@ -59,6 +59,10 @@
 # SSH is the only service reachable on the public interface of a non-edge host,
 # and on the edge the HTTP-facing protection is CrowdSec's rather than
 # fail2ban's. So this jail is deliberately the only one.
+#
+# The ignoreip line exempts edge1's private address. Edge1 carries the CI route
+# and the owner's route to these hosts, and five failed logins from it in ten
+# minutes would otherwise ban that route for an hour. Loopback stays exempt too.
 - name: Configure the sshd jail
   ansible.builtin.copy:
     src: jail.local

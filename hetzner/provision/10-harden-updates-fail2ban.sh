@@ -39,20 +39,10 @@ fi
 
 systemctl enable --now unattended-upgrades >/dev/null 2>&1 || true
 
-# Debian's stock origins list covers the Debian security suites and nothing
-# else, so the container runtime -- installed from Docker's own apt repo by
-# 20-install-docker.sh -- would receive no unattended security updates at
-# all. Every tenant's isolation rests on that runtime, so a container-escape
-# fix in runc or containerd reaching the host is not optional.
-#
-# An APT configuration block appends to the list it names rather than
-# replacing it, which is what is wanted here: Debian's own entries stay, and
-# Docker's origin is added alongside them. The file sorts after
-# 50unattended-upgrades so the default list exists by the time this is read.
-#
-# Consequence worth knowing: an unattended docker-ce upgrade restarts the
-# daemon. Containers carry `restart: unless-stopped` and come back, but a
-# stack mid-request loses it.
+# Docker's origin is added here so unattended-upgrades also covers the container
+# runtime, which every tenant's isolation rests on. The reasons, and the daemon
+# restart an unattended docker-ce upgrade causes, are in
+# ansible/roles/host_baseline/tasks/_updates_fail2ban.yml.
 ORIGINS=/etc/apt/apt.conf.d/51branchleft-unattended-origins
 cat > "$TMP" <<'EOF'
 Unattended-Upgrade::Origins-Pattern {
@@ -87,6 +77,7 @@ backend = systemd
 maxretry = 5
 findtime = 10m
 bantime = 1h
+ignoreip = 127.0.0.1/8 ::1 10.20.1.10
 EOF
 if [[ -f "$JAIL_LOCAL" ]] && cmp -s "$TMP" "$JAIL_LOCAL"; then
     echo "10-harden-updates-fail2ban: $JAIL_LOCAL already up to date, no-op"

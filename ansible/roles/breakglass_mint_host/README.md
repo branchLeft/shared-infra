@@ -213,9 +213,10 @@ The test reads the role and runs it. It does not read or run any playbook.
 ## How it is delivered
 
 A role reaches a host only through the gated pull (ANS-17), never by running
-`ansible-playbook` by hand. No playbook applies this role yet: it reaches the
-control host through the per-host role list, in a later wiring change. Until
-then a merge of this role changes no host.
+`ansible-playbook` by hand. `playbooks/ops1.yml` applies this role after
+`host_baseline`, which is after the two pull roles, as a plain entry the per-host role
+list allows. A merge changes no host. The role reaches the control host only when
+that host is under the pull and an approved delivery run applies the playbook.
 
 ## How to change it safely
 
