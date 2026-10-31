@@ -144,11 +144,11 @@ image does not have.
 Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode, the
 approval of the protected environment, a pull of that exact commit on the host, and a
 second run that must report zero changes. Nothing in this repository applies the role by
-hand, and an author's local run is the container test. No host plays the role yet: the
-per-host role list will carry it, with each host's class
-and variant, is a follow-up, and capturing the real `iptables -S INPUT` and
-`iptables -S DOCKER-USER` (and the IPv6 pair) from a real app host is a precondition of
-it (see "Named limits").
+hand, and an author's local run is the container test. The gateway host plays the role as
+class gateway, named in that host's play vars and pinned by the enrolment check. No app
+host plays it yet: listing it with the app class and variant is a follow-up, and
+capturing the real `iptables -S INPUT` and `iptables -S DOCKER-USER` (and the IPv6 pair)
+from a real app host is a precondition of it (see "Named limits").
 
 ## How to change it safely
 

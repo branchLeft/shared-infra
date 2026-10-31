@@ -19,6 +19,8 @@ from check_enrolment import ROOT, check
 EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
 # The loader's entry in db1's playbook, as it stands on main.
 LOADER_LINE = "    - role: ../roles/host_inputs # noqa: role-name[path]\n"
+# The stack's entry in db1's playbook, after the loader, as it stands on main.
+STACK_LINE = "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
 
 
 class RealTree(unittest.TestCase):
@@ -222,11 +224,8 @@ class Sabotage(unittest.TestCase):
     def test_r2_db1_role_entry_carries_an_input(self) -> None:
         self._edit(
             "playbooks/db1.yml",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
-            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
-            "      vars:\n"
-            "        db1_stack_exporter_password: x\n",
+            STACK_LINE,
+            STACK_LINE + "      vars:\n        db1_stack_exporter_password: x\n",
         )
         self._assert_rule("R2 db1.yml")
 
@@ -237,7 +236,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            LOADER_LINE + "    - role: ../roles/db1_stack # noqa: role-name[path]\n",
+            LOADER_LINE + "    - role: ../roles/db1_grants # noqa: role-name[path]\n",
         )
         self.assertEqual(check(self.root), [])
 
@@ -246,7 +245,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
         )
         findings = self._assert_rule("R11 db1.yml")
         self.assertTrue(any("must be the first role after the pull roles" in f for f in findings))
@@ -256,8 +255,8 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
-            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/db1_grants # noqa: role-name[path]\n"
+            "    - role: ../roles/tunnel_account # noqa: role-name[path]\n" + LOADER_LINE,
         )
         self._assert_rule("R11 db1.yml")
 
@@ -1071,6 +1070,51 @@ class Sabotage(unittest.TestCase):
             "    - '{{ playbook_dir }}/../owner_vars/other.yml'\n",
         )
         self._assert_one("R2 edge1.yml: vars_files must be exactly")
+
+    # R2: edge1 may set one play var beside enrolled_host, the deploy_tooling class, pinned by
+    # HOST_PLAY_VARS. The positive control first: the real edge1 play carries it and the tree
+    # is green, so a check that refused every extra var would not pass.
+    def test_r2_pinned_play_var_passes_on_edge1(self) -> None:
+        text = (self.ansible / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
+        self.assertIn("    deploy_tooling_host_class: gateway\n", text)
+        self.assertEqual(check(self.root), [])
+
+    # R2: the pinned value is exact, so a different class is refused (sabotage a).
+    def test_r2_pinned_play_var_with_another_class(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "deploy_tooling_host_class: gateway",
+            "deploy_tooling_host_class: app",
+        )
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R2: dropping the pinned var is refused too, the pin is the whole value (sabotage b).
+    def test_r2_pinned_play_var_removed(self) -> None:
+        self._edit("playbooks/edge1.yml", "    deploy_tooling_host_class: gateway\n", "")
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R2: a host with no row in the table keeps the exact pin (sabotage c).
+    def test_r2_pinned_play_var_on_a_host_with_no_row(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    enrolled_host: ops1\n",
+            "    enrolled_host: ops1\n    deploy_tooling_host_class: gateway\n",
+        )
+        self._assert_one("R2 ops1.yml: vars must be exactly")
+
+    # R2: an extra key beside the pinned one is refused (sabotage d).
+    def test_r2_pinned_play_var_with_an_extra_key(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "    deploy_tooling_host_class: gateway\n",
+            "    deploy_tooling_host_class: gateway\n    deploy_tooling_extra: x\n",
+        )
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R9 through R2: the role is applied only while it is on edge1's list (sabotage e).
+    def test_r2_deploy_tooling_off_the_list(self) -> None:
+        self._edit("checks/host_roles.yml", "  - ci_login\n  - deploy_tooling\n", "  - ci_login\n")
+        self._assert_one("R2 edge1.yml: role deploy_tooling is not on edge1's list")
 
 
 if __name__ == "__main__":

@@ -213,7 +213,7 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_three_db1_inputs(self) -> None:
+    def test_the_rows_name_the_db1_and_app1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
@@ -222,8 +222,32 @@ class RealTree(unittest.TestCase):
                     "db1_stack_exporter_password",
                     "db1_grants_tenants",
                     "db1_grants_ops1_host",
-                ]
+                ],
+                "app1": [
+                    "website_app1_smtp_host",
+                    "website_app1_smtp_port",
+                    "website_app1_smtp_user",
+                    "website_app1_smtp_password",
+                ],
             },
+        )
+
+    def test_app1_applies_the_loader_then_the_website_role_after_the_pull_roles(self) -> None:
+        # The order is the point: the loader sets the four SMTP facts the role requires, so the
+        # role must follow it, and both must follow the two pull roles (check_enrolment R11). The
+        # host baseline installs Docker, which the role needs, so it too sits before the role.
+        playbook = _mapping_list(_read(ROOT / "ansible" / "playbooks" / "app1.yml"))
+        applied = [Path(str(entry.get("role", entry))).name for entry in playbook]
+        self.assertEqual(
+            applied,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                LOADER,
+                "host_baseline",
+                "breakglass_grant_host",
+                "website_app1",
+            ],
         )
 
 
@@ -234,12 +258,22 @@ class Mutations(unittest.TestCase):
         self.ansible = Path(temp.name) / "ansible"
         real = ROOT / "ansible"
         leave_out = shutil.ignore_patterns("molecule", "tests", "files", "templates")
-        for role in (LOADER, "db1_stack", "db1_grants", "db1_backup_timers", "tunnel_account"):
+        for role in (
+            LOADER,
+            "db1_stack",
+            "db1_grants",
+            "db1_backup_timers",
+            "tunnel_account",
+            "website_app1",
+        ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
         shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
         (self.ansible / "playbooks").mkdir()
-        shutil.copy(real / "playbooks" / "db1.yml", self.ansible / "playbooks" / "db1.yml")
+        for host in ("db1", "app1"):
+            shutil.copy(
+                real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
+            )
 
     def _edit(self, relative: str, old: str, new: str) -> None:
         path = self.ansible / relative
@@ -302,8 +336,40 @@ class Mutations(unittest.TestCase):
         self._expect("pull_trigger_signers is a protected or internal name")
 
     def test_a_host_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
-        self._edit("checks/host_roles.yml", "  - host_inputs\n", "")
+        self._edit("checks/host_roles.yml", "db1:\n  - host_inputs\n", "db1:\n")
         self._expect("host_inputs is not on db1's list")
+
+    def test_app1_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
+        self._edit("checks/host_roles.yml", "app1:\n  - host_inputs\n", "app1:\n")
+        self._expect("host_inputs is not on app1's list")
+
+    def test_an_app1_row_name_that_is_no_roles_required_argument_is_found(self) -> None:
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "    - website_app1_smtp_password\n",
+            "    - website_app1_smtp_passwrod\n",
+        )
+        self._expect("website_app1_smtp_passwrod is not a required argument")
+
+    def test_a_default_for_the_website_roles_smtp_port_is_found(self) -> None:
+        path = self.ansible / "roles" / "website_app1" / "defaults" / "main.yml"
+        path.write_text(
+            path.read_text(encoding="utf-8") + "website_app1_smtp_port: '25'\n", encoding="utf-8"
+        )
+        self._expect("role website_app1 gives website_app1_smtp_port a default")
+
+    def test_the_website_role_applied_before_the_loader_on_app1_is_found(self) -> None:
+        self._edit(
+            "playbooks/app1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/website_app1 # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/app1.yml applies a role before host_inputs")
+
+    def test_an_app1_input_the_loader_sets_with_no_row_is_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - website_app1_smtp_user\n", "")
+        self._expect("the input task sets")
 
     def test_a_host_playbook_that_does_not_apply_the_loader_is_found(self) -> None:
         self._edit(
