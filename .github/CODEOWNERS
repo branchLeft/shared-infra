@@ -67,6 +67,8 @@
 /ansible/roles/ansible_runtime/          @branchLeft/branchleft-admin
 # host_inputs is the one loader of every pulled host's private role inputs (owner ruling, option A): the values of every host pass through it as root, and a check that fails open there exposes them all, so a change to it is the owner's to review.
 /ansible/roles/host_inputs/              @branchLeft/branchleft-admin
+# The owner-run writer of a host's inputs file runs as root, takes every input value and writes the file the loader reads.
+/ansible/tools/seed_host_inputs.py       @branchLeft/branchleft-admin
 # ci_login grants the pipeline account root-run sudo for the trigger and writes its authorized_keys, so a change to it is the owner's to review.
 /ansible/roles/ci_login/                 @branchLeft/branchleft-admin
 # owner_vars holds the owner's values for a host's roles, such as the pipeline's public keys. check_enrolment.py (R10) pins which keys each file may set.

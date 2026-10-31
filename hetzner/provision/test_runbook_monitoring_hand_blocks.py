@@ -398,7 +398,7 @@ class SndsRotationTests(unittest.TestCase):
         # A terminal for the hidden prompt, and no value anywhere on the command line.
         self.assertNotIn("read -rs", rotation[0])
         self.assertNotIn("$SNDS", rotation[0])
-        self.assertIn("/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py", rotation[0])
+        self.assertIn("python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py", rotation[0])
 
     def test_the_two_writers_wording_is_gone(self) -> None:
         self.assertNotRegex(self.text, r"(?i)two\s+writers")
@@ -413,6 +413,7 @@ class SndsRotationTests(unittest.TestCase):
     def test_the_rotation_says_when_the_new_link_arrives(self) -> None:
         flat = re.sub(r"\s+", " ", self.text)
         self.assertIn("reaches the collector at the next gated apply, not at once", flat)
+        self.assertNotIn("leaves the old file whole", flat)
 
 
 if __name__ == "__main__":

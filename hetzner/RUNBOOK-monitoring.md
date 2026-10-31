@@ -957,7 +957,7 @@ host.
 
 ```bash
 ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  python3 /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py \
+  python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py \
   --host edge1 --set monitoring_stack_snds_data_url
 ```
 
@@ -969,8 +969,10 @@ file was not changed and the key still holds the old link -- which, if you have
 just re-enabled automated access, is already invalidated. The tool changes only
 this key. It refuses a file that is missing, not `root:root 0600`, not one JSON
 object or holding a key outside edge1's row, and it refuses an empty answer; it
-builds the new file beside the old one, reads it back, and only then renames it
-over the old one, so a failed run leaves the old file whole. It never prints the
+writes the new file beside the old one, renames it over the old one, then reads
+the result back. If the read-back fails, the tool prints `inspect it` and exits
+non-zero; the new file stays in place and the old one is not restored, so inspect
+the file before the apply. It never prints the
 value, and it prints the key name only. Do not run it with `--replace` or without
 `--set` between a rotation and the apply that delivers it: that fills the file
 from the live `monitoring.env`, which still holds the old URL.

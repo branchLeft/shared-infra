@@ -210,7 +210,11 @@ read, so they are written with `json.dumps` from values read into the shell, nev
 command line.
 
 To rotate one value, `seed_host_inputs.py --host H --set KEY` asks for the new value at a hidden
-prompt and changes that key only, in a new file put in place by rename after a read-back. The
+prompt and changes that key only. It writes a new file beside the old one, renames it over the old
+one, then reads the result back. If the read-back fails, the tool prints "inspect it" and exits
+non-zero; the new file stays in place and the old one is not restored. The loader refuses a file
+that is not regular `root:root` 0600, is not one JSON object, or whose keys are not exactly the
+row's; it does not check values, so the owner inspects the file after a failed read-back. The
 next pull reads it, and the role that takes the input delivers it at the next gated apply. Do
 not run the fill step again (`--replace`) between a `--set` and the apply that delivers it: it
 fills from the live files, which still hold the old value. After the first apply of a commit that

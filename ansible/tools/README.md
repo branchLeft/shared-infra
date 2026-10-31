@@ -98,8 +98,8 @@ and `ntfy_pager_env_names`, and the `NAME={{ input }}` lines of `backup-worker.e
 
 Usage, on the host as root:
 
-    seed_host_inputs.py --host edge1|ops1 [--replace]
-    seed_host_inputs.py --host edge1|ops1 --set KEY
+    python3 -I seed_host_inputs.py --host edge1|ops1 [--replace]
+    python3 -I seed_host_inputs.py --host edge1|ops1 --set KEY
 
 It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` once a commit that
 holds it has been applied on the host; before that the file is copied there by hand from the

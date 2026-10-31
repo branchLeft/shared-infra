@@ -137,6 +137,10 @@ CI_LOGIN_PATHS = [
     "ansible/owner_vars/edge1.yml",
 ]
 
+# The owner-run writer of a host's inputs file runs as root, takes every input value and writes
+# the file the loader reads, so it is the owner's alone.
+SEEDING_TOOL_PATHS = ["ansible/tools/seed_host_inputs.py"]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -209,6 +213,9 @@ class CodeownersTests(unittest.TestCase):
     def test_the_ci_login_role_and_the_owner_vars_are_owned_by_the_owner(self) -> None:
         self.assert_owned(CI_LOGIN_PATHS)
 
+    def test_the_seeding_tool_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(SEEDING_TOOL_PATHS)
+
     def test_the_standards_template_paths_are_owned_by_the_owner(self) -> None:
         self.assert_owned(
             [
@@ -235,7 +242,7 @@ class CodeownersTests(unittest.TestCase):
             "hetzner/scripts/anything.sh",
             "ansible/harness/anything.py",
         }
-        owned = PULL_ROLE_PATHS + HOST_INPUTS_PATHS + CI_LOGIN_PATHS
+        owned = PULL_ROLE_PATHS + HOST_INPUTS_PATHS + CI_LOGIN_PATHS + SEEDING_TOOL_PATHS
         for path in ESTATE_PATHS + GATE_PATHS + owned + UNOWNED_PATHS:
             if path in stands_for_more:
                 continue
