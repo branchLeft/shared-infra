@@ -214,7 +214,7 @@ class Sabotage(unittest.TestCase):
             "playbooks/db1.yml",
             LOADER_LINE,
             "    - role: ../roles/db1_grants # noqa: role-name[path]\n"
-            "    - role: ../roles/db1_backup_timers # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/tunnel_account # noqa: role-name[path]\n" + LOADER_LINE,
         )
         self._assert_rule("R11 db1.yml")
 

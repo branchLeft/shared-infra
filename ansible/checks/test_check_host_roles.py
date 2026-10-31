@@ -59,15 +59,17 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host), then edge1's deploy_tooling, app1's host_inputs (the loader goes first,
-# R11) and website_app1 (last, after host_baseline has installed Docker), and db1's host_baseline
-# and db1_stack (after the loader, which goes first).
+# breakglass_grant_host), then edge1's deploy_tooling and edge_stack (last: it needs Docker from
+# host_baseline and the compose unit and deploy wrapper that the deploy tooling installs),
+# app1's host_inputs (the loader goes first, R11) and website_app1 (last, after host_baseline
+# has installed Docker), and db1's host_baseline, db1_stack and db1_backup_timers (after the
+# loader, which goes first; db1_grants would follow the timers and is not applied).
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
-    "edge1": ["host_baseline", "ci_login", "deploy_tooling"],
+    "edge1": ["host_baseline", "ci_login", "deploy_tooling", "edge_stack"],
     "ops1": ["host_baseline", "breakglass_mint_host", "status_page"],
     "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
-    "db1": ["host_inputs", "host_baseline", "db1_stack"],
+    "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {"edge1": "    deploy_tooling_host_class: gateway\n"}
@@ -199,18 +201,47 @@ class HostRoleLists(unittest.TestCase):
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
     # Safety class: db1 is the production database host. It applies the two pull roles, the loader
-    # of its private inputs, the host baseline, then the stack, and none of the other roles on its
-    # list, which R9 allows because a playbook may apply a subset. Red when any role is added or
-    # moved, green with the five named in this order.
-    def test_db1_applies_the_pull_roles_the_loader_the_baseline_then_the_stack(self) -> None:
+    # of its private inputs, the host baseline, the stack, then the backup timers, and none of the
+    # other roles on its list, which R9 allows because a playbook may apply a subset. Red when any
+    # role is added or moved, green with the six named in this order. db1_grants is held back and
+    # would have to follow the timers.
+    def test_db1_applies_the_pull_roles_the_loader_the_baseline_the_stack_then_the_timers(
+        self,
+    ) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
         self.assertEqual(
             names,
-            ["ansible_runtime", "pull_trigger", "host_inputs", "host_baseline", "db1_stack"],
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "host_inputs",
+                "host_baseline",
+                "db1_stack",
+                "db1_backup_timers",
+            ],
         )
-        for held_back in ("db1_grants", "db1_backup_timers", "tunnel_account"):
+        for held_back in ("db1_grants", "tunnel_account"):
             self.assertNotIn(held_back, names)
+        self.assertEqual(check(ROOT), [])
+
+    # edge1 applies the edge stack last: after the baseline (Docker), the CI login and the deploy
+    # tooling, which installs the compose unit and deploy wrapper the stack uses. Red when the
+    # stack moves earlier or is dropped, green with the six named in this order.
+    def test_edge1_applies_the_edge_stack_after_the_baseline_and_the_deploy_tooling(self) -> None:
+        text = (ROOT / "ansible" / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
+        names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
+        self.assertEqual(
+            names,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "host_baseline",
+                "ci_login",
+                "deploy_tooling",
+                "edge_stack",
+            ],
+        )
         self.assertEqual(check(ROOT), [])
 
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.

@@ -10,11 +10,11 @@ edge1:
   - monitoring_stack
   - exporters_and_collectors
   - ntfy_pager
-  - edge_stack
   - host_baseline
   - egress_nat
   - ci_login
   - deploy_tooling
+  - edge_stack
 ops1:
   - control_plane
   - nextcloud_stack
@@ -33,7 +33,7 @@ app1:
 db1:
   - host_inputs
   - db1_stack
-  - db1_grants
   - db1_backup_timers
+  - db1_grants
   - tunnel_account
   - host_baseline
