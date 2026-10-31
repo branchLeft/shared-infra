@@ -36,7 +36,8 @@ In this order, and each step before the first input is set:
 
 It never writes a file, never prints, diffs or defaults a value, and never sets a
 name that is not in the row of the host it runs on. It does not create the file or
-rotate a value: the owner does, by hand, as root, on the host. It does not check that a
+rotate a value: the owner does, as root, on the host, with `ansible/tools/seed_host_inputs.py`
+(see "Bootstrap and rotation"). It does not check that a
 value is right for the role that takes it; that role's own input check does.
 
 A refusal names a path, or the name of an input from the row, and never a value. Each
@@ -72,8 +73,8 @@ The file is one JSON object, for db1:
 }
 ```
 
-JSON, not YAML, so that no value is coerced to another type and the owner writes it with
-`json.dumps` from values read into the shell, never typed into a command line. For app1
+JSON, not YAML, so that no value is coerced to another type and the file is written with
+`json.dumps`, never from a value typed into a command line. For app1
 the file is one JSON object of four strings, the port included (`"587"`, not `587`,
 because the website role's argument is a string):
 
@@ -191,12 +192,33 @@ app1 (root:root, `0600`, the four keys above).
 
 ## Bootstrap and rotation
 
-The owner places the file once, on the host, by hand: one JSON object whose keys are exactly
-the names in the host's row in `vars/main.yml`, written with `json.dumps` (never typed into a
-command line), owned by root:root with mode `0600`, in directories only root can write. The
-role never writes it. To rotate a value the owner edits the file by hand the same way, and the
-next pull reads it. A run before the file exists stops at `host_inputs[file-missing]`, which is
-how the first pull proves the file is in place before the roles that need it run.
+The owner places the file once, on the host, as root: one JSON object whose keys are exactly
+the names in the host's row in `vars/main.yml`, owned by root:root with mode `0600`, in
+directories only root can write. The role never writes it. For edge1 and ops1 the writer is
+`ansible/tools/seed_host_inputs.py --host edge1` (or `ops1`), which:
+
+- takes each key's value from the live file the hand install wrote (its one table of
+  key-to-file is held by a test to this row and to the roles that write those files), so the
+  values equal what is live and the first apply changes nothing;
+- asks a hidden prompt only for a key it cannot find live, and writes nothing at all if any key
+  is still missing;
+- writes the file in one atomic step, refuses to overwrite an existing file unless `--replace`,
+  and prints key names only, never a value.
+
+db1 and app1 are not seeded by the tool: their files exist already and there is no live file to
+read, so they are written with `json.dumps` from values read into the shell, never typed into a
+command line.
+
+To rotate one value, `seed_host_inputs.py --host H --set KEY` asks for the new value at a hidden
+prompt and changes that key only, in a new file put in place by rename after a read-back. The
+next pull reads it, and the role that takes the input delivers it at the next gated apply. Do
+not run the fill step again (`--replace`) between a `--set` and the apply that delivers it: it
+fills from the live files, which still hold the old value. After the first apply of a commit that
+holds the tool, it is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` on the
+host; before that, the pull request that adds the tool carries the step that copies it there.
+
+A run before the file exists stops at `host_inputs[file-missing]`, which is how the first pull
+proves the file is in place before the roles that need it run.
 
 ## How to change it safely
 

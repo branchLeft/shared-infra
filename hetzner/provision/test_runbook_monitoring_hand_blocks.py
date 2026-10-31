@@ -3,8 +3,10 @@
 Each hand block that writes the secrets file, copies the stack or installs a drop-in
 carries `<!-- interim-hand-block: NAME -->` above its fence, and NAME is listed in
 INTERIM below. An unmarked fence, an unlisted or unfenced marker, or a listed name
-without a marker fails. The STALWART and SNDS blocks are also run as bash against a
-temporary file. The roles are the target; see ansible/roles/monitoring_stack/README.md.
+without a marker fails. The STALWART block is also run as bash against a temporary file.
+The SNDS rotation is not a hand block: it goes through the seeding tool into the host's
+inputs file, so the runbook's section 14 must hold no fence that writes the secrets file.
+The roles are the target; see ansible/roles/monitoring_stack/README.md.
 """
 
 from __future__ import annotations
@@ -27,7 +29,6 @@ INTERIM = {
     "s4-rsync",
     "s5-script-call",
     "s13-rollback",
-    "s14-snds-write",
 }
 
 MARKER = re.compile(r"^<!-- interim-hand-block: (\S+) -->$")
@@ -224,7 +225,6 @@ class MarkersTests(unittest.TestCase):
 
 REPLACE_BLOCKS = (
     ("s3-stalwart-block", "STALWART_PROMETHEUS_SECRET"),
-    ("s14-snds-write", "SNDS_DATA_URL"),
 )
 
 OTHER_LINES = "SMTP_PASSWORD=keep-one\nNTFY_TOPIC=keep-two\n"
@@ -350,7 +350,6 @@ class ReplaceBlockTests(unittest.TestCase):
         for body, _ in self.each():
             line = next(line for line in body.splitlines() if "ssh " in line)
             self.assertNotIn("$STALWART_SECRET", line.split("|", 1)[1])
-            self.assertNotIn("$SNDS_URL", line.split("|", 1)[1])
 
     def test_the_check_comes_before_the_move_and_the_success_line_after_it(
         self,
@@ -362,6 +361,58 @@ class ReplaceBlockTests(unittest.TestCase):
             self.assertLess(script.index("grep -c"), script.index('mv "$t"'))
             self.assertLess(script.index("wc -c | tr"), script.index('mv "$t"'))
             self.assertLess(script.index('mv "$t"'), script.index('echo "OK:'))
+
+
+SECTION_14 = re.compile(r"^## 14\. .*?(?=^## 15\. )", re.MULTILINE | re.DOTALL)
+ROTATION = re.compile(
+    r"ssh -t .*seed_host_inputs\.py --host edge1 --set monitoring_stack_snds_data_url\s*$"
+)
+
+
+def section_14_fences(text: str) -> list[str]:
+    """The bash fences of section 14, each with its line continuations joined."""
+    section = SECTION_14.search(text)
+    if section is None:
+        raise AssertionError("no section 14")
+    return [
+        re.sub(r"\s*\\\n\s*", " ", body) for _, body, _ in bash_fences(section.group(0))
+    ]
+
+
+class SndsRotationTests(unittest.TestCase):
+    """The SNDS URL has one writer: the role, from the host's inputs file. Section 14 rotates it."""
+
+    def setUp(self) -> None:
+        self.text = RUNBOOK.read_text(encoding="utf-8")
+
+    def test_no_fence_under_section_14_writes_the_url_into_the_secrets_file(self) -> None:
+        for body in section_14_fences(self.text):
+            self.assertFalse(
+                "SNDS_DATA_URL" in body and "monitoring.env" in body, body.splitlines()[0]
+            )
+            self.assertFalse(is_hand_write(body), body.splitlines()[0])
+
+    def test_the_rotation_fence_calls_the_seeding_tool_for_the_one_key(self) -> None:
+        rotation = [b for b in section_14_fences(self.text) if ROTATION.search(b)]
+        self.assertEqual(1, len(rotation))
+        # A terminal for the hidden prompt, and no value anywhere on the command line.
+        self.assertNotIn("read -rs", rotation[0])
+        self.assertNotIn("$SNDS", rotation[0])
+        self.assertIn("/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py", rotation[0])
+
+    def test_the_two_writers_wording_is_gone(self) -> None:
+        self.assertNotRegex(self.text, r"(?i)two\s+writers")
+        self.assertRegex(self.text, r"One writer of `SNDS_DATA_URL`")
+
+    def test_no_prose_sends_the_owner_to_write_the_line_by_hand(self) -> None:
+        flat = re.sub(r"\s+", " ", self.text)
+        self.assertNotIn("step 14 still writes this key by hand", flat)
+        self.assertNotIn("then write the new URL into `/etc/branchleft/monitoring.env`", flat)
+        self.assertNotIn("re-do §14's write step", flat)
+
+    def test_the_rotation_says_when_the_new_link_arrives(self) -> None:
+        flat = re.sub(r"\s+", " ", self.text)
+        self.assertIn("reaches the collector at the next gated apply, not at once", flat)
 
 
 if __name__ == "__main__":
