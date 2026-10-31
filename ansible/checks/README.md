@@ -80,7 +80,8 @@ may merge alone is not yet decided by the owner.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
 host in `HOST_PLAY_VARS` in `check_enrolment.py` (today one row: edge1's `deploy_tooling_host_class`,
-which the role takes with no default; no other variable: a
+which the role takes with no default, and `egress_nat_gateway_enabled: true`, the one switch
+that makes a host the estate's NAT gateway, so only edge1 can carry it; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,

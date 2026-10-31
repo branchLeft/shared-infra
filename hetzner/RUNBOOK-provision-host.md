@@ -25,7 +25,7 @@ than a step inside it.
 | `10-harden-updates-fail2ban.sh` | Installs and enables `unattended-upgrades` and `fail2ban`, with an SSH jail this repo owns                                                         |
 | `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                                              |
 | `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses                            |
-| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once                                       |
+| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and its boot unit, then runs it once. On edge1 the `egress_nat` role does this (step 2)         |
 | `app-host-isolation.sh`         | **App hosts only.** Installs the `DOCKER-USER` isolation-policy reconciler and the unit that reasserts it at boot, then runs it once               |
 | `provision_deploy_slot.py`      | **Per stack, not per host.** Grants one keypair a forced command reaching one stack, and renders `authorized_keys` from its own register           |
 
@@ -35,7 +35,9 @@ makes this the right response to "I am not sure whether that host is current".
 
 `nat-gateway.sh` is deliberately outside `run-all.sh`. Exactly one host in the
 estate is the gateway, and the script refuses to run anywhere the estate's
-egress could not work from.
+egress could not work from. On edge1, the gateway, the `egress_nat` role
+delivers the same reconciler and unit through the gated pull (step 2), so nobody
+runs the script there by hand; the script stays as code.
 
 `app-host-isolation.sh` is deliberately outside `run-all.sh` too, for the
 matching reason: it is scoped to app hosts, and its reconciler
@@ -50,7 +52,8 @@ only route off the subnet is the private network's own gateway. Nothing is
 routed there until the network stack declares a default route, and nothing
 forwards at the far end until one host has been provisioned as the gateway.
 Both halves are `branchLeft/shared-infra`'s: the route is in
-`hetzner/network.ts`, the forwarding is `provision/nat-gateway.sh`.
+`hetzner/network.ts`, the forwarding is the NAT reconciler
+(`provision/branchleft_nat.sh`), which the `egress_nat` role delivers to edge1.
 
 **Both have to be live before the private-only host is created**, not merely
 before this runbook is run against it. Cloud-init installs `ca-certificates`,
@@ -235,6 +238,15 @@ ciphertext, and neither may be committed.
 
 ### 2. Make the gateway forward
 
+Nothing is run by hand for the forwarding itself. The `egress_nat` role delivers it:
+edge1's playbook applies the role with `egress_nat_gateway_enabled` on, a value the
+owner-only checks pin to edge1 alone (a second gateway would loop the estate's
+egress). The role installs the NAT reconciler and its unit from `hetzner/provision`,
+runs it, and puts the previous files back if the run fails. The route to the host is
+the gated `ansible-delivery` run on `main` (the plan job, the approval, then the
+apply); wait for that run to finish on edge1 before step 3, and before any
+private-only host is created.
+
 From the repository root, not from `hetzner/` — the paths below are
 repo-root-relative, and step 1 left the shell one directory down. Set
 `edge1`'s address once, from a lookup rather than a literal — every command
@@ -244,15 +256,19 @@ those steps independently, later:
 ```bash
 cd ~/branchLeft/shared-infra
 EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@"$EDGE1_IPV4":/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
 ```
 
-Idempotent, and the right response to "is that host still the gateway". Re-run
-it after a Docker reinstall: the rules live in netfilter, and the chain they
-are inserted into is one Docker owns.
+A second apply does not put back a rule that was lost while the unit stays active.
+The one such case is a Docker reinstall: the rules live in netfilter, and the chain
+they are inserted into is one Docker owns. After a Docker reinstall, run the reconciler
+again by restarting its unit, then repeat step 3:
 
-The trailing `/.` on the `scp` source is load-bearing: without it, `scp -r`
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'systemctl restart branchleft-nat.service'
+```
+
+The steps below that copy `hetzner/provision/` to a host with `scp -r` share two
+details. The trailing `/.` on the `scp` source is load-bearing: without it, `scp -r`
 copies the directory _inside_ the destination once the destination already
 exists, nesting a stale copy under a fresh one on any re-run. The destination
 itself must carry **no** trailing slash — `scp` in SFTP mode fails outright on
@@ -266,9 +282,8 @@ may run a different one. CPython recompiles on a source size/mtime mismatch
 rather than trusting a foreign `.pyc`, so this is not a live defect, but a
 stray bytecode file is still confusing to find mid-incident and has no
 business being the host's copy of anything the repository doesn't itself
-contain. The `find … -prune -exec rm -rf` above runs before anything else on
-the host reads the directory, and is repeated at every other `scp -r
-hetzner/provision/.` below for the same reason.
+contain. The `find … -prune -exec rm -rf` in each of those commands runs before
+anything else on the host reads the directory.
 
 ### 3. Confirm the gateway is forwarding
 
