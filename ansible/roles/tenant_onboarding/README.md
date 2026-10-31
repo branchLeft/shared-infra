@@ -12,7 +12,7 @@ standard sets for a role README (ANS-14).
 
 1. A plain apply fetches the tenant volume program and its register from the
    ghost-platform repository at one pinned commit, and installs both root-owned with
-   mode 0644 in `/opt/branchleft/app/provision`. Each fetch is checked against its pinned
+   mode 0644 in `/usr/local/lib/branchleft/provision`. Each fetch is checked against its pinned
    sha256, so a file whose bytes differ fails the apply. A plain apply runs no tenant step.
 2. `PROVISION_TENANT_VOLUMES` runs the program with `--uid N`, once for one tenant. The
    program creates the tenant's three volumes (content, adapters and metrics), claims the
@@ -56,10 +56,10 @@ changed path would install a program the rest of the host does not run.
 
 ## What it changes on a host
 
-- `/opt/branchleft/app/provision`: created root-owned, mode 0755.
-- `/opt/branchleft/app/provision/provision_tenant_volume.py`: the program, root-owned, mode
+- `/usr/local/lib/branchleft/provision`: created root-owned, mode 0755.
+- `/usr/local/lib/branchleft/provision/provision_tenant_volume.py`: the program, root-owned, mode
   0644, its bytes the pinned ghost-platform file.
-- `/opt/branchleft/app/provision/tenant-names.json`: the register the program reads beside
+- `/usr/local/lib/branchleft/provision/tenant-names.json`: the register the program reads beside
   itself, root-owned, mode 0644, its bytes the pinned file.
 - With `PROVISION_TENANT_VOLUMES`, through the program: three Docker volumes named for the
   tenant, the claim directory `/etc/branchleft/tenant-uids` (root, 0700) and the tenant's
@@ -136,7 +136,7 @@ run them and writes no marker for them. Each is written with placeholders in cap
 1. **Choose a free UID.** Run, on the application host as root:
 
    ```text
-   /usr/bin/python3 /opt/branchleft/app/provision/provision_tenant_volume.py --list-claims
+   /usr/bin/python3 /usr/local/lib/branchleft/provision/provision_tenant_volume.py --list-claims
    ```
 
    Each line is `slug=uid`. A UID in the tenant range that no line names is free. The role

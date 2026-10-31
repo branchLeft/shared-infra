@@ -5,9 +5,9 @@
 
 # Where the tenant program and its register are installed. The program refuses every
 # slug unless the register sits beside it, so the two are installed together, here.
-tenant_onboarding_program_dir: /opt/branchleft/app/provision
-tenant_onboarding_program: /opt/branchleft/app/provision/provision_tenant_volume.py
-tenant_onboarding_register: /opt/branchleft/app/provision/tenant-names.json
+tenant_onboarding_program_dir: /usr/local/lib/branchleft/provision
+tenant_onboarding_program: /usr/local/lib/branchleft/provision/provision_tenant_volume.py
+tenant_onboarding_register: /usr/local/lib/branchleft/provision/tenant-names.json
 
 # The program and register are fetched, never copied into this role. Each is fetched
 # from ghost-platform at one full 40-character commit, so no branch or tag can move
