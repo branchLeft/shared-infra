@@ -173,49 +173,55 @@ class ProgramRefusesBadLists(unittest.TestCase):
         self.program = load_program()
         self.steps = real_steps()
 
-    def _refused(self, steps: object) -> None:
-        with self.assertRaises(self.program.ConfigError):
+    def _refused(self, steps: object, reason: str) -> None:
+        """Expect the program to refuse the list, with the sentence it gives for that rule.
+
+        The reason is on the exception as ``detail`` (a step error has no subject, so the
+        detail is the sentence alone).
+        """
+        with self.assertRaises(self.program.ConfigError) as caught:
             parse_allowlist(self.program, steps)
+        self.assertEqual(reason, caught.exception.detail)
 
     def test_a_tag_that_is_not_the_ids_own(self) -> None:
         steps = copy.deepcopy(self.steps)
         steps[0]["tag"] = "control_plane_db_other"
-        self._refused(steps)
+        self._refused(steps, self.program.Why.CONFIG_STEP_TAG.value)
 
     def test_a_tag_that_is_another_steps(self) -> None:
         steps = copy.deepcopy(self.steps)
         steps[0]["tag"] = "control_plane_db_provision"
-        self._refused(steps)
+        self._refused(steps, self.program.Why.CONFIG_STEP_TAG.value)
 
     def test_an_id_outside_the_closed_list(self) -> None:
         steps = copy.deepcopy(self.steps)
         steps.append(
             {"id": "break_glass", "tag": "control_plane_db_break_glass", "word": "BREAK-1"}
         )
-        self._refused(steps)
+        self._refused(steps, self.program.Why.CONFIG_STEP_UNKNOWN.value)
 
     def test_a_duplicate_id(self) -> None:
         steps = copy.deepcopy(self.steps)
         steps.append(copy.deepcopy(steps[0]))
-        self._refused(steps)
+        self._refused(steps, self.program.Why.CONFIG_STEP_DUPLICATE.value)
 
     def test_a_word_with_lower_case(self) -> None:
         steps = copy.deepcopy(self.steps)
         steps[0]["word"] = "migrate-ops1"
-        self._refused(steps)
+        self._refused(steps, self.program.Why.CONFIG_STEP_WORD.value)
 
     def test_a_word_too_short(self) -> None:
         steps = copy.deepcopy(self.steps)
         steps[0]["word"] = "ABC"
-        self._refused(steps)
+        self._refused(steps, self.program.Why.CONFIG_STEP_WORD.value)
 
     def test_a_fourth_field(self) -> None:
         steps = copy.deepcopy(self.steps)
         steps[0]["extra"] = "x"
-        self._refused(steps)
+        self._refused(steps, self.program.Why.CONFIG_STEP_FIELDS.value)
 
     def test_a_string_in_place_of_the_list(self) -> None:
-        self._refused("migrate")
+        self._refused("migrate", self.program.Why.CONFIG_STEPS_LIST.value)
 
 
 if __name__ == "__main__":
