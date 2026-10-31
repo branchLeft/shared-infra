@@ -28,7 +28,11 @@ name: Ansible delivery
 # ansible-hosts, on its /deployment-branch-policies and on its /secrets.
 #
 # The apply key is an environment secret, named here like the others: only the job in the
-# environment reads it, after approval. The five repository secrets (the jump pair: both or neither) are named one by one; `secrets: inherit` passes all.
+# environment reads it, after approval. The six repository secrets (the jump pair: both or neither;
+# the push list: optional, and empty means every host is pulled) are named one by one; `secrets: inherit` passes all.
+# The push list, ANSIBLE_PUSH_HOSTS, is one user@host per line, a subset of ANSIBLE_HOSTS: the
+# hosts that never open a connection, reached through the jump host with push-playbook. The
+# owner creates it; its value is never written in this repository.
 
 on:
   push:
@@ -73,6 +77,7 @@ jobs:
     uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.19
     with:
       environment: ansible-hosts
+      push-playbook: ansible/playbooks/demo1.yml
       role-directories: |
         roles/*
         patterns/*
@@ -86,5 +91,6 @@ jobs:
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
       ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
       ssh_apply_key: ${{ secrets.SSH_APPLY_KEY }}
+      ssh_push_hosts: ${{ secrets.ANSIBLE_PUSH_HOSTS }}
       ssh_jump_host: ${{ secrets.SSH_JUMP_HOST }}
       ssh_jump_key: ${{ secrets.SSH_JUMP_KEY }}
