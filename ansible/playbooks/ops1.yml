@@ -6,13 +6,18 @@
 # unsafe, then the host baseline, the break-glass mint, the status page, then the
 # control plane. The control plane needs no input from the owner: it takes the image
 # the running stack already uses and leaves the live env file and master key alone.
-# The last three roles come after it, so that their failure holds nothing else back:
+# The last four roles come after it, so that their failure holds nothing else back:
 # the Nextcloud stack (no input; it adopts the hand-installed copy), then the backup
 # worker and the backup restore, which take their inputs from the loader. The backup
 # restore reads the backup worker's variables in the same play, so it follows it. Both
-# leave their timers off. Only this host's name is set
+# leave their timers off. The last is the control plane's database role, after the
+# control plane (it asserts the directory that role makes). A plain apply makes one
+# directory and runs no step; a step runs only when the gated pull asks for it, by tag,
+# for an id on the step allow-list in owner_vars/ops1.yml. No playbook, inventory or
+# owner file sets its step variable. Only this host's name is set
 # here; the remote, the playbook allowlist and the signer list come from the shared
-# includes and the one trust file, all loaded through vars_files.
+# includes and the one trust file, all loaded through vars_files, and the step
+# allow-list from the owner's file.
 #
 # The refusal is not a host control: under the trigger inventory_hostname is
 # localhost. The root-owned pull config is the host control.
@@ -24,6 +29,7 @@
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/ops1.yml'
+    - '{{ playbook_dir }}/../owner_vars/ops1.yml'
   pre_tasks:
     - name: Refuse a run that is not ops1's
       ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
@@ -44,3 +50,4 @@
     - role: ../roles/nextcloud_stack # noqa: role-name[path]
     - role: ../roles/backup_worker # noqa: role-name[path]
     - role: ../roles/backup_restore # noqa: role-name[path]
+    - role: ../roles/control_plane_db # noqa: role-name[path]

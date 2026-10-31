@@ -43,7 +43,15 @@ TREES = ("playbooks", "trust", "owner_vars")
 TREE_RULES = {"playbooks": "R2", "trust": "R5", "owner_vars": "R10"}
 OWNER_VARS_DIR = "owner_vars"
 # The keys a host's owner_vars file holds, exactly. A host named nowhere here may have no file.
-OWNER_VARS_KEYS = {"edge1": frozenset(("ci_login_keys", "ci_login_manage_keys"))}
+OWNER_VARS_KEYS = {
+    "edge1": frozenset(("ci_login_keys", "ci_login_manage_keys")),
+    "ops1": frozenset(("pull_trigger_steps",)),
+}
+STEPS_KEY = "pull_trigger_steps"
+# Only the shape of an allow-list entry. Which ids, tags and words are valid is the program's
+# rule alone (pull_trigger.py: STEP_IDS, _step_from, WORD_PATTERN), and test_step_allowlist.py
+# feeds the real file through the program's own parser, so none of it is copied here.
+STEP_ENTRY = frozenset(("id", "tag", "word"))
 OWNER_KEY_ENTRY = frozenset(("key", "mode"))
 OWNER_KEY_MODES = frozenset(("apply", "check"))
 README_EXCEPTIONS = frozenset(("playbooks/README.md", "trust/README.md"))
@@ -626,10 +634,27 @@ def _yml_files(directory: Path) -> list[Path]:
     return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix == ".yml")
 
 
+def _step_shape_problems(steps: object) -> list[str]:
+    """The shape of pull_trigger_steps: a list of mappings with exactly id, tag and word, all
+    text. Whether an id is on the program's closed list, a tag is the id's own and a word is
+    well formed is judged by the program (see STEP_ENTRY), not here."""
+    if not isinstance(steps, list):
+        return [f"{STEPS_KEY} must be a list of {sorted(STEP_ENTRY)} entries"]
+    problems: list[str] = []
+    for entry in steps:
+        if not isinstance(entry, dict) or set(entry) != STEP_ENTRY:
+            problems.append(f"a {STEPS_KEY} entry must hold exactly {sorted(STEP_ENTRY)}")
+        elif not all(isinstance(value, str) for value in entry.values()):
+            problems.append(f"a {STEPS_KEY} entry needs a text id, tag and word")
+    return problems
+
+
 def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     """What is wrong with the values of an owner_vars file, by key. A missing key is reported
     by the caller, which compares the key set."""
     problems: list[str] = []
+    if STEPS_KEY in doc:
+        problems.extend(_step_shape_problems(doc[STEPS_KEY]))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")
     keys = doc.get("ci_login_keys", [])

@@ -67,7 +67,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # and db1_backup_timers (after the loader, which goes first; db1_grants would follow the timers
 # and is not applied), ops1's host_inputs (first), control_plane after the status page, then
 # nextcloud_stack, backup_worker and backup_restore (the restore reads the worker's variables, so
-# it follows), and demo1's two build roles.
+# it follows), then control_plane_db last (it asserts the directory control_plane makes), and
+# demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -89,6 +90,7 @@ APPLIED_ON_MAIN = {
         "nextcloud_stack",
         "backup_worker",
         "backup_restore",
+        "control_plane_db",
     ],
     "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
     "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
@@ -280,10 +282,11 @@ class HostRoleLists(unittest.TestCase):
         self.assertEqual(check(ROOT), [])
 
     # ops1 applies the loader first (R11), the roles it had before (control_plane keeps its place
-    # after the status page, #530), then the three roles that take the loader's inputs or adopt
-    # a hand copy, last, so their failure holds nothing else back. The restore reads the worker's
-    # variables in the same play, so it follows the worker. Red when any role moves or is
-    # dropped, green with the ten named in this order.
+    # after the status page, #530), then the roles that take the loader's inputs or adopt a hand
+    # copy, last, so their failure holds nothing else back. The restore reads the worker's
+    # variables in the same play, so it follows the worker. The database role is last: it
+    # asserts the directory control_plane makes and holds nothing else back. Red when any role
+    # moves or is dropped, green with the eleven named in this order.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,
     ) -> None:
@@ -302,9 +305,12 @@ class HostRoleLists(unittest.TestCase):
                 "nextcloud_stack",
                 "backup_worker",
                 "backup_restore",
+                "control_plane_db",
             ],
         )
         self.assertLess(names.index("backup_worker"), names.index("backup_restore"))
+        # The database role asserts the directory the control plane makes, so it follows it.
+        self.assertLess(names.index("control_plane"), names.index("control_plane_db"))
         self.assertEqual(names[2], "host_inputs")
         self.assertEqual(check(ROOT), [])
 

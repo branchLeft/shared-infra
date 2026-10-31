@@ -17,7 +17,9 @@ first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
 `roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
-reads). `playbooks/app1.yml` applies the two pull roles, then
+reads), then `roles/control_plane_db` last (it asserts the directory `roles/control_plane` makes; a
+plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
+allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
 `roles/host_baseline`, `roles/breakglass_grant_host` and `roles/website_app1`.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of

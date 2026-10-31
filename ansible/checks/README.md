@@ -170,8 +170,13 @@ is not loaded there.
   exactly the keys its host is allowed and no other, with values of the right shape. For
   edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
   `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
-  key (a source address list, say) is refused. A host with no allowed keys may have no file.
-  The check does not judge a key's text; the `ci_login` role does. The directory is the
+  key (a source address list, say) is refused. For ops1 the one key is `pull_trigger_steps`,
+  the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text. R10 reads
+  only that shape. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
+  word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
+  real file through the program's own `parse_config`. `control_plane_db_step` is never an owner
+  key: it is the role's second key and only the pull sets it. A host with no allowed keys may
+  have no file. The check does not judge a key's text; the `ci_login` role does. The directory is the
   owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
 - **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
   (owner ruling, option A), it is the first role after the two
