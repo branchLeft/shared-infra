@@ -59,12 +59,14 @@ SIGNER_LINE = "      ansible.builtin.include_tasks: includes/require_signers.yml
 TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
-# breakglass_grant_host), then db1's host_baseline and db1_stack (after the loader, which goes first).
+# breakglass_grant_host), then app1's host_inputs (the loader goes first, R11) and website_app1
+# (last, after host_baseline has installed Docker), and db1's host_baseline and db1_stack (after
+# the loader, which goes first).
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": ["host_baseline", "ci_login"],
     "ops1": ["host_baseline", "breakglass_mint_host", "status_page"],
-    "app1": ["host_baseline", "breakglass_grant_host"],
+    "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
     "db1": ["host_inputs", "host_baseline", "db1_stack"],
 }
 

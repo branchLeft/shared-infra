@@ -7,10 +7,12 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1`, `ops1`, `app1` and `db1`. Each has a playbook
-enrolled in the gated pull. `edge1`, `ops1` and `app1` apply `roles/ansible_runtime` and
+enrolled in the gated pull. `edge1` and `ops1` apply `roles/ansible_runtime` and
 `roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` adds
-`roles/ci_login`, `playbooks/ops1.yml` adds `roles/breakglass_mint_host` and then
-`roles/status_page`, and `playbooks/app1.yml` adds `roles/breakglass_grant_host`.
+`roles/ci_login` and `playbooks/ops1.yml` adds `roles/breakglass_mint_host` and then
+`roles/status_page`. `playbooks/app1.yml` applies the two pull roles, then
+`roles/host_inputs` (the loader of the host's private inputs, which goes first),
+`roles/host_baseline`, `roles/breakglass_grant_host` and `roles/website_app1`.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
 the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`;
 `roles/db1_grants` is left out of it.
@@ -569,9 +571,12 @@ oversight. Each is a decision the standard assigns to later work.
   merge on its own.
 - **Delivery.** Each of edge1, db1, app1 and ops1 has a playbook under `playbooks/`.
   edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
-  playbook applies the same two pull roles, then `roles/host_inputs`, then `roles/db1_stack`; `roles/host_inputs` refuses the
+  playbook applies the same two pull roles, then `roles/host_inputs`, then `roles/host_baseline`, then `roles/db1_stack`; `roles/host_inputs` refuses the
   run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
-  its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. ANS-17 describes the only approved path. The trigger is
+  its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. app1's
+  playbook applies `roles/host_inputs` and then `roles/website_app1` (after `roles/host_baseline` and
+  `roles/breakglass_grant_host`), and refuses the run the same way
+  until the owner has placed app1's own `/etc/branchleft/host-inputs.json`. ANS-17 describes the only approved path. The trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
   `.github/workflows/ansible-delivery.yml` calls that workflow.
 - **Reuse by other repositories.** The harness is code another repository may

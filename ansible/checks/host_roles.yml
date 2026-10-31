@@ -23,6 +23,7 @@ ops1:
   - host_baseline
   - status_page
 app1:
+  - host_inputs
   - deploy_tooling
   - deploy_slot_keys
   - website_app1
