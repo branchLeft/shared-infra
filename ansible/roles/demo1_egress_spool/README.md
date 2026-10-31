@@ -279,8 +279,13 @@ Also covered, each with its control on the good value:
 ## How it is delivered
 
 A role reaches a host only through the gated workflow (ANS-17), never by running
-`ansible-playbook` by hand. Nothing applies this role to demo1 yet: the host is not enrolled, and
-the way a pull reaches it is the owner's decision. What the owner provides before a run, once:
+`ansible-playbook` by hand. Nothing applies this role to demo1 yet. `ansible/playbooks/demo1.yml`
+enrols the host and lists this role after `demo1_build`, and demo1 takes its commit by push, not by
+a pull. The bundle that carries it is sent by CI through edge1 and arrives with shared-infra#511,
+which is not yet merged, so until it lands no run reaches this role. A bootstrap run of demo1.yml
+applies all four of its roles as root, because the roles carry no tags, so the bootstrap waits for
+the egress decision (Desk decision demo1-github-files) and the broker_deploy precondition. What the
+owner provides before a run, once:
 the token file `/etc/branchleft/mail-spool.env` (root, mode 0600, one `SHIM_DRAIN_TOKEN=` line),
 if the host holds none. The role asserts it and never writes it.
 

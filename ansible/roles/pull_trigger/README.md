@@ -518,8 +518,12 @@ itself, and a repeated request is never skipped as "already done".
   runs is the file that was signed. That claim stops at the playbook file and its
   path: the program checks no other path, so a link elsewhere in the signed tree
   (in a role, an include or a template) can make the playbook read or run a file of
-  the host. The signed tree is trusted for what it contains. A repository's
-  `ansible.cfg` under `ansible/` is read from the checkout.
+  the host. The signed tree is trusted for what it contains. The program sets
+  `ANSIBLE_CONFIG` to an empty private file and sets no variable that names a plugin or
+  module path, so the checkout's `ansible.cfg` is not read. Ansible still loads code from
+  the loader directories beside a playbook, in an imported playbook's directory and in a
+  role, with no config; those directories are owner-only in `.github/CODEOWNERS` and in
+  the delivery register.
 
 ## Refusals leave the host untouched
 

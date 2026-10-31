@@ -688,9 +688,10 @@ other unit tests of `ansible/harness`.
 Delivery to a host is ANS-17: only the gated workflow, run against `main` after the
 approval of its protected environment. The plan job shows the host's diff in check
 mode first. Nothing is applied from a laptop. This role is not applied to any host
-yet: the host's enrolment (inventory entry, trigger and nightly drift check) is a
-separate piece of work and is not in this role or in `ansible/playbooks/demo1.yml`.
-The first live run is check mode; the apply waits on the owner.
+yet. `ansible/playbooks/demo1.yml` enrols demo1 on the signed push route and lists this role
+after `pull_trigger`. The host has no inventory entry: the playbook and its trust file enrol it.
+The commit reaches the host by push, which needs shared-infra#511 (not yet merged), so the role
+is applied only after that lands. The first live run is check mode; the apply waits on the owner.
 
 The playbook `ansible/playbooks/demo1.yml` refuses any host but demo1. It does not
 apply `broker_deploy`, whose inputs are the owner's built bundle and public key.

@@ -24,8 +24,10 @@ name: Ansible
 # What runs, by event:
 #   - a pull request: lint, and the shards of the roles and patterns it changed (and of
 #     those that name them, and of those that read a changed file outside ansible/). A
-#     change to the harness, the checks, the lock, the lint config or this file runs
-#     every shard;
+#     change to the harness, the lock, the lint config or this file runs every shard, and so
+#     does a change to one of the three checks files the shards read (ci_select.py,
+#     check_pins.py, pip-requirements.txt). Any other file under ansible/checks/ runs the
+#     lint job only;
 #   - the merge queue: the same choice, made from the queue entry's own diff
 #     (base_sha..head_sha of the merge_group event), by the same rules. The entry is
 #     tested on the tree it will merge into, so this is the last check before `main`;

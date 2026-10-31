@@ -6,14 +6,18 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. Its real hosts are `edge1`, `ops1`, `app1` and `db1`. Each has a playbook
-enrolled in the gated pull. `edge1`, `ops1` and `app1` apply `roles/ansible_runtime` and
+the skeleton. Its real hosts are `edge1`, `ops1`, `app1`, `db1` and `demo1`. Each has a playbook
+enrolled in the gated pull, except that `demo1` takes its commit by push and never fetches.
+`edge1`, `ops1` and `app1` apply `roles/ansible_runtime` and
 `roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` adds
 `roles/ci_login`, `playbooks/ops1.yml` adds `roles/breakglass_mint_host` and then
 `roles/status_page`, and `playbooks/app1.yml` adds `roles/breakglass_grant_host`.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
 the host's private inputs, then `roles/host_baseline`; `roles/db1_stack` and
 `roles/db1_grants` are left out of it.
+`playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
+`roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
+`roles/broker_deploy`.
 The other trees hold only what those hosts need.
 
 ## Layout
@@ -174,11 +178,11 @@ jobs are skipped and the gate passes.
 
 What runs, by event:
 
-| Event          | Lint | Shards                                                                                                                                                                                    |
-| -------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, checks, lock, lint config or workflow changed |
-| merge queue    | yes  | every shard, whatever changed                                                                                                                                                             |
-| push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything                                                                                                                   |
+| Event          | Lint | Shards                                                                                                                                                                                                                                                    |
+| -------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, the lock, the lint config, the workflow, or `ci_select.py`, `check_pins.py` or `pip-requirements.txt` changed |
+| merge queue    | yes  | the shards its diff selects, as on a pull request                                                                                                                                                                                                         |
+| push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything                                                                                                                                                                                   |
 
 The workflow has three kinds of job:
 
@@ -567,7 +571,7 @@ oversight. Each is a decision the standard assigns to later work.
   required (CI-14), but making it required is a repository ruleset change and
   belongs to the owner. Until it is done a red Ansible job does not block a
   merge on its own.
-- **Delivery.** Each of edge1, db1, app1 and ops1 has a playbook under `playbooks/`.
+- **Delivery.** Each of edge1, db1, app1, ops1 and demo1 has a playbook under `playbooks/`.
   edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
   playbook applies the same two pull roles and then `roles/host_inputs`, which refuses the
   run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
