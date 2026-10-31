@@ -1,0 +1,86 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container. Molecule's interpolation
+# has no "required variable" form, so when the variable is unset the name
+# falls back to one the Docker daemon rejects: the run fails at create, loudly,
+# instead of sharing a container name with another run.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, the release every production
+    # host runs, trusted by digest. The digest is the pin; the tag is
+    # informational and moves weekly. The image runs systemd as PID 1, which this
+    # scenario needs for the stand-in of the compose template unit that the role
+    # enables and restarts.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # Destroy removes the container's anonymous volumes. This scenario's cgroup
+    # bind mount means none is created; the key guards against one if the mount
+    # is ever dropped.
+    keep_volumes: false
+    # The host cgroup namespace is a stated exception (ANS-15): on a cgroup v2
+    # host such as a native Linux runner, a private namespace over the
+    # read-write cgroup mount below makes systemd exit at once. The host
+    # namespace is the least privilege that works. It shares the host's cgroup
+    # view and, with the read-write mount, write access to the host cgroup tree,
+    # which is why the test image is trusted by digest and the job holds no
+    # credentials.
+    cgroupns_mode: host
+    # The cgroup tree systemd manages, mounted read-write: without it the
+    # container exits at start.
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # systemd's runtime and lock directories are tmpfs in a real boot: without
+    # them the container exits at start.
+    tmpfs:
+      - /run
+      - /run/lock
+    # Start systemd as the init process, the image's own CMD.
+    command: /lib/systemd/systemd
+    # NET_ADMIN is the one added capability: the netlink right iptables needs to
+    # read and write the container's own filter tables, which the role reads back
+    # and the scenario writes to show the spool is refused without its rules. It
+    # reaches the container's network namespace only, never the runner's.
+    capabilities:
+      - NET_ADMIN
+    # The run's label, so the harness can check that a destroy removed only
+    # this run's container.
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every step of one run appends to this file, so the verify play can look
+    # through all of the run's output for a secret. It lives in the scenario's
+    # ephemeral directory, which destroy removes.
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    # Verbosity 3 prints each task's result and the facts it set, so a task that
+    # handles a secret and lacks no_log shows it in the log, and verify fails (ANS-16).
+    ANSIBLE_VERBOSITY: '3'
+    # One docker exec for a task, not six: the scenario applies the role about
+    # twenty-five times, and CI gives the whole harness 45 minutes.
+    ANSIBLE_PIPELINING: 'true'
+    # The verify play calls the role's own module outside the role's tasks, so
+    # the role's library is on the module path.
+    ANSIBLE_LIBRARY: '${MOLECULE_PROJECT_DIRECTORY}/library'
+  inventory:
+    group_vars:
+      all:
+        # Throwaway values made for this run from the harness's run id: none is
+        # ever committed, and the verify play looks for them in the run's log.
+        scenario_secret: "THROWAWAY-{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
+        scenario_mail_secret: "THROWAWAY-MAIL-{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
+        # Images use the .invalid top-level domain, which never resolves, and
+        # fixed made-up digests: no image is ever pulled.
+        scenario_image: example.invalid/example-app@sha256:2222222222222222222222222222222222222222222222222222222222222222
+        scenario_newer_image: example.invalid/example-app@sha256:3333333333333333333333333333333333333333333333333333333333333333
+        scenario_spool_image: example.invalid/example-spool@sha256:4444444444444444444444444444444444444444444444444444444444444444
+verifier:
+  name: ansible
