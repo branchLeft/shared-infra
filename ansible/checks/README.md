@@ -79,8 +79,9 @@ deploy approval of the gated apply, which is not yet wired. Which files the revi
 may merge alone is not yet decided by the owner.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
-host in `HOST_PLAY_VARS` in `check_enrolment.py` (today one row: edge1's `deploy_tooling_host_class`,
-which the role takes with no default; no other variable: a
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (today two rows: edge1's `deploy_tooling_host_class`,
+and app1's `deploy_tooling_host_class` with `deploy_tooling_policy_variant`, which the role takes
+with no default for the class and which a host of class app must name; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,

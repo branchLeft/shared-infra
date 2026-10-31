@@ -38,6 +38,35 @@
       run reads the chains back.
   when: deploy_tooling_apply_pending
 
+# What the skipped read-back would say about the chains as they are now, so the plan
+# is not blind to the one thing it cannot simulate. The module reads the chains and
+# reports names, places and counts, never a rule's text: the log of a plan is public
+# and a real chain holds administration addresses and ports. The policy program is not
+# on the host yet on a first plan, so its text is read from the checkout the playbook
+# runs from, the one home of the program, on the controller (a lookup runs there). It is
+# the same file the copy above installs. Nothing here parses command output (ANS-9): the
+# listing and the verdicts are the module's, and the same test the read-back applies.
+# The module cannot show the state after the restart, so this is evidence of what the
+# apply would refuse given the chains now, not a guarantee of the apply.
+- name: Summarise the firewall chains the apply will see
+  deploy_tooling_chain:
+    mode: summary
+    reconciler_text: >-
+      {{ lookup('ansible.builtin.file', deploy_tooling_programs_dir ~ '/' ~
+         (deploy_tooling_app_file_targets
+          | selectattr('label', 'equalto', 'policy program')
+          | map(attribute='program') | first)) }}
+    variant: '{{ deploy_tooling_policy_variant }}'
+    foreign_chain_allowlist: '{{ deploy_tooling_foreign_chain_allowlist }}'
+  check_mode: false
+  register: deploy_tooling_chain_summary
+  when: deploy_tooling_apply_pending
+
+- name: Show the firewall chains the apply will see
+  ansible.builtin.debug:
+    msg: '{{ deploy_tooling_chain_summary.summary_lines }}'
+  when: deploy_tooling_apply_pending
+
 # The restart handler runs the policy program, so a handler that fails (the program
 # refused the host, say) stops the run here with the handler's own failure.
 - name: Apply the changed files

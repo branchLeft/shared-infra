@@ -10,6 +10,8 @@ on PYTHONPATH.
 """
 
 import dataclasses
+import json
+import re
 import unittest
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -638,6 +640,318 @@ class ParameterTests(unittest.TestCase):
         for name in ("f2b ssh", "-j", "", "a" * 40):
             with self.subTest(name=name), self.assertRaises(chain.ParameterError):
                 chain.params_from_mapping({**self.VALID, "foreign_chain_allowlist": [name]})
+
+
+def summarise(
+    variant: chain.Variant = STANDARD,
+    v4: str | None = None,
+    v6: str | None = None,
+    allowed: frozenset[str] = frozenset(),
+    runner: chain.Runner | None = None,
+) -> chain.Summary:
+    """Run the summary against listings, defaulting to the captured ones and the real program."""
+    params = chain.SummaryParams(PROGRAM.read_text(encoding="utf-8"), variant, allowed)
+    return chain.summarise(params, runner or runner_for(v4 or listing(variant), v6))
+
+
+def fresh(lines: list[str]) -> list[str]:
+    """Return a listing as a host has it before the policy: no rule of the policy in it."""
+    owned = {*V4_STANDARD_DELETIONS.values(), *INPUT_DELETIONS.values()}
+    return [line for line in lines if line not in owned]
+
+
+def refused_position(error: chain.PolicyError) -> int:
+    """Return the place in its chain that a RuleBypassError names."""
+    found = re.search(r"rule (\d+) of the chain", str(error))
+    assert found is not None, str(error)  # noqa: S101
+    return int(found[1])
+
+
+def verdicts(found: chain.Summary, family: chain.Family, name: str) -> list[tuple[int, str]]:
+    """Return (place, verdict) for every other rule of one chain."""
+    (one,) = [c for c in found.chains if (c.family, c.chain) == (family, name)]
+    return [(row.position, row.verdict) for row in one.rows]
+
+
+# Text a foreign rule carries that a public log must never show: an address, a port, an
+# interface, a comment, a negation. Each marker is unique, so a leak is found by the marker.
+MARKER_RULES = (
+    "-A INPUT -s 198.51.100.77/32 -p tcp -m tcp --dport 2299"
+    " -m comment --comment marker-note -j ACCEPT",
+    "-A INPUT -i eth9 ! -s 203.0.113.9/32 -j f2b-sshd",
+    "-A DOCKER-USER -s 192.0.2.44/32 -i wg-marker0 -j ACCEPT",
+    "-A FORWARD -o marker-out0 -j ACCEPT",
+)
+MARKERS = (
+    "198.51.100.77",
+    "2299",
+    "marker-note",
+    "comment",
+    "eth9",
+    "203.0.113.9",
+    "192.0.2.44",
+    "wg-marker0",
+    "marker-out0",
+    "--dport",
+    "-A ",
+    " ! ",
+)
+
+
+class SummaryTests(unittest.TestCase):
+    """Mode summary says what the read-back would refuse, and prints no rule's text."""
+
+    def marked(self) -> str:
+        """Return a standard listing whose foreign rules carry the markers, above the policy."""
+
+        def edit(lines: list[str]) -> list[str]:
+            out = inserted(
+                MARKER_RULES[0], before=INPUT_DELETIONS["spool bridge established accept"]
+            )(lines)
+            out = inserted(
+                MARKER_RULES[1], before=INPUT_DELETIONS["spool bridge established accept"]
+            )(out)
+            out = inserted(MARKER_RULES[2], before=V4_STANDARD_DELETIONS["established accept"])(out)
+            return inserted(MARKER_RULES[3], before="-A FORWARD -j DOCKER-USER")(out)
+
+        return listing(STANDARD, edit)
+
+    def test_the_summary_prints_names_positions_and_counts_never_rule_text(self) -> None:
+        found = summarise(v4=self.marked())
+        everything = json.dumps(chain.summary_result(found)) + "\n".join(found.lines())
+        for marker in MARKERS:
+            with self.subTest(marker=marker):
+                self.assertNotIn(marker, everything)
+        # The names that may be shown are shown: that is what the capture needs.
+        self.assertIn("f2b-sshd", everything)
+        self.assertIn("target: ACCEPT", everything)
+
+    def test_a_listing_error_prints_the_exit_status_and_nothing_the_tool_said(self) -> None:
+        runner = runner_for("", status=4, stderr="Permission denied 198.51.100.77 marker-note")
+        found = summarise(runner=runner)
+        everything = json.dumps(chain.summary_result(found)) + "\n".join(found.lines())
+        self.assertNotIn("198.51.100.77", everything)
+        self.assertNotIn("marker-note", everything)
+        self.assertIn("exited 4", everything)
+
+    def test_a_listing_error_is_an_unreadable_row_not_a_failure(self) -> None:
+        found = summarise(runner=runner_for("", status=4, stderr="boom"))
+        self.assertEqual(found.would_refuse, 0)
+        self.assertEqual(found.unreadable, 6)  # four chains and two FORWARD checks
+        self.assertTrue(all(c.state == "unreadable" for c in found.chains))
+
+    def test_a_policy_text_that_is_not_usable_still_fails_as_the_apply_would(self) -> None:
+        params = chain.SummaryParams("not a program\n", STANDARD, frozenset())
+        with self.assertRaises(chain.LiteralMissingError):
+            chain.summarise(params, runner_for(listing(STANDARD)))
+
+    def test_the_result_is_counts_flags_and_names_only(self) -> None:
+        found = summarise(v4=self.marked())
+        result = chain.summary_result(found)
+        self.assertEqual(
+            set(result),
+            {"msg", "summary_lines", "chains", "forward", "would_refuse", "at_risk", "unreadable"},
+        )
+        # Every word in the structured part is a chain, a family, a state, a verdict or a
+        # target name: none of them can be the text of a rule.
+        name = re.compile(f"{chain.CHAIN_NAME.pattern}|{re.escape(chain.UNREADABLE_TARGET)}")
+
+        def walk(value: object) -> None:
+            if isinstance(value, dict):
+                for item in value.values():
+                    walk(item)
+            elif isinstance(value, (list, tuple)):
+                for item in value:
+                    walk(item)
+            elif isinstance(value, str):
+                self.assertRegex(value, name)
+                self.assertIsNotNone(name.fullmatch(value), value)
+            else:
+                self.assertIsInstance(value, (int, bool))
+
+        walk([result["chains"], result["forward"]])
+        for key in ("would_refuse", "at_risk", "unreadable"):
+            self.assertIsInstance(result[key], int)
+
+    def test_the_summary_marks_exactly_the_rules_the_apply_would_refuse(self) -> None:
+        above = V4_STANDARD_DELETIONS["established accept"]
+        cases = {
+            "an accept": ("-A DOCKER-USER -s 172.17.0.0/16 -j ACCEPT", frozenset[str]()),
+            "a return": ("-A DOCKER-USER -s 172.17.0.0/16 -j RETURN", frozenset[str]()),
+            "a jump to an unlisted chain": ("-A DOCKER-USER -j f2b-ssh", frozenset[str]()),
+            "a goto to a listed chain": ("-A DOCKER-USER -g f2b-ssh", frozenset({"f2b-ssh"})),
+            "an unmatched drop": ("-A DOCKER-USER -j DROP", frozenset[str]()),
+        }
+        for name, (rule, allowed) in cases.items():
+            with self.subTest(case=name):
+                text = listing(STANDARD, inserted(rule, before=above))
+                with self.assertRaises(chain.RuleBypassError) as caught:
+                    check(STANDARD, v4=text, allowed=allowed)
+                found = summarise(v4=text, allowed=allowed)
+                refused = [
+                    p for p, v in verdicts(found, "iptables", "DOCKER-USER") if v == "would-refuse"
+                ]
+                self.assertEqual(refused[0], refused_position(caught.exception))
+                self.assertEqual(found.would_refuse, 1)
+
+    def test_the_same_rules_pass_when_the_apply_would_pass_them(self) -> None:
+        above = V4_STANDARD_DELETIONS["established accept"]
+        cases = {
+            "a jump to a listed chain": ("-A DOCKER-USER -j f2b-ssh", frozenset({"f2b-ssh"})),
+            "a matched drop": ("-A DOCKER-USER -s 192.0.2.7/32 -j DROP", frozenset[str]()),
+        }
+        for name, (rule, allowed) in cases.items():
+            with self.subTest(case=name):
+                text = listing(STANDARD, inserted(rule, before=above))
+                check(STANDARD, v4=text, allowed=allowed)
+                found = summarise(v4=text, allowed=allowed)
+                self.assertEqual(found.would_refuse, 0)
+                self.assertEqual(verdicts(found, "iptables", "DOCKER-USER")[0], (1, "ok"))
+
+    def test_an_allowlisted_target_flips_the_verdict(self) -> None:
+        text = listing(
+            STANDARD,
+            inserted(
+                "-A DOCKER-USER -j f2b-ssh", before=V4_STANDARD_DELETIONS["established accept"]
+            ),
+        )
+        self.assertEqual(summarise(v4=text).would_refuse, 1)
+        self.assertEqual(summarise(v4=text, allowed=frozenset({"f2b-ssh"})).would_refuse, 0)
+
+    def test_a_rule_below_the_last_drop_is_below_policy(self) -> None:
+        text = "\n".join([*listing(STANDARD).splitlines(), "-A DOCKER-USER -j ACCEPT"]) + "\n"
+        found = summarise(v4=text)
+        self.assertEqual(verdicts(found, "iptables", "DOCKER-USER")[-1], (7, "below-policy"))
+        self.assertEqual(found.would_refuse, 0)
+
+    def test_the_captured_chains_have_nothing_the_apply_would_refuse(self) -> None:
+        for variant in (STANDARD, PROTECTED):
+            with self.subTest(variant=variant):
+                found = summarise(variant)
+                self.assertEqual((found.would_refuse, found.at_risk, found.unreadable), (0, 0, 0))
+                self.assertEqual(
+                    verdicts(found, "iptables", "DOCKER-USER"),
+                    [(6 if variant == STANDARD else 8, "below-policy")],
+                )
+
+    def test_forward_rule_one_other_than_the_docker_user_jump_is_reported(self) -> None:
+        jump = "-A FORWARD -j DOCKER-USER"
+        cases = {
+            "other": inserted("-A FORWARD -j ACCEPT", before=jump),
+            "empty": without(jump),
+        }
+        for first, edit in cases.items():
+            with self.subTest(first=first):
+                text = listing(STANDARD, edit)
+                with self.assertRaises(chain.ForwardBypassError):
+                    check(STANDARD, v4=text)
+                found = summarise(v4=text)
+                (forward,) = [f for f in found.forwards if f.family == "iptables"]
+                self.assertEqual(forward.first, first)
+                self.assertEqual(found.would_refuse, 1)
+                self.assertIn(f"iptables FORWARD: first rule is {first}", " ".join(found.lines()))
+
+    def test_forward_is_reported_as_the_jump_when_it_is_and_not_checked_without_the_chain(
+        self,
+    ) -> None:
+        no_chain = v6_listing(lambda lines: [ln for ln in lines if "DOCKER-USER" not in ln])
+        found = summarise(v6=no_chain)
+        self.assertEqual(
+            {f.family: f.first for f in found.forwards},
+            {"iptables": "jump-to-DOCKER-USER", "ip6tables": "not-checked"},
+        )
+
+    def test_a_fresh_chain_reports_policy_absent_and_at_risk_not_would_refuse(self) -> None:
+        def edit(lines: list[str]) -> list[str]:
+            kept = fresh(lines)
+            kept = inserted("-A DOCKER-USER -j f2b-ssh", before="-A DOCKER-USER -j RETURN")(kept)
+            kept = inserted(
+                "-A INPUT -p tcp -m tcp --dport 22 -j ACCEPT", before="-A FORWARD -j DOCKER-USER"
+            )(kept)
+            return [*kept, "-A INPUT -s 192.0.2.7/32 -j DROP"]
+
+        text = listing(STANDARD, edit)
+        with self.assertRaises(chain.RuleMissingError):
+            check(STANDARD, v4=text)
+        found = summarise(v4=text)
+        (docker_user,) = [
+            c for c in found.chains if (c.family, c.chain) == ("iptables", "DOCKER-USER")
+        ]
+        self.assertEqual((docker_user.policy_present, docker_user.policy_total), (0, 5))
+        self.assertEqual(
+            verdicts(found, "iptables", "DOCKER-USER"), [(1, "at-risk"), (2, "below-policy")]
+        )
+        self.assertEqual(verdicts(found, "iptables", "INPUT"), [(1, "at-risk"), (2, "ok")])
+        self.assertEqual((found.would_refuse, found.at_risk), (0, 2))
+
+    def test_a_chain_the_policy_needs_that_is_absent_would_be_refused(self) -> None:
+        gone = listing(STANDARD, lambda lines: [ln for ln in lines if "DOCKER-USER" not in ln])
+        with self.assertRaises(chain.ChainAbsentError):
+            check(STANDARD, v4=gone)
+        self.assertEqual(summarise(v4=gone).would_refuse, 1)
+
+    def test_a_lookalike_of_an_owned_rule_is_foreign_as_it_is_for_the_read_back(self) -> None:
+        lookalike = V4_STANDARD_DELETIONS["subnet drop"].replace("DROP", "ACCEPT")
+        text = listing(
+            STANDARD, inserted(lookalike, before=V4_STANDARD_DELETIONS["established accept"])
+        )
+        with self.assertRaises(chain.RuleBypassError):
+            check(STANDARD, v4=text)
+        self.assertEqual(summarise(v4=text).would_refuse, 1)
+
+    def test_main_in_summary_mode_only_lists_and_never_fails_on_a_listing_error(self) -> None:
+        for status in (0, 4):
+            with self.subTest(status=status):
+                fake = mock.MagicMock()
+                fake.params = {
+                    "mode": "summary",
+                    "reconciler_path": None,
+                    "reconciler_text": PROGRAM.read_text(encoding="utf-8"),
+                    "variant": STANDARD,
+                    "foreign_chain_allowlist": [],
+                }
+                fake.get_bin_path.side_effect = lambda name, required=False: name  # noqa: ARG005
+                fake.run_command.side_effect = lambda argv, check_rc=False, code=status: (  # noqa: ARG005
+                    (code, listing(STANDARD) if code == 0 else "", "denied")
+                )
+                with mock.patch.object(chain, "AnsibleModule", return_value=fake) as constructor:
+                    chain.main()
+                self.assertEqual(constructor.call_args.kwargs["required_if"], chain.REQUIRED_IF)
+                fake.fail_json.assert_not_called()
+                self.assertFalse(fake.exit_json.call_args.kwargs["changed"])
+                self.assertIn("summary_lines", fake.exit_json.call_args.kwargs)
+                for call in fake.run_command.call_args_list:
+                    self.assertEqual(call.args[0][1:], ["-w", "-t", "filter", "-S"])
+
+    def test_mode_check_is_the_default_and_keeps_its_result(self) -> None:
+        values = {
+            "reconciler_path": str(PROGRAM),
+            "variant": STANDARD,
+            "foreign_chain_allowlist": [],
+        }
+        runner = runner_for(listing(STANDARD))
+        expected = {
+            "msg": "the firewall chains carry the policy",
+            "owned_rules": 5 + 2 + 2 + 1,
+            "foreign_rules": 2,
+        }
+        self.assertEqual(chain.run(values, runner), expected)
+        self.assertEqual(chain.run({**values, "mode": "check"}, runner), expected)
+
+    def test_each_mode_requires_its_own_program_input(self) -> None:
+        documented = cast(
+            "Mapping[str, Mapping[str, Mapping[str, object]]]",
+            YAML(typ="safe").load(chain.DOCUMENTATION),
+        )["options"]
+        self.assertEqual(
+            {(mode, name) for _, mode, names in chain.REQUIRED_IF for name in names},
+            {("check", "reconciler_path"), ("summary", "reconciler_text")},
+        )
+        self.assertEqual(documented["mode"]["choices"], ["check", "summary"])
+        self.assertEqual(documented["mode"]["default"], "check")
+        for _, _, names in chain.REQUIRED_IF:
+            for name in names:
+                self.assertFalse(chain.ARGUMENT_SPEC[name].get("required", False))
 
 
 if __name__ == "__main__":
