@@ -1,0 +1,63 @@
+---
+# Test scaffolding, not role tasks: the stand-in for the docker CLI the instance has instead
+# of an engine (the default scenario's stand-in, not copied), a healthy running service for
+# `compose ps` to report, and a web server on loopback that answers the endpoint check from
+# www/health. Removing that file makes the endpoint answer 404.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the stand-in's state directory and the directory it serves
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/lib/compose_stack_standin
+        - /var/lib/compose_stack_standin/www
+
+    - name: Install the default scenario's stand-in as the docker command
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../default/files/docker_standin.sh'
+        dest: /usr/local/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Start the stand-in's call logs empty
+      ansible.builtin.copy:
+        content: ''
+        dest: '/var/lib/compose_stack_standin/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+        force: true
+      loop:
+        - argv.log
+        - dryrun.log
+
+    - name: Report one healthy running container for the web service
+      ansible.builtin.copy:
+        content: |
+          {"Name":"stand-in-web-1","Service":"web","State":"running","Labels":"","Networks":"default","Publishers":null}
+        dest: /var/lib/compose_stack_standin/ps.json
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Give the endpoint a health answer
+      ansible.builtin.copy:
+        content: |
+          {"status":"UP"}
+        dest: /var/lib/compose_stack_standin/www/health
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Detached with its output closed, so the task returns while the server keeps running.
+    - name: Serve the endpoint on loopback
+      ansible.builtin.shell:
+        cmd: setsid --fork python3 -m http.server 8304 --bind 127.0.0.1 --directory /var/lib/compose_stack_standin/www >/dev/null 2>&1 </dev/null
+      changed_when: true

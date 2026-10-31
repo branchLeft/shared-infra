@@ -1,20 +1,14 @@
-"""Unit tests for the order of the control_plane role's secret tasks.
+"""Order tests for the control_plane secret tasks: attributes are set before each fill."""
 
-The role writes each secret in two steps. Each file is created empty at its final
-owner and mode, then the owner, group and mode of both files are set on every run,
-and only then is each file's content written into the file. A fill writes through
-the existing file, which keeps the owner and mode it has, so an attribute task that
-runs after a fill leaves the content in a file that is still wide. These tests read
-tasks/main.yml as text and fail when one of the five tasks is missing, or when the
-attribute task is not between the two create-empty tasks and the two fills.
-"""
-
-import re
+import sys
 import unittest
 from pathlib import Path
 
 ROLE = Path(__file__).resolve().parents[2]
 TASKS = ROLE / "tasks" / "main.yml"
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests" / "support"))
+
+from role_tasks import task_lines  # noqa: E402
 
 CREATE_ENV = "Create the environment file empty, if it is absent"
 CREATE_KEY = "Create the master key empty, if it is absent"
@@ -23,19 +17,9 @@ FILL_ENV = "Write the environment file's content while the file is empty"
 FILL_KEY = "Write the master key's content while the file is empty"
 
 
-def _task_names() -> list[str]:
-    """Return the name of every task in tasks/main.yml, in file order, read as text."""
-    names: list[str] = []
-    for line in TASKS.read_text(encoding="utf-8").splitlines():
-        match = re.match(r"^- name: (.+)$", line)
-        if match:
-            names.append(match.group(1).strip())
-    return names
-
-
 class TaskOrderTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.names = _task_names()
+        self.names = [name for name, _ in task_lines(TASKS)]
 
     def _position(self, name: str) -> int:
         self.assertEqual(self.names.count(name), 1, f"{name!r} must appear exactly once in tasks/main.yml")

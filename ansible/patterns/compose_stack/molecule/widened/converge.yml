@@ -1,0 +1,55 @@
+---
+# The widened contract, applied the way a consumer applies it: a caller's own template,
+# a configuration file in a directory of its own, a named compose file, no secret, and the
+# optional endpoint check. A fresh instance goes through a chain of changes, each stating the
+# number of real `up` calls it must cause. The chain is skipped on an instance that already
+# has the stack, so a second run changes nothing: the last application, with the final
+# values, runs every time and must cause no up call.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read whether the compose file is already on the instance
+      ansible.builtin.stat:
+        path: /opt/compose_widened/widened.yml
+      register: converge_existing_file
+
+    - name: Apply the caller's stack for the first time
+      ansible.builtin.include_tasks: tasks/apply_widened.yml
+      vars:
+        widened_title: First application
+        widened_greeting: FIRST
+        widened_expected_ups: 1
+      when: not converge_existing_file.stat.exists
+
+    - name: Apply the same values again, with no file changed
+      ansible.builtin.include_tasks: tasks/apply_widened.yml
+      vars:
+        widened_title: Nothing edited
+        widened_greeting: FIRST
+        widened_expected_ups: 0
+      when: not converge_existing_file.stat.exists
+
+    - name: Refuse a configuration file name that climbs out of the project directory
+      ansible.builtin.include_tasks: tasks/refuse_name.yml
+      when: not converge_existing_file.stat.exists
+
+    # Check mode writes nothing, so the endpoint is not taken away there, and the role would pass.
+    - name: Apply a new value while the endpoint does not answer
+      ansible.builtin.include_tasks: tasks/endpoint_fails.yml
+      when: not converge_existing_file.stat.exists and not ansible_check_mode
+
+    - name: Apply the new value once the endpoint answers again
+      ansible.builtin.include_tasks: tasks/apply_widened.yml
+      vars:
+        widened_title: Retried after the endpoint answered
+        widened_greeting: FINAL
+        widened_expected_ups: 1
+      when: not converge_existing_file.stat.exists
+
+    - name: Apply the final values, with nothing edited
+      ansible.builtin.include_tasks: tasks/apply_widened.yml
+      vars:
+        widened_title: Settled
+        widened_greeting: FINAL
+        widened_expected_ups: 0
