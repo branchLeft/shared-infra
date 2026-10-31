@@ -163,6 +163,14 @@ class DockerSigningKeyTests(unittest.TestCase):
         result, calls = self.run_script(DOCKER_KEY_FIXTURE, _listing(other))
         self.assert_refused(result, calls)
 
+    def test_refuses_a_fingerprint_sharing_only_the_last_sixteen_characters(self):
+        filler = "0" if PINNED_FPR[:24] != "0" * 24 else "1"
+        forged = filler * 24 + PINNED_FPR[-16:]
+        self.assertNotEqual(forged, PINNED_FPR)
+        self.assertEqual(forged[-16:], PINNED_FPR[-16:])
+        result, calls = self.run_script(DOCKER_KEY_FIXTURE, _listing(forged))
+        self.assert_refused(result, calls)
+
     def test_accepts_the_pinned_fingerprint_written_in_lower_case(self):
         result, calls = self.run_script(DOCKER_KEY_FIXTURE, _listing(PINNED_FPR.lower()))
         self.assert_accepted(result, calls)
