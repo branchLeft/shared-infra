@@ -125,8 +125,13 @@ EXPECTED_COMMON = {
 }
 
 
+# The one definition of the loader every read uses: libyaml's C parser where PyYAML was built
+# with it (the pinned wheel is), else the pure-Python SafeLoader. Both build only plain data.
+_BASE_LOADER: type[yaml.SafeLoader] = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 # PyYAML ships no type stubs and the lock has no types-PyYAML, so mypy sees SafeLoader as Any.
-class _AnyTagLoader(yaml.SafeLoader):  # type: ignore[misc]
+class _AnyTagLoader(_BASE_LOADER):  # type: ignore[misc]
     """SafeLoader with every tag accepted. Ansible's loader takes !unsafe and !vault, and a
     list that carries such a value still runs as plays, so the README play-list parse must
     not refuse to read one. Only the README play-list check uses it."""
@@ -143,21 +148,41 @@ def _construct_any_tag(loader: yaml.SafeLoader, suffix: str, node: yaml.Node) ->
 _AnyTagLoader.add_multi_constructor("", _construct_any_tag)
 
 
+# What a parse gave, by loader and file text: the document, or the error message. The text is
+# the key because a rewrite in place keeps the path, the size and perhaps the mtime, and a
+# stale parse here would be a false green in a safety check; the same text parses the same
+# whichever path it was read from, so one parse serves every copy of the tree. A caller must
+# not change a document it is handed: they are shared. None does: _mapping and _plays copy.
+_PARSED: dict[tuple[type[yaml.SafeLoader], str], tuple[object, str | None]] = {}
+
+
 def _load(
-    path: Path, findings: list[str], label: str, loader: type[yaml.SafeLoader] = yaml.SafeLoader
+    path: Path, findings: list[str], label: str, loader: type[yaml.SafeLoader] = _BASE_LOADER
 ) -> object:
     """The one YAML reader, for every rule, for R6 and for the README play-list check. The
     loader is the only difference: the README check passes _AnyTagLoader, the same reader with
     every tag accepted. A missing file is reported by its own rule, not here. An unparseable
-    file is a finding under the caller's label."""
+    file is a finding under the caller's label. The file is read on every call; only the
+    parse of a text already seen is skipped."""
     if not path.is_file():
         return None
     try:
-        # The loader is always a SafeLoader subclass whose only addition turns any tag into a
-        # plain list, dict or string, so no Python object is built here.
-        doc: object = yaml.load(path.read_text(encoding="utf-8"), Loader=loader)  # noqa: S506
-    except (OSError, ValueError, yaml.YAMLError) as error:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as error:
         findings.append(f"{label}: cannot be read as YAML: {error}")
+        return None
+    parsed = _PARSED.get((loader, text))
+    if parsed is None:
+        try:
+            # The loader is always a SafeLoader subclass whose only addition turns any tag into
+            # a plain list, dict or string, so no Python object is built here.
+            parsed = (yaml.load(text, Loader=loader), None)  # noqa: S506
+        except (ValueError, yaml.YAMLError) as error:
+            parsed = (None, str(error))
+        _PARSED[(loader, text)] = parsed
+    doc, error_text = parsed
+    if error_text is not None:
+        findings.append(f"{label}: cannot be read as YAML: {error_text}")
         return None
     return doc
 

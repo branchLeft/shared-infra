@@ -13,7 +13,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_enrolment import ROOT, check
+import yaml  # type: ignore[import-untyped]
+from check_enrolment import (
+    _BASE_LOADER,
+    _PARSED,
+    ROOT,
+    _AnyTagLoader,
+    _construct_any_tag,
+    _load,
+    check,
+)
 
 # A playbook that applies the pull on edge1: it is refused in any name the pull cannot read.
 EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
@@ -1116,6 +1125,120 @@ class Sabotage(unittest.TestCase):
     def test_r2_deploy_tooling_off_the_list(self) -> None:
         self._edit("checks/host_roles.yml", "  - ci_login\n  - deploy_tooling\n", "  - ci_login\n")
         self._assert_one("R2 edge1.yml: role deploy_tooling is not on edge1's list")
+
+
+class _PurePythonAnyTagLoader(yaml.SafeLoader):  # type: ignore[misc]
+    """_AnyTagLoader's reader on the pure-Python parser: the reference its parse is held to."""
+
+
+_PurePythonAnyTagLoader.add_multi_constructor("", _construct_any_tag)
+
+# Texts neither parser may read. Parity is on the refusal, not on the wording of the message.
+UNREADABLE = ("a: [\n", "a: b: c\n", "a:\n\t- b\n", "a: !unsafe x\n", "- !vault |\n  $X\n", "{")
+
+
+def _outcome(text: str, loader: type) -> tuple[str, object]:
+    try:
+        return "read", yaml.load(text, Loader=loader)  # noqa: S506
+    except (ValueError, yaml.YAMLError):
+        return "refused", None
+
+
+class LoaderParity(unittest.TestCase):
+    """The reader is libyaml's C parser where PyYAML has it. It must give, for every file the
+    check reads, exactly what the pure-Python SafeLoader gives, or a safety check would judge
+    a different document in CI than the one the pure parser reads."""
+
+    def _texts(self) -> list[tuple[Path, str]]:
+        paths = sorted((*ROOT.glob("ansible/**/*.yml"), *ROOT.glob("ansible/**/*.yaml")))
+        return [(path, path.read_text(encoding="utf-8")) for path in paths if path.is_file()]
+
+    def test_the_loader_is_libyaml_when_pyyaml_has_it(self) -> None:
+        if yaml.__with_libyaml__:
+            self.assertIs(_BASE_LOADER, yaml.CSafeLoader)
+        else:
+            self.assertIs(_BASE_LOADER, yaml.SafeLoader)
+
+    def test_the_loader_reads_every_file_as_the_pure_python_loader_does(self) -> None:
+        texts = self._texts()
+        self.assertGreater(len(texts), 50, "the glob found too few files to be a parity check")
+        for path, text in texts:
+            with self.subTest(path=str(path.relative_to(ROOT))):
+                self.assertEqual(
+                    _outcome(text, _BASE_LOADER), _outcome(text, yaml.SafeLoader), "strict"
+                )
+                self.assertEqual(
+                    _outcome(text, _AnyTagLoader), _outcome(text, _PurePythonAnyTagLoader), "any"
+                )
+
+    def test_the_loader_refuses_what_the_pure_python_loader_refuses(self) -> None:
+        for text in UNREADABLE:
+            with self.subTest(text=text):
+                strict = _outcome(text, _BASE_LOADER)
+                self.assertEqual(strict, _outcome(text, yaml.SafeLoader))
+                if "!" in text:
+                    self.assertEqual(strict[0], "refused", "a tag is refused by the strict loader")
+                    self.assertEqual(
+                        _outcome(text, _AnyTagLoader), _outcome(text, _PurePythonAnyTagLoader)
+                    )
+                    self.assertEqual(_outcome(text, _AnyTagLoader)[0], "read")
+                else:
+                    self.assertEqual(strict[0], "refused")
+
+
+class LoadCache(unittest.TestCase):
+    """The parse is cached by file text. The file is read on every call, so an edit is seen."""
+
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.path = Path(temp.name) / "play.yml"
+
+    def test_an_edit_of_the_same_length_is_read_not_replayed(self) -> None:
+        self.path.write_text("signers: [aaaa]\n", encoding="utf-8")
+        self.assertEqual(_load(self.path, [], "x"), {"signers": ["aaaa"]})
+        before = self.path.stat()
+        self.path.write_text("signers: [bbbb]\n", encoding="utf-8")
+        self.assertEqual(self.path.stat().st_size, before.st_size, "the case is a same-size edit")
+        self.assertEqual(_load(self.path, [], "x"), {"signers": ["bbbb"]})
+
+    def test_an_unreadable_file_is_a_finding_every_time_under_the_callers_label(self) -> None:
+        self.path.write_text("a: [\n", encoding="utf-8")
+        first: list[str] = []
+        second: list[str] = []
+        self.assertIsNone(_load(self.path, first, "R2 one.yml"))
+        self.assertIsNone(_load(self.path, second, "R6 two.yml"))
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertTrue(first[0].startswith("R2 one.yml: cannot be read as YAML: "))
+        self.assertTrue(second[0].startswith("R6 two.yml: cannot be read as YAML: "))
+        self.assertEqual(first[0].split(": ", 2)[2], second[0].split(": ", 2)[2])
+
+    def test_a_file_fixed_after_a_failed_read_is_read(self) -> None:
+        self.path.write_text("a: [\n", encoding="utf-8")
+        self.assertIsNone(_load(self.path, [], "x"))
+        self.path.write_text("a: [1]\n", encoding="utf-8")
+        findings: list[str] = []
+        self.assertEqual(_load(self.path, findings, "x"), {"a": [1]})
+        self.assertEqual(findings, [])
+
+    def test_the_two_loaders_do_not_share_a_result(self) -> None:
+        self.path.write_text("- hosts: all\n  note: !unsafe '{{ x }}'\n", encoding="utf-8")
+        for _ in range(2):
+            strict: list[str] = []
+            self.assertIsNone(_load(self.path, strict, "strict"))
+            self.assertEqual(len(strict), 1)
+            self.assertEqual(
+                _load(self.path, [], "any", _AnyTagLoader),
+                [{"hosts": "all", "note": "{{ x }}"}],
+            )
+
+    def test_the_cache_holds_a_parse_per_text_not_per_call(self) -> None:
+        self.path.write_text("only: this-text-is-unique-to-the-cache-test\n", encoding="utf-8")
+        _load(self.path, [], "x")
+        held = len(_PARSED)
+        _load(self.path, [], "x")
+        self.assertEqual(len(_PARSED), held)
 
 
 if __name__ == "__main__":
