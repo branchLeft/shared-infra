@@ -86,6 +86,55 @@ because the website role's argument is a string):
 }
 ```
 
+For edge1 the file is one JSON object of eleven keys, each the name of a required argument
+of `monitoring_stack` (seven) or `ntfy_pager` (four). The values must equal what is live on
+the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env` with others:
+
+```text
+{
+  "monitoring_stack_smtp_username": "<string>",
+  "monitoring_stack_smtp_password": "<string>",
+  "monitoring_stack_healthchecks_ping_url": "<string>",
+  "monitoring_stack_alert_recipient_email": "<string>",
+  "monitoring_stack_mailhost_ping_url": "<string>",
+  "monitoring_stack_grafana_admin_password": "<string>",
+  "monitoring_stack_snds_data_url": "<string>",
+  "ntfy_pager_pager_token": "<string>",
+  "ntfy_pager_watcher_token": "<string>",
+  "ntfy_pager_owner_password_hash": "<string>",
+  "ntfy_pager_machine_password_hash": "<string>"
+}
+```
+
+For ops1 the file is one JSON object of twenty keys, each the name of a required argument of
+`backup_worker` (ten) or `backup_restore` (ten). `backup_worker_tenants` is a list; the rest
+are strings:
+
+```text
+{
+  "backup_worker_db_host": "<string>",
+  "backup_worker_db_user": "<string>",
+  "backup_worker_db_password": "<string>",
+  "backup_worker_db_ca_pem": "<string>",
+  "backup_worker_bucket": "<string>",
+  "backup_worker_s3_endpoint": "<string>",
+  "backup_worker_s3_region": "<string>",
+  "backup_worker_s3_access_key_id": "<string>",
+  "backup_worker_s3_secret_access_key": "<string>",
+  "backup_worker_tenants": [{"slug": "<slug>", "recipient": "<public key>"}],
+  "backup_restore_state_copy_recipient": "<string>",
+  "backup_restore_state_copy_dest_access_key_id": "<string>",
+  "backup_restore_state_copy_estate_bucket": "<string>",
+  "backup_restore_state_copy_estate_endpoint": "<string>",
+  "backup_restore_state_copy_estate_region": "<string>",
+  "backup_restore_state_copy_estate_access_key_id": "<string>",
+  "backup_restore_state_copy_tenant_bucket": "<string>",
+  "backup_restore_state_copy_tenant_endpoint": "<string>",
+  "backup_restore_state_copy_tenant_region": "<string>",
+  "backup_restore_state_copy_tenant_access_key_id": "<string>"
+}
+```
+
 A value
 is set exactly as the file gave it: a string stays a string, a list stays a list, and
 braces or `{%` in a string are not evaluated a second time.
@@ -128,7 +177,11 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. Today db1's and app1's playbooks apply it. The first db1 apply that includes
+nothing else. Today the playbooks of edge1, ops1, db1 and app1 apply it. On edge1 the loader is
+followed by the roles up to `edge_stack` and then the monitoring roles, and on ops1 by the roles
+up to `control_plane` and then the backup roles; on both, the first run after this change stops
+here with `host_inputs[file-missing]`, before anything else is applied, until the owner has placed
+`/etc/branchleft/host-inputs.json` (root:root, `0600`, the keys above). The first db1 apply that includes
 it stops here until the owner has placed the file, which proves the file on the host before
 the database roles depend on it. db1 also needs its signer in `ansible/trust/db1.yml`
 before any pull runs. On app1 the loader is followed by `website_app1`, and the same holds:

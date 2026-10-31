@@ -2,9 +2,17 @@
 # edge1: the first host under the gated pull. Two pull roles, in order: the
 # Ansible toolchain the host runs this playbook with, then the trigger that runs it.
 # After them, the roles on edge1's list in checks/host_roles.yml that this playbook wires:
+# the loader of the host's private inputs (host_inputs, first: check_enrolment R11), which reads
+# the one root-only file the owner places on the host and stops the run if it is missing or unsafe,
 # the host baseline, the pipeline account the trigger is reached through, then the deploy
-# tooling (as class gateway, which installs the common targets only), then the edge stack, last:
-# it needs Docker from the baseline and the compose unit and deploy wrapper from the deploy tooling.
+# tooling (as class gateway, which installs the common targets only), then the edge stack. The
+# edge stack needs Docker from the baseline and the compose unit and deploy wrapper from the deploy
+# tooling. After it come the three monitoring roles, so a failure in them cannot hold the edge
+# delivery back: the node exporter and the SNDS collector (exporters_and_collectors), the pager
+# (ntfy_pager), and the monitoring stack, last (monitoring_stack): the stack hashes the pager's
+# secrets file and renderer and decides the one restart of its unit, and the SNDS textfile
+# directory the collectors create should be in place before that restart.
+# egress_nat is on edge1's list and is not applied here.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
@@ -33,7 +41,11 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/ci_login # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/edge_stack # noqa: role-name[path]
+    - role: ../roles/exporters_and_collectors # noqa: role-name[path]
+    - role: ../roles/ntfy_pager # noqa: role-name[path]
+    - role: ../roles/monitoring_stack # noqa: role-name[path]
