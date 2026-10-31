@@ -1,0 +1,32 @@
+---
+# One service account token the role must refuse. Takes case_name and item (setup, and
+# owner, group, mode for a file).
+- name: 'Remove the token: {{ case_name }}'
+  ansible.builtin.file:
+    path: /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat
+    state: absent
+
+- name: 'Write the token: {{ case_name }}'
+  ansible.builtin.copy:
+    content: "EXAMPLE_TOKEN\n"
+    dest: /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+  when: item.setup == 'file'
+
+- name: 'Link the token: {{ case_name }}'
+  ansible.builtin.file:
+    src: /var/tmp/verify-target
+    dest: /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat
+    state: link
+    force: true
+  when: item.setup == 'link'
+
+- name: 'Refuse a bad token: {{ case_name }}'
+  ansible.builtin.include_tasks: refuse.yml
+  vars:
+    ask_name: 'a service account token: {{ case_name }}'
+    ask_tags: control_plane_db_identity
+    ask_extra: { control_plane_db_step: identity }
+    refused_text: 'REFUSED: /var/lib/branchleft/control-plane/zitadel-state/reconciler.pat must be a regular file'

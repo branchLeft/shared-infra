@@ -1,0 +1,19 @@
+---
+# Read what the stand-in docker recorded, as a list of calls. An absent log is no call.
+- name: Look for the stand-in's log
+  ansible.builtin.stat:
+    path: /var/tmp/fake-docker/calls.jsonl
+  register: control_plane_db_verify_calls_stat
+
+- name: Read the stand-in's log
+  ansible.builtin.slurp:
+    src: /var/tmp/fake-docker/calls.jsonl
+  register: control_plane_db_verify_calls_slurp
+  when: control_plane_db_verify_calls_stat.stat.exists
+
+- name: Keep the calls as data
+  ansible.builtin.set_fact:
+    control_plane_db_verify_calls: >-
+      {{ (control_plane_db_verify_calls_slurp.content | ansible.builtin.b64decode).splitlines()
+         | map('ansible.builtin.from_json') | list
+         if control_plane_db_verify_calls_stat.stat.exists else [] }}
