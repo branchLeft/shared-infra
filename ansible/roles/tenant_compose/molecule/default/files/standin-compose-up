@@ -1,0 +1,24 @@
+#!/bin/sh
+# Test stand-in for what the compose template unit runs: `docker compose up --wait`.
+# It records one line per start and never prints a secret: the image it was given, whether
+# a secret reached its environment (set or unset), and whether the deploy lock was held
+# while it ran. It fails while the file up_fails exists, as a stack that does not come up.
+set -eu
+state=/var/lib/standin
+mkdir -p "$state"
+stack="$1"
+if flock --nonblock "/etc/branchleft/${stack}.deploy.lock" true; then
+  lock=free
+else
+  lock=held
+fi
+if [ -n "${GHOST_DB_PASSWORD:-}" ]; then
+  secret=set
+else
+  secret=unset
+fi
+printf '%s image=%s secret=%s lock=%s\n' "$stack" "${IMAGE:-none}" "$secret" "$lock" >>"$state/starts.log"
+if [ -e "$state/up_fails" ]; then
+  echo "stand-in: the stack did not come up" >&2
+  exit 1
+fi

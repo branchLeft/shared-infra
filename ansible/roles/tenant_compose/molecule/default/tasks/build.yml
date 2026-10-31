@@ -1,0 +1,26 @@
+---
+# Builds the role's stacks input from phase_specs, one entry per placeholder tenant. A spec
+# names slug, uid and port, and may name secret, memory, publish, service_image, image and
+# drop_secret to change what the stack says. The result is tenant_compose_scenario_stacks.
+# The entries hold throwaway secrets, so nothing here prints one.
+- name: Start the list
+  ansible.builtin.set_fact:
+    tenant_compose_scenario_stacks: []
+
+# The newlines are written in double-quoted YAML, which turns the escape into a newline
+# before Jinja reads it; inside a folded block the escape would reach the file as two characters.
+- name: Add one placeholder tenant
+  ansible.builtin.set_fact:
+    tenant_compose_scenario_stacks: '{{ tenant_compose_scenario_stacks + [tenant_compose_scenario_stack] }}'
+  vars:
+    tenant_compose_scenario_mail_line: "{{ '' if (item.drop_secret | default(false)) else 'GHOST_MAIL_PASSWORD=' ~ scenario_mail_secret ~ '\n' }}"
+    tenant_compose_scenario_stack:
+      slug: '{{ item.slug }}'
+      uid: '{{ item.uid }}'
+      compose_text: "{{ lookup('ansible.builtin.template', 'tenant.compose.yml.j2') }}"
+      secrets_env_text: "{{ 'GHOST_DB_PASSWORD=' ~ (item.secret | default(scenario_secret)) ~ '\n' ~ tenant_compose_scenario_mail_line }}"
+      image_env_text: "{{ 'IMAGE=' ~ (item.image | default(scenario_image)) ~ '\n' }}"
+  loop: '{{ phase_specs }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  no_log: true

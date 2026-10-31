@@ -1,0 +1,36 @@
+# A placeholder mail spool with the shape of the renderer's, for the role's test.
+name: 'mail-spool'
+services:
+  mail-spool:
+    image: '{{ scenario_spool_image }}'
+    restart: 'unless-stopped'
+    user: '31000:31000'
+    read_only: true
+    cap_drop:
+      - 'ALL'
+    environment:
+      SHIM_DRAIN_TOKEN: '${SHIM_DRAIN_TOKEN:?set SHIM_DRAIN_TOKEN in /etc/branchleft/mail-spool.env}'
+    ports:
+      - '127.0.0.1:{{ spool_port | default(8095) }}:8081'
+    networks:
+      - 'branchleft-mail-spool-drain'
+      - 'branchleft-mail-30901'
+      - 'branchleft-mail-30902'
+    volumes:
+      - 'branchleft-mail-spool-data:/data'
+networks:
+  branchleft-mail-spool-drain:
+    name: 'branchleft-mail-spool-drain'
+    driver: 'bridge'
+    driver_opts:
+      com.docker.network.bridge.name: 'br-mailspool'
+      com.docker.network.bridge.enable_ip_masquerade: 'false'
+  branchleft-mail-30901:
+    name: 'branchleft-mail-30901'
+    internal: true
+  branchleft-mail-30902:
+    name: 'branchleft-mail-30902'
+    internal: true
+volumes:
+  branchleft-mail-spool-data:
+    external: true

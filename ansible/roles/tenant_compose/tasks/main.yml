@@ -1,0 +1,165 @@
+---
+# Order: everything that can refuse runs first, over every stack, and the role writes
+# nothing until all of it has passed. A refusal then leaves the host exactly as it was.
+# After that the spool is delivered, because the tenants' per-uid networks belong to the
+# spool's stack and must exist before a tenant's first start, and then each tenant.
+#
+# The tenants' list holds secrets. No task here loops over it without `no_log: true`, and
+# no loop labelled by `item` is allowed to fail over it: a failed labelled loop prints its
+# whole item, nested items included, so every assertion below reads only the sanitised
+# lists built from the verdicts.
+
+# ----- What the host must already have -----
+
+- name: Look at the stack and the configuration directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+  loop:
+    - '{{ tenant_compose_stack_root }}'
+    - '{{ tenant_compose_config_root }}'
+  register: tenant_compose_roots
+
+- name: Refuse a host without the directories the deploy tooling makes
+  ansible.builtin.assert:
+    that:
+      - tenant_compose_roots.results | map(attribute='stat.isdir') | select | list | length == 2
+    quiet: true
+    fail_msg: >-
+      {{ tenant_compose_stack_root }} and {{ tenant_compose_config_root }} must both exist before this role runs.
+      The deploy tooling role makes them. Nothing was written.
+
+# The names are not secret, so the lists are built from the slug and the uid alone.
+- name: Refuse a list that names a slug or a uid twice
+  ansible.builtin.assert:
+    that:
+      - tenant_compose_slugs | length == tenant_compose_slugs | unique | length
+      - tenant_compose_uids | length == tenant_compose_uids | unique | length
+    quiet: true
+    fail_msg: A slug or a uid is named by two stacks. Nothing was written.
+  vars:
+    tenant_compose_slugs: "{{ tenant_compose_stacks | map(attribute='slug') | list }}"
+    tenant_compose_uids: "{{ tenant_compose_stacks | map(attribute='uid') | list }}"
+
+- name: Look at the volume program
+  ansible.builtin.stat:
+    path: '{{ tenant_compose_volume_program }}'
+    get_checksum: false
+  register: tenant_compose_program
+  when: tenant_compose_stacks | length > 0
+
+# The program belongs to the tenant onboarding role. Without it a tenant has no
+# volumes, and the unit would fail on a volume Compose cannot find.
+- name: Refuse a host without the volume program
+  ansible.builtin.assert:
+    that:
+      - tenant_compose_program.stat.exists
+      - tenant_compose_program.stat.executable
+    quiet: true
+    fail_msg: >-
+      {{ tenant_compose_volume_program }} is missing or not executable. The tenant onboarding role installs it;
+      this role only calls it. Nothing was written.
+  when: tenant_compose_stacks | length > 0
+
+# The program lists one slug=uid per line, and nothing else. Reading is safe in check
+# mode, and the verdicts below need it in a plan as much as in an apply.
+- name: Read the uids the volume program has claimed
+  ansible.builtin.command:
+    argv:
+      - '{{ tenant_compose_volume_program }}'
+      - --list-claims
+  register: tenant_compose_claims
+  changed_when: false
+  check_mode: false
+  when: tenant_compose_stacks | length > 0
+
+# ----- The spool's firewall, read back before the spool is judged -----
+
+- name: Read the INPUT chain
+  ansible.builtin.command:
+    argv: ['{{ tenant_compose_iptables }}', -t, filter, -S, INPUT]
+  register: tenant_compose_firewall_input
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - tenant_compose_mail_spool_text | length > 0
+    - tenant_compose_spool_isolation_required | bool
+
+- name: Read the DOCKER-USER chain
+  ansible.builtin.command:
+    argv: ['{{ tenant_compose_iptables }}', -t, filter, -S, DOCKER-USER]
+  register: tenant_compose_firewall_docker_user
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when:
+    - tenant_compose_mail_spool_text | length > 0
+    - tenant_compose_spool_isolation_required | bool
+
+# ----- The verdicts -----
+
+# Not secret: the spool's text names a variable and holds no value.
+- name: Judge the mail spool
+  tenant_compose_check:
+    profile: spool
+    slug: '{{ tenant_compose_spool_slug }}'
+    compose_text: '{{ tenant_compose_mail_spool_text }}'
+    require_isolation: '{{ tenant_compose_spool_isolation_required | bool }}'
+    iptables_input_text: "{{ tenant_compose_firewall_input.stdout | default('') }}"
+    iptables_docker_user_text: "{{ tenant_compose_firewall_docker_user.stdout | default('') }}"
+  register: tenant_compose_spool_verdict
+  when: tenant_compose_mail_spool_text | length > 0
+
+# The item holds the tenant's secrets, so the task hides it. The module echoes the slug
+# and puts it in front of every refusal, so no later task needs the item to say which
+# stack was refused.
+- name: Judge each tenant's stack
+  tenant_compose_check:
+    profile: tenant
+    slug: '{{ item.slug }}'
+    uid: '{{ item.uid }}'
+    compose_text: '{{ item.compose_text }}'
+    secrets_env_text: '{{ item.secrets_env_text }}'
+    image_env_text: '{{ item.image_env_text }}'
+    claims_text: '{{ tenant_compose_claims.stdout }}'
+  loop: '{{ tenant_compose_stacks }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  register: tenant_compose_verdicts
+  no_log: true
+
+- name: Refuse every stack that breaks a rule, before anything is written
+  ansible.builtin.assert:
+    that:
+      - tenant_compose_refusals | length == 0
+    quiet: true
+    fail_msg: >-
+      Refused, and nothing was written: {{ tenant_compose_refusals | join('; ') }}.
+  vars:
+    tenant_compose_spool_refusals: '{{ tenant_compose_spool_verdict.refusals | default([]) }}'
+    tenant_compose_tenant_refusals: "{{ tenant_compose_verdicts.results | map(attribute='refusals') | flatten }}"
+    tenant_compose_refusals: '{{ tenant_compose_spool_refusals + tenant_compose_tenant_refusals }}'
+
+# ----- The deliveries -----
+
+- name: Deliver the mail spool
+  ansible.builtin.include_tasks: _stack.yml
+  vars:
+    tenant_compose_stack:
+      slug: '{{ tenant_compose_spool_slug }}'
+      compose_text: '{{ tenant_compose_mail_spool_text }}'
+      secrets_env_text: ''
+    tenant_compose_is_spool: true
+    tenant_compose_verdict: '{{ tenant_compose_spool_verdict }}'
+  when: tenant_compose_mail_spool_text | length > 0
+
+- name: Deliver each tenant's stack
+  ansible.builtin.include_tasks: _stack.yml
+  vars:
+    tenant_compose_is_spool: false
+    tenant_compose_verdict: "{{ tenant_compose_verdicts.results | selectattr('slug', 'equalto', tenant_compose_stack.slug) | first }}"
+  loop: '{{ tenant_compose_stacks }}'
+  loop_control:
+    loop_var: tenant_compose_stack
+    label: '{{ tenant_compose_stack.slug }}'

@@ -107,6 +107,15 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "only slug this repository names; the set is open, and a slug granted "
         "a deploy slot on a host appears in no file here."
     ),
+    "tenant-a": (
+        "A placeholder tenant slug, the example instance the "
+        "ansible/roles/tenant_compose role's Molecule scenario starts, which is "
+        "why a fixture here names it. Real tenant instances are rendered by "
+        "branchLeft/ghost-platform's infra/tenant/compose.ts and never committed "
+        "as a Compose file at all, the same as `blog`, so no Compose file exists "
+        "for this one and nothing here sees whether a tenant declares a health "
+        "signal."
+    ),
     "demo-": (
         "The prefix of one instance per demo slot, `demo-<slot>`: the scan reads "
         "the name up to the placeholder. Provisioned by branchLeft/ghost-platform's "
