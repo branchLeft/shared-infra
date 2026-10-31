@@ -188,14 +188,16 @@ the database roles depend on it. db1 also needs its signer in `ansible/trust/db1
 before any pull runs. On app1 the loader is followed by `website_app1`, and the same holds:
 the first app1 run after this change stops here with `host_inputs[file-missing]`, before
 the website role starts, until the owner has placed `/etc/branchleft/host-inputs.json` on
-app1 (root:root, `0600`, the four keys above).
+app1 (root:root, `0600`, the four keys above). The tool places it: `seed_host_inputs.py --host
+app1` reads the four keys from the `website.env` that the website role's env file holds (the
+same four `CONTACT_SMTP_*` lines), so the values equal what is live.
 
 ## Bootstrap and rotation
 
 The owner places the file once, on the host, as root: one JSON object whose keys are exactly
 the names in the host's row in `vars/main.yml`, owned by root:root with mode `0600`, in
-directories only root can write. The role never writes it. For edge1 and ops1 the writer is
-`ansible/tools/seed_host_inputs.py --host edge1` (or `ops1`), which:
+directories only root can write. The role never writes it. For edge1, ops1 and app1 the writer is
+`ansible/tools/seed_host_inputs.py --host edge1` (or `ops1`, or `app1`), which:
 
 - takes each key's value from the live file the hand install wrote (its one table of
   key-to-file is held by a test to this row and to the roles that write those files), so the
@@ -205,9 +207,8 @@ directories only root can write. The role never writes it. For edge1 and ops1 th
 - writes the file in one atomic step, refuses to overwrite an existing file unless `--replace`,
   and prints key names only, never a value.
 
-db1 and app1 are not seeded by the tool: their files exist already and there is no live file to
-read, so they are written with `json.dumps` from values read into the shell, never typed into a
-command line.
+db1 is not seeded by the tool: its file exists already and there is no live file to read, so it is
+written with `json.dumps` from values read into the shell, never typed into a command line.
 
 To rotate one value, `seed_host_inputs.py --host H --set KEY` asks for the new value at a hidden
 prompt and changes that key only. It writes a new file beside the old one, renames it over the old

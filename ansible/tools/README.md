@@ -45,8 +45,8 @@ Usage:
 Place or rotate `/etc/branchleft/host-inputs.json`, the one root-only file the `host_inputs`
 loader reads on a pulled host. The loader never writes it; this is the owner-run writer. It runs
 ON the host, as root, with the interpreter the host already has (standard library only), and
-seeds edge1 and ops1. db1 and app1 already have their files and no live file to read; a test names
-them, so a new host row in the loader fails until it is classified.
+seeds edge1, ops1 and app1. db1 already has its file and no live file to read; a test names it, so
+a new host row in the loader fails until it is classified.
 
 What it does, in this order:
 
@@ -60,7 +60,8 @@ What it does, in this order:
    `ntfy-pager.env` and then `monitoring.env` for the four pager keys (the unit loads the pager's
    file later, so it wins, and the hand runbook put them in `monitoring.env` first);
    `backup-worker.env` for the worker keys; `db1-ca.pem` whole for the CA; the lines of
-   `backup-worker-recipients` for the tenants, in order; `state-copy.env` for the state-copy keys.
+   `backup-worker-recipients` for the tenants, in order; `state-copy.env` for the state-copy keys;
+   `website.env` for the app1 contact keys.
    A value is the raw text after the first equals sign, which is what the roles write, so the
    first apply finds nothing to change. Live always wins and is never prompted over. A live file
    that is a link, not a regular file, not owned by root, writable by others or not valid text,
@@ -94,12 +95,12 @@ The key-to-file table lives only in the tool. `test_seed_host_inputs` holds it t
 authorities: the host rows equal the loader's `host_inputs_required_by_host` both ways, each
 `NAME` equals the role's own (`monitoring_stack_env_keys`, the pager's `ntfy_pager_env_lines`
 and `ntfy_pager_env_names`, and the `NAME={{ input }}` lines of `backup-worker.env.j2` and
-`state-copy.env.j2`), and each path equals the role's constant.
+`state-copy.env.j2`, and of `website.env.j2` for app1), and each path equals the role's constant.
 
 Usage, on the host as root:
 
-    python3 -I seed_host_inputs.py --host edge1|ops1 [--replace]
-    python3 -I seed_host_inputs.py --host edge1|ops1 --set KEY
+    python3 -I seed_host_inputs.py --host edge1|ops1|app1 [--replace]
+    python3 -I seed_host_inputs.py --host edge1|ops1|app1 --set KEY
 
 It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` once a commit that
 holds it has been applied on the host; before that the file is copied there by hand from the

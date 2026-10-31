@@ -27,9 +27,9 @@ import yaml  # type: ignore[import-untyped]
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = ROOT / "ansible" / "roles"
 
-# Hosts whose private inputs file exists already and which this tool does not seed: they have no
-# live files to read. A new host in the loader's rows fails until it is named here or in the tool.
-UNSUPPORTED = frozenset({"db1", "app1"})
+# The host whose private inputs file exists already and which this tool does not seed: db1 has
+# no live file to read. A new host in the loader's rows fails until it is named here or in the tool.
+UNSUPPORTED = frozenset({"db1"})
 
 PEM = "-----BEGIN CERTIFICATE-----\nMIIBsentinelcertbody\n-----END CERTIFICATE-----\n"
 RECIPIENT_A = "age1" + "q" * 58
@@ -85,6 +85,13 @@ OPS1_LIVE: dict[str, tuple[str, str]] = {
         "STATE_COPY_TENANT_ACCESS_KEY_ID",
     ),
 }
+APP1_LIVE: dict[str, tuple[str, str]] = {
+    "website_app1_smtp_host": ("website.env", "CONTACT_SMTP_HOST"),
+    "website_app1_smtp_port": ("website.env", "CONTACT_SMTP_PORT"),
+    "website_app1_smtp_user": ("website.env", "CONTACT_SMTP_USER"),
+    "website_app1_smtp_password": ("website.env", "CONTACT_SMTP_PASSWORD"),
+}
+APP1_KEYS = tuple(APP1_LIVE)
 CA_KEY = "backup_worker_db_ca_pem"
 TENANTS_KEY = "backup_worker_tenants"
 TENANTS = [
@@ -266,6 +273,12 @@ class TableTests(unittest.TestCase):
             f"{tool.CONFIG_DIR}/state-copy.env", str(restore["backup_restore_state_copy_env_file"])
         )
 
+    def test_website_env_names_equal_the_role(self) -> None:
+        website = yaml_of(ROLES / "website_app1" / "defaults" / "main.yml")
+        role = template_pairs(ROLES / "website_app1" / "templates" / "website.env.j2")
+        self.assertEqual(role, tool_pairs("website.env"))
+        self.assertEqual(f"{tool.CONFIG_DIR}/website.env", str(website["website_app1_env_file"]))
+
     def test_the_ca_and_recipients_files_are_the_workers(self) -> None:
         worker = yaml_of(ROLES / "backup_worker" / "vars" / "main.yml")
         self.assertEqual((tool.Source(tool.WHOLE, "db1-ca.pem"),), tool.SOURCES[CA_KEY])
@@ -378,6 +391,13 @@ class Rig:
                 "".join(f"{t['slug']} {t['recipient']}\n" for t in TENANTS),
             )
 
+    def seed_app1(self, skip: Sequence[str] = ()) -> None:
+        lines = [
+            f"{name}={app1_value(key)}\n" for key, (_, name) in APP1_LIVE.items() if key not in skip
+        ]
+        if lines:
+            self.put("website.env", "".join(lines))
+
     def document(self) -> dict[str, object]:
         return mapping_of(json.loads(self.dest.read_text(encoding="utf-8")))
 
@@ -391,6 +411,21 @@ def ops1_document() -> dict[str, object]:
     document[CA_KEY] = PEM
     document[TENANTS_KEY] = TENANTS
     return {key: document[key] for key in OPS1_KEYS}
+
+
+def app1_value(key: str) -> str:
+    """The host, port and user are made-up names, the port as the text a file holds; the password
+    is a sentinel, so the leak test covers it."""
+    plain = {
+        "website_app1_smtp_host": "smtp.example.test",
+        "website_app1_smtp_port": "587",
+        "website_app1_smtp_user": "mailer.example.test",
+    }
+    return plain.get(key, value_for(key))
+
+
+def app1_document() -> dict[str, object]:
+    return {key: app1_value(key) for key in APP1_KEYS}
 
 
 class FillTests(unittest.TestCase):
@@ -568,6 +603,36 @@ class FillTests(unittest.TestCase):
         self.assertIn(CA_KEY, rig.stdout)
         self.assertNotIn("SENTKEY", rig.everything)
 
+    def test_app1_is_filled_from_website_env_with_no_prompt(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(app1_document(), rig.document())
+        self.assertEqual([], rig.prompts)
+        self.assertIn(
+            "filled from live (4): website_app1_smtp_host, website_app1_smtp_port, "
+            "website_app1_smtp_user, website_app1_smtp_password",
+            rig.stdout,
+        )
+        self.assertIn("still missing (0): none", rig.stdout)
+
+    def test_app1_port_stays_a_string(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        port = rig.document()["website_app1_smtp_port"]
+        self.assertEqual("587", port)
+        self.assertIsInstance(port, str)
+
+    def test_an_app1_key_missing_from_website_env_is_still_missing_and_nothing_is_written(
+        self,
+    ) -> None:
+        rig = Rig(self)
+        rig.seed_app1(skip=["website_app1_smtp_port"])
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn("still missing (1): website_app1_smtp_port", rig.stdout)
+        self.assertFalse(rig.dest.exists())
+
 
 class SourceSafetyTests(unittest.TestCase):
     def test_a_key_found_twice_is_not_guessed_and_is_reported_by_file_and_key(self) -> None:
@@ -717,7 +782,7 @@ class WriteTests(unittest.TestCase):
         self.assertFalse(rig.dest.exists())
 
     def test_an_unknown_host_is_refused(self) -> None:
-        for host in ("db1", "app1", "demo1"):
+        for host in ("db1", "demo1"):
             rig = Rig(self)
             self.assertEqual(1, rig.run("--host", host), host)
             self.assertFalse(rig.dest.exists())
@@ -827,7 +892,7 @@ class LeakTests(unittest.TestCase):
     """No value reaches stdout, stderr or a prompt, on any path."""
 
     def sentinels(self) -> list[str]:
-        values = [value_for(key) for key in (*EDGE1_KEYS, *OPS1_LIVE)]
+        values = [value_for(key) for key in (*EDGE1_KEYS, *OPS1_LIVE, "website_app1_smtp_password")]
         return [
             *values,
             "MIIBsentinelcertbody",
@@ -850,6 +915,10 @@ class LeakTests(unittest.TestCase):
         rig.seed_ops1()
         self.assertEqual(0, rig.run("--host", "ops1"))
         self.assert_clean(rig, "ops1 fill")
+        rig = Rig(self)
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assert_clean(rig, "app1 fill")
 
     def test_set_paths(self) -> None:
         rig = Rig(self, answers=["SENT-TYPED"])
