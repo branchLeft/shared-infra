@@ -45,5 +45,15 @@ platforms:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
 provisioner:
   name: ansible
+  # The container test reads the ten pinned programs from a copy staged by
+  # prepare.yml, never from raw.githubusercontent.com, so a run makes no request
+  # to github.com and a shared runner's rate limit cannot fail it (workspace#2824).
+  # The copy is held to the same sha256 pins the role checks at its download. The
+  # live default (defaults/main.yml) is untouched; the plan and refusals scenarios
+  # link this file, so they read the same copy.
+  inventory:
+    group_vars:
+      all:
+        demo1_build_source_base_url: 'file:///opt/branchleft-test-fixtures/ghost-platform'
 verifier:
   name: ansible

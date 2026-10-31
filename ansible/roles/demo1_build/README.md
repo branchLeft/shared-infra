@@ -177,7 +177,8 @@ Two values must agree: the commit and the checksums. The role fetches each file
 by its commit, so a changed commit with the old checksums fails at the download of
 the first file that differs, and so does a changed checksum. The check runs at the
 real download; CI runs it on every pull request, because the Molecule scenario
-fetches the real files from `raw.githubusercontent.com` (below). To change the pin,
+stages a copy of the ten files and downloads them from that copy, held to the same
+pins (below). To change the pin,
 change the commit, compute each checksum with
 `git show <commit>:<path> | shasum -a 256` in ghost-platform, and change
 `defaults/main.yml` and `meta/argument_specs.yml` together.
@@ -430,10 +431,14 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
 - `prepare.yml` renders `broker_deploy`'s own sudoers template and `broker.env`
   template with its own defaults and installs them. The role is therefore tested
   against the real component's output, and not against a fixture written to match.
-- The real pinned programs are fetched from `raw.githubusercontent.com` and run:
-  the renderers, the claim program and the checks of the sidecar's text. A pin that
-  does not match fails the scenario. The scenario therefore needs the network, as
-  the real apply does.
+- The pinned programs are the real ones, run: the renderers, the claim program and
+  the checks of the sidecar's text. The scenario reads them from a copy in
+  `molecule/default/files/ghost-platform/`, staged by `prepare.yml` at
+  `/opt/branchleft-test-fixtures/ghost-platform`, with `demo1_build_source_base_url`
+  set to that `file://` URL in `molecule.yml`. The copy is the commit's own bytes,
+  and the role's download holds each file to its pin, so a copy that differs fails
+  the scenario. The scenario makes no request to `raw.githubusercontent.com`
+  (workspace#2824); a real apply still does.
 - The real `visudo` checks the grant, and systemd reads the units.
 
 ### What does not run for real
