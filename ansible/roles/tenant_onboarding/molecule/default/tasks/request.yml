@@ -1,0 +1,30 @@
+---
+# One request of the role, run as ansible-playbook on the controller against the same
+# container, then asserted against the case's expectation. no_log: a request names the
+# canary tenant, and its output must not reach the scenario's log.
+- name: Run one request of the role
+  ansible.builtin.command:
+    argv: >-
+      {{ tenant_onboarding_verify_request_base
+      + ['--tags', tenant_onboarding_verify_request_tag, '-e', tenant_onboarding_verify_request_extra | to_json] }}
+  register: tenant_onboarding_verify_request_run
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Assert the request ended the way its case expects
+  ansible.builtin.assert:
+    that:
+      - (tenant_onboarding_verify_request_run.rc == 0) == tenant_onboarding_verify_request_expect_success
+      - >-
+        tenant_onboarding_verify_request_expect_text == ''
+        or tenant_onboarding_verify_request_expect_text in
+        (tenant_onboarding_verify_request_run.stdout ~ tenant_onboarding_verify_request_run.stderr)
+      - >-
+        not tenant_onboarding_verify_request_expect_unchanged
+        or 'changed=0' in tenant_onboarding_verify_request_run.stdout
+    quiet: true
+    fail_msg: >-
+      Request case {{ tenant_onboarding_verify_request_case }} did not end as its case expects
+      (exit status {{ tenant_onboarding_verify_request_run.rc }}).
+  no_log: true

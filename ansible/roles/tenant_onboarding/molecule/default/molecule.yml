@@ -1,0 +1,56 @@
+---
+# The role's container test (ANS-15). The harness in ansible/harness sets
+# ROLE_TEST_RUN_ID, so the instance name is unique to one run and a destroy can only
+# ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production hosts, trusted
+    # by digest. The digest is the pin; the tag is informational and may since have moved on.
+    # It has sudo, visudo and Python in it. The scenario does not need systemd (the role
+    # enables nothing), so it sets none of the settings that run systemd: no cgroup mount,
+    # no cgroup namespace mode and no tmpfs. No privileged mode and no added capabilities.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # A plain sleep keeps the container alive so Ansible can run in it, in place of the
+    # image's systemd, which this scenario does not grant (see the comment above).
+    command: sleep infinity
+    # The image declares /sys/fs/cgroup as a volume and this scenario does not bind-mount
+    # it, so Docker makes an anonymous volume for every container. Molecule's destroy keeps
+    # a container's volumes unless told otherwise, and an anonymous volume carries no label
+    # to find it by, so each run would leave one behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario, the nested requests included, appends its
+    # output to one log on the controller. verify reads it and asserts the canary tenant
+    # appears nowhere in it (see the README, "The log").
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '1'
+  inventory:
+    # Placeholder values only. The canary is the one tenant whose name and UID the log
+    # must never show. The holder, the refused names and the ranges are other placeholders.
+    group_vars:
+      all:
+        scenario_canary_slug: example-scan-canary
+        scenario_canary_uid: 30007
+        scenario_holder_slug: example-holder
+        scenario_holder_uid: 30002
+        scenario_refused_slug: example-refused
+        scenario_reserved_slug: website
+        scenario_reserved_uid: 30003
+        scenario_range_slug: example-range
+        scenario_range_uid: 1000
+        scenario_dash_slug: '--list-claims'
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+verifier:
+  name: ansible
