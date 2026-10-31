@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  standalone: true
+  author: branchLeft
+  # Molecule derives a fully qualified role name from the namespace, or from
+  # the author when there is none, and refuses an upper-case author.
+  namespace: branchleft
+  description: Makes a tenant's volumes and UID claim on the application host, and enables its compose unit, each only when named and confirmed.
+  license: PolyForm-Shield-1.0.0
+  min_ansible_version: '2.21.5'

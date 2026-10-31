@@ -1,0 +1,27 @@
+---
+# Internal to the role, not part of its interface. A caller cannot change these by
+# setting a variable of the same name in an inventory, because role vars outrank
+# inventory vars.
+
+# Where the tenant program and its register are installed. The program refuses every
+# slug unless the register sits beside it, so the two are installed together, here.
+tenant_onboarding_program_dir: /opt/branchleft/app/provision
+tenant_onboarding_program: /opt/branchleft/app/provision/provision_tenant_volume.py
+tenant_onboarding_register: /opt/branchleft/app/provision/tenant-names.json
+
+# The program and register are fetched, never copied into this role. Each is fetched
+# from ghost-platform at one full 40-character commit, so no branch or tag can move
+# under the role, and each fetch is checked against the digest below. Keeping one home
+# for a program (ghost-platform) is the reuse rule; the role only names it.
+tenant_onboarding_ghost_commit: 695787b9eb44a92780df67142c812bbc099465d0
+tenant_onboarding_ghost_raw_base: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ tenant_onboarding_ghost_commit }}'
+
+# The sha256 of each file at that commit, read from the git blob of the file there.
+# A register that changes in ghost-platform is a bump: a stale register is a taken name
+# the host does not know about.
+tenant_onboarding_program_sha256: ce71b9ae1a0a55f81abe9f79d62ea190cd5b63a409c670ff81c81f6adbcd3cce
+tenant_onboarding_register_sha256: 0910440ef4f1611bf5cb6e3c0ec8291c93616722c8289c638f52328ced2eb7f6
+
+# A step id is a name written into a confirmation: capitals, digits and underscore,
+# starting with a capital. \Z, not $, so a trailing line break does not pass.
+tenant_onboarding_step_id_pattern: '^[A-Z][A-Z0-9_]*\Z'

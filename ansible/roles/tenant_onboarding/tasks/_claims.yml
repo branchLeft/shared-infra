@@ -1,0 +1,30 @@
+---
+# Reads the UID claims the program keeps on this host. Internal: imported by a guarded
+# step, so it runs only under that step's tag. The program's output names every tenant
+# on the host, so nothing it prints is shown on success; a refusal shows the program's
+# own message, which can name the tenant it is about.
+- name: Read the UID claims the tenant program holds on this host
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - '{{ tenant_onboarding_program }}'
+      - --list-claims
+  register: tenant_onboarding_claims
+  # A read: it changes nothing, so it runs in check mode too, and it reports no change.
+  check_mode: false
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Refuse when the UID claims cannot be read, with the program's own message
+  ansible.builtin.fail:
+    msg: 'REFUSED: the UID claims could not be read: {{ tenant_onboarding_claims.stderr | trim }}'
+  when: tenant_onboarding_claims.rc != 0
+
+# The claims as lines of slug=uid, and the slugs alone. Kept as facts so both steps read
+# them one way. no_log: the lines name every tenant.
+- name: Note the tenant slugs and claims the program reports
+  ansible.builtin.set_fact:
+    tenant_onboarding_held_claims: '{{ tenant_onboarding_claims.stdout_lines }}'
+    tenant_onboarding_held_slugs: '{{ tenant_onboarding_claims.stdout_lines | map("regex_replace", "=.*", "") | list }}'
+  no_log: true
