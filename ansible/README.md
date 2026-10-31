@@ -177,7 +177,7 @@ What runs, by event:
 | Event          | Lint | Shards                                                                                                                                                                                                                                                    |
 | -------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, the lock, the lint config, the workflow, or `ci_select.py`, `check_pins.py` or `pip-requirements.txt` changed |
-| merge queue    | yes  | every shard, whatever changed                                                                                                                                                                                                                             |
+| merge queue    | yes  | the shards its diff selects, as on a pull request                                                                                                                                                                                                         |
 | push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything                                                                                                                                                                                   |
 
 The workflow has three kinds of job:
