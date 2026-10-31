@@ -351,7 +351,8 @@ Each is proven by sabotage; the commands and results are in the pull request.
 2. Copy `library/typed_module_record.py` to the service role's `library/`,
    renamed with the role's name as prefix (ANS-8), for example
    `SERVICE_NAME_THING.py`, and rename the module in the three documentation
-   blocks.
+   blocks. A role's `library/` is owner-only in `.github/CODEOWNERS`, so this copy
+   is merged by the owner.
 3. Replace the fields of `Params`, `validate`, `render`, `observe`, `plan` and
    `apply` with the service's. Keep the split: `plan` is pure, `apply` is the
    only writer, `run` calls `apply` only outside check mode. Keep

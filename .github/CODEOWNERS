@@ -1,8 +1,11 @@
 # Owner-only files are the ones that judge or gate a merge or a deploy (m14,
 # branchLeft/workspace#2265; source list: branchLeft/workspace#2314). Every
 # other path is merged on the reviewer App's approval, with no catch-all line.
-# Every line below is an explicit path that exists on main: no pattern is matched
-# by a word in a file name, so ordinary role work is not owner-gated by its name.
+# Gate files are listed by their existing path. The Ansible loader directories are the
+# exception: they are listed before any file is in them, so a first file in one is already
+# the owner's. Their names come from ansible-core, and ansible/checks/test_codeowners.py
+# fails when a loader has no line. No pattern is matched by a word in a file name, so
+# ordinary role work is not owner-gated by its name.
 # A new gate file is added here by its path, in the pull request that adds it.
 
 # Estate files the merge script refuses at gate 6: mail/ runs under plan credentials on push, and every credentialed plan job installs from the lockfiles, pnpm-workspace.yaml files (which hold allowBuilds) and .npmrc files below.
@@ -75,6 +78,91 @@
 /ansible/roles/deploy_slot_keys/         @branchLeft/branchleft-admin
 # Each host's trusted signer list is the trust anchor of the pull. An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root. The reusable gated apply exists in branchLeft/github-workflows, but nothing here calls it, so no gate on a role edit is wired.
 /ansible/trust/                          @branchLeft/branchleft-admin
+
+# Ansible runs code from the directories beside each playbook it loads, in an imported
+# playbook's directory and in each role. The pull sets no variable that names a plugin or
+# module path, so these are read with no config. Each name below is a loader directory of
+# ansible-core; collections is listed at the top and playbook levels only, where Ansible's
+# collection finder looks.
+/ansible/ansible.cfg                     @branchLeft/branchleft-admin
+/ansible/action_plugins/                 @branchLeft/branchleft-admin
+/ansible/become_plugins/                 @branchLeft/branchleft-admin
+/ansible/cache_plugins/                  @branchLeft/branchleft-admin
+/ansible/callback_plugins/               @branchLeft/branchleft-admin
+/ansible/cliconf_plugins/                @branchLeft/branchleft-admin
+/ansible/collections/                    @branchLeft/branchleft-admin
+/ansible/connection_plugins/             @branchLeft/branchleft-admin
+/ansible/doc_fragments/                  @branchLeft/branchleft-admin
+/ansible/filter_plugins/                 @branchLeft/branchleft-admin
+/ansible/httpapi_plugins/                @branchLeft/branchleft-admin
+/ansible/inventory_plugins/              @branchLeft/branchleft-admin
+/ansible/library/                        @branchLeft/branchleft-admin
+/ansible/lookup_plugins/                 @branchLeft/branchleft-admin
+/ansible/module_utils/                   @branchLeft/branchleft-admin
+/ansible/netconf_plugins/                @branchLeft/branchleft-admin
+/ansible/shell_plugins/                  @branchLeft/branchleft-admin
+/ansible/strategy_plugins/               @branchLeft/branchleft-admin
+/ansible/terminal_plugins/               @branchLeft/branchleft-admin
+/ansible/test_plugins/                   @branchLeft/branchleft-admin
+/ansible/vars_plugins/                   @branchLeft/branchleft-admin
+/ansible/playbooks/action_plugins/       @branchLeft/branchleft-admin
+/ansible/playbooks/become_plugins/       @branchLeft/branchleft-admin
+/ansible/playbooks/cache_plugins/        @branchLeft/branchleft-admin
+/ansible/playbooks/callback_plugins/     @branchLeft/branchleft-admin
+/ansible/playbooks/cliconf_plugins/      @branchLeft/branchleft-admin
+/ansible/playbooks/collections/          @branchLeft/branchleft-admin
+/ansible/playbooks/connection_plugins/   @branchLeft/branchleft-admin
+/ansible/playbooks/doc_fragments/        @branchLeft/branchleft-admin
+/ansible/playbooks/filter_plugins/       @branchLeft/branchleft-admin
+/ansible/playbooks/httpapi_plugins/      @branchLeft/branchleft-admin
+/ansible/playbooks/inventory_plugins/    @branchLeft/branchleft-admin
+/ansible/playbooks/library/              @branchLeft/branchleft-admin
+/ansible/playbooks/lookup_plugins/       @branchLeft/branchleft-admin
+/ansible/playbooks/module_utils/         @branchLeft/branchleft-admin
+/ansible/playbooks/netconf_plugins/      @branchLeft/branchleft-admin
+/ansible/playbooks/shell_plugins/        @branchLeft/branchleft-admin
+/ansible/playbooks/strategy_plugins/     @branchLeft/branchleft-admin
+/ansible/playbooks/terminal_plugins/     @branchLeft/branchleft-admin
+/ansible/playbooks/test_plugins/         @branchLeft/branchleft-admin
+/ansible/playbooks/vars_plugins/         @branchLeft/branchleft-admin
+/ansible/playbooks/**/action_plugins/    @branchLeft/branchleft-admin
+/ansible/playbooks/**/become_plugins/    @branchLeft/branchleft-admin
+/ansible/playbooks/**/cache_plugins/     @branchLeft/branchleft-admin
+/ansible/playbooks/**/callback_plugins/  @branchLeft/branchleft-admin
+/ansible/playbooks/**/cliconf_plugins/   @branchLeft/branchleft-admin
+/ansible/playbooks/**/connection_plugins/ @branchLeft/branchleft-admin
+/ansible/playbooks/**/doc_fragments/     @branchLeft/branchleft-admin
+/ansible/playbooks/**/filter_plugins/    @branchLeft/branchleft-admin
+/ansible/playbooks/**/httpapi_plugins/   @branchLeft/branchleft-admin
+/ansible/playbooks/**/inventory_plugins/ @branchLeft/branchleft-admin
+/ansible/playbooks/**/library/           @branchLeft/branchleft-admin
+/ansible/playbooks/**/lookup_plugins/    @branchLeft/branchleft-admin
+/ansible/playbooks/**/module_utils/      @branchLeft/branchleft-admin
+/ansible/playbooks/**/netconf_plugins/   @branchLeft/branchleft-admin
+/ansible/playbooks/**/shell_plugins/     @branchLeft/branchleft-admin
+/ansible/playbooks/**/strategy_plugins/  @branchLeft/branchleft-admin
+/ansible/playbooks/**/terminal_plugins/  @branchLeft/branchleft-admin
+/ansible/playbooks/**/test_plugins/      @branchLeft/branchleft-admin
+/ansible/playbooks/**/vars_plugins/      @branchLeft/branchleft-admin
+/ansible/roles/*/action_plugins/         @branchLeft/branchleft-admin
+/ansible/roles/*/become_plugins/         @branchLeft/branchleft-admin
+/ansible/roles/*/cache_plugins/          @branchLeft/branchleft-admin
+/ansible/roles/*/callback_plugins/       @branchLeft/branchleft-admin
+/ansible/roles/*/cliconf_plugins/        @branchLeft/branchleft-admin
+/ansible/roles/*/connection_plugins/     @branchLeft/branchleft-admin
+/ansible/roles/*/doc_fragments/          @branchLeft/branchleft-admin
+/ansible/roles/*/filter_plugins/         @branchLeft/branchleft-admin
+/ansible/roles/*/httpapi_plugins/        @branchLeft/branchleft-admin
+/ansible/roles/*/inventory_plugins/      @branchLeft/branchleft-admin
+/ansible/roles/*/library/                @branchLeft/branchleft-admin
+/ansible/roles/*/lookup_plugins/         @branchLeft/branchleft-admin
+/ansible/roles/*/module_utils/           @branchLeft/branchleft-admin
+/ansible/roles/*/netconf_plugins/        @branchLeft/branchleft-admin
+/ansible/roles/*/shell_plugins/          @branchLeft/branchleft-admin
+/ansible/roles/*/strategy_plugins/       @branchLeft/branchleft-admin
+/ansible/roles/*/terminal_plugins/       @branchLeft/branchleft-admin
+/ansible/roles/*/test_plugins/           @branchLeft/branchleft-admin
+/ansible/roles/*/vars_plugins/           @branchLeft/branchleft-admin
 
 # The shared set from branchLeft/standards templates/codeowners (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin and the floors file, and /.github/ owns the workflows, actions and dependabot settings.
 /.standardsignore        @branchLeft/branchleft-admin
