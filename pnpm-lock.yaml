@@ -9,11 +9,11 @@ importers:
   .:
     devDependencies:
       '@branchleft/prettier-config':
-        specifier: ^0.3.1
-        version: 0.3.1
+        specifier: ^0.8.3
+        version: 0.8.3
       '@branchleft/tsconfig':
-        specifier: ^0.3.1
-        version: 0.3.1
+        specifier: ^0.8.3
+        version: 0.8.3
       '@types/node':
         specifier: ^26
         version: 26.6.5
@@ -26,11 +26,11 @@ importers:
 
 packages:
 
-  '@branchleft/prettier-config@0.3.1':
-    resolution: {integrity: sha512-hbcpVMSNnnBdwwpjQtIlCqOYam0lihlGJ4et7flmDJCRb/DmndvQgF8dWosXoA2xrVHb14bzJ3GE8NvzpN9RJA==, tarball: https://npm.pkg.github.com/download/@branchleft/prettier-config/0.3.1/b60e80d1edecfd4ca143afa464f60e88ac9461d3}
+  '@branchleft/prettier-config@0.8.3':
+    resolution: {integrity: sha512-+ob4Ws3hv5+UNZnTQw8uKFLRxNtnXHVp1OBwfhn8dEgRlUqgIms1xtAvft3f/eXYWsHeeqqq86tV2BclqJgEzA==, tarball: https://npm.pkg.github.com/download/@branchleft/prettier-config/0.8.3/e36debf9ed9d9b0dac54fa640ebb7741cc9fafa1}
 
-  '@branchleft/tsconfig@0.3.1':
-    resolution: {integrity: sha512-yWAPpeDbHiyHc/aA7eFdAqR3ZqeI3IF2gzcGzf5vvTPmEDFUtXM50tnfaEeDYlrdC/oY/6uHMTyRKnSdAJNo7A==, tarball: https://npm.pkg.github.com/download/@branchleft/tsconfig/0.3.1/2e0d24028d28b8d2b476b77093f11e9816843cd0}
+  '@branchleft/tsconfig@0.8.3':
+    resolution: {integrity: sha512-0Xb9bk/CLdPGfWU34aShos8Bm0eS0hSqSLrQsy+folkmQvGI6CfVlw3oReBziMoXppdwU52IOMjP8LL7Kk1xRg==, tarball: https://npm.pkg.github.com/download/@branchleft/tsconfig/0.8.3/c5912d89dc913beb2c3dff73320e58b4d2350fb0}
 
   '@types/node@26.6.5':
     resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
@@ -170,9 +170,9 @@ packages:
 
 snapshots:
 
-  '@branchleft/prettier-config@0.3.1': {}
+  '@branchleft/prettier-config@0.8.3': {}
 
-  '@branchleft/tsconfig@0.3.1': {}
+  '@branchleft/tsconfig@0.8.3': {}
 
   '@types/node@26.6.5':
     dependencies:
