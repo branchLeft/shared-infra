@@ -9,6 +9,7 @@ the workflow.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -84,8 +85,17 @@ def role_with_test(ansible: Path, name: str, text: str) -> Path:
     return role
 
 
-def run_script(ansible: Path) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "PYTHON": sys.executable}
+def fake_python(directory: Path, lines: list[str]) -> Path:
+    """An interpreter that prints the given lines and exits 0, for summaries a real run cannot print."""
+    path = directory / "fake-python"
+    body = "".join(f"printf '%s\\n' {shlex.quote(line)}\n" for line in lines)
+    write(path, f"#!/bin/sh\n{body}exit 0\n")
+    path.chmod(0o755)
+    return path
+
+
+def run_script(ansible: Path, python: str = sys.executable) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "PYTHON": python}
     return subprocess.run(  # noqa: S603 - the fixed script in this repository, run with this suite's interpreter
         [str(SCRIPT), str(ansible)],
         capture_output=True,
@@ -104,6 +114,11 @@ class RoleUnitTestScript(unittest.TestCase):
 
     def assert_red(self, result: subprocess.CompletedProcess[str]) -> None:
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+
+    def run_with_summary(self, lines: list[str]) -> subprocess.CompletedProcess[str]:
+        role_with_test(self.ansible, "shimmed", PASSING)
+        python = fake_python(Path(self.tmp.name), lines)
+        return run_script(self.ansible, str(python))
 
     def test_empty_discovery_fails(self) -> None:
         result = run_script(self.ansible)
@@ -167,6 +182,21 @@ class RoleUnitTestScript(unittest.TestCase):
         result = run_script(self.ansible)
         self.assert_red(result)
         self.assertIn("expected: unit suites skipped or expected-failed", result.stdout)
+
+    def test_exit_zero_with_no_result_line_after_the_ran_line_fails(self) -> None:
+        result = self.run_with_summary(["Ran 3 tests in 0.001s"])
+        self.assert_red(result)
+        self.assertIn("no OK or FAILED result line", result.stdout)
+
+    def test_a_skip_is_caught_when_a_stray_ok_line_follows_the_summary(self) -> None:
+        result = self.run_with_summary(["Ran 1 test in 0.000s", "", "OK (skipped=1)", "OK"])
+        self.assert_red(result)
+        self.assertIn("shimmed: unit suites skipped or expected-failed", result.stdout)
+
+    def test_a_failed_summary_with_a_stray_ok_line_after_it_fails(self) -> None:
+        result = self.run_with_summary(["Ran 1 test in 0.000s", "", "FAILED (failures=1)", "OK"])
+        self.assert_red(result)
+        self.assertIn("shimmed: unit suites reported FAILED", result.stdout)
 
     def test_a_role_library_and_its_files_are_on_the_path(self) -> None:
         role = role_with_test(self.ansible, "typed", LIBRARY_PASSING)
