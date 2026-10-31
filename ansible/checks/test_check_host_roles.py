@@ -587,7 +587,8 @@ class HostRoleLists(unittest.TestCase):
     # Rule: a host with no entry in the list gets the pull roles and nothing else.
     def test_a_host_with_no_list_gets_only_the_pull_roles(self) -> None:
         trust = "---\npull_trigger_signers: []\n"
-        new = self.original["ops1"].replace("ops1", "mx9")
+        # Built on app1, which has no owner_vars file; ops1's play loads one, and mx9 has none.
+        new = self.original["app1"].replace("app1", "mx9")
         for extra, passes in (("", True), (_entry("host_baseline"), False)):
             with self.subTest(extra=extra):
                 (self.ansible / "playbooks" / "mx9.yml").write_text(new + extra, encoding="utf-8")
