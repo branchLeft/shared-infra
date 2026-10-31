@@ -33,6 +33,39 @@ host_inputs_file_mode: '0600'
 # task in tasks/main.yml, and to checks/host_roles.yml (the owner's merge).
 # checks/test_host_inputs_registry.py fails when they disagree.
 host_inputs_required_by_host:
+  edge1:
+    - monitoring_stack_smtp_username
+    - monitoring_stack_smtp_password
+    - monitoring_stack_healthchecks_ping_url
+    - monitoring_stack_alert_recipient_email
+    - monitoring_stack_mailhost_ping_url
+    - monitoring_stack_grafana_admin_password
+    - monitoring_stack_snds_data_url
+    - ntfy_pager_pager_token
+    - ntfy_pager_watcher_token
+    - ntfy_pager_owner_password_hash
+    - ntfy_pager_machine_password_hash
+  ops1:
+    - backup_worker_db_host
+    - backup_worker_db_user
+    - backup_worker_db_password
+    - backup_worker_db_ca_pem
+    - backup_worker_bucket
+    - backup_worker_s3_endpoint
+    - backup_worker_s3_region
+    - backup_worker_s3_access_key_id
+    - backup_worker_s3_secret_access_key
+    - backup_worker_tenants
+    - backup_restore_state_copy_recipient
+    - backup_restore_state_copy_dest_access_key_id
+    - backup_restore_state_copy_estate_bucket
+    - backup_restore_state_copy_estate_endpoint
+    - backup_restore_state_copy_estate_region
+    - backup_restore_state_copy_estate_access_key_id
+    - backup_restore_state_copy_tenant_bucket
+    - backup_restore_state_copy_tenant_endpoint
+    - backup_restore_state_copy_tenant_region
+    - backup_restore_state_copy_tenant_access_key_id
   db1:
     - db1_stack_exporter_password
     - db1_grants_tenants

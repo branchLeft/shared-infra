@@ -21,6 +21,8 @@
 
 # The review rule itself. GitHub reads this file from .github/ first; /.github/ at the foot of this file owns the workflows and actions as well.
 /.github/CODEOWNERS      @branchLeft/branchleft-admin
+# The floors file is a gate the standards job reads. It is listed here, with the other gate files, and not in the shared tail below, because the tail must be the template's own lines.
+/tools/floors.tsv        @branchLeft/branchleft-admin
 
 # CI gate scripts and their tests: ci.yml runs the scripts/ and hetzner/scripts/ checks to pass or fail.
 /scripts/                @branchLeft/branchleft-admin
@@ -67,6 +69,9 @@
 /ansible/roles/ansible_runtime/          @branchLeft/branchleft-admin
 # host_inputs is the one loader of every pulled host's private role inputs (owner ruling, option A): the values of every host pass through it as root, and a check that fails open there exposes them all, so a change to it is the owner's to review.
 /ansible/roles/host_inputs/              @branchLeft/branchleft-admin
+# The owner-run writer of a host's inputs file runs as root, takes every input value and writes the file the loader reads. Its test holds the proofs of what it keeps secret, so the test is the owner's too.
+/ansible/tools/seed_host_inputs.py       @branchLeft/branchleft-admin
+/ansible/tools/test_seed_host_inputs.py  @branchLeft/branchleft-admin
 # ci_login grants the pipeline account root-run sudo for the trigger and writes its authorized_keys, so a change to it is the owner's to review.
 /ansible/roles/ci_login/                 @branchLeft/branchleft-admin
 # owner_vars holds the owner's values for a host's roles, such as the pipeline's public keys. check_enrolment.py (R10) pins which keys each file may set.
@@ -167,7 +172,7 @@
 /ansible/roles/*/vars_plugins            @branchLeft/branchleft-admin
 /tools/floors.tsv        @branchLeft/branchleft-admin
 
-# The shared set from branchLeft/standards templates/codeowners (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin and the floors file, and /.github/ owns the workflows, actions and dependabot settings.
+# The shared set from branchLeft/standards templates/codeowners at the v0.8.4 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above with the gate files.
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
 /.docs-lint*             @branchLeft/branchleft-admin

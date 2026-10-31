@@ -9,10 +9,15 @@ test harness that proves a role in containers, and one worked role made from
 the skeleton. Its real hosts are `edge1`, `ops1`, `app1`, `db1` and `demo1`. Each has a playbook
 enrolled in the gated pull, except that `demo1` takes its commit by push and never fetches.
 `edge1` and `ops1` apply `roles/ansible_runtime` and
-`roles/pull_trigger`, then `roles/host_baseline`: `playbooks/edge1.yml` adds
-`roles/ci_login`, then `roles/deploy_tooling`, then `roles/edge_stack`, and
-`playbooks/ops1.yml` adds `roles/breakglass_mint_host` and then
-`roles/status_page`. `playbooks/app1.yml` applies the two pull roles, then
+`roles/pull_trigger`, then `roles/host_inputs` (the loader of the host's private inputs, which goes
+first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
+`roles/ci_login`, then `roles/deploy_tooling`, then `roles/edge_stack`, then
+`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last, and
+`roles/egress_nat` is on edge1's list and not applied), and
+`playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
+`roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
+`roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
+reads). `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
 `roles/host_baseline`, `roles/breakglass_grant_host` and `roles/website_app1`.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
@@ -581,7 +586,10 @@ oversight. Each is a decision the standard assigns to later work.
   its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. app1's
   playbook applies `roles/host_inputs` and then `roles/website_app1` (after `roles/host_baseline` and
   `roles/breakglass_grant_host`), and refuses the run the same way
-  until the owner has placed app1's own `/etc/branchleft/host-inputs.json`. ANS-17 describes the only approved path. The trigger is
+  until the owner has placed app1's own `/etc/branchleft/host-inputs.json`. edge1 and ops1 apply
+  `roles/host_inputs` first as well, and refuse the run until the owner has placed their own
+  `/etc/branchleft/host-inputs.json` (edge1 holds the monitoring and pager inputs, ops1 the
+  backup worker and restore inputs). ANS-17 describes the only approved path. The trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
   `.github/workflows/ansible-delivery.yml` calls that workflow.
 - **Reuse by other repositories.** The harness is code another repository may

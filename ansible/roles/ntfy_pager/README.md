@@ -35,9 +35,11 @@ template, delete a file, change the network, or restart or start anything.
 
 ### Order
 
-`ntfy_pager` runs first, and `monitoring_stack` second. No playbook in this
-repository runs either role yet, so the order is written here and held by the
-pair of tests below, not by a playbook.
+`ntfy_pager` runs first, and `monitoring_stack` second. `ansible/playbooks/edge1.yml`
+runs both, in that order, after `edge_stack` and `exporters_and_collectors`, with
+`monitoring_stack` last. The order is held by the playbook, by
+`test_check_host_roles` and by the pair of tests below. The four inputs come from
+the `host_inputs` loader's edge1 row.
 
 - This role creates its secrets file when it is absent. `monitoring_stack`
   creates the directory with the same owner, group and mode, so whichever runs
