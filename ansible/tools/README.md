@@ -61,7 +61,16 @@ What it does, in this order:
    file later, so it wins, and the hand runbook put them in `monitoring.env` first);
    `backup-worker.env` for the worker keys; `db1-ca.pem` whole for the CA; the lines of
    `backup-worker-recipients` for the tenants, in order; `state-copy.env` for the state-copy keys;
-   `website.env` for the app1 contact keys.
+   `website.env` for the app1 contact keys. app1's `tenant_compose_stacks` is not a file: the
+   tool runs the volume program (`/root/platform-provision/provision_tenant_volume.py
+--list-claims`, the one process it starts, by that fixed path with no shell, no input and a
+   clean environment, and only when the program is a regular file owned by root and writable by
+   no one else) and reads each claimed tenant's `/opt/branchleft/<slug>/compose.yml`,
+   `/etc/branchleft/<slug>.env` and `/etc/branchleft/<slug>.image.env` with the checks below. A
+   claim the role's module would refuse (a slug or uid of the wrong shape, a repeat, the mail
+   spool) makes the whole list unusable before any path is built from it. A claimed tenant with
+   none of the three files is left out and named; one with only some, or an empty one, is
+   unusable and nothing is written. The report names the tenants and never a text.
    A value is the raw text after the first equals sign, which is what the roles write, so the
    first apply finds nothing to change. Live always wins and is never prompted over. A live file
    that is a link, not a regular file, not owned by root, writable by others or not valid text,
@@ -69,7 +78,9 @@ What it does, in this order:
    the tool never guesses between two values.
 3. Asks a hidden prompt (`getpass`) for each key it could not find live: the tenants as
    `slug recipient` lines until an empty one, the CA as the path of a PEM file (a certificate,
-   never one holding a private key). An empty answer, or no terminal, leaves the key missing.
+   never one holding a private key). An empty answer, or no terminal, leaves the key missing. A
+   tenant stack is never asked for: `tenant_compose_stacks` that cannot be read live stays
+   missing, and `--set tenant_compose_stacks` is refused.
 4. If any key is missing, writes nothing, names the missing keys, and exits 1. A rerun then needs
    no `--replace`, and the loader never meets a half file.
 5. Writes a temporary file in `/etc/branchleft` created exclusively with mode `0600`, owner
@@ -96,6 +107,10 @@ authorities: the host rows equal the loader's `host_inputs_required_by_host` bot
 `NAME` equals the role's own (`monitoring_stack_env_keys`, the pager's `ntfy_pager_env_lines`
 and `ntfy_pager_env_names`, and the `NAME={{ input }}` lines of `backup-worker.env.j2` and
 `state-copy.env.j2`, and of `website.env.j2` for app1), and each path equals the role's constant.
+For the stacks, the stack and configuration directories and the volume program's path equal
+`tenant_compose`'s own variables (one home: the tool holds copies of the constants and a test
+fails when they differ), the three file names equal the ones its tasks write, and the slug, uid
+and claim rules equal its module's.
 
 Usage, on the host as root:
 

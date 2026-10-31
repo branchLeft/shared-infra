@@ -32,6 +32,7 @@ app1:
   - website_app1
   - breakglass_grant_host
   - host_baseline
+  - tenant_compose
 db1:
   - host_inputs
   - db1_stack

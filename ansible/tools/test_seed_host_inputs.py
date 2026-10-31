@@ -15,6 +15,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import tempfile
 import unittest
 from collections.abc import Mapping, Sequence
@@ -91,7 +92,10 @@ APP1_LIVE: dict[str, tuple[str, str]] = {
     "website_app1_smtp_user": ("website.env", "CONTACT_SMTP_USER"),
     "website_app1_smtp_password": ("website.env", "CONTACT_SMTP_PASSWORD"),
 }
-APP1_KEYS = tuple(APP1_LIVE)
+STACKS_KEY = "tenant_compose_stacks"
+APP1_KEYS = (*APP1_LIVE, STACKS_KEY)
+# Two made-up tenants and their uids, in the order the volume program lists them.
+STACK_CLAIMS = (("tenant-a", 30901), ("tenant-b", 30902))
 CA_KEY = "backup_worker_db_ca_pem"
 TENANTS_KEY = "backup_worker_tenants"
 TENANTS = [
@@ -105,6 +109,28 @@ OPS1_KEYS = (*OPS1_LIVE, CA_KEY, TENANTS_KEY)
 def value_for(key: str) -> str:
     """A distinct value per key, with the characters a URL or a secret really carries."""
     return f"SENT-{key}-a=b&c=d%2F=="
+
+
+def stack_texts(slug: str) -> dict[str, str]:
+    """The three files of a made-up tenant's stack, as the role would deliver them. Every text
+    carries a sentinel, and the compose file of tenant-b has Windows line ends and no final
+    newline, so a copy that tidied a file would not equal what is live."""
+    compose = (
+        f"# SENT-compose-{slug}\nname: {slug}\nservices:\n  ghost:\n    image: ${{IMAGE}}\n"
+        "    environment:\n      database__connection__password: "
+        "${GHOST_database__connection__password}\n"
+    )
+    if slug == "tenant-b":
+        compose = compose.replace("\n", "\r\n").rstrip("\r\n")
+    return {
+        "compose_text": compose,
+        "secrets_env_text": f"GHOST_database__connection__password=SENT-secret-{slug}-a=b&c==\n",
+        "image_env_text": f"IMAGE=registry.example/{slug}@sha256:{'ab' * 32}\n",
+    }
+
+
+def stacks_document() -> list[dict[str, object]]:
+    return [{"slug": slug, "uid": uid, **stack_texts(slug)} for slug, uid in STACK_CLAIMS]
 
 
 def mapping_of(value: object) -> dict[str, object]:
@@ -279,6 +305,36 @@ class TableTests(unittest.TestCase):
         self.assertEqual(role, tool_pairs("website.env"))
         self.assertEqual(f"{tool.CONFIG_DIR}/website.env", str(website["website_app1_env_file"]))
 
+    def test_the_stack_paths_and_the_volume_program_are_the_tenant_compose_roles(self) -> None:
+        role = yaml_of(ROLES / "tenant_compose" / "vars" / "main.yml")
+        self.assertEqual(str(role["tenant_compose_stack_root"]), tool.STACK_ROOT)
+        self.assertEqual(str(role["tenant_compose_config_root"]), tool.CONFIG_DIR)
+        # One home: the program's path is the role's, and the key's one source is that program.
+        self.assertEqual(str(role["tenant_compose_volume_program"]), tool.VOLUME_PROGRAM)
+        self.assertEqual((tool.Source(tool.STACKS, tool.VOLUME_PROGRAM),), tool.SOURCES[STACKS_KEY])
+        tasks = (ROLES / "tenant_compose" / "tasks" / "_stack.yml").read_text(encoding="utf-8")
+        main = (ROLES / "tenant_compose" / "tasks" / "main.yml").read_text(encoding="utf-8")
+        self.assertIn("- --list-claims", main)
+        for expected in (
+            "tenant_compose_env_path: "
+            "'{{ tenant_compose_config_root }}/{{ tenant_compose_stack.slug }}.env'",
+            "tenant_compose_image_env_path: "
+            "'{{ tenant_compose_config_root }}/{{ tenant_compose_stack.slug }}.image.env'",
+            "dest: '{{ tenant_compose_project_dir }}/compose.yml'",
+        ):
+            self.assertIn(expected, tasks)
+
+    def test_the_slug_uid_and_claim_rules_are_the_roles_module(self) -> None:
+        module = (ROLES / "tenant_compose" / "library" / "tenant_compose_check.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f'SLUG_PATTERN = re.compile(r"{tool.SLUG_PATTERN.pattern}")', module)
+        self.assertIn(f"SLUG_MAX_LENGTH = {tool.SLUG_MAX_LENGTH}", module)
+        self.assertIn(f'SPOOL_SLUG = "{tool.SPOOL_SLUG}"', module)
+        self.assertIn(f'CLAIM_LINE_PATTERN = re.compile(r"{tool.CLAIM_PATTERN.pattern}")', module)
+        self.assertIn(f"UID_MIN = {tool.UID_RANGE.start}", module)
+        self.assertIn(f"UID_MAX = {tool.UID_RANGE.stop - 1}", module)
+
     def test_the_ca_and_recipients_files_are_the_workers(self) -> None:
         worker = yaml_of(ROLES / "backup_worker" / "vars" / "main.yml")
         self.assertEqual((tool.Source(tool.WHOLE, "db1-ca.pem"),), tool.SOURCES[CA_KEY])
@@ -318,6 +374,11 @@ class Rig:
         self.out = io.StringIO()
         self.err = io.StringIO()
         self.uid = os.getuid()
+        self.opt = self.base / "opt"
+        self.opt.mkdir()
+        self.opt.chmod(0o755)
+        # What the volume program lists; None stands for a program that cannot be run.
+        self.claims_text: str | None = ""
         self.ctx = tool.Context(
             config_dir=self.cfg,
             ancestors=(self.cfg,),
@@ -328,7 +389,14 @@ class Rig:
             ask_path=self.path,
             out=self.out,
             err=self.err,
+            stack_root=self.opt,
+            list_claims=self.claims,
         )
+
+    def claims(self) -> str:
+        if self.claims_text is None:
+            raise tool.SeedError("claims")
+        return self.claims_text
 
     def secret(self, prompt: str) -> str:
         self.prompts.append(prompt)
@@ -397,6 +465,21 @@ class Rig:
         ]
         if lines:
             self.put("website.env", "".join(lines))
+        if STACKS_KEY not in skip:
+            self.seed_stacks()
+
+    def seed_stacks(self, claims: Sequence[tuple[str, int]] = STACK_CLAIMS) -> None:
+        """List the tenants as claimed, and lay each one's three files out as they are live."""
+        self.claims_text = "".join(f"{slug}={uid}\n" for slug, uid in claims)
+        for slug, _ in claims:
+            texts = stack_texts(slug)
+            directory = self.opt / slug
+            directory.mkdir()
+            directory.chmod(0o755)
+            (directory / "compose.yml").write_bytes(texts["compose_text"].encode("utf-8"))
+            (directory / "compose.yml").chmod(0o644)
+            self.put(f"{slug}.env", texts["secrets_env_text"])
+            self.put(f"{slug}.image.env", texts["image_env_text"])
 
     def document(self) -> dict[str, object]:
         return mapping_of(json.loads(self.dest.read_text(encoding="utf-8")))
@@ -425,7 +508,9 @@ def app1_value(key: str) -> str:
 
 
 def app1_document() -> dict[str, object]:
-    return {key: app1_value(key) for key in APP1_KEYS}
+    document: dict[str, object] = {key: app1_value(key) for key in APP1_LIVE}
+    document[STACKS_KEY] = stacks_document()
+    return document
 
 
 class FillTests(unittest.TestCase):
@@ -610,8 +695,8 @@ class FillTests(unittest.TestCase):
         self.assertEqual(app1_document(), rig.document())
         self.assertEqual([], rig.prompts)
         self.assertIn(
-            "filled from live (4): website_app1_smtp_host, website_app1_smtp_port, "
-            "website_app1_smtp_user, website_app1_smtp_password",
+            "filled from live (5): website_app1_smtp_host, website_app1_smtp_port, "
+            "website_app1_smtp_user, website_app1_smtp_password, tenant_compose_stacks",
             rig.stdout,
         )
         self.assertIn("still missing (0): none", rig.stdout)
@@ -632,6 +717,237 @@ class FillTests(unittest.TestCase):
         self.assertEqual(1, rig.run("--host", "app1"))
         self.assertIn("still missing (1): website_app1_smtp_port", rig.stdout)
         self.assertFalse(rig.dest.exists())
+
+
+class StackTests(unittest.TestCase):
+    """app1's tenant stacks: the tenants the volume program lists, from the files that are live."""
+
+    def test_the_stacks_equal_the_live_files_byte_for_byte_in_the_claimed_order(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        stacks = list_of(rig.document()[STACKS_KEY])
+        self.assertEqual(stacks_document(), stacks)
+        for entry in stacks:
+            self.assertIsInstance(mapping_of(entry)["uid"], int)
+        # The odd one is kept as it is: Windows line ends, no final newline.
+        self.assertEqual(
+            stack_texts("tenant-b")["compose_text"], mapping_of(stacks[1])["compose_text"]
+        )
+        self.assertFalse(str(mapping_of(stacks[1])["compose_text"]).endswith("\n"))
+
+    def test_a_stack_is_never_prompted_for(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual([], rig.prompts)
+
+    def test_the_report_names_the_tenants_and_no_value(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertIn(
+            "tenant stacks seeded (2): tenant-a, tenant-b; "
+            "claimed with no stack on the host, left out (0): none",
+            rig.stdout,
+        )
+
+    def test_a_tenant_claimed_with_no_stack_on_the_host_is_left_out_by_name(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        rig.claims_text = (rig.claims_text or "") + "tenant-c=30903\n"
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(stacks_document(), rig.document()[STACKS_KEY])
+        self.assertIn("left out (1): tenant-c", rig.stdout)
+
+    def test_a_tenant_with_only_some_of_its_three_files_is_not_guessed(self) -> None:
+        for gone in ("tenant-a.env", "tenant-a.image.env"):
+            with self.subTest(gone=gone):
+                rig = Rig(self)
+                rig.seed_app1()
+                (rig.cfg / gone).unlink()
+                self.assertEqual(1, rig.run("--host", "app1"))
+                self.assertIn("tenant-a (some of the stack's three files are missing)", rig.stdout)
+                self.assertIn("still missing (1): tenant_compose_stacks", rig.stdout)
+                self.assertFalse(rig.dest.exists())
+
+    def test_a_tenant_whose_compose_file_is_missing_is_not_guessed(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        (rig.opt / "tenant-a" / "compose.yml").unlink()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_an_empty_stack_file_is_not_used(self) -> None:
+        for name in ("tenant-a.env", "tenant-a.image.env"):
+            with self.subTest(name=name):
+                rig = Rig(self)
+                rig.seed_app1()
+                rig.put(name, "  \n")
+                self.assertEqual(1, rig.run("--host", "app1"))
+                self.assertIn("tenant-a (a stack file is empty)", rig.stdout)
+                self.assertFalse(rig.dest.exists())
+
+    def test_a_stack_file_that_is_a_link_is_not_read(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        target = rig.base / "elsewhere"
+        target.write_text("GHOST_x=SENT-linked\n", encoding="utf-8")
+        (rig.cfg / "tenant-a.env").unlink()
+        (rig.cfg / "tenant-a.env").symlink_to(target)
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn("tenant-a.env (link or unreadable)", rig.stdout)
+        self.assertNotIn("SENT-linked", rig.everything)
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_stack_file_others_can_write_is_not_read(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        (rig.opt / "tenant-b" / "compose.yml").chmod(0o666)
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn("tenant-b compose.yml (writable by others)", rig.stdout)
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_stack_directory_that_is_a_link_or_open_to_others_is_not_read(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        (rig.opt / "tenant-a").rename(rig.base / "moved")
+        (rig.opt / "tenant-a").symlink_to(rig.base / "moved")
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn(
+            "tenant-a directory (not a real directory owned by root and closed)", rig.stdout
+        )
+        self.assertFalse(rig.dest.exists())
+        rig = Rig(self)
+        rig.seed_app1()
+        (rig.opt / "tenant-b").chmod(0o777)
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn("tenant-b directory (not a real directory", rig.stdout)
+
+    def test_a_program_that_cannot_run_writes_nothing_and_asks_nothing(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        rig.claims_text = None
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn("volume claims (the program could not be run)", rig.stdout)
+        self.assertIn("still missing (1): tenant_compose_stacks", rig.stdout)
+        self.assertEqual([], rig.prompts)
+        self.assertFalse(rig.dest.exists())
+
+    def test_no_claims_at_all_writes_nothing(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        rig.claims_text = ""
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn("still missing (1): tenant_compose_stacks", rig.stdout)
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_claim_the_role_would_refuse_never_names_a_path(self) -> None:
+        bad = (
+            "tenant-a",
+            "Tenant-a=30901",
+            "../etc=30901",
+            "tenant-a/../x=30901",
+            "tenant-a=29999",
+            "tenant-a=31000",
+            "tenant-a=30901\ntenant-b=30901",
+            "tenant-a=30901\ntenant-a=30902",
+            "mail-spool=30903",
+            "a" * 27 + "=30903",
+            "-tenant=30903",
+            "tenant-=30903",
+            "tenant-a=30901 ",
+        )
+        for text in bad:
+            with self.subTest(claims=text):
+                rig = Rig(self)
+                rig.seed_app1()
+                rig.claims_text = text + "\n"
+                self.assertEqual(1, rig.run("--host", "app1"))
+                self.assertIn("volume claims (malformed)", rig.stdout)
+                self.assertFalse(rig.dest.exists())
+
+    def test_a_stack_cannot_be_set_at_a_prompt(self) -> None:
+        rig = Rig(self, answers=["SENT-TYPED"])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        before = rig.dest.read_bytes()
+        self.assertEqual(1, rig.run("--host", "app1", "--set", STACKS_KEY))
+        self.assertIn(
+            "a tenant's stack is never typed at a prompt; run with --replace", rig.err.getvalue()
+        )
+        self.assertEqual([], rig.prompts)
+        self.assertEqual(before, rig.dest.read_bytes())
+
+    def test_set_of_another_key_keeps_the_stacks(self) -> None:
+        rig = Rig(self, answers=["smtp.rotated.example.test"])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(0, rig.run("--host", "app1", "--set", "website_app1_smtp_host"))
+        document = rig.document()
+        self.assertEqual("smtp.rotated.example.test", document["website_app1_smtp_host"])
+        self.assertEqual(stacks_document(), document[STACKS_KEY])
+
+    def test_replace_reads_the_live_files_again(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        rig.put("tenant-a.env", "GHOST_database__connection__password=SENT-rotated\n")
+        self.assertEqual(0, rig.run("--host", "app1", "--replace"))
+        first = mapping_of(list_of(rig.document()[STACKS_KEY])[0])
+        self.assertEqual(
+            "GHOST_database__connection__password=SENT-rotated\n", first["secrets_env_text"]
+        )
+
+    def test_an_existing_file_is_not_overwritten_without_replace_and_no_program_is_run(
+        self,
+    ) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        rig.put(tool.DEST_NAME, "{}")
+        rig.claims_text = None
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertNotIn("volume claims", rig.stdout)
+        self.assertEqual("{}", rig.dest.read_text(encoding="utf-8"))
+
+    def test_the_program_is_run_by_its_fixed_path_with_one_argument_and_no_shell(self) -> None:
+        listing = subprocess.CompletedProcess([], 0, stdout=b"tenant-a=30901\n", stderr=b"")
+        regular = os.stat_result((stat.S_IFREG | 0o755, 0, 0, 1, tool.ROOT_UID, 0, 0, 0, 0, 0))
+        with (
+            mock.patch("os.lstat", return_value=regular),
+            mock.patch("subprocess.run", return_value=listing) as run,
+        ):
+            self.assertEqual("tenant-a=30901\n", tool.run_volume_program())
+        self.assertEqual([tool.VOLUME_PROGRAM, "--list-claims"], run.call_args.args[0])
+        self.assertIsNot(True, run.call_args.kwargs.get("shell"))
+        self.assertEqual(subprocess.DEVNULL, run.call_args.kwargs["stdin"])
+        self.assertEqual({"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}, run.call_args.kwargs["env"])
+
+    def test_a_program_that_fails_or_that_others_can_write_is_not_trusted(self) -> None:
+        failed = subprocess.CompletedProcess([], 1, stdout=b"tenant-a=30901\n", stderr=b"SENT-X")
+        regular = os.stat_result((stat.S_IFREG | 0o755, 0, 0, 1, tool.ROOT_UID, 0, 0, 0, 0, 0))
+        writable = os.stat_result((stat.S_IFREG | 0o775, 0, 0, 1, tool.ROOT_UID, 0, 0, 0, 0, 0))
+        stranger = os.stat_result((stat.S_IFREG | 0o755, 0, 0, 1, 1000, 0, 0, 0, 0, 0))
+        link = os.stat_result((stat.S_IFLNK | 0o777, 0, 0, 1, tool.ROOT_UID, 0, 0, 0, 0, 0))
+        with (
+            mock.patch("os.lstat", return_value=regular),
+            mock.patch("subprocess.run", return_value=failed),
+        ):
+            with self.assertRaises(tool.SeedError):
+                tool.run_volume_program()
+        for refused in (writable, stranger, link):
+            with (
+                mock.patch("os.lstat", return_value=refused),
+                mock.patch("subprocess.run") as run,
+                self.assertRaises(tool.SeedError),
+            ):
+                tool.run_volume_program()
+            self.assertFalse(run.called)
+        with (
+            mock.patch("os.lstat", side_effect=FileNotFoundError),
+            self.assertRaises(tool.SeedError),
+        ):
+            tool.run_volume_program()
 
 
 class SourceSafetyTests(unittest.TestCase):
@@ -893,8 +1209,14 @@ class LeakTests(unittest.TestCase):
 
     def sentinels(self) -> list[str]:
         values = [value_for(key) for key in (*EDGE1_KEYS, *OPS1_LIVE, "website_app1_smtp_password")]
+        stacks = [
+            text
+            for slug, _ in STACK_CLAIMS
+            for text in ("SENT-secret-" + slug, "SENT-compose-" + slug, "registry.example/" + slug)
+        ]
         return [
             *values,
+            *stacks,
             "MIIBsentinelcertbody",
             RECIPIENT_A,
             RECIPIENT_B,
@@ -950,6 +1272,21 @@ class LeakTests(unittest.TestCase):
         cases.append(
             ("bad json", bad, ("--host", "edge1", "--set", "monitoring_stack_snds_data_url"))
         )
+        partial = Rig(self)
+        partial.seed_app1()
+        (partial.cfg / "tenant-a.env").unlink()
+        cases.append(("partial stack", partial, ("--host", "app1")))
+        no_program = Rig(self)
+        no_program.seed_app1()
+        no_program.claims_text = None
+        cases.append(("no volume program", no_program, ("--host", "app1")))
+        bad_claims = Rig(self)
+        bad_claims.seed_app1()
+        bad_claims.claims_text = "tenant-a=30901\ntenant-a=30902\n"
+        cases.append(("bad claims", bad_claims, ("--host", "app1")))
+        set_stack = Rig(self, answers=["SENT-TYPED"])
+        set_stack.put(tool.DEST_NAME, json.dumps(app1_document()))
+        cases.append(("set a stack", set_stack, ("--host", "app1", "--set", STACKS_KEY)))
         for label, rig, argv in cases:
             rig.run(*argv)
             self.assert_clean(rig, label)
@@ -990,6 +1327,8 @@ class ProductionContextTests(unittest.TestCase):
         self.assertEqual(os.geteuid(), ctx.euid)
         self.assertEqual(tool.ROOT_UID, ctx.root_uid)
         self.assertEqual(tool.ROOT_GID, ctx.root_gid)
+        self.assertEqual(Path(tool.STACK_ROOT), ctx.stack_root)
+        self.assertIs(tool.run_volume_program, ctx.list_claims)
 
 
 if __name__ == "__main__":

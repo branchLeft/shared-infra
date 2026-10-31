@@ -76,16 +76,32 @@ The file is one JSON object, for db1:
 JSON, not YAML, so that no value is coerced to another type and the file is written with
 `json.dumps`, never from a value typed into a command line. For app1
 the file is one JSON object of four strings, the port included (`"587"`, not `587`,
-because the website role's argument is a string):
+because the website role's argument is a string), and the list of tenant stacks
+that `tenant_compose` delivers:
 
 ```text
 {
   "website_app1_smtp_host": "<string>",
   "website_app1_smtp_port": "<string>",
   "website_app1_smtp_user": "<string>",
-  "website_app1_smtp_password": "<string>"
+  "website_app1_smtp_password": "<string>",
+  "tenant_compose_stacks": [
+    {
+      "slug": "<tenant name>",
+      "uid": 30900,
+      "compose_text": "<the stack's compose file, byte for byte>",
+      "secrets_env_text": "<the stack's GHOST_ environment file, byte for byte>",
+      "image_env_text": "<the stack's IMAGE=name@sha256:digest line>"
+    }
+  ]
 }
 ```
+
+`tenant_compose_stacks` is a non-empty list with one entry for each tenant of the host, exactly
+as `tenant_compose`'s argument specification gives it. It holds each tenant's secrets file, so it
+is as private as `/etc/branchleft/<slug>.env` itself (root:root, `0600`, same host), and the
+loader sets it with `no_log` and never templates it again. An empty list counts as no value and
+stops the run with `host_inputs[missing-key]`: the file is not valid until it names the tenants.
 
 For edge1 the file is one JSON object of eleven keys, each the name of a required argument
 of `monitoring_stack` (seven) or `ntfy_pager` (four). The values must equal what is live on
@@ -188,9 +204,18 @@ the database roles depend on it. db1 also needs its signer in `ansible/trust/db1
 before any pull runs. On app1 the loader is followed by `website_app1`, and the same holds:
 the first app1 run after this change stops here with `host_inputs[file-missing]`, before
 the website role starts, until the owner has placed `/etc/branchleft/host-inputs.json` on
-app1 (root:root, `0600`, the four keys above). The tool places it: `seed_host_inputs.py --host
-app1` reads the four keys from the `website.env` that the website role's env file holds (the
-same four `CONTACT_SMTP_*` lines), so the values equal what is live.
+app1 (root:root, `0600`, the five keys above). The tool places it: `seed_host_inputs.py --host
+app1` reads the four SMTP keys from the `website.env` that the website role's env file holds (the
+same four `CONTACT_SMTP_*` lines), and `tenant_compose_stacks` from the tenants themselves, so the
+values equal what is live.
+
+`tenant_compose` is applied last on app1, after the website role, and its stacks arrive only
+through this file. An app1 whose file already holds the four SMTP keys and not
+`tenant_compose_stacks` stops at `host_inputs[missing-key]` on every apply, the website role
+included, and so does the nightly drift check: the owner runs `seed_host_inputs.py --host app1
+--replace` as root on app1 before approving the apply that carries `tenant_compose`. How a NEW
+tenant's rendered stack reaches the file is the render path's job and not this loader's; until it
+exists, a new site needs the file edited by the owner.
 
 ## Bootstrap and rotation
 
@@ -201,7 +226,14 @@ directories only root can write. The role never writes it. For edge1, ops1 and a
 
 - takes each key's value from the live file the hand install wrote (its one table of
   key-to-file is held by a test to this row and to the roles that write those files), so the
-  values equal what is live and the first apply changes nothing;
+  values equal what is live and the first apply changes nothing. app1's `tenant_compose_stacks`
+  is not one file: the tool asks the volume program (`provision_tenant_volume.py --list-claims`,
+  run by its fixed path, as root, with no shell) which tenants are claimed, then reads each one's
+  `/opt/branchleft/<slug>/compose.yml`, `/etc/branchleft/<slug>.env` and
+  `/etc/branchleft/<slug>.image.env`, with the same checks as every source (opened without
+  following a link, owned by root, not writable by others). A claimed tenant with none of the
+  three files is left out and named in the report; one with only some, or an empty one, stops
+  the fill. The report lists the tenant names, never a value;
 - asks a hidden prompt only for a key it cannot find live, and writes nothing at all if any key
   is still missing;
 - writes the file in one atomic step, refuses to overwrite an existing file unless `--replace`,
@@ -211,7 +243,8 @@ db1 is not seeded by the tool: its file exists already and there is no live file
 written with `json.dumps` from values read into the shell, never typed into a command line.
 
 To rotate one value, `seed_host_inputs.py --host H --set KEY` asks for the new value at a hidden
-prompt and changes that key only. It writes a new file beside the old one, renames it over the old
+prompt and changes that key only. `--set tenant_compose_stacks` is refused: a stack is never typed
+at a prompt, and `--replace` reads it again from the live files. It writes a new file beside the old one, renames it over the old
 one, then reads the result back. If the read-back fails, the tool prints "inspect it" and exits
 non-zero; the new file stays in place and the old one is not restored. The loader refuses a file
 that is not regular `root:root` 0600, is not one JSON object, or whose keys are not exactly the
