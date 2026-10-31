@@ -247,6 +247,13 @@ the gated `ansible-delivery` run on `main` (the plan job, the approval, then the
 apply); wait for that run to finish on edge1 before step 3, and before any
 private-only host is created.
 
+A freshly created or rebuilt edge1 first gets the gated pull from a one-time root
+bootstrap that the owner runs by hand, as described in
+[ansible/roles/ansible_runtime/README.md](../ansible/roles/ansible_runtime/README.md)
+("How it is delivered"). That README says the command is in the owner's edge1
+runbook; no runbook in this repository carries it, so the owner supplies it, and
+nothing on edge1 is gated until that bootstrap has run.
+
 From the repository root, not from `hetzner/` — the paths below are
 repo-root-relative, and step 1 left the shell one directory down. Set
 `edge1`'s address once, from a lookup rather than a literal — every command
