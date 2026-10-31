@@ -45,7 +45,7 @@
           - deploy_tooling_chain_summary.at_risk == 0
           - deploy_tooling_chain_summary.unreadable == 0
           - deploy_tooling_chain_summary.forward | map(attribute='first') | list == ['jump-to-DOCKER-USER', 'jump-to-DOCKER-USER']
-          - deploy_tooling_chain_summary.summary_lines | select('search', 'FORWARD: first rule is jump-to-DOCKER-USER') | list | length == 2
+          - "deploy_tooling_chain_summary.summary_lines | select('search', 'FORWARD: first rule is jump-to-DOCKER-USER') | list | length == 2"
           - deploy_tooling_scenario_summary_text is not search('-A ')
           - deploy_tooling_scenario_summary_text is not regex('[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+')
         fail_msg: >-
