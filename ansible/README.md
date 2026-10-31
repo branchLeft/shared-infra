@@ -22,7 +22,8 @@ reads). `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_baseline`, `roles/breakglass_grant_host` and `roles/website_app1`.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
 the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, then
-`roles/db1_backup_timers`; `roles/db1_grants` is left out of it.
+`roles/db1_backup_timers`, then `roles/tunnel_account` (last: db1's half of the replica
+tunnel, the role's `main` entry); `roles/db1_grants` is left out of it.
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
 `roles/broker_deploy`.
