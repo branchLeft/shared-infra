@@ -1,0 +1,11 @@
+---
+# The entry a pulled playbook applies: db1's half, and nothing else. A pulled
+# playbook names the role in a plain `role:` entry with no variables and no
+# tasks_from (check_enrolment R2), so this file is the whole of what that entry
+# runs. It is one include, not a copy of any task and not a choice made by a
+# variable: db1.yml runs db1_key.yml first, then reads the three db1 inputs.
+# The replica half and the teardown are not reachable from here. They stay
+# tasks_from entries, run by the owner by hand, because the replica host is not
+# enrolled in the pull (README, "Run order").
+- name: Install db1's half of the replica tunnel
+  ansible.builtin.include_tasks: db1.yml

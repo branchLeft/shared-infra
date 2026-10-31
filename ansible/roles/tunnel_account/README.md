@@ -1,10 +1,11 @@
 # tunnel_account
 
 The reverse tunnel that publishes db1's MySQL on the replica host's loopback.
-db1 dials out; the replica never dials in. One role, four entry points:
+db1 dials out; the replica never dials in. One role, five entry points:
 
 | Entry point | Host         | What it does                                                                                                                  |
 | ----------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `main`      | db1          | db1 only; what a pulled playbook applies. It runs `db1` and nothing of `replica` or `teardown`.                               |
 | `db1_key`   | db1          | Creates the tunnel account (no login shell) and db1's ed25519 key, once. Prints the public half. Reads no input.              |
 | `db1`       | db1          | Runs `db1_key`, reads its three input files, pins the replica host key, writes the target file, installs the unit, starts it. |
 | `replica`   | replica host | Reads its two input files, creates the account, writes the sshd drop-in and the authorized key, checks sshd, reads it back.   |
@@ -63,15 +64,29 @@ each input, as text, as base64 and as sha1. See "Tests".
 
 The live run is the owner's, through the gated apply. No agent applies it.
 
-1. db1: `tasks_from: db1_key`. Copy the printed public key.
-2. Operator places the five input files (above) on db1 and on the replica host,
-   each where its entry point reads it. `db1_public_key` and `from_address` go on
-   the replica host; the other three go on db1.
-3. Replica host: `tasks_from: replica`.
-4. db1: `tasks_from: db1`.
+Once wired, db1's playbook (`playbooks/db1.yml`) applies this role as its last
+entry, a plain `role:` line with no variable and no `tasks_from` (the pull's rule
+R2). That entry is `main`, which is db1's half. The replica half is not wired: the
+replica host is not enrolled in the pull, so the owner runs it by hand.
 
-`db1_key` reads no input, so step 1 needs nothing placed. Step 4 runs `db1_key`
-first; `regenerate: never` keeps the existing key.
+1. Operator places the three db1 input files (`replica_host`,
+   `replica_host_key`, `db1_subnet_prefix`) on db1 before the gated run that
+   includes the wiring. `replica_host_key` is the replica's
+   `/etc/ssh/ssh_host_ed25519_key.pub` (see "Host key"). Without the files the run
+   fails at this role, the last one, by design, after every earlier db1 role has
+   applied. A missing input is never skipped, so a green drift check cannot hide an
+   absent tunnel.
+2. The gated run on db1 applies `main`: it creates the account and db1's key
+   (once), reads the three inputs and starts the tunnel. Copy the public key it
+   prints.
+3. Operator places the other two input files (`db1_public_key`, `from_address`)
+   on the replica host.
+4. Replica host, by hand: `tasks_from: replica`.
+
+Before the role is wired, or on a host that is not under the pull, the halves are
+run by hand with `tasks_from: db1_key`, `db1` and `replica`. `db1_key` reads no
+input, so it needs nothing placed. `db1` (and so `main`) runs `db1_key` first;
+`regenerate: never` keeps the existing key.
 
 ## The sshd change on the replica
 
@@ -126,11 +141,20 @@ directory, then the account. One run serves both hosts: each path is removed if
 it is there. It never removes the run-time inputs or the key directory that
 holds them, which are the operator's.
 
+Teardown is not wired into any playbook (R2 refuses `tasks_from`), and a wired
+`main` would put the tunnel straight back on the next pull. Removing an installed
+tunnel from db1 is therefore two steps: take the `role:` entry out of
+`playbooks/db1.yml` (and its line in the host's list in `checks/host_roles.yml`
+only if the role is to be retired), then run `tasks_from: teardown` by hand with
+`tunnel_account_teardown_confirm: true`.
+
 ## Tests
 
 `molecule/default` runs the role in one container, which is the replica and db1
 at once; the test inputs stand in for the two hosts. It runs in the order
-converge, idempotence, verify. Verify does these things, in order:
+converge, idempotence, verify. Converge calls `main` and then `replica`, so the
+entry a pulled playbook runs is the one under idempotence and the configured
+check. Verify does these things, in order:
 
 - Reads the host back: the key's owner and mode, the account's shell, the
   unit's state in systemd, both rendered files against their golden files, the
@@ -151,8 +175,11 @@ converge, idempotence, verify. Verify does these things, in order:
   drop-in, a sshd configuration that fails its check (the
   marked previous drop-in must be back, byte for byte), an unconfirmed teardown,
   and an existing account with a login shell.
-- Runs teardown with confirmation, reads it back, and runs the three halves again
-  so the configured check meets a configured host.
+- Runs teardown with confirmation and reads it back. Then runs `main` alone on
+  the bare host and checks it wrote exactly db1's half (the unit, the known hosts
+  file, the target file and the key) and nothing of the replica half (no sshd
+  drop-in, no authorized key), and tears that down too. Last, runs `main` and the
+  replica half again so the configured check meets a configured host.
 - Last, scans the log of every Ansible run of the scenario, check runs with
   `--diff` included, for each private input, as text, as the base64 that
   `slurp` returns and as the sha1 that `stat` returns unless told not to. It

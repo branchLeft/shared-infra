@@ -854,6 +854,42 @@
           - tunnel_account_verify_gone.rc == 2
         quiet: true
 
+    # The main entry, which a pulled playbook runs, is db1's half and only that. The host is bare here (teardown above), so what main leaves is what
+    # main wrote. It must have written the account's key, the known hosts file,
+    # the target file and the unit, and none of the replica half's files.
+    - name: Run the main entry alone on the bare host
+      ansible.builtin.include_role:
+        name: branchleft.tunnel_account
+
+    - name: Read what the main entry wrote
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /etc/branchleft/db-tunnel/id_ed25519
+        - /etc/branchleft/db-tunnel/id_ed25519.pub
+        - /etc/branchleft/db-tunnel/known_hosts
+        - /etc/branchleft/db-tunnel/target.env
+        - /etc/systemd/system/branchleft-db-tunnel.service
+        - /etc/ssh/sshd_config.d/50-branchleft-db-tunnel.conf
+        - /etc/ssh/branchleft-db-tunnel/authorized_keys
+      register: tunnel_account_verify_main
+
+    - name: Assert the main entry wrote exactly db1's half
+      ansible.builtin.assert:
+        that:
+          - tunnel_account_verify_main.results[0:5] | selectattr('stat.exists') | list | length == 5
+          - tunnel_account_verify_main.results[5:7] | selectattr('stat.exists') | list | length == 0
+        quiet: true
+        fail_msg: The main entry did not write exactly db1's half (the key, the known hosts file, the target file and the unit, and no replica file).
+
+    - name: Run teardown with confirmation after the main case
+      ansible.builtin.include_role:
+        name: branchleft.tunnel_account
+        tasks_from: teardown
+      vars:
+        tunnel_account_teardown_confirm: true
+
     # Control 2: an account that already has a login shell is refused, not
     # silently changed. The account is made by hand here, as an operator might.
     - name: Case, an existing tunnel account with a login shell is refused (control 2)
@@ -893,15 +929,9 @@
             name: dbtunnel
             state: absent
 
-    - name: Run db1's key stage again to put the configuration back
+    - name: Run db1's half through the main entry again to put the configuration back
       ansible.builtin.include_role:
         name: branchleft.tunnel_account
-        tasks_from: db1_key
-
-    - name: Run db1's install again
-      ansible.builtin.include_role:
-        name: branchleft.tunnel_account
-        tasks_from: db1
 
     - name: Run the replica half again
       ansible.builtin.include_role:
