@@ -82,7 +82,7 @@ PULL_INTRO_TEXT
 | `ansible/trust/HOST.yml`      | Signer list for that host. Empty list means the host refuses every run.             |
 | `ansible/playbooks/includes/` | Shared pull values and refusals, defined once.                                      |
 
-`ansible/playbooks/demo1.yml` is enrolled like the others: the two pull roles, its trust file `ansible/trust/demo1.yml`, then `ansible/roles/demo1_build` and `ansible/roles/demo1_egress_spool`. demo1 never fetches: its commit arrives by push, as a git bundle CI sends through edge1, and the trigger checks it against the same trust file. `host_baseline`, `egress_nat` and `broker_deploy` are not applied to it.
+`ansible/playbooks/demo1.yml` is enrolled like the others: the two pull roles, its trust file `ansible/trust/demo1.yml`, then `ansible/roles/demo1_build` and `ansible/roles/demo1_egress_spool`. demo1 never fetches: its commit arrives by push, as a git bundle CI sends through edge1, and the trigger checks it against the same trust file. That sending arrives with shared-infra#511, which is not yet merged, so no bundle reaches demo1 until it lands. `host_baseline`, `egress_nat` and `broker_deploy` are not applied to it.
 
 The program's steps for one request, from `ansible/roles/pull_trigger/README.md`:
 
