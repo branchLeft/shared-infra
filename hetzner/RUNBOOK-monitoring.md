@@ -964,15 +964,15 @@ ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
 Expect `set monitoring_stack_snds_data_url (N bytes) in
 /etc/branchleft/host-inputs.json` **and exit 0**. Check `N` against the URL's
 real length in bytes: it is the one confirmation that does not involve printing
-the credential back, and it catches a truncated paste. Anything else means the
-file was not changed and the key still holds the old link -- which, if you have
+the credential back, and it catches a truncated paste. Any failure before the
+rename means the file was not changed and the key still holds the old link -- which, if you have
 just re-enabled automated access, is already invalidated. The tool changes only
 this key. It refuses a file that is missing, not `root:root 0600`, not one JSON
 object or holding a key outside edge1's row, and it refuses an empty answer; it
 writes the new file beside the old one, renames it over the old one, then reads
-the result back. If the read-back fails, the tool prints `inspect it` and exits
-non-zero; the new file stays in place and the old one is not restored, so inspect
-the file before the apply. It never prints the
+the result back. A failed read-back is the one exception to the line above: the
+new file is already in place and the old one is not restored. The tool prints
+`inspect it` and exits non-zero, so inspect the file before the apply. It never prints the
 value, and it prints the key name only. Do not run it with `--replace` or without
 `--set` between a rotation and the apply that delivers it: that fills the file
 from the live `monitoring.env`, which still holds the old URL.

@@ -39,7 +39,6 @@ STANDARDS_TEMPLATE = [
     ("/.standardsignore", [OWNER]),
     ("/.standards.mode", [OWNER]),
     ("/.docs-lint*", [OWNER]),
-    ("/tools/floors.tsv", [OWNER]),
     ("/.standards-db-tooling", [OWNER]),
     ("/.github/", [OWNER]),
 ]
@@ -138,8 +137,12 @@ CI_LOGIN_PATHS = [
 ]
 
 # The owner-run writer of a host's inputs file runs as root, takes every input value and writes
-# the file the loader reads, so it is the owner's alone.
-SEEDING_TOOL_PATHS = ["ansible/tools/seed_host_inputs.py"]
+# the file the loader reads, so it is the owner's alone. Its test holds the proofs of what it
+# keeps secret, so the test is the owner's too.
+SEEDING_TOOL_PATHS = [
+    "ansible/tools/seed_host_inputs.py",
+    "ansible/tools/test_seed_host_inputs.py",
+]
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role

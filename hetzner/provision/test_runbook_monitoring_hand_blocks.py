@@ -414,6 +414,11 @@ class SndsRotationTests(unittest.TestCase):
         flat = re.sub(r"\s+", " ", self.text)
         self.assertIn("reaches the collector at the next gated apply, not at once", flat)
         self.assertNotIn("leaves the old file whole", flat)
+        # The unqualified sentence said every non-success left the file unchanged, which a
+        # failed read-back does not: the new file is already in place. The qualified wording
+        # must name that exception.
+        self.assertNotIn("Anything else means the file was not changed", flat)
+        self.assertIn("A failed read-back is the one exception to the line above", flat)
 
 
 if __name__ == "__main__":
