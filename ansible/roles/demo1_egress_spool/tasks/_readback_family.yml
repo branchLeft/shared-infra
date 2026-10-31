@@ -1,0 +1,137 @@
+---
+# Internal to the role: included by _readback_egress.yml once for each firewall
+# family, with demo1_egress_spool_tool set to iptables or ip6tables. It only
+# reads. The rules are read as the kernel holds them, with -S, and compared per
+# item, so a duplicate rule cannot hide a missing one.
+- name: Read DOCKER-USER
+  ansible.builtin.command:
+    argv: ['{{ demo1_egress_spool_tool }}', -t, filter, -S, DOCKER-USER]
+  register: demo1_egress_spool_chain_user
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read the forward policy chain
+  ansible.builtin.command:
+    argv:
+      ['{{ demo1_egress_spool_tool }}', -t, filter, -S, '{{ demo1_egress_spool_forward_chain }}']
+  register: demo1_egress_spool_chain_forward
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read the input policy chain
+  ansible.builtin.command:
+    argv: ['{{ demo1_egress_spool_tool }}', -t, filter, -S, '{{ demo1_egress_spool_input_chain }}']
+  register: demo1_egress_spool_chain_input
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read INPUT
+  ansible.builtin.command:
+    argv: ['{{ demo1_egress_spool_tool }}', -t, filter, -S, INPUT]
+  register: demo1_egress_spool_chain_host_input
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse a family where a policy chain is missing
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_chain_user.rc | default(1) == 0
+      - demo1_egress_spool_chain_forward.rc | default(1) == 0
+      - demo1_egress_spool_chain_input.rc | default(1) == 0
+      - demo1_egress_spool_chain_host_input.rc | default(1) == 0
+    quiet: true
+    fail_msg: >-
+      {{ demo1_egress_spool_tool }} has no {{ demo1_egress_spool_forward_chain }} chain, no {{ demo1_egress_spool_input_chain }} chain,
+      or no DOCKER-USER chain after the egress unit ran, so the policy is not loaded.
+
+# An accept ahead of the jump would outrank the policy, so the jump must be the
+# first rule. The egress program inserts the jump only when it is absent, and a
+# restart does not move one that is already there: the repair for a jump that is
+# present but not first is to delete it and restart the unit.
+- name: Refuse a DOCKER-USER chain whose first rule is not the jump to the policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_chain_user.stdout_lines | select('match', '^-A DOCKER-USER ') | list | first | default('')
+        == '-A DOCKER-USER -j ' ~ demo1_egress_spool_forward_chain
+    quiet: true
+    fail_msg: >-
+      DOCKER-USER in {{ demo1_egress_spool_tool }} does not carry the jump to {{ demo1_egress_spool_forward_chain }} as its first rule,
+      so an earlier rule could outrank the policy. If the jump is missing, restart {{ demo1_egress_spool_egress_unit_name }}.
+      If it is there but not first, delete it with {{ demo1_egress_spool_tool }} -D DOCKER-USER -j {{ demo1_egress_spool_forward_chain }},
+      then restart the unit, which inserts it first.
+
+- name: Refuse a forward chain that lacks its established-traffic return
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_chain_forward.stdout_lines | select('match',
+        '^-A ' ~ demo1_egress_spool_forward_chain ~ ' -m conntrack --ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j RETURN$')
+        | list | length == 1
+    quiet: true
+    fail_msg: The {{ demo1_egress_spool_forward_chain }} chain in {{ demo1_egress_spool_tool }} has no return rule for established traffic.
+
+- name: Refuse a forward chain that does not reject each bridge's own connections
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_chain_forward.stdout_lines | select('match',
+        '^-A ' ~ demo1_egress_spool_forward_chain ~ ' -i ' ~ (item | regex_escape) ~ ' ! -o ' ~ (item | regex_escape) ~ ' -j REJECT')
+        | list | length == 1
+    quiet: true
+    fail_msg: >-
+      The {{ demo1_egress_spool_forward_chain }} chain in {{ demo1_egress_spool_tool }} has no REJECT rule
+      for connections leaving {{ item }}.
+  loop: '{{ demo1_egress_spool_bridges }}'
+
+- name: Refuse an input chain that does not reject what a container opens to the host
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_chain_input.stdout_lines | select('match',
+        '^-A ' ~ demo1_egress_spool_input_chain ~ ' -j REJECT') | list | length == 1
+      - >-
+        demo1_egress_spool_chain_input.stdout_lines | select('match',
+        '^-A ' ~ demo1_egress_spool_input_chain ~ ' -m conntrack --ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j RETURN$')
+        | list | length == 1
+    quiet: true
+    fail_msg: >-
+      The {{ demo1_egress_spool_input_chain }} chain in {{ demo1_egress_spool_tool }} does not return established traffic
+      and reject the rest, so a container could open connections to the host.
+
+- name: Refuse an INPUT chain that does not send each bridge to the input policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('-A INPUT -i ' ~ item ~ ' -j ' ~ demo1_egress_spool_input_chain) in demo1_egress_spool_chain_host_input.stdout_lines
+    quiet: true
+    fail_msg: INPUT in {{ demo1_egress_spool_tool }} has no jump to {{ demo1_egress_spool_input_chain }} for traffic from {{ item }}.
+  loop: '{{ demo1_egress_spool_bridges }}'
+
+# The program inserts the jumps at the top of INPUT, and a tool that inserts a rule
+# later puts it ahead of them. A rule ahead is harmless unless it accepts what a bridge
+# sends: an accept that names another interface (the loopback) or only returns
+# established traffic is left alone, and any other accept would outrank the policy.
+- name: Refuse an INPUT chain with an accept rule ahead of the jumps to the input policy
+  ansible.builtin.assert:
+    that:
+      - >-
+        demo1_egress_spool_input_ahead | select('search', ' -j ACCEPT$') | reject('search', ' -i (?!docker0 |br-)[^ ]+ ')
+        | reject('search', ' --ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT$') | list | length == 0
+    quiet: true
+    fail_msg: >-
+      INPUT in {{ demo1_egress_spool_tool }} has an accept rule ahead of the jumps to {{ demo1_egress_spool_input_chain }},
+      so what a container sends to the host could be accepted before the policy sees it.
+      Delete that rule, or put it after the jumps.
+  vars:
+    demo1_egress_spool_input_rules: '{{ demo1_egress_spool_chain_host_input.stdout_lines | select("match", "^-A INPUT ") | list }}'
+    demo1_egress_spool_input_jumps: >-
+      {{ demo1_egress_spool_bridges | map('regex_replace', '^', '-A INPUT -i ')
+      | map('regex_replace', '$', ' -j ' ~ demo1_egress_spool_input_chain) | list }}
+    demo1_egress_spool_input_first_jump: '{{ demo1_egress_spool_input_rules | select("in", demo1_egress_spool_input_jumps) | first }}'
+    demo1_egress_spool_input_text_ahead: '{{ (demo1_egress_spool_input_rules | join(" ;; ")).split(demo1_egress_spool_input_first_jump)[0] }}'
+    demo1_egress_spool_input_ahead: '{{ demo1_egress_spool_input_text_ahead.split(" ;; ") | select | list }}'

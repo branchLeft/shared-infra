@@ -1,0 +1,32 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party Debian 13 test base, the release every production host runs,
+    # trusted by digest. The same image and digest as the compose_stack pattern.
+    # This scenario needs no init system, so it takes none of the systemd settings.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image declares /sys/fs/cgroup as a volume, so each start creates an
+    # anonymous volume. Destroy removes it with the container.
+    keep_volumes: false
+    # Nothing here uses systemd, so the container just stays up for Ansible to
+    # connect to.
+    command: sleep infinity
+    # The run's label, so the harness can check that a destroy removed only
+    # this run's container.
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+verifier:
+  name: ansible

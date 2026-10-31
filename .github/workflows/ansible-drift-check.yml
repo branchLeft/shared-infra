@@ -1,0 +1,37 @@
+name: Ansible drift check
+
+# The nightly check that the Ansible hosts still match the default branch. It calls the
+# check-only reusable workflow of branchLeft/github-workflows at an exact tag. That workflow
+# asks each host in check mode what an apply would change, goes red on drift or on a refusal,
+# and opens or comments on one issue. It applies nothing: this caller passes no apply key and
+# names no environment.
+#
+# The tag is an exact vMAJOR.MINOR.PATCH (CI-5, checked by test_drift_caller.py). The six
+# secrets are repository secrets, named one by one: `secrets: inherit` would pass all. The
+# push list, ANSIBLE_PUSH_HOSTS, is optional: empty means every host is pulled.
+# The job grants actions: read to the drift job and issues: write to the alert job, and
+# contents: read, which the reusable workflow's own top-level permission also carries.
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+
+jobs:
+  drift-check:
+    uses: branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@v1.0.19
+    with:
+      host-label: ansible-estate
+      push-playbook: ansible/playbooks/demo1.yml
+    secrets:
+      ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
+      ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
+      ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
+      ssh_push_hosts: ${{ secrets.ANSIBLE_PUSH_HOSTS }}
+      ssh_jump_host: ${{ secrets.SSH_JUMP_HOST }}
+      ssh_jump_key: ${{ secrets.SSH_JUMP_KEY }}

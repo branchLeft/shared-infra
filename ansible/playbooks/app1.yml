@@ -1,8 +1,16 @@
 ---
-# app1: the gated pull. Two roles, in order: the Ansible toolchain this
-# playbook runs with, then the trigger that runs it. Only this host's name is set
-# here; the remote, the playbook allowlist and the signer list come from the shared
-# includes and the one trust file, all loaded through vars_files.
+# app1: the gated pull. Two pull roles, in order: the Ansible toolchain this
+# playbook runs with, then the trigger that runs it. After them, in order: the loader
+# of the host's private inputs (host_inputs), the host baseline (which installs Docker),
+# the break-glass grant (breakglass_grant_host), then the website stack (website_app1).
+# The loader reads the one root-only file the owner places on the host and sets the four
+# SMTP values the website role requires; it stops the run if that file is missing or
+# unsafe, and it runs first so every later role sees its values. The website role is
+# given no image here, so it writes the stack's files and enables its unit but deploys
+# and restarts nothing; the website's own CI deploy remains the route that delivers an
+# image. Only this host's name is set here; the remote, the playbook allowlist and the
+# signer list come from the shared includes and the one trust file, all loaded through
+# vars_files.
 #
 # The refusal is not a host control: under the trigger inventory_hostname is
 # localhost. The root-owned pull config is the host control.
@@ -26,3 +34,7 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/breakglass_grant_host # noqa: role-name[path]
+    - role: ../roles/website_app1 # noqa: role-name[path]

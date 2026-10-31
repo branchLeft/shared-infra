@@ -1,0 +1,47 @@
+---
+# Test-only values. Every secret-shaped value is a sentinel made for this
+# scenario: forty letters and digits from a seeded generator, the same value in
+# every play, never a real one and never in a file of this repository. The tenant
+# slugs and the address are made-up (an RFC 5737 documentation address).
+
+# The /dev/null path makes the lookup keep nothing, and the seed makes the value
+# repeat, so the file prepare.yml places and the values verify.yml expects agree.
+host_inputs_test_password: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-exporter chars=ascii_letters,digits length=40') }}"
+# A text that no refusal message may hold: it rides in a file the role must refuse.
+host_inputs_test_marker: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-marker chars=ascii_letters,digits length=40') }}"
+# A text the scan must be able to find in the log: verify prints it once on purpose.
+host_inputs_test_control: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-control chars=ascii_letters,digits length=40') }}"
+host_inputs_test_tenants:
+  - tenant-one
+  - tenant-two
+host_inputs_test_ops1_host: 192.0.2.10
+# app1's four SMTP inputs. The host and user are made-up (.test is reserved), the port
+# is a string as the role's argument spec types it, and the password is a sentinel.
+host_inputs_test_smtp_host: smtp.example.test
+host_inputs_test_smtp_port: '587'
+host_inputs_test_smtp_user: test-smtp-user
+host_inputs_test_smtp_password: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-smtp chars=ascii_letters,digits length=40') }}"
+
+# What the owner would place for db1: exactly the row's three names.
+host_inputs_test_doc:
+  db1_stack_exporter_password: '{{ host_inputs_test_password }}'
+  db1_grants_tenants: '{{ host_inputs_test_tenants }}'
+  db1_grants_ops1_host: '{{ host_inputs_test_ops1_host }}'
+
+# What the owner would place for app1: exactly the row's four names.
+host_inputs_test_app1_doc:
+  website_app1_smtp_host: '{{ host_inputs_test_smtp_host }}'
+  website_app1_smtp_port: '{{ host_inputs_test_smtp_port }}'
+  website_app1_smtp_user: '{{ host_inputs_test_smtp_user }}'
+  website_app1_smtp_password: '{{ host_inputs_test_smtp_password }}'
+
+# Template syntax in a value must reach the role that uses it as the characters the
+# owner typed, and not be evaluated a second time on the host.
+host_inputs_test_template_text: '{% raw %}{{ 7 * 7 }}{% if 1 %}x{% endif %}{% endraw %}'
+
+host_inputs_test_path: /etc/branchleft/host-inputs.json
+host_inputs_test_dir: /etc/branchleft
+host_inputs_test_link_target: /etc/branchleft/real.json
+
+# The good file's text, the one most cases start from.
+host_inputs_test_json: '{{ host_inputs_test_doc | to_json }}'

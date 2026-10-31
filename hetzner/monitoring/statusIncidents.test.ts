@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyProbe,
   CLOSED,
+  type ProbeResult,
   replayProbes,
   STATUS_TEST_COMPONENT,
   utcTimestamp,
@@ -65,5 +66,42 @@ describe('the TEST component', () => {
   it('is named TEST and probes a reserved .invalid name, never a public hostname', () => {
     expect(STATUS_TEST_COMPONENT.name).toBe('TEST');
     expect(new URL(STATUS_TEST_COMPONENT.probeUrl).hostname.endsWith('.invalid')).toBe(true);
+  });
+});
+
+/**
+ * Stands in for the probe runner: one result every INTERVAL seconds from T0.
+ * Ticks in [failFrom, failUntil) fail; with no failure window the target is healthy.
+ * No network is touched; the TEST component's URL is only named, never requested.
+ */
+function driveTestComponent(ticks: number, failFrom?: number, failUntil?: number): ProbeResult[] {
+  return Array.from({ length: ticks }, (_, i) => ({
+    at: T0 + i * INTERVAL,
+    ok: failFrom === undefined || failUntil === undefined || i < failFrom || i >= failUntil,
+  }));
+}
+
+describe('the TEST component under a stubbed probe', () => {
+  it('opens an incident within the probe interval plus one minute of a forced failure', () => {
+    const forcedAt = T0 + INTERVAL + 30; // forced between tick 1 and tick 2
+    const probes = driveTestComponent(3, 2, 4);
+    const firstFailedAt = probes.find((probe) => !probe.ok)?.at;
+    expect(firstFailedAt).toBeDefined();
+    const events = replayProbes(probes);
+    expect(events).toEqual([{ kind: 'opened', openedAt: T0 + 2 * INTERVAL }]);
+    expect((firstFailedAt ?? Infinity) - forcedAt).toBeLessThanOrEqual(INTERVAL + 60);
+  });
+
+  it('resolves that incident when the same component recovers, stamped in UTC', () => {
+    const events = replayProbes(driveTestComponent(7, 2, 5));
+    expect(events).toEqual([
+      { kind: 'opened', openedAt: T0 + 2 * INTERVAL },
+      { kind: 'resolved', recoveredAt: utcTimestamp(T0 + 5 * INTERVAL) },
+    ]);
+  });
+
+  it('control: the same drive against a healthy target shows no incident', () => {
+    expect(driveTestComponent(7, 2, 5).some((probe) => !probe.ok)).toBe(true);
+    expect(replayProbes(driveTestComponent(7))).toEqual([]);
   });
 });

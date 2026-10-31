@@ -1,0 +1,14 @@
+---
+# Written to a temporary file and checked by visudo (-s: strict, so an undefined alias fails)
+# before it replaces anything. Check mode skips the validate step. This task has no no_log and
+# no diff: false on purpose: a sudoers file holds command paths, not secrets, and the gated plan
+# must show the owner the lines it would install. The pins test fails if either returns. Tasks
+# that handle key material keep both (ANS-16).
+- name: Install the sudoers file of the pipeline account
+  ansible.builtin.copy:
+    content: "{{ ci_login_sudoers_lines | join('\n') }}\n"
+    dest: '/etc/sudoers.d/{{ ci_login_sudoers_name }}'
+    owner: root
+    group: root
+    mode: '0440'
+    validate: /usr/sbin/visudo -csf %s

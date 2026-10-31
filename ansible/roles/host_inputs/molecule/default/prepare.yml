@@ -1,0 +1,28 @@
+---
+# Test setup only, never part of the role. It puts the host in the state the owner
+# leaves it in at bootstrap: the directory, and the one file, owned by root with
+# mode 0600. The file is written with no_log and diff: false, because the scan in
+# verify.yml reads the log of this play too.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+  tasks:
+    - name: Create the directory the file lives in, as the operator does
+      ansible.builtin.file:
+        path: '{{ host_inputs_test_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Place the host inputs file as the operator does (root-only, mode 0600)
+      ansible.builtin.copy:
+        content: '{{ host_inputs_test_doc | to_json }}'
+        dest: '{{ host_inputs_test_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false

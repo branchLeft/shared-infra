@@ -1,0 +1,182 @@
+---
+# Each check names the control it proves. In order: the refusal cases (the
+# safety-class proof: every state the role must refuse, each refused with its own
+# code, with no input set and no sentinel in the message), the accepted file (the
+# inputs reach the play as the owner typed them, once, and the file's text is dropped
+# from memory), the template-syntax case, and last the scan of every log this
+# scenario wrote for a sentinel (ANS-16).
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - vars/test.yml
+    - vars/cases.yml
+  vars:
+    # The texts no message and no log may hold, as one pattern. Sentinels are
+    # letters and digits, so they need no escaping.
+    host_inputs_verify_pattern: "{{ [host_inputs_test_password, host_inputs_test_marker] | join('|') }}"
+    # Every value the log must not hold, by the name the failure gives. A refused
+    # file carries the marker in place of a value, so that a message or a log line
+    # that echoed the file would hold it.
+    host_inputs_verify_watch:
+      password: '{{ host_inputs_test_password }}'
+      marker: '{{ host_inputs_test_marker }}'
+      first_tenant: '{{ host_inputs_test_tenants[0] }}'
+      second_tenant: '{{ host_inputs_test_tenants[1] }}'
+      ops1_host: '{{ host_inputs_test_ops1_host }}'
+      smtp_password: '{{ host_inputs_test_smtp_password }}'
+  tasks:
+    # ---- The refusal cases ------------------------------------------------------
+    # Run first, so a fact left by an earlier success cannot be mistaken for one
+    # set by a refused run.
+    - name: Assert no input is set before the cases run
+      ansible.builtin.assert:
+        that:
+          - db1_stack_exporter_password is not defined
+          - db1_grants_tenants is not defined
+          - db1_grants_ops1_host is not defined
+        quiet: true
+
+    - name: Run each refusal case and require its own refusal
+      ansible.builtin.include_tasks: tasks/refused.yml
+      loop: '{{ host_inputs_verify_cases }}'
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+
+    # ---- The accepted file ------------------------------------------------------
+    - name: Run the role on the good file
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      vars:
+        enrolled_host: db1
+
+    - name: Assert the inputs reached the play as the owner typed them
+      ansible.builtin.assert:
+        that:
+          - db1_stack_exporter_password == host_inputs_test_password
+          - db1_stack_exporter_password is string
+          - db1_grants_tenants == host_inputs_test_tenants
+          - db1_grants_tenants is sequence
+          - db1_grants_tenants is not string
+          - db1_grants_ops1_host == host_inputs_test_ops1_host
+          - db1_grants_ops1_host is string
+        fail_msg: An input did not reach the play as the file gave it.
+        quiet: true
+
+    - name: Assert the file's text was dropped from memory
+      ansible.builtin.assert:
+        that:
+          - host_inputs_raw == {}
+          - host_inputs_doc == {}
+          - host_inputs_keys == []
+          - host_inputs_report == {}
+        fail_msg: The loader left the file's text in a fact.
+        quiet: true
+
+    - name: Assert nothing outside the row was set
+      ansible.builtin.assert:
+        that:
+          - control_plane_master_key is not defined
+          - pull_trigger_signers is not defined
+        fail_msg: A name outside this host's row was set.
+        quiet: true
+
+    # ---- Template syntax in a value ---------------------------------------------
+    # A value with braces and a block statement must arrive as those characters.
+    - name: Write a file whose password is template syntax
+      ansible.builtin.copy:
+        content: "{{ host_inputs_test_doc | combine({'db1_stack_exporter_password': host_inputs_test_template_text}) | to_json }}"
+        dest: '{{ host_inputs_test_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Run the role on it
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      vars:
+        enrolled_host: db1
+
+    - name: Assert the value was not evaluated a second time
+      ansible.builtin.assert:
+        that:
+          - db1_stack_exporter_password == host_inputs_test_template_text
+        fail_msg: A value with template syntax in it was changed on its way to the play.
+        quiet: true
+
+    # ---- app1's file ------------------------------------------------------------
+    # The same shape for app1's four SMTP inputs. The port is a JSON string, and the
+    # role's argument spec types it as a string, so the loader must pass it on as one.
+    - name: Write the app1 file as the operator would for app1
+      ansible.builtin.copy:
+        content: '{{ host_inputs_test_app1_doc | to_json }}'
+        dest: '{{ host_inputs_test_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Run the role on the app1 file
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      vars:
+        enrolled_host: app1
+
+    - name: Assert the app1 inputs reached the play as the owner typed them
+      ansible.builtin.assert:
+        that:
+          - website_app1_smtp_host == host_inputs_test_smtp_host
+          - website_app1_smtp_port == host_inputs_test_smtp_port
+          - website_app1_smtp_port is string
+          - website_app1_smtp_user == host_inputs_test_smtp_user
+          - website_app1_smtp_password == host_inputs_test_smtp_password
+          - website_app1_smtp_password is string
+        fail_msg: An app1 input did not reach the play as the file gave it.
+        quiet: true
+
+    - name: Put the good file back
+      ansible.builtin.include_tasks: tasks/restore.yml
+
+    # ---- ANS-16: no sentinel in any log -----------------------------------------
+    # The scenario sets verbosity 3 and a log path (molecule.yml), so a task that
+    # handles an input without no_log prints it into this log, in its result or in
+    # the facts it set. The control text is printed once on purpose, so a scan that
+    # found nothing because the log was empty or unreadable would fail first.
+    - name: Print the control text once
+      ansible.builtin.debug:
+        msg: '{{ host_inputs_test_control }}'
+
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        host_inputs_verify_log: "{{ lookup('ansible.builtin.file', host_inputs_scenario_log_path) }}"
+      no_log: true
+
+    - name: Assert the log holds the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - host_inputs_test_control in host_inputs_verify_log
+          - "' : Read the file into memory for this run' in host_inputs_verify_log"
+          - "' : Set each input the file holds' in host_inputs_verify_log"
+          - "' : Refuse a file with an input missing or empty' in host_inputs_verify_log"
+        fail_msg: The log lacks the control text or a role task name, so an empty scan would prove nothing.
+        quiet: true
+
+    # The names of the values the log holds, never the values: the task that finds
+    # them hides its result, and the assert after it can say which without a risk.
+    - name: Find which of the watched values the log holds
+      ansible.builtin.set_fact:
+        host_inputs_verify_leaked: >-
+          {{ host_inputs_verify_watch | dict2items | selectattr('value', 'in', host_inputs_verify_log)
+          | map(attribute='key') | list }}
+      no_log: true
+
+    - name: Assert no sentinel and no private value reached the log
+      ansible.builtin.assert:
+        that:
+          - host_inputs_verify_leaked == []
+        fail_msg: "The log of this scenario's runs holds: {{ host_inputs_verify_leaked | join(', ') }}."
+        quiet: true

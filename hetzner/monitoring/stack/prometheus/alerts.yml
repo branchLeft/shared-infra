@@ -223,23 +223,26 @@ groups:
       - alert: TenantBackupAgeHigh
         expr: >-
           (time() - backup_worker_last_success_timestamp_seconds > 129600)
-          or absent(backup_worker_last_success_timestamp_seconds)
+          or label_replace(absent(backup_worker_last_success_timestamp_seconds), "scope", "family", "", "")
         labels:
           severity: warning
         annotations:
-          summary: "{{ $labels.tenant }}'s last successful backup is over 36 hours old."
+          summary: >-
+            {{ if eq $labels.scope "family" }}No tenant's backup age is being reported at all.{{ else }}{{ $labels.tenant }}'s last successful backup is over 36 hours old.{{ end }}
           description: >-
             backup_worker_last_success_timestamp_seconds only advances on
             a floor-verified successful dump, so a stopped or
             consistently-refused worker for one tenant leaves that
             tenant's gauge frozen while every other tenant's keeps
             advancing -- each tenant is its own series, so this fires for
-            the stale one alone. The `or absent(...)` half catches the
-            whole metric family vanishing -- the exporter down, or the
-            textfile deleted -- which the time() subtraction alone cannot
-            see, since subtracting from an absent series yields no series
-            at all, not a large number; that branch carries no tenant
-            label, unlike a single stale tenant firing on its own. 129600s
+            the stale one alone. The `or label_replace(absent(...))` half
+            catches the whole metric family vanishing -- the exporter down,
+            or the textfile deleted -- which the time() subtraction alone
+            cannot see, since subtracting from an absent series yields no
+            series at all, not a large number. That branch is tagged
+            scope="family" and carries no tenant label, so its summary says
+            no tenant is being reported instead of rendering an empty
+            tenant name. 129600s
             (36h) is 1.5x the nightly (24h) cadence, following this file's
             own SNDSCollectorStale threshold convention -- LLD-9 names the
             cadence, not a number of missed runs. Warning, never page: a
@@ -453,13 +456,13 @@ groups:
   - name: probes
     rules:
       - alert: BlackboxProbeFailed
-        expr: probe_success{job!="blackbox_mail"} == 0
+        expr: probe_success{job!~"blackbox_mail|blackbox_object_storage"} == 0
         for: 5m
         labels:
           severity: critical
         annotations:
           summary: "{{ $labels.instance }} failed its external probe for 5 minutes."
-          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below."
+          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below, and blackbox_object_storage, which has ObjectStorageProbeFailed."
 
       - alert: TLSCertificateExpiringSoon
         expr: probe_ssl_earliest_cert_expiry{job="blackbox_http"} - time() < 14*86400
@@ -497,6 +500,41 @@ groups:
         annotations:
           summary: "{{ $labels.instance }} failed its mail liveness probe for 5 minutes."
           description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."
+
+  - name: object-storage
+    rules:
+      - alert: ObjectStorageProbeFailed
+        expr: probe_success{job="blackbox_object_storage"} == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} failed its object storage probe for 15 minutes."
+          description: >-
+            The bucket endpoint is probed over HTTPS and the probe reads a 403 as
+            up: an anonymous request to the bare endpoint is refused by the service
+            itself, which is the liveness signal here. A refused or timed-out
+            connection held for 15 minutes is the outage this rule exists for.
+            BlackboxProbeFailed excludes blackbox_object_storage, so exactly one of
+            the two rules fires for a given probe.
+
+  - name: target-liveness
+    rules:
+      - alert: TargetDownUnmarked
+        expr: up{expected_up!="false"} == 0
+        for: 24h
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} on {{ $labels.host }} has been unreachable for 24 hours with no expected_up mark."
+          description: >-
+            Covers what HostOrServiceDown cannot see: that rule reads
+            up{expected_up="true"} only, so a target with no expected_up label at all
+            had no alert for a sustained outage. A target marked expected_up="false"
+            is excluded, because that mark says it is not expected yet;
+            ExpectedDownTargetAnswering covers the mark going stale in the other
+            direction. A target labelled "true" is also caught here at 24 hours,
+            after HostOrServiceDown has paged it at 5 minutes.
 
   - name: mail-delivery
     rules:

@@ -163,7 +163,7 @@ stack being created.
 ```bash
 cd hetzner
 nvm use
-npm ci
+pnpm install --frozen-lockfile
 ```
 
 A clean checkout has no `node_modules`, and `pulumi preview` in step 5 fails

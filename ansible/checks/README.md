@@ -58,10 +58,10 @@ exception is a role's or pattern's `molecule/` directory and a role's or pattern
 `meta/argument_specs.yml`, which are fixtures and schema. A file that does not parse is
 refused. A symlink that leads out of `ansible/` under a loaded directory is refused.
 
-Under `playbooks/` and `trust/` the name rule is stricter, and R6 reads all of it. Every
-entry there that is not a directory must be an exact `.yml` (case-sensitive, no other
-suffix), or one of the two README paths named exactly: `playbooks/README.md` and
-`trust/README.md`. A README anywhere else is refused. Each of the two exception READMEs is
+Under `playbooks/`, `trust/` and `owner_vars/` the name rule is stricter, and R6 reads all of
+it. Every entry there that is not a directory must be an exact `.yml` (case-sensitive, no
+other suffix), or one of the two README paths named exactly: `playbooks/README.md` and
+`trust/README.md`. A README anywhere else is refused, `owner_vars/` has none, and it is flat. Each of the two exception READMEs is
 refused if it parses as a YAML list, because `ansible-playbook` would run a list as plays.
 That parse accepts every tag (`!unsafe`, `!vault`), as Ansible's loader does, so a tagged
 list is refused too. A link is refused whatever its name,
@@ -78,7 +78,9 @@ a role edit is not gated by anything here. The control on a role edit is the own
 deploy approval of the gated apply, which is not yet wired. Which files the reviewer App
 may merge alone is not yet decided by the owner.
 
-Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` (no other variable: a
+Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (today one row: edge1's `deploy_tooling_host_class`,
+which the role takes with no default; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
@@ -125,8 +127,10 @@ is not loaded there.
   runs only the derived `.yml` path, and `ansible-playbook` would run any other name, so
   R6 must read every file in the tree. Each enrolled `HOST.yml` has one play, with no key
   but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`, `pre_tasks` and `roles`, on
-  `hosts: all`, `vars` exactly `enrolled_host: HOST` and nothing else, `vars_files` exactly the shared
-  include and `../trust/HOST.yml`, `roles` the runtime entry then the bare trigger as the
+  `hosts: all`, `vars` exactly `enrolled_host: HOST` plus that host's row in `HOST_PLAY_VARS`
+  and nothing else, `vars_files` exactly the shared
+  include and `../trust/HOST.yml`, then `../owner_vars/HOST.yml` if and only if that file
+  exists (the playbook and the file must agree both ways), `roles` the runtime entry then the bare trigger as the
   first two entries and nothing attached to either, then only plain entries from that
   host's list in `host_roles.yml` (R9), and `pre_tasks` exactly the refusal include then
   the signer include, each a task of only its name and include. A plain entry is a mapping
@@ -159,10 +163,38 @@ is not loaded there.
   file is in `ansible/checks/`, which CODEOWNERS gives to the owner, so adding a role to a
   host is the owner's merge. The check reads names, not directories: a role may be listed
   before its directory merges, and until then it runs nothing. Order after the pull roles
-  is free, and a listed role need not be applied.
+  is free, except for the loader (R11), and a listed role need not be applied.
+- **R10** `owner_vars/` holds the owner's values for a host's roles. It is flat, and a name
+  must be exactly `HOST.yml` for an enrolled host; the name rule above refuses anything
+  else, and R6 refuses a protected key in it (its allowed set is empty). Each file holds
+  exactly the keys its host is allowed and no other, with values of the right shape. For
+  edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
+  `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
+  key (a source address list, say) is refused. A host with no allowed keys may have no file.
+  The check does not judge a key's text; the `ci_login` role does. The directory is the
+  owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
+- **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
+  (owner ruling, option A), it is the first role after the two
+  pull roles, so no role runs before the inputs are loaded or refused. A host that does not
+  apply it is unaffected. `test_host_inputs_registry.py` holds the loader's row table, the
+  literal keys of its input task, `host_roles.yml`, the playbook and the role argument specs
+  in agreement, and the structure of the loader's tasks.
 
 The refusal's host test is not a host control. Under the trigger `inventory_hostname` is
 `localhost`, and the root-owned pull config is the control on the host.
+
+## test_ci_login_pins.py: the ci_login copies and the missing source limit
+
+The `ci_login` role carries its own copy of the key shapes of the `sudoers_and_keys` pattern
+and of the trigger program's path, because a role may not call a pattern or another role
+(ANS-12). The test fails when either copy differs from its home
+(`sudoers_and_keys_key_shapes`, `pull_trigger_program_path`), when the sudoers lines are
+anything but the `env_keep` line and the two-command grant, and when a source address option
+(`from=`, `from_addresses`, or an interface option with `from` in its name) appears in the
+key template, the tasks, the variables or the argument spec. The owner accepted keys with no
+source limit; this keeps that visible, so a limit is added by an owner ruling that changes
+the test too. Each pin runs red on a sabotaged copy of its files and green once the file is
+put back.
 
 # check_role_imports and check_role_paths
 
@@ -198,8 +230,11 @@ run needs, from the event and the files it changed. The rules, in the order they
   from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
   as it does in a pull request. An entry stacked on another is tested on that one's tree
   and diffed from it; if the earlier entry leaves the queue, the later one is tested again;
-- a changed file that is part of the harness, the checks, the lock or the lint config
+- a changed file that is part of the harness, the lock, the lint config, or one of the three
+  checks files the shards read (`ci_select.py`, `check_pins.py`, `pip-requirements.txt`)
   executes every shard, because it decides what every role is held to;
+- any other file in `ansible/checks/` runs the lint job only, because lint runs its tests and
+  no shard reads it;
 - a changed file under `ansible/` that nothing here recognises executes every shard,
   because a new kind of file must be named in the program before it may skip a shard;
 - a changed file in a role or pattern executes that role's or pattern's shards, and the
@@ -251,3 +286,68 @@ Every other expression stays a finding: another operator, a branch that is not a
 branch, a different literal in the test and the result, the `github`, `inputs` or `vars` context,
 string concatenation, a function such as `format()`, a nested `${{ }}`, or any text before or
 after the expression.
+
+## test_no_new_hand_installers.py: the hand installers stay frozen
+
+A hand installer is a bash script under any `provision/` directory, or under `hetzner/scripts`.
+Each one is listed in `hand_installers.yml` with a reason: `stays-as-code`, or `pending-role`
+naming the role that will replace it. The test walks the tree and fails on a script that is not
+listed, and on an entry whose script is gone. The list is the baseline as it stood when the guard
+was added, so a new installer needs a reviewed entry, which is an owner merge under CODEOWNERS.
+The test reads the role name and does not check that the role exists, as `host_roles.yml` does.
+
+## test_no_new_hand_runbook_steps.py: the hand runbook steps stay frozen
+
+A hand step is a fenced shell block in any `RUNBOOK*.md` that reaches a host (`ssh`, `scp`,
+`rsync`) and changes it (writes a file, installs a package, manages a unit, moves files, changes
+a firewall). `hand_runbook_steps.yml` lists how many such blocks each runbook holds, with a reason
+as in `hand_installers.yml`. The test fails on more blocks than listed, on a runbook that is not
+listed, and on fewer blocks than listed, so the count only falls: lower it in the PR that moves a
+step into a role. Read-only checks over `ssh` and blocks fenced as `text` do not count.
+It counts blocks, so rewriting one hand step into another keeps the count; a reviewer reads that.
+The `Ansible` workflow watches `ansible/` and `hetzner/` only, so a change to a runbook under
+`mail/` or at the repository root does not start it; `mail/` is owner-gated by CODEOWNERS.
+
+## merge_group_proof.py: when a delivery may skip its re-test
+
+`ansible-delivery.yml` has a job, `queue-proof`, that decides whether the delivery of a pushed
+commit may skip the lint and Molecule re-run. It reads the runs of `ansible.yml` for the pushed
+commit and `merge_group_proof.py` answers `tested=true` only for a run that has all of:
+
+- the workflow `.github/workflows/ansible.yml`, the event `merge_group`, the pushed commit as head;
+- a head branch that starts with `gh-readonly-queue/`;
+- the status `completed` and the conclusion `success`.
+
+The event is judged here and is never narrowed by the API's own `event` filter, because after a
+squash queue main carries a green push run of the same commit under the same check name, from a
+job with no diff. A check name, or any success on the commit, is not proof. A merge that skipped
+the queue has no queue run, so it gets `tested=false` and the delivery re-tests in full. An
+unreadable, truncated or malformed answer is `false` too.
+
+`check_delivery.py` fixes the shape of the proof job and of the two inputs the delivery passes
+(`skip-rerun-after-merge-group` from the proof's output, and `merge-group-check-name`, the gate
+job's name in `ansible.yml`). The reusable workflow then checks the queue's check run and suite
+itself and refuses the delivery if they disagree, so a skip needs both to agree.
+
+`check_delivery.py` also fixes the push route of both callers. The push list is the
+`ANSIBLE_PUSH_HOSTS` repository secret, passed as `ssh_push_hosts` (the owner creates it; an unset
+secret is empty, and empty means every host is pulled). The `push-playbook` input is the one path
+`PUSH_PLAYBOOK`, defined once in `check_delivery.py` and imported by `test_drift_caller.py`. The
+release floor `MIN_RELEASE` is `v1.0.19`, the first release of `branchLeft/github-workflows` that
+declares both: a call that passes a key the called workflow does not declare fails on GitHub. A
+`push-dry-run-stub` is not an allowed input.
+
+After a lock-file merge (for example Dependabot), dispatch the Ansible workflow, because the
+venv cache stays cold until the Monday sweep.
+
+Named limit: that only an org-admin pull-request bypass can skip the queue comes from the org
+ruleset standard. The ruleset's bypass list could not be read with the App tokens, so the owner
+should confirm it from the owner's view.
+
+## run_role_unit_tests.sh: the role unit suites
+
+The lint job runs `run_role_unit_tests.sh` once, and it runs the unit tests of every
+`roles/*/tests/unit` directory found by glob, with no list to edit. A suite fails the step when it
+fails, runs no test, or skips or expected-fails a test: a role suite is a control, and a skipped
+test is a control that does not run, so `OK (skipped=N)` and `OK (expected failures=N)` both fail
+the step and name the role.

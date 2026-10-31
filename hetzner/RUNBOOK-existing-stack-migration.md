@@ -400,7 +400,7 @@ unset PULUMI_CONFIG_PASSPHRASE
 #    below rewrites that file in place, and the rewrite must land in a commit.
 cd <repo>/<project-dir>
 git switch -c chore/passphrase-secrets-<stack>
-nvm use && npm ci
+nvm use && pnpm install --frozen-lockfile
 
 # 2. Address the right state. `pulumi login` is global: it rewrites
 #    ~/.pulumi/credentials.json for every project on the machine.

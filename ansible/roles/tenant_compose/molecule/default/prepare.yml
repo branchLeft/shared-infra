@@ -1,0 +1,95 @@
+---
+# Test setup only, never part of the role. It makes the instance look as an app host does
+# before the role runs: the directories the deploy tooling makes, the volume program the
+# tenant onboarding role installs and the compose template unit the deploy tooling
+# installs (the last two as stand-ins, which record what they are asked and never touch a
+# container), and the firewall rules the spool's drain bridge is fenced in by. Real iptables
+# is used: the instance has the NET_ADMIN capability for it.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    - name: Install the firewall tools and PyYAML
+      ansible.builtin.apt:
+        name:
+          - iptables
+          - python3-yaml
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Make the directories the deploy tooling makes
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - '{{ tenant_compose_stack_root }}'
+        - '{{ tenant_compose_config_root }}'
+
+    - name: Make the directory of the volume program
+      ansible.builtin.file:
+        path: '{{ tenant_compose_volume_program | dirname }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Put the volume program stand-in in place
+      ansible.builtin.copy:
+        src: standin-volume-program
+        dest: '{{ tenant_compose_volume_program }}'
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Put the compose unit's command stand-in in place
+      ansible.builtin.copy:
+        src: standin-compose-up
+        dest: /usr/local/bin/standin-compose-up
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The same properties of the real template unit the role depends on: it asserts the
+    # pin file, reads the pin and the secrets as its environment, is a oneshot that stays
+    # active, and runs one command that fails when the stack does not come up.
+    - name: Put the compose template unit stand-in in place
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Test stand-in for the compose template unit %i
+          AssertPathExists=/etc/branchleft/%i.image.env
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          EnvironmentFile=/etc/branchleft/%i.image.env
+          EnvironmentFile=-/etc/branchleft/%i.env
+          ExecStart=/usr/local/bin/standin-compose-up %i
+
+          [Install]
+          WantedBy=multi-user.target
+        dest: '/etc/systemd/system/{{ tenant_compose_unit_prefix }}@.service'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the unit
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    # Docker's own chain, with the rules the host's isolation policy writes for the
+    # spool's drain bridge. The role only reads them. The accept sits above the drop, as the
+    # policy program puts them.
+    - name: Make Docker's chain
+      ansible.builtin.command:
+        argv: ['{{ tenant_compose_iptables }}', -t, filter, -N, DOCKER-USER]
+      changed_when: true
+
+    - name: Put the drain bridge's rules in place
+      ansible.builtin.include_tasks: tasks/fence.yml

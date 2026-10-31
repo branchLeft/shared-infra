@@ -2,11 +2,11 @@
 
 ``caller`` reads .github/workflows/ansible-delivery.yml and fails on anything that
 would let a pull request, a schedule or a manual run reach a host, float on a moved
-workflow, hand the repository's secrets or the apply key to the call, share an approval
-with the Pulumi applies, or widen the token. ``environment`` reads the answers of three
-read-only GitHub calls and fails unless the deployment environment is protected as the
-reusable workflow assumes, because that workflow cannot read the protection itself and a
-missing environment is created unprotected by the first run that names it.
+workflow, hand the call any secret but the seven it names, pass a push playbook other than the
+one fixed here, share an approval with the Pulumi applies, or widen the token. ``environment``
+reads the answers of three read-only GitHub calls and fails unless the deployment environment
+is protected as the reusable workflow assumes, because that workflow cannot read the protection
+itself and a missing environment is created unprotected by the first run that names it.
 """
 
 from __future__ import annotations
@@ -28,9 +28,19 @@ ENVIRONMENT = "ansible-hosts"
 # Used with fullmatch and in ASCII mode: only an exact tag (CI-5), never a branch, a
 # commit id or a major version that a later tag could move under the caller.
 REUSABLE = re.compile(
-    r"branchLeft/github-workflows/\.github/workflows/ansible-gated-apply\.yml@v\d+\.\d+\.\d+",
+    r"branchLeft/github-workflows/\.github/workflows/ansible-gated-apply\.yml@v(\d+)\.(\d+)\.(\d+)",
     re.ASCII,
 )
+# The oldest release of the reusable workflows a caller may pin: the first that declares the
+# ssh_push_hosts secret and the push-playbook input (the jump secrets and the
+# shard-timeout-minutes input came before it). A call that passes a secret or an input the called
+# workflow does not declare fails on GitHub, so a pin below this is a broken delivery. The drift
+# caller's test imports it: this is its one home.
+MIN_RELEASE = (1, 0, 19)
+# The playbook the receiver of a pushed host runs, a path from the repository root. One value for
+# every pushed host (the workflow takes one path), held here once: both callers pass it and the
+# drift caller's test imports it.
+PUSH_PLAYBOOK = "ansible/playbooks/demo1.yml"
 ROLE_DIRECTORIES = ["roles/*", "patterns/*"]
 # The one expression C4 reads in an environment name, and it reads this shape alone:
 #   ${{ needs.<job>.outputs.<name> == '<A>' && '<A>' || '<B>' }}
@@ -49,25 +59,70 @@ CHOSEN_ENVIRONMENT = re.compile(
     re.ASCII,
 )
 PYTHON_PATHS = "harness checks"
+# The script, relative to the Ansible directory, that tests one role: the entry point the pull
+# request gate runs (ansible.yml), so a delivery and the gate run one sequence.
+ROLE_TEST_COMMAND = "harness/run_harness.py"
 PERMISSIONS = {"contents": "read", "actions": "read"}
-# The only secrets the call passes. The apply key is not among them: it is a secret of
-# the environment, which only a job that passed the approval can read.
+# The only secrets the call passes, each named by its expression. The apply key is an
+# environment secret: the call names it too, and only the job in the environment reads it.
 SECRETS = {
     "ssh_hosts": "${{ secrets.ANSIBLE_HOSTS }}",
     "ssh_known_hosts": "${{ secrets.ANSIBLE_KNOWN_HOSTS }}",
     "ssh_check_key": "${{ secrets.ANSIBLE_CHECK_KEY }}",
+    "ssh_apply_key": "${{ secrets.SSH_APPLY_KEY }}",
+    # The hosts reached by a push, one user@host per line, a subset of ssh_hosts. An unset
+    # repository secret is empty, and empty means every host is pulled.
+    "ssh_push_hosts": "${{ secrets.ANSIBLE_PUSH_HOSTS }}",
+    # Both or neither: an unset repository secret is empty, and empty means no jump.
+    "ssh_jump_host": "${{ secrets.SSH_JUMP_HOST }}",
+    "ssh_jump_key": "${{ secrets.SSH_JUMP_KEY }}",
 }
 APPLY_KEY = "ssh_apply_key"
 
 WORKFLOW_KEYS = frozenset({"name", "on", "permissions", "jobs"})
-JOB_KEYS = frozenset({"uses", "with", "secrets"})
-INPUT_KEYS = frozenset({"environment", "role-directories", "python-paths"})
+JOB_KEYS = frozenset({"uses", "with", "secrets", "needs"})
+SKIP_INPUT = "skip-rerun-after-merge-group"
+CHECK_NAME_INPUT = "merge-group-check-name"
+PUSH_PLAYBOOK_INPUT = "push-playbook"
+INPUT_KEYS = frozenset(
+    {
+        "environment",
+        "role-directories",
+        "python-paths",
+        "role-test-command",
+        SKIP_INPUT,
+        CHECK_NAME_INPUT,
+        "shard-timeout-minutes",
+        PUSH_PLAYBOOK_INPUT,
+    }
+)
+# The delivery may skip its lint and Molecule re-run only on the answer of the proof job, which
+# is true for a successful merge_group run of this exact commit (merge_group_proof.py). A static
+# true would skip it for a merge that never went through the queue, or refuse that merge.
+PROOF_JOB = "queue-proof"
+PROOF_STEP = "proof"
+SKIP_EXPRESSION = "${{ needs.queue-proof.outputs.tested == 'true' }}"
+PROOF_OUTPUTS = {"tested": "${{ steps.proof.outputs.tested }}"}
+# The check run the merge queue publishes for the gate: the name of the gate job of ansible.yml
+# (test_check_delivery.py reads it from there). The reusable workflow looks for it by this name.
+GATE_CHECK_NAME = "Lint and test the Ansible roles"
+PROOF_SCRIPT = "ansible/checks/merge_group_proof.py"
+PROOF_JOB_KEYS = frozenset({"name", "runs-on", "timeout-minutes", "outputs", "steps"})
+CHECKOUT_KEYS = frozenset({"name", "uses", "with"})
+PROOF_STEP_KEYS = frozenset({"name", "id", "env", "run"})
+CHECKOUT_WITH = {"persist-credentials": False}
+PROOF_ENV = {
+    "GH_TOKEN": "${{ github.token }}",
+    "REPO": "${{ github.repository }}",
+    "SHA": "${{ github.sha }}",
+}
 # What a key that must not be there would do, for the finding's text.
 WHY = {
     "dry-run": "a dry run replaces the host call, so a green run would reach no host",
     "dry-run-stub": "a stand-in for the host",
     "if": "a condition can skip the delivery without a red run",
     "needs": "a dependency can skip the delivery without a red run",
+    "continue-on-error": "a failed proof would read as a pass",
     "environment": "the environment is an input of the call, not a job key",
     "permissions": "the token is set once, for the whole workflow",
 }
@@ -142,28 +197,44 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
         findings.append(
             f"with.python-paths must be {PYTHON_PATHS!r}, got {given.get('python-paths')!r}"
         )
+    if given.get("role-test-command") != ROLE_TEST_COMMAND:
+        findings.append(
+            f"with.role-test-command must be {ROLE_TEST_COMMAND!r}, the entry point the pull "
+            "request gate runs, so a delivery tests a role as the gate does, got "
+            f"{given.get('role-test-command')!r}"
+        )
+    if given.get(SKIP_INPUT) != SKIP_EXPRESSION:
+        findings.append(
+            f"with.{SKIP_INPUT} must be {SKIP_EXPRESSION!r}, so only a commit the proof job found "
+            f"tested by the merge queue skips the re-test, got {given.get(SKIP_INPUT)!r}"
+        )
+    if given.get(CHECK_NAME_INPUT) != GATE_CHECK_NAME:
+        findings.append(
+            f"with.{CHECK_NAME_INPUT} must be {GATE_CHECK_NAME!r}, the gate job of ansible.yml, "
+            f"got {given.get(CHECK_NAME_INPUT)!r}"
+        )
+    if given.get(PUSH_PLAYBOOK_INPUT) != PUSH_PLAYBOOK:
+        findings.append(
+            f"with.{PUSH_PLAYBOOK_INPUT} must be {PUSH_PLAYBOOK!r}, the playbook the receiver of "
+            f"a pushed host runs, got {given.get(PUSH_PLAYBOOK_INPUT)!r}"
+        )
     return findings
 
 
 def secret_findings(secrets: object) -> list[str]:
-    """Check the call names its three secrets one by one and never passes the apply key."""
+    """Check the call names its seven secrets one by one: apply key, push list and jump pair."""
     if secrets == "inherit":
         return [
-            "secrets: inherit passes every secret of the repository, the apply key "
-            "included, to the call: name the three secrets"
+            "secrets: inherit passes every secret of the repository to the call: name the seven "
+            "secrets"
         ]
     given = as_mapping(secrets)
     if given is None:
-        return [f"secrets must be a mapping of the three named secrets, got {secrets!r}"]
+        return [f"secrets must be a mapping of the seven named secrets, got {secrets!r}"]
     findings = []
     for key in sorted(given):
-        if key == APPLY_KEY:
-            findings.append(
-                f"secrets passes {APPLY_KEY}: the apply key is a secret of the environment "
-                "and is read only after the approval, so it is never passed"
-            )
-        elif key not in SECRETS:
-            findings.append(f"secrets passes {key}, which is not one of the three named secrets")
+        if key not in SECRETS:
+            findings.append(f"secrets passes {key}, which is not one of the seven named secrets")
     findings.extend(
         f"secrets.{key} must be {expected}, got {given.get(key)!r}"
         for key, expected in SECRETS.items()
@@ -172,20 +243,86 @@ def secret_findings(secrets: object) -> list[str]:
     return findings
 
 
+def proof_step_findings(steps: object) -> list[str]:
+    """Check the proof job is the checkout and the one step that runs the proof script."""
+    mappings = [as_mapping(step) for step in steps] if isinstance(steps, list) else []
+    if len(mappings) != 2:
+        return [f"job {PROOF_JOB} must hold exactly two steps (checkout, proof), got {steps!r}"]
+    checkout, proof = mappings
+    if checkout is None or proof is None:
+        return [f"job {PROOF_JOB} steps must be mappings, got {steps!r}"]
+    findings = unexpected(checkout, CHECKOUT_KEYS, "the checkout step")
+    uses = checkout.get("uses")
+    if not isinstance(uses, str) or not uses.startswith("actions/checkout@"):
+        findings.append(f"the checkout step must use actions/checkout, got {uses!r}")
+    if checkout.get("with") != CHECKOUT_WITH:
+        findings.append(
+            f"the checkout step with must be {CHECKOUT_WITH!r}: the commit pushed, no credentials "
+            f"kept, got {checkout.get('with')!r}"
+        )
+    findings.extend(unexpected(proof, PROOF_STEP_KEYS, f"step {PROOF_STEP}"))
+    if proof.get("id") != PROOF_STEP:
+        findings.append(f"step {PROOF_STEP} id must be {PROOF_STEP}, got {proof.get('id')!r}")
+    if proof.get("env") != PROOF_ENV:
+        findings.append(
+            f"step {PROOF_STEP} env must be {PROOF_ENV!r}: the pushed commit and the run's own "
+            f"read-only token, got {proof.get('env')!r}"
+        )
+    run = proof.get("run")
+    wanted = (f"python3 {PROOF_SCRIPT} --runs", '--sha "$SHA"', "$GITHUB_OUTPUT")
+    # A literal answer in the script text would decide the skip without the evidence.
+    if not isinstance(run, str) or any(part not in run for part in wanted) or "tested=" in run:
+        findings.append(
+            f"step {PROOF_STEP} run must run {PROOF_SCRIPT} on the runs file and the pushed "
+            f"commit and write its output to $GITHUB_OUTPUT, and set no answer itself, got {run!r}"
+        )
+    return findings
+
+
+def proof_findings(declared: object) -> list[str]:
+    """Check the proof job is the one fixed shape that decides whether the re-test is skipped."""
+    job = as_mapping(declared)
+    if job is None:
+        return [f"job {PROOF_JOB} must be a mapping, got {declared!r}"]
+    findings = unexpected(job, PROOF_JOB_KEYS, f"job {PROOF_JOB}")
+    if job.get("outputs") != PROOF_OUTPUTS:
+        findings.append(
+            f"job {PROOF_JOB} outputs must be {PROOF_OUTPUTS!r}, got {job.get('outputs')!r}"
+        )
+    findings.extend(proof_step_findings(job.get("steps")))
+    return findings
+
+
 def job_findings(jobs: object, other_environments: frozenset[str]) -> list[str]:
-    """Check the one job calls the reusable workflow at an exact tag and sets nothing else."""
+    """Check the proof job is fixed and the call is the reusable workflow at an exact tag."""
     declared = as_mapping(jobs)
-    if declared is None or sorted(declared) != [JOB]:
-        return [f"jobs must hold exactly one job, {JOB}, got {jobs!r}"]
+    if declared is None or sorted(declared) != sorted([PROOF_JOB, JOB]):
+        return [f"jobs must hold exactly the two jobs {PROOF_JOB} and {JOB}, got {jobs!r}"]
+    findings = proof_findings(declared[PROOF_JOB])
     job = as_mapping(declared[JOB])
     if job is None:
-        return [f"job {JOB} must be a mapping, got {declared[JOB]!r}"]
-    findings = unexpected(job, JOB_KEYS, f"job {JOB}")
+        return [*findings, f"job {JOB} must be a mapping, got {declared[JOB]!r}"]
+    findings.extend(unexpected(job, JOB_KEYS, f"job {JOB}"))
+    if "needs" not in job:
+        findings.append(f"job {JOB} must have needs {[PROOF_JOB]!r}, so it waits for the proof")
+    elif job["needs"] != [PROOF_JOB]:
+        findings.append(
+            f"job {JOB} has needs {job['needs']!r}, which is not allowed: it must be exactly "
+            f"{[PROOF_JOB]!r}, so it waits for the proof and for nothing that could skip it"
+        )
     uses = job.get("uses")
-    if not isinstance(uses, str) or REUSABLE.fullmatch(uses) is None:
+    pinned = REUSABLE.fullmatch(uses) if isinstance(uses, str) else None
+    if pinned is None:
         findings.append(
             f"job {JOB} must call ansible-gated-apply.yml of branchLeft/github-workflows at an "
             f"exact tag vMAJOR.MINOR.PATCH (CI-5), got {uses!r}"
+        )
+    elif tuple(int(part) for part in pinned.groups()) < MIN_RELEASE:
+        floor = ".".join(str(part) for part in MIN_RELEASE)
+        findings.append(
+            f"job {JOB} calls {uses!r}, older than v{floor}, the first release that declares the "
+            "push list secret and the push-playbook input: a call that passes a secret or an "
+            "input the workflow does not declare fails"
         )
     findings.extend(input_findings(job.get("with"), other_environments))
     findings.extend(secret_findings(job.get("secrets")))

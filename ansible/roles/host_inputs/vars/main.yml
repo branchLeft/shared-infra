@@ -1,0 +1,81 @@
+---
+# Constants of the loader, not inputs: role variables outrank every value a play
+# or an inventory passes, and the pull route has no -e (check_enrolment R2), so a
+# caller cannot move the file or loosen what is asked of it.
+
+# The one file. The owner writes it once at bootstrap, by hand, and edits it by
+# hand to rotate a value (README, "Bootstrap and rotation"). The role never
+# writes it.
+host_inputs_path: /etc/branchleft/host-inputs.json
+
+# Every directory above the file, root first. Each must be a real directory owned
+# by uid 0 that neither its group nor others can write, or whoever can write one
+# could rename the directory below it and put a file of their own in its place.
+# Keep this list the path of the file, one entry per parent.
+host_inputs_ancestors:
+  - /
+  - /etc
+  - /etc/branchleft
+
+# Who may own the file and the directories above it, and the only mode the file
+# may have. The mode is compared as the exact string the stat module returns, not
+# as bits, so 0640, 0400 and 0700 are refused as well as 0644.
+host_inputs_owner_uid: 0
+host_inputs_group_gid: 0
+host_inputs_file_mode: '0600'
+
+# The inputs each host's file must hold, by the name of the role argument each one
+# feeds, and nothing else: a key outside this host's row is refused, so the file
+# cannot set a protected pull key (pull_trigger_signers, enrolled_host). A host
+# with no row is refused.
+
+# A new host or name is an edit here, to the literal keys of the "Set each input"
+# task in tasks/main.yml, and to checks/host_roles.yml (the owner's merge).
+# checks/test_host_inputs_registry.py fails when they disagree.
+host_inputs_required_by_host:
+  edge1:
+    - monitoring_stack_smtp_username
+    - monitoring_stack_smtp_password
+    - monitoring_stack_healthchecks_ping_url
+    - monitoring_stack_alert_recipient_email
+    - monitoring_stack_mailhost_ping_url
+    - monitoring_stack_grafana_admin_password
+    - monitoring_stack_snds_data_url
+    - ntfy_pager_pager_token
+    - ntfy_pager_watcher_token
+    - ntfy_pager_owner_password_hash
+    - ntfy_pager_machine_password_hash
+  ops1:
+    - backup_worker_db_host
+    - backup_worker_db_user
+    - backup_worker_db_password
+    - backup_worker_db_ca_pem
+    - backup_worker_bucket
+    - backup_worker_s3_endpoint
+    - backup_worker_s3_region
+    - backup_worker_s3_access_key_id
+    - backup_worker_s3_secret_access_key
+    - backup_worker_tenants
+    - backup_restore_state_copy_recipient
+    - backup_restore_state_copy_dest_access_key_id
+    - backup_restore_state_copy_estate_bucket
+    - backup_restore_state_copy_estate_endpoint
+    - backup_restore_state_copy_estate_region
+    - backup_restore_state_copy_estate_access_key_id
+    - backup_restore_state_copy_tenant_bucket
+    - backup_restore_state_copy_tenant_endpoint
+    - backup_restore_state_copy_tenant_region
+    - backup_restore_state_copy_tenant_access_key_id
+  db1:
+    - db1_stack_exporter_password
+    - db1_grants_tenants
+    - db1_grants_ops1_host
+  app1:
+    - website_app1_smtp_host
+    - website_app1_smtp_port
+    - website_app1_smtp_user
+    - website_app1_smtp_password
+
+# A value that is only white space counts as empty. Matched from the start, so
+# \s*\Z holds for the empty string and for blanks and nothing else.
+host_inputs_blank_pattern: '\s*\Z'

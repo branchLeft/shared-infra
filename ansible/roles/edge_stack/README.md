@@ -48,7 +48,7 @@ The inputs, their types and defaults are in `meta/argument_specs.yml`; Ansible c
 | `edge_stack_crowdsec_wait_tries`    | `24`                          | Times CrowdSec's Local API is asked whether it answers after the restart.                           |
 | `edge_stack_crowdsec_wait_interval` | `5`                           | Seconds between those asks.                                                                         |
 
-The paths, the stamp names, the classes and the pin pattern are constants in `vars/main.yml`, not inputs: a caller cannot override them. The role has no `dependencies` and loads no other role (ANS-12): the stamp steps are its own task files ("The stamp steps" below). This role is not yet listed in `playbooks/edge1.yml`; the wiring follows the per-host role list (see "How it is delivered").
+The paths, the stamp names, the classes and the pin pattern are constants in `vars/main.yml`, not inputs: a caller cannot override them. The role has no `dependencies` and loads no other role (ANS-12): the stamp steps are its own task files ("The stamp steps" below). `playbooks/edge1.yml` applies this role last, after `host_baseline`, `ci_login` and `deploy_tooling` (see "How it is delivered").
 
 ## Requirements
 
@@ -159,7 +159,7 @@ The stamp steps are tested here and nowhere else: `p7` (a drifted file with an u
 - The read of `edge.image.env` is early (a pin the role refuses stops it before anything changes), again inside the validation and again inside the apply. The apply acts only on the pin the validation read, so a deploy between the two sections is refused (exit code 74), never acted on. What stays on the host after that refusal is in "Lock windows".
 - The fingerprints are computed from the first read of the repository. A checkout that changes before the candidate Compose file is copied leaves a stamp that is not the fingerprint of the file that was placed (the placed file is the one that was validated). The next run sees the difference and acts again.
 - The stamp steps exist in two roles, this one and `monitoring_stack`, as the owner allowed on 25 October 2026 on condition that a shared module is extracted later. Until then a fix to the steps is made twice, and nothing fails when one copy changes and the other does not.
-- The role is not yet applied by `playbooks/edge1.yml`. A merge of this role changes no host.
+- `playbooks/edge1.yml` applies the role, but only the gated run on `main`, once the owner approves it, changes the host.
 
 ### Differences from the monitoring_stack family
 
@@ -167,13 +167,13 @@ The shape is the same. It differs, on purpose: three stamps named `edge.<class>.
 
 ## How it is delivered
 
-A role reaches a host only through the gated workflow (ANS-17), never by running `ansible-playbook` by hand. This role is not in `playbooks/edge1.yml` yet: the host playbooks now take a per-host role list, and the wiring is a separate change that follows when that list is merged. Until then a merge of this role changes no host. The owner order for the first live apply, once it is wired, is:
+A role reaches a host only through the gated workflow (ANS-17), never by running `ansible-playbook` by hand. `playbooks/edge1.yml` applies this role last, after `host_baseline` (which installs Docker), `ci_login` and `deploy_tooling` (which installs the `branchleft-deploy` wrapper that writes `edge.image.env` and the `branchleft-compose@.service` template unit). A merge changes no host; the gated run does, after the owner approves it. The owner order for the first live apply is:
 
 1. edge1's bootstrap (the owner's step).
 2. The owner places `/etc/branchleft/edge.env` (root, 0600). The role asserts it and fails the run loudly until it is there.
 3. `branchleft-deploy` writes `edge.image.env` with the live digest.
 4. The check-mode output for edge1 is put on the PR before the approval; every class that would be acted on is named in it.
-5. The gated run on `main`. It installs the edge unit's drop-in itself ("The unit's drop-in"), so nothing else needs to have placed it. The hand script `hetzner/provision/install-systemd-drop-ins.sh` installs the same file and, until this role is wired, is the runnable path; the role finds it already there and changes nothing.
+5. The gated run on `main`. It installs the edge unit's drop-in itself ("The unit's drop-in"), so nothing else needs to have placed it. The hand script `hetzner/provision/install-systemd-drop-ins.sh` installs the same file; the role finds it already there and changes nothing. The first apply adopts the host's existing files where they equal `hetzner/edge/stack` and acts only on a class that differs (see "Adoption"): if the plan job shows a Caddy restart rather than an adoption, reject the apply and read the difference first.
 
 ## How to change it safely
 

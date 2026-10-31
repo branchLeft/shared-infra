@@ -1,0 +1,27 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver the Gatus status page's Compose stack, bring it up on loopback, check it answers
+    description: >-
+      Refuses a listen address that is not 127.0.0.1, a compose file whose images are
+      not pinned by digest, and a project directory that holds a compose override
+      file. Then writes the two Gatus configuration files from the repository and the
+      compose file into the project directory, brings the stack up when that content
+      differs from the content last recorded as healthy, and records it only after
+      the page answers 200 on /health from the host. The image, the port and the
+      project directory are constants of the role, not inputs. It holds no secret and
+      never removes a volume.
+    author: branchLeft
+    options:
+      status_page_listen_address:
+        type: str
+        description: >-
+          Address the page is published on. Loopback is the only value allowed: the
+          page is reached through an SSH tunnel until the public route is chosen.
+        choices:
+          - 127.0.0.1
+        default: 127.0.0.1
+      status_page_wait_timeout:
+        type: int
+        description: Seconds the stack may take to become healthy after it is brought up, for the compose wait and for the health check.
+        default: 120

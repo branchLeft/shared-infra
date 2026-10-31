@@ -61,9 +61,18 @@ which only the reviewer App answers, and any plan the gate cannot read stays in
 mechanically, the reviewer catches the plan that is green and still wrong.
 
 ```bash
-npm ci
-npx tsc --noEmit                              # what CI type-checks with
+pnpm install --frozen-lockfile
+pnpm exec tsc --noEmit                        # what CI type-checks with
 ```
+
+## Merging
+
+Merge with **Merge when ready** (the merge queue), never **Merge pull
+request**. A merge that bypasses the queue starts an `Ansible delivery` run
+whose actor is the merger, and the `ansible-hosts` environment's
+`prevent_self_review` rule stops that merger approving it, which also blocks
+every later apply. A merge through the queue runs as `github-merge-queue[bot]`,
+and its apply can be approved.
 
 ## Related documents
 

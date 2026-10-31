@@ -1,10 +1,22 @@
 ---
-# edge1: the first host under the gated pull. Two roles, in order: the
+# edge1: the first host under the gated pull. Two pull roles, in order: the
 # Ansible toolchain the host runs this playbook with, then the trigger that runs it.
+# After them, the roles on edge1's list in checks/host_roles.yml that this playbook wires:
+# the loader of the host's private inputs (host_inputs, first: check_enrolment R11), which reads
+# the one root-only file the owner places on the host and stops the run if it is missing or unsafe,
+# the host baseline, the pipeline account the trigger is reached through, then the deploy
+# tooling (as class gateway, which installs the common targets only), then the edge stack. The
+# edge stack needs Docker from the baseline and the compose unit and deploy wrapper from the deploy
+# tooling. After it come the three monitoring roles, so a failure in them cannot hold the edge
+# delivery back: the node exporter and the SNDS collector (exporters_and_collectors), the pager
+# (ntfy_pager), and the monitoring stack, last (monitoring_stack): the stack hashes the pager's
+# secrets file and renderer and decides the one restart of its unit, and the SNDS textfile
+# directory the collectors create should be in place before that restart.
+# egress_nat is on edge1's list and is not applied here.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
-# from vars_files: the shared includes and edge1's own trust file. The one-time
+# from vars_files: the shared includes, edge1's own trust file and its owner_vars file. The one-time
 # bootstrap loads the same files the same way. Run against more than one host, the
 # refusal in includes/refuse_other_hosts.yml stops the play.
 - name: Bring edge1 under the pull
@@ -12,9 +24,11 @@
   gather_facts: false
   vars:
     enrolled_host: edge1
+    deploy_tooling_host_class: gateway
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/edge1.yml'
+    - '{{ playbook_dir }}/../owner_vars/edge1.yml'
   pre_tasks:
     - name: Refuse a run that is not edge1's
       ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
@@ -27,3 +41,11 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/ci_login # noqa: role-name[path]
+    - role: ../roles/deploy_tooling # noqa: role-name[path]
+    - role: ../roles/edge_stack # noqa: role-name[path]
+    - role: ../roles/exporters_and_collectors # noqa: role-name[path]
+    - role: ../roles/ntfy_pager # noqa: role-name[path]
+    - role: ../roles/monitoring_stack # noqa: role-name[path]

@@ -1,26 +1,37 @@
 ---
-# db1: the database host. Two roles, in order: the host's prerequisites, then the
-# accounts and grants. The roles read their private inputs (the tenants' slugs, the
-# address the ops1 backup worker connects from, the exporter's password) from the
-# channel the delivery of this host uses; no file of this repository holds them, so
-# a run without them stops at the role's input check.
+# db1: the database host under the gated pull. Six roles, in order: the Ansible
+# toolchain the host runs this playbook with, the trigger that runs it, the loader
+# of the host's private inputs (host_inputs), which reads the one root-only file
+# the owner places on the host and stops the run if it is missing or unsafe, the
+# host baseline, the database stack (db1_stack), which takes its input from what
+# the loader sets, and the backup timers (db1_backup_timers), which take no input.
+# db1_stack never starts, stops, restarts or recreates a container. The other
+# database role (db1_grants) returns in a later change, after the backup timers.
 #
-# Run against more than one host this playbook would apply db1's values to every
-# one, so the first play refuses any host but db1 (or the localhost the trigger
-# names).
-- name: Bring db1's accounts under Ansible
+# The host's trigger runs this file on a signed checkout with the inventory
+# `localhost,`, which loads no group variables, so every value the roles read comes
+# from vars_files: the shared includes and db1's own trust file.
+- name: Bring db1 under the pull
   hosts: all
   gather_facts: false
+  vars:
+    enrolled_host: db1
+  vars_files:
+    - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
+    - '{{ playbook_dir }}/../trust/db1.yml'
   pre_tasks:
-    - name: Refuse any host but db1
-      ansible.builtin.assert:
-        that:
-          - inventory_hostname in ['db1', 'localhost']
-        fail_msg: This playbook is db1's. Limit the run to db1.
-        quiet: true
-  # The roles live in ansible/roles/ (ANS-13), one level above this directory, and a
-  # playbook finds roles only beside itself unless a path is given. One suppression
-  # per line.
+    - name: Refuse a run that is not db1's
+      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
+    - name: Refuse an empty signer list
+      ansible.builtin.include_tasks: includes/require_signers.yml
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory. A
+  # path works from any directory, which the host trigger and the lint do not share.
   roles:
+    - role: ../roles/ansible_runtime # noqa: role-name[path]
+      vars:
+        ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
+    - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/db1_stack # noqa: role-name[path]
-    - role: ../roles/db1_grants # noqa: role-name[path]
+    - role: ../roles/db1_backup_timers # noqa: role-name[path]

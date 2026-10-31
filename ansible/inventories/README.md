@@ -5,10 +5,12 @@ them. It holds three hosts: `edge1`, in the group `edge`, and `mx1`, in the grou
 which have no group variables now. Their values, and their trusted signer lists, are
 loaded by `playbooks/edge1.yml` and `playbooks/mx1.yml` through `vars_files`, and `db1`, in the group `db`,
 which has no group variables because its inputs are private and reach the host
-through its delivery channel (`roles/db1_grants`). A role applied to a new host
-adds its host and variables in the same pull request. `ops1` and `app1` have
-playbooks under the pull but no inventory entry: no host is enrolled by this
-layout, and against this inventory `--limit ops1` and `--limit app1` match nothing.
+through its delivery channel (`roles/db1_grants`). `playbooks/db1.yml` is under the
+pull and loads its trust file, `trust/db1.yml`, through `vars_files`. A role
+applied to a new host adds its host and variables in the same pull request. `ops1`, `app1` and `demo1` have
+playbooks under the pull route but no inventory entry: an inventory entry does not enrol a host
+(a playbook and its trust file do), so against this inventory `--limit ops1`, `--limit app1` and
+`--limit demo1` match nothing.
 Their bootstrap route is the one the refusal include describes: on an inline
 one-host inventory (`-i 'HOST,'`) the one-host test is true by construction.
 `ANS-13` leaves the placement of inventories undecided; this layout is a

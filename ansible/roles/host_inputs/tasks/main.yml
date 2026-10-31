@@ -1,0 +1,231 @@
+---
+# The one loader of a pulled host's private role inputs (owner ruling, option A).
+# Every check completes before the first input is set,
+# no check can be skipped, and every task that touches the file's content has
+# no_log: true and diff: false (ANS-16). A refusal names a path or a name from this
+# host's row and never a value; each starts with host_inputs[code] so that a test
+# can tell one from another. The role changes nothing on the host.
+
+# ----- The host -----
+
+- name: Refuse a host that has no row of required inputs
+  ansible.builtin.assert:
+    that:
+      - enrolled_host is defined
+      - enrolled_host is string
+      - enrolled_host in host_inputs_required_by_host
+      - host_inputs_required_by_host[enrolled_host] | length > 0
+    fail_msg: >-
+      host_inputs[no-host-row]: this host has no row in host_inputs_required_by_host (vars/main.yml). The owner
+      adds the row, and the host's entry in checks/host_roles.yml, before the host can load its inputs.
+    quiet: true
+
+# ----- The ground the file stands on -----
+
+# Only as safe as every directory above it: whoever can write one can rename the
+# directory below it and put a file of their own in the place.
+- name: Look at each directory above the file
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ host_inputs_ancestors }}'
+  register: host_inputs_ancestor_stats
+
+# The good directories are picked out, and every other one is bad, so a directory
+# that is missing, a link (not a directory when not followed), not root's, or
+# writable by its group or by others cannot slip past a test that did not run.
+- name: Find the directories above the file that are not root-only real directories
+  ansible.builtin.set_fact:
+    host_inputs_bad_dirs: >-
+      {{ host_inputs_ancestors | difference(host_inputs_ancestor_stats.results
+      | selectattr('stat.exists') | selectattr('stat.isdir')
+      | selectattr('stat.uid', 'equalto', host_inputs_owner_uid)
+      | rejectattr('stat.wgrp') | rejectattr('stat.woth')
+      | map(attribute='item') | list) }}
+  no_log: true
+  diff: false
+
+- name: Refuse a directory above the file that is missing, a link, not root's, or writable by others
+  ansible.builtin.assert:
+    that:
+      - host_inputs_bad_dirs | length == 0
+    fail_msg: >-
+      host_inputs[dir]: every directory above the host inputs file must exist as a real directory owned by root and
+      not writable by its group or by others. Not so: {{ host_inputs_bad_dirs | join(', ') }}.
+    quiet: true
+
+# ----- The file -----
+
+# No checksum, no mime type and no attributes: a result that fails an assert is
+# printed whole, and the checksum of a short value is a way to recover it.
+- name: Look at the host inputs file
+  ansible.builtin.stat:
+    path: '{{ host_inputs_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: host_inputs_file_stat
+
+- name: Refuse a host with no inputs file
+  ansible.builtin.assert:
+    that:
+      - host_inputs_file_stat.stat.exists
+    fail_msg: >-
+      host_inputs[file-missing]: {{ host_inputs_path }} does not exist. The owner places it once, by hand, on this
+      host (the bootstrap step in the pull request that added this role).
+    quiet: true
+
+# The mode is the exact string the stat module returns, so a bit test cannot pass
+# a mode the string comparison refuses. A link is not followed: with follow off a
+# link is not a regular file, so it is refused whatever it points at.
+- name: Refuse an inputs file that is not a regular root-only file
+  ansible.builtin.assert:
+    that:
+      - host_inputs_file_stat.stat.isreg | default(false)
+      - host_inputs_file_stat.stat.uid | default(-1) == host_inputs_owner_uid
+      - host_inputs_file_stat.stat.gid | default(-1) == host_inputs_group_gid
+      - host_inputs_file_stat.stat.mode | default('') == host_inputs_file_mode
+    fail_msg: >-
+      host_inputs[file-mode]: {{ host_inputs_path }} must be a regular file (not a link or a directory) owned by
+      root:root with mode exactly {{ host_inputs_file_mode }}.
+    quiet: true
+
+# ----- The content -----
+
+# Reading and parsing sit in one block. A parse error of Ansible's own echoes the
+# text it could not parse, so the failing task has no_log and the rescue raises a
+# fixed message in its place.
+- name: Read the file and parse it as JSON
+  block:
+    - name: Read the file into memory for this run (no value is shown)
+      ansible.builtin.slurp:
+        src: '{{ host_inputs_path }}'
+      register: host_inputs_raw
+      no_log: true
+      diff: false
+
+    - name: Parse the file (no value is shown)
+      ansible.builtin.set_fact:
+        host_inputs_doc: '{{ host_inputs_raw.content | b64decode | from_json }}'
+      no_log: true
+      diff: false
+  rescue:
+    - name: Refuse a file that cannot be read or is not one JSON document
+      ansible.builtin.fail:
+        msg: >-
+          host_inputs[parse]: {{ host_inputs_path }} could not be read, or is not exactly one JSON document. The text
+          is not shown. The owner writes it with json.dumps (the bootstrap step).
+
+# What the file holds, as names and counts only. A name here comes from this
+# host's row, never from the file, so the asserts after it can state the rule
+# without a risk of printing a value.
+- name: Work out which keys the file holds (no value is shown)
+  ansible.builtin.set_fact:
+    host_inputs_required: '{{ host_inputs_required_by_host[enrolled_host] }}'
+    host_inputs_keys: '{{ (host_inputs_doc | list) if host_inputs_doc is mapping else [] }}'
+  no_log: true
+  diff: false
+
+- name: Work out what is missing, empty or unknown (names from the row, counts, no value)
+  ansible.builtin.set_fact:
+    host_inputs_report:
+      is_mapping: '{{ host_inputs_doc is mapping }}'
+      unknown_count: '{{ host_inputs_keys | difference(host_inputs_required) | length }}'
+      incomplete: >-
+        {{ ((host_inputs_required | difference(host_inputs_keys))
+        + ((host_inputs_doc | dict2items | selectattr('key', 'in', host_inputs_required) | rejectattr('value')
+        | map(attribute='key') | list) if host_inputs_doc is mapping else [])
+        + ((host_inputs_doc | dict2items | selectattr('key', 'in', host_inputs_required) | selectattr('value', 'string')
+        | selectattr('value', 'match', host_inputs_blank_pattern) | map(attribute='key') | list)
+        if host_inputs_doc is mapping else [])) | unique | sort }}
+  no_log: true
+  diff: false
+
+- name: Refuse a file that is not one JSON object
+  ansible.builtin.assert:
+    that:
+      - host_inputs_report.is_mapping
+    fail_msg: >-
+      host_inputs[shape]: {{ host_inputs_path }} must hold one JSON object whose keys are this host's inputs.
+    quiet: true
+
+- name: Refuse a file with a key that is not one of this host's inputs
+  ansible.builtin.assert:
+    that:
+      - host_inputs_report.unknown_count | int == 0
+    fail_msg: >-
+      host_inputs[unknown-key]: {{ host_inputs_path }} holds {{ host_inputs_report.unknown_count }} key(s) that are
+      not in this host's row in vars/main.yml. The key is not shown. A key outside the row is never set.
+    quiet: true
+
+- name: Refuse a file with an input missing or empty
+  ansible.builtin.assert:
+    that:
+      - host_inputs_report.incomplete | length == 0
+    fail_msg: >-
+      host_inputs[missing-key]: {{ host_inputs_path }} has no usable value for: {{ host_inputs_report.incomplete | join(', ') }}.
+      An empty string, an empty list or object, null, false and zero count as no value.
+    quiet: true
+
+# ----- The inputs -----
+
+# Literal keys, one per name in vars/main.yml. A templated key would be refused by
+# check_enrolment R6, and set_fact of a whole templated mapping sets nothing and
+# does not fail. A name absent from this host's file is omitted, so no fact is set
+# for another host's input. Each value is set as the JSON gave it, string or list,
+# and is not templated again.
+- name: Set each input the file holds, by the name of the role argument it feeds (no value is shown) # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    monitoring_stack_smtp_username: "{{ host_inputs_doc['monitoring_stack_smtp_username'] | default(omit) }}"
+    monitoring_stack_smtp_password: "{{ host_inputs_doc['monitoring_stack_smtp_password'] | default(omit) }}"
+    monitoring_stack_healthchecks_ping_url: "{{ host_inputs_doc['monitoring_stack_healthchecks_ping_url'] | default(omit) }}"
+    monitoring_stack_alert_recipient_email: "{{ host_inputs_doc['monitoring_stack_alert_recipient_email'] | default(omit) }}"
+    monitoring_stack_mailhost_ping_url: "{{ host_inputs_doc['monitoring_stack_mailhost_ping_url'] | default(omit) }}"
+    monitoring_stack_grafana_admin_password: "{{ host_inputs_doc['monitoring_stack_grafana_admin_password'] | default(omit) }}"
+    monitoring_stack_snds_data_url: "{{ host_inputs_doc['monitoring_stack_snds_data_url'] | default(omit) }}"
+    ntfy_pager_pager_token: "{{ host_inputs_doc['ntfy_pager_pager_token'] | default(omit) }}"
+    ntfy_pager_watcher_token: "{{ host_inputs_doc['ntfy_pager_watcher_token'] | default(omit) }}"
+    ntfy_pager_owner_password_hash: "{{ host_inputs_doc['ntfy_pager_owner_password_hash'] | default(omit) }}"
+    ntfy_pager_machine_password_hash: "{{ host_inputs_doc['ntfy_pager_machine_password_hash'] | default(omit) }}"
+    backup_worker_db_host: "{{ host_inputs_doc['backup_worker_db_host'] | default(omit) }}"
+    backup_worker_db_user: "{{ host_inputs_doc['backup_worker_db_user'] | default(omit) }}"
+    backup_worker_db_password: "{{ host_inputs_doc['backup_worker_db_password'] | default(omit) }}"
+    backup_worker_db_ca_pem: "{{ host_inputs_doc['backup_worker_db_ca_pem'] | default(omit) }}"
+    backup_worker_bucket: "{{ host_inputs_doc['backup_worker_bucket'] | default(omit) }}"
+    backup_worker_s3_endpoint: "{{ host_inputs_doc['backup_worker_s3_endpoint'] | default(omit) }}"
+    backup_worker_s3_region: "{{ host_inputs_doc['backup_worker_s3_region'] | default(omit) }}"
+    backup_worker_s3_access_key_id: "{{ host_inputs_doc['backup_worker_s3_access_key_id'] | default(omit) }}"
+    backup_worker_s3_secret_access_key: "{{ host_inputs_doc['backup_worker_s3_secret_access_key'] | default(omit) }}"
+    backup_worker_tenants: "{{ host_inputs_doc['backup_worker_tenants'] | default(omit) }}"
+    backup_restore_state_copy_recipient: "{{ host_inputs_doc['backup_restore_state_copy_recipient'] | default(omit) }}"
+    backup_restore_state_copy_dest_access_key_id: "{{ host_inputs_doc['backup_restore_state_copy_dest_access_key_id'] | default(omit) }}"
+    backup_restore_state_copy_estate_bucket: "{{ host_inputs_doc['backup_restore_state_copy_estate_bucket'] | default(omit) }}"
+    backup_restore_state_copy_estate_endpoint: "{{ host_inputs_doc['backup_restore_state_copy_estate_endpoint'] | default(omit) }}"
+    backup_restore_state_copy_estate_region: "{{ host_inputs_doc['backup_restore_state_copy_estate_region'] | default(omit) }}"
+    backup_restore_state_copy_estate_access_key_id: "{{ host_inputs_doc['backup_restore_state_copy_estate_access_key_id'] | default(omit) }}"
+    backup_restore_state_copy_tenant_bucket: "{{ host_inputs_doc['backup_restore_state_copy_tenant_bucket'] | default(omit) }}"
+    backup_restore_state_copy_tenant_endpoint: "{{ host_inputs_doc['backup_restore_state_copy_tenant_endpoint'] | default(omit) }}"
+    backup_restore_state_copy_tenant_region: "{{ host_inputs_doc['backup_restore_state_copy_tenant_region'] | default(omit) }}"
+    backup_restore_state_copy_tenant_access_key_id: "{{ host_inputs_doc['backup_restore_state_copy_tenant_access_key_id'] | default(omit) }}"
+    db1_stack_exporter_password: "{{ host_inputs_doc['db1_stack_exporter_password'] | default(omit) }}"
+    db1_grants_tenants: "{{ host_inputs_doc['db1_grants_tenants'] | default(omit) }}"
+    db1_grants_ops1_host: "{{ host_inputs_doc['db1_grants_ops1_host'] | default(omit) }}"
+    website_app1_smtp_host: "{{ host_inputs_doc['website_app1_smtp_host'] | default(omit) }}"
+    website_app1_smtp_port: "{{ host_inputs_doc['website_app1_smtp_port'] | default(omit) }}"
+    website_app1_smtp_user: "{{ host_inputs_doc['website_app1_smtp_user'] | default(omit) }}"
+    website_app1_smtp_password: "{{ host_inputs_doc['website_app1_smtp_password'] | default(omit) }}"
+  no_log: true
+  diff: false
+
+- name: Drop the file's text from memory (no value is shown)
+  ansible.builtin.set_fact:
+    host_inputs_raw: {}
+    host_inputs_doc: {}
+    host_inputs_keys: []
+    host_inputs_report: {}
+  no_log: true
+  diff: false

@@ -1,0 +1,11 @@
+---
+# A plain apply passes none of these: the role runs no step and needs no image.
+# A step request sets control_plane_db_step on the command line (the gated pull
+# does), and the inventory sets the rest.
+control_plane_db_step: ''
+control_plane_db_apps_image: ''
+control_plane_db_identity_hostnames:
+  console: ''
+  portal: ''
+  identity: ''
+control_plane_db_identity_tenants: []

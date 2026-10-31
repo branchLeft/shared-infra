@@ -1,0 +1,29 @@
+---
+# Turns a list of slots, each a stack and the name of a key pair made by prepare.yml, into
+# the list the role takes: the stack, the public key read from the container, and whether
+# the entry adopts a stack the host already runs. declare_slots is the input and
+# deploy_slot_keys_scenario_declared_slots the result. Every task here handles the public keys, so every one hides
+# its result (ANS-16), and no label names a stack.
+- name: Read the public key of each slot
+  ansible.builtin.slurp:
+    src: '{{ scenario_key_dir }}/{{ item.key_name }}.pub'
+  loop: '{{ declare_slots }}'
+  loop_control:
+    label: '{{ item.key_name }}'
+  register: deploy_slot_keys_scenario_declare_public
+  no_log: true
+
+- name: Start the declared list
+  ansible.builtin.set_fact:
+    deploy_slot_keys_scenario_declared_slots: []
+  no_log: true
+
+- name: Add each slot to the declared list
+  ansible.builtin.set_fact:
+    deploy_slot_keys_scenario_declared_slots: >-
+      {{ deploy_slot_keys_scenario_declared_slots + [{'stack': item.0.stack, 'public_key': item.1.content | b64decode | trim,
+                            'adopt_existing': item.0.adopt | default(false)}] }}
+  loop: '{{ declare_slots | zip(deploy_slot_keys_scenario_declare_public.results) | list }}'
+  loop_control:
+    label: '{{ item.0.key_name }}'
+  no_log: true

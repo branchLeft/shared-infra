@@ -1,0 +1,27 @@
+---
+# The one-off bootstrap of a host that takes bundles writes its rollback floor here: the commit it
+# was brought up at. A host that takes bundles with no floor refuses every request (no-floor), so
+# without this a first bootstrap would leave the host unable to apply anything. The seed comes in
+# with -e at the bootstrap and never from the pull route, which passes none.
+#
+# It is written only when the host has no floor (force: false) and never over one, so no seed can
+# move a floor that exists, up or down. A seed that is not exactly one commit id is refused before
+# anything is written.
+- name: Refuse a floor seed that is not exactly one commit id
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_floor_seed | length == 40
+      - pull_trigger_floor_seed is match('[0-9a-f]{40}')
+    fail_msg: pull_trigger_floor_seed must be exactly 40 lowercase hex digits, or empty.
+    quiet: true
+  when: pull_trigger_floor_seed | length > 0
+
+- name: Write the rollback floor, only if the host has none
+  ansible.builtin.copy:
+    content: "{{ pull_trigger_floor_seed }}\n"
+    dest: '{{ pull_trigger_state_dir }}/last-applied'
+    owner: root
+    group: root
+    mode: '0600'
+    force: false
+  when: pull_trigger_floor_seed | length > 0

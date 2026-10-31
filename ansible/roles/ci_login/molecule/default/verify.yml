@@ -1,0 +1,246 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_apply_body: "{{ scenario_apply_public.split(' ')[1] }}"
+    verify_check_type: "{{ scenario_check_public.split(' ')[0] }}"
+    verify_check_body: "{{ scenario_check_public.split(' ')[1] }}"
+    # A paste cut short: the mistake the key check exists for.
+    verify_truncated_body: '{{ verify_check_body[:40] }}'
+    # Code points: tab, line feed, vertical tab, form feed, carriage return, the three file,
+    # group and record separators, next line, line separator and paragraph separator.
+    # Python's str.splitlines splits on all of them but the tab, which sits here as the one
+    # control character that is not a line break. Each is a way to bring a second line the
+    # caller never declared, and none can be typed into this file.
+    verify_separators: [9, 10, 11, 12, 13, 28, 29, 30, 133, 8232, 8233]
+    verify_key_bodies:
+      - '{{ verify_apply_body }}'
+      - '{{ verify_check_body }}'
+      - "{{ scenario_other_apply_public.split(' ')[1] }}"
+      - "{{ scenario_other_check_public.split(' ')[1] }}"
+      - "{{ scenario_stale_public.split(' ')[1] }}"
+      - '{{ verify_truncated_body }}'
+  tasks:
+    - name: Assert the host is configured
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    - name: Refuse an empty key list, which is never read as remove every key
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an empty key list
+        refused_keys: []
+
+    - name: Refuse three keys
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key list that is not one apply key and one check key
+        refused_keys: '{{ scenario_keys + [{"key": scenario_other_check_public, "mode": "check"}] }}'
+
+    - name: Refuse two apply keys and no check key
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key list that is not one apply key and one check key
+        refused_keys:
+          - key: '{{ scenario_apply_public }}'
+            mode: apply
+          - key: '{{ scenario_other_apply_public }}'
+            mode: apply
+
+    - name: Refuse a single key
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key list that is not one apply key and one check key
+        refused_keys:
+          - key: '{{ scenario_apply_public }}'
+            mode: apply
+
+    - name: Refuse one key given for both modes
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse the same key for both modes
+        refused_keys:
+          - key: '{{ scenario_apply_public }}'
+            mode: apply
+          - key: '{{ scenario_apply_public }} PLACEHOLDER_other_comment'
+            mode: check
+
+    # The second entry is the bad one: the refusal must say which entry, and not print the key.
+    - name: Refuse a key whose body was cut short
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_message_part: 'entry number 2 '
+        refused_keys:
+          - key: '{{ scenario_apply_public }}'
+            mode: apply
+          - key: '{{ verify_check_type }} {{ verify_truncated_body }}'
+            mode: check
+
+    - name: Refuse a key whose type has a typo
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_message_part: 'entry number 1 '
+        refused_keys:
+          - key: 'ssh-ed25518 {{ verify_apply_body }} PLACEHOLDER_comment'
+            mode: apply
+          - key: '{{ scenario_check_public }}'
+            mode: check
+
+    # A key value that brings its own options would give the key more than the role's command.
+    - name: Refuse a key value that brings its own options
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_keys:
+          - key: 'command="/bin/EXAMPLE_COMMAND" {{ scenario_apply_public }}'
+            mode: apply
+          - key: '{{ scenario_check_public }}'
+            mode: check
+
+    # A valid key, a separator, and behind it the key this host retired, now with an option of
+    # its own. The key check must refuse it and the retired key must not come back.
+    - name: Refuse a key value that smuggles in a second key behind a separator
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_keys:
+          - key: '{{ scenario_apply_public }}{{ ''%c'' | format(verify_separator) }}command="/bin/EXAMPLE_COMMAND" {{ scenario_stale_public }}'
+            mode: apply
+          - key: '{{ scenario_check_public }}'
+            mode: check
+      loop: '{{ verify_separators }}'
+      loop_control:
+        loop_var: verify_separator
+        label: code point {{ verify_separator }}
+
+    # The line break after the key and nothing behind it: \Z refuses it, $ does not.
+    - name: Refuse a key value that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_keys:
+          - key: "{{ scenario_apply_public }}{{ '%c' | format(10) }}"
+            mode: apply
+          - key: '{{ scenario_check_public }}'
+            mode: check
+
+    - name: Refuse a key value with a comment that is not printable ASCII
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key entry that is not one public key on one line
+        refused_keys:
+          - key: "{{ scenario_apply_public }} PLACEHOLDER_comment_{{ '%c' | format(233) }}"
+            mode: apply
+          - key: '{{ scenario_check_public }}'
+            mode: check
+
+    # An account the role did not make is never changed, only judged. The role stops at the
+    # check that names the fault, and the account is put back before the next case.
+    - name: Give the account a password that is not locked
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        password: '$6$EXAMPLESALT$EXAMPLEHASH'
+      no_log: true
+
+    - name: Refuse an account that has a usable password
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an account that has a usable password
+
+    - name: Lock the password of the account again
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        password: '!'
+      no_log: true
+
+    - name: Give the account a shell that cannot run a forced command
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        shell: /usr/sbin/nologin
+
+    - name: Refuse an account whose shell cannot run a forced command
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an account whose shell cannot run a forced command
+
+    - name: Give the account its shell back
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        shell: /bin/bash
+
+    - name: Assert the refusals left the host as it was
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # With the flag false the keys are not read, not checked and not touched, whatever the
+    # list holds: a list that is empty, a list of other keys, and a list that is no keys at all.
+    - name: Apply the role with the flag false and other keys declared
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: false
+        ci_login_keys: '{{ scenario_other_keys }}'
+
+    - name: Apply the role with the flag false and an empty list
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: false
+        ci_login_keys: []
+
+    - name: Assert the host is still exactly as configured
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # exclusive: a key the host holds that the role was not given is removed.
+    - name: Give the account a key the role was not given
+      ansible.posix.authorized_key:
+        user: '{{ scenario_user }}'
+        key: '{{ scenario_stale_public }}'
+        manage_dir: true
+      no_log: true
+      diff: false
+
+    - name: Apply the role again with the key half on
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: true
+        ci_login_keys: '{{ scenario_keys }}'
+
+    - name: Assert the key the role was not given is gone
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # ANS-16. The scenario sets verbosity 1 and a log path (molecule.yml), so a task that
+    # handles key material without no_log prints it into this log. The sudoers task has no
+    # no_log on purpose: the gated plan shows the owner its diff, so the sudoers lines must
+    # be in this log through that diff. molecule.yml sets ANSIBLE_DIFF_ALWAYS, so the first
+    # run that changes the host prints them whether or not the caller ran a --diff step
+    # (the harness's check-fresh does; `molecule test` does not). The scan runs last, so it
+    # covers the refused runs too. The canary and the task names show the
+    # scan reads the output of the converge, so "nothing found" cannot mean "nothing read".
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        ci_login_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+
+    - name: Assert the log holds the converge output
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in ci_login_verify_log"
+          - "'Install the sudoers file of the pipeline account' in ci_login_verify_log"
+          - "'Make the authorised keys of the pipeline account exactly the two declared keys' in ci_login_verify_log"
+        quiet: true
+
+    - name: Assert the sudoers lines reached the log through the diff of the sudoers task
+      ansible.builtin.assert:
+        that:
+          - "'NOPASSWD: /usr/local/sbin/pull-trigger --mode apply' in ci_login_verify_log"
+        quiet: true
+
+    - name: Assert no key body and no password hash reached the log
+      ansible.builtin.assert:
+        that:
+          - verify_key_bodies | select('in', ci_login_verify_log) | list | length == 0
+          - "'EXAMPLEHASH' not in ci_login_verify_log"
+        quiet: true

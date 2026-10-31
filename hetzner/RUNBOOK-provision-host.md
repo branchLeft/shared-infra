@@ -459,9 +459,11 @@ decides again at the next boot unless the script itself can re-derive it.
 
 **`ops1` also gets a source rule on its published control-plane ports.** The
 same self-identification adds, on `ops1` only, a drop of every new connection
-to ports 8301 and 8302 from any source but `edge1`, matched on the original
-destination because a published port is a DNAT
+to ports 8300, 8301 and 8302 from any source but `edge1`, matched on the
+original destination because a published port is a DNAT
 ([ISSUE branchLeft/workspace#1284](https://github.com/branchLeft/workspace/issues/1284)).
+Port 8300 is the sign-in service's private listener, which the edge proxies to;
+8301 and 8302 are the portal and the console.
 
 **App hosts only, and the reconciler enforces that itself.** `edge1` is the
 estate's NAT gateway: it forwards every private-only host's own internet
@@ -604,7 +606,7 @@ unscoped form of `branchleft-deploy` lets the caller name the stack. `hetzner/RE
 carries the design; this is the procedure.
 
 Run once per stack, before that repository's first deploy. Steps 1–3 are the
-platform owner's; step 5 is the platform owner's too, because it writes a
+platform owner's; step 6 is the platform owner's too, because it writes a
 credential into a repository.
 
 ```bash

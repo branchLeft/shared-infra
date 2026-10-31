@@ -4,11 +4,13 @@ This reads .github/CODEOWNERS the way GitHub does (the last matching line wins) 
 when a file that must be the owner's is not. It covers the standards template's lines being
 the file's final lines (SYNC-1), the estate and gate files, the pull-role paths, and the pin
 gate's install program (check_pins.py loads the lock reader from it and keeps no copy), and
-that a host playbook is not the owner's.
+that a host playbook is not the owner's, and that every Ansible loader directory, and a bare
+file or symlink of its name, is the owner's at each level it can sit in.
 """
 
 from __future__ import annotations
 
+import importlib
 import unittest
 from pathlib import Path
 
@@ -19,6 +21,16 @@ ROOT = Path(__file__).resolve().parents[2]
 CODEOWNERS = ROOT / ".github" / "CODEOWNERS"
 OWNER = "@branchLeft/branchleft-admin"
 INSTALL_PROGRAM = "ansible/roles/ansible_runtime/files/install_runtime.py"
+# The loader directories ansible-core searches, derived from the installed ansible-core rather
+# than typed here, so a loader a bump adds is missing from this set until its lines are in
+# CODEOWNERS. collections is not a loader subdirectory; Ansible's collection finder looks only at
+# the top and playbook levels, so it is listed there and nowhere deeper.
+LOADER_DIRS: frozenset[str] = frozenset(
+    loader.subdir
+    for _, loader in importlib.import_module("ansible.plugins.loader").get_all_plugin_loaders()
+    if loader.subdir
+)
+COLLECTIONS_DIR = "collections"
 
 # The lines of branchLeft/standards templates/codeowners at the tag the Standards job is pinned
 # to (.github/workflows/standards.yml). SYNC-1 requires them, unchanged and in order, as the
@@ -27,19 +39,20 @@ STANDARDS_TEMPLATE = [
     ("/.standardsignore", [OWNER]),
     ("/.standards.mode", [OWNER]),
     ("/.docs-lint*", [OWNER]),
-    ("/tools/floors.tsv", [OWNER]),
     ("/.standards-db-tooling", [OWNER]),
     ("/.github/", [OWNER]),
 ]
 
 # Estate files the merge script refuses at gate 6: mail/ runs under plan credentials, and every
-# credentialed plan job installs from these lockfiles and .npmrc files. A directory path stands
-# for a file under it.
+# credentialed plan job installs from these lockfiles, pnpm-workspace.yaml files and .npmrc files.
+# A directory path stands for a file under it.
 ESTATE_PATHS = [
     "mail/index.ts",
-    "package-lock.json",
-    "hetzner/package-lock.json",
-    "hetzner-host/package-lock.json",
+    "pnpm-lock.yaml",
+    "hetzner/pnpm-lock.yaml",
+    "hetzner-host/pnpm-lock.yaml",
+    "hetzner/pnpm-workspace.yaml",
+    "hetzner-host/pnpm-workspace.yaml",
     ".npmrc",
     "hetzner/.npmrc",
     "hetzner-host/.npmrc",
@@ -94,6 +107,41 @@ PULL_ROLE_PATHS = [
     "ansible/roles/ansible_runtime/tasks/main.yml",
     "ansible/roles/broker_deploy/tasks/_sudoers.yml",
     "ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2",
+    "ansible/roles/deploy_slot_keys/tasks/main.yml",
+    "ansible/roles/deploy_slot_keys/library/deploy_slot_keys_reconcile.py",
+    "ansible/roles/deploy_slot_keys/tests/unit/test_deploy_slot_keys_reconcile.py",
+    "ansible/roles/deploy_slot_keys/README.md",
+    "ansible/checks/test_deploy_slot_keys_single_home.py",
+]
+
+# The loader of every pulled host's private role inputs is the owner's alone (owner ruling,
+# option A): its tasks, its per-host rows, its molecule proof of the
+# refusals, and its README all sit under one path.
+HOST_INPUTS_PATHS = [
+    "ansible/roles/host_inputs/tasks/main.yml",
+    "ansible/roles/host_inputs/vars/main.yml",
+    "ansible/roles/host_inputs/meta/argument_specs.yml",
+    "ansible/roles/host_inputs/molecule/default/verify.yml",
+    "ansible/roles/host_inputs/README.md",
+]
+
+# ci_login grants the pipeline account root-run sudo and writes its authorized_keys; the owner's
+# values for edge1's roles are in owner_vars. Both are the owner's alone.
+CI_LOGIN_PATHS = [
+    "ansible/roles/ci_login/tasks/main.yml",
+    "ansible/roles/ci_login/tasks/_sudoers.yml",
+    "ansible/roles/ci_login/tasks/_keys.yml",
+    "ansible/roles/ci_login/templates/authorized_keys.j2",
+    "ansible/roles/ci_login/vars/main.yml",
+    "ansible/owner_vars/edge1.yml",
+]
+
+# The owner-run writer of a host's inputs file runs as root, takes every input value and writes
+# the file the loader reads, so it is the owner's alone. Its test holds the proofs of what it
+# keeps secret, so the test is the owner's too.
+SEEDING_TOOL_PATHS = [
+    "ansible/tools/seed_host_inputs.py",
+    "ansible/tools/test_seed_host_inputs.py",
 ]
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
@@ -162,6 +210,15 @@ class CodeownersTests(unittest.TestCase):
     def test_the_pull_roles_and_sudoers_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(PULL_ROLE_PATHS)
 
+    def test_the_host_inputs_loader_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(HOST_INPUTS_PATHS)
+
+    def test_the_ci_login_role_and_the_owner_vars_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(CI_LOGIN_PATHS)
+
+    def test_the_seeding_tool_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(SEEDING_TOOL_PATHS)
+
     def test_the_standards_template_paths_are_owned_by_the_owner(self) -> None:
         self.assert_owned(
             [
@@ -188,7 +245,8 @@ class CodeownersTests(unittest.TestCase):
             "hetzner/scripts/anything.sh",
             "ansible/harness/anything.py",
         }
-        for path in ESTATE_PATHS + GATE_PATHS + PULL_ROLE_PATHS + UNOWNED_PATHS:
+        owned = PULL_ROLE_PATHS + HOST_INPUTS_PATHS + CI_LOGIN_PATHS + SEEDING_TOOL_PATHS
+        for path in ESTATE_PATHS + GATE_PATHS + owned + UNOWNED_PATHS:
             if path in stands_for_more:
                 continue
             with self.subTest(path=path):
@@ -204,6 +262,55 @@ class CodeownersTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual([OWNER], owners_of(path, self.rules))
+
+    def test_the_loader_names_are_derived_from_ansible_core(self) -> None:
+        # An empty or partial derivation must not pass, so four names every Ansible install has
+        # are asserted by name as well as by count.
+        self.assertGreaterEqual(len(LOADER_DIRS), 19)
+        for name in ("library", "module_utils", "filter_plugins", "doc_fragments"):
+            self.assertIn(name, LOADER_DIRS)
+
+    def test_every_loader_line_the_derivation_implies_is_in_codeowners(self) -> None:
+        patterns = {pattern for pattern, _ in self.rules}
+        top_and_playbooks = LOADER_DIRS | {COLLECTIONS_DIR}
+        expected = {"/ansible/ansible.cfg"}
+        # No trailing slash: a pattern with one matches a directory only, so a symlink (a file
+        # in git) named like a loader directory would be unowned while Ansible follows it.
+        expected |= {f"/ansible/{name}" for name in top_and_playbooks}
+        expected |= {f"/ansible/playbooks/{name}" for name in top_and_playbooks}
+        expected |= {f"/ansible/playbooks/**/{name}" for name in LOADER_DIRS}
+        expected |= {f"/ansible/roles/*/{name}" for name in LOADER_DIRS}
+        self.assertEqual([], sorted(expected - patterns))
+
+    def test_each_loader_directory_is_owned_at_every_level(self) -> None:
+        for name in sorted(LOADER_DIRS | {COLLECTIONS_DIR}):
+            self.assert_owned([f"ansible/{name}/x.py", f"ansible/playbooks/{name}/x.py"])
+        for name in sorted(LOADER_DIRS):
+            self.assert_owned(
+                [f"ansible/playbooks/includes/{name}/x.py", f"ansible/roles/r/{name}/x.py"]
+            )
+        self.assert_owned(["ansible/ansible.cfg"])
+
+    def test_a_bare_file_named_like_a_loader_directory_is_owned_at_every_level(self) -> None:
+        # A symlink committed as library, filter_plugins and so on is a file in git, and Ansible
+        # follows it to a directory it loads code from, so the bare name is the owner's too.
+        for name in sorted(LOADER_DIRS | {COLLECTIONS_DIR}):
+            self.assert_owned([f"ansible/{name}", f"ansible/playbooks/{name}"])
+        for name in sorted(LOADER_DIRS):
+            self.assert_owned([f"ansible/playbooks/includes/{name}", f"ansible/roles/r/{name}"])
+        self.assert_owned(["ansible/roles/x/library", "ansible/playbooks/filter_plugins"])
+
+    def test_the_paths_beside_a_loader_directory_stay_unowned(self) -> None:
+        # A molecule scenario's library, a directory that is not a loader and a role's tasks are
+        # ordinary work and stay on the reviewer App's approval.
+        for path in (
+            "ansible/roles/r/molecule/default/library/x.py",
+            "ansible/patterns/typed_module/library/x.py",
+            "ansible/roles/r/tasks/main.yml",
+            "ansible/library.md",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual([], owners_of(path, self.rules))
 
     def test_the_last_matching_line_wins(self) -> None:
         rules = [("/a/", [OWNER]), ("/a/b.py", ["@someone-else"])]

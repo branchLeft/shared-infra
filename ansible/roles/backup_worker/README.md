@@ -119,8 +119,12 @@ caller cannot override them.
 
 ### The environment file
 
-It is created empty with mode `0600` first and only then written, so no moment
-exists in which a value is in a wider file. The tasks that handle a value say
+An absent file is created empty at `root:root` `0600` first, and only then is the
+value written. A file already there is kept, and its owner, group and mode are set
+back to `root:root` `0600` on every run before the value is written. The values
+come from `backup_worker_secret_files` in `vars/main.yml`, the one home. The
+limit: the correction happens on each run, not continuously, so a file widened by
+hand stays wide until the next run. The tasks that handle a value say
 `no_log: true` and `diff: false`, the include in the test carries no `no_log` so
 the role's own tasks must keep values out of the log, and the registered results
 are not kept. No value is a default or in the tests except documentation values.
@@ -164,7 +168,11 @@ placeholder programs and stand-ins for `age`, `mysql` and `mysqldump`.
   and requires that the role stops at the download, naming the checksum. It then
   enables the timer, applies the role with the defaults, requires the timer to
   stay enabled, and disables it again so the later steps see the off state.
-- `verify.yml` checks: the environment file is a plain file, `root:root`, mode
+- `verify.yml` first widens the environment file by hand to `nobody:nogroup`
+  `0644` and applies the role again, so the checks after it read the restored file.
+  It is a regression check on the end state, not a sabotage control: the end state
+  is the same with or without the attribute task.
+- `verify.yml` then checks: the environment file is a plain file, `root:root`, mode
   `0600`, and holds exactly the nine names with the supplied values; the tenants
   and recipients files are `root:backup-worker` `0640` and the recipients file is
   one `slug recipient` line per tenant; the timer is installed, disabled and
@@ -179,10 +187,19 @@ placeholder programs and stand-ins for `age`, `mysql` and `mysqldump`.
 One row per edit, with the harness run over this role and a restore afterwards.
 The retrieval is the run itself.
 
-| Edit to the role                                                       | Step that fails | Assertion that names it                                                                                                |
-| ---------------------------------------------------------------------- | --------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| The environment file's mode `0600` changed to `0644` in both tasks     | `verify`        | "The environment file is missing, not a plain file, not root:root or not mode 0600."                                   |
-| The `backup_worker_timer_may_disable` gate removed from the timer task | `converge`      | "The default apply changed a timer that was enabled; the timer task must be gated on backup_worker_timer_may_disable." |
+| Edit to the role                                                                                       | Step that fails | Assertion that names it                                                                                                |
+| ------------------------------------------------------------------------------------------------------ | --------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| The environment file's mode `0600` changed to `0644` in `backup_worker_secret_files` (`vars/main.yml`) | `verify`        | "The environment file is missing, not a plain file, not root:root or not mode 0600."                                   |
+| The `backup_worker_timer_may_disable` gate removed from the timer task                                 | `converge`      | "The default apply changed a timer that was enabled; the timer task must be gated on backup_worker_timer_may_disable." |
+
+The order of the environment-file tasks is not in this table, because the harness
+cannot see it. `tests/unit/test_backup_worker.py` fails when the attribute task is
+removed, moved after the write, or given an owner, group or mode other than the
+lookup's. Run it by hand, from the repository root:
+
+```text
+python3 -B -m unittest discover -b -s ansible/roles/backup_worker/tests/unit -p "test_*.py"
+```
 
 Reviewed or asserted, but not shown to fail by a sabotage run: the tenants and
 recipients file modes, the timer being disabled in `verify`, the release-file
@@ -209,9 +226,14 @@ service account assertion and the input checks at the top of `tasks/main.yml`.
   check mode on a host with no release directory yet, and the converge skips its
   wrong-checksum control in check mode, because nothing is written there; the
   harness does not catch a silent skip, and this is the review of it (ANS-10).
-- **The mode of the environment file at the instant of writing** is a property of
-  Ansible's temporary file and atomic move, not of anything the test can observe.
-  The empty `0600` file created first is the role's part of it.
+- **The window before the attributes are set** is not observable by Molecule. The
+  template writes the value on every run and sets the attributes after it, so a
+  widened file ends `root:root` `0600` with or without the attribute task. The
+  order is proven by the unit test, which reads the task text and so cannot see a
+  task that exists and does nothing (`when: false`, a wrong variable). The mode of
+  the temporary file and the atomic move are Ansible's, not the test's.
+- **The correction happens on each run, not continuously.** A file widened between
+  two runs stays wide until the next one.
 - **A release directory is never removed.** Old releases stay.
 - CI runs this scenario: the Ansible workflow runs the harness over every
   directory under `ansible/roles/`.
@@ -220,8 +242,9 @@ service account assertion and the input checks at the top of `tasks/main.yml`.
 
 Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. The plan job shows the host's diff in
-check mode first. Nothing is applied from a laptop. This role is not applied to
-any host yet.
+check mode first. Nothing is applied from a laptop. `ansible/playbooks/ops1.yml`
+applies this role, after the `host_inputs` loader, whose ops1 row carries its ten
+inputs; no run has been approved yet.
 
 ## How to change it safely
 

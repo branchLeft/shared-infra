@@ -3,7 +3,8 @@ name: Ansible delivery
 # Delivers the Ansible roles to the hosts by the gated pull (ANS-17). It calls the
 # reusable workflow of branchLeft/github-workflows, which lints, runs Molecule over
 # every role and pattern, asks each host in check mode what this commit would change,
-# and then waits on the deployment environment below before the apply.
+# and then waits on the deployment environment below before the apply. The lint and
+# Molecule re-run is skipped only for a commit the merge queue already tested (queue-proof).
 #
 # It runs on a push to main and on nothing else. A pull request is gated by
 # ansible.yml, whose required check keeps its name. No pull request, schedule or
@@ -26,8 +27,12 @@ name: Ansible delivery
 # where the three files are the output of `gh api` on repos/<owner>/<repo>/environments/
 # ansible-hosts, on its /deployment-branch-policies and on its /secrets.
 #
-# The apply key is an environment secret and is never passed here. The three secrets
-# below are repository secrets, named one by one: `secrets: inherit` would pass all.
+# The apply key is an environment secret, named here like the others: only the job in the
+# environment reads it, after approval. The six repository secrets (the jump pair: both or neither;
+# the push list: optional, and empty means every host is pulled) are named one by one; `secrets: inherit` passes all.
+# The push list, ANSIBLE_PUSH_HOSTS, is one user@host per line, a subset of ANSIBLE_HOSTS: the
+# hosts that never open a connection, reached through the jump host with push-playbook. The
+# owner creates it; its value is never written in this repository.
 
 on:
   push:
@@ -38,15 +43,54 @@ permissions:
   actions: read
 
 jobs:
+  # Decides whether this push may skip the lint and Molecule re-run. It may only when the
+  # merge queue ran the Ansible workflow, to a green result, on exactly this commit
+  # (ansible/checks/merge_group_proof.py holds the rule). A push run of the same commit is
+  # green too, so a merge that skipped the queue is not told apart by a green check; it
+  # re-tests in full. The job fails toward testing: an unreadable answer is "false".
+  queue-proof:
+    name: Find the merge queue run of this commit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tested: ${{ steps.proof.outputs.tested }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the Ansible runs of this commit and judge them
+        id: proof
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          runs="$RUNNER_TEMP/ansible-runs.json"
+          gh api -X GET "repos/$REPO/actions/workflows/ansible.yml/runs" -f head_sha="$SHA" -f per_page=100 > "$runs" || echo '{}' > "$runs"
+          python3 ansible/checks/merge_group_proof.py --runs "$runs" --sha "$SHA" | tee -a "$GITHUB_OUTPUT"
+
   delivery:
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.13
+    needs: [queue-proof]
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.19
     with:
       environment: ansible-hosts
+      push-playbook: ansible/playbooks/demo1.yml
       role-directories: |
         roles/*
         patterns/*
       python-paths: harness checks
+      role-test-command: harness/run_harness.py
+      skip-rerun-after-merge-group: ${{ needs.queue-proof.outputs.tested == 'true' }}
+      merge-group-check-name: Lint and test the Ansible roles
+      shard-timeout-minutes: 45 # the edge_stack Molecule shard takes up to 39 minutes
     secrets:
       ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
       ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
+      ssh_apply_key: ${{ secrets.SSH_APPLY_KEY }}
+      ssh_push_hosts: ${{ secrets.ANSIBLE_PUSH_HOSTS }}
+      ssh_jump_host: ${{ secrets.SSH_JUMP_HOST }}
+      ssh_jump_key: ${{ secrets.SSH_JUMP_KEY }}

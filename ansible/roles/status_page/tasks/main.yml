@@ -1,0 +1,281 @@
+---
+# The compose file is rendered once from the role's template and parsed, not
+# searched, so a tag in quotes or a comment is judged by what YAML says it is. A
+# service that builds its own image has no digest to pin, so it is refused too.
+- name: Render the compose file from the role's template
+  ansible.builtin.set_fact:
+    status_page_compose_text: "{{ lookup('ansible.builtin.template', 'compose.yml.j2') }}"
+
+- name: Parse the rendered compose file
+  ansible.builtin.set_fact:
+    status_page_rendered: '{{ status_page_compose_text | ansible.builtin.from_yaml }}'
+
+# This role is a copy of the compose_stack pattern's recipe (ANS-12: a role does not
+# apply another role), with the status page's own names, its own template and its
+# two configuration files. The first refusal of an address that would expose ops1.
+# The argument specification has already refused any value but 127.0.0.1; this holds
+# if that validation is ever switched off, and it also reads the compose file as
+# rendered, so a published port that does not start with the loopback address is
+# refused whatever put it there. It runs before anything is written to the host.
+- name: Refuse a published port that is not on loopback
+  ansible.builtin.assert:
+    that:
+      - status_page_listen_address == '127.0.0.1'
+      - status_page_rendered.services is ansible.builtin.mapping
+      - status_page_published | ansible.builtin.reject('ansible.builtin.match', '^127\.0\.0\.1:') | ansible.builtin.list | ansible.builtin.length == 0
+      - status_page_published | ansible.builtin.length == 1
+    quiet: true
+    fail_msg: >-
+      The status page is published on loopback only. Its listen address must be
+      127.0.0.1 and the only published port of the compose file must start with
+      that address; found {{ status_page_listen_address }} and {{ status_page_published }}.
+  vars:
+    status_page_rendered: '{{ status_page_compose_text | ansible.builtin.from_yaml }}'
+    status_page_published: >-
+      {{ status_page_rendered.services.values() | ansible.builtin.map(attribute='ports', default=[])
+      | ansible.builtin.flatten | ansible.builtin.list }}
+
+- name: Refuse a compose file whose images are not all pinned by digest
+  ansible.builtin.assert:
+    that:
+      - status_page_rendered.services is ansible.builtin.mapping
+      - status_page_rendered.services | ansible.builtin.length > 0
+      - status_page_rendered.include is ansible.builtin.undefined
+      - status_page_service_list | ansible.builtin.selectattr('build', 'ansible.builtin.defined') | ansible.builtin.list | ansible.builtin.length == 0
+      - status_page_service_list | ansible.builtin.selectattr('extends', 'ansible.builtin.defined') | ansible.builtin.list | ansible.builtin.length == 0
+      - status_page_service_list | ansible.builtin.rejectattr('image', 'ansible.builtin.defined') | ansible.builtin.list | ansible.builtin.length == 0
+      - status_page_images | ansible.builtin.reject('ansible.builtin.match', status_page_image_pattern) | ansible.builtin.list | ansible.builtin.length == 0
+    quiet: true
+    fail_msg: >-
+      Every service needs an image reference ending in @sha256: and 64 lower-case
+      hex digits. No service may build an image or extend another, and the file may
+      not include another. A tag alone can move.
+  vars:
+    status_page_service_list: '{{ status_page_rendered.services.values() | ansible.builtin.list }}'
+    status_page_images: "{{ status_page_service_list | ansible.builtin.map(attribute='image') | ansible.builtin.list }}"
+    status_page_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
+
+# Compose merges a compose.override.yml that sits next to the compose file
+# unless the files are named on the command line. Every call below names the
+# compose file, so an override is never read; this refuses one anyway, because
+# an image added there would not have been through the digest check above.
+# Reading only, so it runs in check mode too.
+- name: Look at the project directory before looking in it
+  ansible.builtin.stat:
+    path: '{{ status_page_project_dir }}'
+  register: status_page_project_dir_stat
+
+- name: Look for a compose override file in the project directory
+  ansible.builtin.find:
+    paths: '{{ status_page_project_dir }}'
+    patterns:
+      - compose.override.y*ml
+      - docker-compose.override.y*ml
+    file_type: any
+  register: status_page_overrides
+  when: status_page_project_dir_stat.stat.isdir | ansible.builtin.default(false)
+
+- name: Refuse a project directory that holds a compose override file
+  ansible.builtin.assert:
+    that:
+      - status_page_overrides.files | ansible.builtin.default([]) | ansible.builtin.length == 0
+    quiet: true
+    fail_msg: >-
+      The project directory holds a compose override file, which Compose would
+      merge into the stack without the digest check. Remove it:
+      {{ status_page_overrides.files | ansible.builtin.default([]) | ansible.builtin.map(attribute='path') | ansible.builtin.list }}.
+
+# The two configuration files as the repository holds them, read byte for byte
+# (rstrip and lstrip off), so the copy on the host is the file in the repository.
+# The list starts empty on every run: a fact persists across a second include of
+# the role in the same play, and a list that was not reset would grow.
+- name: Start the list of configuration files
+  ansible.builtin.set_fact:
+    status_page_config_files: []
+
+- name: Read each configuration file from the repository
+  ansible.builtin.set_fact:
+    status_page_config_files: >-
+      {{ status_page_config_files + [{'name': 'stack/' ~ item,
+      'content': lookup('ansible.builtin.file', 'stack/' ~ item, rstrip=false, lstrip=false),
+      'mode': '0644'}] }}
+  loop: '{{ status_page_stack_files }}'
+
+# One digest of everything the stack is made of: the compose file as rendered and
+# the two configuration files as the repository holds them. It is a function of the
+# inputs, not of the host, so it is worked out in check mode too.
+- name: Work out the stamp of the content this run delivers
+  ansible.builtin.set_fact:
+    status_page_stamp: >-
+      {{ {'compose': status_page_compose_text, 'config': status_page_config_files}
+      | ansible.builtin.to_json(sort_keys=True) | ansible.builtin.hash('sha256') }}
+
+- name: Create the project directory
+  ansible.builtin.file:
+    path: '{{ status_page_project_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the directory of the configuration files
+  ansible.builtin.file:
+    path: '{{ status_page_project_dir }}/stack'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# No delivery task notifies a handler. A notification is lost if a later task
+# fails, and the next run would find every file already delivered; the stamp
+# below is what remembers that the stack was never brought up.
+- name: Deliver the configuration files
+  ansible.builtin.copy:
+    content: '{{ item.content }}'
+    dest: '{{ status_page_project_dir }}/{{ item.name }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ status_page_config_files }}'
+  register: status_page_stack_delivery
+
+# Last of the deliveries, so the files it points at are already on disk when
+# the validator reads them. The validator runs on a temporary copy before the
+# file replaces the old one.
+- name: Deliver the compose file
+  ansible.builtin.copy:
+    content: '{{ status_page_compose_text }}'
+    dest: '{{ status_page_project_dir }}/compose.yml'
+    owner: root
+    group: root
+    mode: '0644'
+    validate: docker compose --project-directory {{ status_page_project_dir }} --file %s config --quiet
+  register: status_page_compose_delivery
+
+# Check mode writes no compose file, so on a fresh host there is nothing for a
+# look at the containers to read. The tasks below that need it run whenever the
+# file is really on disk, and the skip on a fresh host is stated here (ANS-10).
+- name: Read back the compose file
+  ansible.builtin.stat:
+    path: '{{ status_page_project_dir }}/compose.yml'
+  register: status_page_compose_file_stat
+
+# The stamp file holds the digest of the content the stack was last brought up
+# with and found healthy. Its checksum is read, not its content.
+- name: Read the checksum of the recorded stamp
+  ansible.builtin.stat:
+    path: '{{ status_page_stamp_file }}'
+    checksum_algorithm: sha256
+  register: status_page_recorded_stamp
+
+# Bring the stack up when its content is not the content last recorded as good,
+# which covers a first run, an edit, and a run that follows one that failed
+# before the stamp was written. Also when a delivery task changed a file in this
+# run: a container that bind-mounts one file keeps the inode it started with.
+- name: Work out whether the stack must be brought up
+  ansible.builtin.set_fact:
+    status_page_up_needed: >-
+      {{ status_page_stack_delivery is ansible.builtin.changed
+      or status_page_compose_delivery is ansible.builtin.changed
+      or not (status_page_recorded_stamp.stat.exists
+      and status_page_recorded_stamp.stat.checksum == (status_page_stamp | ansible.builtin.hash('sha256'))) }}
+
+# Nothing here removes data: no orphan removal, no renewed anonymous volumes,
+# and state is present, never absent (which would run `down`). The compose file
+# is named, so an override file is never merged.
+- name: Bring up the stack
+  community.docker.docker_compose_v2:
+    project_src: '{{ status_page_project_dir }}'
+    project_name: '{{ status_page_project_name }}'
+    files:
+      - compose.yml
+    state: present
+    recreate: always
+    build: never
+    wait: true
+    wait_timeout: '{{ status_page_wait_timeout }}'
+    remove_orphans: false
+    renew_anon_volumes: false
+  when:
+    - status_page_compose_file_stat.stat.exists
+    - status_page_up_needed | ansible.builtin.bool
+
+# The same module in check mode, which runs `up --dry-run` and then lists the
+# project's containers, and changes nothing, so it is also run in check mode.
+- name: Read the state of the stack's containers without changing it
+  community.docker.docker_compose_v2:
+    project_src: '{{ status_page_project_dir }}'
+    project_name: '{{ status_page_project_name }}'
+    files:
+      - compose.yml
+    state: present
+    build: never
+    wait: false
+    remove_orphans: false
+    renew_anon_volumes: false
+  register: status_page_state
+  check_mode: true
+  changed_when: false
+  when: status_page_compose_file_stat.stat.exists
+
+- name: Refuse a stack with a service that is missing or not running
+  ansible.builtin.assert:
+    that:
+      - status_page_missing | ansible.builtin.length == 0
+      - status_page_not_running | ansible.builtin.length == 0
+    quiet: true
+    fail_msg: >-
+      The status page stack is not running. Services with no container:
+      {{ status_page_missing }}. Not running: {{ status_page_not_running }}.
+  vars:
+    status_page_containers: '{{ status_page_state.containers }}'
+    status_page_declared: '{{ status_page_rendered.services.keys() | ansible.builtin.list }}'
+    status_page_missing: >-
+      {{ status_page_declared | ansible.builtin.difference(status_page_containers
+      | ansible.builtin.map(attribute='Service') | ansible.builtin.list) }}
+    status_page_not_running: >-
+      {{ status_page_containers | ansible.builtin.rejectattr('State', 'ansible.builtin.equalto', 'running')
+      | ansible.builtin.map(attribute='Service') | ansible.builtin.list }}
+  when: status_page_compose_file_stat.stat.exists
+
+# The image is a scratch image: it has no shell, so Compose cannot carry a
+# healthcheck for it, and the page is checked from the host. A read that changes
+# nothing, so it runs in check mode as well. A failed request is kept as a
+# result and judged by the assert below, which names the problem.
+- name: Ask the page whether it is healthy
+  ansible.builtin.uri:
+    url: 'http://{{ status_page_listen_address }}:{{ status_page_port }}/health'
+    method: GET
+    status_code: 200
+    timeout: 5
+  register: status_page_health
+  until: status_page_health.status | ansible.builtin.default(-1) == 200
+  retries: '{{ [1, (status_page_wait_timeout | ansible.builtin.int) // (status_page_health_delay | ansible.builtin.int)] | ansible.builtin.max }}'
+  delay: '{{ status_page_health_delay }}'
+  failed_when: false
+  changed_when: false
+  check_mode: false
+  when: status_page_compose_file_stat.stat.exists
+
+- name: Refuse a page that does not answer 200 on /health
+  ansible.builtin.assert:
+    that:
+      - status_page_health.status | ansible.builtin.default(-1) == 200
+    quiet: true
+    fail_msg: >-
+      The status page did not answer 200 on http://{{ status_page_listen_address }}:{{ status_page_port }}/health
+      (status {{ status_page_health.status | ansible.builtin.default(-1) }}). Nothing is recorded
+      as healthy, so the next run brings the stack up again.
+  when: status_page_compose_file_stat.stat.exists
+
+# Last, and only reached if the stack came up and the page answered: a run that
+# fails anywhere above leaves the old stamp, so the next run brings the stack up
+# again.
+- name: Record the content as brought up and healthy
+  ansible.builtin.copy:
+    content: '{{ status_page_stamp }}'
+    dest: '{{ status_page_stamp_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  when: status_page_compose_file_stat.stat.exists

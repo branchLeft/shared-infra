@@ -3,8 +3,11 @@
 # every value below has a default, and the pinned programs are public.
 
 # The one home of the demo host's programs is branchLeft/ghost-platform, at
-# demo-host/provision/. They are downloaded from this commit, never copied into
-# this repository, and each file is held to the sha256 below. Bump the commit
+# demo-host/provision/. They are downloaded from this commit, and each file is
+# held to the sha256 below. The only copies in this repository are the Molecule
+# fixtures under molecule/default/files/, which the role test serves instead of
+# GitHub; the same checksums hold them, so a fixture that drifts from the pin
+# fails the test. A bump updates the fixtures in the same change. Bump the commit
 # and every checksum in one change: a checksum that does not match the file at
 # the commit fails the download. The commit must be at or after the ghost-platform
 # commit that moved the drain flags to /var/lib/branchleft-broker/drain-flags

@@ -1,0 +1,237 @@
+---
+# The refusal cases, one run of the role each. A case is the state the host is put
+# in (kind), the code its refusal must start with, and for some the names the
+# message must give. The kinds, in tasks/place_*.yml:
+#   absent   no file
+#   content  a file with the given text, owner, group and mode (default root, root, 0600)
+#   link     the path is a link to a good file
+#   dir      the path is a directory
+#   parent   a directory above the file is changed (path, state, owner, group, mode)
+# A case runs the role as enrolled_host db1, as the case's host if it has one, or
+# with no enrolled_host at all if it has no_host. Every case begins from the good
+# file and puts it back.
+host_inputs_verify_cases:
+  # ----- The ground and the file's own state -----
+  - name: file missing
+    kind: absent
+    code: file-missing
+  - name: owner is not root
+    kind: content
+    owner: nobody
+    content: '{{ host_inputs_test_json }}'
+    code: file-mode
+  - name: group is not root
+    kind: content
+    group: nogroup
+    content: '{{ host_inputs_test_json }}'
+    code: file-mode
+  - name: mode 0640 (group can read)
+    kind: content
+    mode: '0640'
+    content: '{{ host_inputs_test_json }}'
+    code: file-mode
+  - name: mode 0644 (world can read)
+    kind: content
+    mode: '0644'
+    content: '{{ host_inputs_test_json }}'
+    code: file-mode
+  - name: mode 0400 (root can only read)
+    kind: content
+    mode: '0400'
+    content: '{{ host_inputs_test_json }}'
+    code: file-mode
+  - name: mode 0700 (executable)
+    kind: content
+    mode: '0700'
+    content: '{{ host_inputs_test_json }}'
+    code: file-mode
+  - name: mode 0666 (everyone can write)
+    kind: content
+    mode: '0666'
+    content: '{{ host_inputs_test_json }}'
+    code: file-mode
+  - name: a link to a good file
+    kind: link
+    code: file-mode
+  - name: a directory at the path
+    kind: dir
+    code: file-mode
+  - name: directory above is group-writable
+    kind: parent
+    path: /etc/branchleft
+    mode: '0775'
+    code: dir
+  - name: directory above is world-writable
+    kind: parent
+    path: /etc/branchleft
+    mode: '0777'
+    code: dir
+  - name: directory above is owned by somebody else
+    kind: parent
+    path: /etc/branchleft
+    owner: nobody
+    code: dir
+  - name: directory two above is group-writable
+    kind: parent
+    path: /etc
+    mode: '0775'
+    code: dir
+  - name: directory above is missing
+    kind: parent
+    path: /etc/branchleft
+    state: absent
+    code: dir
+  # ----- The text -----
+  - name: empty file
+    kind: content
+    content: ''
+    code: parse
+  - name: only white space
+    kind: content
+    content: "  \n\t\n"
+    code: parse
+  - name: malformed JSON that carries the marker
+    kind: content
+    content: '{"db1_stack_exporter_password": "{{ host_inputs_test_marker }}", '
+    code: parse
+  - name: YAML and not JSON
+    kind: content
+    content: 'db1_stack_exporter_password: {{ host_inputs_test_marker }}'
+    code: parse
+  - name: text after the document
+    kind: content
+    content: '{{ host_inputs_test_json }} {{ host_inputs_test_marker }}'
+    code: parse
+  - name: a JSON array
+    kind: content
+    content: '["{{ host_inputs_test_marker }}"]'
+    code: shape
+  - name: a JSON string
+    kind: content
+    content: '"{{ host_inputs_test_marker }}"'
+    code: shape
+  - name: JSON null
+    kind: content
+    content: 'null'
+    code: shape
+  # ----- The keys -----
+  - name: an empty object
+    kind: content
+    content: '{}'
+    code: missing-key
+    names: db1_stack_exporter_password
+  - name: a key that is not in the row
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'extra_key': host_inputs_test_marker}) | to_json }}"
+    code: unknown-key
+  - name: the signer list key
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'pull_trigger_signers': [host_inputs_test_marker]}) | to_json }}"
+    code: unknown-key
+  - name: the host key
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'enrolled_host': host_inputs_test_marker}) | to_json }}"
+    code: unknown-key
+  - name: another host's input
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'control_plane_master_key': host_inputs_test_marker}) | to_json }}"
+    code: unknown-key
+  - name: an unknown key and a missing one
+    kind: content
+    content: >-
+      {{ {'db1_grants_tenants': host_inputs_test_tenants, 'db1_grants_ops1_host': host_inputs_test_ops1_host,
+      'extra_key': host_inputs_test_marker} | to_json }}
+    code: unknown-key
+  - name: exporter password missing
+    kind: content
+    content: >-
+      {{ host_inputs_test_doc | dict2items | rejectattr('key', 'equalto', 'db1_stack_exporter_password')
+      | list | items2dict | to_json }}
+    code: missing-key
+    names: db1_stack_exporter_password
+  - name: tenants missing
+    kind: content
+    content: >-
+      {{ host_inputs_test_doc | dict2items | rejectattr('key', 'equalto', 'db1_grants_tenants')
+      | list | items2dict | to_json }}
+    code: missing-key
+    names: db1_grants_tenants
+  - name: ops1 host missing
+    kind: content
+    content: >-
+      {{ host_inputs_test_doc | dict2items | rejectattr('key', 'equalto', 'db1_grants_ops1_host')
+      | list | items2dict | to_json }}
+    code: missing-key
+    names: db1_grants_ops1_host
+  # ----- The values -----
+  - name: exporter password is an empty string
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_stack_exporter_password': ''}) | to_json }}"
+    code: missing-key
+    names: db1_stack_exporter_password
+  - name: exporter password is null
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_stack_exporter_password': none}) | to_json }}"
+    code: missing-key
+    names: db1_stack_exporter_password
+  - name: exporter password is white space
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_stack_exporter_password': '   '}) | to_json }}"
+    code: missing-key
+    names: db1_stack_exporter_password
+  - name: exporter password is an empty object
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_stack_exporter_password': {}}) | to_json }}"
+    code: missing-key
+    names: db1_stack_exporter_password
+  - name: exporter password is zero
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_stack_exporter_password': 0}) | to_json }}"
+    code: missing-key
+    names: db1_stack_exporter_password
+  - name: tenants is an empty string
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_grants_tenants': ''}) | to_json }}"
+    code: missing-key
+    names: db1_grants_tenants
+  - name: tenants is an empty list
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_grants_tenants': []}) | to_json }}"
+    code: missing-key
+    names: db1_grants_tenants
+  - name: tenants is null
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_grants_tenants': none}) | to_json }}"
+    code: missing-key
+    names: db1_grants_tenants
+  - name: ops1 host is an empty string
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_grants_ops1_host': ''}) | to_json }}"
+    code: missing-key
+    names: db1_grants_ops1_host
+  - name: ops1 host is null
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_grants_ops1_host': none}) | to_json }}"
+    code: missing-key
+    names: db1_grants_ops1_host
+  - name: ops1 host is false
+    kind: content
+    content: "{{ host_inputs_test_doc | combine({'db1_grants_ops1_host': false}) | to_json }}"
+    code: missing-key
+    names: db1_grants_ops1_host
+  # ----- The host -----
+  - name: a host with no row
+    kind: content
+    content: '{{ host_inputs_test_json }}'
+    host: demo1
+    code: no-host-row
+  - name: an empty host name
+    kind: content
+    content: '{{ host_inputs_test_json }}'
+    host: ''
+    code: no-host-row
+  - name: no enrolled host at all
+    kind: content
+    content: '{{ host_inputs_test_json }}'
+    no_host: true
+    code: no-host-row

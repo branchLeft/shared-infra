@@ -30,8 +30,8 @@ import { HOST_IPS } from '@branchleft/hetzner-host';
 /**
  * The file-snapshot assertions at the bottom are not snapshots in the usual
  * sense: `stack/` is what gets copied onto `edge1`, so those files *are* the
- * deployment, same discipline as `../edge/render.test.ts`. `npm run render`
- * updates them; `npm test` fails if they drift.
+ * deployment, same discipline as `../edge/render.test.ts`. `pnpm run render`
+ * updates them; `pnpm run test` fails if they drift.
  */
 
 const site = (overrides: Partial<EdgeSite> = {}): EdgeSite => ({
@@ -81,7 +81,7 @@ describe("the pager's own liveness", () => {
   it('pages by another path when it is dead: BlackboxProbeFailed is critical and routes to email, not to ntfy', () => {
     const rules = renderAlertRules();
     expect(rules).toMatch(
-      /alert: BlackboxProbeFailed\n\s+expr: probe_success\{job!="blackbox_mail"\} == 0/
+      /alert: BlackboxProbeFailed\n\s+expr: probe_success\{job!~"blackbox_mail\|blackbox_object_storage"\} == 0/
     );
     expect(rules).toMatch(/alert: BlackboxProbeFailed[\s\S]*?severity: critical/);
   });
@@ -459,7 +459,28 @@ describe('the rendered alert rules', () => {
 
   it('alerts on a failed public probe, excluding the mail job so it is not double-alerted with MailHostDown', () => {
     expect(rendered).toContain('alert: BlackboxProbeFailed');
-    expect(rendered).toContain('expr: probe_success{job!="blackbox_mail"} == 0');
+    expect(rendered).toContain(
+      'expr: probe_success{job!~"blackbox_mail|blackbox_object_storage"} == 0'
+    );
+  });
+
+  it('probes the object storage endpoint through its own module, and pages on it at 15 minutes', () => {
+    const rendered = renderPrometheusConfig(sites);
+    const section = rendered.slice(rendered.indexOf('  - job_name: blackbox_object_storage'));
+    expect(section).toContain("module: ['http_object_storage']");
+    expect(section).toContain('- https://hel1.your-objectstorage.com');
+    expect(section).toContain("labels: {host: edge1, expected_up: 'true'}");
+    const alerts = renderAlertRules();
+    expect(alerts).toContain('alert: ObjectStorageProbeFailed');
+    expect(alerts).toContain(
+      'expr: probe_success{job="blackbox_object_storage"} == 0\n        for: 15m'
+    );
+  });
+
+  it('warns when an unmarked target has read down for 24 hours, and leaves expected_up="false" targets out', () => {
+    const alerts = renderAlertRules();
+    expect(alerts).toContain('alert: TargetDownUnmarked');
+    expect(alerts).toContain('expr: up{expected_up!="false"} == 0\n        for: 24h');
   });
 
   it('warns when a public HTTPS certificate is within 14 days of expiry, before the probe itself fails', () => {
@@ -512,7 +533,10 @@ describe('the rendered alert rules', () => {
     const start = rendered.indexOf('alert: TenantBackupAgeHigh');
     const end = rendered.indexOf('- alert:', start + 1);
     const block = rendered.slice(start, end === -1 ? undefined : end);
-    expect(block).toContain('or absent(backup_worker_last_success_timestamp_seconds)');
+    expect(block).toContain(
+      'or label_replace(absent(backup_worker_last_success_timestamp_seconds), "scope", "family", "", "")'
+    );
+    expect(block).toContain('{{ if eq $labels.scope "family" }}');
   });
 
   // The five rules that read db1's own dump and binlog shipping. promtool

@@ -1,6 +1,16 @@
 ---
-# ops1: the gated pull. Two roles, in order: the Ansible toolchain this
-# playbook runs with, then the trigger that runs it. Only this host's name is set
+# ops1: the gated pull. Two pull roles, in order: the Ansible toolchain this
+# playbook runs with, then the trigger that runs it. After them, the loader of the
+# host's private inputs (host_inputs, first: check_enrolment R11), which reads the one
+# root-only file the owner places on the host and stops the run if it is missing or
+# unsafe, then the host baseline, the break-glass mint, the status page, then the
+# control plane. The control plane needs no input from the owner: it takes the image
+# the running stack already uses and leaves the live env file and master key alone.
+# The last three roles come after it, so that their failure holds nothing else back:
+# the Nextcloud stack (no input; it adopts the hand-installed copy), then the backup
+# worker and the backup restore, which take their inputs from the loader. The backup
+# restore reads the backup worker's variables in the same play, so it follows it. Both
+# leave their timers off. Only this host's name is set
 # here; the remote, the playbook allowlist and the signer list come from the shared
 # includes and the one trust file, all loaded through vars_files.
 #
@@ -26,3 +36,11 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/breakglass_mint_host # noqa: role-name[path]
+    - role: ../roles/status_page # noqa: role-name[path]
+    - role: ../roles/control_plane # noqa: role-name[path]
+    - role: ../roles/nextcloud_stack # noqa: role-name[path]
+    - role: ../roles/backup_worker # noqa: role-name[path]
+    - role: ../roles/backup_restore # noqa: role-name[path]
