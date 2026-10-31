@@ -48,6 +48,29 @@ LIBRARY_FAILING = (
     "    def test_library_value(self) -> None:\n"
     "        self.assertEqual(3, VALUE)\n"
 )
+SKIPPING = (
+    "import unittest\n\n\n"
+    "class Skipping(unittest.TestCase):\n"
+    "    @unittest.skip('not yet')\n"
+    "    def test_skipped(self) -> None:\n"
+    "        self.assertTrue(False)\n"
+)
+PARTIALLY_SKIPPING = (
+    "import unittest\n\n\n"
+    "class Partly(unittest.TestCase):\n"
+    "    def test_passes(self) -> None:\n"
+    "        self.assertTrue(True)\n\n"
+    "    @unittest.skip('not yet')\n"
+    "    def test_skipped(self) -> None:\n"
+    "        self.assertTrue(False)\n"
+)
+EXPECTED_FAILURE = (
+    "import unittest\n\n\n"
+    "class Expected(unittest.TestCase):\n"
+    "    @unittest.expectedFailure\n"
+    "    def test_known_broken(self) -> None:\n"
+    "        self.assertEqual(1, 2)\n"
+)
 
 
 def write(path: Path, text: str) -> None:
@@ -126,6 +149,24 @@ class RoleUnitTestScript(unittest.TestCase):
         self.assert_red(result)
         self.assertIn("test_broken_assertion", result.stdout)
         self.assertIn("gamma: unit tests failed", result.stdout)
+
+    def test_a_fully_skipped_suite_fails_and_is_named(self) -> None:
+        role_with_test(self.ansible, "skipper", SKIPPING)
+        result = run_script(self.ansible)
+        self.assert_red(result)
+        self.assertIn("skipper: unit suites skipped or expected-failed", result.stdout)
+
+    def test_a_partly_skipped_suite_fails_and_is_named(self) -> None:
+        role_with_test(self.ansible, "partly", PARTIALLY_SKIPPING)
+        result = run_script(self.ansible)
+        self.assert_red(result)
+        self.assertIn("partly: unit suites skipped or expected-failed", result.stdout)
+
+    def test_an_expected_failure_fails_and_is_named(self) -> None:
+        role_with_test(self.ansible, "expected", EXPECTED_FAILURE)
+        result = run_script(self.ansible)
+        self.assert_red(result)
+        self.assertIn("expected: unit suites skipped or expected-failed", result.stdout)
 
     def test_a_role_library_and_its_files_are_on_the_path(self) -> None:
         role = role_with_test(self.ansible, "typed", LIBRARY_PASSING)
