@@ -1,0 +1,23 @@
+---
+# The owner's values for the roles ops1 applies. check_enrolment.py (R10) allows this one key
+# and no other. It is the gated pull's step allow-list (pull_trigger_steps): the routine
+# control_plane_db steps ops1 may be asked to run. The program holds the closed list of ids and
+# fixes each tag to control_plane_db_ plus the id, and refuses a file that breaks either (the
+# role's README, "Step requests"). Strike an entry to stop that step being requested.
+#
+# The words are typing guards in a public file, not secrets. What stops a step is the protected
+# environment whose only reviewer is the owner. The person dispatching reads the word here and
+# types it in; one that does not match the entry for that step is refused.
+#
+# control_plane_db_apps_image and control_plane_db_identity_hostnames are not set here. With
+# them unset every step refuses by name, which is the safe state until the image exists.
+pull_trigger_steps:
+  - id: migrate
+    tag: control_plane_db_migrate
+    word: MIGRATE-OPS1
+  - id: identity
+    tag: control_plane_db_identity
+    word: IDENTITY-OPS1
+  - id: provision
+    tag: control_plane_db_provision
+    word: PROVISION-OPS1

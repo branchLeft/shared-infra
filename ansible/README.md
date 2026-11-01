@@ -11,13 +11,16 @@ enrolled in the gated pull, except that `demo1` takes its commit by push and nev
 `edge1` and `ops1` apply `roles/ansible_runtime` and
 `roles/pull_trigger`, then `roles/host_inputs` (the loader of the host's private inputs, which goes
 first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
+`roles/egress_nat` (the estate's NAT gateway; edge1 alone, with `egress_nat_gateway_enabled` pinned
+in `checks/check_enrolment.py`), then
 `roles/ci_login`, then `roles/deploy_tooling`, then `roles/edge_stack`, then
-`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last, and
-`roles/egress_nat` is on edge1's list and not applied), and
+`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
 `roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
-reads). `playbooks/app1.yml` applies the two pull roles, then
+reads), then `roles/control_plane_db` last (it asserts the directory `roles/control_plane` makes; a
+plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
+allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
 `roles/host_baseline`, `roles/breakglass_grant_host` and `roles/website_app1`.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of

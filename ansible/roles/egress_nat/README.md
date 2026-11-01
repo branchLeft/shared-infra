@@ -230,13 +230,15 @@ installed reconciler left, so it fails when the reconciler stops inserting the r
 Delivery to a host is ANS-17: only the gated workflow, run against `main` after the
 approval of its protected environment. A plan job shows the host's diff in check mode
 first; after the approval the host pulls that exact commit of `main` and applies it, and
-a second run must report zero changes. Nothing is applied from a laptop. This role is not
-applied to any host yet: the live run waits on the enrolment of the hosts and on the gate.
-On the gateway host it is applied with `egress_nat_gateway_enabled` set in that host's
-inventory; the inventory trees are still empty, so that variable is set when the host is
-enrolled. Until then the manual steps in the provisioning runbook remain the way, and the
-runbook section that names `05-configure-host-egress.sh` and `nat-gateway.sh` is pointed at
-this role by the pull request that makes the first live apply.
+a second run must report zero changes. Nothing is applied from a laptop. The role is
+wired into `ansible/playbooks/edge1.yml`, after `host_baseline` (Docker and `iptables`
+come from there) and before `ci_login`, and nowhere else. The live run waits on the gate.
+The switch `egress_nat_gateway_enabled` is set in edge1's play vars, not in an inventory
+(the inventory trees load no group variables), and the enrolment checker pins it to edge1
+in `HOST_PLAY_VARS` (R2) so the role entry stays bare and no other host can become a second
+gateway; `ansible/checks/test_egress_nat_single_gateway.py` holds that. The provisioning
+runbook's gateway step points at this role. The hand steps for a host that is not on the
+gateway list stay: `05-configure-host-egress.sh` is still run by hand there.
 
 ## How to change it safely
 

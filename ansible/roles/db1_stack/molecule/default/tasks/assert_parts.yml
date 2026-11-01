@@ -1,0 +1,28 @@
+---
+# The cases are shared out between scenarios (verify_parts in verify.yml). A part that
+# no scenario runs would be a set of cases nobody checks, and it would pass silently,
+# so this fails first: the run is itself a listed part, and each listed part is a
+# scenario directory beside this one that has a molecule.yml and a verify.yml and does
+# not leave the verify step out. The files are read on the controller.
+- name: Assert this run is a listed part
+  ansible.builtin.assert:
+    that:
+      - verify_part in verify_parts
+    fail_msg: >-
+      This scenario ({{ verify_part }}) is not one of the listed parts: {{ verify_parts }}.
+      Its cases would not run in any scenario.
+    quiet: true
+
+- name: Assert each listed part is a scenario that runs verify
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.fileglob', verify_scenarios_dir ~ '/' ~ item ~ '/molecule.yml', wantlist=true) | length == 1
+      - lookup('ansible.builtin.fileglob', verify_scenarios_dir ~ '/' ~ item ~ '/verify.yml', wantlist=true) | length == 1
+      - >-
+        not (lookup('ansible.builtin.file', verify_scenarios_dir ~ '/' ~ item ~ '/skip-steps.txt', errors='ignore')
+        | default('', true) | string | regex_search('(?m)^verify\s*$'))
+    fail_msg: 'The part {{ item }} has no molecule/{{ item }}/molecule.yml or verify.yml, or that scenario leaves the verify step out.'
+    quiet: true
+  loop: '{{ verify_parts }}'
+  vars:
+    verify_scenarios_dir: '{{ playbook_dir }}/..'

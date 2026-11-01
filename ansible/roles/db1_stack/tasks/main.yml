@@ -144,6 +144,67 @@
   loop_control:
     label: '{{ item.item }}'
 
+# ----- The repository's source files -----
+
+# Any other file that names the repository makes two entries for it, and apt
+# refuses two entries that disagree about the key. The index refresh is skipped
+# in check mode, so a plan could not show it; these tasks only read, which the
+# find and slurp modules do in check mode too, and stop the role before it
+# changes anything. They handle no secret, and the refusal names paths, never
+# what a file holds.
+#
+# The find module is used to list names only (file_type any, so a link is listed
+# too: with file_type file it skips links, which was observed, and its contains
+# test is never applied to anything else). slurp then reads each entry through
+# any link. A directory has nothing to read and is skipped; a link to nothing
+# stops the role at the read, which is a refusal too.
+- name: List the entries of the apt sources directory that apt reads
+  ansible.builtin.find:
+    paths: /etc/apt/sources.list.d
+    patterns:
+      - '*.list'
+      - '*.sources'
+    file_type: any
+    hidden: true
+  register: db1_stack_apt_source_entries
+
+- name: List the main apt source list
+  ansible.builtin.find:
+    paths: /etc/apt
+    patterns:
+      - sources.list
+    file_type: any
+    hidden: true
+  register: db1_stack_apt_main_entry
+
+- name: Read each apt source entry
+  ansible.builtin.slurp:
+    src: '{{ item.path }}'
+  loop: '{{ db1_stack_apt_source_entries.files + db1_stack_apt_main_entry.files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  when: not item.isdir
+  register: db1_stack_apt_source_texts
+
+# One assertion for each entry. An entry the role delivers or removes is allowed
+# to name the repository; any other that does is refused, by name.
+- name: Refuse an apt source file the role does not manage that names the MySQL repository
+  ansible.builtin.assert:
+    that:
+      - >-
+        item.skipped | default(false)
+        or item.item.path in ([db1_stack_mysql_source_path] + db1_stack_legacy_files)
+        or (item.content | b64decode) is not search(db1_stack_mysql_host_pattern)
+    fail_msg: >-
+      db1_stack[unmanaged-mysql-source]: {{ item.item.path }} names the MySQL repository
+      and the role neither delivers nor removes it. Two entries for one repository that
+      disagree about the key stop every apt command on the host. Inspect the file; if it
+      is the hand-run installer's, remove it, then run the role again.
+    quiet: true
+  loop: '{{ db1_stack_apt_source_texts.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+
 # ----- The host prerequisites -----
 
 - name: Create the download directory
@@ -207,7 +268,7 @@
 - name: Deliver the repository source, signed by that key file
   ansible.builtin.template:
     src: mysql-community.sources.j2
-    dest: /etc/apt/sources.list.d/mysql-community.sources
+    dest: '{{ db1_stack_mysql_source_path }}'
     owner: root
     group: root
     mode: '0644'

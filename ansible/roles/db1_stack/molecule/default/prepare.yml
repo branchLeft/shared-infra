@@ -69,6 +69,23 @@
       loop_control:
         label: '{{ item.name }}'
 
+    # The container has no network, so every index refresh the role runs fails, and
+    # the test relies on that (the repository-file cases). apt retries a failed fetch
+    # and waits on each name lookup before it gives up, which made one failed refresh
+    # take about a minute, and a failed refresh runs in several cases. These
+    # two settings make it give up at once. The refresh still runs and still fails at
+    # the same task; only the wait before it fails goes. Nothing in the role reads the
+    # file, and it is in the instance only.
+    - name: Make apt give up at once when it cannot reach the network
+      ansible.builtin.copy:
+        content: |
+          Acquire::Retries "0";
+          Acquire::http::Timeout "2";
+        dest: /etc/apt/apt.conf.d/99-test-fail-fast
+        owner: root
+        group: root
+        mode: '0644'
+
     # apt skips its index refresh while this stamp is younger than the cache
     # validity, so no refresh runs and nothing is fetched.
     - name: Mark the apt index as fresh so no refresh runs

@@ -57,7 +57,9 @@ class Edge1Class(unittest.TestCase):
         self.assertEqual(_play_vars(GATEWAY_HOST).get(CLASS_KEY), "gateway")
 
     def test_the_checker_table_says_gateway_for_edge1(self) -> None:
-        self.assertEqual(HOST_PLAY_VARS[GATEWAY_HOST], {CLASS_KEY: "gateway"})
+        # One key, not the whole row: the row also pins the gateway switch of egress_nat, and
+        # test_egress_nat_single_gateway.py holds the full row.
+        self.assertEqual(HOST_PLAY_VARS[GATEWAY_HOST][CLASS_KEY], "gateway")
 
     def test_no_other_host_is_pinned_to_gateway(self) -> None:
         for host, pinned in HOST_PLAY_VARS.items():

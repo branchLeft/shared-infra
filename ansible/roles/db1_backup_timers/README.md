@@ -14,6 +14,12 @@ the order the standard sets for a role README (ANS-14).
    pinned commit in `vars/main.yml`. Each is installed root-owned with mode 0644 at
    `/opt/branchleft/db/provision` or `/opt/branchleft/db/recovery`. Each fetch is
    checked against its pinned sha256 digest, and a file whose bytes differ fails.
+   The directory holds ten programs under `provision/`. One of them,
+   `provision_tenant_db.py`, no unit of this role runs: the `db1_grants` role runs it
+   and only consumes it, so this role is where it is delivered. The fetches are
+   skipped in check mode (a check-mode run creates no directory), so the file
+   reaches the host only after a real apply, and a plan of `db1_grants` refuses
+   until then.
 2. It copies the six unit files under `files/units/` to `/etc/systemd/system`, and
    reloads systemd when one changed.
 3. It enables and starts the three timers: `branchleft-db-dump.timer` (03:10 UTC,
@@ -69,7 +75,10 @@ because the unit files fix the paths they run.
   pinned digest, and each unit byte for byte against the role's own copy.
 - `tests/unit/test_db1_backup_timers.py` checks the schedule values in the units,
   that every program a unit runs is fetched, that every fetched program has a
-  digest, that the commit is a full sha, and that no `.py` file is in `files/`.
+  digest, that the commit is a full sha, and that no `.py` file is in `files/`. Its
+  `CrossRoleTests` fail when a file `db1_grants` stages is not delivered here, is
+  pinned to a different digest in `db1_grants`, or when the two roles pin different
+  commits.
 
 ## Not covered
 
