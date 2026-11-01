@@ -259,7 +259,8 @@
         that:
           - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker volume create ') | list | length == 1
           - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker compose up ') | list | length == 1
-          - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker compose down') | list | length == 0        quiet: true
+          - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker compose down') | list | length == 0
+        quiet: true
         fail_msg: The role made the volume more than once, restarted the spool when nothing it owns had changed, or took it down.
 
     # The role ran with GitHub and its registry unreachable (molecule.yml): the files came
