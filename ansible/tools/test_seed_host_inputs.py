@@ -10,6 +10,7 @@ sentinel values planted in the live files and in the typed answers.
 
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import os
@@ -867,16 +868,96 @@ class StackTests(unittest.TestCase):
                 self.assertIn("volume claims (malformed)", rig.stdout)
                 self.assertFalse(rig.dest.exists())
 
-    def test_a_stack_cannot_be_set_at_a_prompt(self) -> None:
+    # A key that only ever has a typed value, as shared-infra#548's deploy_slot_keys_slots is: it
+    # is added to the row here, so the tests stand for the tree once that change is merged in.
+    TYPED_KEY = "deploy_slot_keys_slots"
+    TYPED_VALUE = [
+        {"stack": "tenant-a", "public_key": "ssh-ed25519 SENT-key", "adopt_existing": True}
+    ]
+
+    def typed_key_row(self) -> contextlib.ExitStack:
+        stack = contextlib.ExitStack()
+        row = (*tool.HOSTS["app1"], self.TYPED_KEY)
+        stack.enter_context(mock.patch.dict(tool.HOSTS, {"app1": row}))
+        stack.enter_context(
+            mock.patch.dict(tool.SOURCES, {self.TYPED_KEY: (tool.Source("typed", ""),)})
+        )
+        return stack
+
+    def test_a_stack_is_never_typed_but_set_reads_it_from_the_live_files(self) -> None:
         rig = Rig(self, answers=["SENT-TYPED"])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
-        before = rig.dest.read_bytes()
-        self.assertEqual(1, rig.run("--host", "app1", "--set", STACKS_KEY))
-        self.assertIn(
-            "a tenant's stack is never typed at a prompt; run with --replace", rig.err.getvalue()
+        rig.put("tenant-a.env", "GHOST_database__connection__password=SENT-rotated\n")
+        self.assertEqual(0, rig.run("--host", "app1", "--set", STACKS_KEY))
+        self.assertEqual([], rig.prompts)
+        document = rig.document()
+        first = mapping_of(list_of(document[STACKS_KEY])[0])
+        self.assertEqual(
+            "GHOST_database__connection__password=SENT-rotated\n", first["secrets_env_text"]
+        )
+        self.assertIn("tenant stacks seeded (2): tenant-a, tenant-b", rig.stdout)
+
+    def test_set_of_the_stacks_changes_that_key_only_and_keeps_a_typed_key_as_it_was(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        before = dict(app1_document())
+        before[self.TYPED_KEY] = self.TYPED_VALUE
+        before[STACKS_KEY] = []
+        rig.put(tool.DEST_NAME, json.dumps(before))
+        rig.put("tenant-a.env", "GHOST_database__connection__password=SENT-rotated\n")
+        with self.typed_key_row():
+            self.assertEqual(0, rig.run("--host", "app1", "--set", STACKS_KEY))
+        after = rig.document()
+        self.assertEqual(self.TYPED_VALUE, after[self.TYPED_KEY])
+        for key, value in before.items():
+            if key != STACKS_KEY:
+                self.assertEqual(value, after[key], key)
+        self.assertEqual(
+            "GHOST_database__connection__password=SENT-rotated\n",
+            mapping_of(list_of(after[STACKS_KEY])[0])["secrets_env_text"],
         )
         self.assertEqual([], rig.prompts)
+
+    def test_set_of_the_stacks_with_none_readable_changes_nothing(self) -> None:
+        for label, claims in (("no program", None), ("no claims", ""), ("bad claims", "x\n")):
+            with self.subTest(label):
+                rig = Rig(self)
+                rig.seed_app1()
+                rig.put(tool.DEST_NAME, json.dumps(app1_document()))
+                before = rig.dest.read_bytes()
+                rig.claims_text = claims
+                self.assertEqual(1, rig.run("--host", "app1", "--set", STACKS_KEY))
+                self.assertIn("no tenant stacks could be read", rig.err.getvalue())
+                self.assertEqual(before, rig.dest.read_bytes())
+
+    def test_a_tool_that_does_not_know_a_key_of_the_file_refuses_set_and_changes_nothing(
+        self,
+    ) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        existing = dict(app1_document())
+        existing[self.TYPED_KEY] = self.TYPED_VALUE
+        rig.put(tool.DEST_NAME, json.dumps(existing))
+        before = rig.dest.read_bytes()
+        self.assertEqual(1, rig.run("--host", "app1", "--set", STACKS_KEY))
+        self.assertIn("keys inside this host's row", rig.err.getvalue())
+        self.assertEqual(before, rig.dest.read_bytes())
+
+    def test_replace_does_not_keep_a_typed_key_it_asks_again_and_writes_nothing_unanswered(
+        self,
+    ) -> None:
+        # Why the owner step is --set and not --replace: the fill never reads the old file.
+        rig = Rig(self)
+        rig.seed_app1()
+        existing = dict(app1_document())
+        existing[self.TYPED_KEY] = self.TYPED_VALUE
+        rig.put(tool.DEST_NAME, json.dumps(existing))
+        before = rig.dest.read_bytes()
+        with self.typed_key_row():
+            self.assertEqual(1, rig.run("--host", "app1", "--replace"))
+        self.assertIn(f"still missing (1): {self.TYPED_KEY}", rig.stdout)
+        self.assertIn(self.TYPED_KEY, "".join(rig.prompts))
         self.assertEqual(before, rig.dest.read_bytes())
 
     def test_set_of_another_key_keeps_the_stacks(self) -> None:
@@ -1285,8 +1366,13 @@ class LeakTests(unittest.TestCase):
         bad_claims.claims_text = "tenant-a=30901\ntenant-a=30902\n"
         cases.append(("bad claims", bad_claims, ("--host", "app1")))
         set_stack = Rig(self, answers=["SENT-TYPED"])
+        set_stack.seed_app1()
         set_stack.put(tool.DEST_NAME, json.dumps(app1_document()))
+        set_stack.put("tenant-a.env", "GHOST_x=SENT-secret-tenant-a\n")
         cases.append(("set a stack", set_stack, ("--host", "app1", "--set", STACKS_KEY)))
+        set_none = Rig(self, answers=["SENT-TYPED"])
+        set_none.put(tool.DEST_NAME, json.dumps(app1_document()))
+        cases.append(("set a stack, none live", set_none, ("--host", "app1", "--set", STACKS_KEY)))
         for label, rig, argv in cases:
             rig.run(*argv)
             self.assert_clean(rig, label)

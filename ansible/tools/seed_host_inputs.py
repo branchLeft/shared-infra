@@ -44,6 +44,7 @@ ENV: Final = "env"
 WHOLE: Final = "whole"
 RECIPIENTS: Final = "recipients"
 STACKS: Final = "stacks"
+STACKS_KEY: Final = "tenant_compose_stacks"
 
 type Value = str | Sequence[Mapping[str, str | int]]
 
@@ -185,7 +186,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "website_app1_smtp_password": (_env("website.env", "CONTACT_SMTP_PASSWORD"),),
     # Not a file: the tenants the volume program lists, each with the three files its stack
     # has on the host. The source's filename is the program, for the notes.
-    "tenant_compose_stacks": (Source(STACKS, VOLUME_PROGRAM),),
+    STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
@@ -200,9 +201,7 @@ MESSAGES: Final[dict[str, str]] = {
     "bad-key": "that name is not in this host's row",
     "no-value": "no value was given",
     "read-back": "the file was written but did not read back as written; inspect it",
-    "stacks-not-typed": (
-        "a tenant's stack is never typed at a prompt; run with --replace to read the live files"
-    ),
+    "no-stacks": "no tenant stacks could be read from the live files; nothing was changed",
     "claims": "the volume program could not be run or did not list its claims",
 }
 REASONS: Final[dict[str, str]] = {
@@ -717,13 +716,30 @@ def size_of(value: Value) -> str:
     return f"{len(value)} entries"
 
 
+# The stacks are read from the live files, never typed, and only this key changes: every other key
+# of the existing file is carried over as it stands, so a key with no live source (one that was
+# only ever typed) is neither asked for again nor dropped.
+def read_stacks(ctx: Context) -> Value:
+    live = Live(ctx)
+    state, value = live.lookup(SOURCES[STACKS_KEY][0])
+    print(
+        f"tenant stacks seeded ({len(live.seeded)}): {names(live.seeded)}; "
+        f"claimed with no stack on the host, left out ({len(live.skipped)}): "
+        f"{names(live.skipped)}",
+        file=ctx.out,
+    )
+    if live.problems:
+        print(f"unusable live sources: {'; '.join(live.problems)}", file=ctx.out)
+    if state != "found" or value is None:
+        raise SeedError("no-stacks")
+    return value
+
+
 def run_set(ctx: Context, host: str, key: str) -> int:
     if key not in HOSTS[host]:
         raise SeedError("bad-key")
-    if SOURCES[key][0].kind == STACKS:
-        raise SeedError("stacks-not-typed")
     document = load_existing(ctx, host)
-    value = ask_for(ctx, key)
+    value = read_stacks(ctx) if SOURCES[key][0].kind == STACKS else ask_for(ctx, key)
     if value is None:
         raise SeedError("no-value")
     document[key] = value

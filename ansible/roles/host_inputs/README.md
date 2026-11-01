@@ -213,7 +213,9 @@ values equal what is live.
 through this file. An app1 whose file already holds the four SMTP keys and not
 `tenant_compose_stacks` stops at `host_inputs[missing-key]` on every apply, the website role
 included, and so does the nightly drift check: the owner runs `seed_host_inputs.py --host app1
---replace` as root on app1 before approving the apply that carries `tenant_compose`. How a NEW
+--set tenant_compose_stacks` as root on app1 before approving the apply that carries
+`tenant_compose`. It changes that one key and keeps every other key of the file (a plain
+`--replace` would rebuild the file and lose any key that has no live source). How a NEW
 tenant's rendered stack reaches the file is the render path's job and not this loader's; until it
 exists, a new site needs the file edited by the owner.
 
@@ -243,8 +245,9 @@ db1 is not seeded by the tool: its file exists already and there is no live file
 written with `json.dumps` from values read into the shell, never typed into a command line.
 
 To rotate one value, `seed_host_inputs.py --host H --set KEY` asks for the new value at a hidden
-prompt and changes that key only. `--set tenant_compose_stacks` is refused: a stack is never typed
-at a prompt, and `--replace` reads it again from the live files. It writes a new file beside the old one, renames it over the old
+prompt and changes that key only. `--set tenant_compose_stacks` asks nothing: a stack is never
+typed at a prompt, so it reads the stacks from the live files again and changes that key only. It
+writes a new file beside the old one, renames it over the old
 one, then reads the result back. If the read-back fails, the tool prints "inspect it" and exits
 non-zero; the new file stays in place and the old one is not restored. The loader refuses a file
 that is not regular `root:root` 0600, is not one JSON object, or whose keys are not exactly the

@@ -80,7 +80,7 @@ What it does, in this order:
    `slug recipient` lines until an empty one, the CA as the path of a PEM file (a certificate,
    never one holding a private key). An empty answer, or no terminal, leaves the key missing. A
    tenant stack is never asked for: `tenant_compose_stacks` that cannot be read live stays
-   missing, and `--set tenant_compose_stacks` is refused.
+   missing.
 4. If any key is missing, writes nothing, names the missing keys, and exits 1. A rerun then needs
    no `--replace`, and the loader never meets a half file.
 5. Writes a temporary file in `/etc/branchleft` created exclusively with mode `0600`, owner
@@ -96,6 +96,14 @@ asked with `getpass`; nothing else changes; the file is replaced atomically as a
 the key name and the byte length of the new value, to catch a truncated paste, and never the
 value. Do not run the fill step with `--replace` between a `--set` and the apply that delivers it:
 the fill reads the live files, which still hold the old value.
+
+`--set tenant_compose_stacks` is the one `--set` that asks nothing: it reads the stacks from the
+live files exactly as the fill does, and changes that key only. Every other key of the existing
+file is carried over as it stands. This is the command for an app1 whose file already holds other
+keys, and above all one that holds a key with no live source (one that was only ever typed, such
+as `deploy_slot_keys_slots`). `--replace` is not that command: the fill never reads the old file,
+so it asks for such a key again and writes nothing if it is not answered, and a tool that does not
+know the key writes a file without it. If no stack can be read, nothing is changed.
 
 Output is key names in three lists (filled from live, typed, still missing), the unusable live
 sources by file and key, and the path written. A failure prints the exception class, never its

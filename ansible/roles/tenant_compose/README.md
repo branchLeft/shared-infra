@@ -248,8 +248,10 @@ The wiring has three requirements:
   root-only file (`/etc/branchleft/host-inputs.json`, root:root, `0600`; the file's shape is in
   `ansible/roles/host_inputs/README.md`). The role takes them as an argument with no default, so a
   host without the key stops at `host_inputs[missing-key]` before any role runs.
-  `ansible/tools/seed_host_inputs.py --host app1 --replace` fills the key from the tenants' live
-  files, so the first apply changes no file.
+  `ansible/tools/seed_host_inputs.py --host app1 --set tenant_compose_stacks` fills the key from
+  the tenants' live files and leaves every other key of the file as it was, so the first apply
+  changes no file. Do not use `--replace` on a file that already holds keys with no live source (it
+  rebuilds the whole file and would ask for them again).
 
 Named limits of this wiring:
 
@@ -267,6 +269,32 @@ Named limits of this wiring:
 In a plan (check mode) the role reads everything it needs and says, in a line, which stacks it
 would restart and which tenants' volumes it would make; the restart, the volume program and the
 unit's state are not run, and the plan says so.
+
+### Rotating a tenant secret or changing its compose
+
+After the first apply, the role is the only writer of a tenant's files. Every gated or nightly
+apply writes the text in `host-inputs.json` over `/etc/branchleft/<slug>.env` and
+`/opt/branchleft/<slug>/compose.yml`, and restarts the stack if they differ. So an edit made on the
+host to either file, however it was made, is put back by the next apply, and the stack restarts on
+the old value. The plan job hides the secret's diff, so the revert shows only as "changed".
+
+A rotation, or a change to a compose file, must therefore go through `host-inputs.json`, in one
+sitting, as root on app1:
+
+1. Change the live file (`/etc/branchleft/<slug>.env` or `/opt/branchleft/<slug>/compose.yml`).
+2. At once, run the command below. It reads every tenant's live files again, changes that key only,
+   and prints tenant names and never a text.
+3. Only then let an apply run. It finds the file and the host agree, and restarts that one stack
+   once, because the stamp on the host is not the stamp of the new text.
+
+```text
+python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host app1 --set tenant_compose_stacks
+```
+
+If an apply runs between steps 1 and 2 it writes the old text back, and step 2 would then seed the
+old text too; check the file is as you left it before you seed. Never use `--replace` for this: it
+rebuilds the whole file, and a key that only ever had a typed value (such as
+`deploy_slot_keys_slots`) is asked for again, or lost if the tool run does not know it.
 
 ## How to change it safely
 
