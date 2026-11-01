@@ -3,12 +3,12 @@
 # role's own variables (the role's variables outrank it), and a task's vars cannot take a
 # templated dictionary, so each case here gives its variables to the step in its own task.
 # The first is the control: the inputs as they are must be accepted. Every other case stops
-# before it changes the host: a refused input comes first, and a download whose checksum
-# does not match leaves the file it was to replace as it was.
+# before it changes the host: a refused input comes first, and the vendored-file check
+# reads only.
 #
-# The checksum cases pass a checksum that is not any file's, so they refuse whatever the
-# pins are bumped to. The cases are skipped by Molecule's idempotence step (the tag), and a
-# plan makes no change, so a check run skips them.
+# The pin cases pass a pin that is not any file's, so they refuse whatever the pins are
+# bumped to. The cases are skipped by Molecule's idempotence step (the tag), and a plan
+# makes no change, so a check run skips them.
 - name: Accept the inputs as they are
   hosts: all
   gather_facts: false
@@ -43,30 +43,6 @@
           ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
           vars:
             expect_phrase: 'must be a full 40-character'
-
-- name: Refuse a base URL that carries a credential
-  hosts: all
-  gather_facts: false
-  tags: [molecule-idempotence-notest]
-  tasks:
-    - name: Prove a credential in the URL is refused
-      when: not ansible_check_mode
-      block:
-        - name: Run the input checks with a credential in the base URL
-          ansible.builtin.include_role:
-            name: branchleft.demo1_egress_spool
-            tasks_from: _inputs.yml
-          vars:
-            demo1_egress_spool_source_base_url: https://someone:not-a-real-secret@example.invalid/path
-
-        - name: Fail if the credential was accepted
-          ansible.builtin.fail:
-            msg: The role accepted a credential in the base URL.
-      rescue:
-        - name: Assert the refusal was the one this case is for
-          ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
-          vars:
-            expect_phrase: 'must be a plain https URL'
 
 - name: Refuse a file list that lacks a file
   hosts: all
@@ -170,62 +146,92 @@
           vars:
             expect_phrase: 'is missing or is not a regular file owned by root'
 
-- name: Refuse an egress program whose checksum does not match
+# The three files are the role's own copies, held to their pinned sha256 on the machine
+# that runs the role before anything is written to the host. The control comes first: the
+# copies as they are, against the pins as they are, are accepted. Without it, a check that
+# refused every file would pass the cases after it. Each case then gives one file a pin
+# that is not any file's, and the refusal must name that file and no other.
+- name: Accept the vendored files against their pins
   hosts: all
   gather_facts: false
   tags: [molecule-idempotence-notest]
   tasks:
-    - name: Prove a download that does not match its pin is refused
+    - name: Run the vendored-file check with the role's own pins
+      ansible.builtin.include_role:
+        name: branchleft.demo1_egress_spool
+        tasks_from: _vendored.yml
+      when: not ansible_check_mode
+
+- name: Refuse an egress program whose pin does not match
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  tasks:
+    - name: Read the role's own pins
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../defaults/main.yml'
+        name: converge_defaults
+      when: not ansible_check_mode
+
+    - name: Prove a file that does not match its pin is refused
       when: not ansible_check_mode
       block:
-        - name: Install the egress program against a checksum that is not its own
+        - name: Run the vendored-file check against a pin that is not the egress program's own
           ansible.builtin.include_role:
             name: branchleft.demo1_egress_spool
-            tasks_from: _egress.yml
+            tasks_from: _vendored.yml
           vars:
-            demo1_egress_spool_files:
-              - path: demo-host/provision/branchleft_demo_egress.sh
-                sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-              - path: demo-host/provision/branchleft-demo-egress.service
-                sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-              - path: render-core/test/golden/mail-spool-compose.demo1.yml
-                sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+            demo1_egress_spool_files: >-
+              {{ (converge_defaults.demo1_egress_spool_files | rejectattr('path', 'equalto', 'demo-host/provision/branchleft_demo_egress.sh') | list)
+              + [{'path': 'demo-host/provision/branchleft_demo_egress.sh',
+              'sha256': '0000000000000000000000000000000000000000000000000000000000000000'}] }}
 
-        - name: Fail if the download was accepted
+        - name: Fail if the file was accepted
           ansible.builtin.fail:
             msg: The role accepted an egress program that does not match its pin.
       rescue:
-        - name: Assert the refusal was the one this case is for
-          ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
-          vars:
-            expect_phrase: 'did not match'
+        - name: Assert the refusal named the egress program and no other file
+          ansible.builtin.assert:
+            that:
+              - "'demo-host/provision/branchleft_demo_egress.sh in the role' in (ansible_failed_result | string)"
+              - "'does not match its pin' in (ansible_failed_result | string)"
+              - "'mail-spool-compose.demo1.yml in the role' not in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed for a reason other than the pin of the egress program.
 
-- name: Refuse a Compose file whose checksum does not match
+- name: Refuse a Compose file whose pin does not match
   hosts: all
   gather_facts: false
   tags: [molecule-idempotence-notest]
   tasks:
-    - name: Prove a Compose download that does not match its pin is refused
+    - name: Read the role's own pins
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../defaults/main.yml'
+        name: converge_defaults
+      when: not ansible_check_mode
+
+    - name: Prove a Compose file that does not match its pin is refused
       when: not ansible_check_mode
       block:
-        - name: Place the Compose file against a checksum that is not its own
+        - name: Run the vendored-file check against a pin that is not the Compose file's own
           ansible.builtin.include_role:
             name: branchleft.demo1_egress_spool
-            tasks_from: _compose.yml
+            tasks_from: _vendored.yml
           vars:
-            demo1_egress_spool_files:
-              - path: demo-host/provision/branchleft_demo_egress.sh
-                sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-              - path: demo-host/provision/branchleft-demo-egress.service
-                sha256: '0000000000000000000000000000000000000000000000000000000000000000'
-              - path: render-core/test/golden/mail-spool-compose.demo1.yml
-                sha256: '0000000000000000000000000000000000000000000000000000000000000000'
+            demo1_egress_spool_files: >-
+              {{ (converge_defaults.demo1_egress_spool_files | rejectattr('path', 'equalto', 'render-core/test/golden/mail-spool-compose.demo1.yml') | list)
+              + [{'path': 'render-core/test/golden/mail-spool-compose.demo1.yml',
+              'sha256': '0000000000000000000000000000000000000000000000000000000000000000'}] }}
 
-        - name: Fail if the download was accepted
+        - name: Fail if the file was accepted
           ansible.builtin.fail:
             msg: The role accepted a Compose file that does not match its pin.
       rescue:
-        - name: Assert the refusal was the one this case is for
-          ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
-          vars:
-            expect_phrase: 'did not match'
+        - name: Assert the refusal named the Compose file and no other file
+          ansible.builtin.assert:
+            that:
+              - "'render-core/test/golden/mail-spool-compose.demo1.yml in the role' in (ansible_failed_result | string)"
+              - "'does not match its pin' in (ansible_failed_result | string)"
+              - "'branchleft_demo_egress.sh in the role' not in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed for a reason other than the pin of the Compose file.

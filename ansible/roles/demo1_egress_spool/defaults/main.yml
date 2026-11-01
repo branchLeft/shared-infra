@@ -3,13 +3,15 @@
 # every value below has a default, and the pinned files are public.
 
 # The one home of the egress program, its unit and the rendered Compose file is
-# branchLeft/ghost-platform. They are downloaded from this commit, never copied
-# into this repository, and each file is held to the sha256 below. Bump the
-# commit and every checksum in one change: a checksum that does not match the
-# file at the commit fails the download. This role is the only pin of the
-# egress program and its unit in this repository.
+# branchLeft/ghost-platform. This role carries a copy of each under
+# files/ghost-platform, at the same paths, taken from the commit below, and the
+# host takes them from the signed commit CI pushes to it; the host never fetches
+# them from anywhere. Each file is held to the sha256 below, on the machine that
+# runs the role, before the role writes anything to the host. Bump the commit,
+# the files and every checksum in one change (README, "Vendored files"): a copy
+# that does not match its pin stops the role before it writes. This role is the
+# only pin of the egress program and its unit in this repository.
 demo1_egress_spool_source_sha: 19622ee9c88bf918949f675a85897cfb64c65a24
-demo1_egress_spool_source_base_url: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ demo1_egress_spool_source_sha }}'
 
 # The three files, one path from the repository root and one sha256 each. The
 # Compose file is the committed golden of the renderer: the image digest, the

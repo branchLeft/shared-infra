@@ -6,8 +6,11 @@
 # host's trust file (pull_trigger_bundle_hosts in roles/pull_trigger/vars/main.yml is the one
 # place that says so). That sending arrives with shared-infra#511, not yet merged: until it
 # lands no bundle reaches the host, and a pull-mode check against demo1 fails the run. The
-# broker's own install (the broker_deploy role) comes first on the
-# host and is not applied from here: its inputs are the owner's built bundle and public key,
+# two demo1 roles carry the files they pin (their files/ghost-platform) and set the spool's
+# Compose service never to pull, so no role reaches GitHub or a container registry;
+# ansible/checks/test_demo1_no_github_fetch.py holds that. The broker's own install (the
+# broker_deploy role) comes first on the host and is not applied from here: its inputs are
+# the owner's built bundle and public key,
 # which have no home in a pushed commit yet, and applying it from this playbook would
 # repoint a broker the owner installed by hand. demo1_build checks, read-only, that
 # broker_deploy has run, and refuses the host when it has not.

@@ -182,6 +182,39 @@
         - [systemctl, start, 'branchleft-compose@mail-spool.service']
       expect: 'is not active, or is not enabled for boot'
 
+# The image the spool starts. The host has no route to a registry and never pulls, so the
+# image the pin file names must already be on it, and the step refuses the start when it is
+# not. The control is the host as delivered (the image is there); the cases take the image
+# away, and move the pin file to an image that is not there.
+- name: Accept the spool's image as on the host
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the image the pin file names is on the host
+      tasks_from: _image.yml
+      accepted: true
+
+- name: Refuse a spool whose image is not on the host
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the host holds no image
+      tasks_from: _image.yml
+      standin:
+        images: []
+      expect: 'The spool was not started'
+
+- name: Refuse a pin file that names an image that is not on the host
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the pin file names an image the host does not hold
+      tasks_from: _image.yml
+      files:
+        - path: /etc/branchleft/mail-spool.image.env
+          content: "IMAGE=ghcr.io/branchleft/mailgun-shim@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\n"
+      expect: 'is not on this host'
+
 # The loaded egress policy, read from the kernel. The control, then one rule taken away or
 # put out of order at a time. A restart of the egress unit rebuilds both policy chains and
 # puts back a jump that is absent (it does not move one that is present, which is why the
@@ -499,6 +532,21 @@
         - path: /opt/branchleft/mail-spool/compose.override.yml
           regexp: '(    image: .*)$'
           replace: "\\1\n    ports:\n      - '0.0.0.0:2525:2525'"
+      expect: 'is not the file the role writes'
+
+# The host has no route to a registry, and the shared unit pulls on every start, so an
+# override that does not say pull_policy never would fail the start. The control is the
+# accepted case above, with the override as the role writes it.
+- name: Refuse an override that lets Compose pull
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the override no longer says pull_policy never
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.override.yml
+          regexp: '\n    pull_policy: never'
+          replace: ''
       expect: 'is not the file the role writes'
 
 - name: Refuse a Compose file that publishes on every address

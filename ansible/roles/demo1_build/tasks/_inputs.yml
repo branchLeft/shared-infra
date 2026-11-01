@@ -1,6 +1,6 @@
 ---
 # Internal to the role: included first from main.yml. The inputs are refused
-# before anything is downloaded or written. The argument spec has already run;
+# before anything is checked against the host or written. The argument spec has already run;
 # it coerces a wrong type rather than rejecting it, so these reject the shapes.
 - name: Refuse a release that is not pinned to a commit and a checksum for every program
   ansible.builtin.assert:

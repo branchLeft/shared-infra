@@ -94,7 +94,11 @@
         quiet: true
         fail_msg: The override beside the Compose file, or the drop-in beside the spool's unit, is not as expected.
       vars:
-        expected_override: "services:\n  mail-spool:\n    image: ${IMAGE:?the image pin file /etc/branchleft/mail-spool.image.env names no image}\n"
+        expected_override: |
+          services:
+            mail-spool:
+              image: ${IMAGE:?the image pin file /etc/branchleft/mail-spool.image.env names no image}
+              pull_policy: never
         expected_dropin: "[Unit]\nRequires=branchleft-demo-egress.service\nAfter=branchleft-demo-egress.service\n"
 
     # What the container reports is what the stand-in docker was started with. The wrapper's
@@ -258,3 +262,9 @@
           - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker compose down') | list | length == 0
         quiet: true
         fail_msg: The role made the volume more than once, restarted the spool when nothing it owns had changed, or took it down.
+
+    # The role ran with GitHub and its registry unreachable (molecule.yml): the files came
+    # from the role's own copies, and the shared unit's `compose pull`, which the stand-in
+    # docker fails unless the override says pull_policy never, did not stop the start.
+    - name: Assert that GitHub and its registry were unreachable
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../demo1_build/molecule/default/tasks/blocked_outbound.yml'
