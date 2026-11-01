@@ -430,14 +430,14 @@ def environment_findings(
             "run that names a missing environment creates it with no protection"
         ]
     findings: list[str] = []
-    # Administrators may release a blocked run without a reviewer unless this is exactly False,
-    # and a new environment answers True. A missing key is a finding, so the probe proves the
-    # ruled value and not an absence of the field.
-    if described.get("can_admins_bypass") is not False:
+    # The administrator bypass must be ticked, so the owner is never blocked from taking an apply.
+    # Ruling: https://github.com/branchLeft/workspace/issues/2870#issuecomment-6564958314
+    # Only exactly True passes; a missing key or any other value is a finding.
+    if described.get("can_admins_bypass") is not True:
         findings.append(
-            f"environment {name} lets administrators bypass its protection rules: an administrator "
-            "whose merge started a run could then release it without the approval path, so 'Allow "
-            "administrators to bypass configured protection rules' must be off"
+            f"environment {name} does not let administrators bypass its protection rules: 'Allow "
+            "administrators to bypass configured protection rules' must be on, so the owner is "
+            "never blocked from an administrator bypass to take an apply"
         )
     rules = described.get("protection_rules")
     reviewer_rules = [
