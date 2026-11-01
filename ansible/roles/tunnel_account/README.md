@@ -3,13 +3,13 @@
 The reverse tunnel that publishes db1's MySQL on the replica host's loopback.
 db1 dials out; the replica never dials in. One role, five entry points:
 
-| Entry point | Host         | What it does                                                                                                                  |
-| ----------- | ------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `main`      | db1          | db1 only; what a pulled playbook applies. It runs `db1` and nothing of `replica` or `teardown`.                               |
-| `db1_key`   | db1          | Creates the tunnel account (no login shell) and db1's ed25519 key, once. Prints the public half. Reads no input.              |
-| `db1`       | db1          | Runs `db1_key`, reads its three input files, pins the replica host key, writes the target file, installs the unit, starts it. |
-| `replica`   | replica host | Reads its two input files, creates the account, writes the sshd drop-in and the authorized key, checks sshd, reads it back.   |
-| `teardown`  | either       | Removes the tunnel from the host it runs on. Needs `tunnel_account_teardown_confirm: true`.                                   |
+| Entry point | Host         | What it does                                                                                                                                |
+| ----------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `main`      | db1          | db1 only; what db1's playbook will apply once wired. Not wired yet (see "Run order"). It runs `db1` and nothing of `replica` or `teardown`. |
+| `db1_key`   | db1          | Creates the tunnel account (no login shell) and db1's ed25519 key, once. Prints the public half. Reads no input.                            |
+| `db1`       | db1          | Runs `db1_key`, reads its three input files, pins the replica host key, writes the target file, installs the unit, starts it.               |
+| `replica`   | replica host | Reads its two input files, creates the account, writes the sshd drop-in and the authorized key, checks sshd, reads it back.                 |
+| `teardown`  | either       | Removes the tunnel from the host it runs on. Needs `tunnel_account_teardown_confirm: true`.                                                 |
 
 The ports (13306, 3306, 9105, 9104) and paths are constants in `vars/main.yml`,
 not inputs. A caller cannot change them. The play that calls the role may run with
@@ -64,18 +64,26 @@ each input, as text, as base64 and as sha1. See "Tests".
 
 The live run is the owner's, through the gated apply. No agent applies it.
 
-Once wired, db1's playbook (`playbooks/db1.yml`) applies this role as its last
-entry, a plain `role:` line with no variable and no `tasks_from` (the pull's rule
-R2). That entry is `main`, which is db1's half. The replica half is not wired: the
-replica host is not enrolled in the pull, so the owner runs it by hand.
+The role is not wired into any playbook yet. `playbooks/db1.yml` does not apply it.
+Wiring is a later change, its own PR, and it waits until db-t1 exists (ISSUE
+branchLeft/workspace#1634) and db-t1's host key is placed on db1. Once wired, db1's
+playbook (`playbooks/db1.yml`) applies this role as its last entry, a plain `role:`
+line with no variable and no `tasks_from` (the pull's rule R2). That entry is
+`main`, which is db1's half. The replica half is not wired: the replica host is not
+enrolled in the pull, so the owner runs it by hand.
+
+When the wiring is merged, a missing input fails the plan for every host, not only
+db1, because the pull runs the four hosts' plans together. So the inputs must be
+placed before the wiring merges, not before a gated run.
+
+Once wired, the run order is:
 
 1. Operator places the three db1 input files (`replica_host`,
-   `replica_host_key`, `db1_subnet_prefix`) on db1 before the gated run that
-   includes the wiring. `replica_host_key` is the replica's
-   `/etc/ssh/ssh_host_ed25519_key.pub` (see "Host key"). Without the files the run
-   fails at this role, the last one, by design, after every earlier db1 role has
-   applied. A missing input is never skipped, so a green drift check cannot hide an
-   absent tunnel.
+   `replica_host_key`, `db1_subnet_prefix`) on db1. `replica_host_key` is the
+   replica's `/etc/ssh/ssh_host_ed25519_key.pub` (see "Host key"). Without the files
+   the run fails at this role, the last one, by design, after every earlier db1 role
+   has applied. A missing input is never skipped, so a green drift check cannot hide
+   an absent tunnel.
 2. The gated run on db1 applies `main`: it creates the account and db1's key
    (once), reads the three inputs and starts the tunnel. Copy the public key it
    prints.
@@ -83,10 +91,10 @@ replica host is not enrolled in the pull, so the owner runs it by hand.
    on the replica host.
 4. Replica host, by hand: `tasks_from: replica`.
 
-Before the role is wired, or on a host that is not under the pull, the halves are
-run by hand with `tasks_from: db1_key`, `db1` and `replica`. `db1_key` reads no
-input, so it needs nothing placed. `db1` (and so `main`) runs `db1_key` first;
-`regenerate: never` keeps the existing key.
+Until then, and on a host that is not under the pull, the halves are run by hand
+with `tasks_from: db1_key`, `db1` and `replica`. `db1_key` reads no input, so it
+needs nothing placed. `db1` (and so `main`) runs `db1_key` first; `regenerate: never`
+keeps the existing key.
 
 ## The sshd change on the replica
 
