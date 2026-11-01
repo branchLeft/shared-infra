@@ -4,15 +4,17 @@
 # After them, the roles on edge1's list in checks/host_roles.yml that this playbook wires:
 # the loader of the host's private inputs (host_inputs, first: check_enrolment R11), which reads
 # the one root-only file the owner places on the host and stops the run if it is missing or unsafe,
-# the host baseline, the pipeline account the trigger is reached through, then the deploy
+# the host baseline, then the NAT gateway (egress_nat, with egress_nat_gateway_enabled on: edge1
+# is the estate's one gateway, and the switch is pinned to edge1 alone in checks/check_enrolment.py),
+# the pipeline account the trigger is reached through, then the deploy
 # tooling (as class gateway, which installs the common targets only), then the edge stack. The
+# gateway follows the baseline because its reconciler needs Docker and iptables from it. The
 # edge stack needs Docker from the baseline and the compose unit and deploy wrapper from the deploy
 # tooling. After it come the three monitoring roles, so a failure in them cannot hold the edge
 # delivery back: the node exporter and the SNDS collector (exporters_and_collectors), the pager
 # (ntfy_pager), and the monitoring stack, last (monitoring_stack): the stack hashes the pager's
 # secrets file and renderer and decides the one restart of its unit, and the SNDS textfile
 # directory the collectors create should be in place before that restart.
-# egress_nat is on edge1's list and is not applied here.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
@@ -25,6 +27,7 @@
   vars:
     enrolled_host: edge1
     deploy_tooling_host_class: gateway
+    egress_nat_gateway_enabled: true
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/edge1.yml'
@@ -43,6 +46,7 @@
     - role: ../roles/pull_trigger # noqa: role-name[path]
     - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_login # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/edge_stack # noqa: role-name[path]
