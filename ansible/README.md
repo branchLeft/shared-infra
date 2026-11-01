@@ -6,7 +6,7 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. Its real hosts are `edge1`, `ops1`, `app1`, `db1` and `demo1`. Each has a playbook
+the skeleton. Its real hosts are `edge1`, `mx1`, `ops1`, `app1`, `db1` and `demo1`. Each has a playbook
 enrolled in the gated pull, except that `demo1` takes its commit by push and never fetches.
 `edge1` and `ops1` apply `roles/ansible_runtime` and
 `roles/pull_trigger`, then `roles/host_inputs` (the loader of the host's private inputs, which goes
@@ -23,6 +23,8 @@ reads). `playbooks/app1.yml` applies the two pull roles, then
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
 the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, then
 `roles/db1_backup_timers`; `roles/db1_grants` is left out of it.
+`playbooks/mx1.yml` applies the two pull roles only (`roles/ansible_runtime` and
+`roles/pull_trigger`), with no `roles/host_inputs` and no `roles/host_baseline`.
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
 `roles/broker_deploy`.
@@ -30,25 +32,25 @@ The other trees hold only what those hosts need.
 
 ## Layout
 
-| Path                  | What it is                                                             |
-| --------------------- | ---------------------------------------------------------------------- |
-| `role_skeleton/`      | The skeleton `ansible-galaxy role init --role-skeleton` copies.        |
-| `roles/`              | One directory per role. `example_config` is the worked example.        |
-| `patterns/`           | One directory per pattern, each a role the harness runs like `roles/`. |
-| `harness/`            | The test harness, its unit tests and nothing else.                     |
-| `requirements.in`     | The seven tools chosen on purpose, exact pins (ANS-4).                 |
-| `requirements.txt`    | The hash-locked toolchain compiled from it, collections included.      |
-| `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).    |
-| `checks/`             | The pin, enrolment, delivery, role and path checks, with tests.        |
-| `tools/`              | The record a new host's first boot is built from, and its tests.       |
-| `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1. |
-| `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |
-| `playbooks/includes/` | The shared pull values and refusals, each defined once.                |
-| `trust/`              | One signer file per host under the pull, loaded only by its playbook.  |
-| `owner_vars/`         | The owner's values for a host's roles, one file per host, owner-held.  |
-| `pyproject.toml`      | The Python floor for the harness: version, mypy strict, ruff (ANS-2).  |
-| `../.ansible-lint`    | The lint floor, production profile (ANS-5). Not editable by a role PR. |
-| `../.yamllint`        | The YAML floor (ANS-6). Not editable by a role PR.                     |
+| Path                  | What it is                                                                  |
+| --------------------- | --------------------------------------------------------------------------- |
+| `role_skeleton/`      | The skeleton `ansible-galaxy role init --role-skeleton` copies.             |
+| `roles/`              | One directory per role. `example_config` is the worked example.             |
+| `patterns/`           | One directory per pattern, each a role the harness runs like `roles/`.      |
+| `harness/`            | The test harness, its unit tests and nothing else.                          |
+| `requirements.in`     | The seven tools chosen on purpose, exact pins (ANS-4).                      |
+| `requirements.txt`    | The hash-locked toolchain compiled from it, collections included.           |
+| `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).         |
+| `checks/`             | The pin, enrolment, delivery, role and path checks, with tests.             |
+| `tools/`              | The record a new host's first boot is built from, and its tests.            |
+| `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1, mx1. |
+| `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).              |
+| `playbooks/includes/` | The shared pull values and refusals, each defined once.                     |
+| `trust/`              | One signer file per host under the pull, loaded only by its playbook.       |
+| `owner_vars/`         | The owner's values for a host's roles, one file per host, owner-held.       |
+| `pyproject.toml`      | The Python floor for the harness: version, mypy strict, ruff (ANS-2).       |
+| `../.ansible-lint`    | The lint floor, production profile (ANS-5). Not editable by a role PR.      |
+| `../.yamllint`        | The YAML floor (ANS-6). Not editable by a role PR.                          |
 
 ## Make a new role
 
@@ -573,14 +575,17 @@ oversight. Each is a decision the standard assigns to later work.
 - **The standard's own checks.** Of the checks the standard's check plans
   describe, the scenario limits and the pins are scripted. No `shell` tasks and
   no loosened lint file are still review.
-- **Inventories.** The trees under `inventories/` hold one host, and their
+- **Inventories.** The trees under `inventories/` hold three hosts, edge1, mx1 and db1, and their
   layout is a proposal.
 - **A required check.** The Ansible job runs on every pull request, so it can be
   required (CI-14), but making it required is a repository ruleset change and
   belongs to the owner. Until it is done a red Ansible job does not block a
   merge on its own.
-- **Delivery.** Each of edge1, db1, app1, ops1 and demo1 has a playbook under `playbooks/`.
-  edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
+- **Delivery.** Each of edge1, mx1, db1, app1, ops1 and demo1 has a playbook under `playbooks/`.
+  edge1's first apply is the one-time root bootstrap and then the gated pull. mx1's playbook and
+  trust file are enrolled, but its first-apply route is not yet defined: the one-time bootstrap
+  record and its tool are fixed to edge1, so nothing can bootstrap mx1 from main today. The board
+  item "Generalise the pull bootstrap to take a host" tracks it. db1's
   playbook applies the same two pull roles, then `roles/host_inputs`, then `roles/host_baseline`, then `roles/db1_stack`, then `roles/db1_backup_timers`; `roles/host_inputs` refuses the
   run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
   its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. app1's

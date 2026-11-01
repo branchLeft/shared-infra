@@ -50,7 +50,11 @@ class Sabotage(unittest.TestCase):
     def _assert_rule(self, rule: str) -> list[str]:
         findings = check(self.root)
         self.assertTrue(
-            any(finding.startswith(rule) for finding in findings),
+            # R1 must not be satisfied by R10 or R11: the rule name ends at a non-digit.
+            any(
+                finding.startswith(rule) and not finding[len(rule) :][:1].isdigit()
+                for finding in findings
+            ),
             f"expected a {rule} finding, got {findings}",
         )
         return findings
@@ -62,7 +66,7 @@ class Sabotage(unittest.TestCase):
 
     # R1: an empty enrolled set fails, it does not pass over nothing.
     def test_r1_no_enrolled_playbook(self) -> None:
-        for host in ("edge1", "ops1", "app1", "db1", "demo1"):
+        for host in ("edge1", "mx1", "ops1", "app1", "db1", "demo1"):
             (self.ansible / "playbooks" / f"{host}.yml").unlink()
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
