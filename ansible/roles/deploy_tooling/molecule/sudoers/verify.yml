@@ -1,0 +1,20 @@
+---
+# The sudoers drop-in cases, on their own: the drop-in is verified and never written, and
+# the role refuses a drop-in that is owned, grouped, moded, linked or worded wrongly. Each
+# one applies the role, so together they are the largest part of the cases' time. The case
+# file is the default scenario's, run from there: it is not copied, and
+# ansible/checks/test_deploy_tooling_cases_covered.py fails if it is run by two scenarios
+# or by none.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the cases are built from the same constants the role
+  # installs.
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    - name: Apply the role to a host of class app, standard variant, and read it back
+      ansible.builtin.include_tasks: ../default/tasks/start_standard.yml
+
+    - name: Case, the sudoers drop-in is verified and never written
+      ansible.builtin.include_tasks: ../default/tasks/case_sudoers.yml

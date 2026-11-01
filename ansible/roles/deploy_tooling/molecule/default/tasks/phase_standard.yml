@@ -1,40 +1,27 @@
 ---
-- name: Apply the role to a host of class app, standard variant
-  ansible.builtin.include_tasks: run_role.yml
-  vars:
-    run_class: app
-    run_variant: standard
-
-- name: Assert the host is as the role leaves it
-  ansible.builtin.include_tasks: assert_applied.yml
-  vars:
-    chain_variant: standard
+- name: Apply the role to a host of class app, standard variant, and read it back
+  ansible.builtin.include_tasks: start_standard.yml
 
 # Each case below changes the instance, runs the role or its module, and puts
 # the instance back. A case that fails to restore fails its own assertion.
+#
+# Four cases are not here: they are the verify plays of the other scenarios of this
+# role, to keep each shard well inside its time limit. The retry case waits on the
+# compose unit's own timers (the retry scenario); the sudoers cases and the parent
+# directory and chain cases apply the role the most often (the sudoers and
+# chains_parents scenarios). Every case is in exactly one scenario:
+# ansible/checks/test_deploy_tooling_cases_covered.py fails otherwise.
 - name: Case, a target with the wrong owner, group and mode is repaired
   ansible.builtin.include_tasks: case_targets_repaired.yml
 
 - name: Case, a link or a directory where a file belongs
   ansible.builtin.include_tasks: case_target_kinds.yml
 
-- name: Case, the directory that holds a target is root's to change alone
-  ansible.builtin.include_tasks: case_parent_directories.yml
-
-- name: Case, the sudoers drop-in is verified and never written
-  ansible.builtin.include_tasks: case_sudoers.yml
-
 - name: Case, the role never touches a compose instance
   ansible.builtin.include_tasks: case_compose_probe.yml
 
-- name: Case, the compose unit retries a failed start and a deploy still sees the failure
-  ansible.builtin.include_tasks: case_compose_retry.yml
-
 - name: Case, a changed policy program is applied by the handler
   ansible.builtin.include_tasks: case_program_changed.yml
-
-- name: Case, the read-back against the firewall chains
-  ansible.builtin.include_tasks: case_chain.yml
 
 - name: Case, the policy follows a restart of docker.service
   ansible.builtin.include_tasks: case_docker_restart.yml

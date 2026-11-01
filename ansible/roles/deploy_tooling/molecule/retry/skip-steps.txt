@@ -1,0 +1,13 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# This scenario applies the role once and runs the one case that waits on the compose
+# unit's own timers (verify.yml): about five minutes of deliberate waiting, which is
+# why it is a shard of its own. The steps that plan, and the second apply that checks
+# idempotence, are the default scenario's, which runs all five of them and the other
+# cases. Waiting alongside the default scenario's cases is what took its shard past
+# half an hour.
+check-fresh
+idempotence
+check-configured
+molecule-check

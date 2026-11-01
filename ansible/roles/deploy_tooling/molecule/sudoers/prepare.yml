@@ -1,0 +1,5 @@
+---
+# The same host the default scenario starts from. Imported, not copied, so the
+# scaffolding has one home.
+- name: Prepare the instance as the default scenario does
+  ansible.builtin.import_playbook: ../default/prepare.yml
