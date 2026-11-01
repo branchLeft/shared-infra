@@ -32,7 +32,8 @@ allowed, and whether a step may run at all.
 
 It does not generate or choose a secret, create the sign-in service's token, restart a
 service, write the deploy wrapper's pin, apply itself to a host, or wire itself into a
-host's playbook or into the gated pull's step allow-list. Wiring a host is separate work.
+host's playbook or into the gated pull's step allow-list. Wiring is separate work, and for
+ops1 it is done (`playbooks/ops1.yml`, `owner_vars/ops1.yml`, `checks/host_roles.yml`).
 
 ## Interface
 
@@ -187,9 +188,11 @@ Only through the gated pull. A plain apply of the host's playbook delivers the i
 directory. A step is requested with the commit, the step id and the step's word, over the
 step key, and the pull runs the playbook with `--tags control_plane_db_<id> -e
 control_plane_db_step=<id>`. The host's step allow-list names the id, this role's tag and
-the word. Adding the role to the host's playbook, the host's role list, the allow-list
-and the inventory values is the wiring change, not this one. Until it is done no step
-can be requested on any host.
+the word. For ops1 the role is in the host's playbook (last, after `control_plane`), on the
+host's role list, and the allow-list is in `owner_vars/ops1.yml`. The applications image
+digest and the identity hostnames are not set, so every step refuses by name until a
+later owner change sets them. No step can be requested until the sender and the owner's
+one-time host steps exist (see the pull_trigger README, "Step requests").
 
 ## How to change it safely
 
