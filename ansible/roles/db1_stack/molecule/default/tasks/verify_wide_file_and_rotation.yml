@@ -1,6 +1,6 @@
 ---
 # The wide file and the rotation, included by verify.yml in the `rotation` scenario
-# only (ws#2865). Moved out of verify.yml as they were. They apply the role to a host
+# only. Moved out of verify.yml as they were. They apply the role to a host
 # that holds an earlier release's wide file, and then rotate the password and put it
 # back, so the host ends as the converge left it.
 # ----- An earlier release left a wide file behind -----

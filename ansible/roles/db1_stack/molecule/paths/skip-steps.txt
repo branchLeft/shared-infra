@@ -4,8 +4,7 @@
 # This scenario applies the role once and runs the path cases against the configured
 # host (verify.yml, the part named paths). The steps that plan, and the second apply
 # that checks idempotence, are the default scenario's, which runs all eight steps. Running
-# every case in one verify took about twenty minutes (ws#2865).
+# every case in one verify took about twenty minutes.
 check-fresh
 idempotence
-check-configured
 molecule-check

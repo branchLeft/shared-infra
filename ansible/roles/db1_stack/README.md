@@ -173,7 +173,7 @@ this scenario runs on each pull request.
 ### The scenarios, and running one alone
 
 The cases are shared out between five scenarios, each its own shard in CI, because
-all of them in one verify took about twenty minutes (ws#2865). One verify.yml serves
+all of them in one verify took about twenty minutes. One verify.yml serves
 all five; the part of the cases it runs is the name Molecule gives the scenario
 (`MOLECULE_SCENARIO_NAME`), and `molecule/default/tasks/assert_parts.yml` fails the
 run when a part has no scenario directory with a `molecule.yml` and a `verify.yml`
@@ -236,7 +236,7 @@ time molecule verify -s paths
 The log of every play is `$MOLECULE_EPHEMERAL_DIRECTORY/ansible.log` and holds a time
 on each line; the time between two `TASK [` lines is the time of the first.
 
-What the first measurement (ws#2865) found, on the local Docker engine, and what was
+What the first measurement found, on the local Docker engine, and what was
 done about each:
 
 | Cause                                                                                                                     | Cost                                                          | What was done                                                                                                                            |
@@ -451,14 +451,14 @@ removal makes a named step fail with the message shown, and the file is restored
 afterwards. A control that does not make the test fail when it is removed is not
 claimed.
 
-Since ws#2865 the cases are shared out between scenarios (see "The scenarios"), so
+Since the split the cases are shared out between scenarios (see "The scenarios"), so
 "verify" in the tables below is the verify step of the scenario that holds the case:
 the refusal rows (the password, the downloads, the key pin, the toolchain, the image
 pin and the second compose files) in `refusals`; the rows for a directory or a link in
 the exporter file's place in `paths`; the rows for the wide file and the rotation in
 `rotation`; the rows for a changed repository file in `repository`. The content,
 order, source and log-scan rows, and the sentinel scan (ANS-16), are in every
-scenario. The sabotage of ws#2865 itself (deleting the close task, changing the
+scenario. The sabotage of this change itself (deleting the close task, changing the
 password anchor `\Z` to `$`, deleting `no_log` from the write task, and deleting a
 scenario's `molecule.yml`) each went red, then green again once reverted: the close
 task in `rotation`, the anchor in `refusals`, the write task's `no_log` in the sentinel

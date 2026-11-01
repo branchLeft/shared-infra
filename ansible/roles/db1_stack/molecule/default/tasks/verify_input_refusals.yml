@@ -1,6 +1,6 @@
 ---
 # The refusal cases of the password, the downloads, the key pin and the toolchain
-# packages, included by verify.yml in the `refusals` scenario only (ws#2865). Moved
+# packages, included by verify.yml in the `refusals` scenario only. Moved
 # out of verify.yml as they were: each case applies the role with one input made bad
 # and requires that the role stops at the named task. They apply the role once per case
 # and change nothing on the host. They are the largest share of the verify time, which

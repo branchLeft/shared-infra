@@ -1,5 +1,5 @@
 ---
-# The path cases, included by verify.yml in the `paths` scenario only (ws#2865).
+# The path cases, included by verify.yml in the `paths` scenario only.
 # Moved out of verify.yml as they were. Each case puts something in the exporter
 # file's place and applies the role, which is most of the verify time of this scenario.
 # ----- A path that Docker or an earlier release left in the way -----

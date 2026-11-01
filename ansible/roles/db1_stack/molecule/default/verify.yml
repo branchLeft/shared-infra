@@ -1,6 +1,6 @@
 ---
 # One verify.yml for every scenario of the role. The cases are shared out between
-# scenarios so that no shard takes more than a few minutes (ws#2865; README, "Timing
+# scenarios so that no shard takes more than a few minutes (README, "Timing
 # a run"). Each scenario applies the role in its converge, then runs this file, which
 # runs the part of the cases that carries the scenario's own name:
 #

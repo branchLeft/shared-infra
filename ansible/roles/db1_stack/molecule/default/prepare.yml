@@ -72,7 +72,7 @@
     # The container has no network, so every index refresh the role runs fails, and
     # the test relies on that (the repository-file cases). apt retries a failed fetch
     # and waits on each name lookup before it gives up, which made one failed refresh
-    # take about a minute, and a failed refresh runs in several cases (ws#2865). These
+    # take about a minute, and a failed refresh runs in several cases. These
     # two settings make it give up at once. The refresh still runs and still fails at
     # the same task; only the wait before it fails goes. Nothing in the role reads the
     # file, and it is in the instance only.
