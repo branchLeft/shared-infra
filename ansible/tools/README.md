@@ -103,7 +103,11 @@ file is carried over as it stands. This is the command for an app1 whose file al
 keys, and above all one that holds a key with no live source (one that was only ever typed, such
 as `deploy_slot_keys_slots`). `--replace` is not that command: the fill never reads the old file,
 so it asks for such a key again and writes nothing if it is not answered, and a tool that does not
-know the key writes a file without it. If no stack can be read, nothing is changed.
+know the key writes a file without it. If no stack can be read, nothing is changed. Nor is
+anything changed when a tenant would drop out: a slug the file already holds that the new read
+does not return, or a claimed tenant with no stack on the host (the fill leaves such a tenant out
+and says so; a write over an existing key refuses). The refusal names the slugs, never a text.
+There is no path yet to remove a tenant on purpose; a tenant stays listed.
 
 Output is key names in three lists (filled from live, typed, still missing), the unusable live
 sources by file and key, and the path written. A failure prints the exception class, never its

@@ -931,6 +931,66 @@ class StackTests(unittest.TestCase):
                 self.assertIn("no tenant stacks could be read", rig.err.getvalue())
                 self.assertEqual(before, rig.dest.read_bytes())
 
+    def remove_stack(self, rig: Rig, slug: str, files: Sequence[str] = ("all",)) -> None:
+        if "all" in files:
+            files = ("compose.yml", f"{slug}.env", f"{slug}.image.env")
+        for name in files:
+            path = rig.opt / slug / name if name == "compose.yml" else rig.cfg / name
+            path.unlink()
+
+    def test_set_of_the_stacks_refuses_when_a_tenant_the_file_holds_would_drop_out(self) -> None:
+        for label in ("claimed, stack gone", "no longer claimed"):
+            with self.subTest(label):
+                rig = Rig(self)
+                rig.seed_app1()
+                rig.put(tool.DEST_NAME, json.dumps(app1_document()))
+                before = rig.dest.read_bytes()
+                if label == "no longer claimed":
+                    rig.claims_text = "tenant-a=30901\n"
+                else:
+                    self.remove_stack(rig, "tenant-b")
+                self.assertEqual(1, rig.run("--host", "app1", "--set", STACKS_KEY))
+                self.assertIn("would drop out (1): tenant-b", rig.stdout)
+                self.assertIn("nothing was changed", rig.err.getvalue())
+                self.assertEqual(before, rig.dest.read_bytes())
+                self.assertNotIn("SENT-secret-tenant-b", rig.everything)
+
+    def test_set_of_the_stacks_refuses_a_claimed_tenant_with_no_stack_even_if_none_is_held(
+        self,
+    ) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        existing = dict(app1_document())
+        existing[STACKS_KEY] = []
+        rig.put(tool.DEST_NAME, json.dumps(existing))
+        before = rig.dest.read_bytes()
+        rig.claims_text = (rig.claims_text or "") + "tenant-c=30903\n"
+        self.assertEqual(1, rig.run("--host", "app1", "--set", STACKS_KEY))
+        self.assertIn("left out (1): tenant-c", rig.stdout)
+        self.assertEqual(before, rig.dest.read_bytes())
+
+    def test_set_of_the_stacks_with_one_stack_unusable_and_others_fine_changes_nothing(
+        self,
+    ) -> None:
+        # The file holds one tenant only, so the refusal here is the partial read's own and not
+        # the check that a held tenant would drop out.
+        for label in ("a file missing", "a file empty"):
+            with self.subTest(label):
+                rig = Rig(self)
+                rig.seed_app1()
+                existing = dict(app1_document())
+                existing[STACKS_KEY] = list_of(stacks_document())[:1]
+                rig.put(tool.DEST_NAME, json.dumps(existing))
+                before = rig.dest.read_bytes()
+                if label == "a file missing":
+                    self.remove_stack(rig, "tenant-b", ("tenant-b.env",))
+                else:
+                    rig.put("tenant-b.env", "  \n")
+                self.assertEqual(1, rig.run("--host", "app1", "--set", STACKS_KEY))
+                self.assertIn("no tenant stacks could be read", rig.err.getvalue())
+                self.assertEqual(before, rig.dest.read_bytes())
+                self.assertNotIn("SENT-secret-tenant-b", rig.everything)
+
     def test_a_tool_that_does_not_know_a_key_of_the_file_refuses_set_and_changes_nothing(
         self,
     ) -> None:

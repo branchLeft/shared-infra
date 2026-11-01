@@ -291,6 +291,13 @@ sitting, as root on app1:
 python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host app1 --set tenant_compose_stacks
 ```
 
+The command refuses, and writes nothing, when a tenant would drop out of the list: a slug already
+in the file that the new read does not return, or a claimed tenant with no stack on the host. It
+names the slugs and never a text. Without this the role would stop managing that tenant, silently.
+The tool has no path to remove a tenant on purpose; that is a later change, and until it exists a
+tenant stays listed (decommissioning is a different job, and the role never removes a stack). If a
+stack is unusable, mend its files and run the command again.
+
 If an apply runs between steps 1 and 2 it writes the old text back, and step 2 would then seed the
 old text too; check the file is as you left it before you seed. Never use `--replace` for this: it
 rebuilds the whole file, and a key that only ever had a typed value (such as

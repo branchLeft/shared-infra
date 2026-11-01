@@ -202,6 +202,10 @@ MESSAGES: Final[dict[str, str]] = {
     "no-value": "no value was given",
     "read-back": "the file was written but did not read back as written; inspect it",
     "no-stacks": "no tenant stacks could be read from the live files; nothing was changed",
+    "stacks-dropped": (
+        "a claimed tenant has no stack on the host, or a tenant the file holds would drop out; "
+        "nothing was changed"
+    ),
     "claims": "the volume program could not be run or did not list its claims",
 }
 REASONS: Final[dict[str, str]] = {
@@ -719,7 +723,24 @@ def size_of(value: Value) -> str:
 # The stacks are read from the live files, never typed, and only this key changes: every other key
 # of the existing file is carried over as it stands, so a key with no live source (one that was
 # only ever typed) is neither asked for again nor dropped.
-def read_stacks(ctx: Context) -> Value:
+def known_slugs(existing: Value | None) -> list[str]:
+    """The slugs the existing key names. Only a name of the slug's own shape is kept, so that a
+    malformed entry of the file is never printed."""
+    if not isinstance(existing, list):
+        return []
+    slugs: list[str] = []
+    for entry in existing:
+        slug = entry.get("slug") if isinstance(entry, dict) else None
+        if isinstance(slug, str) and SLUG_PATTERN.fullmatch(slug) and len(slug) <= SLUG_MAX_LENGTH:
+            slugs.append(slug)
+    return slugs
+
+
+# A write of the stacks never makes a tenant the role manages drop out: the role would stop
+# delivering that tenant's files without a word. It is refused when a claimed tenant has no stack
+# on the host (the fill leaves such a tenant out; a write over a file that exists does not), and
+# when a slug the file already holds is not in the new list. Only slug names are printed.
+def read_stacks(ctx: Context, existing: Value | None = None) -> Value:
     live = Live(ctx)
     state, value = live.lookup(SOURCES[STACKS_KEY][0])
     print(
@@ -732,6 +753,11 @@ def read_stacks(ctx: Context) -> Value:
         print(f"unusable live sources: {'; '.join(live.problems)}", file=ctx.out)
     if state != "found" or value is None:
         raise SeedError("no-stacks")
+    kept = set(live.seeded)
+    dropped = [slug for slug in known_slugs(existing) if slug not in kept]
+    if live.skipped or dropped:
+        print(f"tenants that would drop out ({len(dropped)}): {names(dropped)}", file=ctx.out)
+        raise SeedError("stacks-dropped")
     return value
 
 
@@ -739,7 +765,10 @@ def run_set(ctx: Context, host: str, key: str) -> int:
     if key not in HOSTS[host]:
         raise SeedError("bad-key")
     document = load_existing(ctx, host)
-    value = read_stacks(ctx) if SOURCES[key][0].kind == STACKS else ask_for(ctx, key)
+    if SOURCES[key][0].kind == STACKS:
+        value: Value | None = read_stacks(ctx, document.get(key))
+    else:
+        value = ask_for(ctx, key)
     if value is None:
         raise SeedError("no-value")
     document[key] = value
