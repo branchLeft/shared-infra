@@ -180,7 +180,7 @@ test. `playbooks/db1.yml` refuses any host but `db1` through the shared include,
 refuses an empty signer list and applies the two pull roles, then `host_inputs`, then
 this role. `host_inputs` reads the one root-only file the owner places on the host and
 sets this role's input (`db1_stack_exporter_password`) as a fact, so the playbook
-carries no value for it. `db1_grants` is not in that playbook yet.
+carries no value for it. `db1_grants` follows `db1_backup_timers` in that playbook.
 
 The first live apply on the database host must not recreate or restart the
 running MySQL. The role does not do either, so the check-mode plan of that run is

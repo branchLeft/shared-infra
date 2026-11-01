@@ -236,7 +236,7 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            LOADER_LINE + "    - role: ../roles/db1_grants # noqa: role-name[path]\n",
+            LOADER_LINE + "    - role: ../roles/tunnel_account # noqa: role-name[path]\n",
         )
         self.assertEqual(check(self.root), [])
 
@@ -245,12 +245,14 @@ class Sabotage(unittest.TestCase):
         self._edit(
             "playbooks/db1.yml",
             LOADER_LINE,
-            "    - role: ../roles/db1_grants # noqa: role-name[path]\n" + LOADER_LINE,
+            "    - role: ../roles/tunnel_account # noqa: role-name[path]\n" + LOADER_LINE,
         )
         findings = self._assert_rule("R11 db1.yml")
         self.assertTrue(any("must be the first role after the pull roles" in f for f in findings))
 
-    # R11, the sabotage: the loader behind two roles is refused too, not only behind one.
+    # R11, the sabotage: the loader behind two roles is refused too, not only behind one. The
+    # real playbook already applies db1_grants, so this case also trips the applied-twice rule;
+    # the assertion is on the R11 finding alone.
     def test_r10_the_loader_last_of_three_is_refused(self) -> None:
         self._edit(
             "playbooks/db1.yml",
