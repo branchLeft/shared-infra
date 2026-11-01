@@ -1,8 +1,37 @@
 ---
+# One verify.yml for every scenario of the role. The cases are shared out between
+# scenarios so that no shard takes more than a few minutes (README, "Timing
+# a run"). Each scenario applies the role in its converge, then runs this file, which
+# runs the part of the cases that carries the scenario's own name:
+#
+#   default      no case of its own: the checks on what the converge left, the source
+#                checks and the log scan, with the plan, idempotence and check-mode steps
+#                that only this scenario runs
+#   refusals     the inputs, the downloads, the pins and the second compose files
+#                the role must refuse
+#   paths        the paths Docker or an earlier release left in the way
+#   rotation     the wide file an earlier release left, and the rotation
+#   repository   the changes to a repository file that make the role refresh the index
+#
+# The other scenarios' verify.yml import this file, and the part is read from the name
+# Molecule gives the scenario it runs. The checks that read what the converge left,
+# the sentinel scan of the log and of the files on the controller, and the source checks
+# run in every scenario, each over that scenario's own run. tasks/assert_parts.yml fails
+# the run when a part has no scenario that runs it, so a case cannot be dropped by
+# deleting a scenario.
 - name: Verify
   hosts: all
   gather_facts: false
   vars:
+    # The part this run is: the scenario's name. Every part is a scenario directory
+    # beside this one (tasks/assert_parts.yml checks that it is, and runs verify).
+    verify_part: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') }}"
+    verify_parts:
+      - default
+      - refusals
+      - paths
+      - rotation
+      - repository
     # The sentinels, read from the files prepare.yml made. A task that prints one
     # of these variables prints a sentinel, so every task below that handles one
     # has no_log.
@@ -133,6 +162,10 @@
         8232,
       ]
   tasks:
+    # ----- That every part has a scenario that runs it -----
+    - name: Assert this run is a listed part, and that every part is a scenario that runs verify
+      ansible.builtin.include_tasks: tasks/assert_parts.yml
+
     - name: Read the placeholder package file the download names
       ansible.builtin.stat:
         path: '{{ scenario_package_dir }}/{{ scenario_libaio_name }}'
@@ -257,378 +290,25 @@
         fail_msg: "Unpinned download in the role: {{ db1_stack_verify_scan.failures | join('; ') }}"
         quiet: true
 
-    # ----- Inputs the role must refuse, before it changes anything -----
-    # The unsafe-character refusal is the control that matters most: a password
-    # with one of these characters is accepted by the exporter, which then
-    # authenticates as another string than the one the database holds. Each case
-    # is the probe sentinel with the character in the middle, so a refusal that
-    # echoed its input would hold the probe, and the log scan at the end would
-    # fail.
-    - name: Refuse a password with a character outside the allowed set
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an exporter password with a character outside the allowed set
-        refused_password: "{{ verify_probe ~ '%c' | format(verify_code) ~ 'tail' }}"
-      loop: '{{ verify_unsafe_codes }}'
-      loop_control:
-        loop_var: verify_code
-        label: code point {{ verify_code }}
+    # ----- The cases this scenario runs -----
+    # Each case applies the role to the converged host and puts the host back as the
+    # converge left it, so the scenarios are independent of each other and each runs
+    # on its own instance. The part is the scenario's name (see the top of this file).
+    - name: Refuse the inputs the role must refuse, before it changes anything
+      ansible.builtin.include_tasks: tasks/verify_input_refusals.yml
+      when: verify_part == 'refusals'
 
-    # The allowed set is exact: every ASCII code point is checked against the
-    # pattern the role reads, and only the letters, the digits and the four
-    # punctuation characters match. The role's own use of that pattern is the
-    # refusal cases above and below. This loop is what fails when the set is
-    # widened by a character the cases above never try.
-    - name: Assert the password pattern accepts exactly the allowed ASCII characters
-      ansible.builtin.assert:
-        that:
-          - (('%c' | format(verify_code)) is match(db1_stack_verify_vars.db1_stack_password_alphabet_pattern)) == (verify_code in verify_allowed_codes)
-        fail_msg: The password pattern does not accept exactly the allowed characters; code point {{ verify_code }} is on the wrong side.
-        quiet: true
-      loop: '{{ range(0, 128) | list }}'
-      loop_control:
-        loop_var: verify_code
-        label: code point {{ verify_code }}
+    - name: Meet a path that Docker or an earlier release left in the way
+      ansible.builtin.include_tasks: tasks/verify_paths.yml
+      when: verify_part == 'paths'
 
-    # A final line break is the case a pattern ending in a dollar sign accepts.
-    - name: Refuse a password that ends in a line break
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an exporter password with a character outside the allowed set
-        refused_password: "{{ verify_probe ~ '%c' | format(10) }}"
+    - name: Close the wide file an earlier release left, and rotate the password
+      ansible.builtin.include_tasks: tasks/verify_wide_file_and_rotation.yml
+      when: verify_part == 'rotation'
 
-    - name: Refuse a password with a character in front of the rest
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an exporter password with a character outside the allowed set
-        refused_password: "{{ '%c' | format(36) ~ verify_probe }}"
-
-    - name: Refuse a password one character short of the minimum
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an exporter password shorter than the minimum length
-        refused_password: '{{ verify_probe[:19] }}'
-
-    - name: Refuse a short password
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an exporter password shorter than the minimum length
-        refused_password: Abc123
-
-    - name: Refuse an empty password
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an empty exporter password
-        refused_password: ''
-
-    # YAML reads an unquoted run of digits as a number.
-    - name: Refuse a password that YAML read as a number
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an exporter password that is not text
-        refused_password: 12345678901234567890
-
-    - name: Refuse a missing password
-      ansible.builtin.include_tasks: tasks/refused_without_password.yml
-
-    # A value of the wrong shape, with the sentinel inside it. Ansible's own
-    # argument check runs first, in a task no keyword reaches, so the role cannot
-    # hide what it prints. It converts a mapping or a list to text for a text
-    # option and hands the role the original, so these reach the role's own
-    # check, which refuses them without printing them. The log scan at the end
-    # requires that the sentinel is printed nowhere.
-    - name: Refuse a password that is a mapping
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an exporter password that is not text
-        refused_password:
-          EXAMPLE_KEY: '{{ verify_probe }}'
-
-    - name: Refuse a password that is a list
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse an exporter password that is not text
-        refused_password:
-          - '{{ verify_probe }}'
-
-    # The download and package-file rules.
-    - name: Refuse a download pinned by an md5 digest
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
-        refused_downloads:
-          - url: '{{ verify_downloads[0].url }}'
-            dest: '{{ scenario_libaio_path }}'
-            checksum: md5:d41d8cd98f00b204e9800998ecf8427e
-
-    - name: Refuse a download with an empty digest
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
-        refused_downloads:
-          - url: '{{ verify_downloads[0].url }}'
-            dest: '{{ scenario_libaio_path }}'
-            checksum: ''
-
-    - name: Refuse a download whose digest is a URL
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
-        refused_downloads:
-          - url: '{{ verify_downloads[0].url }}'
-            dest: '{{ scenario_libaio_path }}'
-            checksum: https://example.invalid/PLACEHOLDER.sha256
-
-    - name: Refuse a download whose digest ends in a line break
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
-        refused_downloads:
-          - url: '{{ verify_downloads[0].url }}'
-            dest: '{{ scenario_libaio_path }}'
-            checksum: "{{ verify_downloads[0].checksum ~ '%c' | format(10) }}"
-
-    # A well-formed digest that is not the file's: the download module refuses
-    # the file. This is a module failure, not an assertion, and it is the
-    # designed result.
-    - name: Refuse a download whose digest is not the file's
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Download each pinned artefact and check its digest
-        refused_downloads:
-          - url: '{{ verify_downloads[0].url }}'
-            dest: '/var/cache/db1-stack/OTHER.deb'
-            checksum: 'sha256:{{ "0" * 64 }}'
-        refused_debs: []
-
-    - name: Refuse a package file that is a URL
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a package file that is not the destination of a pinned download
-        refused_debs:
-          - https://example.invalid/PLACEHOLDER.deb
-
-    - name: Refuse a package file that no pinned download wrote
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a package file that is not the destination of a pinned download
-        refused_debs:
-          - /srv/db1-stack/age_1.0.0-1_all.deb
-
-    # The key file is compared with the digest pinned in the role.
-    - name: Refuse a key file whose digest is not the pinned one
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a repository key whose digest is not the pinned one
-        refused_key_sha256: '{{ "0" * 64 }}'
-
-    - name: Refuse a pin that is not a digest
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a repository key whose digest is not the pinned one
-        refused_key_sha256: NOT_A_DIGEST
-
-    # The installed version is checked, not assumed: the placeholder age package
-    # is on a 1.0 line, which stands in for a client on another line.
-    - name: Refuse a toolchain package that is not on the pinned line
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a MySQL toolchain that is not on the pinned line
-        refused_checked_packages:
-          - age
-
-    - name: Refuse a toolchain package that is not installed
-      ansible.builtin.include_tasks: tasks/refused.yml
-      vars:
-        refused_task: Refuse a MySQL toolchain that is not on the pinned line
-        refused_checked_packages:
-          - no-such-package
-
-    # Nothing above changed anything: the host is as the converge left it.
-    - name: Assert the refusals left the host as it was
-      ansible.builtin.include_tasks: tasks/assert_state.yml
-      vars:
-        state_password: '{{ verify_password }}'
-
-    # ----- A path that Docker or an earlier release left in the way -----
-    # Docker creates a directory at a bind-mount source it cannot find. The
-    # role removes an empty one, refuses one that holds anything, and replaces a
-    # link without following it.
-    - name: Put an empty directory where the exporter file goes
-      ansible.builtin.include_tasks: tasks/path_empty_directory.yml
-
-    - name: Put a directory that holds a file where the exporter file goes
-      ansible.builtin.include_tasks: tasks/path_kept_directory.yml
-      vars:
-        kept_name: PLACEHOLDER_KEEP
-        kept_kind: file
-
-    - name: Put a directory that holds only a hidden file where the exporter file goes
-      ansible.builtin.include_tasks: tasks/path_kept_directory.yml
-      vars:
-        kept_name: .PLACEHOLDER_KEEP
-        kept_kind: file
-
-    - name: Put a directory that holds only a subdirectory where the exporter file goes
-      ansible.builtin.include_tasks: tasks/path_kept_directory.yml
-      vars:
-        kept_name: PLACEHOLDER_KEEP_DIRECTORY
-        kept_kind: directory
-
-    - name: Put a link to another file where the exporter file goes
-      ansible.builtin.include_tasks: tasks/path_link.yml
-
-    # ----- An earlier release left a wide file behind -----
-    # The file is world-readable, owned by root and holds an earlier password.
-    # The role must close it, give it to the exporter's account, replace the
-    # content, and leave no copy of the earlier password anywhere.
-    - name: Leave an exporter file that anyone can read, with an earlier password
-      ansible.builtin.copy:
-        content: "{{ '[client]' ~ ('%c' | format(10)) ~ 'password = ' ~ verify_earlier ~ ('%c' | format(10)) }}"
-        dest: '{{ scenario_cnf_path }}'
-        owner: root
-        group: root
-        mode: '0644'
-      no_log: true
-      diff: false
-
-    - name: Apply the role over the wide file
-      ansible.builtin.include_tasks: tasks/apply.yml
-
-    # The final owner, mode and content alone would also hold if the write
-    # closed the file after moving it into place, which leaves the new password
-    # open to others for a moment. The task that closes an existing file before
-    # the write must itself have run and changed the file. The task that creates
-    # a missing file changes nothing here, because the file exists. The earlier
-    # run left a skipped result in the registered variable, so a missing task
-    # cannot pass on a stale one.
-    - name: Assert the wide file was closed by the task that runs before the write
-      ansible.builtin.assert:
-        that:
-          - db1_stack_exporter_closed | default({}) is changed
-          - db1_stack_exporter_closed | default({}) is not skipped
-          - db1_stack_exporter_created is not changed
-        fail_msg: The task that closes an exporter file that already exists did not change the wide file, so the write met an open file.
-        quiet: true
-
-    - name: Assert the wide file was closed and replaced
-      ansible.builtin.include_tasks: tasks/assert_state.yml
-      vars:
-        state_password: '{{ verify_password }}'
-
-    - name: Assert the earlier password is gone from the host
-      ansible.builtin.include_tasks: tasks/assert_gone.yml
-      vars:
-        gone_value: '{{ verify_earlier }}'
-
-    # ----- Rotation as a re-run -----
-    - name: Read the exporter file before the rotation
-      ansible.builtin.stat:
-        path: '{{ scenario_cnf_path }}'
-        get_checksum: false
-      register: db1_stack_verify_before
-
-    - name: Apply the same password again
-      ansible.builtin.include_tasks: tasks/apply.yml
-
-    - name: Read the exporter file after the same password
-      ansible.builtin.stat:
-        path: '{{ scenario_cnf_path }}'
-        get_checksum: false
-      register: db1_stack_verify_same
-
-    # The same inode: nothing was rewritten.
-    - name: Assert the same password rewrote nothing
-      ansible.builtin.assert:
-        that:
-          - db1_stack_verify_same.stat.inode == db1_stack_verify_before.stat.inode
-        quiet: true
-
-    - name: Plan the rotation in check mode with diff on
-      check_mode: true
-      diff: true
-      block:
-        - name: Apply the rotated password in check mode
-          ansible.builtin.include_tasks: tasks/apply.yml
-          vars:
-            apply_password: '{{ verify_password_rotated }}'
-
-    - name: Assert the plan changed nothing
-      ansible.builtin.include_tasks: tasks/assert_state.yml
-      vars:
-        state_password: '{{ verify_password }}'
-
-    - name: Rotate the password
-      ansible.builtin.include_tasks: tasks/apply.yml
-      vars:
-        apply_password: '{{ verify_password_rotated }}'
-
-    - name: Assert the rotated password is in the file
-      ansible.builtin.include_tasks: tasks/assert_state.yml
-      vars:
-        state_password: '{{ verify_password_rotated }}'
-
-    - name: Assert the replaced password is gone from the host
-      ansible.builtin.include_tasks: tasks/assert_gone.yml
-      vars:
-        gone_value: '{{ verify_password }}'
-
-    - name: Read the exporter file after the rotation
-      ansible.builtin.stat:
-        path: '{{ scenario_cnf_path }}'
-        get_checksum: false
-      register: db1_stack_verify_rotated
-
-    - name: Assert the rotation replaced the file
-      ansible.builtin.assert:
-        that:
-          - db1_stack_verify_rotated.stat.inode != db1_stack_verify_before.stat.inode
-        quiet: true
-
-    - name: Apply the rotated password again
-      ansible.builtin.include_tasks: tasks/apply.yml
-      vars:
-        apply_password: '{{ verify_password_rotated }}'
-
-    - name: Read the exporter file after the rotated password again
-      ansible.builtin.stat:
-        path: '{{ scenario_cnf_path }}'
-        get_checksum: false
-      register: db1_stack_verify_rotated_again
-
-    - name: Assert the rotated password again rewrote nothing
-      ansible.builtin.assert:
-        that:
-          - db1_stack_verify_rotated_again.stat.inode == db1_stack_verify_rotated.stat.inode
-        quiet: true
-
-    # Put the host back as the converge left it. The harness checks the
-    # configured host for drift after this play, and the rotated password must not
-    # outlive it.
-    - name: Rotate back to the first password
-      ansible.builtin.include_tasks: tasks/apply.yml
-
-    - name: Assert the first password is back
-      ansible.builtin.include_tasks: tasks/assert_state.yml
-      vars:
-        state_password: '{{ verify_password }}'
-
-    - name: Assert the rotated password is gone from the host
-      ansible.builtin.include_tasks: tasks/assert_gone.yml
-      vars:
-        gone_value: '{{ verify_password_rotated }}'
-
-    # ----- A change to a repository file refreshes the index -----
-    # The container has no network, so the refresh fails, which is how the test
-    # sees that it ran. Nothing else in the role reaches the network.
-    - name: Leave the repository files the hand-run installer made
-      ansible.builtin.include_tasks: tasks/legacy_files.yml
-
-    - name: Change the repository source by hand
-      ansible.builtin.include_tasks: tasks/source_changed.yml
-
-    - name: Change the repository key file by hand
-      ansible.builtin.include_tasks: tasks/key_changed.yml
+    - name: Refresh the index when a repository file changed
+      ansible.builtin.include_tasks: tasks/verify_repository_files.yml
+      when: verify_part == 'repository'
 
     # ----- The host is as the converge left it -----
     - name: Assert the host ends as the converge left it
@@ -740,8 +420,8 @@
     # Part two: the database stack's files and the order of the legacy drop-in and
     # the exporter file (verify_part_two.yml), the source of the role's task files
     # (verify_role_source.yml), and the refusals of the image pin and of a second
-    # compose or an override file (verify_refusals.yml). The source checks read the
-    # file list registered above.
+    # compose or an override file (verify_refusals.yml, in the `refusals` scenario
+    # only). The source checks read the file list registered above.
     - name: Check the database stack's files and the order of its tasks
       ansible.builtin.import_tasks: tasks/verify_part_two.yml
 
@@ -749,7 +429,8 @@
       ansible.builtin.import_tasks: tasks/verify_role_source.yml
 
     - name: Check the refusals of the image pin and of a second compose or an override file
-      ansible.builtin.import_tasks: tasks/verify_refusals.yml
+      ansible.builtin.include_tasks: tasks/verify_refusals.yml
+      when: verify_part == 'refusals'
 
 # The other files this run leaves on the controller: Molecule's own copy of the
 # configuration, the inventory it built, its state, and the log. The sentinel
