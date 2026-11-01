@@ -75,6 +75,7 @@ host_inputs_required_by_host:
     - website_app1_smtp_port
     - website_app1_smtp_user
     - website_app1_smtp_password
+    - deploy_slot_keys_slots
 
 # A value that is only white space counts as empty. Matched from the start, so
 # \s*\Z holds for the empty string and for blanks and nothing else.

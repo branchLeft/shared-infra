@@ -69,7 +69,12 @@ What it does, in this order:
    the tool never guesses between two values.
 3. Asks a hidden prompt (`getpass`) for each key it could not find live: the tenants as
    `slug recipient` lines until an empty one, the CA as the path of a PEM file (a certificate,
-   never one holding a private key). An empty answer, or no terminal, leaves the key missing.
+   never one holding a private key), and app1's deploy slots as `stack public_key [adopt]` lines
+   until an empty one (`adopt`, the literal word at the end, sets `adopt_existing`; a slot the
+   host already runs needs it). A slot line that is malformed, or repeats a stack or a key, is
+   refused and the whole list is left missing, so nothing is written and the line is never shown.
+   The role checks each slot's shape on the host, so the tool judges none of it. An empty answer,
+   or no terminal, leaves the key missing.
 4. If any key is missing, writes nothing, names the missing keys, and exits 1. A rerun then needs
    no `--replace`, and the loader never meets a half file.
 5. Writes a temporary file in `/etc/branchleft` created exclusively with mode `0600`, owner

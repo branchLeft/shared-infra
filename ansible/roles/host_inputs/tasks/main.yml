@@ -218,6 +218,7 @@
     website_app1_smtp_port: "{{ host_inputs_doc['website_app1_smtp_port'] | default(omit) }}"
     website_app1_smtp_user: "{{ host_inputs_doc['website_app1_smtp_user'] | default(omit) }}"
     website_app1_smtp_password: "{{ host_inputs_doc['website_app1_smtp_password'] | default(omit) }}"
+    deploy_slot_keys_slots: "{{ host_inputs_doc['deploy_slot_keys_slots'] | default(omit) }}"
   no_log: true
   diff: false
 

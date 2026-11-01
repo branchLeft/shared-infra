@@ -13,9 +13,10 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
+from check_enrolment import HOST_PLAY_VARS, HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
 
 ENROLLED = ("edge1", "ops1", "app1", "db1", "demo1")
 SECOND_PLAY = "- name: Second play\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n"
@@ -62,10 +63,12 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
-# (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs and
-# website_app1 (last, after host_baseline has installed Docker), db1's host_baseline, db1_stack
-# and db1_backup_timers (after the loader, which goes first; db1_grants would follow the timers
-# and is not applied), ops1's host_inputs (first), control_plane after the status page, then
+# (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
+# host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
+# installed Docker), then app1's deploy_tooling and deploy_slot_keys (last, in that order: the slot
+# keys need the wrapper the tooling installs), db1's host_baseline, db1_stack and
+# db1_backup_timers (after the loader, which goes first; db1_grants would follow the timers and
+# is not applied), ops1's host_inputs (first), control_plane after the status page, then
 # nextcloud_stack, backup_worker and backup_restore (the restore reads the worker's variables, so
 # it follows), and demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
@@ -90,12 +93,22 @@ APPLIED_ON_MAIN = {
         "backup_worker",
         "backup_restore",
     ],
-    "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
+    "app1": [
+        "host_inputs",
+        "host_baseline",
+        "breakglass_grant_host",
+        "website_app1",
+        "deploy_tooling",
+        "deploy_slot_keys",
+    ],
     "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
     "demo1": ["demo1_build", "demo1_egress_spool"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
-PINNED_PLAY_VARS = {"edge1": "    deploy_tooling_host_class: gateway\n"}
+PINNED_PLAY_VARS = {
+    "edge1": "    deploy_tooling_host_class: gateway\n",
+    "app1": "    deploy_tooling_host_class: app\n    deploy_tooling_policy_variant: standard\n",
+}
 
 
 def _entry(name: str, extra: str = "") -> str:
@@ -307,6 +320,55 @@ class HostRoleLists(unittest.TestCase):
         self.assertLess(names.index("backup_worker"), names.index("backup_restore"))
         self.assertEqual(names[2], "host_inputs")
         self.assertEqual(check(ROOT), [])
+
+    # Safety class: app1 applies the deploy tooling, which installs the sudo-run deploy wrapper and
+    # the Docker firewall policy, then the deploy slot keys, which grant SSH keys to the deploy
+    # account. Both come last, tooling first, so a failure in either cannot hold the website back
+    # and the slot program finds its wrapper. The play states class app and variant standard, and
+    # the checker's table (HOST_PLAY_VARS) says the same; the slots come from the loader's row, not
+    # from the play. Red when the table's app1 row is deleted (R2), when the slots leave the
+    # loader's row (the registry test), or when either deploy role moves before the loader (R11),
+    # green with the tree as it is.
+    def test_app1_applies_the_deploy_roles_last_with_class_app_and_slots_from_the_loader(
+        self,
+    ) -> None:
+        text = (ROOT / "ansible" / "playbooks" / "app1.yml").read_text(encoding="utf-8")
+        play = yaml.safe_load(text)[0]
+        names = [Path(entry["role"]).name for entry in play["roles"]]
+        self.assertEqual(
+            names,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "host_inputs",
+                "host_baseline",
+                "breakglass_grant_host",
+                "website_app1",
+                "deploy_tooling",
+                "deploy_slot_keys",
+            ],
+        )
+        self.assertEqual(
+            play["vars"],
+            {
+                "enrolled_host": "app1",
+                "deploy_tooling_host_class": "app",
+                "deploy_tooling_policy_variant": "standard",
+            },
+        )
+        # The slots are private and the play must not carry them, nor tenant data of any kind.
+        self.assertNotIn("deploy_slot_keys_slots", play["vars"])
+        for name in ("deploy_tooling", "deploy_slot_keys"):
+            self.assertIn(name, self.listed["app1"])
+        self.assertEqual(check(ROOT), [])
+
+    # Safety class: the table is what decides the vars, not the playbook. With app1's row removed
+    # the playbook that states class app is refused, so a play cannot name its own class.
+    def test_app1_without_its_row_in_the_checker_table_is_refused(self) -> None:
+        self.assertEqual(self._findings("R2 app1.yml"), [])
+        with mock.patch.dict(HOST_PLAY_VARS, clear=False):
+            del HOST_PLAY_VARS["app1"]
+            self._assert_refused("app1", "vars must be exactly")
 
     # Safety class: demo1 is held off host_baseline, egress_nat and broker_deploy by its own
     # list in host_roles.yml. Green first: the real playbook applies exactly the pull roles then

@@ -25,6 +25,7 @@
       second_tenant: '{{ host_inputs_test_tenants[1] }}'
       ops1_host: '{{ host_inputs_test_ops1_host }}'
       smtp_password: '{{ host_inputs_test_smtp_password }}'
+      slot_key: '{{ host_inputs_test_slot_blob }}'
   tasks:
     # ---- The refusal cases ------------------------------------------------------
     # Run first, so a fact left by an earlier success cannot be mistaken for one
@@ -108,8 +109,9 @@
         quiet: true
 
     # ---- app1's file ------------------------------------------------------------
-    # The same shape for app1's four SMTP inputs. The port is a JSON string, and the
-    # role's argument spec types it as a string, so the loader must pass it on as one.
+    # The same shape for app1's four SMTP inputs and its list of deploy slots. The port is a
+    # JSON string, and the role's argument spec types it as a string, so the loader must pass
+    # it on as one. The slots are a list of mappings, and adopt_existing must stay a boolean.
     - name: Write the app1 file as the operator would for app1
       ansible.builtin.copy:
         content: '{{ host_inputs_test_app1_doc | to_json }}'
@@ -135,6 +137,14 @@
           - website_app1_smtp_user == host_inputs_test_smtp_user
           - website_app1_smtp_password == host_inputs_test_smtp_password
           - website_app1_smtp_password is string
+          - deploy_slot_keys_slots == host_inputs_test_app1_doc.deploy_slot_keys_slots
+          - deploy_slot_keys_slots is sequence
+          - deploy_slot_keys_slots | length == 1
+          - deploy_slot_keys_slots[0] is mapping
+          - deploy_slot_keys_slots[0].stack == host_inputs_test_slot_stack
+          - deploy_slot_keys_slots[0].public_key == host_inputs_test_slot_key
+          - deploy_slot_keys_slots[0].adopt_existing is boolean
+          - not deploy_slot_keys_slots[0].adopt_existing
         fail_msg: An app1 input did not reach the play as the file gave it.
         quiet: true
 

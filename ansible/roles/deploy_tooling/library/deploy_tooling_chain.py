@@ -33,14 +33,38 @@ description:
   - A failure names the chain and says how many other rules it holds. It never prints
     the text of a rule the policy did not put there, and for a rule above the last drop
     it names only the rule's place in the chain and its target.
+  - In mode summary it changes nothing and fails on nothing the chains hold. It reports, for each
+    chain, how many rules the chain has, how many of the policy's rules are in it, and one row
+    for every other rule with its place, the name of its target and a verdict. would-refuse is
+    exactly what mode check would fail on (the same test), ok cannot let a packet past,
+    below-policy sits under the policy's last drop and is not checked, and at-risk could be
+    refused if a tool put it above the policy, which is what a chain with no policy drop yet
+    cannot show. It reports the first rule of FORWARD in each family where DOCKER-USER exists.
+    It does not report a missing, misplaced or forbidden rule of the policy.
+  - A target is named only if it is a chain name or a built-in target; any other is reported as
+    none or unreadable. A rule's addresses, ports, interfaces and comments are never read out.
 version_added: "1.0.0"
 author:
   - branchLeft
 options:
+  mode:
+    description:
+      - check fails unless the chains carry the policy, and needs reconciler_path.
+      - summary reports what check would refuse. It reads the literals from reconciler_text, so
+        it runs before the policy program is installed on the host.
+    type: str
+    default: check
+    choices: [check, summary]
   reconciler_path:
-    description: Absolute path of the installed policy program the rules' literals are read from.
+    description:
+      - Absolute path of the installed policy program the rules' literals are read from.
+      - Required when mode is check.
     type: path
-    required: true
+  reconciler_text:
+    description:
+      - The text of the policy program, from which the rules' literals are read.
+      - Required when mode is summary, which runs before the program is installed.
+    type: str
   variant:
     description:
       - Which chain this host is expected to carry.
@@ -72,6 +96,13 @@ EXAMPLES = r"""
     reconciler_path: /usr/local/sbin/EXAMPLE_POLICY_PROGRAM
     variant: standard
     foreign_chain_allowlist: []
+
+- name: Say what the read-back would refuse, before the program is installed
+  deploy_tooling_chain:
+    mode: summary
+    reconciler_text: "{{ lookup('ansible.builtin.file', '/EXAMPLE/POLICY_PROGRAM') }}"
+    variant: standard
+  register: example_summary
 """
 
 RETURN = r"""
@@ -85,12 +116,43 @@ owned_rules:
   type: int
 foreign_rules:
   description: How many other rules the checked chains hold. They are counted, not listed.
-  returned: success
+  returned: success and mode is check
+  type: int
+summary_lines:
+  description: The summary as printable lines. Names, positions and counts only.
+  returned: success and mode is summary
+  type: list
+  elements: str
+chains:
+  description: Per chain, its state, rule counts, and a row (place, target, verdict) per other rule.
+  returned: success and mode is summary
+  type: list
+  elements: dict
+forward:
+  description: Per family where DOCKER-USER exists, what the first rule of FORWARD is.
+  returned: success and mode is summary
+  type: list
+  elements: dict
+would_refuse:
+  description: How many rows (and chains) mode check would fail on.
+  returned: success and mode is summary
+  type: int
+at_risk:
+  description: How many rows could be refused if a tool put them above the policy.
+  returned: success and mode is summary
+  type: int
+unreadable:
+  description: How many families could not be listed.
+  returned: success and mode is summary
   type: int
 """
 
 Variant = Literal["standard", "protected_no_db"]
 Family = Literal["iptables", "ip6tables"]
+Mode = Literal["check", "summary"]
+Verdict = Literal["would-refuse", "ok", "below-policy", "at-risk"]
+ChainState = Literal["listed", "absent", "unreadable"]
+ForwardFirst = Literal["jump-to-DOCKER-USER", "other", "empty", "not-checked", "unreadable"]
 
 DOCKER_USER = "DOCKER-USER"
 FORWARD = "FORWARD"
@@ -104,11 +166,19 @@ BRIDGE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,15}")
 PORT = re.compile(r"[0-9]{1,5}")
 CONNTRACK_STATES = frozenset({"ESTABLISHED", "RELATED"})
 
+UNREADABLE_TARGET = "none or unreadable"
+
 ARGUMENT_SPEC: dict[str, dict[str, object]] = {
-    "reconciler_path": {"type": "path", "required": True},
+    "mode": {"type": "str", "default": "check", "choices": ["check", "summary"]},
+    "reconciler_path": {"type": "path"},
+    "reconciler_text": {"type": "str"},
     "variant": {"type": "str", "required": True, "choices": ["standard", "protected_no_db"]},
     "foreign_chain_allowlist": {"type": "list", "elements": "str", "default": []},
 }
+REQUIRED_IF = [
+    ("mode", "check", ("reconciler_path",)),
+    ("mode", "summary", ("reconciler_text",)),
+]
 
 LITERAL_NAMES = (
     "SUBNET",
@@ -171,6 +241,11 @@ class ChainAbsentError(PolicyError):
         super().__init__(f"{family} has no {chain} chain")
 
 
+def shown_target(target: str) -> str:
+    """Return a rule's target as it may be printed: a chain or built-in name, or a stand-in."""
+    return target if CHAIN_NAME.fullmatch(target) else UNREADABLE_TARGET
+
+
 def _others(count: int) -> str:
     """Return how many rules the chain holds that the policy did not put there."""
     return f"the chain holds {count} other rule{'' if count == 1 else 's'}"
@@ -216,7 +291,7 @@ class RuleBypassError(PolicyError):
     """
 
     def __init__(self, family: Family, chain: str, position: int, target: str, others: int) -> None:
-        shown = target if CHAIN_NAME.fullmatch(target) else "none or unreadable"
+        shown = shown_target(target)
         super().__init__(
             f"{family} {chain}: rule {position} of the chain (target: {shown}) is above the "
             f"policy's last drop and can let a packet past it; {_others(others)}"
@@ -246,6 +321,15 @@ class Params:
     """The module's parameters."""
 
     reconciler_path: Path
+    variant: Variant
+    foreign_chain_allowlist: frozenset[str]
+
+
+@dataclasses.dataclass(frozen=True)
+class SummaryParams:
+    """The parameters of mode summary: the policy program's text in place of its path."""
+
+    reconciler_text: str
     variant: Variant
     foreign_chain_allowlist: frozenset[str]
 
@@ -337,6 +421,118 @@ class Result:
 
     owned_rules: int
     foreign_rules: int
+
+
+@dataclasses.dataclass(frozen=True)
+class ForeignRow:
+    """One rule the policy did not put in a chain: its place, its target's name, its verdict.
+
+    Nothing else of the rule is kept, so nothing else can be printed.
+    """
+
+    position: int
+    target: str
+    verdict: Verdict
+
+
+@dataclasses.dataclass(frozen=True)
+class ChainSummary:
+    """What the summary found in one chain."""
+
+    family: Family
+    chain: str
+    state: ChainState
+    required: bool
+    exit_status: int
+    rules: int
+    policy_present: int
+    policy_total: int
+    rows: tuple[ForeignRow, ...]
+
+    @property
+    def refused(self) -> bool:
+        """Whether the chain is one the policy needs and the host does not have."""
+        return self.state == "absent" and self.required
+
+
+@dataclasses.dataclass(frozen=True)
+class ForwardSummary:
+    """What the first rule of FORWARD is, in a family where DOCKER-USER exists."""
+
+    family: Family
+    first: ForwardFirst
+    rules: int
+
+    @property
+    def refused(self) -> bool:
+        """Whether the check would fail on it: anything but the plain jump, rule one."""
+        return self.first in ("other", "empty")
+
+
+@dataclasses.dataclass(frozen=True)
+class Summary:
+    """Everything mode summary reports, as counts, positions and names."""
+
+    chains: tuple[ChainSummary, ...]
+    forwards: tuple[ForwardSummary, ...]
+
+    @property
+    def would_refuse(self) -> int:
+        """How many rows, FORWARD first rules and absent chains the read-back would fail on."""
+        rows = sum(row.verdict == "would-refuse" for chain in self.chains for row in chain.rows)
+        return (
+            rows
+            + sum(chain.refused for chain in self.chains)
+            + sum(forward.refused for forward in self.forwards)
+        )
+
+    @property
+    def at_risk(self) -> int:
+        """How many rows could be refused if a tool put them above the policy."""
+        return sum(row.verdict == "at-risk" for chain in self.chains for row in chain.rows)
+
+    @property
+    def unreadable(self) -> int:
+        """How many chains and FORWARD checks could not be read."""
+        return sum(chain.state == "unreadable" for chain in self.chains) + sum(
+            forward.first == "unreadable" for forward in self.forwards
+        )
+
+    def lines(self) -> list[str]:
+        """Return the summary as lines that carry names, positions and counts only."""
+        out: list[str] = []
+        for chain in self.chains:
+            out.append(_chain_line(chain))
+            out.extend(
+                f"  {chain.family} {chain.chain} rule {row.position} (target: {row.target}): "
+                f"{row.verdict}"
+                for row in chain.rows
+            )
+        out.extend(
+            f"{forward.family} FORWARD: first rule is {forward.first} "
+            f"({forward.rules} rule{'' if forward.rules == 1 else 's'})"
+            f"{': would-refuse' if forward.refused else ''}"
+            for forward in self.forwards
+        )
+        out.append(
+            f"would-refuse: {self.would_refuse}; at-risk: {self.at_risk}; "
+            f"unreadable: {self.unreadable}"
+        )
+        return out
+
+
+def _chain_line(chain: ChainSummary) -> str:
+    """Return the line that heads one chain of the summary."""
+    head = f"{chain.family} {chain.chain}:"
+    if chain.state == "unreadable":
+        return f"{head} unreadable (the tool exited {chain.exit_status})"
+    if chain.state == "absent":
+        return f"{head} no such chain{': would-refuse' if chain.refused else ''}"
+    return (
+        f"{head} {chain.rules} rule{'' if chain.rules == 1 else 's'}, "
+        f"{chain.policy_present} of {chain.policy_total} policy rules present, "
+        f"{len(chain.rows)} other"
+    )
 
 
 @dataclasses.dataclass(frozen=True)
@@ -648,11 +844,7 @@ def check_chain(
         raise ChainAbsentError(policy.family, policy.chain)
     observed = table.rules.get(policy.chain, ())
     others = _others_count(policy, observed)
-    matched: dict[int, int] = {}
-    for index, rule in enumerate(observed):
-        wanted = len(matched)
-        if wanted < len(policy.owned) and rule == policy.owned[wanted].rule:
-            matched[wanted] = index
+    matched = _match_owned(policy, observed)
     if len(matched) < len(policy.owned):
         missing = policy.owned[len(matched)]
         if any(rule == missing.rule for rule in observed):
@@ -669,15 +861,49 @@ def check_chain(
     for forbidden in policy.forbidden:
         if any(rule == forbidden.rule for rule in observed):
             raise RuleForbiddenError(policy.family, policy.chain, forbidden.label, variant, others)
-    last_drop = max(
-        (matched[i] for i, owned in enumerate(policy.owned) if owned.rule.target == DROP),
-        default=-1,
-    )
+    last_drop = _last_drop(policy, matched)
     owned_positions = set(matched.values())
     for index, rule in enumerate(observed[:last_drop]):
-        if index not in owned_positions and not _cannot_bypass(rule, allowed_chains):
+        if _bypasses(rule, index, owned_positions, allowed_chains):
             raise RuleBypassError(policy.family, policy.chain, index + 1, rule.target, others)
     return Result(len(policy.owned), len(observed) - len(policy.owned))
+
+
+def _match_owned(policy: ChainPolicy, observed: Sequence[Rule]) -> dict[int, int]:
+    """Return, for each owned rule found in order, where in the chain it was found.
+
+    The scan takes the owned rules in their order and each one at its first place after the
+    one before; an owned rule that comes out of order is not in the result.
+    """
+    matched: dict[int, int] = {}
+    for index, rule in enumerate(observed):
+        wanted = len(matched)
+        if wanted < len(policy.owned) and rule == policy.owned[wanted].rule:
+            matched[wanted] = index
+    return matched
+
+
+def _last_drop(policy: ChainPolicy, matched: Mapping[int, int]) -> int:
+    """Return the place of the lowest drop of the policy that was found, or -1 if none was."""
+    return max(
+        (
+            matched[i]
+            for i, owned in enumerate(policy.owned)
+            if owned.rule.target == DROP and i in matched
+        ),
+        default=-1,
+    )
+
+
+def _bypasses(
+    rule: Rule, index: int, owned_positions: set[int], allowed_chains: frozenset[str]
+) -> bool:
+    """Return whether a rule above the policy's last drop could let a packet past it.
+
+    The one decision, used by the read-back that fails on it and by the summary that
+    reports it. A rule the policy put there is not foreign, so it never bypasses.
+    """
+    return index not in owned_positions and not _cannot_bypass(rule, allowed_chains)
 
 
 def _others_count(policy: ChainPolicy, observed: Sequence[Rule]) -> int:
@@ -697,10 +923,16 @@ def check_forward(family: Family, table: Table) -> None:
     Raises:
         ForwardBypassError: when the first rule of FORWARD is not a plain jump to DOCKER-USER.
     """
+    if _forward_first(table) != "jump-to-DOCKER-USER":
+        raise ForwardBypassError(family, len(table.rules.get(FORWARD, ())))
+
+
+def _forward_first(table: Table) -> ForwardFirst:
+    """Return what the first rule of FORWARD is: the plain jump to DOCKER-USER, or not."""
     forward = table.rules.get(FORWARD, ())
-    first = forward[0] if forward else None
-    if first != Rule(target=DOCKER_USER):
-        raise ForwardBypassError(family, len(forward))
+    if not forward:
+        return "empty"
+    return "jump-to-DOCKER-USER" if forward[0] == Rule(target=DOCKER_USER) else "other"
 
 
 def _displaced(policy: ChainPolicy, observed: Sequence[Rule], fallback: str) -> str:
@@ -765,6 +997,107 @@ def check_all(params: Params, runner: Runner) -> Result:
     return Result(owned, foreign)
 
 
+def summarise(params: SummaryParams, runner: Runner) -> Summary:
+    """Report what the read-back would refuse, from the chains as they are now.
+
+    Reads only. The chains are listed once per family, and a family that cannot be listed
+    is reported as unreadable, with the tool's exit status and nothing else, instead of
+    failing: the summary is a plan's evidence, and a plan that stops cannot show the rest.
+
+    Raises:
+        PolicyError: when the policy's text is not usable, as the read-back would fail.
+    """
+    literals = read_literals(params.reconciler_text)
+    tables: dict[Family, Table | int] = {}
+    chains: list[ChainSummary] = []
+    for policy in policies(literals, params.variant):
+        if policy.family not in tables:
+            tables[policy.family] = _table_or_status(policy.family, runner)
+        chains.append(
+            _summarise_chain(policy, tables[policy.family], params.foreign_chain_allowlist)
+        )
+    forwards = tuple(_summarise_forward(family, table) for family, table in tables.items())
+    return Summary(tuple(chains), forwards)
+
+
+def _table_or_status(family: Family, runner: Runner) -> Table | int:
+    """List one family's filter table, or return the tool's exit status if it failed."""
+    listing = runner(family)
+    if listing.status != 0:
+        return listing.status
+    return parse_listing(listing.stdout)
+
+
+def _summarise_chain(
+    policy: ChainPolicy, table: Table | int, allowed_chains: frozenset[str]
+) -> ChainSummary:
+    """Summarise one chain: its counts and a verdict for each rule the policy did not put there."""
+    total = len(policy.owned)
+    required = not policy.only_if_present
+    if isinstance(table, int):
+        return ChainSummary(
+            policy.family, policy.chain, "unreadable", required, table, 0, 0, total, ()
+        )
+    if policy.chain not in table.chains:
+        return ChainSummary(policy.family, policy.chain, "absent", required, 0, 0, 0, total, ())
+    observed = table.rules.get(policy.chain, ())
+    matched = _match_owned(policy, observed)
+    last_drop = _last_drop(policy, matched)
+    owned_positions = set(matched.values())
+    rows = tuple(
+        ForeignRow(
+            index + 1,
+            shown_target(rule.target),
+            _verdict(policy, observed, index, last_drop, owned_positions, allowed_chains),
+        )
+        for index, rule in enumerate(observed)
+        if index not in owned_positions
+    )
+    return ChainSummary(
+        policy.family, policy.chain, "listed", required, 0, len(observed), len(matched), total, rows
+    )
+
+
+def _verdict(
+    policy: ChainPolicy,
+    observed: Sequence[Rule],
+    index: int,
+    last_drop: int,
+    owned_positions: set[int],
+    allowed_chains: frozenset[str],
+) -> Verdict:
+    """Return the verdict on one rule the policy did not put in the chain.
+
+    Above the policy's last drop it is the read-back's own decision. Where the chain has no
+    drop of the policy yet, the policy goes in at the top, so every rule now there ends up
+    below it; the rules that could be refused are the ones a tool might put back above it.
+    """
+    rule = observed[index]
+    bypasses = _bypasses(rule, index, owned_positions, allowed_chains)
+    if last_drop >= 0:
+        if index > last_drop:
+            return "below-policy"
+        return "would-refuse" if bypasses else "ok"
+    if not bypasses:
+        return "ok"
+    docker_tail = (
+        policy.chain == DOCKER_USER
+        and index == len(observed) - 1
+        and rule.target == "RETURN"
+        and not rule.has_match
+    )
+    return "below-policy" if docker_tail else "at-risk"
+
+
+def _summarise_forward(family: Family, table: Table | int) -> ForwardSummary:
+    """Summarise the first rule of FORWARD, where DOCKER-USER exists in the family."""
+    if isinstance(table, int):
+        return ForwardSummary(family, "unreadable", 0)
+    if DOCKER_USER not in table.chains:
+        return ForwardSummary(family, "not-checked", 0)
+    return ForwardSummary(family, _forward_first(table), len(table.rules.get(FORWARD, ())))
+
+
 def _list_table(family: Family, runner: Runner) -> Table:
     """List one family's filter table.
 
@@ -784,30 +1117,96 @@ def params_from_mapping(values: Mapping[str, object]) -> Params:
     Raises:
         ParameterError: when a value is not the type or shape it must be.
     """
-    variant: Variant
-    given = values["variant"]
-    allowlist = values["foreign_chain_allowlist"]
     path = values["reconciler_path"]
-    if given == "standard":
-        variant = "standard"
-    elif given == "protected_no_db":
-        variant = "protected_no_db"
-    else:
-        raise ParameterError("variant", str(given))
     if not isinstance(path, str):
         raise ParameterError("reconciler_path", str(path))
+    return Params(
+        Path(path), _variant_from(values), _allowlist_from(values["foreign_chain_allowlist"])
+    )
+
+
+def summary_params_from_mapping(values: Mapping[str, object]) -> SummaryParams:
+    """Build the typed parameters of mode summary from the values AnsibleModule validated.
+
+    Raises:
+        ParameterError: when a value is not the type or shape it must be.
+    """
+    text = values["reconciler_text"]
+    if not isinstance(text, str):
+        raise ParameterError("reconciler_text", type(text).__name__)
+    return SummaryParams(
+        text, _variant_from(values), _allowlist_from(values["foreign_chain_allowlist"])
+    )
+
+
+def _variant_from(values: Mapping[str, object]) -> Variant:
+    """Return the variant the parameters name.
+
+    Raises:
+        ParameterError: when it is neither of the two.
+    """
+    given = values["variant"]
+    if given == "standard":
+        return "standard"
+    if given == "protected_no_db":
+        return "protected_no_db"
+    raise ParameterError("variant", str(given))
+
+
+def _allowlist_from(allowlist: object) -> frozenset[str]:
+    """Return the foreign-chain allowlist as a set of names.
+
+    Raises:
+        ParameterError: when it is not a list of chain names.
+    """
     if not isinstance(allowlist, list):
         raise ParameterError("foreign_chain_allowlist", str(allowlist))
     names = [str(name) for name in allowlist]
     for name in names:
         if CHAIN_NAME.fullmatch(name) is None:
             raise ParameterError("foreign_chain_allowlist", name)
-    return Params(Path(path), variant, frozenset(names))
+    return frozenset(names)
+
+
+def summary_result(summary: Summary) -> dict[str, object]:
+    """Return what mode summary hands back: counts, positions, names and printable lines.
+
+    Every value is an integer, a flag, or a short name the module chose or checked against
+    CHAIN_NAME. The listing's text is not in it, so nothing a task registers can print it.
+    """
+    return {
+        "msg": "the firewall chains were summarised; nothing was changed",
+        "summary_lines": summary.lines(),
+        "chains": [dataclasses.asdict(chain) for chain in summary.chains],
+        "forward": [dataclasses.asdict(forward) for forward in summary.forwards],
+        "would_refuse": summary.would_refuse,
+        "at_risk": summary.at_risk,
+        "unreadable": summary.unreadable,
+    }
+
+
+def run(values: Mapping[str, object], runner: Runner) -> dict[str, object]:
+    """Do what the mode asks and return the module's result.
+
+    Raises:
+        PolicyError: when mode check finds the chains are not the policy, or either mode
+            cannot read the policy or its parameters.
+    """
+    if values.get("mode", "check") == "summary":
+        return summary_result(summarise(summary_params_from_mapping(values), runner))
+    found = check_all(params_from_mapping(values), runner)
+    return {
+        "msg": "the firewall chains carry the policy",
+        "owned_rules": found.owned_rules,
+        "foreign_rules": found.foreign_rules,
+    }
 
 
 def main() -> None:
     """Run as an Ansible module."""
-    module = AnsibleModule(argument_spec=ARGUMENT_SPEC, supports_check_mode=True)
+    module = AnsibleModule(
+        argument_spec=ARGUMENT_SPEC, required_if=REQUIRED_IF, supports_check_mode=True
+    )
 
     def runner(family: Family) -> Listing:
         binary = module.get_bin_path(family, required=True)
@@ -815,17 +1214,11 @@ def main() -> None:
         return Listing(status, out, err)
 
     try:
-        params = params_from_mapping(module.params)
-        found = check_all(params, runner)
+        result = run(module.params, runner)
     except PolicyError as error:
         module.fail_json(msg=str(error))
     else:
-        module.exit_json(
-            changed=False,
-            msg="the firewall chains carry the policy",
-            owned_rules=found.owned_rules,
-            foreign_rules=found.foreign_rules,
-        )
+        module.exit_json(changed=False, **result)
 
 
 if __name__ == "__main__":

@@ -19,7 +19,8 @@ first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
 reads). `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
-`roles/host_baseline`, `roles/breakglass_grant_host` and `roles/website_app1`.
+`roles/host_baseline`, `roles/breakglass_grant_host`, `roles/website_app1`, then
+`roles/deploy_tooling` (as class app, standard variant) and `roles/deploy_slot_keys`, last.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
 the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, then
 `roles/db1_backup_timers`; `roles/db1_grants` is left out of it.
@@ -585,11 +586,13 @@ oversight. Each is a decision the standard assigns to later work.
   run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
   its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. app1's
   playbook applies `roles/host_inputs` and then `roles/website_app1` (after `roles/host_baseline` and
-  `roles/breakglass_grant_host`), and refuses the run the same way
-  until the owner has placed app1's own `/etc/branchleft/host-inputs.json`. edge1 and ops1 apply
-  `roles/host_inputs` first as well, and refuse the run until the owner has placed their own
-  `/etc/branchleft/host-inputs.json` (edge1 holds the monitoring and pager inputs, ops1 the
-  backup worker and restore inputs). ANS-17 describes the only approved path. The trigger is
+  `roles/breakglass_grant_host`), then `roles/deploy_tooling` and `roles/deploy_slot_keys`, and
+  refuses the run the same way until the owner has placed app1's own
+  `/etc/branchleft/host-inputs.json`, holding the four SMTP values and at least one deploy slot.
+  edge1 and ops1 apply `roles/host_inputs` first as well, and refuse the run until the owner has
+  placed their own `/etc/branchleft/host-inputs.json` (edge1 holds the monitoring and pager
+  inputs, ops1 the backup worker and restore inputs). ANS-17 describes the only approved path. The
+  trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
   `.github/workflows/ansible-delivery.yml` calls that workflow.
 - **Reuse by other repositories.** The harness is code another repository may
