@@ -15,7 +15,7 @@ name: Ansible delivery
 # it before the first run, with all of these set:
 #   - required reviewer: one user, the single owner account the probe accepts, alone, no team and no other user;
 #   - Prevent self-review: ticked, so the person who merged a change cannot approve its deploy;
-#   - Allow administrators to bypass configured protection rules: unticked;
+#   - Allow administrators to bypass configured protection rules: ticked, so the owner is never blocked from an administrator bypass to take an apply (Rob, 1 Nov 2026);
 #   - deployment branches: main only;
 #   - environment secret: ssh_apply_key.
 # ansible/checks/check_delivery.py fails on every line of this file that would weaken
