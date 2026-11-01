@@ -156,22 +156,33 @@ def _applied_roles(playbook: str) -> list[str]:
 
 
 class HostRoleLists(unittest.TestCase):
+    real: dict[str, str]
+    original: dict[str, str]
+    listed: dict[str, list[str]]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """What every test only reads, read once from the tree on main. A test edits the copy
+        it makes in setUp, never these, so they are the same for each test as a fresh read
+        of the copy would give."""
+        # `real` is each playbook as it is on main, with whatever it applies after the pull
+        # roles. `original` is the same text cut after pull_trigger: the base every fixture
+        # builds on, so a role wired into a real playbook cannot collide with a fixture's own.
+        cls.real = {
+            host: (ROOT / "ansible" / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
+            for host in ENROLLED
+        }
+        cls.original = {host: _pull_roles_only(text) for host, text in cls.real.items()}
+        cls.listed = yaml.safe_load(
+            (ROOT / "ansible" / HOST_ROLES_FILE).read_text(encoding="utf-8")
+        )
+
     def setUp(self) -> None:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         shutil.copytree(ROOT / "ansible", self.root / "ansible", symlinks=True)
         self.ansible = self.root / "ansible"
-        # `real` is each playbook as it is on main, with whatever it applies after the pull
-        # roles. `original` is the same text cut after pull_trigger: the base every fixture
-        # builds on, so a role wired into a real playbook cannot collide with a fixture's own.
-        self.real = {
-            host: (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
-            for host in ENROLLED
-        }
-        self.original = {host: _pull_roles_only(text) for host, text in self.real.items()}
-        listed = yaml.safe_load((self.ansible / HOST_ROLES_FILE).read_text(encoding="utf-8"))
-        self.listed: dict[str, list[str]] = listed
 
     def _playbook(self, host: str, extra: str, bare: bool = False) -> None:
         """Put every enrolled playbook back to its pull roles only, then add text to one. With
@@ -194,14 +205,24 @@ class HostRoleLists(unittest.TestCase):
     def _list_file(self, text: str) -> None:
         (self.ansible / HOST_ROLES_FILE).write_text(text, encoding="utf-8")
 
-    def _findings(self, label: str) -> list[str]:
-        return [finding for finding in check(self.root) if finding.startswith(label)]
+    def _findings(self, label: str, everything: list[str] | None = None) -> list[str]:
+        """The findings that start with label. A caller that already holds the findings for
+        this tree passes them as everything, so the check is not run over the tree again."""
+        if everything is None:
+            everything = check(self.root)
+        return [finding for finding in everything if finding.startswith(label)]
 
-    def _assert_refused(self, host: str, contains: str) -> None:
-        findings = self._findings(f"R2 {host}.yml")
+    def _assert_refused(
+        self, host: str, contains: str, everything: list[str] | None = None
+    ) -> None:
+        """Assert an R2 finding for host holds contains. The check runs once, and a failure
+        message is built from those findings, never from a second run."""
+        if everything is None:
+            everything = check(self.root)
+        findings = self._findings(f"R2 {host}.yml", everything)
         self.assertTrue(
             any(contains in finding for finding in findings),
-            f"expected an R2 {host}.yml finding with {contains!r}, got {check(self.root)}",
+            f"expected an R2 {host}.yml finding with {contains!r}, got {everything}",
         )
 
     def test_the_real_tree_passes(self) -> None:
@@ -452,8 +473,11 @@ class HostRoleLists(unittest.TestCase):
                 path.write_text(
                     text.replace(body, runtime + _entry("host_baseline") + tail), "utf-8"
                 )
-                found = self._findings(f"R7 {host}.yml") + self._findings(f"R4 trust/{host}.yml")
-                self.assertTrue(found, check(self.root))
+                everything = check(self.root)
+                found = self._findings(f"R7 {host}.yml", everything) + self._findings(
+                    f"R4 trust/{host}.yml", everything
+                )
+                self.assertTrue(found, everything)
 
     # Rule: the pull roles carry nothing. A trigger with a var, a tag or a when is refused.
     def test_the_trigger_carries_nothing(self) -> None:
@@ -609,8 +633,9 @@ class HostRoleLists(unittest.TestCase):
     def test_a_missing_list_file_refuses_every_extra_role(self) -> None:
         (self.ansible / HOST_ROLES_FILE).unlink()
         self._playbook("edge1", _entry("host_baseline"))
-        self.assertTrue(any(f.startswith("R9") for f in check(self.root)), check(self.root))
-        self._assert_refused("edge1", "role host_baseline is not on edge1's list")
+        everything = check(self.root)
+        self.assertTrue(any(f.startswith("R9") for f in everything), everything)
+        self._assert_refused("edge1", "role host_baseline is not on edge1's list", everything)
 
     def test_a_malformed_list_file_is_refused(self) -> None:
         bad_files = (
@@ -632,14 +657,15 @@ class HostRoleLists(unittest.TestCase):
                 self._playbook("edge1", _entry("host_baseline"))
                 findings = check(self.root)
                 self.assertTrue(any(f.startswith("R9") for f in findings), findings)
-                self._assert_refused("edge1", "role host_baseline is not on edge1's list")
+                self._assert_refused("edge1", "role host_baseline is not on edge1's list", findings)
 
     # Control: one bad host in the list does not take the others' lists with it.
     def test_one_bad_entry_does_not_refuse_another_hosts_roles(self) -> None:
         self._list_file("edge1: [pull_trigger]\nops1: [control_plane]\n")
         self._playbook("ops1", _entry("control_plane"))
-        self.assertEqual(self._findings("R2 ops1.yml"), [])
-        self.assertTrue(any(f.startswith("R9") for f in check(self.root)))
+        everything = check(self.root)
+        self.assertEqual(self._findings("R2 ops1.yml", everything), [])
+        self.assertTrue(any(f.startswith("R9") for f in everything), everything)
 
     # The scan that no role sets the trust settings still runs on a role named in a list.
     def test_a_listed_role_that_sets_the_signers_is_still_refused(self) -> None:
