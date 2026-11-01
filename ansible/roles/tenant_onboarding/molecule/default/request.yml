@@ -1,0 +1,15 @@
+---
+# A request for one guarded step, as a maintainer makes it: this playbook with the step's
+# tag named on the command line, and the step id and the tenant given with -e. verify.yml
+# runs it with ansible-playbook for each case. Molecule's default sequence does not run it.
+- name: Request one guarded step
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with the tag named on the command line
+      ansible.builtin.include_role:
+        name: branchleft.tenant_onboarding
+      # always: the include itself must run under --tags, so the role's own tasks are the
+      # ones the named tag selects. The untagged plain-apply tasks are not selected.
+      tags:
+        - always

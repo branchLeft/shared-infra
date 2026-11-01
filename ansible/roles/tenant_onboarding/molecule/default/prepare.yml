@@ -1,0 +1,22 @@
+---
+# What the role expects to find on a host before it runs: the docker command the tenant
+# program calls, which is a stand-in here. Nothing else.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install the stand-in for the docker command the tenant program calls
+      ansible.builtin.copy:
+        src: fake_docker.py
+        dest: /usr/local/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the stand-in's state directory
+      ansible.builtin.file:
+        path: /var/lib/fake-docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
