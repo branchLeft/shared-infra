@@ -1052,7 +1052,9 @@ class Sabotage(unittest.TestCase):
 
     def _ops1_keys(self) -> list[str]:
         doc = _load(self.ansible / "owner_vars" / "ops1.yml", [], "ops1.yml")
-        return list(doc)
+        if not isinstance(doc, dict):
+            self.fail("ops1.yml must load as a mapping of owner_vars keys")
+        return [str(key) for key in doc]
 
     # W5: the role's step variable is the second key of the guard and must never be set by an
     # owner file. R10 holds the key set to exactly the allow-list.
