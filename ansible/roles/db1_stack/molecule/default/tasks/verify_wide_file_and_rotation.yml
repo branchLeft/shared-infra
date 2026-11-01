@@ -1,0 +1,144 @@
+---
+# The wide file and the rotation, included by verify.yml in the `rotation` scenario
+# only. Moved out of verify.yml as they were. They apply the role to a host
+# that holds an earlier release's wide file, and then rotate the password and put it
+# back, so the host ends as the converge left it.
+# ----- An earlier release left a wide file behind -----
+# The file is world-readable, owned by root and holds an earlier password.
+# The role must close it, give it to the exporter's account, replace the
+# content, and leave no copy of the earlier password anywhere.
+- name: Leave an exporter file that anyone can read, with an earlier password
+  ansible.builtin.copy:
+    content: "{{ '[client]' ~ ('%c' | format(10)) ~ 'password = ' ~ verify_earlier ~ ('%c' | format(10)) }}"
+    dest: '{{ scenario_cnf_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  no_log: true
+  diff: false
+
+- name: Apply the role over the wide file
+  ansible.builtin.include_tasks: apply.yml
+
+# The final owner, mode and content alone would also hold if the write
+# closed the file after moving it into place, which leaves the new password
+# open to others for a moment. The task that closes an existing file before
+# the write must itself have run and changed the file. The task that creates
+# a missing file changes nothing here, because the file exists. The earlier
+# run left a skipped result in the registered variable, so a missing task
+# cannot pass on a stale one.
+- name: Assert the wide file was closed by the task that runs before the write
+  ansible.builtin.assert:
+    that:
+      - db1_stack_exporter_closed | default({}) is changed
+      - db1_stack_exporter_closed | default({}) is not skipped
+      - db1_stack_exporter_created is not changed
+    fail_msg: The task that closes an exporter file that already exists did not change the wide file, so the write met an open file.
+    quiet: true
+
+- name: Assert the wide file was closed and replaced
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
+
+- name: Assert the earlier password is gone from the host
+  ansible.builtin.include_tasks: assert_gone.yml
+  vars:
+    gone_value: '{{ verify_earlier }}'
+
+# ----- Rotation as a re-run -----
+- name: Read the exporter file before the rotation
+  ansible.builtin.stat:
+    path: '{{ scenario_cnf_path }}'
+    get_checksum: false
+  register: db1_stack_verify_before
+
+- name: Apply the same password again
+  ansible.builtin.include_tasks: apply.yml
+
+- name: Read the exporter file after the same password
+  ansible.builtin.stat:
+    path: '{{ scenario_cnf_path }}'
+    get_checksum: false
+  register: db1_stack_verify_same
+
+# The same inode: nothing was rewritten.
+- name: Assert the same password rewrote nothing
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_same.stat.inode == db1_stack_verify_before.stat.inode
+    quiet: true
+
+- name: Plan the rotation in check mode with diff on
+  check_mode: true
+  diff: true
+  block:
+    - name: Apply the rotated password in check mode
+      ansible.builtin.include_tasks: apply.yml
+      vars:
+        apply_password: '{{ verify_password_rotated }}'
+
+- name: Assert the plan changed nothing
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
+
+- name: Rotate the password
+  ansible.builtin.include_tasks: apply.yml
+  vars:
+    apply_password: '{{ verify_password_rotated }}'
+
+- name: Assert the rotated password is in the file
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password_rotated }}'
+
+- name: Assert the replaced password is gone from the host
+  ansible.builtin.include_tasks: assert_gone.yml
+  vars:
+    gone_value: '{{ verify_password }}'
+
+- name: Read the exporter file after the rotation
+  ansible.builtin.stat:
+    path: '{{ scenario_cnf_path }}'
+    get_checksum: false
+  register: db1_stack_verify_rotated
+
+- name: Assert the rotation replaced the file
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_rotated.stat.inode != db1_stack_verify_before.stat.inode
+    quiet: true
+
+- name: Apply the rotated password again
+  ansible.builtin.include_tasks: apply.yml
+  vars:
+    apply_password: '{{ verify_password_rotated }}'
+
+- name: Read the exporter file after the rotated password again
+  ansible.builtin.stat:
+    path: '{{ scenario_cnf_path }}'
+    get_checksum: false
+  register: db1_stack_verify_rotated_again
+
+- name: Assert the rotated password again rewrote nothing
+  ansible.builtin.assert:
+    that:
+      - db1_stack_verify_rotated_again.stat.inode == db1_stack_verify_rotated.stat.inode
+    quiet: true
+
+# Put the host back as the converge left it. The harness checks the
+# configured host for drift after this play, and the rotated password must not
+# outlive it.
+- name: Rotate back to the first password
+  ansible.builtin.include_tasks: apply.yml
+
+- name: Assert the first password is back
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
+
+- name: Assert the rotated password is gone from the host
+  ansible.builtin.include_tasks: assert_gone.yml
+  vars:
+    gone_value: '{{ verify_password_rotated }}'

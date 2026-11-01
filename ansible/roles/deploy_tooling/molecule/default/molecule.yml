@@ -61,5 +61,16 @@ provisioner:
     # the chains back, outside the role's tasks, so the role's library is on the
     # module path.
     ANSIBLE_LIBRARY: '${MOLECULE_PROJECT_DIRECTORY}/library'
+    # Print each task's duration in the job log. The harness prints each step's
+    # whole output inside a group, so the timings appear there for the converge
+    # and verify plays. ansible.posix 2.2.2 is the collection the ansible 14.5.0
+    # package bundles and pins.
+    ANSIBLE_CALLBACKS_ENABLED: 'ansible.posix.profile_tasks'
+    # Order the timing recap slowest first, so its top entries are the slowest tasks.
+    ANSIBLE_PROFILE_TASKS_SORT_ORDER: 'desc'
+    # Pipelining, the setting db1_grants, edge_stack, host_inputs and
+    # tenant_compose already use. Whether it makes this scenario faster is what
+    # the timings in the job log show.
+    ANSIBLE_PIPELINING: 'true'
 verifier:
   name: ansible
