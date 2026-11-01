@@ -1,0 +1,33 @@
+---
+# Internal to the role: included from main.yml right after the inputs and before
+# anything is written to the host. The programs are this role's own copies under
+# files/ghost-platform, and they arrive in the signed commit the host checks out.
+# Each is hashed where the role runs and held to its pinned sha256 here, so a
+# digit flipped in a pin, or a file changed without its pin, stops the role before
+# it writes anything. Reading is not a change, so this runs in check mode too.
+- name: Hash each vendored program where the role runs
+  ansible.builtin.stat:
+    path: '{{ demo1_build_vendored_root }}/{{ item.path }}'
+    follow: false
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  loop: '{{ demo1_build_release_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: demo1_build_vendored_stats
+
+- name: Refuse a vendored program that is missing, is not a plain file or does not have its pinned sha256
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - not item.stat.islnk
+      - item.stat.checksum == item.item.sha256
+    quiet: true
+    fail_msg: >-
+      {{ item.item.path }} in the role's files/ghost-platform is missing, is not a plain file or
+      does not match its pin ({{ item.item.sha256 }}). Nothing has been written to the host.
+  loop: '{{ demo1_build_vendored_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'

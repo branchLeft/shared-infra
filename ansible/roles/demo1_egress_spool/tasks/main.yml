@@ -1,6 +1,6 @@
 ---
-# The order is the order the host needs. The inputs and the host are checked
-# before anything is written. The egress policy is installed and read back
+# The order is the order the host needs. The inputs, the vendored files and the host
+# are checked before anything is written. The egress policy is installed and read back
 # before the spool is delivered, because a spool container must never run on a
 # host whose policy is not loaded. The spool is read back last, from the
 # running container.
@@ -11,6 +11,11 @@
 # open a port or reboot the host.
 - name: Check the inputs
   ansible.builtin.include_tasks: _inputs.yml
+
+# Before the host is read and before anything is written: a file that is not the one
+# its pin names stops the run here.
+- name: Hold each vendored file to its pinned sha256
+  ansible.builtin.include_tasks: _vendored.yml
 
 - name: Check the host and what the role relies on and does not own
   ansible.builtin.include_tasks: _preconditions.yml

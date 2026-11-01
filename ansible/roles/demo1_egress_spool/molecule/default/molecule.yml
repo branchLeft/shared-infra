@@ -45,6 +45,15 @@ platforms:
       - /run
       - /run/lock
     command: /lib/systemd/systemd
+    # The demo host's egress allowlist holds the package mirrors only, so the role
+    # must work with GitHub and its container registry unreachable. Both names
+    # resolve to the container's own loopback, where nothing listens: a request to
+    # either fails at once, and verify.yml asserts that it does, so a role that
+    # reached for either would fail here and not pass on a runner that has internet.
+    # The refusals scenario links this file, so it runs blocked too.
+    etc_hosts:
+      raw.githubusercontent.com: 127.0.0.1
+      ghcr.io: 127.0.0.1
     # NET_ADMIN is the one added capability. The egress program loads rules into
     # the container's own network namespace with iptables-restore, which is a
     # netlink write, and the scenario reads them back. It reaches no host

@@ -417,3 +417,8 @@
           - demo1_build_verify_sudoers.stat.mode == '0440'
         quiet: true
         fail_msg: The sudoers grant is not root:root mode 0440.
+
+    # The role ran with GitHub and its registry unreachable (molecule.yml): the
+    # programs came from the role's own files, not from the network.
+    - name: Assert that GitHub and its registry were unreachable
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/blocked_outbound.yml'

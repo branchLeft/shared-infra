@@ -27,6 +27,20 @@ case $1 in
       *) exit 1 ;;
     esac
     ;;
+  image)
+    # The host never pulls, so the role looks for the image it will start. Only an image
+    # named in $state/images (tasks/standin_state.yml writes it) is on this stand-in host.
+    case $2 in
+      inspect)
+        grep -qxF -- "$3" "$state/images" 2>/dev/null || {
+          echo "Error: No such image: $3" >&2
+          exit 1
+        }
+        echo '[]'
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
   inspect)
     [ "$2" = mail-spool-mail-spool-1 ] || exit 1
     # The image the container was started with is filled in where the file holds the
@@ -45,7 +59,15 @@ case $1 in
       exit 1
     }
     case $2 in
-      pull) exit 0 ;;
+      pull)
+        # The unit runs this before every start. The demo host has no route to a
+        # registry, so a pull fails, as it did when it was tried with an unresolvable
+        # registry; Compose skips it for a service whose pull_policy is never, which
+        # the override beside the Compose file sets.
+        grep -qx '    pull_policy: never' "$project/compose.override.yml" 2>/dev/null && exit 0
+        echo "failed to resolve reference: no route to a registry" >&2
+        exit 1
+        ;;
       up)
         # The Compose file interpolates this with ${SHIM_DRAIN_TOKEN:?...}, which
         # fails the run when the owner's environment file is missing or empty.

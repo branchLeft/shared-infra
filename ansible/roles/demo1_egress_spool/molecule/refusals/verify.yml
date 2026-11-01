@@ -162,3 +162,7 @@
           - demo1_egress_spool_verify_call.status == 401
         quiet: true
         fail_msg: The drain endpoint answers a call with no token after the cases.
+
+    # The cases ran with GitHub and its registry unreachable (molecule.yml).
+    - name: Assert that GitHub and its registry were unreachable
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../demo1_build/molecule/default/tasks/blocked_outbound.yml'

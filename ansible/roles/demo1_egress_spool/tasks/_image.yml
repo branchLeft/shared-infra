@@ -1,0 +1,80 @@
+---
+# Internal to the role. The demo host has no route to a registry and the override sets
+# pull_policy never, so the host never pulls the spool's image: the image the pin file
+# names must already be on it. This reads, and writes nothing. In a real run it refuses
+# when the image is not there, before the volume is made or the unit is started, with
+# the reason in its message; in a plan it says so in a visible line, so a plan that
+# would fail the apply does not read as a pass (ANS-10). How an image gets onto the
+# host is not this role's job.
+
+# The pin file is the one source of the image the spool runs, so it is read first. It
+# is created once from the Compose file earlier in _spool.yml; a plan on a host that has
+# neither has no image to look for yet.
+- name: Look at the image pin file
+  ansible.builtin.stat:
+    path: '{{ demo1_egress_spool_image_env_path }}'
+    follow: false
+  register: demo1_egress_spool_image_env_stat
+
+- name: Read the image pin file
+  ansible.builtin.slurp:
+    src: '{{ demo1_egress_spool_image_env_path }}'
+  register: demo1_egress_spool_image_env_text
+  when: demo1_egress_spool_image_env_stat.stat.exists
+
+- name: Refuse an image pin file that is not one IMAGE line holding a digest-pinned image
+  ansible.builtin.assert:
+    that:
+      - (demo1_egress_spool_image_env_text.content | b64decode).splitlines() | length == 1
+      - (demo1_egress_spool_image_env_text.content | b64decode).splitlines() | first is match(demo1_egress_spool_image_env_pattern)
+    quiet: true
+    fail_msg: >-
+      {{ demo1_egress_spool_image_env_path }} is not exactly one IMAGE=<name>@sha256:<64 hex digits> line.
+      The shared Compose unit reads it, and the deploy wrapper rewrites it.
+  when: demo1_egress_spool_image_env_stat.stat.exists
+
+- name: Name the image the spool would start
+  ansible.builtin.set_fact:
+    demo1_egress_spool_wanted_image: ''
+
+- name: Take the image from the pin file where it is there
+  ansible.builtin.set_fact:
+    demo1_egress_spool_wanted_image: >-
+      {{ (demo1_egress_spool_image_env_text.content | b64decode).splitlines() | first | regex_replace('^IMAGE=', '') }}
+  when: demo1_egress_spool_image_env_stat.stat.exists
+
+- name: Take the image from the Compose file where there is no pin file yet
+  ansible.builtin.set_fact:
+    demo1_egress_spool_wanted_image: '{{ demo1_egress_spool_compose_doc.services[demo1_egress_spool_service].image }}'
+  when: not demo1_egress_spool_image_env_stat.stat.exists and demo1_egress_spool_compose_now.stat.exists
+
+# Reads only, so it runs in check mode too. A name that begins with a letter or digit
+# cannot be taken for an option (the pattern above holds the pin file to that).
+- name: Look for the image on the host
+  ansible.builtin.command:
+    argv:
+      ['{{ demo1_egress_spool_docker }}', image, inspect, '{{ demo1_egress_spool_wanted_image }}']
+  register: demo1_egress_spool_image_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: demo1_egress_spool_wanted_image | length > 0
+
+- name: Say the spool image is not on the host, in a plan
+  ansible.builtin.debug:
+    msg: >-
+      Spool image NOT on host: this plan cannot show that the image the spool starts is there
+      (image: {{ demo1_egress_spool_wanted_image | default('none named yet, no pin file or Compose file on the host', true) }}).
+      The host never pulls an image, so an apply refuses to start the spool until it is.
+  when: ansible_check_mode and (demo1_egress_spool_wanted_image | length == 0 or demo1_egress_spool_image_inspect.rc | default(1) != 0)
+
+- name: Refuse to start the spool when its image is not on the host
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_image_inspect.rc | default(1) == 0
+    quiet: true
+    fail_msg: >-
+      The image {{ demo1_egress_spool_wanted_image }} is not on this host. The host has no route to a
+      registry and never pulls an image (the Compose override sets pull_policy never), so the image the
+      pin file {{ demo1_egress_spool_image_env_path }} names must already be on it. The spool was not started.
+  when: not ansible_check_mode
