@@ -64,10 +64,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs and
 # website_app1 (last, after host_baseline has installed Docker), db1's host_baseline, db1_stack
-# db1_backup_timers and tunnel_account (after the loader, which goes first; the tunnel is last, so
-# that a missing tunnel input stops the run after every other role; db1_grants would sit between
-# the timers and the tunnel and is not applied), ops1's host_inputs (first), control_plane after
-# the status page, then
+# and db1_backup_timers (after the loader, which goes first; db1_grants would follow the timers
+# and is not applied), ops1's host_inputs (first), control_plane after the status page, then
 # nextcloud_stack, backup_worker and backup_restore (the restore reads the worker's variables, so
 # it follows), and demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
@@ -93,7 +91,7 @@ APPLIED_ON_MAIN = {
         "backup_restore",
     ],
     "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
-    "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers", "tunnel_account"],
+    "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
     "demo1": ["demo1_build", "demo1_egress_spool"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
@@ -226,12 +224,11 @@ class HostRoleLists(unittest.TestCase):
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
     # Safety class: db1 is the production database host. It applies the two pull roles, the loader
-    # of its private inputs, the host baseline, the stack, the backup timers, then the replica
-    # tunnel last, and none of the other roles on its list, which R9 allows because a playbook may
-    # apply a subset. Red when any role is added, dropped or moved (the tunnel first, or missing,
-    # included), green with the seven named in this order. db1_grants is held back and would sit
-    # between the timers and the tunnel.
-    def test_db1_applies_the_loader_the_baseline_the_stack_the_timers_then_the_tunnel(
+    # of its private inputs, the host baseline, the stack, then the backup timers, and none of the
+    # other roles on its list, which R9 allows because a playbook may apply a subset. Red when any
+    # role is added or moved, green with the six named in this order. db1_grants is held back and
+    # would have to follow the timers.
+    def test_db1_applies_the_pull_roles_the_loader_the_baseline_the_stack_then_the_timers(
         self,
     ) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
@@ -245,10 +242,10 @@ class HostRoleLists(unittest.TestCase):
                 "host_baseline",
                 "db1_stack",
                 "db1_backup_timers",
-                "tunnel_account",
             ],
         )
-        self.assertNotIn("db1_grants", names)
+        for held_back in ("db1_grants", "tunnel_account"):
+            self.assertNotIn(held_back, names)
         self.assertEqual(check(ROOT), [])
 
     # edge1 applies the loader first, then the edge stack after the baseline (Docker), the CI login
