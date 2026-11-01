@@ -57,6 +57,7 @@
       - db1_stack_exporter_password is not defined
       - db1_grants_tenants is not defined
       - db1_grants_ops1_host is not defined
+      - tenant_compose_stacks is not defined
     fail_msg: 'Case {{ case.name }}: an input was set although the run was refused.'
     quiet: true
 

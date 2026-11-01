@@ -63,8 +63,10 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs and
-# website_app1 (last, after host_baseline has installed Docker), db1's host_baseline, db1_stack
-# and db1_backup_timers (after the loader, which goes first; db1_grants would follow the timers
+# website_app1 (after host_baseline has installed Docker) and tenant_compose (last: it restarts
+# the tenants' live stacks, so a failure there must not hold the website back), db1's
+# host_baseline, db1_stack and db1_backup_timers (after the loader, which goes first; db1_grants
+# would follow the timers
 # and is not applied), ops1's host_inputs (first), control_plane after the status page, then
 # nextcloud_stack, backup_worker and backup_restore (the restore reads the worker's variables, so
 # it follows), and demo1's two build roles.
@@ -90,7 +92,13 @@ APPLIED_ON_MAIN = {
         "backup_worker",
         "backup_restore",
     ],
-    "app1": ["host_inputs", "host_baseline", "breakglass_grant_host", "website_app1"],
+    "app1": [
+        "host_inputs",
+        "host_baseline",
+        "breakglass_grant_host",
+        "website_app1",
+        "tenant_compose",
+    ],
     "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
     "demo1": ["demo1_build", "demo1_egress_spool"],
 }
@@ -205,7 +213,12 @@ class HostRoleLists(unittest.TestCase):
     def test_the_playbooks_on_main_apply_the_expected_roles(self) -> None:
         for host in ENROLLED:
             text = (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
-            after = text[text.index(TRIGGER_ENTRY) + len(TRIGGER_ENTRY) :]
+            # A comment line among the roles says why one is where it is; it applies nothing.
+            after = "".join(
+                line
+                for line in text[text.index(TRIGGER_ENTRY) + len(TRIGGER_ENTRY) :].splitlines(True)
+                if not line.lstrip().startswith("#")
+            )
             expected = "".join(
                 f"    - role: ../roles/{name} # noqa: role-name[path]\n"
                 for name in APPLIED_ON_MAIN.get(host, [])
