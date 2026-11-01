@@ -5,7 +5,10 @@
 # under test. Inputs left out take the scenario's good values. The refusal
 # message must not hold a sentinel, which the check below requires for every
 # case and the log scan requires again at the end.
+# refused_check_mode: true applies it in check mode, for a refusal that must hold
+# in a plan as well as in an apply. The default is a real apply.
 - name: Apply the role with input it must refuse
+  check_mode: '{{ refused_check_mode | default(false) }}'
   block:
     - name: Apply the role
       ansible.builtin.include_role:
@@ -21,11 +24,13 @@
       ansible.builtin.set_fact:
         db1_stack_refused_by: 'NOTHING: the role accepted the input'
         db1_stack_refused_message: ''
+        db1_stack_refused_item_messages: []
   rescue:
     - name: Record which task refused the input
       ansible.builtin.set_fact:
         db1_stack_refused_by: '{{ ansible_failed_task.name }}'
         db1_stack_refused_message: '{{ ansible_failed_result.msg | default("") }}'
+        db1_stack_refused_item_messages: '{{ ansible_failed_result.results | default([]) | map(attribute="msg", default="") | list }}'
 
 - name: Assert the role stopped at the expected task
   ansible.builtin.assert:
@@ -37,6 +42,6 @@
 - name: Assert the refusal holds no sentinel
   ansible.builtin.assert:
     that:
-      - db1_stack_refused_message | regex_search(verify_sentinel_pattern) is none
+      - (db1_stack_refused_message ~ ' ' ~ (db1_stack_refused_item_messages | join(' '))) | regex_search(verify_sentinel_pattern) is none
     quiet: true
   no_log: true

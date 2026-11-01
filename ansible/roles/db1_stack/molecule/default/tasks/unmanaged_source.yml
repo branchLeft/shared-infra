@@ -1,0 +1,48 @@
+---
+# Another file names the MySQL repository, and the role neither delivers nor
+# removes it. The role must stop before it changes the host, in a plan as well
+# as in an apply. Each case below is one way such a file can look: an unknown
+# source list, an unknown deb822 file, the main list, a link to a file outside
+# the directory, and a host name in upper case. The cases run one at a time, and
+# each is removed before the next so a case cannot pass because of another.
+- name: Look for a main apt source list the image may already have
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list
+  register: db1_stack_unmanaged_main_list
+
+# The main-list case writes and then removes /etc/apt/sources.list, which is only
+# a clean test if the image has none. Stopping here if it has one is better than
+# deleting an image file.
+- name: Assert the image has no main apt source list
+  ansible.builtin.assert:
+    that:
+      - not db1_stack_unmanaged_main_list.stat.exists
+    fail_msg: The image holds /etc/apt/sources.list, so the main-list case would delete a file it did not make.
+    quiet: true
+
+- name: Run each case of an apt source file the role does not manage
+  ansible.builtin.include_tasks: unmanaged_source_case.yml
+  loop:
+    - name: unknown list
+      path: /etc/apt/sources.list.d/zz-other.list
+      link_target: ''
+      text: deb https://repo.mysql.com/apt/debian bookworm mysql-8.0
+    - name: unknown deb822 file
+      path: /etc/apt/sources.list.d/zz-other.sources
+      link_target: ''
+      text: "Types: deb\nURIs: https://repo.mysql.com/apt/debian\nSuites: bookworm\nComponents: mysql-8.0\n"
+    - name: main list
+      path: /etc/apt/sources.list
+      link_target: ''
+      text: deb https://repo.mysql.com/apt/debian bookworm mysql-8.0
+    - name: linked list
+      path: /etc/apt/sources.list.d/zz-link.list
+      link_target: /var/cache/db1-stack/zz-link-target
+      text: deb https://repo.mysql.com/apt/debian bookworm mysql-8.0
+    - name: upper-case host name
+      path: /etc/apt/sources.list.d/zz-upper.list
+      link_target: ''
+      text: deb https://REPO.MYSQL.COM/apt/debian bookworm mysql-8.0
+  loop_control:
+    loop_var: unmanaged_case
+    label: '{{ unmanaged_case.name }}'
