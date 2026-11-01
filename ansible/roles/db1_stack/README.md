@@ -170,6 +170,95 @@ creates one container with no network. It never touches a host.
 CI runs the harness over every role and every pattern (the Ansible workflow), so
 this scenario runs on each pull request.
 
+### The scenarios, and running one alone
+
+The cases are shared out between five scenarios, each its own shard in CI, because
+all of them in one verify took about twenty minutes (ws#2865). One verify.yml serves
+all five; the part of the cases it runs is the name Molecule gives the scenario
+(`MOLECULE_SCENARIO_NAME`), and `molecule/default/tasks/assert_parts.yml` fails the
+run when a part has no scenario directory with a `molecule.yml` and a `verify.yml`
+that does not leave the verify step out. So a case cannot be dropped by deleting a
+scenario.
+
+| Scenario     | Runs                                                                                                                                    | Steps                                                                      |
+| ------------ | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `default`    | no case of its own: the checks on what the converge left, the source checks and the log scan                                            | all eight, so the plan, idempotence and check-mode steps are run here only |
+| `refusals`   | `verify_input_refusals.yml` (password, downloads, key pin, toolchain) and `verify_refusals.yml` (image pin forms, second compose files) | converge, verify                                                           |
+| `paths`      | `verify_paths.yml`: the directory, the kept directories and the link in the exporter file's place                                       | converge, verify                                                           |
+| `rotation`   | `verify_wide_file_and_rotation.yml`: the wide file an earlier release left, and the rotation                                            | converge, verify                                                           |
+| `repository` | `verify_repository_files.yml`: a changed repository file makes the role refresh the index                                               | converge, verify                                                           |
+
+The checks that read what the converge left, the source checks, the sentinel scan of
+the log (ANS-16) and the scan of the files on the controller run in every scenario,
+each over that scenario's own run. A scenario's `molecule.yml` is a link to
+`default/molecule.yml`, so there is one copy of the container and the Ansible
+settings. A scenario other than `default` has a `skip-steps.txt` that leaves out the
+steps `default` runs (`ansible/README.md`, "Sharing steps between scenarios").
+
+To run one scenario with everything the CI shard runs:
+
+```text
+.venv/bin/python ansible/harness/run_harness.py ansible/roles/db1_stack --scenario refusals
+```
+
+To iterate on one case, keep one instance and run only the step you changed. The
+instance name comes from `ROLE_TEST_RUN_ID`, so use a name of your own, and give
+Molecule the scenario with `-s`:
+
+```text
+cd ansible/roles/db1_stack
+export ROLE_TEST_RUN_ID=mine ANSIBLE_HOME=/path/to/a/scratch/directory
+molecule create -s paths
+molecule converge -s paths
+molecule verify -s paths
+molecule destroy -s paths
+```
+
+`molecule verify -s paths` runs the path cases only. Change a case, run
+`molecule verify -s paths` again on the same instance, and run `destroy` when you
+are done. A case that changes the host and does not put it back needs a new
+`converge` first.
+
+### Timing a run
+
+Every scenario enables Ansible's `profile_tasks` callback (the setting deploy_tooling
+uses, shared-infra PR 551), which prints the slowest tasks at the end of each play,
+and keeps verbosity 3 and the log path that the ANS-16 scan needs (`molecule.yml`).
+Run one Molecule step per call, with a clock on it, and never the whole harness to
+find out where the time goes:
+
+```text
+time molecule create -s paths
+time molecule converge -s paths
+time molecule verify -s paths
+```
+
+The log of every play is `$MOLECULE_EPHEMERAL_DIRECTORY/ansible.log` and holds a time
+on each line; the time between two `TASK [` lines is the time of the first.
+
+What the first measurement (ws#2865) found, on the local Docker engine, and what was
+done about each:
+
+| Cause                                                                                                                     | Cost                                                          | What was done                                                                                                                            |
+| ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| Each task was six `docker exec` calls (home directory, temporary directory, copy, mode, run, remove)                      | most of the time of every role application                    | `ANSIBLE_PIPELINING` (one exec per task), as db1_grants, edge_stack, host_inputs and tenant_compose set it                               |
+| The role runs about 60 tasks, and its loop of eight `stat` calls over the second-compose-file names is eight docker execs | about 2.5 s of every application (4 to 6 s before pipelining) | not changed: it is the role's own task. Fewer applications per shard is the lever.                                                       |
+| A failed index refresh: apt waits on each name lookup, and the apt module retries the update five times                   | about 65 s for each of three cases                            | `Acquire::Retries "0"` and a 2 s timeout in the instance (`prepare.yml`): about 30 s, which is the module's own wait between its retries |
+| One verify of every case                                                                                                  | about 20 minutes                                              | the five scenarios above, which CI runs as five shards                                                                                   |
+
+| What the harness takes, local    | Before (one shard) | After: default | refusals | paths | rotation | repository |
+| -------------------------------- | ------------------ | -------------- | -------- | ----- | -------- | ---------- |
+| Whole harness, seconds           | 1311 or more       | 302            | 352      | 312   | 266      | 361        |
+| Share of the before              |                    | 23%            | 27%      | 24%   | 20%      | 28%        |
+| `molecule verify` alone, seconds | 1127 or more       |                | 276      | 230   |          | 243        |
+
+The before figure is the sum of the steps that were measured: the two verify runs
+were cut at the ten-minute limit of one command and each was still running, so the
+real figure is higher (20 minutes was seen on the issue), and the check-mode and
+Molecule-check steps after verify were not measured. The after figures are the harness
+run once per scenario (`run_harness.py --scenario`) on the same machine. The longest
+shard is the number CI waits for.
+
 ## How it is delivered
 
 Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode,
@@ -361,6 +450,20 @@ table is removed in turn, by a single edit, and the whole harness is run: each
 removal makes a named step fail with the message shown, and the file is restored
 afterwards. A control that does not make the test fail when it is removed is not
 claimed.
+
+Since ws#2865 the cases are shared out between scenarios (see "The scenarios"), so
+"verify" in the tables below is the verify step of the scenario that holds the case:
+the refusal rows (the password, the downloads, the key pin, the toolchain, the image
+pin and the second compose files) in `refusals`; the rows for a directory or a link in
+the exporter file's place in `paths`; the rows for the wide file and the rotation in
+`rotation`; the rows for a changed repository file in `repository`. The content,
+order, source and log-scan rows, and the sentinel scan (ANS-16), are in every
+scenario. The sabotage of ws#2865 itself (deleting the close task, changing the
+password anchor `\Z` to `$`, deleting `no_log` from the write task, and deleting a
+scenario's `molecule.yml`) each went red, then green again once reverted: the close
+task in `rotation`, the anchor in `refusals`, the write task's `no_log` in the sentinel
+scan of `refusals` and of `default`, and the missing `molecule.yml` in the part check
+that opens every scenario's verify.
 
 Part one:
 

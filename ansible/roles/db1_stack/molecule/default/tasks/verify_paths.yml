@@ -1,0 +1,31 @@
+---
+# The path cases, included by verify.yml in the `paths` scenario only (ws#2865).
+# Moved out of verify.yml as they were. Each case puts something in the exporter
+# file's place and applies the role, which is most of the verify time of this scenario.
+# ----- A path that Docker or an earlier release left in the way -----
+# Docker creates a directory at a bind-mount source it cannot find. The
+# role removes an empty one, refuses one that holds anything, and replaces a
+# link without following it.
+- name: Put an empty directory where the exporter file goes
+  ansible.builtin.include_tasks: path_empty_directory.yml
+
+- name: Put a directory that holds a file where the exporter file goes
+  ansible.builtin.include_tasks: path_kept_directory.yml
+  vars:
+    kept_name: PLACEHOLDER_KEEP
+    kept_kind: file
+
+- name: Put a directory that holds only a hidden file where the exporter file goes
+  ansible.builtin.include_tasks: path_kept_directory.yml
+  vars:
+    kept_name: .PLACEHOLDER_KEEP
+    kept_kind: file
+
+- name: Put a directory that holds only a subdirectory where the exporter file goes
+  ansible.builtin.include_tasks: path_kept_directory.yml
+  vars:
+    kept_name: PLACEHOLDER_KEEP_DIRECTORY
+    kept_kind: directory
+
+- name: Put a link to another file where the exporter file goes
+  ansible.builtin.include_tasks: path_link.yml
