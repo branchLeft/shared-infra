@@ -295,8 +295,11 @@ jobs:
       - name: Test the harness
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
 
+      # --durations 10 prints the ten slowest checks after the run, so the time the step takes
+      # can be attributed. unittest's flag needs Python 3.12 or later, the runner image's
+      # interpreter. It changes no result: a failing check still fails the step.
       - name: Test the checks
-        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py"'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py" --durations 10'
 
       # The tools build the record a new host's first-boot document is made from. Their
       # tests run the role's own configuration task with this job's ansible-playbook and
