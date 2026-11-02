@@ -1,4 +1,4 @@
-"""Check that each network has exactly one NAT gateway, and that no other host plays the role as one.
+"""Check that each network has exactly one NAT gateway, and no other host plays that role.
 
 The role installs the gateway half (the NAT reconciler and its unit) only when
 `egress_nat_gateway_enabled` is true, and its default is false. A second gateway on one network
@@ -167,7 +167,8 @@ class EgressNatSingleGateway(unittest.TestCase):
         for host in GATEWAYS:
             with self.subTest(host=host):
                 roles = _play(host).get("roles")
-                self.assertIn({"role": f"../roles/{ROLE}"}, roles if isinstance(roles, list) else [])
+                role_list = roles if isinstance(roles, list) else []
+                self.assertIn({"role": f"../roles/{ROLE}"}, role_list)
 
 
 if __name__ == "__main__":

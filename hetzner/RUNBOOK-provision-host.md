@@ -444,7 +444,7 @@ project is created, and `db-t1` stays off (`dbt1Enabled`) until they are. The
 forwarding has only been proven with Docker's FORWARD chain on edge1; prove it
 on `edge-t` with Docker running before `db-t1`'s first boot (for example from a
 network namespace on `edge-t` itself, which costs nothing), and record the
-result on branchLeft/workspace#2898.
+result in the change that brings up `db-t1`.
 
 ### What this does not solve
 

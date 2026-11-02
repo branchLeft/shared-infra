@@ -246,6 +246,24 @@ pnpm run typecheck
 pnpm run test
 ```
 
+## Where the estate is placed
+
+`ESTATE_LOCATION` in `addressPlan.ts` is `nbg1`, the one location every host is created in. It is a
+shared constant rather than a per-stack setting because the estate is built by more than one stack
+in more than one repository, and `location` is create-time-only on `hcloud.Server`. A per-stack
+value lets a second apply land somewhere the first did not, with a clean preview, and the app and
+database hosts are the latency-sensitive pair, so a split between them is the outcome to prevent.
+
+It is weaker than one apply in two ways. Nothing stops a stack passing another value to `Host`. And
+a stack that has already applied does not follow a later edit to the constant: its hosts stay where
+they were created, so changing it after a host exists describes an estate that is already split.
+Read `estateLocation` from the applied stack's outputs to learn where a host is.
+
+`hel1` is the substitute if `cx23` is out of stock at apply time. Reach and cost do not change,
+because a subnet spans the whole `eu-central` zone, so the mail hop stays intra-network either way.
+What is given up is that the hop's latency becomes unmeasured, which is what the placement rule
+exists to avoid.
+
 ## Notes kept from the source
 
 These notes were cut from `cloudInit.ts`, `cloudInit.test.ts`, `host.ts` and `host.test.ts`

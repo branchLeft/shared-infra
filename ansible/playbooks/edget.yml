@@ -12,8 +12,8 @@
 # tested in checks/test_egress_nat_single_gateway.py.
 #
 # Not here yet, each with its own change: ci_login and deploy_tooling (the pipeline reaches
-# edge-t through edge1 once the ci_jump role, workspace#2894, is on main), the edge stack
-# (Caddy, workspace#1640) and the monitoring roles. No host_inputs: neither host_baseline
+# edge-t through edge1 once the ci_jump role is on main), the edge stack (Caddy) and the
+# monitoring roles. No host_inputs: neither host_baseline
 # nor egress_nat takes an input. No owner_vars file for the same reason.
 #
 # The host's trigger runs this file on a signed checkout with the inventory `localhost,`,

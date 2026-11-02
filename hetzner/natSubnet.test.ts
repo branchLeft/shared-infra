@@ -9,7 +9,7 @@ import { internetEgressRoute } from './egress';
 /**
  * The NAT reconciler takes no subnet parameter from the `egress_nat` role: it
  * forwards and masquerades the subnet written in its own default, and the
- * tenants network's subnet is the same `SUBNET_CIDR` (Rob, 2 Nov 2026, ruling
+ * tenants network's subnet is the same `SUBNET_CIDR` (the owner, 2 Nov 2026, ruling
  * 5a keeps the range). The script runs on a host with no checkout to import
  * the plan from, so the equality is pinned here. If the two drift, the gateway
  * masquerades a subnet nothing is in and every private host loses its path out

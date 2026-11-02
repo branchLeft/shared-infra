@@ -10,7 +10,7 @@ import {
 } from './addressPlan';
 
 /**
- * The tenants project reuses the estate's address range (Rob, 2 Nov 2026,
+ * The tenants project reuses the estate's address range (the owner, 2 Nov 2026,
  * ruling 5a), so a register that every private address passes through is the
  * only thing that stops two hosts in two projects claiming one address.
  */
