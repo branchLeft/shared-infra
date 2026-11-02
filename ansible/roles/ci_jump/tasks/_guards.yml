@@ -1,0 +1,32 @@
+---
+# Every input is judged by the module before the key file is touched, inputs first and then the
+# host. No assertion loops: a failed loop prints its item, which here would be a key. The module
+# task hides its result (ANS-16); a refusal is a code and an entry number, read out by the
+# assertion after it, so the cause of a stop shows in the log with no value in it.
+# failed_when: false makes the result's failed flag false, so a refusal is read from msg: only a
+# refusal carries one.
+- name: Judge the inputs and the host, and compare the live key lines with the wanted ones
+  ci_jump_authorized_keys:
+    action: plan
+    user: '{{ ci_jump_user }}'
+    destinations: '{{ ci_jump_destinations }}'
+    keys: "{{ ci_jump_keys | map(attribute='key') | list }}"
+    owned_accounts: '{{ ci_jump_owned_accounts }}'
+  register: ci_jump_plan
+  failed_when: false
+  changed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop if the module refused
+  ansible.builtin.assert:
+    that:
+      - ci_jump_plan.msg is not defined
+    fail_msg: "{{ ci_jump_plan.msg | default('the module returned no result') }}"
+    quiet: true
+
+# The lines hold host names, ports, key types and fingerprints. This is what Rob reads in the
+# check-mode plan before approving an apply: each destination live against wanted, and each key.
+- name: Show the live key lines against the wanted ones
+  ansible.builtin.debug:
+    msg: '{{ ci_jump_plan.lines }}'

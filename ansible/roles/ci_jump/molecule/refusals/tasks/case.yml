@@ -1,0 +1,124 @@
+---
+# One case of the role's refusals, included by converge.yml with converge_case set. The case puts
+# the host in one bad state, runs one of the role's own steps alone, and asserts that the step
+# refuses it with its own code. See converge.yml for the keys a case may set. A case with
+# accepted: true is a control: the same step on the host as prepared must not refuse, so a step
+# that refused everything would not pass every case.
+#
+# Everything the case changed is put back in every outcome: the files from a copy taken first, a
+# file the host did not have removed, and the commands the case gives. A plan makes no change, so a
+# check run skips the case.
+- name: Prove the step refuses the state, or accepts it for a control
+  when: not ansible_check_mode
+  vars:
+    case_accepted: '{{ converge_case.accepted | default(false) | bool }}'
+    case_paths: >-
+      {{ ((converge_case.files | default([])) + (converge_case.edits | default([])))
+      | map(attribute='path') | unique | list }}
+  block:
+    - name: Look at the files the case changes
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop: '{{ case_paths }}'
+      register: ci_jump_case_stat
+
+    - name: Keep the files the case changes
+      ansible.builtin.slurp:
+        src: '{{ item.item }}'
+      loop: '{{ ci_jump_case_stat.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+      when: item.stat.exists
+      register: ci_jump_case_kept
+      no_log: true
+
+    - name: Put the files the case replaces in place
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ item.path }}'
+        owner: '{{ item.owner | default("root") }}'
+        group: '{{ item.owner | default("root") }}'
+        mode: '{{ item.mode | default("0600") }}'
+      loop: '{{ converge_case.files | default([]) }}'
+      loop_control:
+        label: '{{ item.path }}'
+      no_log: true
+
+    - name: Edit the files the case edits
+      ansible.builtin.replace:
+        path: '{{ item.path }}'
+        regexp: '{{ item.regexp }}'
+        replace: '{{ item.replace }}'
+      loop: '{{ converge_case.edits | default([]) }}'
+      loop_control:
+        label: '{{ item.path }}'
+      no_log: true
+
+    - name: Run the commands that put the host in the state
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop: '{{ converge_case.setup | default([]) }}'
+      loop_control:
+        label: '{{ item | join(" ") }}'
+      changed_when: true
+
+    # The step is the role's own internal tasks file, run alone with the inputs the case gives in
+    # place of the delivered ones. The flag is on, as it is when the step is reached in a run.
+    - name: Run the step the case is for
+      ansible.builtin.include_role:
+        name: branchleft.ci_jump
+        tasks_from: '{{ converge_case.tasks_from | default("_guards.yml") }}'
+      vars:
+        ci_jump_manage_keys: true
+        ci_jump_user: '{{ converge_case.user | default(scenario_jump_user) }}'
+        ci_jump_destinations: '{{ converge_case.destinations | default([scenario_listed]) }}'
+        ci_jump_keys: >-
+          {{ converge_case.key_entries | default([{'key': ci_jump_scenario_pub_jump}, {'key': ci_jump_scenario_pub_second}]) }}
+
+    - name: Fail if the step accepted a state it must refuse
+      ansible.builtin.fail:
+        msg: 'The role accepted a host it must refuse: {{ converge_case.name }}.'
+      when: not case_accepted | bool
+  rescue:
+    - name: Fail if the control case was refused
+      ansible.builtin.fail:
+        msg: 'The control case was refused: {{ ansible_failed_result | to_json }}'
+      when: case_accepted | bool
+
+    - name: Assert the refusal was the one this case is for
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
+      vars:
+        expect_phrase: '{{ converge_case.expect }}'
+      when: not case_accepted | bool
+  always:
+    - name: Put the files back, with the owners and modes they had
+      ansible.builtin.copy:
+        content: '{{ item.content | b64decode }}'
+        dest: '{{ item.item.item }}'
+        owner: '{{ item.item.stat.pw_name }}'
+        group: '{{ item.item.stat.gr_name }}'
+        mode: '{{ item.item.stat.mode }}'
+      loop: '{{ (ci_jump_case_kept.results | default([])) | rejectattr("skipped", "defined") | list }}'
+      loop_control:
+        label: '{{ item.item.item }}'
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Remove the files the host did not have before the case
+      ansible.builtin.file:
+        path: '{{ item.item }}'
+        state: absent
+      loop: '{{ ci_jump_case_stat.results | default([]) | rejectattr("stat.exists") | list }}'
+      loop_control:
+        label: '{{ item.item }}'
+      when: not ansible_check_mode
+
+    - name: Run the commands that undo the state
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop: '{{ converge_case.restore | default([]) }}'
+      loop_control:
+        label: '{{ item | join(" ") }}'
+      changed_when: true
+      when: not ansible_check_mode

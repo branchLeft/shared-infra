@@ -1,0 +1,131 @@
+---
+# One connection to the container's own sshd with one key, and what came of it. Inputs:
+# attempt_key, the key pair's name; attempt_expect, one of
+#   through  the stdio forward to attempt_target was made: the target's own banner came back
+#   refused  the jump host refused the forward and logged that it denied it; no banner came
+#   denied   the key did not authenticate
+#   no_command  a remote command was asked for and nothing ran
+# attempt_target, host:port for the forward (a -W request); attempt_command, the remote command
+# (sent after a double dash), for the no_command case. The marker file is what the hostile command
+# tries to make. Every other target is a live listener of the same sshd, so a refusal is the key
+# line's doing and not an absent listener's.
+- name: Clear the marker a hostile command would make
+  ansible.builtin.file:
+    path: /tmp/EXAMPLE_MARKER
+    state: absent
+  check_mode: false
+
+- name: Look at what the test SSH server had logged before the connection
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/sshd.log'
+  register: ci_jump_scenario_attempt_log_before
+  check_mode: false
+
+- name: Connect with the key
+  ansible.builtin.command:
+    argv: '{{ attempt_base + (attempt_forward if attempt_target is defined else attempt_remote) }}'
+    stdin: "EXAMPLE\n"
+    stdin_add_newline: false
+  vars:
+    # timeout turns a client left waiting into a failure (124, or 137 once killed) that the
+    # assertion below names.
+    attempt_base:
+      - timeout
+      - --kill-after=5
+      - '60'
+      - ssh
+      - -o
+      - ConnectTimeout=10
+      - -i
+      - '{{ scenario_key_dir }}/{{ attempt_key }}'
+      - -p
+      - '{{ scenario_ssh_port }}'
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - LogLevel=ERROR
+    attempt_forward:
+      ['-W', '{{ attempt_target | default("") }}', '{{ scenario_jump_user }}@127.0.0.1']
+    attempt_remote:
+      ['{{ scenario_jump_user }}@127.0.0.1', '--', '{{ attempt_command | default("") }}']
+  register: ci_jump_scenario_attempt
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Look for the marker a hostile command would make
+  ansible.builtin.stat:
+    path: /tmp/EXAMPLE_MARKER
+  register: ci_jump_scenario_attempt_marker
+  check_mode: false
+
+- name: Look at what the test SSH server has logged since
+  ansible.builtin.slurp:
+    src: '{{ scenario_record_dir }}/sshd.log'
+  register: ci_jump_scenario_attempt_log_after
+  check_mode: false
+
+- name: Assert the client was not left waiting and nothing the client asked for ran
+  ansible.builtin.assert:
+    that:
+      - ci_jump_scenario_attempt.rc not in [124, 137]
+      - not ci_jump_scenario_attempt_marker.stat.exists
+    fail_msg: 'The client hung, or a command it asked for ran: {{ attempt_key }}'
+    quiet: true
+
+# A target's banner is the proof that the forward reached it.
+- name: Assert the forward was made and the target answered
+  ansible.builtin.assert:
+    that:
+      - ci_jump_scenario_attempt.rc == 0
+      - "'SSH-2.0-' in ci_jump_scenario_attempt.stdout"
+    fail_msg: >-
+      The forward to {{ attempt_target }} was not made for {{ attempt_key }}: it ended with
+      {{ ci_jump_scenario_attempt.rc }} and said {{ ci_jump_scenario_attempt.stderr }}
+    quiet: true
+  when: attempt_expect == 'through'
+
+- name: Assert the forward was refused by the key line
+  ansible.builtin.assert:
+    that:
+      - ci_jump_scenario_attempt.rc == 255
+      - "'SSH-2.0-' not in ci_jump_scenario_attempt.stdout"
+      - "'stdio forwarding failed' in ci_jump_scenario_attempt.stderr"
+      - ci_jump_scenario_attempt_denied_after > ci_jump_scenario_attempt_denied_before
+    fail_msg: >-
+      The forward to {{ attempt_target }} was not refused for {{ attempt_key }}: it ended with
+      {{ ci_jump_scenario_attempt.rc }} and said {{ ci_jump_scenario_attempt.stderr }}
+    quiet: true
+  vars:
+    # split leaves one more piece than the line occurs, so more pieces after than before means
+    # sshd logged that it denied a forward during this connection: the key line refused it, and
+    # not an absent listener.
+    ci_jump_scenario_attempt_denied_before: >-
+      {{ (ci_jump_scenario_attempt_log_before.content | b64decode).split('but the request was denied') | length }}
+    ci_jump_scenario_attempt_denied_after: >-
+      {{ (ci_jump_scenario_attempt_log_after.content | b64decode).split('but the request was denied') | length }}
+  when: attempt_expect == 'refused'
+
+- name: Assert the key was turned away
+  ansible.builtin.assert:
+    that:
+      - ci_jump_scenario_attempt.rc == 255
+      - "'Permission denied' in ci_jump_scenario_attempt.stderr"
+    fail_msg: 'The key {{ attempt_key }} was not turned away: {{ ci_jump_scenario_attempt.stderr }}'
+    quiet: true
+  when: attempt_expect == 'denied'
+
+- name: Assert a remote command was not run
+  ansible.builtin.assert:
+    that:
+      - ci_jump_scenario_attempt.rc != 0
+      - "'SSH-2.0-' not in ci_jump_scenario_attempt.stdout"
+    fail_msg: 'A remote command was served to {{ attempt_key }}.'
+    quiet: true
+  when: attempt_expect == 'no_command'

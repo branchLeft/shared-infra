@@ -1,0 +1,16 @@
+---
+# Not part of the interface: role vars outrank inventory vars, so a caller cannot change these.
+# The module (library/ci_jump_authorized_keys.py) pins the port and the fixed options for itself
+# as the read-back oracle; ansible/checks/test_ci_jump_pins.py holds these copies equal to it.
+ci_jump_port: 22
+ci_jump_fixed_options: restrict,port-forwarding
+
+# One account has one owning role. These are the accounts other roles own, by role, and the jump
+# account may be none of them: exclusive key writes would remove each other's keys. A role may
+# not call another (ANS-12) nor load its variables (check_enrolment R6), so these are literal
+# copies; the pins test reads ci_login_user and tunnel_account_user from their roles' vars by
+# name and fails when a copy differs. root is owned by no role and belongs to no pipeline.
+ci_jump_owned_accounts:
+  root: root
+  ci_login: ansible-ci
+  tunnel_account: dbtunnel

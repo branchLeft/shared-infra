@@ -1,0 +1,23 @@
+---
+# The module builds the lines it expects from the inputs for itself, apart from the template that
+# wrote them, and compares the file with them exactly. It also asks sshd again what it would do for
+# the account, so a write that sshd does not honour is a stop and not a success.
+- name: Read the key file back and compare it with the wanted lines
+  ci_jump_authorized_keys:
+    action: verify
+    user: '{{ ci_jump_user }}'
+    destinations: '{{ ci_jump_destinations }}'
+    keys: "{{ ci_jump_keys | map(attribute='key') | list }}"
+    owned_accounts: '{{ ci_jump_owned_accounts }}'
+  register: ci_jump_readback
+  failed_when: false
+  changed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop if the file is not what was wanted
+  ansible.builtin.assert:
+    that:
+      - ci_jump_readback.msg is not defined
+    fail_msg: "{{ ci_jump_readback.msg | default('the module returned no result') }}"
+    quiet: true

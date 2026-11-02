@@ -1,0 +1,239 @@
+---
+# The refusal cases of the role, one for each guard. Each is one bad input or one bad state on the
+# host the role has already delivered, and the step of the role that reads it must refuse it with
+# its own code. They live in their own scenario so that the default scenario applies the role only
+# a few times (its shard is bound by the time limit): here the role is applied once, by the first
+# play, and the second play runs one internal tasks file of the role alone for each case against a
+# state it made bad and puts right afterwards (tasks/case.yml says how). A plan makes no change, so
+# a check run skips every case.
+#
+# Every group of cases starts with a control: the same step on the host as the first play left it
+# must accept. Without it, a step that refused everything would pass every case.
+#
+# A case has: name; expect, the code the refusal must start with; tasks_from, the step (default
+# _guards.yml); user, destinations and key_entries, in place of the delivered values; files, to put in
+# place (path, content, optional mode and owner, absent_after for a file that did not exist);
+# setup and restore, commands as argv lists; accepted: true for a control.
+- name: Apply the role once, so the cases have a delivered host to make bad
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with the scenario's values
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/apply_role.yml'
+      when: not ansible_check_mode
+
+- name: Run every case
+  hosts: all
+  gather_facts: false
+  # A plan makes no change and the second converge would repeat every case for nothing.
+  tags: [molecule-idempotence-notest]
+  vars:
+    case_dropin: /etc/ssh/sshd_config.d/99-ci-jump-case.conf
+    case_second_file: '/home/{{ scenario_jump_user }}/.ssh/authorized_keys2'
+    case_delivered_file: '/home/{{ scenario_jump_user }}/.ssh/authorized_keys'
+    case_cases:
+      # --- The delivered inputs and host are accepted.
+      - name: control, the inputs and the host as delivered
+        accepted: true
+
+      # --- Destinations.
+      - name: a wildcard destination
+        destinations: ['*']
+        expect: E-DEST-WILDCARD
+      - name: a wildcard inside an address
+        destinations: ['127.0.0.*']
+        expect: E-DEST-WILDCARD
+      - name: a destination with a port
+        destinations: ['127.0.0.2:22']
+        expect: E-DEST-PORT
+      - name: a destination with a quote
+        destinations: ['127.0.0.2"']
+        expect: E-DEST-QUOTE
+      - name: a destination that closes the quote and opens a second option
+        destinations: ['127.0.0.2",permitopen="127.0.0.3']
+        expect: E-DEST-QUOTE
+      - name: a destination with a comma
+        destinations: ['127.0.0.2,127.0.0.3']
+        expect: E-DEST-COMMA
+      - name: a destination with a space
+        destinations: ['127.0.0.2 127.0.0.3']
+        expect: E-DEST-SPACE
+      - name: a destination in an IPv6 form
+        destinations: ['[::1]']
+        expect: E-DEST-IPV6
+      - name: a destination listed twice
+        destinations: ['127.0.0.2', '127.0.0.2']
+        expect: E-DEST-DUPLICATE
+      - name: an empty destination list
+        destinations: []
+        expect: E-DEST-EMPTY
+
+      # --- Keys.
+      - name: an empty key list
+        key_entries: []
+        expect: E-KEY-EMPTY
+      - name: a key of an unknown type
+        key_entries: [{ key: 'ssh-dss AAAAB3NzaC1kc3MAAAAEEXAMPLE' }]
+        expect: E-KEY-SHAPE
+      - name: a key with options in front of it
+        key_entries: [{ key: 'command="true" {{ ci_jump_scenario_pub_jump }}' }]
+        expect: E-KEY-SHAPE
+      - name: a key whose body is another type
+        key_entries: [{ key: 'ssh-rsa {{ ci_jump_scenario_pub_jump.split(" ")[1] }}' }]
+        expect: E-KEY-SHAPE
+      - name: the same key twice
+        key_entries:
+          [
+            { key: '{{ ci_jump_scenario_pub_jump }}' },
+            { key: '{{ ci_jump_scenario_pub_jump }} again' },
+          ]
+        expect: E-KEY-DUPLICATE
+
+      # --- The account.
+      - name: no jump account named
+        user: ''
+        expect: E-USER-EMPTY
+      - name: a jump account that is not on the host
+        user: nosuchaccount
+        expect: E-USER-ABSENT
+      - name: a jump account with a login shell
+        setup: [[usermod, -s, /bin/bash, '{{ scenario_jump_user }}']]
+        restore: [[usermod, -s, /usr/sbin/nologin, '{{ scenario_jump_user }}']]
+        expect: E-USER-SHELL
+      - name: root as the jump account
+        user: root
+        expect: E-USER-FORBIDDEN
+      - name: the account the ci_login role owns
+        user: ansible-ci
+        expect: E-USER-FORBIDDEN
+      - name: the account the tunnel_account role owns
+        user: dbtunnel
+        expect: E-USER-FORBIDDEN
+
+      # --- What sshd would do. Each case changes the sshd configuration with a drop-in that sshd -T
+      # reads at once; no reload is needed.
+      - name: sshd with forwarding off for everyone
+        files:
+          [{ path: '{{ case_dropin }}', content: "AllowTcpForwarding no\n", absent_after: true }]
+        expect: E-SSHD-FORWARDING
+      - name: sshd with remote forwarding only
+        files:
+          [
+            {
+              path: '{{ case_dropin }}',
+              content: "AllowTcpForwarding remote\n",
+              absent_after: true,
+            },
+          ]
+        expect: E-SSHD-FORWARDING
+      - name: sshd with all forwarding disabled
+        files:
+          [{ path: '{{ case_dropin }}', content: "DisableForwarding yes\n", absent_after: true }]
+        expect: E-SSHD-FORWARDING
+      - name: sshd with forwarding off for the jump account by a Match block
+        files:
+          - path: '{{ case_dropin }}'
+            content: "Match User {{ scenario_jump_user }}\n  AllowTcpForwarding no\n"
+            absent_after: true
+        expect: E-SSHD-FORWARDING
+      - name: control, a Match block for another user does not refuse
+        files:
+          - path: '{{ case_dropin }}'
+            content: "Match User {{ scenario_other_user }}\n  AllowTcpForwarding no\n"
+            absent_after: true
+        accepted: true
+      - name: sshd with a keys command
+        files:
+          - path: '{{ case_dropin }}'
+            content: "AuthorizedKeysCommand /bin/true\nAuthorizedKeysCommandUser nobody\n"
+            absent_after: true
+        expect: E-SSHD-KEYSCOMMAND
+      - name: sshd with a PermitOpen of its own
+        files:
+          [{ path: '{{ case_dropin }}', content: "PermitOpen 127.0.0.2:22\n", absent_after: true }]
+        expect: E-SSHD-PERMITOPEN
+      - name: sshd reading the keys from another file
+        files:
+          [
+            {
+              path: '{{ case_dropin }}',
+              content: "AuthorizedKeysFile /etc/ssh/keys.d/%u\n",
+              absent_after: true,
+            },
+          ]
+        expect: E-SSHD-FILE
+      - name: a second key file that sshd reads, holding a key
+        files:
+          - path: '{{ case_second_file }}'
+            content: "{{ ci_jump_scenario_pub_second }}\n"
+            owner: '{{ scenario_jump_user }}'
+            absent_after: true
+        expect: E-SSHD-KEYS2
+      - name: control, a second key file that holds no key does not refuse
+        files:
+          - path: '{{ case_second_file }}'
+            content: "# nothing here\n"
+            owner: '{{ scenario_jump_user }}'
+            absent_after: true
+        accepted: true
+
+      # --- The read-back, after the write. The file is changed behind the role's back and the
+      # read-back step alone must see it.
+      - name: control, the delivered file reads back
+        tasks_from: _readback.yml
+        accepted: true
+      - name: a destination added to the delivered lines
+        tasks_from: _readback.yml
+        edits:
+          - path: '{{ case_delivered_file }}'
+            regexp: 'permitopen="{{ scenario_listed }}:22"'
+            replace: 'permitopen="{{ scenario_listed }}:22",permitopen="{{ scenario_unlisted }}:22"'
+        expect: E-READBACK-MISMATCH
+      - name: a wildcard written into the delivered lines
+        tasks_from: _readback.yml
+        edits:
+          - path: '{{ case_delivered_file }}'
+            regexp: 'permitopen="{{ scenario_listed }}:22"'
+            replace: 'permitopen="*:22"'
+        expect: E-READBACK-MISMATCH
+      - name: the options removed from the delivered lines
+        tasks_from: _readback.yml
+        edits:
+          - path: '{{ case_delivered_file }}'
+            regexp: '^restrict,port-forwarding,permitopen="[^"]*" '
+            replace: ''
+        expect: E-READBACK-MISMATCH
+      - name: a key line added behind the role's back
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_delivered_file }}'
+            content: |
+              restrict,port-forwarding,permitopen="{{ scenario_listed }}:22" {{ ci_jump_scenario_pub_jump.split(' ')[0:2] | join(' ') }}
+              restrict,port-forwarding,permitopen="{{ scenario_listed }}:22" {{ ci_jump_scenario_pub_second.split(' ')[0:2] | join(' ') }}
+              {{ ci_jump_scenario_pub_jump }}
+            owner: '{{ scenario_jump_user }}'
+        expect: E-READBACK-MISMATCH
+  tasks:
+    - name: Read the public keys the cases use
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - jump
+        - second
+      register: ci_jump_case_pubs
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Make the keys available to the cases
+      ansible.builtin.set_fact:
+        ci_jump_scenario_pub_jump: '{{ ci_jump_case_pubs.results[0].content | b64decode | trim }}'
+        ci_jump_scenario_pub_second: '{{ ci_jump_case_pubs.results[1].content | b64decode | trim }}'
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Run every case
+      ansible.builtin.include_tasks: tasks/case.yml
+      loop: '{{ case_cases }}'
+      loop_control:
+        loop_var: converge_case
+        label: '{{ converge_case.name }}'

@@ -6,7 +6,8 @@
 # the one root-only file the owner places on the host and stops the run if it is missing or unsafe,
 # the host baseline, then the NAT gateway (egress_nat, with egress_nat_gateway_enabled on: edge1
 # is the estate's one gateway, and the switch is pinned to edge1 alone in checks/check_enrolment.py),
-# the pipeline account the trigger is reached through, then the deploy
+# the pipeline account the trigger is reached through, then the jump account's key options (ci_jump;
+# it only reports until the owner turns it on), then the deploy
 # tooling (as class gateway, which installs the common targets only), then the edge stack. The
 # gateway follows the baseline because its reconciler needs Docker and iptables from it. The
 # edge stack needs Docker from the baseline and the compose unit and deploy wrapper from the deploy
@@ -48,6 +49,7 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_login # noqa: role-name[path]
+    - role: ../roles/ci_jump # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/edge_stack # noqa: role-name[path]
     - role: ../roles/exporters_and_collectors # noqa: role-name[path]

@@ -11,6 +11,7 @@ edge1:
   - host_baseline
   - egress_nat
   - ci_login
+  - ci_jump
   - deploy_tooling
   - edge_stack
   - exporters_and_collectors

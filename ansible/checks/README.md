@@ -172,13 +172,17 @@ is not loaded there.
   exactly the keys its host is allowed and no other, with values of the right shape. For
   edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
   `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
-  key (a source address list, say) is refused. For ops1 the one key is `pull_trigger_steps`,
+  key (a source address list, say) is refused; and the four values of the `ci_jump` role:
+  `ci_jump_manage_keys`, a bool, `ci_jump_user`, text, `ci_jump_destinations`, a list of text,
+  and `ci_jump_keys`, a list of `{key}` entries with nothing else (a destination list per key
+  is refused: the role takes one list for every key). What a destination or a key may look
+  like is the role's rule alone, in its module. For ops1 the one key is `pull_trigger_steps`,
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text. R10 reads
   only that shape. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
   word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
   real file through the program's own `parse_config`. `control_plane_db_step` is never an owner
   key: it is the role's second key and only the pull sets it. A host with no allowed keys may
-  have no file. The check does not judge a key's text; the `ci_login` role does. The directory is the
+  have no file. The check does not judge a key's text; the `ci_login` and `ci_jump` roles do. The directory is the
   owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
 - **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
   (owner ruling, option A), it is the first role after the two
@@ -202,6 +206,32 @@ key template, the tasks, the variables or the argument spec. The owner accepted 
 source limit; this keeps that visible, so a limit is added by an owner ruling that changes
 the test too. Each pin runs red on a sabotaged copy of its files and green once the file is
 put back.
+
+## test_ci_jump_pins.py: the ci_jump copies, its output and its task order
+
+The `ci_jump` role carries its own copy of the port and the fixed options its module also pins (the
+module is the read-back oracle, so the two must be held equal), and a literal list of the accounts
+other roles own, because a role may not call another or load its variables (ANS-12, R6). The test
+fails when the port or the options differ, when the account names differ from `ci_login_user` in
+`roles/ci_login/vars/main.yml` and `tunnel_account_user` in `roles/tunnel_account/vars/main.yml`
+(read by variable name), when the key template writes other lines than the module expects, when
+the argument spec, the defaults and `owner_vars/edge1.yml` name different variables or the role does
+not ship inert (flag false), and when the order or hiding of its tasks changes (the report runs
+whatever the flag is; the guards, the exclusive write and the read-back are behind it, in that
+order; the write and the module calls set `no_log` and `diff: false`; the read-back is skipped in
+check mode).
+
+It also keeps the role's output out of the gated apply's plan scan, which withholds a host's whole
+plan on one line that reads like a credential assignment. The module holds a copy of the scan's
+credential-assignment pattern (`SCAN_PATTERN`, from
+`branchLeft/github-workflows/.github/actions/ssh-check-hosts/action.yml` line 434 at tag v1.0.19).
+The test runs the module's report and plan over hostile values (an account named like a
+credential, option values that read like credentials) and fails when a line matches or when the
+module's last-resort guard had to withhold one, and it scans every variable name, task name and
+message of the role. **Drift of the copy from the original is not checked here**: it is held equal
+by no test until branchLeft/shared-infra#574 lands one, and the copy is then replaced by an import
+of that test's constant. Each pin runs red on a sabotaged copy of its files and green once the file
+is put back.
 
 # check_role_imports and check_role_paths
 

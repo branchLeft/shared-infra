@@ -44,7 +44,16 @@ TREE_RULES = {"playbooks": "R2", "trust": "R5", "owner_vars": "R10"}
 OWNER_VARS_DIR = "owner_vars"
 # The keys a host's owner_vars file holds, exactly. A host named nowhere here may have no file.
 OWNER_VARS_KEYS = {
-    "edge1": frozenset(("ci_login_keys", "ci_login_manage_keys")),
+    "edge1": frozenset(
+        (
+            "ci_login_keys",
+            "ci_login_manage_keys",
+            "ci_jump_keys",
+            "ci_jump_manage_keys",
+            "ci_jump_user",
+            "ci_jump_destinations",
+        )
+    ),
     "ops1": frozenset(("pull_trigger_steps",)),
 }
 STEPS_KEY = "pull_trigger_steps"
@@ -54,6 +63,9 @@ STEPS_KEY = "pull_trigger_steps"
 STEP_ENTRY = frozenset(("id", "tag", "word"))
 OWNER_KEY_ENTRY = frozenset(("key", "mode"))
 OWNER_KEY_MODES = frozenset(("apply", "check"))
+# A ci_jump_keys entry is the public key and nothing else: the options of the written line are
+# the role's, and the destinations are one list for every key (the role takes none per key).
+JUMP_KEY_ENTRY = frozenset(("key",))
 README_EXCEPTIONS = frozenset(("playbooks/README.md", "trust/README.md"))
 INCLUDE_VARS = frozenset(
     ("include_vars", "ansible.builtin.include_vars", "ansible.legacy.include_vars")
@@ -682,12 +694,38 @@ def _step_shape_problems(steps: object) -> list[str]:
     return problems
 
 
+def _jump_key_problems(doc: dict[str, object]) -> list[str]:
+    """The shape of the ci_jump values. What a destination or a key may look like is the role's
+    rule alone (library/ci_jump_authorized_keys.py), so only the types are read here."""
+    problems: list[str] = []
+    if "ci_jump_manage_keys" in doc and not isinstance(doc["ci_jump_manage_keys"], bool):
+        problems.append("ci_jump_manage_keys must be a bool")
+    if "ci_jump_user" in doc and not isinstance(doc["ci_jump_user"], str):
+        problems.append("ci_jump_user must be text")
+    destinations = doc.get("ci_jump_destinations", [])
+    if not isinstance(destinations, list) or not all(
+        isinstance(item, str) for item in destinations
+    ):
+        problems.append("ci_jump_destinations must be a list of text entries")
+    keys = doc.get("ci_jump_keys", [])
+    if not isinstance(keys, list):
+        problems.append("ci_jump_keys must be a list of {key} entries")
+        return problems
+    for entry in keys:
+        if not isinstance(entry, dict) or set(entry) != JUMP_KEY_ENTRY:
+            problems.append(f"a ci_jump_keys entry must hold exactly {sorted(JUMP_KEY_ENTRY)}")
+        elif not isinstance(entry["key"], str):
+            problems.append("a ci_jump_keys entry needs a text key")
+    return problems
+
+
 def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     """What is wrong with the values of an owner_vars file, by key. A missing key is reported
     by the caller, which compares the key set."""
     problems: list[str] = []
     if STEPS_KEY in doc:
         problems.extend(_step_shape_problems(doc[STEPS_KEY]))
+    problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")
     keys = doc.get("ci_login_keys", [])

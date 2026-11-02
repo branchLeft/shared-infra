@@ -1,0 +1,26 @@
+---
+# Order matters. The report always runs and only reads, so the plan of a host shows what its key
+# files hold before anything is enabled. With the flag false that is all the role does: it writes
+# nothing, and every task reports no change. With the flag true the inputs and the host are judged
+# first (_guards.yml), then the key file is written exclusively (_keys.yml), then read back
+# against the lines the module builds for itself (_readback.yml).
+#
+# The module (library/ci_jump_authorized_keys.py) is the one home of every rule about the key
+# lines. Its results carry fingerprints and option names only, never a key body, and its
+# refusals carry a code and an entry number, never a value.
+
+- name: Report which accounts carry forwarding options, read only
+  ansible.builtin.import_tasks: _report.yml
+
+- name: Judge the inputs and the host before anything is written
+  ansible.builtin.import_tasks: _guards.yml
+  when: ci_jump_manage_keys | bool
+
+- name: Make the jump account's key file exactly the declared lines
+  ansible.builtin.import_tasks: _keys.yml
+  when: ci_jump_manage_keys | bool
+
+# A plan has not written the file, so there is nothing to read back.
+- name: Read the key file back and compare it with the wanted lines
+  ansible.builtin.import_tasks: _readback.yml
+  when: ci_jump_manage_keys | bool and not ansible_check_mode

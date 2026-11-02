@@ -1,5 +1,12 @@
 ---
-# The owner's values for the roles edge1 applies. check_enrolment.py (R10) allows these two
-# keys and no others. With the flag false the role leaves the account's keys alone.
+# The owner's values for the roles edge1 applies. check_enrolment.py (R10) allows these six
+# keys and no others. With a flag false the role leaves its account's keys alone.
 ci_login_manage_keys: false
 ci_login_keys: []
+# The jump account's key options (the ci_jump role). With the flag false the role only reports,
+# read only, which accounts hold forwarding options. The destinations are host names or IPv4
+# addresses with no port, and the role adds port 22; the keys are public keys, one per entry.
+ci_jump_manage_keys: false
+ci_jump_user: ''
+ci_jump_destinations: []
+ci_jump_keys: []
