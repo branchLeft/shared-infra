@@ -1,0 +1,69 @@
+---
+# Records the state of the host the role may change, under the label snap_label in
+# mx1_stack_snaps: the stand-in docker's containers and call log, the openssl stand-in's log, and
+# the modification time, checksum and content (stamps only) of every file the role writes. Two
+# snapshots compared by untouched.yml say whether anything moved between them.
+- name: Record the host's state
+  vars:
+    mx1_stack_case_paths:
+      - /opt/stalwart/docker-compose.yml
+      - /opt/stalwart/.env
+      - /etc/mailgun-shim/shim-compose.yml
+      - /etc/mailgun-shim/Caddyfile
+      - /etc/mailgun-shim/env
+      - /var/lib/mailgun-shim/throttle.json
+      - /var/lib/branchleft/mx1.stalwart.applied
+      - /var/lib/branchleft/mx1.shim.applied
+      - /var/lib/branchleft/mx1.resolver.applied
+      - /etc/unbound/unbound.conf.d/10-branchleft-local-recursive.conf
+      - /root/mail-provision/check_dnsbl_blocklist.py
+      - /etc/cron.d/dnsbl-check
+  block:
+    - name: Read the stand-in docker's containers
+      ansible.builtin.command:
+        argv: [docker, standin, dump]
+      register: mx1_stack_snap_dump
+      changed_when: false
+
+    - name: Read the call logs of the stand-ins
+      ansible.builtin.slurp:
+        src: '/var/lib/standin-docker/{{ item }}'
+      loop:
+        - argv.log
+        - openssl.log
+      register: mx1_stack_snap_logs
+
+    - name: Look at every file the role writes
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop: '{{ mx1_stack_case_paths }}'
+      register: mx1_stack_snap_stats
+
+    - name: Read the stamps
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /var/lib/branchleft/mx1.stalwart.applied
+        - /var/lib/branchleft/mx1.shim.applied
+        - /var/lib/branchleft/mx1.resolver.applied
+      register: mx1_stack_snap_stamps
+      failed_when: false
+
+    - name: Keep the snapshot
+      vars:
+        mx1_stack_snap_containers: '{{ mx1_stack_snap_dump.stdout | ansible.builtin.from_json }}'
+        mx1_stack_snap_argv: '{{ (mx1_stack_snap_logs.results[0].content | ansible.builtin.b64decode).splitlines() }}'
+        mx1_stack_snap_now:
+          containers: "{{ dict(mx1_stack_snap_containers | map(attribute='name') | zip(mx1_stack_snap_containers)) }}"
+          argv: '{{ mx1_stack_snap_argv }}'
+          ups: "{{ mx1_stack_snap_argv | select('search', ' compose .* up ') | list }}"
+          openssl: '{{ (mx1_stack_snap_logs.results[1].content | ansible.builtin.b64decode).splitlines() }}'
+          mtimes: "{{ dict(mx1_stack_case_paths | zip(mx1_stack_snap_stats.results | map(attribute='stat.mtime', default=0))) }}"
+          sums: "{{ dict(mx1_stack_case_paths | zip(mx1_stack_snap_stats.results | map(attribute='stat.checksum', default=''))) }}"
+          stamps: >-
+            {{ dict(['stalwart', 'shim', 'resolver'] | zip(mx1_stack_snap_stamps.results
+            | map(attribute='content', default='') | map('ansible.builtin.b64decode'))) }}
+      ansible.builtin.set_fact:
+        mx1_stack_snaps: '{{ mx1_stack_snaps | ansible.builtin.default({}) | ansible.builtin.combine({snap_label: mx1_stack_snap_now}) }}'

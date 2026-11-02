@@ -186,7 +186,7 @@ CI runs the same commands, the pin check, and the harness over every role. The w
 (`.github/workflows/ansible.yml`) runs on every pull request and every push to
 `main`, with no path filter, so its jobs always report. The first job decides
 whether a file under `ansible/`, the two lint files or the workflow itself
-changed (`ansible/` and `hetzner/` are watched whole); when none did, the other
+changed (`ansible/`, `hetzner/` and `mail/provision/` are watched whole); when none did, the other
 jobs are skipped and the gate passes.
 
 What runs, by event:

@@ -72,10 +72,31 @@ class Sabotage(unittest.TestCase):
 
     # R1: an empty enrolled set fails, it does not pass over nothing.
     def test_r1_no_enrolled_playbook(self) -> None:
-        for host in ("edge1", "ops1", "app1", "db1", "demo1"):
+        for host in ("edge1", "edget", "ops1", "app1", "db1", "demo1"):
             (self.ansible / "playbooks" / f"{host}.yml").unlink()
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
+
+    # R2: the tenants gateway's switch is pinned exactly, in both directions.
+    def test_r2_edget_gateway_switch_removed(self) -> None:
+        self._edit("playbooks/edget.yml", "    egress_nat_gateway_enabled: true\n", "")
+        self._assert_rule("R2 edget.yml")
+
+    def test_r2_edget_gateway_switch_set_false(self) -> None:
+        self._edit(
+            "playbooks/edget.yml",
+            "egress_nat_gateway_enabled: true",
+            "egress_nat_gateway_enabled: 'true'",
+        )
+        self._assert_rule("R2 edget.yml")
+
+    def test_r2_a_host_without_a_pin_cannot_carry_the_switch(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    enrolled_host: ops1\n",
+            "    enrolled_host: ops1\n    egress_nat_gateway_enabled: true\n",
+        )
+        self._assert_rule("R2 ops1.yml")
 
     # R2: the refusal include is missing from pre_tasks.
     def test_r2_refusal_include_removed(self) -> None:

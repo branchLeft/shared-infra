@@ -63,7 +63,7 @@ mail/provision/20-install-docker.sh:
   role: docker_host
 mail/provision/30-deploy-stalwart.sh:
   reason: pending-role
-  role: mail_stalwart
+  role: mx1_stack
 mail/provision/40-configure-stalwart.sh:
   reason: pending-role
   role: mail_reconcilers
@@ -81,13 +81,13 @@ mail/provision/62-provision-shim-submission-credential.sh:
   role: mail_reconcilers
 mail/provision/63-deploy-mailgun-shim.sh:
   reason: pending-role
-  role: mailgun_shim
+  role: mx1_stack
 mail/provision/64-provision-alerting-submission-credential.sh:
   reason: pending-role
   role: mail_reconcilers
 mail/provision/65-install-local-resolver.sh:
   reason: pending-role
-  role: mail_resolver
+  role: mx1_stack
 mail/provision/66-provision-nextcloud-submission-credential.sh:
   reason: pending-role
   role: mail_reconcilers
@@ -99,7 +99,7 @@ mail/provision/68-provision-zitadel-submission-credential.sh:
   role: mail_reconcilers
 mail/provision/70-schedule-dnsbl-check.sh:
   reason: pending-role
-  role: mail_dnsbl_check
+  role: mx1_stack
 mail/provision/run-all.sh:
   reason: pending-role
   role: mail_stalwart

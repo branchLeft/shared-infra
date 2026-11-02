@@ -1,0 +1,206 @@
+---
+# One Compose class: Stalwart's project or the mailgun-shim's. The caller sets mx1_stack_c:
+#   name, project, dir, compose_name   the class, its Compose project and where its compose file is
+#   stamp                              the stamp file
+#   place                              the tasks file that places the files read from the repository
+#   files, expected                    the stamp's inputs (name -> path) and, for those read from the
+#                                      repository, the SHA-256 the file should have
+#   fresh_inputs                       the rows of mx1_stack_container_inputs a container reads
+#   containers                         name and pinned image of each container
+#   health_tries                       how many reads of health after the class was acted on
+#
+# The order is the point:
+#   1  read what the containers have and whether they are healthy        (reads)
+#   2  decide, from the stamp, the repository and those reads            (reads)
+#   3  mark the stamp pending                                            (first write)
+#   4  place the files from the repository
+#   5  Compose's own up, which recreates a service whose compose file or image changed
+#   6  read what each container has, and recreate by force exactly the services whose input the
+#      container does not have (a mounted file replaced by a rename leaves the container on the old
+#      inode, and a create-time file is never read again by a restart: Compose does not see either,
+#      because it hashes the mount path and the env_file name and not their content)
+#   7  read back, and refuse if any container still lacks what it reads
+#   8  check health
+#   9  only then record the stamp
+# A run that stops anywhere before 9 leaves the stamp pending, so the next run acts again.
+
+- name: Read whether each container has the content of the files it reads
+  mx1_stack_probe:
+    action: container_fresh
+    inputs: '{{ mx1_stack_c.fresh_inputs }}'
+  register: mx1_stack_pre_fresh
+  changed_when: false
+
+- name: Read whether the containers run, are healthy and run their pinned images
+  mx1_stack_probe:
+    action: docker_health
+    containers: '{{ mx1_stack_c.containers }}'
+    tries: 1
+  register: mx1_stack_pre_health
+  changed_when: false
+
+- name: Decide whether the class is due
+  mx1_stack_stamp:
+    action: decide
+    stamp_path: '{{ mx1_stack_c.stamp }}'
+    files: '{{ mx1_stack_c.files }}'
+    expected: '{{ mx1_stack_c.expected }}'
+    live_ok: '{{ mx1_stack_pre_health.ok }}'
+    stale: '{{ mx1_stack_pre_fresh.stale_services | ansible.builtin.length > 0 }}'
+  register: mx1_stack_decision
+  changed_when: false
+
+# What a plan shows: the services that would be recreated by force, and why. A change to the compose
+# file is left to Compose, which decides from its own hash which services it recreates.
+- name: Work out which services this run would recreate
+  ansible.builtin.set_fact:
+    mx1_stack_would_recreate: >-
+      {{ (mx1_stack_pre_fresh.stale_services
+      + (mx1_stack_c.fresh_inputs | ansible.builtin.selectattr('name', 'in', mx1_stack_decision.repository_differs)
+      | ansible.builtin.map(attribute='service') | ansible.builtin.list))
+      | ansible.builtin.unique | ansible.builtin.sort }}
+
+- name: Say what the class would do
+  ansible.builtin.debug:
+    msg:
+      class: '{{ mx1_stack_c.name }}'
+      due: '{{ mx1_stack_decision.due }}'
+      adopt: '{{ mx1_stack_decision.adopt }}'
+      would_recreate: '{{ mx1_stack_would_recreate }}'
+      reasons: '{{ mx1_stack_decision.reasons }}'
+      stale_inputs: "{{ mx1_stack_pre_fresh.results | ansible.builtin.rejectattr('fresh') | ansible.builtin.map(attribute='name') | ansible.builtin.list }}"
+  when: mx1_stack_decision.due or mx1_stack_decision.adopt
+
+- name: Mark the class pending before anything is changed
+  mx1_stack_stamp:
+    action: mark
+    stamp_path: '{{ mx1_stack_c.stamp }}'
+  when: mx1_stack_decision.due
+
+# The two includes are literal paths because the enrolment check (R6) reads only those.
+- name: Place Stalwart's files from the repository
+  ansible.builtin.include_tasks: _stalwart_place.yml
+  when: mx1_stack_decision.due and mx1_stack_c.name == 'stalwart'
+
+- name: Place the shim's files from the repository
+  ansible.builtin.include_tasks: _shim_place.yml
+  when: mx1_stack_decision.due and mx1_stack_c.name == 'shim'
+
+# ----- Acting. A plan stops above: it has no container to recreate. -----
+
+- name: Bring the project up, so Compose recreates what its own hash says changed
+  community.docker.docker_compose_v2:
+    project_src: '{{ mx1_stack_c.dir }}'
+    project_name: '{{ mx1_stack_c.project }}'
+    files:
+      - '{{ mx1_stack_c.compose_name }}'
+    state: present
+    recreate: auto
+    build: never
+    wait: true
+    wait_timeout: '{{ (mx1_stack_c.health_tries | ansible.builtin.int) * (mx1_stack_health_interval | ansible.builtin.int) }}'
+    remove_orphans: false
+    renew_anon_volumes: false
+  register: mx1_stack_up
+  when:
+    - mx1_stack_decision.due
+    - not ansible_check_mode
+
+# Compose does not see a change in the content of a mounted file or of an env file, so what the
+# running containers have is read, not assumed.
+- name: Read whether each container has the content of the files it reads, after the project was brought up
+  mx1_stack_probe:
+    action: container_fresh
+    inputs: '{{ mx1_stack_c.fresh_inputs }}'
+  register: mx1_stack_after_up
+  changed_when: false
+  when:
+    - mx1_stack_decision.due
+    - not ansible_check_mode
+
+# Only the services whose input is stale, and without their dependencies. A recreate of the whole
+# project would refuse mail for about two minutes for an edit to the Caddyfile.
+- name: Recreate by force exactly the services whose input the running container lacks
+  community.docker.docker_compose_v2:
+    project_src: '{{ mx1_stack_c.dir }}'
+    project_name: '{{ mx1_stack_c.project }}'
+    files:
+      - '{{ mx1_stack_c.compose_name }}'
+    services:
+      - '{{ mx1_stack_service }}'
+    dependencies: false
+    state: present
+    recreate: always
+    build: never
+    wait: true
+    wait_timeout: '{{ (mx1_stack_c.health_tries | ansible.builtin.int) * (mx1_stack_health_interval | ansible.builtin.int) }}'
+    remove_orphans: false
+    renew_anon_volumes: false
+  loop: '{{ mx1_stack_after_up.stale_services }}'
+  loop_control:
+    loop_var: mx1_stack_service
+  register: mx1_stack_recreated
+  when:
+    - mx1_stack_decision.due
+    - not ansible_check_mode
+
+- name: Read back whether each container now has the content of the files it reads
+  mx1_stack_probe:
+    action: container_fresh
+    inputs: '{{ mx1_stack_c.fresh_inputs }}'
+  register: mx1_stack_final
+  changed_when: false
+  when:
+    - mx1_stack_decision.due
+    - not ansible_check_mode
+
+# The stamp is not written past this task. A container that still lacks a file it reads would be
+# recorded as converged and never acted on again.
+- name: Refuse a project whose container still lacks the content of a file it reads
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_final.stale_services | ansible.builtin.length == 0
+    quiet: true
+    fail_msg: >-
+      After the project was brought up and the services recreated, {{ mx1_stack_final.stale_services }}
+      still lack the current content of
+      {{ mx1_stack_final.results | ansible.builtin.rejectattr('fresh') | ansible.builtin.map(attribute='name') | ansible.builtin.list }}.
+      The stamp was not written, so the next run acts again.
+  when:
+    - mx1_stack_decision.due
+    - not ansible_check_mode
+
+- name: Read whether the containers run, are healthy and run their pinned images, after the class was acted on
+  mx1_stack_probe:
+    action: docker_health
+    containers: '{{ mx1_stack_c.containers }}'
+    tries: '{{ mx1_stack_c.health_tries }}'
+    interval: '{{ mx1_stack_health_interval }}'
+  register: mx1_stack_health
+  changed_when: false
+  when:
+    - mx1_stack_decision.due
+    - not ansible_check_mode
+
+- name: Refuse a project with a container that is not running, not healthy or not on its pinned image
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_health.ok
+    quiet: true
+    fail_msg: >-
+      A container of the {{ mx1_stack_c.name }} class is not ok after it was acted on:
+      {{ mx1_stack_health.containers | ansible.builtin.rejectattr('ok') | ansible.builtin.list }}.
+      The stamp was not written, so the next run acts again.
+  when:
+    - mx1_stack_decision.due
+    - not ansible_check_mode
+
+# Written last. On a host with no stamp that is already in the state the repository describes, the
+# reads at the top are the read-back (healthy, on the pinned image, with the current content), and
+# this is the only write of the class.
+- name: Record the class as converged
+  mx1_stack_stamp:
+    action: record
+    stamp_path: '{{ mx1_stack_c.stamp }}'
+    files: '{{ mx1_stack_c.files }}'
+  when: mx1_stack_decision.due or mx1_stack_decision.adopt
