@@ -91,7 +91,8 @@ in `demo1_build`, so a caller's play or inventory variables cannot point the rol
 | `/root/export-bundler-state`, `…/flags`, `…/out` | `root:root` 0700 | Where an export keeps its flags, output and audit log. |
 
 It also removes any other file or directory under `/root/export-bundler/dist`. No service, port, user, package or
-unit.
+unit. The five files listed in `export_bundler_release_files_hidden` (`vars/main.yml`) are copied with their diff
+hidden (ANS-16); the other files show theirs in the plan.
 
 ## Check mode
 

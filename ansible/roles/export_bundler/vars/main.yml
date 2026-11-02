@@ -33,3 +33,16 @@ export_bundler_dist_paths: >-
      | select('match', '^dist/')
      | map('regex_replace', '^', export_bundler_dir ~ '/')
      | list }}
+
+# The pinned files whose copy shows no diff (ANS-16). Each one has a line the plan's secret scan
+# matches, a variable name or a prose word and no secret, so a diff of it would withhold the
+# whole plan of the host. Their copy task sets diff: false; every other pinned file keeps its
+# diff. The rule is to hide only the files that match, with no exemption list.
+# ansible/checks/test_plan_diff_scan.py fails for a file listed here that does not match, and
+# for a matching file that is not.
+export_bundler_release_files_hidden:
+  - dist/cli.js
+  - dist/colourIsolation.js
+  - dist/ghostExportClient.js
+  - dist/operatorToken.js
+  - dist/scratchDatabase.js
