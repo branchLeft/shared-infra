@@ -58,6 +58,8 @@ SEARCH = {
     "template": ("templates", "files", ".", "tasks"),
 }
 EXPRESSION = re.compile(r"\{\{\s*([A-Za-z_]\w*)((?:\.\w+|\[['\"]\w+['\"]\])*)\s*\}\}")
+PIPELINE = re.compile(r"\{\{\s*([A-Za-z_]\w*)((?:\s*\|\s*\w+(?:\([^()]*\))?)+)\s*\}\}")
+STAGE = re.compile(r"\|\s*(\w+)(?:\(([^()]*)\))?")
 DEPTH = 6
 
 Env = dict[str, object]
@@ -93,6 +95,45 @@ def render(text: str, env: Env, depth: int = DEPTH) -> str:
     return EXPRESSION.sub(one, text)
 
 
+def _filtered(text: str, env: Env) -> object:
+    """Return the list a `{{ name | filter(...) | ... }}` loop stands for, else ``text``.
+
+    Only the filters a split loop needs are understood: intersect(name), difference(name),
+    selectattr('attr', 'in', name), rejectattr('attr', 'in', name) and list. Any other filter, or a
+    name that is not a list, leaves the text as it was, so the loop is unresolved and is a finding.
+    """
+    whole = PIPELINE.fullmatch(text.strip())
+    if whole is None:
+        return text
+    current = value_of("{{ " + whole[1] + " }}", env)
+    for stage in STAGE.finditer(whole[2]):
+        name = stage[1]
+        arguments = [part.strip().strip("'\"") for part in (stage[2] or "").split(",")]
+        if not isinstance(current, list):
+            return text
+        if name == "list":
+            continue
+        if name in ("intersect", "difference") and len(arguments) == 1:
+            other = value_of("{{ " + arguments[0] + " }}", env)
+            if not isinstance(other, list):
+                return text
+            keep = name == "intersect"
+            current = [item for item in current if (item in other) == keep]
+        elif name in ("selectattr", "rejectattr") and len(arguments) == 3 and arguments[1] == "in":
+            other = value_of("{{ " + arguments[2] + " }}", env)
+            if not isinstance(other, list):
+                return text
+            keep = name == "selectattr"
+            current = [
+                item
+                for item in current
+                if isinstance(item, dict) and (item.get(arguments[0]) in other) == keep
+            ]
+        else:
+            return text
+    return current
+
+
 def value_of(text: object, env: Env) -> object:
     """Return the list or mapping a lone `{{ name }}` stands for, else the rendered text."""
     if isinstance(text, str):
@@ -100,8 +141,35 @@ def value_of(text: object, env: Env) -> object:
         if whole:
             value = _evaluate(whole, env, DEPTH)
             return text if value is None else value
+        if PIPELINE.fullmatch(text.strip()):
+            return _filtered(text, env)
         return render(text, env)
     return text
+
+
+def edge_stack_deliver(env: Env) -> list[str] | None:
+    """Return the files the edge_stack role delivers by copy, or None when they cannot be named.
+
+    The role makes the list while it runs (tasks/_classify.yml): the static CrowdSec files of its
+    vars, then every regular file directly in the acquisition directory of the stack directory,
+    found on the controller by a `find` with delegate_to: localhost. The stack directory is in the
+    checkout, so the same list is made here.
+    """
+    static = env.get("edge_stack_crowdsec_files")
+    source = env.get("edge_stack_source_dir")
+    acquis = env.get("edge_stack_acquis_dir")
+    if not (isinstance(static, list) and isinstance(source, str) and isinstance(acquis, str)):
+        return None
+    directory = Path(render(source, env)) / acquis
+    if not directory.is_dir():
+        return None
+    found = sorted(entry.name for entry in directory.iterdir() if entry.is_file())
+    return [str(item) for item in static] + [f"{acquis}/{name}" for name in found]
+
+
+# Per role, a list it makes while it runs and the function that makes the same list from the
+# checkout. A role not named here has only the lists its defaults/ and vars/ set.
+DERIVED_LISTS = {"edge_stack": ("edge_stack_deliver", edge_stack_deliver)}
 
 
 def role_variables(role: Path) -> Env:
@@ -212,7 +280,9 @@ def findings_for(root: Path) -> tuple[list[Finding], list[str]]:
     """Return (findings, scanned): the unsafe tasks, and each source file that was read.
 
     A task that sets diff: false is still resolved and read, so a pass shows the walk reached
-    the file; only a task without it can produce a finding.
+    the file. It hides every file it copies, so each of those files must have a matching line: a
+    file without one is a finding, and the loop is split into a hidden task and a visible one. A
+    task that sets no_log renders a secret and is not held to that (see below).
     """
     roles_dir = root / "ansible" / "roles"
     every = {role.name: role_variables(role) for role in sorted(roles_dir.glob("*"))}
@@ -222,6 +292,11 @@ def findings_for(root: Path) -> tuple[list[Finding], list[str]]:
     for name in named_roles(root / "ansible" / "playbooks"):
         role = roles_dir / name
         base: Env = {**fallback, **every[name], "role_path": str(role)}
+        if name in DERIVED_LISTS:
+            variable, derive = DERIVED_LISTS[name]
+            made = derive(base)
+            if made is not None:
+                base[variable] = made
         for path, task, diff_is_off in tasks_of(role):
             used = _module_args(task, COPIERS)
             args = used[1] if used else None
@@ -231,6 +306,10 @@ def findings_for(root: Path) -> tuple[list[Finding], list[str]]:
             if "content" in args or args.get("remote_src") or not isinstance(src, str):
                 continue
             where = (str(path.relative_to(root)), str(task.get("name", "(unnamed)")))
+            # A task with no_log renders a secret into the file (ANS-16): its diff is hidden for
+            # what the file becomes, not for a line of its source, so a source without a
+            # matching line is expected there.
+            carries_secret = task.get("no_log") not in (None, False, "false")
             for outer in _including_environments(role, path, base):
                 for env in _loop_environments(task, outer):
                     text = render(src, env)
@@ -245,6 +324,12 @@ def findings_for(root: Path) -> tuple[list[Finding], list[str]]:
                             message = (
                                 f"copies {shown}, whose line {lines[0]} matches the plan's "
                                 "secret scan, and sets no diff: false"
+                            )
+                            findings.add((*where, message))
+                        elif diff_is_off and not lines and not carries_secret:
+                            message = (
+                                f"sets diff: false but copies {shown}, which has no matching "
+                                "line, so its diff is hidden for nothing: split the loop"
                             )
                             findings.add((*where, message))
     return sorted(findings), scanned
@@ -432,6 +517,99 @@ class TreeCase(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("cannot find", found[0])
 
+    def test_diff_false_on_a_file_with_no_matching_line_is_a_finding(self) -> None:
+        """A task that hides its diff must hide only files that read as secret."""
+        self.put(self.role / "files" / "clean.txt", "x = 1\n")
+        found = self.tasks(
+            "- name: a\n  ansible.builtin.copy:\n    src: clean.txt\n    dest: /x\n  diff: false\n"
+        )
+        self.assertEqual(len(found), 1)
+        self.assertIn("files/clean.txt", found[0])
+        self.assertIn("split the loop", found[0])
+
+    def test_a_loop_mixing_matching_and_clean_files_is_a_finding_until_split(self) -> None:
+        """One hidden loop over both kinds fails; a hidden loop and a visible one pass."""
+        self.put(self.role / "files" / "bad.txt", self.DOCLINE)
+        self.put(self.role / "files" / "good.txt", "x = 1\n")
+        self.put(
+            self.role / "vars" / "main.yml",
+            "r_files: [bad.txt, good.txt]\nr_hidden: [bad.txt]\n"
+            "r_items:\n  - {path: bad.txt}\n  - {path: good.txt}\n",
+        )
+        copy = "  ansible.builtin.copy:\n    src: '{{ item }}'\n    dest: /x\n"
+        mixed = "- name: a\n" + copy + "  loop: '{{ r_files }}'\n  diff: false\n"
+        found = self.tasks(mixed)
+        self.assertEqual(len(found), 1)
+        self.assertIn("files/good.txt", found[0])
+        hidden = (
+            "- name: a\n" + copy + "  loop: '{{ r_files | intersect(r_hidden) }}'\n  diff: false\n"
+        )
+        shown = "- name: b\n" + copy + "  loop: '{{ r_files | difference(r_hidden) }}'\n"
+        self.assertEqual(self.tasks(hidden + shown), [])
+        # A match left in the visible half, or a clean file left in the hidden half, is found.
+        self.assertEqual(len(self.tasks(shown.replace("difference", "intersect"))), 1)
+        self.assertEqual(len(self.tasks(hidden.replace("intersect", "difference"))), 1)
+
+    def test_a_list_of_mappings_is_split_by_attribute(self) -> None:
+        """selectattr and rejectattr split a loop over {path: ...} items by a list of paths."""
+        self.put(self.role / "files" / "bad.txt", self.DOCLINE)
+        self.put(self.role / "files" / "good.txt", "x = 1\n")
+        self.put(
+            self.role / "vars" / "main.yml",
+            "r_hidden: [bad.txt]\nr_items:\n  - {path: bad.txt}\n  - {path: good.txt}\n",
+        )
+        copy = "  ansible.builtin.copy:\n    src: '{{ item.path }}'\n    dest: /x\n"
+        hidden = (
+            "- name: a\n" + copy + "  loop: \"{{ r_items | selectattr('path', 'in', r_hidden) "
+            '| list }}"\n  diff: false\n'
+        )
+        shown = (
+            "- name: b\n" + copy + "  loop: \"{{ r_items | rejectattr('path', 'in', r_hidden) "
+            '| list }}"\n'
+        )
+        self.assertEqual(self.tasks(hidden + shown), [])
+        self.assertEqual(len(self.tasks(shown.replace("rejectattr", "selectattr"))), 1)
+
+    def test_a_task_with_no_log_may_hide_a_file_that_has_no_matching_line(self) -> None:
+        """no_log marks a file that becomes secret when rendered, which its source does not show."""
+        self.put(self.role / "templates" / "t.j2", "KEY={{ value }}\n")
+        found = self.tasks(
+            "- name: a\n  ansible.builtin.template:\n    src: t.j2\n    dest: /x\n"
+            "  no_log: true\n  diff: false\n"
+        )
+        self.assertEqual(found, [])
+
+    def test_a_list_the_role_makes_is_resolved_and_a_match_in_it_is_found(self) -> None:
+        """edge_stack_deliver is the static CrowdSec files plus the files of the acquisition dir."""
+        edge = self.root / "ansible" / "roles" / "edge_stack"
+        self.put(
+            self.root / "ansible" / "playbooks" / "e.yml",
+            "- hosts: all\n  roles:\n    - role: ../roles/edge_stack\n",
+        )
+        self.put(
+            edge / "vars" / "main.yml",
+            "edge_stack_source_dir: '{{ role_path }}/files/stack'\n"
+            "edge_stack_crowdsec_files: [crowdsec/config.yaml.local]\n"
+            "edge_stack_acquis_dir: crowdsec/acquis.d\n",
+        )
+        stack = edge / "files" / "stack" / "crowdsec"
+        self.put(stack / "config.yaml.local", "x: 1\n")
+        self.put(stack / "acquis.d" / "a.yaml", self.DOCLINE)
+        self.put(
+            edge / "tasks" / "main.yml",
+            "- name: Deliver the CrowdSec files\n  ansible.builtin.copy:\n"
+            "    src: '{{ edge_stack_source_dir }}/{{ item }}'\n    dest: /x/{{ item }}\n"
+            "  loop: '{{ edge_stack_deliver }}'\n",
+        )
+        messages = [m for _f, _n, m in findings_for(self.root)[0]]
+        self.assertEqual(len(messages), 1)
+        self.assertIn("acquis.d/a.yaml", messages[0])
+        self.put(stack / "acquis.d" / "a.yaml", "x: 1\n")
+        findings, scanned = findings_for(self.root)
+        self.assertEqual(findings, [])
+        self.assertTrue(any(s.endswith("acquis.d/a.yaml") for s in scanned))
+        self.assertTrue(any(s.endswith("config.yaml.local") for s in scanned))
+
     def test_a_role_no_playbook_names_is_not_read(self) -> None:
         """Only the roles the playbooks list are in the plan's reach."""
         other = self.root / "ansible" / "roles" / "other"
@@ -458,6 +636,21 @@ class RealTreeCase(unittest.TestCase):
         # The walk must have read the files the fix is about, or a pass proves nothing.
         self.assertTrue(any(s.endswith("provision_deploy_slot.py") for s in scanned))
         self.assertTrue(any(s.endswith("website_app1/files/compose.yml") for s in scanned))
+        # The loops that are made while a role runs, or split into a hidden task and a visible
+        # one, must be resolved to their files, or the files they copy were never read.
+        for tail in (
+            "edge_stack:hetzner/edge/stack/crowdsec/config.yaml.local",
+            "control_plane:hetzner/control-plane/stack/pg_hba.conf",
+            "control_plane:hetzner/control-plane/stack/compose.yml",
+            "monitoring_stack:hetzner/monitoring/stack/prometheus/alerts.yml",
+            "monitoring_stack:hetzner/monitoring/stack/compose.yml",
+            "demo1_build:ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/"
+            "branchleft_slot.py",
+            "demo1_build:ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/"
+            "render_slot_sudoers.py",
+        ):
+            self.assertIn(tail, scanned)
+        self.assertTrue(any(s.startswith("edge_stack:") and "acquis.d/" in s for s in scanned))
 
 
 if __name__ == "__main__":

@@ -96,15 +96,25 @@
 # The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the files hold
 # placeholder names, paths and environment variables named like passwords or tokens, which
 # the plan's secret scan would withhold the whole plan of the host over. None holds a secret.
-- name: Deliver the stack's files
+# The other files go by the next task, which shows its diff.
+- name: Deliver the stack's files whose diff is not shown
   ansible.builtin.copy:
     src: 'stack/{{ item }}'
     dest: '{{ monitoring_stack_project_dir }}/{{ item }}'
     owner: root
     group: root
     mode: '0644'
-  loop: '{{ monitoring_stack_files }}'
+  loop: '{{ monitoring_stack_files | intersect(monitoring_stack_files_hidden) }}'
   diff: false
+
+- name: Deliver the stack's other files
+  ansible.builtin.copy:
+    src: 'stack/{{ item }}'
+    dest: '{{ monitoring_stack_project_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ monitoring_stack_files | difference(monitoring_stack_files_hidden) }}'
 
 - name: Create the drop-in directory of the monitoring instance
   ansible.builtin.file:

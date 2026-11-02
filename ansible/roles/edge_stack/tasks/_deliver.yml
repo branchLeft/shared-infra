@@ -169,9 +169,8 @@
         mode: '0644'
       when: ansible_check_mode
 
-    # The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the list of
-    # files is made at run time (the entries of the acquisition directory), so the check that
-    # no delivered file reads as secret to the plan's scan cannot name them. None does today.
+    # The list is made while the role runs (tasks/_classify.yml); ansible/checks/test_plan_diff_scan.py
+    # makes the same list from the checkout and fails if any of these files reads as secret.
     - name: Deliver the CrowdSec files
       ansible.builtin.copy:
         src: '{{ edge_stack_source_dir }}/{{ item }}'
@@ -180,7 +179,6 @@
         group: root
         mode: '0644'
       loop: '{{ edge_stack_deliver }}'
-      diff: false
 
     # The unit's drop-in is placed with the other files, after the candidates were accepted.
     # It is in no fingerprint: a change to it takes effect through the reload below, never
