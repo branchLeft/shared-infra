@@ -1,0 +1,31 @@
+---
+# Part two's refusals of a second compose file, an override file or a .env file, run by
+# verify.yml in the `refusals_compose` scenario only. Each case applies the role beside
+# one of those files and requires the role to stop at its named task. They run the role
+# once per name, which is most of this scenario's run time, so they have their own shard.
+
+# A second compose file, an override file, or a .env file, beside compose.yml is
+# refused before any change. Compose would read a second base file in place of
+# compose.yml, would merge an override file into it, and would take COMPOSE_FILE,
+# COMPOSE_PROJECT_NAME or COMPOSE_PROFILES from a .env file, and the deploy
+# program checks only compose.yml. The names are written out here, not read from
+# the role, so a name removed from the role's list fails its own case. The unit
+# runs `docker compose up` with no -f, so these are the names Compose looks for
+# by default, other than compose.yml itself.
+- name: Make the names of the files Compose reads beside the compose file
+  ansible.builtin.set_fact:
+    db1_stack_verify_compose_names:
+      - compose.yaml
+      - docker-compose.yml
+      - docker-compose.yaml
+      - compose.override.yml
+      - compose.override.yaml
+      - docker-compose.override.yml
+      - docker-compose.override.yaml
+      - .env
+
+- name: Refuse the role beside each of those files at its named task
+  ansible.builtin.include_tasks: verify_compose_name_case.yml
+  loop: '{{ db1_stack_verify_compose_names }}'
+  loop_control:
+    loop_var: db1_stack_verify_compose_name
