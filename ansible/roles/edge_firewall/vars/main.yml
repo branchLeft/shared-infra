@@ -55,6 +55,14 @@ edge_firewall_bridge_tcp_ports:
 # A port listed here must be published by a Compose file (the flows test fails otherwise).
 edge_firewall_dnat_only_tcp_ports: []
 
+# Native (non-Compose) listeners on edge1's private address, enumerated by hand: the flows test
+# reads only the Compose files. The node_exporter role binds 10.20.1.10:9100 on the host. Nothing
+# reaches it: the monitoring stack scrapes the Compose node-exporter by name over its own bridge.
+# So it is an explicit drop, with no input rule. The test in
+# ansible/checks/test_edge_firewall_flows_agree.py fails if a rule is added for it.
+edge_firewall_native_dropped_tcp_ports:
+  - 9100
+
 # The text the kernel log line begins with. The owner reads the log of monitor mode for it.
 edge_firewall_log_prefix: 'branchleft-fw would-drop: '
 

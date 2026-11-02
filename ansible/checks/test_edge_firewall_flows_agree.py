@@ -365,5 +365,35 @@ class PortsAgreeWithTheRestOfTheRepository(unittest.TestCase):
         self.assertLessEqual(upstream, set(port_list("edge_firewall_bridge_tcp_ports")))
 
 
+class NativeListenersAreExplicitDrops(unittest.TestCase):
+    """A native listener on edge1 is not published by Compose, so the test above cannot see it.
+    Its port is read from the role that binds it, and it must be an explicit drop: in no list,
+    and in no rule. Nothing scrapes it: the monitoring stack reaches the Compose exporter by
+    name."""
+
+    def test_the_native_node_exporter_is_an_explicit_drop(self) -> None:
+        exporter_vars = _mapping(
+            yaml.safe_load(
+                (ROOT / "ansible" / "roles" / "node_exporter" / "vars" / "main.yml").read_text(
+                    encoding="utf-8"
+                )
+            )
+        )
+        exporter = int(str(exporter_vars["node_exporter_port"]))
+        dropped = port_list("edge_firewall_native_dropped_tcp_ports")
+        self.assertIn(exporter, dropped)
+        for name in (
+            "edge_firewall_bridge_tcp_ports",
+            "edge_firewall_public_tcp_ports",
+            "edge_firewall_dnat_only_tcp_ports",
+        ):
+            self.assertNotIn(exporter, port_list(name), f"{name} must not name tcp/{exporter}")
+        rules = " | ".join(rendered_enforce_rules())
+        for port in dropped:
+            self.assertNotRegex(
+                rules, rf"\b{port}\b", f"tcp/{port} is a native drop and must have no rule"
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

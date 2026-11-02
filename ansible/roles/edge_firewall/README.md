@@ -310,7 +310,14 @@ retrieval: make the row's edit and run the command shown to see the message.
 - **A boot-time load failure leaves the host unfiltered.** If the file the boot unit
   loads fails to load, the unit fails visibly and the host runs without the role's
   tables until it is fixed. The Hetzner firewall still stands in front of the public
-  interface.
+  interface. The masquerade is in the same file, so a failed boot-time load also removes
+  the estate's egress: with no masquerade, `branchleft-nat` refuses, and the private hosts
+  lose their route out until the file loads.
+- **Native (non-Compose) listeners are enumerated by hand.** The flows test reads only the
+  Compose files. A host listener that no Compose file publishes, such as node_exporter on
+  `10.20.1.10:9100`, is listed by hand in `edge_firewall_native_dropped_tcp_ports` and has no
+  rule. A new native listener is a flow to decide by hand: record it there, and add a rule
+  only if something must reach it.
 - **The restore can fail.** The scenario shows the host fails closed (the bad set stays
   loaded and the role fails at the restore); it cannot make a restore succeed from a
   corrupted file.
