@@ -1,12 +1,18 @@
 ---
-# db1: the database host under the gated pull. Six roles, in order: the Ansible
+# db1: the database host under the gated pull. Seven roles, in order: the Ansible
 # toolchain the host runs this playbook with, the trigger that runs it, the loader
 # of the host's private inputs (host_inputs), which reads the one root-only file
 # the owner places on the host and stops the run if it is missing or unsafe, the
 # host baseline, the database stack (db1_stack), which takes its input from what
-# the loader sets, and the backup timers (db1_backup_timers), which take no input.
-# db1_stack never starts, stops, restarts or recreates a container. The other
-# database role (db1_grants) returns in a later change, after the backup timers.
+# the loader sets, the backup timers (db1_backup_timers), which take no input, and
+# the database grants (db1_grants), which take their two inputs from what the
+# loader sets and read the two passwords from root-only files on the host.
+# db1_stack never starts, stops, restarts or recreates a container. db1_grants is
+# last because it checks the dump programs the backup timers deliver against pinned
+# digests before it changes the dump account.
+# tunnel_account is not applied here: it has no main entry (a play reaches it only
+# with tasks_from, which the enrolment check refuses), its replica half runs on a
+# host with no enrolled playbook, and the owner runs it in a fixed order across both.
 #
 # The host's trigger runs this file on a signed checkout with the inventory
 # `localhost,`, which loads no group variables, so every value the roles read comes
@@ -35,3 +41,4 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/db1_stack # noqa: role-name[path]
     - role: ../roles/db1_backup_timers # noqa: role-name[path]
+    - role: ../roles/db1_grants # noqa: role-name[path]
