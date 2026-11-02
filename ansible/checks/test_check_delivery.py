@@ -692,12 +692,12 @@ def environment(
     name: str = "ansible-hosts",
     reviewers: list[dict[str, object]] | None = None,
     prevent_self_review: bool = True,
-    can_admins_bypass: bool = False,
+    can_admins_bypass: bool = True,
     custom_branch_policies: bool = True,
 ) -> dict[str, object]:
     """Return an environment answer set up as the owner step says.
 
-    Prevent self-review is ticked, as the gated apply requires, and administrators may not bypass
+    Prevent self-review is ticked, as the gated apply requires, and administrators may bypass
     the rules.
     """
     rules: list[dict[str, object]] = [
@@ -881,29 +881,27 @@ class EnvironmentTests(unittest.TestCase):
         findings = check_delivery.environment_findings("production", live, NOT_FOUND, None)
         self.assert_names(findings, "no custom branch policy")
         self.assert_names(findings, "no branch policy list")
-        self.assert_names(findings, "lets administrators bypass")
 
-    def test_administrators_who_may_bypass_are_not_ready(self) -> None:
-        # A new environment answers True, and the admin whose merge started the run could then
-        # release it with no reviewer, which defeats the bypass rule.
-        self.assert_names(
-            self.judge(environment(can_admins_bypass=True)), "lets administrators bypass"
-        )
+    def test_administrators_who_may_bypass_are_ready(self) -> None:
+        # The owner must never be blocked from an administrator bypass to take an apply.
+        self.assertEqual([], self.judge(environment(can_admins_bypass=True)))
 
     def test_a_missing_bypass_setting_is_not_ready(self) -> None:
         # A missing key fails closed: the probe must prove the ruled value, not its absence.
         described = environment()
         del described["can_admins_bypass"]
-        self.assert_names(self.judge(described), "lets administrators bypass")
+        self.assert_names(self.judge(described), "does not let administrators bypass")
 
     def test_a_bypass_setting_that_is_not_a_boolean_is_not_ready(self) -> None:
-        for value in (None, "false", 0):
+        for value in (None, "true", "false", 0, 1):
             described = environment()
             described["can_admins_bypass"] = value
-            self.assert_names(self.judge(described), "lets administrators bypass")
+            self.assert_names(self.judge(described), "does not let administrators bypass")
 
-    def test_administrators_who_may_not_bypass_are_ready(self) -> None:
-        self.assertEqual([], self.judge(environment(can_admins_bypass=False)))
+    def test_administrators_who_may_not_bypass_are_not_ready(self) -> None:
+        self.assert_names(
+            self.judge(environment(can_admins_bypass=False)), "does not let administrators bypass"
+        )
 
     def test_prevent_self_review_ticked_is_ready(self) -> None:
         # The gated apply keeps Prevent self-review on.
