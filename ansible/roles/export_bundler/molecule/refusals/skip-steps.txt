@@ -1,0 +1,12 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# The refusal cases run the role three times against altered copies and once against the
+# pristine copy, and assert after each what was and was not written. A plan makes no
+# change, so there is nothing to refuse in a check run, and the plan scenario holds the
+# check steps. The role is applied a second time in the default scenario, which is where
+# idempotence is proved.
+check-fresh
+idempotence
+check-configured
+molecule-check

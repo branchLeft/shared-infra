@@ -1,0 +1,35 @@
+---
+# What the refusal cases must leave behind: nothing. The cases use directories of their own and
+# remove them, and no case uses the role's default paths, so none of these may exist. The
+# paths are written out here, not read from the role.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the paths the cases used and the role's own
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /root/export-bundler
+        - /root/export-bundler-state
+        - /root/export-bundler-case-a
+        - /root/export-bundler-case-b
+        - /root/export-bundler-case-c
+        - /root/export-bundler-case-d
+        - /root/export-bundler-state-case-a
+        - /root/export-bundler-state-case-b
+        - /root/export-bundler-state-case-c
+        - /root/export-bundler-state-case-d
+        - /var/tmp/export-bundler-case-d-target
+      register: export_bundler_verify_absent
+
+    - name: Assert none of them exists
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        quiet: true
+        fail_msg: A refusal case left {{ item.item }} behind.
+      loop: '{{ export_bundler_verify_absent.results }}'
+      loop_control:
+        label: '{{ item.item }}'

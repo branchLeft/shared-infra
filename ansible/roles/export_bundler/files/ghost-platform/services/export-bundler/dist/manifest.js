@@ -1,0 +1,68 @@
+export const REQUIRED_EXTENSIONS = [
+    'media',
+    'members_and_subscriptions',
+    'comments',
+];
+/**
+ * What no archive from this bundler can contain, named so the tenant finds
+ * out before they leave rather than after. These are limits of reach, not
+ * failures: they do not make a run incomplete.
+ */
+export const KNOWN_EXPORT_GAPS = [
+    {
+        name: 'analytics_beyond_post_csv',
+        reason: 'the open item named in LLD-8 §11, not closeable before the analytics backend is chosen',
+    },
+    {
+        name: 'stripe_billing_relationship',
+        reason: "Stripe's side of each subscription cannot be moved by this archive: the archive carries Ghost's subscription records, and the ability to keep charging those cards elsewhere is Stripe's to move",
+    },
+    {
+        name: 'portal_moderation_record',
+        reason: "classifier verdicts and moderator decisions held by the portal's moderation queue are not in Ghost and not in this archive; the archive carries Ghost's own status and the member reports for each comment",
+    },
+    {
+        name: 'deleted_comments',
+        reason: "Ghost's admin comment list leaves out comments with status deleted, and blanks their text, so they are not in the archive and the comment count does not include them",
+    },
+    {
+        name: 'media_bytes',
+        reason: "the archive lists the public address of each media file, never the bytes; those addresses stop working on the tenant's erasure date, and a tenant keeps nothing from them after that unless they download first",
+    },
+];
+function shortfalls(extensions) {
+    const gaps = [];
+    for (const name of REQUIRED_EXTENSIONS) {
+        const report = extensions.find((e) => e.name === name);
+        if (report === undefined) {
+            gaps.push({ name, reason: 'not attempted' });
+        }
+        else if (report.status === 'complete' && report.expected !== report.present) {
+            // A report that says complete over a short count is a defect in the
+            // collector, and the manifest must not repeat it.
+            gaps.push({
+                name,
+                reason: `reported complete but present ${report.present} of expected ${String(report.expected)}`,
+            });
+        }
+        else if (report.status !== 'complete') {
+            gaps.push({
+                name,
+                reason: `${report.status}: ${report.notes.join('; ')}`,
+            });
+        }
+    }
+    return gaps;
+}
+export function buildManifest(tenantId, generatedAtIso, encryption, included, extensions = [], permanentGaps = KNOWN_EXPORT_GAPS) {
+    const failed = shortfalls(extensions);
+    return {
+        tenantId,
+        generatedAt: generatedAtIso,
+        encryption,
+        complete: failed.length === 0,
+        extensions,
+        included,
+        excluded: [...failed, ...permanentGaps],
+    };
+}
