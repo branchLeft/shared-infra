@@ -1,0 +1,21 @@
+---
+# Asserts the calls the role made to `compose up` between two snapshots (snapshot.yml): how many,
+# and the services of those that forced a recreate. A forced recreate must name exactly the
+# services expected, one per call, and say --no-deps; no call may remove an orphan or renew a volume.
+#   expect_ups     the number of calls to up (the plain ones and the forced ones)
+#   expect_forced  the services forced, in order, one per forced call
+- name: Assert what the role asked of compose up
+  vars:
+    mx1_stack_new_ups: '{{ mx1_stack_snaps[snap_after].ups[(mx1_stack_snaps[snap_before].ups | length) :] }}'
+    mx1_stack_new_forced: "{{ mx1_stack_new_ups | select('search', '--force-recreate') | list }}"
+    mx1_stack_forced_services: "{{ mx1_stack_new_forced | map('regex_replace', '^.* -- ', '') | list }}"
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_new_ups | length == expect_ups
+      - mx1_stack_forced_services == expect_forced
+      - mx1_stack_new_forced | select('search', ' --no-deps ') | list | length == expect_forced | length
+      - mx1_stack_new_ups | select('search', '--remove-orphans|--renew-anon-volumes') | list | length == 0
+    quiet: true
+    fail_msg: >-
+      The role made {{ mx1_stack_new_ups | length }} call(s) to up, expected {{ expect_ups }}, and forced
+      {{ mx1_stack_forced_services }}, expected {{ expect_forced }}. The calls: {{ mx1_stack_new_ups }}.

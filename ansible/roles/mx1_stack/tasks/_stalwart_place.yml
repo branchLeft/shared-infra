@@ -1,0 +1,13 @@
+---
+# The files Stalwart's project reads from the repository, placed once the class is marked pending.
+- name: Deliver Stalwart's compose file
+  ansible.builtin.copy:
+    content: '{{ mx1_stack_stalwart_compose_text }}'
+    dest: '{{ mx1_stack_stalwart_compose_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  # ANS-16: line 25 of this file is a ${VAR} reference to the Prometheus secret, which the
+  # plan-diff scan matches as a credential assignment. The diff is hidden by decision (choice A):
+  # https://github.com/branchLeft/workspace/issues/2348#issuecomment-6579030323
+  diff: false

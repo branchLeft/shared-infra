@@ -1,126 +1,170 @@
 import * as pulumi from '@pulumi/pulumi';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import {
+  type Created,
+  EDGE1_PUBLIC_IPV4,
+  installTenantsMocks,
+  ofType,
+  settle,
+  TYPES,
+} from './tenants.fixtures';
+
 /**
- * The tenants program's resource graph, read from the requests the SDK sends
- * the engine through mocks. Nothing is previewed or applied: no provider call
- * leaves the process, and the read calls the guard makes are answered here.
+ * The tenants program's resource graph with the default config: edge-t, the
+ * network, the subnet and the route, and no db-t1 (`dbt1Enabled` is absent).
+ * `tenants.dbt1.test.ts` covers db-t1 with the switch on.
  *
- * The config is supplied in the shape the stack file carries, so a key the
- * program requires and the stack file lacks fails here.
+ * `@branchleft/hetzner-host` carries its own copy of the Pulumi SDK, so it is
+ * imported after the mocks are installed, as the program itself imports it.
+ * Imported first, it would be loaded before the config exists.
+ *
+ * `protect` is a plain boolean the SDK resolves at construction and stores as
+ * a private field; a cast through `unknown` reads the value Pulumi resolved,
+ * which is the only way to catch an edit that drops the explicit override.
  */
 
-interface Created {
-  type: string;
-  name: string;
-  inputs: Record<string, unknown>;
-}
+let created: Created[] = [];
+let program: typeof import('./tenants.js');
+let plan: typeof import('@branchleft/hetzner-host');
 
-const created: Created[] = [];
-
-const TENANTS_MARKER = 'project-marker-tenants';
-
-beforeAll(() => {
-  process.env.PULUMI_CONFIG = JSON.stringify({
-    'branchleft-hetzner-tenants:image': 'debian-13',
-    'branchleft-hetzner-tenants:dbt1ServerType': 'cx23',
-    'branchleft-hetzner-tenants:ownerSshKeyNames': '["rob@branchleft.co.uk"]',
-    'branchleft-hetzner-tenants:dbt1DeployPublicKey':
-      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE deploy@test',
-  });
-  pulumi.runtime.setMocks(
-    {
-      newResource(args: pulumi.runtime.MockResourceArgs) {
-        created.push({ type: args.type, name: args.name, inputs: args.inputs });
-        return { id: `${args.name}-id`, state: { ...args.inputs } };
-      },
-      call(args: pulumi.runtime.MockCallArgs) {
-        if (args.token === 'hcloud:index/getServers:getServers') {
-          return { servers: [] };
-        }
-        if (args.token === 'hcloud:index/getFirewalls:getFirewalls') {
-          return { firewalls: [{ name: TENANTS_MARKER }] };
-        }
-        return {};
-      },
-    },
-    'branchleft-hetzner-tenants',
-    'production',
-    false
-  );
+beforeAll(async () => {
+  created = installTenantsMocks();
+  program = await import('./tenants.js');
+  plan = await import('@branchleft/hetzner-host');
+  await settle();
 });
 
-async function load(): Promise<void> {
-  await import('./tenants.js');
-  await new Promise((resolve) => setTimeout(resolve, 0));
-}
+const named = (type: string, name: string) =>
+  ofType(created, type).find((resource) => resource.inputs.name === name);
 
-const ofType = (type: string) => created.filter((resource) => resource.type === type);
+const resolvedProtect = (resource: pulumi.Resource): boolean | undefined =>
+  (resource as unknown as { readonly __protect?: boolean }).__protect;
 
-describe('tenants program', () => {
-  it('creates db-t1 as a private-only server on the tenants network', async () => {
-    await load();
+type FirewallRule = { direction: string; protocol: string; port?: string; sourceIps: string[] };
 
-    const servers = ofType('hcloud:index/server:Server');
-    const db = servers.find((server) => server.inputs.name === 'db-t1');
-    expect(db, 'a server named db-t1').toBeDefined();
-    expect(db?.inputs.serverType).toBe('cx23');
-    expect(db?.inputs.location).toBe('nbg1');
-    expect(db?.inputs.image).toBe('debian-13');
+const edgeTRules = (): FirewallRule[] =>
+  (named(TYPES.firewall, 'edge-t')?.inputs.rules ?? []) as FirewallRule[];
+
+describe('edge-t', () => {
+  it('is a public server of the ruled type, in the estate location', () => {
+    const server = named(TYPES.server, 'edge-t');
+    expect(server, 'a server named edge-t').toBeDefined();
+    expect(server?.inputs.serverType).toBe('cpx22');
+    expect(server?.inputs.location).toBe('nbg1');
+    expect(server?.inputs.image).toBe('debian-13');
+    const publicNets = server?.inputs.publicNets as { ipv4Enabled: boolean }[] | undefined;
+    expect(publicNets?.[0]?.ipv4Enabled).toBe(true);
   });
 
-  it('gives db-t1 no public address of its own', async () => {
-    await load();
+  it('holds two primary IPs, and the only ones in the project', () => {
+    const ips = ofType(created, TYPES.primaryIp);
+    expect(ips.map((ip) => ip.inputs.name).sort()).toEqual(['edge-t-ipv4', 'edge-t-ipv6']);
+  });
 
-    expect(ofType('hcloud:index/primaryIp:PrimaryIp')).toEqual([]);
-    const db = ofType('hcloud:index/server:Server').find(
-      (server) => server.inputs.name === 'db-t1'
+  it('is attached to the tenants network at its register address', () => {
+    const attachment = ofType(created, TYPES.serverNetwork).find(
+      (n) => n.name === 'edge-t-network'
     );
-    const publicNets = db?.inputs.publicNets as
-      { ipv4Enabled: boolean; ipv6Enabled: boolean }[] | undefined;
-    expect(publicNets?.[0]?.ipv4Enabled).toBe(false);
-    expect(publicNets?.[0]?.ipv6Enabled).toBe(false);
+    expect(attachment?.inputs.ip).toBe(plan.TENANTS_HOST_IPS.edgeT);
+    const network = ofType(created, TYPES.network)[0];
+    expect(attachment?.inputs.networkId).toBe(Number(network?.id));
   });
 
-  it('gives db-t1 a firewall with only the SSH and ICMP inbound rules', async () => {
-    await load();
+  it('is protected against deletion and rebuild, with no backups', () => {
+    const server = named(TYPES.server, 'edge-t');
+    expect(server?.inputs.deleteProtection).toBe(true);
+    expect(server?.inputs.rebuildProtection).toBe(true);
+    expect(server?.inputs.backups).toBe(false);
+  });
 
-    const firewall = ofType('hcloud:index/firewall:Firewall').find(
-      (resource) => resource.inputs.name === 'db-t1'
+  // The firewall control. Red when the SSH source is widened in
+  // hetzner-host/firewalls.ts (sshRestrictedRules) or when a rule is added;
+  // the checking function's own teeth are in hetzner-host/firewalls.test.ts.
+  it("accepts SSH only from edge1's /32", () => {
+    const rules = edgeTRules();
+    expect(rules.length).toBeGreaterThan(0);
+
+    const ssh = rules.filter((rule) => rule.protocol === 'tcp' && rule.port === '22');
+    expect(ssh).toHaveLength(1);
+    expect(ssh[0]?.sourceIps).toEqual([`${EDGE1_PUBLIC_IPV4}/32`]);
+
+    const publicPorts = rules.map((rule) => (rule.protocol === 'icmp' ? 'icmp' : rule.port));
+    expect(publicPorts.sort()).toEqual(['22', '443', '80', 'icmp']);
+
+    const anySource = rules
+      .filter((rule) => rule.sourceIps.includes('0.0.0.0/0') || rule.sourceIps.includes('::/0'))
+      .map((rule) => (rule.protocol === 'icmp' ? 'icmp' : rule.port))
+      .sort();
+    expect(anySource).toEqual(['443', '80', 'icmp']);
+
+    expect(plan.sshFromOneAddressViolations(rules as never, EDGE1_PUBLIC_IPV4)).toEqual([]);
+  });
+
+  it('declares only inbound rules, so egress stays default-allow', () => {
+    expect(edgeTRules().every((rule) => rule.direction === 'in')).toBe(true);
+  });
+});
+
+describe('the tenants default route', () => {
+  const route = () => ofType(created, TYPES.route);
+
+  // The NAT control, declaration half. Red when the route is deleted, or
+  // points at db-t1's address, or at the wrong network.
+  it('is one default route via edge-t, on the tenants network', () => {
+    expect(route()).toHaveLength(1);
+    const [only] = route();
+    expect(only?.inputs.destination).toBe('0.0.0.0/0');
+    expect(only?.inputs.gateway).toBe(plan.TENANTS_HOST_IPS.edgeT);
+    expect(only?.inputs.gateway).not.toBe(plan.TENANTS_HOST_IPS.dbT1);
+    const network = ofType(created, TYPES.network)[0];
+    expect(only?.inputs.networkId).toBe(Number(network?.id));
+  });
+
+  it("names the address edge-t holds on the network, not another host's", () => {
+    const attachment = ofType(created, TYPES.serverNetwork).find(
+      (n) => n.name === 'edge-t-network'
     );
-    const rules = firewall?.inputs.rules as { port?: string; protocol: string }[] | undefined;
-    expect(rules?.map((rule) => rule.protocol)).toEqual(['tcp', 'icmp']);
-    expect(rules?.[0]?.port).toBe('22');
+    expect(route()[0]?.inputs.gateway).toBe(attachment?.inputs.ip);
   });
 
-  it('attaches db-t1 inline to the tenants network at its fixed address', async () => {
-    await load();
-
-    const db = ofType('hcloud:index/server:Server').find(
-      (server) => server.inputs.name === 'db-t1'
-    );
-    const networks = db?.inputs.networks as { ip: string; aliasIps: unknown[] }[] | undefined;
-    expect(networks).toHaveLength(1);
-    expect(networks?.[0]?.ip).toBe('10.20.1.20');
-    expect(networks?.[0]?.aliasIps).toEqual([]);
+  it('is created after the subnet and after edge-t is attached, which Hetzner serialises per network', () => {
+    const position = (type: string, name?: string) =>
+      created.findIndex((r) => r.type === type && (name === undefined || r.name === name));
+    expect(position(TYPES.route)).toBeGreaterThan(position(TYPES.subnet));
+    expect(position(TYPES.route)).toBeGreaterThan(position(TYPES.serverNetwork, 'edge-t-network'));
   });
 
-  it('declares its own tenants network and never the estate platform network', async () => {
-    await load();
+  it('does not inherit protect:true from the network it is parented to', () => {
+    expect(resolvedProtect(program.tenantsNetwork)).toBe(true);
+    expect(resolvedProtect(program.tenantsEgressRoute)).toBe(false);
+  });
+});
 
-    const networks = ofType('hcloud:index/network:Network');
+describe('the tenants network', () => {
+  it('declares its own tenants network and never the estate platform network', () => {
+    const networks = ofType(created, TYPES.network);
     expect(networks.map((network) => network.inputs.name)).toEqual(['tenants']);
-    expect(networks[0]?.inputs.ipRange).toBe('10.20.0.0/16');
+    expect(networks[0]?.inputs.ipRange).toBe(plan.NETWORK_CIDR);
   });
 
-  it('protects db-t1 against deletion and rebuild, with no backups switched on', async () => {
-    await load();
+  it('holds both tenants hosts inside the one subnet, clear of every org host', () => {
+    const prefix = plan.SUBNET_CIDR.replace(/\.0\/24$/, '.');
+    for (const ip of Object.values(plan.TENANTS_HOST_IPS)) {
+      expect(ip.startsWith(prefix)).toBe(true);
+      expect(Object.values(plan.HOST_IPS)).not.toContain(ip);
+    }
+    expect(plan.duplicateAddresses(plan.ADDRESS_REGISTER)).toEqual([]);
+  });
+});
 
-    const db = ofType('hcloud:index/server:Server').find(
-      (server) => server.inputs.name === 'db-t1'
-    );
-    expect(db?.inputs.deleteProtection).toBe(true);
-    expect(db?.inputs.rebuildProtection).toBe(true);
-    expect(db?.inputs.backups).toBe(false);
+describe('db-t1 behind its switch', () => {
+  // Red when `dbt1Enabled` defaults to true: db-t1 would be planned before
+  // edge-t's route and NAT are live and proven.
+  it('declares no db-t1 server, firewall or address while dbt1Enabled is absent', () => {
+    expect(named(TYPES.server, 'db-t1')).toBeUndefined();
+    expect(named(TYPES.firewall, 'db-t1')).toBeUndefined();
+    expect(program.dbT1).toBeUndefined();
+    expect(ofType(created, TYPES.server).map((server) => server.inputs.name)).toEqual(['edge-t']);
   });
 });

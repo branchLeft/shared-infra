@@ -15,6 +15,16 @@ each dependent creating its own copy of shared infrastructure.
 
 - `Host`, `HostArgs`, `HostRole` — the component and its arguments.
 - `EDGE_RULES`, `INTERNAL_RULES` — per-role firewall rule sets.
+- `HostArgs.sshSourceIp`, `sshRestrictedRules`, `edgeRulesSshFrom`,
+  `assertSshSourceAddress`, `sshFromOneAddressViolations` — the optional
+  narrowing of a public host's SSH rule to one public IPv4 address (a /32), and
+  the function that states what such a rule set must look like. Absent, a host
+  gets its role's rule set byte for byte; present, only the SSH source changes,
+  so the input can narrow SSH and cannot widen it or add a port. A CIDR, an IPv6
+  address, a hostname, or a private, loopback, link-local, shared or reserved
+  address is refused, before anything is created when the value is a plain
+  string and when an output resolves otherwise. It is refused on a host with no
+  public networking.
 - `renderCloudInit`, `CloudInitArgs`, `assertDeployPublicKey` — the first-boot
   user-data and the validation that protects it.
 - `Enrolment`, `PullBootstrap`, `PullBootstrapFile`, `assertEnrolment`,
@@ -23,8 +33,12 @@ each dependent creating its own copy of shared infrastructure.
   enrolment of an edge host into the gated pull, and its validation
   ("Enrolment" below).
 - `NETWORK_CIDR`, `SUBNET_CIDR`, `HOST_IPS`, `APP_HOST_IPS`,
-  `ESTATE_LOCATION`, `EuCentralLocation`, `EstateLocation` — the shared
-  address plan every host and its peers are named from.
+  `TENANTS_HOST_IPS`, `ESTATE_LOCATION`, `EuCentralLocation`,
+  `EstateLocation` — the shared address plan every host and its peers are named
+  from. The tenants project reuses the estate's range (a network does not span
+  projects), so `ADDRESS_REGISTER` lists every private address of both projects,
+  built from those constants, and `duplicateAddresses` finds an address held
+  twice; `addressRegister.test.ts` refuses one.
 
 ## `Host`
 
@@ -231,6 +245,24 @@ nvm use && pnpm install --frozen-lockfile
 pnpm run typecheck
 pnpm run test
 ```
+
+## Where the estate is placed
+
+`ESTATE_LOCATION` in `addressPlan.ts` is `nbg1`, the one location every host is created in. It is a
+shared constant rather than a per-stack setting because the estate is built by more than one stack
+in more than one repository, and `location` is create-time-only on `hcloud.Server`. A per-stack
+value lets a second apply land somewhere the first did not, with a clean preview, and the app and
+database hosts are the latency-sensitive pair, so a split between them is the outcome to prevent.
+
+It is weaker than one apply in two ways. Nothing stops a stack passing another value to `Host`. And
+a stack that has already applied does not follow a later edit to the constant: its hosts stay where
+they were created, so changing it after a host exists describes an estate that is already split.
+Read `estateLocation` from the applied stack's outputs to learn where a host is.
+
+`hel1` is the substitute if `cx23` is out of stock at apply time. Reach and cost do not change,
+because a subnet spans the whole `eu-central` zone, so the mail hop stays intra-network either way.
+What is given up is that the hop's latency becomes unmeasured, which is what the placement rule
+exists to avoid.
 
 ## Notes kept from the source
 

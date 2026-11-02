@@ -1,0 +1,19 @@
+---
+# The files the shim's project reads from the repository, placed once the class is marked pending.
+- name: Deliver the shim's compose file
+  ansible.builtin.copy:
+    content: '{{ mx1_stack_shim_compose_text }}'
+    dest: '{{ mx1_stack_shim_compose_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+# A rename leaves a running container on the old file (the new file is a new inode), and Caddy reads
+# its file only when it starts. The class action that follows recreates Caddy when this changes.
+- name: Deliver the Caddyfile
+  ansible.builtin.copy:
+    content: '{{ mx1_stack_shim_caddyfile_text }}'
+    dest: '{{ mx1_stack_shim_caddyfile }}'
+    owner: root
+    group: root
+    mode: '0644'

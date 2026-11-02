@@ -2,6 +2,13 @@ import * as pulumi from '@pulumi/pulumi';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { bootstrap, enrolment } from './enrolment.fixtures';
+import {
+  EDGE_RULES,
+  edgeRulesSshFrom,
+  INTERNAL_RULES,
+  sshFromOneAddressViolations,
+  sshRestrictedRules,
+} from './firewalls';
 import { Host } from './host';
 
 /**
@@ -296,5 +303,78 @@ describe('Host', () => {
         })
     ).toThrow(/single-line OpenSSH public key/);
     expect(created.slice(before).some((r) => r.type === 'hcloud:index/server:Server')).toBe(false);
+  });
+});
+
+describe('sshSourceIp', () => {
+  const EDGE1_PUBLIC = '203.0.113.10';
+  const rulesOf = (resources: Created[]) =>
+    resources.find((r) => r.type === 'hcloud:index/firewall:Firewall')?.inputs.rules;
+
+  it('leaves a role-edge host with no sshSourceIp with exactly EDGE_RULES', async () => {
+    // edge1 and ops1 pass no sshSourceIp: their firewalls must not move.
+    const { resources } = await build({ name: 'ssh-none-edge', role: 'edge' });
+    expect(rulesOf(resources)).toEqual(EDGE_RULES);
+  });
+
+  it('leaves a non-edge host with no sshSourceIp with exactly INTERNAL_RULES', async () => {
+    const { resources } = await build({ name: 'ssh-none-app', role: 'app' });
+    expect(rulesOf(resources)).toEqual(INTERNAL_RULES);
+  });
+
+  it('narrows an edge host to SSH from one /32, with 80, 443 and ICMP still open', async () => {
+    const { resources } = await build({
+      name: 'ssh-one-edge',
+      role: 'edge',
+      sshSourceIp: EDGE1_PUBLIC,
+    });
+    const rules = rulesOf(resources) as Parameters<typeof sshFromOneAddressViolations>[0];
+    expect(rules).toEqual(edgeRulesSshFrom(EDGE1_PUBLIC));
+    expect(sshFromOneAddressViolations(rules, EDGE1_PUBLIC)).toEqual([]);
+  });
+
+  it('accepts the address as an output, as another stack supplies it', async () => {
+    const { resources } = await build({
+      name: 'ssh-output-edge',
+      role: 'edge',
+      sshSourceIp: pulumi.output(EDGE1_PUBLIC),
+    });
+    expect(rulesOf(resources)).toEqual(edgeRulesSshFrom(EDGE1_PUBLIC));
+  });
+
+  it('narrows the SSH rule of a public non-edge host too, and nothing else', async () => {
+    const { resources } = await build({
+      name: 'ssh-one-app',
+      role: 'app',
+      sshSourceIp: EDGE1_PUBLIC,
+    });
+    expect(rulesOf(resources)).toEqual(sshRestrictedRules(INTERNAL_RULES, EDGE1_PUBLIC));
+  });
+
+  it.each(['0.0.0.0', '203.0.113.0/24', '10.20.1.10', 'edge1.example.com', ''])(
+    'refuses %j before creating anything',
+    (value) => {
+      const before = created.length;
+      expect(
+        () => new Host({ ...BASE, name: 'ssh-bad', role: 'edge', sshSourceIp: value } as never)
+      ).toThrow();
+      expect(created.slice(before)).toEqual([]);
+    }
+  );
+
+  it('refuses on a host with no public networking, before creating anything', () => {
+    const before = created.length;
+    expect(
+      () =>
+        new Host({
+          ...BASE,
+          name: 'ssh-private',
+          role: 'db',
+          privateIp: '10.20.1.160',
+          publicNetworking: false,
+          sshSourceIp: EDGE1_PUBLIC,
+        } as never)
+    ).toThrow(/no public networking/);
+    expect(created.slice(before)).toEqual([]);
   });
 });
