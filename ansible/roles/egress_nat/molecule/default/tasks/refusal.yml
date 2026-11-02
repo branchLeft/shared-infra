@@ -1,0 +1,50 @@
+---
+# Test scaffolding. One first install that the NAT reconciler must refuse because of a fact
+# about the host that the edge_firewall role is responsible for, with the uplink public so that
+# nothing else is the reason. The caller sets egress_nat_refusal_marker, a file under /run that
+# makes the stand-in nft or sysctl report the fact (no masquerade table, or forwarding off).
+# The marker is removed again at the end, so that the next attempt sees a host that is in order.
+- name: Make the host fail the check
+  ansible.builtin.file:
+    path: '{{ egress_nat_refusal_marker }}'
+    state: touch
+    mode: '0644'
+    modification_time: preserve
+    access_time: preserve
+
+- name: Apply the role where the NAT reconciler must refuse
+  ansible.builtin.include_tasks: attempt.yml
+
+- name: Read the NAT files after the refused first install
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - /usr/local/sbin/branchleft-nat
+    - /etc/systemd/system/branchleft-nat.service
+  register: egress_nat_refusal_files
+
+- name: Read what the refusal inserted into the forwarding chain
+  ansible.builtin.command:
+    argv: [iptables, -t, filter, -S]
+  register: egress_nat_refusal_filter
+  changed_when: false
+
+- name: Assert the refusal failed the apply, was reverted, and inserted nothing
+  ansible.builtin.assert:
+    that:
+      - egress_nat_attempt_failed
+      - "egress_nat_failed_task == 'Restart the unit so the installed reconciler runs: branchleft-nat.service'"
+      - egress_nat_reverted
+      - not egress_nat_refusal_files.results[0].stat.exists
+      - not egress_nat_refusal_files.results[1].stat.exists
+      - egress_nat_refusal_filter.stdout_lines | select('search', '-s 10.20.1.0/24') | list | length == 0
+    quiet: true
+    fail_msg: >-
+      A host that fails {{ egress_nat_refusal_marker }} must make the NAT reconciler refuse, which fails the
+      apply at the restart, with nothing left installed and no forwarding rule inserted.
+      Failed task: {{ egress_nat_failed_task }}.
+
+- name: Make the host pass the check again
+  ansible.builtin.file:
+    path: '{{ egress_nat_refusal_marker }}'
+    state: absent

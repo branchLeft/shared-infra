@@ -4,7 +4,10 @@
 # After them, the roles on edge1's list in checks/host_roles.yml that this playbook wires:
 # the loader of the host's private inputs (host_inputs, first: check_enrolment R11), which reads
 # the one root-only file the owner places on the host and stops the run if it is missing or unsafe,
-# the host baseline, then the NAT gateway (egress_nat, with egress_nat_gateway_enabled on: edge1
+# the host baseline, then the host firewall and the gateway's masquerade (edge_firewall: its own
+# nftables tables, monitor mode until the owner-merged flip of edge_firewall_enforce, with the
+# estate subnet it masquerades; both values are pinned to edge1 alone in checks/check_enrolment.py),
+# then the NAT gateway (egress_nat, with egress_nat_gateway_enabled on: edge1
 # is the estate's one gateway, and the switch is pinned to edge1 alone in checks/check_enrolment.py),
 # the pipeline account the trigger is reached through, then the deploy
 # tooling (as class gateway, which installs the common targets only), then the edge stack. The
@@ -28,6 +31,8 @@
     enrolled_host: edge1
     deploy_tooling_host_class: gateway
     egress_nat_gateway_enabled: true
+    edge_firewall_nat_source: 10.20.1.0/24
+    edge_firewall_enforce: false
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/edge1.yml'
@@ -46,6 +51,7 @@
     - role: ../roles/pull_trigger # noqa: role-name[path]
     - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/edge_firewall # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_login # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]

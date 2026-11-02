@@ -145,6 +145,7 @@ WHITEBOARD_INTRO_TEXT
 | `db1_stack`                | [README](../ansible/roles/db1_stack/README.md)                |
 | `demo1_build`              | [README](../ansible/roles/demo1_build/README.md)              |
 | `deploy_tooling`           | [README](../ansible/roles/deploy_tooling/README.md)           |
+| `edge_firewall`            | [README](../ansible/roles/edge_firewall/README.md)            |
 | `edge_stack`               | [README](../ansible/roles/edge_stack/README.md)               |
 | `egress_nat`               | [README](../ansible/roles/egress_nat/README.md)               |
 | `export_bundler`           | [README](../ansible/roles/export_bundler/README.md)           |

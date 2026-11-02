@@ -3,7 +3,7 @@
 This role installs the two programs that keep a host's route to the internet true:
 the private-host egress reconciler, which gives a host with no public address a
 default route and a resolver, and the NAT gateway reconciler, which lets the one
-gateway host forward and source-NAT the estate's private subnet. It installs each
+gateway host accept the estate's private subnet in its forwarding chain. It installs each
 program to `/usr/local/sbin` with the systemd unit that runs it at every boot, runs
 it, and puts the previous files back if the run fails.
 
@@ -18,7 +18,8 @@ It does what two shell scripts did, in the same order:
    `branchleft_host_egress.sh` as `/usr/local/sbin/branchleft-host-egress` and
    `branchleft-host-egress.service` as its unit, makes systemd read the unit, enables
    it and runs it. This is for every host.
-2. `hetzner/provision/nat-gateway.sh`: the same for `branchleft_nat.sh` as
+2. `hetzner/provision/nat-gateway.sh` (which now only refuses, and names this role and
+   `edge_firewall`): the same for `branchleft_nat.sh` as
    `/usr/local/sbin/branchleft-nat` and `branchleft-nat.service`. This is for the one
    gateway host, and the role does it only when `egress_nat_gateway_enabled` is true.
 
@@ -33,8 +34,13 @@ It does not:
   when it is missing. The packages come with the host baseline and with Docker.
 - choose the gateway host. Setting `egress_nat_gateway_enabled` for the right host,
   and for that host only, is the caller's.
-- write a firewall ruleset of its own. The NAT reconciler inserts its three
-  `iptables` rules, each once, and the role neither adds nor removes any.
+- masquerade, or turn forwarding on. Both moved to the `edge_firewall` role
+  (`ansible/roles/edge_firewall`), which loads the masquerade in its own nftables table,
+  writes the forwarding sysctl drop-in and sets the runtime value, and runs before this
+  role. The NAT reconciler inserts its two `iptables` forwarding accepts, each once, and
+  the role neither adds nor removes any. The accepts stay here because a rule in an
+  nftables forward chain cannot rescue a packet that Docker's `iptables` `FORWARD` policy
+  drops; they go in `DOCKER-USER`, which Docker does not flush.
 - remove anything. A role that stops being applied to a host leaves its files and
   units in place.
 - apply itself to a host (see how it is delivered).
@@ -88,6 +94,13 @@ The role leaves facts after a failed guard, which a caller or a test reads:
   On the gateway host, the reconciler also needs the host to hold a public address on
   the interface of its default route and an address in the estate's private subnet; it
   exits with a message when it does not.
+- On the gateway host, the `edge_firewall` role applied first (it is, in `edge1.yml`): the
+  reconciler reads `net.ipv4.ip_forward` and exits when it is not `1`, and looks for a
+  masquerade, in the role's nftables table `ip branchleft_edge_nat` or, while the old
+  rule is still in place, the `iptables` rule it used to insert. With neither it exits
+  with a message, which fails the apply at the unit's restart and sets the revert guard
+  going: a gateway with the accepts and no masquerade has no outbound internet and every
+  check of the reconciler's own would still pass.
 
 ## What it changes on a host
 
@@ -106,9 +119,11 @@ as `install -m 0755 -o root -g root` and `-m 0644` made them.
 
 What the two reconcilers then do to the host is their own work and is described in
 their source: the host egress reconciler sets a default route and the resolver file on
-a host with no public address and does nothing on any other; the NAT reconciler writes
-`/etc/sysctl.d/99-branchleft-nat.conf`, turns forwarding on, and inserts one masquerade
-rule and two forwarding rules. The role does not touch those.
+a host with no public address and does nothing on any other; the NAT reconciler inserts
+two forwarding rules, one for each direction, and nothing else. It no longer writes
+`/etc/sysctl.d/99-branchleft-nat.conf`, no longer turns forwarding on and no longer
+inserts a masquerade rule: the `edge_firewall` role owns those. The role does not touch
+any of them.
 
 ### One home for every file
 
@@ -165,15 +180,21 @@ cd ansible
 What each part of the scenario does:
 
 - `prepare.yml` installs `iptables` and `iproute2`, a stand-in for the `sysctl` command
-  (a container's `/proc/sys` is read-only, so the real one fails), and gives the container
+  (a container's `/proc/sys` is read-only, so the real one fails; the stand-in records its
+  calls and reports forwarding as on, or off while a marker file exists), a stand-in for
+  `nft` that prints the words of the masquerade table (or the kernel's failure while a marker
+  file exists), and gives the container
   the addresses the two reconcilers look for: a public documentation address on the
   loopback interface (which makes the host egress reconciler take its no-op branch), and,
   on the interface of the default route, a public documentation address and an address in
   the estate's private subnet (which the NAT reconciler needs).
-- `converge.yml`, on the first converge, applies the role four times before the real apply:
+- `converge.yml`, on the first converge, applies the role seven times before the real apply:
   with the gateway switch off (only the host half may be installed); with the uplink's
   public address taken off, on a host with no NAT reconciler (the restart must fail and the
-  guard must remove what it installed); with the address back (a good install); and with
+  guard must remove what it installed); with the address back but no masquerade table, and
+  again with forwarding off (the reconciler must refuse each, the apply must fail at the
+  restart, nothing may be left installed, and no forwarding rule may be inserted); with the
+  address back (a good install); and with
   an earlier release of the reconciler and unit in place and the address taken off again
   (the restart must fail and the guard must put the earlier release back, byte for byte,
   and run it again). It then applies the role for real. The attempts are skipped once the
@@ -183,8 +204,8 @@ What each part of the scenario does:
   byte for byte its source in `hetzner/provision`, read directly and not through the role's
   links; no kept copy is left; both units are enabled and active with a successful last run;
   the host egress reconciler reported its no-op branch; and the NAT reconciler left exactly
-  one masquerade rule and one rule of each forwarding direction, its sysctl drop-in, and a
-  call to turn forwarding on.
+  one rule of each forwarding direction, no masquerade rule, no sysctl drop-in, and made
+  no call that sets `net.ipv4.ip_forward` (only the one that reads it).
 - `check-fresh`, `check-configured` and `molecule-check`: the role runs under
   `--check --diff` before the first apply and against the configured instance and shows no
   drift.
@@ -195,16 +216,19 @@ Each row is an edit made with the editor, one run, and a restore. The run is the
 make the row's edit and run the command shown to see the message. The unit tests run in
 seconds; the scenario run is the harness over the role.
 
-| Control                                                   | The edit                                                                                   | The step that fails                                                        |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| Masquerade is limited to the estate's subnet as source    | in `hetzner/provision/branchleft_nat.sh`, drop `-s "$SUBNET"` from the `MASQUERADE` rule   | harness `verify`: `egress_nat_verify_masquerade \| length == 1`            |
-| Forwarding stays one-way (return traffic only when known) | in the same file, drop `-m conntrack --ctstate ESTABLISHED,RELATED` from the return rule   | harness `verify`: `egress_nat_verify_forward_in \| length == 1`            |
-| A failed update puts the previous reconciler back         | in `tasks/_reconciler.yml`, make the task "Put the previous reconciler back" `when: false` | harness `converge`: the reconciler's checksum equals the earlier release's |
-| Only the gateway host gets the NAT half                   | in `tasks/main.yml`, replace the gateway task's `when` with `when: true`                   | unit test `test_nat_gateway_is_gated_on_the_switch`                        |
+| Control                                                   | The edit                                                                                                                 | The step that fails                                                                                                                   |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------- |
+| The reconciler inserts no masquerade                      | in `hetzner/provision/branchleft_nat.sh`, add back `ensure_rule nat POSTROUTING -s "$SUBNET" -o "$uplink" -j MASQUERADE` | harness `verify`: `egress_nat_verify_masquerade \| length == 0`; and the unit test `test_no_line_inserts_or_appends_to_the_nat_table` |
+| The reconciler refuses when no masquerade exists          | in the same file, delete the `exit 1` after "no masquerade for"                                                          | harness `converge`: the refusal attempt; unit test `test_refuses_when_no_masquerade_exists_anywhere`                                  |
+| The reconciler refuses when forwarding is off             | in the same file, delete the `ip_forward` check                                                                          | harness `converge`: the not-forwarding attempt; unit test `test_refuses_when_forwarding_is_off`                                       |
+| Forwarding stays one-way (return traffic only when known) | in the same file, drop `-m conntrack --ctstate ESTABLISHED,RELATED` from the return rule                                 | harness `verify`: `egress_nat_verify_forward_in \| length == 1`                                                                       |
+| A failed update puts the previous reconciler back         | in `tasks/_reconciler.yml`, make the task "Put the previous reconciler back" `when: false`                               | harness `converge`: the reconciler's checksum equals the earlier release's                                                            |
+| Only the gateway host gets the NAT half                   | in `tasks/main.yml`, replace the gateway task's `when` with `when: true`                                                 | unit test `test_nat_gateway_is_gated_on_the_switch`                                                                                   |
 
-The first two edits are to the shell reconciler, not to the role, because the rule
+The first four edits are to the shell reconciler, not to the role, because the rule
 shapes live there and the role delivers it unchanged; the scenario reads the rules the
-installed reconciler left, so it fails when the reconciler stops inserting the right ones.
+installed reconciler left, so it fails when the reconciler stops inserting the right ones
+or starts inserting one it should not.
 
 ### Named limits
 
@@ -232,7 +256,9 @@ approval of its protected environment. A plan job shows the host's diff in check
 first; after the approval the host pulls that exact commit of `main` and applies it, and
 a second run must report zero changes. Nothing is applied from a laptop. The role is
 wired into `ansible/playbooks/edge1.yml`, after `host_baseline` (Docker and `iptables`
-come from there) and before `ci_login`, and nowhere else. The live run waits on the gate.
+come from there) and after `edge_firewall` (whose nftables table holds the masquerade and
+whose drop-in turns forwarding on, both of which the reconciler checks), and before
+`ci_login`, and nowhere else. The live run waits on the gate.
 The switch `egress_nat_gateway_enabled` is set in edge1's play vars, not in an inventory
 (the inventory trees load no group variables), and the enrolment checker pins it to edge1
 in `HOST_PLAY_VARS` (R2) so the role entry stays bare and no other host can become a second

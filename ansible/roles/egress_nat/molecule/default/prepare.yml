@@ -16,11 +16,22 @@
         update_cache: true
 
     # The real sysctl fails in a container (/proc/sys is read-only), so a stand-in
-    # that records its arguments goes where the unit's PATH finds it first.
+    # that records its arguments and reports forwarding as on goes where the
+    # unit's PATH finds it first.
     - name: Install a stand-in for the sysctl command
       ansible.builtin.copy:
         src: sysctl_standin.sh
         dest: /usr/local/sbin/sysctl
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The NAT reconciler no longer masquerades: it looks for the masquerade the
+    # edge_firewall role loads. A stand-in for nft answers with that table's text.
+    - name: Install a stand-in for the nft command
+      ansible.builtin.copy:
+        src: nft_standin.sh
+        dest: /usr/local/sbin/nft
         owner: root
         group: root
         mode: '0755'
@@ -49,3 +60,20 @@
       ansible.builtin.command:
         argv: [ip, addr, replace, 203.0.113.11/32, dev, '{{ egress_nat_uplink_dev }}']
       changed_when: true
+
+    # The table the stand-in nft prints: the words of the kernel's listing of the role's
+    # NAT table, with this container's uplink as the output interface (tabs shown as spaces;
+    # the reconciler looks for the word masquerade and nothing else).
+    - name: Write the text of the masquerade table the stand-in nft prints
+      ansible.builtin.copy:
+        dest: /run/egress-nat-nft-table
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          table ip branchleft_edge_nat {
+            chain postrouting {
+              type nat hook postrouting priority srcnat; policy accept;
+              ip saddr 10.20.1.0/24 oifname "{{ egress_nat_uplink_dev }}" masquerade
+            }
+          }
