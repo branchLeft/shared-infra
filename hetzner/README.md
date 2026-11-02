@@ -170,6 +170,14 @@ turns forwarding on, and `egress_nat` installs the reconciler (`provision/branch
 keeps the forwarding accepts in `DOCKER-USER`. `RUNBOOK-provision-host.md` carries the order the
 two have to happen in.
 
+Three more facts about the route. A private-only host cannot run its own provisioning
+(`apt-get update`, the Docker signing key) without it, and cannot receive the unattended security
+upgrades that `provision/10-harden-updates-fail2ban.sh` enables. The route is additive: it neither
+reads nor writes a property of the network or the subnet, so neither is replaced by its presence.
+`protect: false` is given explicitly, not left absent: a `parent` option makes Pulumi inherit
+`protect` from the parent whenever a child leaves its own unset, and `network` carries
+`protect: true`, so an absent value would silently pick that up.
+
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`
 (`../hetzner-host/addressPlan.ts`). Hetzner's DHCP allocates in creation
 order, so a host rebuilt at any point would move — and firewall rules,
