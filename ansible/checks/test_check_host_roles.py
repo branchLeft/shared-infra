@@ -66,13 +66,13 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
 # host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
-# installed Docker), then app1's deploy_tooling and deploy_slot_keys (last, in that order: the slot
-# keys need the wrapper the tooling installs), db1's host_baseline, db1_stack and
-# db1_backup_timers (after the loader, which goes first; db1_grants would follow the timers and
-# is not applied), ops1's host_inputs (first), control_plane after the status page, then
-# nextcloud_stack, backup_worker and backup_restore (the restore reads the worker's variables, so
-# it follows), then control_plane_db last (it asserts the directory control_plane makes), and
-# demo1's two build roles.
+# installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that order: the slot
+# keys need the wrapper the tooling installs) and app1's export_bundler (last of all), db1's
+# host_baseline, db1_stack and db1_backup_timers (after the loader, which goes first; db1_grants
+# would follow the timers and is not applied), ops1's host_inputs (first), control_plane after
+# the status page, then nextcloud_stack, backup_worker and backup_restore (the restore reads the
+# worker's variables, so it follows), then control_plane_db last (it asserts the directory
+# control_plane makes), and demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -104,6 +104,7 @@ APPLIED_ON_MAIN = {
         "website_app1",
         "deploy_tooling",
         "deploy_slot_keys",
+        "export_bundler",
     ],
     "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
     "demo1": ["demo1_build", "demo1_egress_spool"],
@@ -357,8 +358,9 @@ class HostRoleLists(unittest.TestCase):
 
     # Safety class: app1 applies the deploy tooling, which installs the sudo-run deploy wrapper and
     # the Docker firewall policy, then the deploy slot keys, which grant SSH keys to the deploy
-    # account. Both come last, tooling first, so a failure in either cannot hold the website back
-    # and the slot program finds its wrapper. The play states class app and variant standard, and
+    # account. Both come after the website, tooling first, so a failure in either cannot hold the
+    # website back and the slot program finds its wrapper; the export bundler follows them, last.
+    # The play states class app and variant standard, and
     # the checker's table (HOST_PLAY_VARS) says the same; the slots come from the loader's row, not
     # from the play. Red when the table's app1 row is deleted (R2), when the slots leave the
     # loader's row (the registry test), or when either deploy role moves before the loader (R11),
@@ -380,6 +382,7 @@ class HostRoleLists(unittest.TestCase):
                 "website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "export_bundler",
             ],
         )
         self.assertEqual(

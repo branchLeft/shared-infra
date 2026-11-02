@@ -1,0 +1,126 @@
+---
+# The refusal cases of the role: the pins are what stand between a changed file and a root-run
+# program on app1, so each way of breaking them must stop the whole role before it writes
+# anything. Each case runs the whole role, not one tasks file, against a copy of the bundler on
+# the machine that runs the role (the pins are checked there, not on the host), with its own
+# bundler and state directories, and then looks at the host.
+#
+#   a. The pristine copy is accepted and written. Without this control, a role that refused
+#      everything would pass every other case.
+#   b. One byte of one dist file is changed. The role must name the pin it does not match.
+#   c. A file no pin names is added under dist. The role must name it.
+#   d. A link stands where the bundler directory belongs. The role must refuse it and must not
+#      write through it.
+#
+# After b, c and d the host must hold nothing at the case's directories: no write came before
+# the refusal. The cases are in their own scenario so that the default scenario applies the
+# role only a few times. A plan makes no change, so a check run has nothing to refuse and the
+# plan scenario holds the check steps.
+- name: Make the altered copies of the bundler where the role runs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    converge_work: '/tmp/export-bundler-refusals-{{ lookup("ansible.builtin.env", "ROLE_TEST_RUN_ID") | default("local", true) }}'
+    converge_source: '{{ playbook_dir }}/../../files/ghost-platform/services/export-bundler'
+  tasks:
+    - name: Start with no earlier copies
+      ansible.builtin.file:
+        path: '{{ converge_work }}'
+        state: absent
+      changed_when: false
+
+    - name: Copy the bundler twice, once for each altered case
+      ansible.builtin.copy:
+        src: '{{ converge_source }}/'
+        dest: '{{ converge_work }}/{{ item }}/'
+        mode: preserve
+        remote_src: true
+      loop:
+        - changed_byte
+        - extra_file
+      changed_when: false
+
+    - name: Change the first byte of dist/cli.js in one copy
+      ansible.builtin.replace:
+        path: '{{ converge_work }}/changed_byte/dist/cli.js'
+        regexp: '\A.'
+        replace: 'X'
+      changed_when: false
+
+    - name: Add a file under dist in the other copy
+      ansible.builtin.copy:
+        content: "// a file no pin names\n"
+        dest: '{{ converge_work }}/extra_file/dist/unpinned.js'
+        mode: '0644'
+      changed_when: false
+
+    - name: Look at the pinned file in the pristine copy and in the changed copy
+      ansible.builtin.stat:
+        path: '{{ item }}/dist/cli.js'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - '{{ converge_source }}'
+        - '{{ converge_work }}/changed_byte'
+      register: export_bundler_converge_cli
+
+    - name: Assert the case is real, that the changed copy differs from the pinned file
+      ansible.builtin.assert:
+        that:
+          - export_bundler_converge_cli.results[0].stat.checksum == '9699e83d55d2acd5f0cf10a96afbca0720324e76c7968f0efa39e3089a6c4472'
+          - export_bundler_converge_cli.results[1].stat.checksum != export_bundler_converge_cli.results[0].stat.checksum
+        quiet: true
+        fail_msg: The changed copy was not changed, or the pristine copy is not the pinned one.
+
+- name: Accept the pristine copy
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the pristine copy
+      accepted: true
+      root: '{{ playbook_dir }}/../../files/ghost-platform/services/export-bundler'
+      dir: /root/export-bundler-case-a
+      state_dir: /root/export-bundler-state-case-a
+
+- name: Refuse one changed byte
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: one changed byte in dist/cli.js
+      root: '/tmp/export-bundler-refusals-{{ lookup("ansible.builtin.env", "ROLE_TEST_RUN_ID") | default("local", true) }}/changed_byte'
+      dir: /root/export-bundler-case-b
+      state_dir: /root/export-bundler-state-case-b
+      expect: does not match its pin
+
+- name: Refuse a file under dist that no pin names
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: a file under dist that no pin names
+      root: '/tmp/export-bundler-refusals-{{ lookup("ansible.builtin.env", "ROLE_TEST_RUN_ID") | default("local", true) }}/extra_file'
+      dir: /root/export-bundler-case-c
+      state_dir: /root/export-bundler-state-case-c
+      expect: dist/unpinned.js
+
+- name: Refuse a link where the bundler directory belongs
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: a link at the bundler directory
+      root: '{{ playbook_dir }}/../../files/ghost-platform/services/export-bundler'
+      dir: /root/export-bundler-case-d
+      state_dir: /root/export-bundler-state-case-d
+      link_target: /var/tmp/export-bundler-case-d-target
+      expect: is not a plain directory
+
+- name: Remove the altered copies
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Remove them
+      ansible.builtin.file:
+        path: '/tmp/export-bundler-refusals-{{ lookup("ansible.builtin.env", "ROLE_TEST_RUN_ID") | default("local", true) }}'
+        state: absent
+      changed_when: false

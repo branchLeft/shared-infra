@@ -1,0 +1,69 @@
+---
+# The host as the runbook's hand steps leave it, and a little worse: a bundler directory and
+# a dist directory that are world-readable, a stale copy of one pinned file, a file the release
+# does not have and a directory it does not have, an old COMMIT, and a state directory that is
+# world-readable and already holds what an earlier export left (an audit line, a descriptor, an
+# archive, a flag). The role must make all of it 0700 and pinned and must not touch the contents
+# of the state directory. verify.yml reads the contents back.
+- name: Prepare the host as an earlier hand delivery left it
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the old directories, world-readable as scp -r and a bare mkdir leave them
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /root/export-bundler
+        - /root/export-bundler/dist
+        - /root/export-bundler/dist/leftover_dir
+        - /root/export-bundler-state
+        - /root/export-bundler-state/flags
+        - /root/export-bundler-state/out
+
+    - name: Put an old build on the host
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ item.dest }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - dest: /root/export-bundler/dist/cli.js
+          content: "// an older build of cli.js\n"
+        - dest: /root/export-bundler/dist/retired.js
+          content: "// a file the release no longer has\n"
+        - dest: /root/export-bundler/dist/leftover_dir/inner.js
+          content: "// a file in a directory the release does not have\n"
+        - dest: /root/export-bundler/package.json
+          content: "{}\n"
+        - dest: /root/export-bundler/COMMIT
+          content: "0000000000000000000000000000000000000000\n"
+      loop_control:
+        label: '{{ item.dest }}'
+
+    - name: Put what an earlier export left in the state directory
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ item.dest }}'
+        owner: root
+        group: root
+        mode: '{{ item.mode }}'
+      loop:
+        - dest: /root/export-bundler-state/audit.jsonl
+          content: "{\"event\":\"earlier export\"}\n"
+          mode: '0640'
+        - dest: /root/export-bundler-state/earlier.descriptor.json
+          content: "{\"slug\":\"earlier\"}\n"
+          mode: '0644'
+        - dest: /root/export-bundler-state/flags/earlier.flag
+          content: "drained\n"
+          mode: '0644'
+        - dest: /root/export-bundler-state/out/earlier.tar.age
+          content: "not a real archive\n"
+          mode: '0600'
+      loop_control:
+        label: '{{ item.dest }}'

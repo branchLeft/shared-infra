@@ -1,0 +1,102 @@
+---
+# One case of the refusals scenario, imported by converge.yml. It runs the whole role against
+# the bundler copy the case names, with directories of the case's own, then looks at the host.
+# A case with converge_case.expect must be refused, with that text in the failure, and must
+# leave nothing at its directories (and, for a link, nothing in the link's target). A case
+# without it must be accepted and must have written the bundler and the state directory.
+- name: Run the role against the case in converge_case
+  hosts: all
+  gather_facts: false
+  vars:
+    export_bundler_converge_refused: false
+    export_bundler_converge_failure: ''
+  tasks:
+    - name: Make the directory the link will lead to, when the case says so
+      ansible.builtin.file:
+        path: '{{ converge_case.link_target }}'
+        state: directory
+        mode: '0755'
+      when: converge_case.link_target is defined
+
+    - name: Plant a link where the bundler directory belongs, when the case says so
+      ansible.builtin.file:
+        path: '{{ converge_case.dir }}'
+        src: '{{ converge_case.link_target }}'
+        state: link
+      when: converge_case.link_target is defined
+
+    - name: Apply the role and catch a refusal
+      block:
+        - name: Apply the whole role
+          ansible.builtin.include_role:
+            name: branchleft.export_bundler
+          vars:
+            export_bundler_vendored_root: '{{ converge_case.root }}'
+            export_bundler_dir: '{{ converge_case.dir }}'
+            export_bundler_state_dir: '{{ converge_case.state_dir }}'
+      rescue:
+        # A refusal in a looped task is reported with the items' messages under results.
+        - name: Keep what the role said
+          ansible.builtin.set_fact:
+            export_bundler_converge_refused: true
+            export_bundler_converge_failure: '{{ ansible_failed_result | to_json }}'
+
+    - name: Assert the role did what the case expects, and gave the reason
+      ansible.builtin.assert:
+        that:
+          - export_bundler_converge_refused == (converge_case.expect is defined)
+          - converge_case.expect is not defined or converge_case.expect in export_bundler_converge_failure
+        quiet: true
+        fail_msg: >-
+          Case "{{ converge_case.name }}": the role {{ 'refused' if export_bundler_converge_refused else 'accepted' }} it,
+          and what it said was: {{ export_bundler_converge_failure }}
+
+    - name: Look at the case's directories and the link's target
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - '{{ converge_case.dir }}'
+        - '{{ converge_case.dir }}/dist/cli.js'
+        - '{{ converge_case.state_dir }}'
+        - '{{ converge_case.state_dir }}/flags'
+        - '{{ converge_case.link_target | default("/var/tmp/export-bundler-no-link-target") }}/dist'
+        - '{{ converge_case.link_target | default("/var/tmp/export-bundler-no-link-target") }}/COMMIT'
+      register: export_bundler_converge_after
+
+    - name: Assert an accepted case wrote the bundler and the state directory
+      ansible.builtin.assert:
+        that:
+          - export_bundler_converge_after.results[0].stat.isdir
+          - export_bundler_converge_after.results[1].stat.isreg
+          - export_bundler_converge_after.results[2].stat.isdir
+          - export_bundler_converge_after.results[3].stat.isdir
+        quiet: true
+        fail_msg: The pristine copy was accepted and the bundler or the state directory is not there.
+      when: converge_case.accepted | default(false)
+
+    - name: Assert a refused case wrote nothing, before or after the refusal
+      ansible.builtin.assert:
+        that:
+          - converge_case.link_target is defined or not export_bundler_converge_after.results[0].stat.exists
+          - converge_case.link_target is not defined or export_bundler_converge_after.results[0].stat.islnk
+          - not export_bundler_converge_after.results[1].stat.exists
+          - not export_bundler_converge_after.results[2].stat.exists
+          - not export_bundler_converge_after.results[3].stat.exists
+          - not export_bundler_converge_after.results[4].stat.exists
+          - not export_bundler_converge_after.results[5].stat.exists
+        quiet: true
+        fail_msg: >-
+          Case "{{ converge_case.name }}" was refused and the host was written to all the same: the
+          bundler directory, the state directory, or the link's target now holds something.
+      when: not (converge_case.accepted | default(false))
+
+    - name: Remove everything the case made
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ converge_case.dir }}'
+        - '{{ converge_case.state_dir }}'
+        - '{{ converge_case.link_target | default("/var/tmp/export-bundler-no-link-target") }}'
+      changed_when: false

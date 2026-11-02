@@ -1,0 +1,29 @@
+---
+# Constants of the role, not inputs: role variables outrank every value a caller
+# passes, so a caller cannot change them.
+
+# The shapes the inputs must have. A pin is a full lower-case hex digest.
+export_bundler_sha_pattern: '^[0-9a-f]{40}$'
+export_bundler_checksum_pattern: '^[0-9a-f]{64}$'
+# The only files the bundler is made of: its package.json, which says the output is a
+# module, and the flat directory of compiled files tsc writes.
+export_bundler_release_path_pattern: '^(package\.json|dist/[A-Za-z0-9]+\.js)$'
+# An absolute path of letters, digits, dot, underscore, hyphen and slash.
+export_bundler_path_pattern: '^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
+export_bundler_path_dots_pattern: '(^|/)\.{1,2}(/|$)'
+
+# The directories under the host's bundler directory and state directory.
+export_bundler_dist_dir: '{{ export_bundler_dir }}/dist'
+export_bundler_commit_file: '{{ export_bundler_dir }}/COMMIT'
+export_bundler_state_subdirs:
+  - '{{ export_bundler_state_dir }}/flags'
+  - '{{ export_bundler_state_dir }}/out'
+
+# The files the host's dist directory may hold, as host paths: the release files under
+# dist/ and nothing else.
+export_bundler_dist_paths: >-
+  {{ export_bundler_release_files
+     | map(attribute='path')
+     | select('match', '^dist/')
+     | map('regex_replace', '^', export_bundler_dir ~ '/')
+     | list }}
