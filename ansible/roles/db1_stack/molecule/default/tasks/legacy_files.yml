@@ -12,6 +12,19 @@
     mode: '0644'
   loop: '{{ verify_legacy_files }}'
 
+# The real installer's line, which names the repository. The role's refusal of an
+# unmanaged source file must let this one through because the role removes it
+# (the refusal reads the same list the removal does), and it must do so in this
+# apply, where the file is present before the refusal runs.
+- name: Make the hand-run installer's source list the line that names the repository
+  ansible.builtin.copy:
+    content: |
+      deb [signed-by=/usr/share/keyrings/mysql.gpg] https://repo.mysql.com/apt/debian bookworm mysql-8.0
+    dest: /etc/apt/sources.list.d/mysql.list
+    owner: root
+    group: root
+    mode: '0644'
+
 - name: Apply the role while the hand-run installer's files are there
   ansible.builtin.include_tasks: refused.yml
   vars:

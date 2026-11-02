@@ -7,8 +7,8 @@
 #   default      no case of its own: the checks on what the converge left, the source
 #                checks and the log scan, with the plan, idempotence and check-mode steps
 #                that only this scenario runs
-#   refusals     the inputs, the downloads, the pins and the second compose files
-#                the role must refuse
+#   refusals     the inputs, the downloads, the pins, the second compose files and the
+#                apt source files the role does not manage that it must refuse
 #   paths        the paths Docker or an earlier release left in the way
 #   rotation     the wide file an earlier release left, and the rotation
 #   repository   the changes to a repository file that make the role refresh the index
@@ -95,6 +95,7 @@
       - mysql-community-server-core
     verify_legacy_files:
       - /etc/apt/sources.list.d/mysql-community.list
+      - /etc/apt/sources.list.d/mysql.list
       - /usr/share/keyrings/mysql.gpg
     verify_spec_short_description: Install the database host prerequisites and render the exporter credentials file
     verify_apt_texts:
@@ -296,6 +297,12 @@
     # on its own instance. The part is the scenario's name (see the top of this file).
     - name: Refuse the inputs the role must refuse, before it changes anything
       ansible.builtin.include_tasks: tasks/verify_input_refusals.yml
+      when: verify_part == 'refusals'
+
+    # Another file names the repository. The role stops before it changes the host,
+    # in a plan and in an apply.
+    - name: Leave a file the role does not manage that names the repository
+      ansible.builtin.include_tasks: tasks/unmanaged_source.yml
       when: verify_part == 'refusals'
 
     - name: Meet a path that Docker or an earlier release left in the way
