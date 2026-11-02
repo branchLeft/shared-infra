@@ -330,7 +330,8 @@ class DataFiles(unittest.TestCase):
             argv = [str(part) for part in o.sequence(entry.get("argv"))]
             self.assertEqual(entry.get("binary"), argv[0], template)
             self.assertIn("{file}", argv, template)
-            self.assertTrue((ROOT / "ansible").rglob(f"templates/{template}"), template)
+            files = [p for p in (ROOT / "ansible").rglob(f"templates/{template}") if p.is_file()]
+            self.assertTrue(files, f"validators.yml entry {template} matches no template file")
 
     def test_each_ratchet_entry_names_a_template_that_exists(self) -> None:
         document, problem = load_yaml(ROOT / o.DATA / "unresolved.yml")

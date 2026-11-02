@@ -50,6 +50,13 @@ def steps_of(workflow: dict[str, object]) -> list[dict[str, object]]:
     return found
 
 
+def action_steps(action_text: str) -> list[dict[str, object]]:
+    """Return every step of the composite action, which keeps them under runs."""
+    runs = parse(action_text).get("runs")
+    steps = runs.get("steps") if isinstance(runs, dict) else None
+    return [step for step in steps if isinstance(step, dict)] if isinstance(steps, list) else []
+
+
 def findings(workflow_text: str, action_text: str, ansible_text: str) -> list[str]:
     """Return what is wrong with the workflow, its action or their match to ansible.yml."""
     workflow = parse(workflow_text)
@@ -79,7 +86,9 @@ def findings(workflow_text: str, action_text: str, ansible_text: str) -> list[st
             found.append(f"job {name} has no timeout of {MAX_MINUTES} minutes or less")
     if re.search(r"\bsecrets\.|\bvars\.", workflow_text):
         found.append("the workflow reads a secret or a variable")
-    for step in steps_of(workflow):
+    if re.search(r"\bsecrets\.|\bvars\.", action_text):
+        found.append("the composite action reads a secret or a variable")
+    for step in steps_of(workflow) + action_steps(action_text):
         used = step.get("uses")
         if isinstance(used, str) and not used.startswith("./") and not PINNED.match(used):
             found.append(f"action {used} is not pinned by a full commit SHA")
@@ -113,6 +122,10 @@ class WorkflowPins(unittest.TestCase):
         self.assertIn(old, self.workflow, "the mutation does not match the real file")
         return findings(self.workflow.replace(old, new, 1), self.action, self.ansible)
 
+    def mutated_action(self, old: str, new: str) -> list[str]:
+        self.assertIn(old, self.action, "the mutation does not match the real action")
+        return findings(self.workflow, self.action.replace(old, new, 1), self.ansible)
+
     def test_the_real_files_have_no_finding(self) -> None:
         self.assertEqual([], findings(self.workflow, self.action, self.ansible))
 
@@ -143,6 +156,13 @@ class WorkflowPins(unittest.TestCase):
             "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1", "actions/checkout@v7"
         )
         self.assertTrue(any("not pinned" in f for f in got), got)
+
+    def test_an_unpinned_action_in_the_composite_is_refused(self) -> None:
+        got = self.mutated_action(
+            "    - name: Check the installed set\n",
+            "    - uses: someorg/tool@v1\n\n    - name: Check the installed set\n",
+        )
+        self.assertIn("action someorg/tool@v1 is not pinned by a full commit SHA", got)
 
     def test_ssh_is_refused(self) -> None:
         got = self.mutated("docker compose version || true", "ssh host true")
