@@ -37,7 +37,7 @@ export_bundler_dist_paths: >-
 # The pinned files whose copy shows no diff (ANS-16). Each one has a line the plan's secret scan
 # matches, a variable name or a prose word and no secret, so a diff of it would withhold the
 # whole plan of the host. Their copy task sets diff: false; every other pinned file keeps its
-# diff. Rob's ruling on branchLeft/workspace#2348 (choice A): hide only the files that match.
+# diff. The rule is to hide only the files that match, with no exemption list.
 # ansible/checks/test_plan_diff_scan.py fails for a file listed here that does not match, and
 # for a matching file that is not.
 export_bundler_release_files_hidden:
