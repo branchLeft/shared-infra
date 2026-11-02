@@ -39,10 +39,17 @@ HOMES = (
     "ansible/roles/ci_login/vars/main.yml",
     "ansible/roles/tunnel_account/vars/main.yml",
     "ansible/checks/host_roles.yml",
+    "ansible/roles/host_inputs/vars/main.yml",
 )
 OWNER_VARS = "ansible/owner_vars"
 SCAN_CITATION = ("ssh-check-hosts/action.yml", "v1.0.19", "line 434")
 ROLE_PREFIX = "ci_jump_"
+# The jump account's name is the owner's secret. It is the one role variable that is not in an
+# owner_vars file: it reaches the role through the host's private inputs file, set by host_inputs.
+SECRET_VARIABLE = "ci_jump_user"  # noqa: S105
+# A realistic name for the pins to render paths with: the lowercase-hyphen shape of a real one. It
+# is made up here and is not the owner's.
+SAMPLE_NAME = "gate-hopper"
 KEY_TYPE = "ssh-ed25519"
 # A well-formed ed25519 key made for the test: the blob is the type and 32 bytes.
 SAMPLE_BODY = "AAAAC3NzaC1lZDI1NTE5AAAAIAEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEB"
@@ -102,7 +109,7 @@ def _source(root: Path, name: str) -> str:
     return (root / ROLE / "templates" / name).read_text(encoding="utf-8")
 
 
-def _render(root: Path, name: str, destinations: list[str], user: str = "jumpacct") -> str:
+def _render(root: Path, name: str, destinations: list[str], user: str = SAMPLE_NAME) -> str:
     """Render one of the role's templates the way Ansible does, with its role variables."""
     mine = _variables(root / ROLE / "vars" / "main.yml")
     return (
@@ -198,9 +205,10 @@ def problems(root: Path) -> list[str]:
             found.append(f"{variable} differs from the module's {constant}")
     if (
         mine.get("ci_jump_sshd_dropin")
-        != f"{mine.get('ci_jump_sshd_config_dir')}/50-branchleft-ci-jump.conf"
+        != f"{mine.get('ci_jump_sshd_config_dir')}/40-branchleft-jump.conf"
     ):
-        found.append("ci_jump_sshd_dropin is not the 50- file of ci_jump_sshd_config_dir")
+        found.append("ci_jump_sshd_dropin is not the 40- file of ci_jump_sshd_config_dir")
+    found.extend(_path_findings(mine, module))
 
     # Remote forwarding: the module must require sshd to say local for the account, and the
     # drop-in must say it. A key line with port-forwarding opens a port on the jump host (ssh -R)
@@ -226,6 +234,53 @@ def problems(root: Path) -> list[str]:
     return found
 
 
+def _render_text(text: str, user: str) -> str:
+    """Render one role variable's text with the account's name, as Ansible would."""
+    return _environment().from_string(text).render(ci_jump_user=user)
+
+
+def _path_findings(mine: dict[str, object], module: types.ModuleType) -> list[str]:
+    """No path the role writes or the module pins is made from the account's name, and the paths
+    of the earlier hand-made layout, which are, are the only ones that are.
+
+    The name is held out of this public repository and of every public log, and a path is printed
+    by a lot of tooling (a stat, a diff, a plan line), so a path made from it is a leak whatever
+    hides the task. Each managed path is rendered with a realistic name and must not hold it.
+    """
+    found: list[str] = []
+    managed = (
+        "ci_jump_key_dir",
+        "ci_jump_key_file",
+        "ci_jump_sshd_dropin",
+        "ci_jump_sshd_config_dir",
+        "ci_jump_reload_marker",
+    )
+    for variable in managed:
+        text = mine.get(variable)
+        if not isinstance(text, str) or SAMPLE_NAME in _render_text(text, SAMPLE_NAME):
+            found.append(f"{variable} is made from the account's name")
+        elif "{{" in text:
+            found.append(f"{variable} is templated; a managed path is a literal")
+    for constant in ("KEY_DIR", "KEY_FILE", "DROPIN_FILE"):
+        if SAMPLE_NAME in getattr(module, constant) or "{" in getattr(module, constant):
+            found.append(f"the module's {constant} is made from the account's name")
+    legacy = (
+        "ci_jump_legacy_dir",
+        "ci_jump_legacy_key_file",
+        "ci_jump_legacy_dropin",
+    )
+    for variable in legacy:
+        text = mine.get(variable)
+        if not isinstance(text, str) or SAMPLE_NAME not in _render_text(text, SAMPLE_NAME):
+            found.append(f"{variable} is not made from the account's name (the earlier layout is)")
+    if mine.get("ci_jump_legacy_files") != [
+        "{{ ci_jump_legacy_dropin }}",
+        "{{ ci_jump_legacy_key_file }}",
+    ]:
+        found.append("ci_jump_legacy_files is not the earlier drop-in and key file")
+    return found
+
+
 def _template_findings(root: Path, module: types.ModuleType) -> list[str]:
     """The templates that write the files and the module that judges them agree, and both are
     made from the one destination list."""
@@ -239,7 +294,7 @@ def _template_findings(root: Path, module: types.ModuleType) -> list[str]:
         written, dropin = [], ""
     if [line.strip() for line in written] != wanted:
         found.append("templates/authorized_keys.j2 writes other lines than the module expects")
-    if dropin != module.wanted_dropin("jumpacct", destinations):
+    if dropin != module.wanted_dropin(SAMPLE_NAME, destinations):
         found.append("templates/sshd-drop-in.conf.j2 writes other text than the module expects")
 
     # One list: the destinations of the key lines and of the Match block come from the one
@@ -293,9 +348,14 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
     found: list[str] = []
     spec = yaml.safe_load((role / "meta" / "argument_specs.yml").read_text(encoding="utf-8"))
     options = set(spec["argument_specs"]["main"]["options"])
+    if spec["argument_specs"]["main"]["options"].get(SECRET_VARIABLE, {}).get("no_log") is not True:
+        found.append(f"the argument spec must hide {SECRET_VARIABLE} with no_log: true")
     defaults = _variables(role / "defaults" / "main.yml")
-    if options != set(defaults):
+    if options - {SECRET_VARIABLE} != set(defaults):
         found.append("the argument spec and the defaults name different variables")
+    secret = spec["argument_specs"]["main"]["options"].get(SECRET_VARIABLE, {})
+    if secret.get("required") is not True or "default" in secret or SECRET_VARIABLE in defaults:
+        found.append(f"{SECRET_VARIABLE} must be required, with no default (a private input)")
     if defaults.get("ci_jump_manage_keys") is not False:
         found.append("ci_jump_manage_keys must default to false")
     carrying = {
@@ -305,20 +365,35 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
     }
     for host, values in carrying.items():
         in_file = {name for name in values if name.startswith(ROLE_PREFIX)}
-        if in_file != options:
+        if SECRET_VARIABLE in in_file:
+            found.append(
+                f"owner_vars/{host}.yml carries {SECRET_VARIABLE}: the account's name stays out of"
+                " the repository and comes from the host's private inputs file"
+            )
+        if in_file - {SECRET_VARIABLE} != options - {SECRET_VARIABLE}:
             found.append(f"owner_vars/{host}.yml names other ci_jump variables than the spec")
-        if any(values.get(name) != value for name, value in defaults.items()):
+        if any(
+            values.get(name) != value for name, value in defaults.items() if name != SECRET_VARIABLE
+        ):
             found.append(
                 f"owner_vars/{host}.yml does not ship the role's defaults"
-                " (the role must ship inert, and the account's name stays out of the repository)"
+                " (the role must ship inert)"
             )
-    # Every host that lists the role has its own owner's file with the variables.
+    # Every host that lists the role has its own owner's file with the variables, and the account's
+    # name in the host's private inputs row, so the loader sets it before the role runs.
     host_roles = _variables(root / HOMES[2])
+    rows = _variables(root / HOMES[3]).get("host_inputs_required_by_host")
     for host, roles in host_roles.items():
-        if isinstance(roles, list) and "ci_jump" in roles and host not in carrying:
-            found.append(
-                f"{host} lists ci_jump but owner_vars/{host}.yml carries no ci_jump variable"
-            )
+        if isinstance(roles, list) and "ci_jump" in roles:
+            if host not in carrying:
+                found.append(
+                    f"{host} lists ci_jump but owner_vars/{host}.yml carries no ci_jump variable"
+                )
+            row = rows.get(host) if isinstance(rows, dict) else None
+            if not isinstance(row, list) or SECRET_VARIABLE not in row:
+                found.append(
+                    f"{host} lists ci_jump but its host_inputs row lacks {SECRET_VARIABLE}"
+                )
     return found
 
 
@@ -407,13 +482,34 @@ def _task_findings(role: Path) -> list[str]:
 
     # The account's name is in the module's arguments: any task that names the variable must
     # hide its result. The drop-in that holds it is written by a hidden task (checked below).
+    # The paths of the earlier hand-made layout are made from the name, so a task that names one
+    # handles the name as much as one that names the variable: it hides its result, and a task
+    # that can show a diff hides that too.
     for path in sorted((role / "tasks").glob("*.yml")):
-        found.extend(
-            f"tasks/{path.name}: a task that handles the account's name must set no_log: true"
+        carriers = [
+            task
             for task in _walk(_tasks_all(path))
             if "block" not in task
-            and "ci_jump_user" in json.dumps(task)
-            and task.get("no_log") is not True
+            and ("ci_jump_user" in json.dumps(task) or "ci_jump_legacy" in json.dumps(task))
+        ]
+        found.extend(
+            f"tasks/{path.name}: a task that handles the account's name must set no_log: true"
+            for task in carriers
+            if task.get("no_log") is not True
+        )
+        found.extend(
+            f"tasks/{path.name}: a task that writes or removes a file of the account's name"
+            " must set diff: false"
+            for task in carriers
+            if any(
+                key in task
+                for key in (
+                    "ansible.builtin.file",
+                    "ansible.builtin.copy",
+                    "ansible.builtin.template",
+                )
+            )
+            and task.get("diff") is not False
         )
 
     write = _walk(_tasks_all(role / "tasks" / "_write.yml"))
@@ -455,9 +551,10 @@ def _task_findings(role: Path) -> list[str]:
         )
     elif not any("_readback.yml" in str(t) for t in _walk(block["block"])):
         found.append("tasks/_write.yml: the read-back must be inside the block that is rolled back")
-    elif not any(
-        "_readback.yml" in str(t) and "ansible_check_mode" in str(t.get("when", ""))
+    elif not all(
+        "ansible_check_mode" in str(t.get("when", ""))
         for t in _walk(block["block"])
+        if "_readback.yml" in str(t)
     ):
         found.append("tasks/_write.yml: the read-back must be skipped in check mode")
 
@@ -509,11 +606,13 @@ class Sabotage(unittest.TestCase):
             shutil.copy(ROOT / home, self.root / home)
         shutil.copytree(ROOT / OWNER_VARS, self.root / OWNER_VARS)
 
-    def _red_then_green(self, relative: str, old: str, new: str, expected: str) -> None:
+    def _red_then_green(
+        self, relative: str, old: str, new: str, expected: str, every: bool = False
+    ) -> None:
         path = self.root / relative
         original = path.read_text(encoding="utf-8")
         self.assertIn(old, original, f"the sabotage matched nothing in {relative}")
-        path.write_text(original.replace(old, new, 1), encoding="utf-8")
+        path.write_text(original.replace(old, new, -1 if every else 1), encoding="utf-8")
         red = problems(self.root)
         self.assertTrue(any(expected in finding for finding in red), f"{expected!r} not in {red}")
         path.write_text(original, encoding="utf-8")
@@ -607,9 +706,9 @@ class Sabotage(unittest.TestCase):
     def test_an_owner_file_that_publishes_the_account_name_is_red(self) -> None:
         self._red_then_green(
             f"{OWNER_VARS}/edge1.yml",
-            "ci_jump_user: ''",
-            "ci_jump_user: jumpacct",
-            "does not ship the role's defaults",
+            "ci_jump_keys: []",
+            "ci_jump_keys: []\nci_jump_user: gate-hopper",
+            "carries ci_jump_user",
         )
 
     def test_an_option_missing_from_the_spec_is_red(self) -> None:
@@ -623,8 +722,8 @@ class Sabotage(unittest.TestCase):
     def test_a_variable_name_that_reads_like_a_credential_is_red(self) -> None:
         self._red_then_green(
             f"{ROLE}/defaults/main.yml",
-            "ci_jump_user: ''",
-            "ci_jump_user: ''\nci_jump_token_file: ''",
+            "ci_jump_manage_keys: false",
+            "ci_jump_manage_keys: false\nci_jump_token_file: ''",
             "reads like a credential in a plan line",
         )
 
@@ -698,6 +797,7 @@ class Sabotage(unittest.TestCase):
             "argv: [sshd, -t]",
             "argv: [true]",
             "must be checked with sshd -t",
+            every=True,
         )
 
     def test_no_rollback_is_red(self) -> None:
@@ -743,8 +843,8 @@ class Sabotage(unittest.TestCase):
     def test_a_moved_key_file_in_the_module_is_red(self) -> None:
         self._red_then_green(
             MODULE,
-            'KEY_FILE = "/etc/ssh/ci-jump/authorized_keys"',
-            'KEY_FILE = "/etc/ssh/ci-jump/keys"',
+            'KEY_FILE = "/etc/ssh/authorized_keys.d/branchleft-jump"',
+            'KEY_FILE = "/etc/ssh/authorized_keys.d/keys"',
             "ci_jump_key_file differs",
         )
 
@@ -804,6 +904,76 @@ class Sabotage(unittest.TestCase):
             "      when: not ansible_check_mode\n",
             "      ansible.builtin.import_tasks: _readback.yml\n",
             "the read-back must be skipped in check mode",
+        )
+
+    # The account's name is the owner's secret (the owner ruled keep-secret on publishing it): no
+    # path the role writes or pins may be made from it, whatever hides the task that prints it.
+    def test_a_managed_path_made_from_the_account_name_is_red(self) -> None:
+        for variable, old in (
+            ("ci_jump_key_file", "/etc/ssh/authorized_keys.d/branchleft-jump"),
+            ("ci_jump_key_dir", "/etc/ssh/authorized_keys.d\n"),
+            ("ci_jump_sshd_dropin", "/etc/ssh/sshd_config.d/40-branchleft-jump.conf"),
+            ("ci_jump_reload_marker", "/run/branchleft-jump-reload-owed"),
+        ):
+            with self.subTest(variable=variable):
+                path = self.root / ROLE / "vars" / "main.yml"
+                original = path.read_text(encoding="utf-8")
+                lines = original.splitlines(keepends=True)
+                index = next(i for i, line in enumerate(lines) if line.startswith(f"{variable}:"))
+                self.assertIn(old.strip(), lines[index])
+                lines[index] = f"{variable}: '{old.strip()}-{{{{ ci_jump_user }}}}'\n"
+                path.write_text("".join(lines), encoding="utf-8")
+                red = problems(self.root)
+                self.assertTrue(
+                    any(f"{variable} is made from the account's name" in f for f in red), red
+                )
+                path.write_text(original, encoding="utf-8")
+                self.assertEqual(problems(self.root), [])
+
+    def test_a_path_in_the_module_made_from_the_account_name_is_red(self) -> None:
+        self._red_then_green(
+            MODULE,
+            'DROPIN_FILE = "/etc/ssh/sshd_config.d/40-branchleft-jump.conf"',
+            'DROPIN_FILE = "/etc/ssh/sshd_config.d/40-gate-hopper.conf"',
+            "DROPIN_FILE is made from the account's name",
+        )
+
+    def test_a_removal_of_the_earlier_layout_that_shows_its_path_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_write.yml",
+            "      register: ci_jump_retired_dropin\n      no_log: true\n      diff: false\n",
+            "      register: ci_jump_retired_dropin\n      diff: false\n",
+            "must set no_log: true",
+        )
+        self._red_then_green(
+            f"{ROLE}/tasks/_write.yml",
+            "      register: ci_jump_retired_key\n      no_log: true\n      diff: false\n",
+            "      register: ci_jump_retired_key\n      no_log: true\n",
+            "must set diff: false",
+        )
+
+    def test_a_jump_host_whose_private_inputs_lack_the_account_is_red(self) -> None:
+        self._red_then_green(
+            HOMES[3],
+            "    - ci_jump_user\n  ops1:",
+            "  ops1:",
+            "its host_inputs row lacks ci_jump_user",
+        )
+
+    def test_a_default_given_to_the_account_name_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/meta/argument_specs.yml",
+            "        required: true\n        no_log: true\n",
+            "        required: false\n        default: ''\n        no_log: true\n",
+            "must be required, with no default",
+        )
+
+    def test_the_account_name_in_the_argument_spec_left_visible_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/meta/argument_specs.yml",
+            "        no_log: true\n        description: >-\n          The jump account,",
+            "        description: >-\n          The jump account,",
+            "must hide ci_jump_user",
         )
 
 

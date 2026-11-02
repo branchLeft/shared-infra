@@ -10,7 +10,8 @@ argument_specs:
       and a forced nologin command, and write the sshd drop-in whose Match block for the account
       allows local forwarding to the same destinations and nothing else. It then reads both
       back, and sshd's own answer for the account, and refuses unless remote forwarding is off.
-      It never creates or edits an account.
+      Only after that read-back does it remove the files of the earlier hand-made layout, and it
+      puts everything back if anything fails. It never creates or edits an account.
     author: branchLeft
     options:
       ci_jump_manage_keys:
@@ -21,16 +22,21 @@ argument_specs:
           When true the role checks every input and the host, then writes the two files.
       ci_jump_user:
         type: str
-        default: ''
+        required: true
+        no_log: true
         description: >-
-          The jump account, which must already exist with a shell of nologin or false. Read only
-          when ci_jump_manage_keys is true. The role refuses root and the accounts the ci_login
-          and tunnel_account roles own. The name is never printed by the role.
+          The jump account, which must already exist with a shell of nologin or false. Required
+          and with no default, because it comes from the host's private inputs file (the
+          host_inputs role), but read only when ci_jump_manage_keys is true. The role refuses root and the accounts the ci_login
+          and tunnel_account roles own. The name is held out of the repository and of every log:
+          it comes from the host's private inputs file (the host_inputs role sets it), no path
+          the role writes is made from it, and the role never prints it.
       ci_jump_own_address:
         type: str
         default: ''
         description: >-
-          The jump host's own private IPv4 address. It must be one of the destinations, because
+          The jump host's own private IPv4 address (10/8, 172.16/12 or 192.168/16; loopback is
+          accepted for a test host). It must be one of the destinations, because
           the runner reaches the jump host itself through the jump, and sshd is asked about the
           account for a connection from this address. Read only when ci_jump_manage_keys is true
           (the report uses it when it is set).

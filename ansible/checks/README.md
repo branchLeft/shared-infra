@@ -172,14 +172,16 @@ is not loaded there.
   exactly the keys its host is allowed and no other, with values of the right shape. For
   edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
   `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
-  key (a source address list, say) is refused. The five values of the `ci_jump` role are
-  allowed on every host in `JUMP_HOSTS` (each jump host has its own file, account, address,
-  destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_user` and
-  `ci_jump_own_address`, text, `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
+  key (a source address list, say) is refused. The four values of the `ci_jump` role that live in the repository are
+  allowed on every host in `JUMP_HOSTS` (each jump host has its own file, address,
+  destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
+  `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
   list of `{key}` entries with nothing else (a destination list per key is refused: the role
   takes one list for every key). `JUMP_HOSTS` must equal the hosts whose row in
   `checks/host_roles.yml` lists `ci_jump`: a host cannot gain the role without its keys, nor
-  the keys without the role. What a destination or a key may look like is the role's rule alone,
+  the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
+  the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the
+  role through the host's `host_inputs` row. What a destination or a key may look like is the role's rule alone,
   in its module. For ops1 the one key is `pull_trigger_steps`,
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text. R10 reads
   only that shape. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
@@ -224,9 +226,12 @@ key template and the drop-in template do not read their destinations from the on
 `ci_jump_destinations`, when the module stops requiring `AllowTcpForwarding local` for the jump
 account (a key line with `port-forwarding` also lets its holder open a port on the jump host with
 `ssh -R` under any other value), when the argument spec and the defaults name different variables,
-when any host's `owner_vars` file does not ship the role inert (flag false, the account's name and
-the address empty: the name is held out of the repository until the owner rules on it), when a
-host lists the role without its variables, and when the order or hiding of the role's tasks changes
+when any host's `owner_vars` file does not ship the role inert (flag false, the address empty), when
+an `owner_vars` file carries the account's name, when a host lists the role without its variables or
+without `ci_jump_user` in its `host_inputs` row, when a path the role writes or the module pins is made
+from the account's name (each is rendered with a realistic name and must not hold it; only the paths
+of the earlier hand-made layout, which the role removes, are), when a task that handles the name or
+one of those paths does not hide its result and its diff, and when the order or hiding of the role's tasks changes
 (the report runs whatever the flag is; the guards and the write are behind it, in that order; the
 two files are written as `root:root` at `0644` by hidden template tasks, never by `authorized_key`;
 the whole configuration is checked with `sshd -t`; a rescue puts the previous files back; the

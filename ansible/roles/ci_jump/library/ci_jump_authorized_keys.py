@@ -19,6 +19,7 @@ import base64
 import binascii
 import dataclasses
 import hashlib
+import ipaddress
 import os
 import pwd
 import re
@@ -75,6 +76,18 @@ options:
     description: Accounts another role owns, by role name. The jump account may not be one.
     type: dict
     default: {}
+  legacy_files:
+    description: >-
+      The files of the earlier hand-made layout, as paths. Their paths are made from the account's
+      name, so they are never printed, only counted. Used by plan (is a write owed, how many
+      remain) and by verify when legacy_gone is set.
+    type: list
+    elements: str
+    default: []
+  legacy_gone:
+    description: With verify, also require that none of legacy_files exists.
+    type: bool
+    default: false
 attributes:
   check_mode:
     support: full
@@ -101,6 +114,10 @@ lines:
   returned: success
   type: list
   elements: str
+pending:
+  description: With plan, true when a write is owed (a file differs, or a legacy file remains).
+  returned: success, with plan
+  type: bool
 """
 
 # What the written files are made of. The role's vars/main.yml holds the same values for its
@@ -108,9 +125,13 @@ lines:
 PINNED_PORT = 22
 PINNED_FIXED_OPTIONS = ("restrict", "port-forwarding")
 PINNED_COMMAND = "/usr/sbin/nologin"
-KEY_DIR = "/etc/ssh/ci-jump"
-KEY_FILE = "/etc/ssh/ci-jump/authorized_keys"
-DROPIN_FILE = "/etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf"
+# The names carry the role's purpose and never the account's name: the account's name is held out
+# of this public repository and of every public log, and a path is printed by a lot of tooling.
+# The drop-in sorts ahead of the earlier hand-made one (50-), so while both are on the host sshd
+# already applies the new one and the read-back proves it before the old one is removed.
+KEY_DIR = "/etc/ssh/authorized_keys.d"
+KEY_FILE = "/etc/ssh/authorized_keys.d/branchleft-jump"
+DROPIN_FILE = "/etc/ssh/sshd_config.d/40-branchleft-jump.conf"
 # The files are root's and nobody else's to change: the account must never edit its own keys.
 ROOT_FILE_MODE = 0o644
 ROOT_DIR_MODE = 0o755
@@ -119,7 +140,7 @@ REFUSED_SHELL_NAMES = frozenset(("nologin", "false"))
 # The connection sshd -T -C evaluates Match blocks for, when the caller names no address of
 # its own. The jump key is used from runners that have no fixed address, so a Match block keyed
 # on a real runner address is not seen (README).
-STAND_IN_HOST = "ci-jump-check.invalid"
+STAND_IN_HOST = "jump-check.invalid"
 STAND_IN_ADDRESS = "192.0.2.1"
 SSHD_PATH = "/usr/sbin/sshd"
 DEFAULT_KEY_FILES = (".ssh/authorized_keys", ".ssh/authorized_keys2")
@@ -198,6 +219,13 @@ KNOWN_OPTIONS = frozenset(
         "verify-required",
         "no-touch-required",
     )
+)
+# The jump host's own address is a private address (RFC 1918), or a loopback one for a test host:
+# the runner reaches the jump host itself over the private network, and a public address typed
+# here by mistake would make sshd evaluate the account's Match block for the wrong connection.
+PRIVATE_NETWORKS = tuple(
+    ipaddress.ip_network(text)
+    for text in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8")
 )
 USER_PATTERN = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 HOST_LABEL = re.compile(r"[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
@@ -527,8 +555,8 @@ def check_keys(keys: object) -> list[tuple[str, str]]:
 
 
 def check_own_address(own: object, destinations: Sequence[str]) -> str:
-    """Return the jump host's own address, or refuse one that is unset, not an IPv4 address, or
-    not among the destinations.
+    """Return the jump host's own address, or refuse one that is unset, not an IPv4 address, not in
+    a private range, or not among the destinations.
 
     The runner reaches every host through the jump, the jump host itself included, so a list
     that lacks the jump host's own address fails the plan of every host and cannot be corrected
@@ -545,6 +573,9 @@ def check_own_address(own: object, destinations: Sequence[str]) -> str:
         for label in labels
     ):
         raise RefusalError("E-OWN-SHAPE", "the jump host's own address is not an IPv4 address")
+    address = ipaddress.ip_address(".".join(str(int(label)) for label in labels))
+    if not any(address in network for network in PRIVATE_NETWORKS):
+        raise RefusalError("E-OWN-PRIVATE", "the jump host's own address is not a private address")
     if own.lower() not in (item.lower() for item in destinations):
         raise RefusalError(
             "E-DEST-OWN", "the destination list lacks the jump host's own address on port 22"
@@ -753,9 +784,11 @@ def plan_lines(
     settings: Mapping[str, list[str]],
     destinations: Sequence[str],
     keys: Sequence[tuple[str, str]],
+    legacy_files: Sequence[str] = (),
 ) -> list[str]:
     """Show the live key file and sshd settings against the wanted ones, destination by
-    destination. The account is never named."""
+    destination. The account is never named, and neither is a path made from it: the files of
+    the earlier hand-made layout are only counted."""
     text = host.read(KEY_FILE)
     live, not_understood = parse_file(text) if text is not None else ([], 0)
     wanted = wanted_options(destinations)
@@ -777,6 +810,11 @@ def plan_lines(
         out.append("sshd drop-in is identical to the wanted text")
     else:
         out.append("sshd drop-in differs from the wanted text and would be replaced")
+    old = legacy_present(host, legacy_files)
+    out.append(
+        f"{old} file(s) of the earlier hand-made layout present"
+        + (", removed once the new files read back" if old else "")
+    )
     live_key_destinations = _destinations_of(live)
     live_sshd = [value.rpartition(":")[0] for value in _values(settings, "permitopen", "any")]
     for item in destinations:
@@ -827,15 +865,17 @@ def _checked_inputs(
     return name, check_own_address(own, dests), dests, check_keys(keys)
 
 
-def do_plan(
+def plan_result(
     host: Host,
     user: object,
     own: object,
     destinations: object,
     keys: object,
     owned: Mapping[str, str],
-) -> list[str]:
-    """Judge the inputs, then the host, and show live against wanted.
+    legacy_files: Sequence[str] = (),
+) -> tuple[list[str], bool]:
+    """Judge the inputs, then the host, and show live against wanted. Also say whether a write
+    is owed (is_pending).
 
     Raises:
         RefusalError: for the first rule that is broken, inputs before host.
@@ -844,26 +884,35 @@ def do_plan(
     account = check_account(find_account(host, name))
     settings = _sshd(host, account.name, own_address)
     check_unfixable(settings)
-    return plan_lines(host, name, settings, dests, parsed_keys)
+    lines = plan_lines(host, name, settings, dests, parsed_keys, legacy_files)
+    return lines, is_pending(host, name, dests, parsed_keys, legacy_files)
 
 
-def do_verify(
+def do_plan(
     host: Host,
     user: object,
     own: object,
     destinations: object,
     keys: object,
     owned: Mapping[str, str],
+    legacy_files: Sequence[str] = (),
 ) -> list[str]:
-    """Read both files back and compare them with the wanted text exactly, then require sshd's
-    own answer for the account to be what the role means.
+    """Judge the inputs, then the host, and show live against wanted.
 
     Raises:
-        RefusalError: when sshd's answer or either file is not exactly what was wanted.
+        RefusalError: for the first rule that is broken, inputs before host.
     """
-    name, own_address, dests, parsed_keys = _checked_inputs(user, own, destinations, keys, owned)
-    account = check_account(find_account(host, name))
-    check_effective(_sshd(host, account.name, own_address), dests)
+    return plan_result(host, user, own, destinations, keys, owned, legacy_files)[0]
+
+
+def check_files(
+    host: Host, name: str, destinations: Sequence[str], keys: Sequence[tuple[str, str]]
+) -> list[str]:
+    """Compare both managed files with the wanted text exactly, and return the key lines.
+
+    Raises:
+        RefusalError: when the directory, either file or either text is not as wanted.
+    """
     if not _root_owned(host.info(KEY_DIR), True):
         raise RefusalError("E-READBACK-MISMATCH", "the key directory is not root's at mode 0755")
     for path in (KEY_FILE, DROPIN_FILE):
@@ -875,19 +924,71 @@ def do_verify(
     if text is None:
         raise RefusalError("E-READBACK-MISMATCH", "the managed key file cannot be read back")
     live = sorted(line.strip() for line in text.splitlines() if line.strip())
-    if live != sorted(wanted_lines(dests, parsed_keys)):
+    if live != sorted(wanted_lines(destinations, keys)):
         raise RefusalError(
             "E-READBACK-MISMATCH", "the managed key file is not exactly the wanted lines"
         )
-    if host.read(DROPIN_FILE) != wanted_dropin(name, dests):
+    if host.read(DROPIN_FILE) != wanted_dropin(name, destinations):
         raise RefusalError(
             "E-READBACK-MISMATCH", "the managed sshd drop-in is not exactly the wanted text"
+        )
+    return live
+
+
+def legacy_present(host: Host, legacy_files: Sequence[str]) -> int:
+    """How many of the files of the earlier hand-made layout are still on the host. A path is
+    only counted, never returned: the paths of that layout are made from the account's name."""
+    return sum(1 for path in legacy_files if host.info(path) is not None)
+
+
+def do_verify(
+    host: Host,
+    user: object,
+    own: object,
+    destinations: object,
+    keys: object,
+    owned: Mapping[str, str],
+    legacy_files: Sequence[str] = (),
+    legacy_gone: bool = False,
+) -> list[str]:
+    """Read both files back and compare them with the wanted text exactly, then require sshd's
+    own answer for the account to be what the role means. With legacy_gone the files of the
+    earlier hand-made layout must also be gone.
+
+    Raises:
+        RefusalError: when sshd's answer or either file is not exactly what was wanted, or when
+            a legacy file the caller says must be gone is still there.
+    """
+    name, own_address, dests, parsed_keys = _checked_inputs(user, own, destinations, keys, owned)
+    account = check_account(find_account(host, name))
+    check_effective(_sshd(host, account.name, own_address), dests)
+    live = check_files(host, name, dests, parsed_keys)
+    if legacy_gone and legacy_present(host, legacy_files):
+        raise RefusalError(
+            "E-LEGACY-PRESENT", "a file of the earlier hand-made layout is still there"
         )
     return [
         f"ci_jump read back {len(live)} key line(s) and the sshd drop-in, each exactly the wanted"
         f" text for {len(dests)} destination(s) on port {PINNED_PORT}; sshd applies local"
         " forwarding only, with the same list as its PermitOpen"
     ]
+
+
+def is_pending(
+    host: Host,
+    user: str,
+    destinations: Sequence[str],
+    keys: Sequence[tuple[str, str]],
+    legacy_files: Sequence[str],
+) -> bool:
+    """True when a write is owed: a managed file is not exactly as wanted, or a file of the
+    earlier hand-made layout is still there. It is the complement of what verify reads, so a
+    host the role has finished with is never pending and the role's second run changes nothing."""
+    try:
+        check_files(host, user, destinations, keys)
+    except RefusalError:
+        return True
+    return legacy_present(host, legacy_files) > 0
 
 
 # ---------------------------------------------------------------------------------------
@@ -1103,6 +1204,8 @@ ARGUMENT_SPEC: dict[str, dict[str, object]] = {
     "destinations": {"type": "list", "elements": "raw", "default": []},
     "keys": {"type": "list", "elements": "raw", "default": [], "no_log": True},
     "owned_accounts": {"type": "dict", "default": {}},
+    "legacy_files": {"type": "list", "elements": "str", "default": [], "no_log": True},
+    "legacy_gone": {"type": "bool", "default": False},
 }
 
 
@@ -1146,15 +1249,16 @@ def main() -> None:
             )
             module.exit_json(changed=False, lines=lines, accounts=accounts)
         elif action == "plan":
-            lines = do_plan(
+            lines, pending = plan_result(
                 host,
                 params["user"],
                 params["own_address"],
                 params["destinations"],
                 params["keys"],
                 owned,
+                params["legacy_files"],
             )
-            module.exit_json(changed=False, lines=lines)
+            module.exit_json(changed=False, lines=lines, pending=pending)
         else:
             lines = do_verify(
                 host,
@@ -1163,6 +1267,8 @@ def main() -> None:
                 params["destinations"],
                 params["keys"],
                 owned,
+                params["legacy_files"],
+                params["legacy_gone"],
             )
             module.exit_json(changed=False, lines=lines)
     except RefusalError as error:

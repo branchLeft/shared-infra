@@ -32,12 +32,12 @@
     # Sorts before the test's own drop-in and the role's, so a Match block in it is met first: for
     # each keyword the first value sshd obtains wins, which is how a block ahead of the role's
     # outranks it. A block in a drop-in that sorts after the role's would change nothing.
-    case_ahead: /etc/ssh/sshd_config.d/05-ci-jump-case.conf
+    case_ahead: /etc/ssh/sshd_config.d/05-case-ahead.conf
     # Sorts after both, for what applies to everyone.
-    case_after: /etc/ssh/sshd_config.d/99-ci-jump-case.conf
-    case_key_dir: /etc/ssh/ci-jump
-    case_key_file: /etc/ssh/ci-jump/authorized_keys
-    case_dropin: /etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf
+    case_after: /etc/ssh/sshd_config.d/99-case-after.conf
+    case_key_dir: /etc/ssh/authorized_keys.d
+    case_key_file: /etc/ssh/authorized_keys.d/branchleft-jump
+    case_dropin: /etc/ssh/sshd_config.d/40-branchleft-jump.conf
     case_reload: [[systemctl, reload, ssh]]
     # The options of a delivered key line, spelled out here and not taken from the role.
     case_options: >-
@@ -89,6 +89,13 @@
       - name: an own address that is a host name
         own_address: edge1
         expect: E-OWN-SHAPE
+      - name: an own address outside the private ranges, which the list holds
+        own_address: 203.0.113.5
+        destinations: ['{{ scenario_listed }}', '203.0.113.5']
+        expect: E-OWN-PRIVATE
+      - name: control, a private own address that the list holds
+        own_address: '{{ scenario_own }}'
+        accepted: true
 
       # --- Keys.
       - name: an empty key list
@@ -344,3 +351,143 @@
       loop_control:
         loop_var: converge_case
         label: '{{ converge_case.name }}'
+
+# The migration from the hand-made layout, and the reload that a pull which died owes. The host
+# these cases start from is the delivered one, and each puts it into the state the prepare made
+# (the hand-made files, named after the account, and none of the role's own), runs the role's step
+# and reads what it left:
+#
+#   1  the read-back that lets the old files go fails: the old files are never touched
+#   2  the read-back after the old files were removed fails (the reload hook of the prepare puts
+#      one back, once armed): the old files are put back as they were, byte for byte
+#   3  nothing fails: the old files and their directory are gone, the new files are in place, and
+#      sshd was reloaded once for the new files and once for the removal
+#   4  a pull that died after the write and before the reload (the marker left behind): the next
+#      run reloads sshd though the files already read as wanted, once, and the run after it does not
+- name: Run the migration and reload cases
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    migration_reloads: '{{ scenario_record_dir }}/reloads'
+    migration_marker: /run/branchleft-jump-reload-owed
+  tasks:
+    - name: Read the public keys the cases use
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - jump
+        - second
+      register: ci_jump_case_pubs
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Make the keys available to the cases
+      ansible.builtin.set_fact:
+        ci_jump_scenario_pub_jump: '{{ ci_jump_case_pubs.results[0].content | b64decode | trim }}'
+        ci_jump_scenario_pub_second: '{{ ci_jump_case_pubs.results[1].content | b64decode | trim }}'
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Make the record of reloads, and the arm of the hook, empty
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - '{{ migration_reloads }}'
+        - '{{ scenario_record_dir }}/resurrect-path'
+      when: not ansible_check_mode
+
+    - name: 1, the first read-back fails, so the old files are never touched
+      ansible.builtin.include_tasks: tasks/migration_case.yml
+      vars:
+        migration_expect: E-SSHD-FORWARDING
+        migration_tasks_from: _write.yml
+        migration_block_ahead: true
+        migration_arm: false
+        migration_inode_kept: true
+      when: not ansible_check_mode
+
+    - name: 2, the second read-back fails, so the old files are put back as they were
+      ansible.builtin.include_tasks: tasks/migration_case.yml
+      vars:
+        migration_expect: E-LEGACY-PRESENT
+        migration_tasks_from: _write.yml
+        migration_block_ahead: false
+        migration_arm: true
+        migration_inode_kept: false
+      when: not ansible_check_mode
+
+    - name: 3, nothing fails, so the old files go and the new ones stay
+      ansible.builtin.include_tasks: tasks/migration_case.yml
+      vars:
+        migration_expect: ''
+        migration_tasks_from: main.yml
+        migration_block_ahead: false
+        migration_arm: false
+        migration_inode_kept: false
+      when: not ansible_check_mode
+
+    # Case 4. The host is as case 3 left it. The marker is what a pull leaves when it dies after a
+    # write and before the reload: the files read as wanted, and only the marker says sshd may not
+    # have been reloaded. The run must reload sshd once, take the marker away, and change nothing
+    # else; the run after it must not reload.
+    - name: 4, a marker left behind makes the next run reload sshd, once
+      when: not ansible_check_mode
+      block:
+        - name: Count the reloads so far
+          ansible.builtin.slurp:
+            src: '{{ migration_reloads }}'
+          register: ci_jump_migration_reloads_before
+          no_log: true
+
+        - name: Leave the marker a dead pull leaves
+          ansible.builtin.copy:
+            content: ''
+            dest: '{{ migration_marker }}'
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Apply the role over the delivered host
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/apply_role.yml'
+
+        - name: Count the reloads after the run that found the marker
+          ansible.builtin.slurp:
+            src: '{{ migration_reloads }}'
+          register: ci_jump_migration_reloads_after
+          no_log: true
+
+        - name: Look for the marker
+          ansible.builtin.stat:
+            path: '{{ migration_marker }}'
+          register: ci_jump_migration_marker
+
+        - name: Assert the run reloaded sshd once and took the marker away
+          ansible.builtin.assert:
+            that:
+              - (ci_jump_migration_reloads_after.content | b64decode).splitlines() | length
+                == (ci_jump_migration_reloads_before.content | b64decode).splitlines() | length + 1
+              - not ci_jump_migration_marker.stat.exists
+            quiet: true
+            fail_msg: A marker left by a pull that died did not make the next run reload sshd exactly once.
+
+        - name: Apply the role once more
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/apply_role.yml'
+
+        - name: Count the reloads after the run that found nothing owed
+          ansible.builtin.slurp:
+            src: '{{ migration_reloads }}'
+          register: ci_jump_migration_reloads_last
+          no_log: true
+
+        - name: Assert a finished host is not reloaded
+          ansible.builtin.assert:
+            that:
+              - (ci_jump_migration_reloads_last.content | b64decode).splitlines() | length
+                == (ci_jump_migration_reloads_after.content | b64decode).splitlines() | length
+            quiet: true
+            fail_msg: A run over a host that was finished reloaded sshd.

@@ -1,5 +1,5 @@
 [project]
-name = "ci-jump-role"
+name = "jump-role"
 version = "0.0.0"
 # The oldest interpreter any target host provides (PY-3): Debian 13 ships Python 3.13.
 requires-python = ">=3.13"

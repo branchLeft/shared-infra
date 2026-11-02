@@ -1,9 +1,12 @@
 ---
 # Test setup only, never part of the role. It makes the instance look as edge1 does before the
-# role is enabled, following the ci-jump runbook's hand-made layout: the jump account with a
+# role is enabled, following the private runbook's hand-made layout: the jump account with a
 # nologin shell and no home directory, a root-owned key file outside any home whose one line
 # allows a host the new list will not (so a converge must replace it), and a drop-in with a Match
-# block for the account that carries the same old destination. The real OpenSSH server runs as
+# block for the account that carries the same old destination. As in that layout, the directory
+# of the key file and the drop-in are named after the account, so the converge has files whose
+# paths hold the account's name to migrate and to remove, and the verify can look for the name in
+# every path under /etc/ssh afterwards. The real OpenSSH server runs as
 # ssh.service. It listens on 127.0.0.1:2222, where the jump connections arrive, and on port 22 of
 # three more loopback addresses, which stand for the hosts behind the jump: one will be on the
 # list, one will not, and one is the jump host's own address. A Match block for another user,
@@ -92,11 +95,13 @@
 
     - name: Make the directory of the hand-made key file as the runbook does
       ansible.builtin.file:
-        path: /etc/ssh/ci-jump
+        path: '/etc/ssh/{{ scenario_jump_user }}'
         state: directory
         owner: root
         group: root
         mode: '0755'
+      no_log: true
+      diff: false
 
     # The state before the role: a line that allows the unlisted address, an old key and the
     # forced command, as the runbook's step writes it. The converge must replace it with exactly
@@ -106,7 +111,7 @@
         content: >-
           restrict,port-forwarding,permitopen="{{ scenario_unlisted }}:22",command="/usr/sbin/nologin"
           {{ ci_jump_scenario_prepare_old.content | b64decode | trim }}
-        dest: /etc/ssh/ci-jump/authorized_keys
+        dest: '/etc/ssh/{{ scenario_jump_user }}/authorized_keys'
         owner: root
         group: root
         mode: '0644'
@@ -138,7 +143,7 @@
           Match User {{ scenario_other_user }}
             AllowTcpForwarding no
           Match all
-        dest: /etc/ssh/sshd_config.d/10-ci-jump-test.conf
+        dest: /etc/ssh/sshd_config.d/10-sshd-test.conf
         owner: root
         group: root
         mode: '0644'
@@ -148,7 +153,7 @@
       ansible.builtin.copy:
         content: |
           Match User {{ scenario_jump_user }}
-              AuthorizedKeysFile /etc/ssh/ci-jump/authorized_keys
+              AuthorizedKeysFile /etc/ssh/{{ scenario_jump_user }}/authorized_keys
               AuthenticationMethods publickey
               AllowTcpForwarding local
               PermitOpen {{ scenario_unlisted }}:22
@@ -161,12 +166,53 @@
               PermitUserRC no
               ForceCommand /usr/sbin/nologin
           Match all
-        dest: /etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf
+        dest: '/etc/ssh/sshd_config.d/50-branchleft-{{ scenario_jump_user }}.conf'
         owner: root
         group: root
         mode: '0644'
       no_log: true
       diff: false
+
+    # Scaffolding for the reload cases of the refusals scenario. Every reload of ssh.service runs
+    # the hook after sshd's own check: it appends a line to a record, so a test can tell that sshd
+    # was reloaded, and, only while a case has armed it, puts a named file back from a stored
+    # copy, which is how a case makes the last read-back fail after the role removed that file.
+    - name: Put the reload hook in place
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          echo reload >> {{ scenario_record_dir }}/reloads
+          arm={{ scenario_record_dir }}/resurrect-path
+          if [ -s "$arm" ] && [ ! -e "$(cat "$arm")" ]; then
+            cp {{ scenario_record_dir }}/resurrect-content "$(cat "$arm")"
+          fi
+        dest: /usr/local/sbin/jump-test-reload-hook
+        owner: root
+        group: root
+        mode: '0755'
+      no_log: true
+
+    - name: Make the directory of the ssh service's drop-ins
+      ansible.builtin.file:
+        path: /etc/systemd/system/ssh.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Make ssh.service run the hook on every reload
+      ansible.builtin.copy:
+        content: |
+          [Service]
+          ExecReload=/usr/local/sbin/jump-test-reload-hook
+        dest: /etc/systemd/system/ssh.service.d/jump-test-reload.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the unit's drop-in
+      ansible.builtin.systemd_service:
+        daemon_reload: true
 
     - name: Check the whole SSH server configuration
       ansible.builtin.command:

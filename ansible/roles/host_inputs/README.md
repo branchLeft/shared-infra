@@ -98,9 +98,13 @@ this route. A slot is exactly the argument spec of `deploy_slot_keys`: `stack` a
 are required, and `adopt_existing` is a JSON boolean that must be `true` only for a stack the
 host already runs.
 
-For edge1 the file is one JSON object of eleven keys, each the name of a required argument
-of `monitoring_stack` (seven) or `ntfy_pager` (four). The values must equal what is live on
-the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env` with others:
+For edge1 the file is one JSON object of twelve keys, each the name of a required argument
+of `monitoring_stack` (seven), `ntfy_pager` (four) or `ci_jump` (one, `ci_jump_user`, the CI
+jump account's name, which is held out of the repository and every log). The values must equal
+what is live on the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env`
+with others. `ci_jump_user` is not read from a live file: the owner types it once, hidden, with
+`seed_host_inputs.py --host edge1 --set ci_jump_user` (see `ansible/tools/README.md`), and the
+first apply after it was added stops at `host_inputs[missing-key]` until that is done:
 
 ```text
 {
@@ -114,7 +118,8 @@ the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env` 
   "ntfy_pager_pager_token": "<string>",
   "ntfy_pager_watcher_token": "<string>",
   "ntfy_pager_owner_password_hash": "<string>",
-  "ntfy_pager_machine_password_hash": "<string>"
+  "ntfy_pager_machine_password_hash": "<string>",
+  "ci_jump_user": "<string>"
 }
 ```
 

@@ -65,7 +65,7 @@ provisioner:
         scenario_ssh_port: 2222
         scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
         # The jump account the role is told about, and the accounts other roles own.
-        scenario_jump_user: jumpacct
+        scenario_jump_user: gate-hopper
         # Loopback addresses stand for the hosts: one is on the list, one is a live listener that
         # is not, one is the jump host's own address, and the test sshd listens on all of them
         # (port 22) and on 127.0.0.1:2222, where the jump connections arrive.

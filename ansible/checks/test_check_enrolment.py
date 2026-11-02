@@ -983,7 +983,7 @@ class Sabotage(unittest.TestCase):
         self._owner_vars(
             "---\nci_login_manage_keys: true\nci_login_keys:\n"
             f"  - key: {key} a\n    mode: apply\n  - key: {key} b\n    mode: check\n"
-            "ci_jump_manage_keys: true\nci_jump_user: jumper\n"
+            "ci_jump_manage_keys: true\n"
             "ci_jump_own_address: 10.0.0.2\n"
             "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
             f"ci_jump_keys:\n  - key: {key} c\n"
@@ -1057,11 +1057,10 @@ class Sabotage(unittest.TestCase):
         self._assert_one("R10 owner_vars/app1.yml: this host has no owner_vars keys")
         self._assert_one("R2 app1.yml: vars_files must be exactly")
 
-    # R10 for the ci_jump values: each of the five keys is required, and each has a shape.
+    # R10 for the ci_jump values: each of the four keys is required, and each has a shape.
     def test_r10_owner_vars_lacks_a_ci_jump_key(self) -> None:
         for name in (
             "ci_jump_manage_keys: false\n",
-            "ci_jump_user: ''\n",
             "ci_jump_own_address: ''\n",
             "ci_jump_destinations: []\n",
             "ci_jump_keys: []\n",
@@ -1077,9 +1076,25 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_one("R10 owner_vars/edge1.yml: ci_jump_manage_keys must be a bool")
 
-    def test_r10_owner_vars_ci_jump_user_is_a_list(self) -> None:
-        self._edit("owner_vars/edge1.yml", "ci_jump_user: ''", "ci_jump_user: [jumper]")
-        self._assert_one("R10 owner_vars/edge1.yml: ci_jump_user must be text")
+    # The jump account's name is the owner's secret: it is never a key of this public file, in any
+    # spelling of value, and reaches the role through the host's private inputs file only.
+    def test_r10_owner_vars_refuses_the_jump_accounts_name(self) -> None:
+        for value in ("''", "jumper", "[jumper]"):
+            with self.subTest(value=value):
+                self._edit(
+                    "owner_vars/edge1.yml",
+                    "ci_jump_keys: []\n",
+                    f"ci_jump_keys: []\nci_jump_user: {value}\n",
+                )
+                self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_the_jump_account_is_not_among_the_keys_a_host_may_set(self) -> None:
+        self.assertNotIn("ci_jump_user", JUMP_VARS)
+        self.assertEqual(
+            JUMP_VARS,
+            {"ci_jump_keys", "ci_jump_manage_keys", "ci_jump_own_address", "ci_jump_destinations"},
+        )
 
     def test_r10_owner_vars_ci_jump_own_address_is_a_number(self) -> None:
         self._edit("owner_vars/edge1.yml", "ci_jump_own_address: ''", "ci_jump_own_address: 5")
@@ -1115,7 +1130,7 @@ class Sabotage(unittest.TestCase):
             ops1 = self.ansible / "owner_vars" / "ops1.yml"
             text = ops1.read_text(encoding="utf-8")
             ops1.write_text(
-                text + "ci_jump_manage_keys: false\nci_jump_user: ''\nci_jump_own_address: ''\n"
+                text + "ci_jump_manage_keys: false\nci_jump_own_address: ''\n"
                 "ci_jump_destinations: []\nci_jump_keys: []\n",
                 encoding="utf-8",
             )

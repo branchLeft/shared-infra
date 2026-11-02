@@ -21,20 +21,32 @@
         path: '{{ item }}'
         follow: false
       loop:
-        - /etc/ssh/ci-jump
-        - /etc/ssh/ci-jump/authorized_keys
-        - /etc/ssh/ci-jump/authorized_keys.real
-        - /etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf
-        - /etc/ssh/sshd_config.d/05-ci-jump-case.conf
-        - /etc/ssh/sshd_config.d/99-ci-jump-case.conf
+        - /etc/ssh/authorized_keys.d
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/authorized_keys.d/branchleft-jump.real
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+        - /etc/ssh/sshd_config.d/05-case-ahead.conf
+        - /etc/ssh/sshd_config.d/99-case-after.conf
       register: ci_jump_scenario_verify_stat
+
+    # The cases that migrate from the hand-made layout end with the role's own run, so none of that
+    # layout, and no path holding the account's name, may be left under /etc/ssh.
+    - name: Find every path under /etc/ssh that holds the account's name
+      ansible.builtin.find:
+        paths: /etc/ssh
+        patterns: '*{{ scenario_jump_user }}*'
+        recurse: true
+        hidden: true
+        file_type: any
+      register: ci_jump_scenario_verify_named
+      no_log: true
 
     - name: Read the key file and the drop-in
       ansible.builtin.slurp:
         src: '{{ item }}'
       loop:
-        - /etc/ssh/ci-jump/authorized_keys
-        - /etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
       register: ci_jump_scenario_verify_files
       no_log: true
 
@@ -51,6 +63,7 @@
           - ci_jump_scenario_verify_stat.results[3].stat.pw_name == 'root'
           - not ci_jump_scenario_verify_stat.results[4].stat.exists
           - not ci_jump_scenario_verify_stat.results[5].stat.exists
+          - ci_jump_scenario_verify_named.matched == 0
           - (ci_jump_scenario_verify_files.results[0].content | b64decode).splitlines() | map('trim') | sort == expected | sort
           - (ci_jump_scenario_verify_files.results[1].content | b64decode) == expected_dropin
         quiet: true
@@ -65,7 +78,7 @@
         expected_dropin: |
           # Written by the ci_jump role. Change the owner's variables, not this file.
           Match User {{ scenario_jump_user }}
-              AuthorizedKeysFile /etc/ssh/ci-jump/authorized_keys
+              AuthorizedKeysFile /etc/ssh/authorized_keys.d/branchleft-jump
               AuthenticationMethods publickey
               AllowTcpForwarding local
               PermitOpen {{ scenario_listed }}:22 {{ scenario_own }}:22

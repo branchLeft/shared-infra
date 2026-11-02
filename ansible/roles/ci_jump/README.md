@@ -30,16 +30,48 @@ one host.
 - **Write, only when `ci_jump_manage_keys` is true.** Two files, both `root:root` at `0644`, written
   with `ansible.builtin.template` and never with `authorized_key` into a home (that would hand the
   account the ownership of its own keys):
-  - `/etc/ssh/ci-jump/authorized_keys` becomes exactly one line per declared key: `restrict`,
+  - `/etc/ssh/authorized_keys.d/branchleft-jump` becomes exactly one line per declared key: `restrict`,
     `port-forwarding`, one `permitopen="HOST:22"` per declared destination, `command="/usr/sbin/nologin"`,
     then the key type and body, and nothing else (the key's comment is dropped);
-  - `/etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf` holds the `Match User` block the runbook
-    documents (the key file as `AuthorizedKeysFile`, `AuthenticationMethods publickey`,
+  - `/etc/ssh/sshd_config.d/40-branchleft-jump.conf` holds the `Match User` block the private
+    jump-host runbook documents (the key file as `AuthorizedKeysFile`, `AuthenticationMethods publickey`,
     `AllowTcpForwarding local`, `PermitOpen` with the same destinations on port 22, and every
     other forwarding and tty setting off, `ForceCommand /usr/sbin/nologin`), closed by `Match all`.
     Both are made from the one list `ci_jump_destinations`, so the key lines' `permitopen` and the
     block's `PermitOpen` cannot differ; `test_ci_jump_pins.py` proves both templates read that one
     variable and render the same destinations.
+  - **No path is made from the account's name.** The owner ruled that the account's
+    name is not published. A path
+    is printed by a lot of tooling, so the two files and the directory are named for the role's
+    purpose, and `test_ci_jump_pins.py` and both Molecule scenarios fail on a path that holds the
+    name. The drop-in is `40-` so that it sorts ahead of the earlier hand-made `50-` file: while both
+    are on the host sshd already applies the new one (the first value sshd obtains wins), and the
+    read-back proves that before the old file is removed.
+- **Migration from the hand-made layout.** The private runbook lays the files out by hand at
+  `/etc/ssh/ACCOUNT/authorized_keys` and `/etc/ssh/sshd_config.d/50-branchleft-ACCOUNT.conf`. Those
+  paths are made from the name, so the role builds them at run time from `ci_jump_user`
+  (`ci_jump_legacy_*` in `vars/main.yml`), prints none of them (the module is given them and only
+  counts them, and every task that handles one hides its result and its diff), and never ships
+  them. The order, in `tasks/_write.yml`:
+  1. Refuse, before anything is changed, an old path that is a link or the wrong kind of thing.
+  2. Keep the old and new files in memory for a rollback, and make the marker (below) when the
+     module's plan says a write is owed.
+  3. Write the new key file and drop-in, `sshd -t`, reload sshd if either changed, and read back
+     (the new files exact, and sshd's own answer for the account).
+  4. Only then remove the old drop-in and key file, and the old directory when nothing else is in it.
+     Nothing is removed recursively but that directory.
+  5. `sshd -t` again, reload again, and read back again, now also requiring the old files gone
+     (`E-LEGACY-PRESENT`).
+  6. Take the marker away.
+     A failure anywhere puts every file back as it was (the new files as they were, the old files and
+     their directory byte for byte), reloads sshd and fails the run. A second run finds the host
+     finished and changes nothing. A host that never had the hand-made layout skips steps 4 and 5.
+- **A pull that dies after the write still reloads sshd.** Before the first write the role leaves
+  `/run/branchleft-jump-reload-owed` whenever the module's plan says a write is owed (a managed file
+  not exactly as wanted, or an old file still there). The next run reloads sshd if the marker is
+  there, even though the files by then read as wanted, and takes it away after the last read-back.
+  `/run` is cleared at boot and a boot starts sshd afresh. A finished host has no marker and is not
+  reloaded. `sshd -T` cannot be used for this: it parses the files on disk, not the running daemon.
 - **Check, reload, read back.** After the write the whole sshd configuration is checked with
   `sshd -t`, sshd is reloaded when either file changed, and the module reads both files back and asks
   `sshd -T -C user=ACCOUNT,host=x,addr=OWN_ADDRESS` what sshd applies to the account. A failed check
@@ -56,8 +88,9 @@ one host.
     (`E-DEST-QUOTE`), a comma (`E-DEST-COMMA`), a space or control character (`E-DEST-SPACE`), an
     IPv6 form (`E-DEST-IPV6`), any other malformed name (`E-DEST-SHAPE`), a repeat
     (`E-DEST-DUPLICATE`), an empty list (`E-DEST-EMPTY`), a non-text entry (`E-DEST-TYPE`);
-  - the jump host's own address: unset (`E-OWN-EMPTY`), not an IPv4 address (`E-OWN-SHAPE`), or not
-    among the destinations (`E-DEST-OWN`). The runner reaches every host through the jump once the
+  - the jump host's own address: unset (`E-OWN-EMPTY`), not an IPv4 address (`E-OWN-SHAPE`), not a
+    private one, that is outside 10/8, 172.16/12 and 192.168/16, loopback excepted for a test host
+    (`E-OWN-PRIVATE`), or not among the destinations (`E-DEST-OWN`). The runner reaches every host through the jump once the
     jump pair is set, the jump host itself included, so a list without the jump host's own address
     on port 22 fails the plan of every host, and the pull that would correct it is one of those
     plans;
@@ -82,7 +115,8 @@ one host.
 
 It does not create, edit or lock an account, install a package, or manage a key anywhere but the one
 file, and it takes no destination per key: every key line carries the same destinations. It writes
-no file but the two above and the directory `/etc/ssh/ci-jump`.
+no file but the two above, the directory `/etc/ssh/authorized_keys.d` and the marker, and it
+removes the old hand-made layout only as the migration above says.
 
 The report reads other accounts' key files as root. It opens each with `O_NOFOLLOW` and `O_NONBLOCK`
 and checks the opened descriptor with `fstat` for a regular file, so a link or a pipe put there by a
@@ -91,13 +125,14 @@ local account is skipped and cannot make the pull read another file or hang.
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the five variables and
-[`defaults/main.yml`](defaults/main.yml) holds the same defaults. All five are read from the host's
-file under `ansible/owner_vars/` (`edge1.yml` today); none comes from `host_inputs`.
+[`defaults/main.yml`](defaults/main.yml) holds the defaults of the four others (`ci_jump_user` is required and has none). Four are read from the host's
+file under `ansible/owner_vars/` (`edge1.yml` today). The fifth, `ci_jump_user`, comes from the
+host's private inputs file through `host_inputs` and is in no file of this repository.
 
 | Variable               | Default | Meaning                                                                     |
 | ---------------------- | ------- | --------------------------------------------------------------------------- |
 | `ci_jump_manage_keys`  | `false` | `false`: report only. `true`: guards, write, check, reload, read-back.      |
-| `ci_jump_user`         | `''`    | The jump account. Read only when the flag is true; never printed.           |
+| `ci_jump_user`         | none    | Required. The jump account, from `host_inputs`; never committed or printed. |
 | `ci_jump_own_address`  | `''`    | The jump host's own private IPv4 address; it must be a destination.         |
 | `ci_jump_destinations` | `[]`    | Host names or IPv4 addresses, no port. The role adds port 22.               |
 | `ci_jump_keys`         | `[]`    | `{key}` entries: public keys, one per entry. Read only when the flag is on. |
@@ -108,9 +143,10 @@ in [`vars/main.yml`](vars/main.yml), so an inventory cannot change them. The mod
 (`library/ci_jump_authorized_keys.py`) pins the same values for itself, as the oracle of its
 read-back, and `ansible/checks/test_ci_jump_pins.py` holds the two copies equal, holds the account
 names equal to `ci_login_user` and `tunnel_account_user` in their own roles, and holds both templates
-to the module's text. `ansible/checks/check_enrolment.py` (R10) allows the five variables in the
-`owner_vars` file of every host in `JUMP_HOSTS`, which must be the hosts whose row in
-`ansible/checks/host_roles.yml` lists the role.
+to the module's text. `ansible/checks/check_enrolment.py` (R10) allows the four variables other than `ci_jump_user` in
+the `owner_vars` file of every host in `JUMP_HOSTS`, which must be the hosts whose row in
+`ansible/checks/host_roles.yml` lists the role, and refuses an `owner_vars` file that holds
+`ci_jump_user`.
 
 A destination must be the exact text the runner's `ssh` sends for the host: sshd matches `permitopen`
 and `PermitOpen` literally, so a name in the list and an address on the command line do not match each
@@ -118,17 +154,26 @@ other.
 
 ### How the account's name reaches the role
 
-The name of the jump account is not committed. The gated workflow holds it only in the `user@host`
-secret `SSH_JUMP_HOST`, splits it on the runner and uses it as the `User` of the jump hop; nothing
-sends it to a host, and the host's pull has no `-e`. So there is no way to give the role the name
-without either committing it to `owner_vars/HOST.yml` (the owner's ruling on publishing the name) or a
-new channel (a `host_inputs` key the owner seeds by hand before the merge, or a change to the
-workflow). Until the owner chooses, `ci_jump_user` stays empty and the flag false: the role is
-inert, and a run with the flag true and no name stops at `E-USER-EMPTY` before any write. The role
-reads one variable, `ci_jump_user`, whichever channel fills it. Everything the role prints or logs is
-written so that the name is in none of it: the module takes it as a `no_log` parameter, every task
-that handles it hides its result and its diff, and `molecule/default` requires the name to be absent
-from the output of every task of the role.
+The name of the jump account is the owner's secret and is in no file of this repository, no
+pull-request text and no log. It reaches the role as the host input `ci_jump_user`: the owner writes
+it once into the host's root-only file `/etc/branchleft/host-inputs.json`, the `host_inputs` role
+(the first role of the host's playbook) sets it as a fact before this role runs, and this role reads
+the one variable `ci_jump_user` as it reads any other. For edge1 the row of
+`host_inputs_required_by_host` now holds it (a twelfth key), so the first apply after this change
+stops at `host_inputs[missing-key]` before any task runs until the owner has seeded it. On edge1,
+once, as root, hidden prompt, nothing echoed:
+
+```text
+python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set ci_jump_user
+```
+
+The tool asks for the name hidden and prints the key name and the byte length only. Everything the
+role prints or logs is written so that the name is in none of it: the argument spec marks it
+`no_log`, the module takes it as a `no_log` parameter, every task that handles it, or a path made
+from it, hides its result and its diff, no managed path holds it, and `molecule/default` requires
+the name to be absent from the log of every run of the role and from every path under `/etc/ssh`.
+The role reads the name only when the flag is true; a run with the flag true and no name stops at
+`E-USER-EMPTY` before any write.
 
 Public keys are not secrets, but every task that handles them sets `no_log: true` and `diff: false`
 (ANS-16), the module returns fingerprints only, and the plan shows no key. The text the role prints is
@@ -145,9 +190,12 @@ also kept out of the plan scan of the gated apply (below).
 ## What it changes on a host
 
 - With the flag false: nothing.
-- With the flag true: `/etc/ssh/ci-jump` (`root:root`, `0755`), `/etc/ssh/ci-jump/authorized_keys`
-  and `/etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf` (`root:root`, `0644`), and a reload of
-  `ssh.service` when either file changed. No port, firewall rule, account or other sshd setting.
+- With the flag true: `/etc/ssh/authorized_keys.d` (`root:root`, `0755`),
+  `/etc/ssh/authorized_keys.d/branchleft-jump` and `/etc/ssh/sshd_config.d/40-branchleft-jump.conf`
+  (`root:root`, `0644`), the marker `/run/branchleft-jump-reload-owed` while a reload is owed, a
+  reload of `ssh.service` when either file changed, a marker was left, or the old layout was
+  removed, and the removal of the old hand-made files and their directory once the new ones have
+  read back. No port, firewall rule, account or other sshd setting.
 - Skipped in check mode, with the reason (ANS-10): the whole-configuration check, the reload and the
   read-back, because `sshd -t` and `sshd -T` read the files on disk, which a plan has not changed.
   The plan shows the live files against the wanted ones, destination by destination, in the key file
@@ -166,24 +214,33 @@ cd ansible/roles/ci_jump && PYTHONPATH=library ../../../.venv/bin/python -m unit
 ```
 
 - `default` starts from a container that runs systemd and the real OpenSSH server as `ssh.service`,
-  laid out as the ci-jump runbook builds it by hand: a `nologin` account whose home is
-  `/nonexistent`, a root-owned key file whose one line allows an address the new list will not, and
-  a drop-in with a `Match` block carrying that old address. It proves the role replaces both with
-  the declared text, reloads sshd, and then, over real SSH connections: the key reaches the listed
+  laid out as the private runbook builds it by hand: a `nologin` account of a realistic name
+  (lowercase words joined by a hyphen) whose home is `/nonexistent`, a root-owned key file in a
+  directory named after it whose one line allows an address the new list will not, and a drop-in
+  named after it with a `Match` block carrying that old address. It proves the role replaces both
+  with the declared text at the new paths, removes the old ones, reloads sshd, and then, over real SSH connections: the key reaches the listed
   address and the jump host's own address on port 22 (the target's banner comes back); a live
   listener that is not on the list is refused, with sshd logging that it denied the forward; the
   listed address on another port is refused; **`ssh -R` is refused, for each key**; a key in no file
   and the replaced line's key are turned away; remote commands are not run. As a control, with a
   second address on the list the same connection goes through, and with the list put back it is
   refused again. It records what `sshd -T -C` evaluates for a user under another `Match` block, runs
-  the report, and scans the run's log for any key body and, in the output of the role's tasks, for
-  the account's name.
+  the report, and requires that no path under `/etc/ssh` holds the account's name; it applies the
+  role once more in check mode and scans the log of every run (the check run over the host as the
+  prepare left it, the converge, the idempotence run and that check run) for any key body and for the
+  account's name, which must be in none of the output.
 - `refusals` applies the role once and then runs each guard alone against the bad input or the bad
   state, expecting the guard's own code, with a control beside each group that must be accepted. The
   read-back cases put a `Match` block ahead of the role's, which outranks it, or change a file or its
-  owner, mode or directory behind the role's back, and run the read-back step alone. The last two
-  cases run the write step with a configuration that fails the whole check, and with a read-back
-  sshd refuses, and require the previous files to be back.
+  owner, mode or directory behind the role's back, and run the read-back step alone. Two cases run
+  the write step with a configuration that fails the whole check, and with a read-back sshd refuses,
+  and require the previous files to be back. A last play starts from the hand-made layout and runs:
+  the first read-back failing (the old files are the very files that were there afterwards); the
+  second read-back failing, made to happen by a test-only hook on `ssh.service` that puts the old
+  drop-in back after the role removed it (the old files are back with the same checksum and the new
+  files are gone); a success (the old layout and its directory gone, the new files in place, sshd
+  reloaded exactly twice); and a marker left by a dead pull (the next run reloads sshd exactly once,
+  the run after it not at all).
 - The unit tests run the module against a fake host: every code above, the parser, the report over
   hostile values with no account name in it, the read-back, and the reader's refusal of a link and a
   pipe.
@@ -198,9 +255,12 @@ it.
 1. **The role, inert.** Merged with the flag false. The first gated plan for the host then prints the
    report: which accounts carry forwarding options, their destinations, whether each is in the
    owner's list, and fingerprints. The owner reads it against the runbook's hand-made layout.
-2. **The data.** A change to `owner_vars/HOST.yml` alone: the account's name (by whichever channel
-   the owner chooses, above), the host's own address, the destinations, the public keys and the flag
-   true. The owner must read the plan's check-mode lines before approving the apply: for each
+   The change that adds the host input also needs the owner's one-time seed of `ci_jump_user` on
+   the host before its first apply (see "How the account's name reaches the role"); the apply
+   stops at `host_inputs[missing-key]`, before any task, until then.
+2. **The data.** A change to `owner_vars/HOST.yml` alone: the host's own address, the destinations,
+   the public keys and the flag true. The account's name is already on the host. With the old
+   hand-made layout still there, the first apply migrates it as the migration above says. The owner must read the plan's check-mode lines before approving the apply: for each
    destination whether it is live and wanted, in the key file and in sshd, and for each key whether it
    is live and wanted, with a destination or key that would be removed named as such. The first apply
    reloads sshd and then proves, with sshd's own answer, that remote forwarding is off. If the report
@@ -222,8 +282,8 @@ for character: the owner supplies its exact spelling.
 
 `edge-t` is enrolled by its own change. To give a host this role, list `ci_jump` in its row of
 `ansible/checks/host_roles.yml`, apply the role in its playbook, add the host to `JUMP_HOSTS` in
-`ansible/checks/check_enrolment.py` and give it an `owner_vars/HOST.yml` that ships the five
-variables inert. The role itself changes nothing: the constants are the same on every jump host (the
+`ansible/checks/check_enrolment.py` and give it an `owner_vars/HOST.yml` that ships the four
+variables inert and a `ci_jump_user` key in its row of `host_inputs_required_by_host`, which the owner seeds. The role itself changes nothing: the constants are the same on every jump host (the
 paths are host-local), and the account, the address, the destinations and the keys are that host's own.
 
 ## Named limits
@@ -233,6 +293,11 @@ paths are host-local), and the account, the address, the destinations and the ke
 - **The `sshd -T -C` check uses the jump host's own address as the client address.** The jump key is
   used from runners that have no fixed address, so a `Match` block keyed on a real runner address is
   not seen. A `Match` on the user, the group or the host name is.
+- **The old layout is found by the runbook's naming.** The migration removes
+  `/etc/ssh/ACCOUNT/authorized_keys`, that directory when it is then empty, and
+  `/etc/ssh/sshd_config.d/50-branchleft-ACCOUNT.conf`, and nothing else. A host whose hand-made files
+  are named otherwise keeps them: the new drop-in outranks the old one (`40-` before `50-`), but a
+  file the role does not know stays on the host for the owner to remove.
 - **sshd is read, not edited, beyond the one drop-in.** If another configuration disables
   forwarding, runs a keys command, or has a `Match` block ahead of the role's that changes a setting
   of the account, the role refuses and stays refused until the owner clears it; it will not edit

@@ -44,13 +44,15 @@ TREE_RULES = {"playbooks": "R2", "trust": "R5", "owner_vars": "R10"}
 OWNER_VARS_DIR = "owner_vars"
 # The keys a host's owner_vars file holds, exactly. A host named nowhere here may have no file.
 CI_LOGIN_VARS = frozenset(("ci_login_keys", "ci_login_manage_keys"))
-# The variables of the ci_jump role. Every host that applies the role carries all of them in its
-# own owner_vars file, with its own jump account, address, destinations and keys.
+# The variables of the ci_jump role that live in the repository. Every host that applies the role
+# carries all of them in its own owner_vars file, with its own address, destinations and keys. The
+# jump account's name is not among them: it is held out of this public repository, and reaches the
+# role only through the host's private inputs file (host_inputs row, key ci_jump_user), so an
+# owner_vars file that holds it is refused as an unknown key.
 JUMP_VARS = frozenset(
     (
         "ci_jump_keys",
         "ci_jump_manage_keys",
-        "ci_jump_user",
         "ci_jump_own_address",
         "ci_jump_destinations",
     )
@@ -713,9 +715,8 @@ def _jump_key_problems(doc: dict[str, object]) -> list[str]:
     problems: list[str] = []
     if "ci_jump_manage_keys" in doc and not isinstance(doc["ci_jump_manage_keys"], bool):
         problems.append("ci_jump_manage_keys must be a bool")
-    for name in ("ci_jump_user", "ci_jump_own_address"):
-        if name in doc and not isinstance(doc[name], str):
-            problems.append(f"{name} must be text")
+    if "ci_jump_own_address" in doc and not isinstance(doc["ci_jump_own_address"], str):
+        problems.append("ci_jump_own_address must be text")
     destinations = doc.get("ci_jump_destinations", [])
     if not isinstance(destinations, list) or not all(
         isinstance(item, str) for item in destinations

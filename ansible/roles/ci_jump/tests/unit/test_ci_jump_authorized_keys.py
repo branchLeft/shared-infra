@@ -19,11 +19,14 @@ from pathlib import Path
 import ci_jump_authorized_keys as jump
 
 HOME = "/nonexistent"
-MANAGED = "/etc/ssh/ci-jump/authorized_keys"
-DROPIN = "/etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf"
+MANAGED = "/etc/ssh/authorized_keys.d/branchleft-jump"
+DROPIN = "/etc/ssh/sshd_config.d/40-branchleft-jump.conf"
 OWN = "10.0.0.2"
 OWNED = {"root": "root", "ci_login": "ansible-ci", "tunnel_account": "dbtunnel"}
 NOLOGIN = "/usr/sbin/nologin"
+# The files of the earlier hand-made layout: their paths are made from the account's name, so the
+# module is given them and only counts them.
+LEGACY = ("/etc/ssh/sshd_config.d/50-branchleft-jumper.conf", "/etc/ssh/jumper/authorized_keys")
 
 
 def make_key(number: int, key_type: str = "ssh-ed25519") -> str:
@@ -64,7 +67,7 @@ def wanted_dropin(destinations: list[str], user: str = "jumper") -> str:
     return (
         "# Written by the ci_jump role. Change the owner's variables, not this file.\n"
         f"Match User {user}\n"
-        "    AuthorizedKeysFile /etc/ssh/ci-jump/authorized_keys\n"
+        "    AuthorizedKeysFile /etc/ssh/authorized_keys.d/branchleft-jump\n"
         "    AuthenticationMethods publickey\n"
         "    AllowTcpForwarding local\n"
         f"    PermitOpen {permit}\n"
@@ -141,7 +144,7 @@ class FakeHost:
         """Make the host as a successful run leaves it."""
         self.put(MANAGED, live_file(*[wanted_line(destinations, key) for key in keys]))
         self.put(DROPIN, wanted_dropin(destinations))
-        self.infos["/etc/ssh/ci-jump"] = jump.FileInfo(0, 0, 0o755, False, True)
+        self.infos["/etc/ssh/authorized_keys.d"] = jump.FileInfo(0, 0, 0o755, False, True)
         self.settings = delivered_settings(destinations)
 
     def accounts(self) -> list[jump.Account]:
@@ -354,6 +357,31 @@ class OwnAddressTests(unittest.TestCase):
                     refusal_code(partial(jump.check_own_address, text, [text])), "E-OWN-SHAPE"
                 )
 
+    def test_control_each_private_range_passes(self) -> None:
+        for text in ("10.0.0.2", "10.255.255.254", "172.16.0.1", "172.31.255.1", "192.168.1.9"):
+            with self.subTest(text=text):
+                self.assertEqual(jump.check_own_address(text, [text]), text)
+
+    def test_a_loopback_address_passes_for_a_test_host(self) -> None:
+        self.assertEqual(jump.check_own_address("127.0.0.4", ["127.0.0.4"]), "127.0.0.4")
+
+    def test_an_address_outside_the_private_ranges_is_refused_before_the_list_is_read(self) -> None:
+        for text in (
+            "203.0.113.5",
+            "8.8.8.8",
+            "172.15.0.1",
+            "172.32.0.1",
+            "192.169.0.1",
+            "11.0.0.1",
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(
+                    refusal_code(partial(jump.check_own_address, text, [text])), "E-OWN-PRIVATE"
+                )
+        self.assertEqual(
+            refusal_code(partial(jump.check_own_address, "203.0.113.5", ["db-t1"])), "E-OWN-PRIVATE"
+        )
+
 
 class EffectiveTests(unittest.TestCase):
     """What sshd says it applies to the account is read after the write, and must be exactly what
@@ -468,7 +496,7 @@ class RealHostTests(unittest.TestCase):
         self.assertEqual(settings["listenaddress"], ["192.0.2.10", "2001:db8::1"])
         self.assertEqual(settings["permitopen"], ["any"])
         self.assertEqual(calls[0][:3], ["/usr/sbin/sshd", "-T", "-C"])
-        self.assertEqual(calls[0][3], f"user=jumper,host=ci-jump-check.invalid,addr={OWN}")
+        self.assertEqual(calls[0][3], f"user=jumper,host=jump-check.invalid,addr={OWN}")
         calls.clear()
         jump.RealHost(run).sshd_test(None, OWN)
         self.assertEqual(calls[0], ["/usr/sbin/sshd", "-T"])
@@ -739,11 +767,11 @@ class VerifyTests(unittest.TestCase):
             "drop-in owned by the account": (DROPIN, jump.FileInfo(1001, 0, 0o644, True, False)),
             "drop-in writable by others": (DROPIN, root_file(0o666)),
             "key directory owned by the account": (
-                "/etc/ssh/ci-jump",
+                "/etc/ssh/authorized_keys.d",
                 jump.FileInfo(1001, 0, 0o755, False, True),
             ),
             "key directory writable by others": (
-                "/etc/ssh/ci-jump",
+                "/etc/ssh/authorized_keys.d",
                 jump.FileInfo(0, 0, 0o777, False, True),
             ),
         }
@@ -765,6 +793,103 @@ class VerifyTests(unittest.TestCase):
         host.per_user["jumper"] = {"allowtcpforwarding": ["yes"]}
         self.assertEqual(refusal_code(partial(self.verify, host)), "E-SSHD-FORWARDING")
         self.assertIn(("jumper", OWN), host.asked)
+
+
+class MigrationTests(unittest.TestCase):
+    """The earlier hand-made files are counted, never named; a write is owed while any remains or
+    while a managed file differs; and the final read-back can require them gone."""
+
+    DESTINATIONS = ["db-t1", OWN]
+    KEYS = [KEY_A, KEY_B]
+
+    def delivered(self) -> FakeHost:
+        host = FakeHost()
+        host.deliver(self.DESTINATIONS, self.KEYS)
+        return host
+
+    def legacy(self, host: FakeHost) -> None:
+        for path in LEGACY:
+            host.put(path, "hand-made\n")
+
+    def plan(self, host: FakeHost, legacy: tuple[str, ...] = LEGACY) -> tuple[list[str], bool]:
+        return jump.plan_result(host, "jumper", OWN, self.DESTINATIONS, self.KEYS, OWNED, legacy)
+
+    def verify(self, host: FakeHost, gone: bool) -> list[str]:
+        return jump.do_verify(
+            host, "jumper", OWN, self.DESTINATIONS, self.KEYS, OWNED, LEGACY, gone
+        )
+
+    def test_control_a_finished_host_is_not_pending(self) -> None:
+        self.assertFalse(self.plan(self.delivered())[1])
+
+    def test_a_host_with_no_managed_files_is_pending(self) -> None:
+        host = FakeHost()
+        host.settings = delivered_settings(self.DESTINATIONS)
+        self.assertTrue(self.plan(host)[1])
+
+    def test_each_way_a_managed_file_differs_is_pending(self) -> None:
+        for change in ("key", "dropin", "mode", "directory"):
+            with self.subTest(change=change):
+                host = self.delivered()
+                if change == "key":
+                    host.put(MANAGED, live_file(wanted_line(["db-t1"], KEY_A)))
+                elif change == "dropin":
+                    host.put(DROPIN, wanted_dropin(self.DESTINATIONS) + "# note\n")
+                elif change == "mode":
+                    host.infos[MANAGED] = root_file(0o664)
+                else:
+                    del host.infos["/etc/ssh/authorized_keys.d"]
+                self.assertTrue(self.plan(host)[1])
+
+    def test_a_legacy_file_alone_keeps_the_host_pending(self) -> None:
+        host = self.delivered()
+        self.legacy(host)
+        self.assertTrue(self.plan(host)[1])
+        host = self.delivered()
+        host.put(LEGACY[1], "hand-made\n")
+        self.assertTrue(self.plan(host)[1])
+
+    def test_the_plan_counts_the_legacy_files_and_prints_no_path_of_them(self) -> None:
+        host = self.delivered()
+        self.legacy(host)
+        text = "\n".join(self.plan(host)[0])
+        self.assertIn("2 file(s) of the earlier hand-made layout present", text)
+        self.assertNotIn("jumper", text)
+        self.assertNotIn(LEGACY[0], text)
+        self.assertIn(
+            "0 file(s) of the earlier hand-made layout present",
+            "\n".join(self.plan(self.delivered())[0]),
+        )
+
+    def test_the_final_read_back_requires_the_legacy_files_gone_and_the_first_does_not(
+        self,
+    ) -> None:
+        host = self.delivered()
+        self.legacy(host)
+        self.verify(host, gone=False)
+        self.assertEqual(refusal_code(partial(self.verify, host, True)), "E-LEGACY-PRESENT")
+        host.files.pop(LEGACY[0])
+        host.infos.pop(LEGACY[0])
+        self.assertEqual(refusal_code(partial(self.verify, host, True)), "E-LEGACY-PRESENT")
+        host.files.pop(LEGACY[1])
+        host.infos.pop(LEGACY[1])
+        self.verify(host, gone=True)
+
+    def test_the_refusal_names_no_path_and_no_account(self) -> None:
+        host = self.delivered()
+        self.legacy(host)
+        try:
+            self.verify(host, gone=True)
+        except jump.RefusalError as error:
+            self.assertNotIn("jumper", str(error))
+            self.assertNotIn(LEGACY[0], str(error))
+        else:
+            self.fail("the legacy files were not refused")
+
+    def test_the_legacy_check_is_independent_of_the_managed_files_being_wrong(self) -> None:
+        host = self.delivered()
+        host.put(MANAGED, live_file(wanted_line(["db-t1"], KEY_A)))
+        self.assertEqual(refusal_code(partial(self.verify, host, False)), "E-READBACK-MISMATCH")
 
 
 class ReportTests(unittest.TestCase):
@@ -1012,7 +1137,7 @@ class WantedTextTests(unittest.TestCase):
         self.assertEqual(jump.PINNED_PORT, 22)
         self.assertEqual(jump.PINNED_FIXED_OPTIONS, ("restrict", "port-forwarding"))
         self.assertEqual(jump.PINNED_COMMAND, "/usr/sbin/nologin")
-        self.assertEqual(jump.KEY_FILE, "/etc/ssh/ci-jump/authorized_keys")
+        self.assertEqual(jump.KEY_FILE, "/etc/ssh/authorized_keys.d/branchleft-jump")
         self.assertEqual(jump.EXPECTED_EFFECTIVE["allowtcpforwarding"], "local")
 
 

@@ -45,6 +45,7 @@ host_inputs_required_by_host:
     - ntfy_pager_watcher_token
     - ntfy_pager_owner_password_hash
     - ntfy_pager_machine_password_hash
+    - ci_jump_user
   ops1:
     - backup_worker_db_host
     - backup_worker_db_user

@@ -97,13 +97,15 @@ SLOTS_KEY = "deploy_slot_keys_slots"
 SLOT_STACK = "tenant-alpha"
 SLOT_KEY = "ssh-ed25519 " + "A" * 68
 SLOT_LINE = f"{SLOT_STACK} {SLOT_KEY}"
+# Typed only on edge1: the CI jump account's name exists nowhere on the host to read.
+JUMP_KEY = "ci_jump_user"
 CA_KEY = "backup_worker_db_ca_pem"
 TENANTS_KEY = "backup_worker_tenants"
 TENANTS = [
     {"slug": "alpha", "recipient": RECIPIENT_A},
     {"slug": "beta", "recipient": RECIPIENT_B},
 ]
-EDGE1_KEYS = tuple(EDGE1_LIVE)
+EDGE1_KEYS = (*EDGE1_LIVE, JUMP_KEY)
 OPS1_KEYS = (*OPS1_LIVE, CA_KEY, TENANTS_KEY)
 
 
@@ -318,6 +320,7 @@ class Rig:
         self.cfg.mkdir()
         self.cfg.chmod(0o755)
         self.answers = list(answers)
+        self.jump_answer: str | None = value_for(JUMP_KEY)
         self.path_answers = list(path_answers)
         self.prompts: list[str] = []
         self.out = io.StringIO()
@@ -337,6 +340,10 @@ class Rig:
 
     def secret(self, prompt: str) -> str:
         self.prompts.append(prompt)
+        # The jump account's name is typed on every edge1 fill and never live, whatever else a
+        # test queues, so it is answered apart from the queue and the other prompts keep theirs.
+        if prompt.startswith(f"{JUMP_KEY}: ") and self.jump_answer is not None:
+            return self.jump_answer
         if not self.answers:
             raise EOFError
         return self.answers.pop(0)
@@ -436,16 +443,18 @@ def app1_document() -> dict[str, object]:
 
 
 class FillTests(unittest.TestCase):
-    def test_edge1_is_filled_from_the_live_files_with_no_prompt(self) -> None:
+    def test_edge1_is_filled_from_the_live_files_and_only_the_jump_account_is_typed(self) -> None:
         rig = Rig(self)
         rig.seed_edge1()
         self.assertEqual(0, rig.run("--host", "edge1"))
         self.assertEqual(edge1_document(), rig.document())
-        self.assertEqual([], rig.prompts)
+        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
         for key in EDGE1_KEYS:
             self.assertIn(key, rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
-        self.assertIn("typed (0): none", rig.stdout)
+        self.assertIn(f"typed (1): {JUMP_KEY}", rig.stdout)
+        self.assertIn(f"filled from live ({len(EDGE1_LIVE)}):", rig.stdout)
+        self.assertNotIn(value_for(JUMP_KEY), rig.everything)
 
     def test_the_pager_keys_are_found_in_monitoring_env_when_the_pager_file_is_absent(self) -> None:
         rig = Rig(self)
@@ -505,17 +514,17 @@ class FillTests(unittest.TestCase):
         rig = Rig(self, answers=["typed-snds-value"])
         rig.seed_edge1(skip=["monitoring_stack_snds_data_url"])
         self.assertEqual(0, rig.run("--host", "edge1"))
-        self.assertEqual(1, len(rig.prompts))
+        self.assertEqual(2, len(rig.prompts))
         self.assertIn("monitoring_stack_snds_data_url", rig.prompts[0])
         self.assertEqual("typed-snds-value", rig.document()["monitoring_stack_snds_data_url"])
-        self.assertIn("typed (1): monitoring_stack_snds_data_url", rig.stdout)
+        self.assertIn(f"typed (2): monitoring_stack_snds_data_url, {JUMP_KEY}", rig.stdout)
         self.assertNotIn("typed-snds-value", rig.everything)
 
     def test_a_live_value_is_never_prompted_over(self) -> None:
         rig = Rig(self, answers=["typed"])
         rig.seed_edge1()
         rig.run("--host", "edge1")
-        self.assertEqual([], rig.prompts)
+        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
         self.assertEqual(["typed"], rig.answers)
 
     def test_an_empty_answer_writes_nothing_and_names_the_key(self) -> None:
@@ -534,6 +543,7 @@ class FillTests(unittest.TestCase):
 
     def test_no_terminal_writes_nothing_and_lists_every_missing_key(self) -> None:
         rig = Rig(self)
+        rig.jump_answer = None
         self.assertEqual(1, rig.run("--host", "edge1"))
         self.assertFalse(rig.dest.exists())
         self.assertIn(f"still missing ({len(EDGE1_KEYS)}):", rig.stdout)
@@ -832,6 +842,20 @@ class SetTests(unittest.TestCase):
         self.assertIn(f"{len('rotated-value')} bytes", rig.stdout)
         self.assertNotIn("rotated-value", rig.everything)
         self.assertEqual([], [p.name for p in rig.cfg.iterdir() if p.name.endswith(".tmp")])
+
+    def test_the_jump_account_is_added_to_the_file_edge1_already_has(self) -> None:
+        # The path the owner takes once: edge1's file holds the eleven live keys from before the
+        # jump account was added, and one --set adds the twelfth without touching the rest.
+        rig = Rig(self, answers=["typed-jump-account"])
+        rig.jump_answer = None
+        earlier = {key: value for key, value in edge1_document().items() if key != JUMP_KEY}
+        rig.put(tool.DEST_NAME, json.dumps(earlier))
+        self.assertEqual(0, rig.run("--host", "edge1", "--set", JUMP_KEY))
+        self.assertEqual({**earlier, JUMP_KEY: "typed-jump-account"}, rig.document())
+        self.assertEqual(0o600, stat.S_IMODE(rig.dest.stat().st_mode))
+        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
+        self.assertIn(f"set {JUMP_KEY} ({len('typed-jump-account')} bytes)", rig.stdout)
+        self.assertNotIn("typed-jump-account", rig.everything)
 
     def test_set_prompts_with_the_key_name(self) -> None:
         rig = self.seeded()

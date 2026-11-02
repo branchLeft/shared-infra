@@ -3,7 +3,8 @@
 # No assertion loops: a failed loop prints its item, which here would be a key. The module task
 # hides its result (ANS-16), and the account's name with it; a refusal is a code and an entry
 # number, read out by the assertion after it, so the cause of a stop shows in the log with no
-# value in it. failed_when: false makes the result's failed flag false, so a refusal is read
+# value in it. The earlier layout's paths are made from the account's name, so the module is given
+# them and only counts them, and says whether a write is owed (pending). failed_when: false makes the result's failed flag false, so a refusal is read
 # from msg: only a refusal carries one.
 - name: Judge the inputs and the host, and compare the live files with the wanted ones
   ci_jump_authorized_keys:
@@ -13,6 +14,7 @@
     destinations: '{{ ci_jump_destinations }}'
     keys: "{{ ci_jump_keys | map(attribute='key') | list }}"
     owned_accounts: '{{ ci_jump_owned_accounts }}'
+    legacy_files: '{{ ci_jump_legacy_files }}'
   register: ci_jump_plan
   failed_when: false
   changed_when: false
