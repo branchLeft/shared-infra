@@ -83,6 +83,9 @@
 # from ${IMAGE}, which the template does. The role does not run docker compose.
 # Skipped in check mode with a stated reason (ANS-10): the directory it is written
 # to is created by the task above, which check mode does not perform.
+# The diff is not shown (ANS-16): the file sets an
+# environment variable named like a password from another variable, which the plan's secret
+# scan would withhold the whole plan of the host over. It holds no secret value.
 - name: Render the compose file the deploy program reads
   ansible.builtin.template:
     src: compose.yml.j2
@@ -91,6 +94,7 @@
     group: root
     mode: '0644'
   when: db1_stack_db_directory_stat.stat.exists
+  diff: false
 
 - name: Render the MySQL configuration the database mounts
   ansible.builtin.template:

@@ -70,6 +70,14 @@
 # The compose file is copied whole, from files/, byte for byte the file the
 # website repository held (its deploy/compose.yml). It names no image of its
 # own: the unit's environment supplies IMAGE, which branchleft-deploy writes.
+#
+# The diff is not shown (ANS-16).
+# The file holds no secret. It names environment variables the host supplies, which reads as
+# secret-like text to the secret scan of the plan's diff, and that scan then withholds the
+# plan of the host, so its diff is not shown. The task is not hidden (no_log is not set): the
+# plan still shows that it changes, and the file is reviewed in its pull request. The scan
+# is not loosened to fit the file; ansible/checks/test_plan_diff_scan.py fails when a copied
+# file reads as secret and its task does not set diff: false.
 - name: Deliver the compose file of the stack
   ansible.builtin.copy:
     src: compose.yml
@@ -78,6 +86,7 @@
     group: root
     mode: '0644'
   register: website_app1_compose_delivery
+  diff: false
 
 # The stamp is a digest of the compose file and the image. It is a function of
 # the inputs, so it is worked out in check mode too, and it is never printed.
