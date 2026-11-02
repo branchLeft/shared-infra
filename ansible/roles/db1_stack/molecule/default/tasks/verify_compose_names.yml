@@ -29,3 +29,8 @@
   loop: '{{ db1_stack_verify_compose_names }}'
   loop_control:
     loop_var: db1_stack_verify_compose_name
+
+# The database image pin is the good one after these refusals too, as in
+# verify_refusals.yml.
+- name: Assert the database image pin is the good one after the refusals
+  ansible.builtin.include_tasks: assert_pin_after_refusals.yml
