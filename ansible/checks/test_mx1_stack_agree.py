@@ -261,6 +261,70 @@ def row_mismatches(
     return found
 
 
+# The module keys that create a host path as a directory, and that write one as a file.
+DIRECTORY_MAKERS = ("ansible.builtin.file", "file")
+FILE_WRITERS = ("ansible.builtin.copy", "ansible.builtin.template", "copy", "template")
+
+
+def placed_kinds(role: Path, role_vars: dict[str, object]) -> dict[str, str]:
+    """Return each host path the role's tasks create or write, as "dir" or "file".
+
+    Compose says nothing about whether a bind mount is a file or a directory, so the row's kind is
+    the only statement of it. The role's own tasks are the other statement: a path a task makes
+    with state: directory is a directory, and a path a copy or template writes is a file. A path no
+    task names is left out, and the audit makes no claim about it.
+    """
+    kinds: dict[str, str] = {}
+
+    def resolved(value: object) -> str:
+        match = re.fullmatch(r"\{\{\s*(\w+)\s*\}\}", str(value).strip())
+        if match is not None and match.group(1) in role_vars:
+            return str(role_vars[match.group(1)])
+        return str(value).strip()
+
+    def walk(tasks: object) -> None:
+        if not isinstance(tasks, list):
+            return
+        for task in cast("list[object]", tasks):
+            if not isinstance(task, dict):
+                continue
+            body = cast("dict[str, object]", task)
+            for block in ("block", "rescue", "always"):
+                walk(body.get(block))
+            for module, args in body.items():
+                if not isinstance(args, dict):
+                    continue
+                options = cast("dict[str, object]", args)
+                if module in DIRECTORY_MAKERS and options.get("state") == "directory":
+                    kinds[resolved(options.get("path", ""))] = "dir"
+                elif module in FILE_WRITERS:
+                    kinds[resolved(options.get("dest", ""))] = "file"
+
+    for task_file in sorted((role / "tasks").rglob("*.yml")):
+        walk(yaml_of(task_file))
+    return kinds
+
+
+def kind_mismatches(rows: list[dict[str, str]], placed: dict[str, str]) -> list[str]:
+    """Return one line for each bind row whose kind names the wrong type of host path.
+
+    A bind_file must be a file the role writes and a bind_dir a directory the role makes. A single
+    file mounted under a bind_dir label is therefore red, as is a directory under a bind_file label.
+    """
+    found: list[str] = []
+    for row in rows:
+        kind = placed.get(row["path"])
+        if row["kind"] == "bind_file" and kind == "dir":
+            found.append(
+                f"{row['name']}: labelled bind_file, but the role makes {row['path']} a directory"
+            )
+        if row["kind"] == "bind_dir" and kind == "file":
+            found.append(
+                f"{row['name']}: labelled bind_dir, but the role writes {row['path']} as a file"
+            )
+    return found
+
+
 def facts(root: Path = ROOT) -> dict[str, object]:
     """Read every fact the role, the hand scripts and the compose files state."""
     role = root / "ansible" / "roles" / ROLE
@@ -298,6 +362,7 @@ def facts(root: Path = ROOT) -> dict[str, object]:
             for row in list_of(role_vars["mx1_stack_container_inputs"])
         ],
         "others": others,
+        "placed": placed_kinds(role, role_vars),
     }
 
 
@@ -344,12 +409,35 @@ def disagreements(f: dict[str, object]) -> list[str]:
     compose_paths = {project: str(role_vars[var]) for project, (var, _) in PROJECTS.items()}
     found.extend(audit_inputs(composes, rows, project_dirs, compose_paths))
     found.extend(row_mismatches(composes, rows))
+    found.extend(kind_mismatches(rows, cast("dict[str, str]", f["placed"])))
     return found
 
 
 class Mx1AgreeTest(unittest.TestCase):
     def test_the_real_tree_agrees(self) -> None:
         self.assertEqual([], disagreements(facts()))
+
+    def test_a_single_file_labelled_bind_dir_is_named(self) -> None:
+        base = facts()
+        rows = [
+            dict(row, kind="bind_dir") if row["name"] == "shim_caddyfile" else row
+            for row in cast("list[dict[str, str]]", base["rows"])
+        ]
+        found = disagreements(dict(base, rows=rows))
+        self.assertTrue(
+            any("shim_caddyfile" in line and "labelled bind_dir" in line for line in found), found
+        )
+
+    def test_a_directory_labelled_bind_file_is_named(self) -> None:
+        base = facts()
+        rows = [
+            dict(row, kind="bind_file") if row["name"] == "shim_data" else row
+            for row in cast("list[dict[str, str]]", base["rows"])
+        ]
+        found = disagreements(dict(base, rows=rows))
+        self.assertTrue(
+            any("shim_data" in line and "labelled bind_file" in line for line in found), found
+        )
 
     def test_a_drifted_dropin_is_named(self) -> None:
         found = disagreements(dict(facts(), role_dropin="server:\n    port: 5353\n"))

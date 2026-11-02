@@ -243,6 +243,7 @@ REPOSITORY = HETZNER.parent
 SCANNED_SUFFIXES = frozenset(
     {
         "",
+        ".Caddyfile",
         ".asc",
         ".authoring",
         ".conf",
