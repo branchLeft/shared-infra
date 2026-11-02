@@ -117,12 +117,15 @@ EXPECTED_ROLES = [
 # The play vars a host's playbook carries beside enrolled_host, pinned per host and exactly. The
 # owner merges every edit here, so the value is decided by this table and not by the playbook.
 # A host not in the table gets enrolled_host alone. deploy_tooling_host_class has no default in
-# the role (ANS-7), so a host that applies the role must name its class here. The egress_nat role
-# makes a host the estate's NAT gateway only when egress_nat_gateway_enabled is true (a bool, so
-# the string "true" does not match), and a second gateway loops the estate's egress, so edge1
-# alone carries that switch. R2 allows no `vars` on a role entry, so this row is its one home.
+# the role (ANS-7), so a host that applies the role must name its class here, and a host of
+# class app must also name the policy variant the role expects its firewall chain to be. The
+# egress_nat role makes a host the estate's NAT gateway only when egress_nat_gateway_enabled is
+# true (a bool, so the string "true" does not match), and a second gateway loops the estate's
+# egress, so edge1 alone carries that switch. R2 allows no `vars` on a role entry, so these rows
+# are their one home.
 HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
-    "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True}
+    "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
+    "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
 }
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
 HOST_ROLES_FILE = "checks/host_roles.yml"

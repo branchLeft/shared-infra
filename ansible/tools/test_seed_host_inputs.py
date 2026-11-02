@@ -92,6 +92,11 @@ APP1_LIVE: dict[str, tuple[str, str]] = {
     "website_app1_smtp_password": ("website.env", "CONTACT_SMTP_PASSWORD"),
 }
 APP1_KEYS = tuple(APP1_LIVE)
+# The app1 slot list is typed, never live: one stack, its public key, and no adopt by default.
+SLOTS_KEY = "deploy_slot_keys_slots"
+SLOT_STACK = "tenant-alpha"
+SLOT_KEY = "ssh-ed25519 " + "A" * 68
+SLOT_LINE = f"{SLOT_STACK} {SLOT_KEY}"
 CA_KEY = "backup_worker_db_ca_pem"
 TENANTS_KEY = "backup_worker_tenants"
 TENANTS = [
@@ -425,7 +430,9 @@ def app1_value(key: str) -> str:
 
 
 def app1_document() -> dict[str, object]:
-    return {key: app1_value(key) for key in APP1_KEYS}
+    document: dict[str, object] = {key: app1_value(key) for key in APP1_KEYS}
+    document[SLOTS_KEY] = [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False}]
+    return document
 
 
 class FillTests(unittest.TestCase):
@@ -603,21 +610,24 @@ class FillTests(unittest.TestCase):
         self.assertIn(CA_KEY, rig.stdout)
         self.assertNotIn("SENTKEY", rig.everything)
 
-    def test_app1_is_filled_from_website_env_with_no_prompt(self) -> None:
-        rig = Rig(self)
+    def test_app1_is_filled_from_website_env_and_the_slots_are_typed(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
         self.assertEqual(app1_document(), rig.document())
-        self.assertEqual([], rig.prompts)
+        # One prompt for the slot line and one for the empty line that ends the list.
+        self.assertEqual(2, len(rig.prompts))
+        self.assertTrue(all(SLOTS_KEY in prompt for prompt in rig.prompts))
         self.assertIn(
             "filled from live (4): website_app1_smtp_host, website_app1_smtp_port, "
             "website_app1_smtp_user, website_app1_smtp_password",
             rig.stdout,
         )
+        self.assertIn(f"typed (1): {SLOTS_KEY}", rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
 
     def test_app1_port_stays_a_string(self) -> None:
-        rig = Rig(self)
+        rig = Rig(self, answers=[SLOT_LINE, ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
         port = rig.document()["website_app1_smtp_port"]
@@ -630,7 +640,17 @@ class FillTests(unittest.TestCase):
         rig = Rig(self)
         rig.seed_app1(skip=["website_app1_smtp_port"])
         self.assertEqual(1, rig.run("--host", "app1"))
-        self.assertIn("still missing (1): website_app1_smtp_port", rig.stdout)
+        self.assertIn(
+            f"still missing (2): website_app1_smtp_port, {SLOTS_KEY}",
+            rig.stdout,
+        )
+        self.assertFalse(rig.dest.exists())
+
+    def test_app1_without_a_slot_is_missing_and_nothing_is_written(self) -> None:
+        rig = Rig(self, answers=[""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn(f"still missing (1): {SLOTS_KEY}", rig.stdout)
         self.assertFalse(rig.dest.exists())
 
 
@@ -888,6 +908,85 @@ class SetTests(unittest.TestCase):
         self.assertEqual([{"slug": "gamma", "recipient": RECIPIENT_A}], rig.document()[TENANTS_KEY])
 
 
+class SlotTests(unittest.TestCase):
+    """The app1 slot list is typed one line each, and each line is held to its shape."""
+
+    def test_a_typed_slot_is_a_mapping_with_a_boolean_adopt_that_defaults_to_false(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        slots = list_of(rig.document()[SLOTS_KEY])
+        expected = [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False}]
+        self.assertEqual(expected, slots)
+        self.assertIs(False, mapping_of(slots[0])["adopt_existing"])
+
+    def test_the_literal_adopt_at_the_end_sets_adopt_and_the_key_keeps_its_spaces(self) -> None:
+        rig = Rig(self, answers=[f"{SLOT_LINE} adopt", ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(
+            [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": True}],
+            rig.document()[SLOTS_KEY],
+        )
+
+    def test_two_slots_are_kept_in_the_order_typed(self) -> None:
+        second_key = "B" * 68
+        rig = Rig(self, answers=[SLOT_LINE, f"tenant-beta {second_key} adopt", ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(
+            [
+                {"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False},
+                {"stack": "tenant-beta", "public_key": second_key, "adopt_existing": True},
+            ],
+            rig.document()[SLOTS_KEY],
+        )
+
+    def test_set_replaces_the_slots_and_no_other_key(self) -> None:
+        rig = Rig(self, answers=["tenant-gamma " + "G" * 68, ""])
+        rig.put(tool.DEST_NAME, json.dumps(app1_document()))
+        self.assertEqual(0, rig.run("--host", "app1", "--set", SLOTS_KEY))
+        expected = {
+            **app1_document(),
+            SLOTS_KEY: [{"stack": "tenant-gamma", "public_key": "G" * 68, "adopt_existing": False}],
+        }
+        self.assertEqual(expected, rig.document())
+        self.assertEqual(0o600, stat.S_IMODE(rig.dest.stat().st_mode))
+
+    def test_a_malformed_line_writes_nothing_and_exits_non_zero(self) -> None:
+        rig = Rig(self, answers=["onlyastack", ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertIn(f"still missing (1): {SLOTS_KEY}", rig.stdout)
+
+    def test_a_stack_given_twice_writes_nothing_and_exits_non_zero(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} {'B' * 68}", ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_key_given_twice_writes_nothing_and_exits_non_zero(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, f"tenant-beta {SLOT_KEY}", ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_an_empty_list_writes_nothing_and_exits_non_zero(self) -> None:
+        rig = Rig(self, answers=[""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_typed_slot_is_never_echoed(self) -> None:
+        rig = Rig(self, answers=["SENTSTACK SENTSLOTKEY adopt", ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertNotIn("SENTSTACK", rig.everything)
+        self.assertNotIn("SENTSLOTKEY", rig.everything)
+        self.assertIn("SENTSTACK", json.dumps(rig.document()))
+
+
 class LeakTests(unittest.TestCase):
     """No value reaches stdout, stderr or a prompt, on any path."""
 
@@ -900,6 +999,8 @@ class LeakTests(unittest.TestCase):
             RECIPIENT_B,
             "SENT-TYPED",
             "SENT-LINKFAIL",
+            "SENTSTACK",
+            "SENTSLOTKEY",
         ]
 
     def assert_clean(self, rig: Rig, label: str) -> None:
@@ -915,7 +1016,7 @@ class LeakTests(unittest.TestCase):
         rig.seed_ops1()
         self.assertEqual(0, rig.run("--host", "ops1"))
         self.assert_clean(rig, "ops1 fill")
-        rig = Rig(self)
+        rig = Rig(self, answers=["SENTSTACK SENTSLOTKEY", ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
         self.assert_clean(rig, "app1 fill")

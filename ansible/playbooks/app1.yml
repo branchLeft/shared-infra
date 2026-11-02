@@ -2,13 +2,20 @@
 # app1: the gated pull. Two pull roles, in order: the Ansible toolchain this
 # playbook runs with, then the trigger that runs it. After them, in order: the loader
 # of the host's private inputs (host_inputs), the host baseline (which installs Docker),
-# the break-glass grant (breakglass_grant_host), then the website stack (website_app1).
+# the break-glass grant (breakglass_grant_host), then the website stack (website_app1),
+# then the deploy tooling and the deploy slot keys.
 # The loader reads the one root-only file the owner places on the host and sets the four
-# SMTP values the website role requires; it stops the run if that file is missing or
-# unsafe, and it runs first so every later role sees its values. The website role is
+# SMTP values the website role requires and the list of deploy slots; it stops the run if
+# that file is missing or unsafe, or holds no slot, and it runs first so every later role
+# sees its values. The website role is
 # given no image here, so it writes the stack's files and enables its unit but deploys
 # and restarts nothing; the website's own CI deploy remains the route that delivers an
-# image. Only this host's name is set here; the remote, the playbook allowlist and the
+# image. The deploy tooling runs as class app with the standard policy variant (app1 may
+# reach the database host, so it has no protected-port drops), and installs the deploy
+# wrapper and the container isolation policy. The deploy slot keys follow it because they
+# need the wrapper it installs; both come last so that a failure in either, which acts on
+# the Docker firewall or on SSH keys, cannot hold the website back. Only this host's name
+# and its deploy class are set here; the remote, the playbook allowlist and the
 # signer list come from the shared includes and the one trust file, all loaded through
 # vars_files.
 #
@@ -19,6 +26,8 @@
   gather_facts: false
   vars:
     enrolled_host: app1
+    deploy_tooling_host_class: app
+    deploy_tooling_policy_variant: standard
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/app1.yml'
@@ -38,3 +47,5 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/breakglass_grant_host # noqa: role-name[path]
     - role: ../roles/website_app1 # noqa: role-name[path]
+    - role: ../roles/deploy_tooling # noqa: role-name[path]
+    - role: ../roles/deploy_slot_keys # noqa: role-name[path]
