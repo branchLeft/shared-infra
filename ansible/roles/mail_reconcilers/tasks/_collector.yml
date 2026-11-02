@@ -1,0 +1,57 @@
+---
+# Guarded step collector: create the collector's credential and its sender scope. The
+# program's own dry run goes first; the real run starts only if the dry run ended clean
+# and said it wrote nothing. The real run restarts Stalwart when it changes the scope.
+
+- name: Check the install directory and the credential files before collector
+  ansible.builtin.import_tasks: _preconditions.yml
+
+# check_mode false: the dry run reads and writes nothing, so a check-mode request can
+# still preview the gate. The program says "DRY RUN, nothing written" when it ends so.
+- name: Run the collector dry run
+  ansible.builtin.command:
+    argv:
+      - '{{ mail_reconcilers_install_dir }}/{{ mail_reconcilers_wrappers.collector }}'
+      - --dry-run
+  environment: '{{ mail_reconcilers_program_environment }}'
+  register: mail_reconcilers_run
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Refuse a collector dry run that did not end clean
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_run.rc == 0
+      - "'DRY RUN, nothing written' in mail_reconcilers_run.stdout"
+    quiet: true
+    fail_msg: >-
+      REFUSED: the collector dry run phase did not end clean (exit {{ mail_reconcilers_run.rc }}),
+      so the real run did not start. The program's output is withheld; its refusal
+      lines: {{ mail_reconcilers_shown_lines }}
+
+# Skipped in check mode: the program writes the scope, creates the account and
+# credential, and restarts Stalwart, and has no preview beyond the dry run above.
+- name: Run the collector
+  ansible.builtin.command:
+    argv:
+      - '{{ mail_reconcilers_install_dir }}/{{ mail_reconcilers_wrappers.collector }}'
+  environment: '{{ mail_reconcilers_program_environment }}'
+  register: mail_reconcilers_run
+  changed_when: true
+  failed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Refuse a collector real run that did not store the sender scope
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_run.rc == 0
+      - "'sender scope stored' in mail_reconcilers_run.stdout"
+    quiet: true
+    fail_msg: >-
+      REFUSED: the collector real run phase did not store the sender scope (exit
+      {{ mail_reconcilers_run.rc }}). The program's output is withheld; its refusal
+      lines: {{ mail_reconcilers_shown_lines }}
+  when: not ansible_check_mode
