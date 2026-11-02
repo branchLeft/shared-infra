@@ -80,6 +80,15 @@ control_plane_stack_files:
   - compose.init.yml
   - pg_hba.conf
 
+# The files above whose diff the plan does not show: both set environment variables named
+# like passwords from other variables, which the plan's secret scan would withhold the whole
+# plan of the host over. The rest are delivered by a task that shows its diff.
+# ansible/checks/test_plan_diff_scan.py fails if a file listed here has no such line, or if
+# a file left out of it has one.
+control_plane_stack_files_hidden:
+  - compose.yml
+  - compose.init.yml
+
 control_plane_stack_unit: branchleft-compose@control-plane.service
 control_plane_deploy_wrapper: /usr/local/sbin/branchleft-deploy
 

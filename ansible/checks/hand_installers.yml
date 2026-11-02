@@ -25,9 +25,6 @@ hetzner/provision/20-install-docker.sh:
 hetzner/provision/30-install-deploy-tooling.sh:
   reason: pending-role
   role: deploy_tooling
-hetzner/provision/40-install-node-exporter.sh:
-  reason: pending-role
-  role: exporters_and_collectors
 hetzner/provision/45-install-db-tunnel.sh:
   reason: pending-role
   role: db_tunnel
@@ -69,37 +66,37 @@ mail/provision/30-deploy-stalwart.sh:
   role: mail_stalwart
 mail/provision/40-configure-stalwart.sh:
   reason: pending-role
-  role: mail_stalwart
+  role: mail_reconcilers
 mail/provision/50-provision-mailboxes.sh:
   reason: pending-role
-  role: mail_stalwart
+  role: mail_reconcilers
 mail/provision/60-provision-website-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/61-provision-blog-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/62-provision-shim-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/63-deploy-mailgun-shim.sh:
   reason: pending-role
   role: mailgun_shim
 mail/provision/64-provision-alerting-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/65-install-local-resolver.sh:
   reason: pending-role
   role: mail_resolver
 mail/provision/66-provision-nextcloud-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/67-provision-collector-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/68-provision-zitadel-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/70-schedule-dnsbl-check.sh:
   reason: pending-role
   role: mail_dnsbl_check

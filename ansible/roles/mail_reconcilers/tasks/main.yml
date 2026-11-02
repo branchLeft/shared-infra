@@ -1,0 +1,57 @@
+---
+# A plain apply places the programs and runs none of them. A step is imported with the
+# never tag plus its own tag, and also needs mail_reconcilers_step to be its id (README,
+# "The guard"). Nothing here carries the always tag.
+
+- name: Make the directory the programs are placed in
+  ansible.builtin.file:
+    path: '{{ mail_reconcilers_install_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '{{ mail_reconcilers_install_dir_mode }}'
+
+# The destination is a loop item, so check_role_paths.py cannot compare it; a unit test holds
+# this list off every file the mail host's stack role owns.
+- name: Place the reconciler programs
+  ansible.builtin.copy:
+    src: '{{ mail_reconcilers_programs_dir }}/{{ item.program }}'
+    dest: '{{ mail_reconcilers_install_dir }}/{{ item.program }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ mail_reconcilers_installed }}'
+  loop_control:
+    label: '{{ item.program }}'
+
+# Runs whenever any step tag is requested, before every step: the confirmed step must be a
+# known id whose own tag is among those requested. Two tags with one confirmed step run only
+# that step, because the other step's own condition skips it.
+- name: Refuse a step tag without its matching confirmation
+  ansible.builtin.import_tasks: _tripwire.yml
+  tags:
+    - never
+    - mail_reconcilers_configure
+    - mail_reconcilers_mailboxes
+    - mail_reconcilers_mint
+    - mail_reconcilers_collector
+
+- name: Guarded step configure
+  ansible.builtin.import_tasks: _configure.yml
+  when: mail_reconcilers_step == 'configure'
+  tags: [never, mail_reconcilers_configure]
+
+- name: Guarded step mailboxes
+  ansible.builtin.import_tasks: _mailboxes.yml
+  when: mail_reconcilers_step == 'mailboxes'
+  tags: [never, mail_reconcilers_mailboxes]
+
+- name: Guarded step mint
+  ansible.builtin.import_tasks: _mint.yml
+  when: mail_reconcilers_step == 'mint'
+  tags: [never, mail_reconcilers_mint]
+
+- name: Guarded step collector
+  ansible.builtin.import_tasks: _collector.yml
+  when: mail_reconcilers_step == 'collector'
+  tags: [never, mail_reconcilers_collector]

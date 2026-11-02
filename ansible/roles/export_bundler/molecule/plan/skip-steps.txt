@@ -1,0 +1,9 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# This scenario is the three steps that plan: check-fresh against a host with nothing on
+# it, where the copies are skipped because their directories do not exist yet,
+# check-configured after an apply, where nothing may be left to change, and Molecule's own
+# check. The idempotence and verify steps are the default scenario's.
+idempotence
+verify

@@ -1,0 +1,15 @@
+---
+# Handlers run in the order written here. The reload comes first, so the restart
+# that follows it starts the unit file as it now is on disk.
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Check mode would restart a unit that the check has not written, so the restart
+# is skipped in check mode only. The skip is stated here (ANS-10); a real run never
+# skips it.
+- name: Restart node_exporter
+  ansible.builtin.systemd_service:
+    name: node_exporter.service
+    state: restarted
+  when: not ansible_check_mode

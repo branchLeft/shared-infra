@@ -24,7 +24,8 @@ plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds o
 allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
 `roles/host_baseline`, `roles/breakglass_grant_host`, `roles/website_app1`, then
-`roles/deploy_tooling` (as class app, standard variant) and `roles/deploy_slot_keys`, last.
+`roles/deploy_tooling` (as class app, standard variant) and `roles/deploy_slot_keys`, then
+`roles/export_bundler`, last.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
 the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, then
 `roles/db1_backup_timers`, then `roles/db1_grants` last; `roles/tunnel_account` is left out of it.
@@ -590,7 +591,8 @@ oversight. Each is a decision the standard assigns to later work.
   run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
   its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. app1's
   playbook applies `roles/host_inputs` and then `roles/website_app1` (after `roles/host_baseline` and
-  `roles/breakglass_grant_host`), then `roles/deploy_tooling` and `roles/deploy_slot_keys`, and
+  `roles/breakglass_grant_host`), then `roles/deploy_tooling` and `roles/deploy_slot_keys`, then
+  `roles/export_bundler`, and
   refuses the run the same way until the owner has placed app1's own
   `/etc/branchleft/host-inputs.json`, holding the four SMTP values and at least one deploy slot.
   edge1 and ops1 apply `roles/host_inputs` first as well, and refuse the run until the owner has
