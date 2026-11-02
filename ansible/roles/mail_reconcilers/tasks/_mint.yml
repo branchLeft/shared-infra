@@ -1,0 +1,42 @@
+---
+# Guarded step mint: create one submission credential, the one the request names, by
+# running that row's wrapper. The program records the new credential in the service
+# credential file; the role never sees it. The zitadel program shows its credential only
+# at a terminal, so run here it is shown nowhere.
+
+- name: Refuse a credential that is not a row of the closed table
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_credential is string
+      - mail_reconcilers_credential is match(mail_reconcilers_id_pattern)
+      - mail_reconcilers_credential in mail_reconcilers_credential_rows
+    quiet: true
+    fail_msg: >-
+      REFUSED: mail_reconcilers_credential must be one of
+      {{ mail_reconcilers_credential_rows | list | join(', ') }}, one per request.
+
+- name: Check the install directory and the credential files before mint
+  ansible.builtin.import_tasks: _preconditions.yml
+
+# No check-mode run: the program creates an account credential and has no preview.
+- name: Run the wrapper of the named credential
+  ansible.builtin.command:
+    argv:
+      - '{{ mail_reconcilers_install_dir }}/{{ mail_reconcilers_credential_rows[mail_reconcilers_credential] }}'
+  environment: '{{ mail_reconcilers_program_environment }}'
+  register: mail_reconcilers_run
+  changed_when: true
+  failed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Refuse a mint that did not end clean
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_run.rc == 0
+    quiet: true
+    fail_msg: >-
+      REFUSED: minting {{ mail_reconcilers_credential }} did not end clean (exit
+      {{ mail_reconcilers_run.rc }}). The program's output is withheld; its refusal
+      lines: {{ mail_reconcilers_shown_lines }}
+  when: not ansible_check_mode

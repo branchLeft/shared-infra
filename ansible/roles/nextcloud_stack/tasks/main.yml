@@ -56,6 +56,9 @@
     group: root
     mode: '0755'
 
+# The diff is not shown (ANS-16): the compose file
+# sets environment variables named like passwords from other variables, which the plan's
+# secret scan would withhold the whole plan of the host over. It holds no secret value.
 - name: Deliver the stack's files
   ansible.builtin.copy:
     src: 'stack/{{ item }}'
@@ -65,6 +68,7 @@
     mode: '0644'
   loop: '{{ nextcloud_stack_files }}'
   notify: Restart the nextcloud1 stack
+  diff: false
 
 # Step 3. The instance drop-in: resets the image-pin assert and the env file
 # this stack does not use, and switches ExecStart to --force-recreate.

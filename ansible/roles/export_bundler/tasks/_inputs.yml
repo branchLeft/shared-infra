@@ -1,0 +1,42 @@
+---
+# Internal to the role: included first from main.yml. The inputs are refused before
+# anything is checked against the host or written. The argument spec has already run;
+# it coerces a wrong type rather than rejecting it, so these reject the shapes.
+- name: Refuse a release that is not pinned to a commit and a checksum for every file
+  ansible.builtin.assert:
+    that:
+      - export_bundler_source_sha is match(export_bundler_sha_pattern)
+      - export_bundler_release_files | length > 0
+      - >-
+        export_bundler_release_files | map(attribute='path') | select('match', export_bundler_release_path_pattern) | list | length
+        == export_bundler_release_files | length
+      - >-
+        export_bundler_release_files | map(attribute='sha256') | select('match', export_bundler_checksum_pattern) | list | length
+        == export_bundler_release_files | length
+      - export_bundler_release_files | map(attribute='path') | unique | list | length == export_bundler_release_files | length
+      - "'package.json' in (export_bundler_release_files | map(attribute='path') | list)"
+      - "'dist/cli.js' in (export_bundler_release_files | map(attribute='path') | list)"
+    quiet: true
+    fail_msg: >-
+      The release needs a full 40-character commit, a 64-character sha256 for every file, no file
+      twice, only package.json and files directly under dist/, and must list package.json and dist/cli.js.
+
+- name: Refuse paths that are not plain absolute paths, or that overlap
+  ansible.builtin.assert:
+    that:
+      - export_bundler_dir is string
+      - export_bundler_state_dir is string
+      - export_bundler_vendored_root is string
+      - export_bundler_vendored_root is match('^/')
+      - export_bundler_dir is match(export_bundler_path_pattern)
+      - export_bundler_state_dir is match(export_bundler_path_pattern)
+      - export_bundler_dir is not search(export_bundler_path_dots_pattern)
+      - export_bundler_state_dir is not search(export_bundler_path_dots_pattern)
+      - export_bundler_dir != export_bundler_state_dir
+      - not export_bundler_state_dir.startswith(export_bundler_dir ~ '/')
+      - not export_bundler_dir.startswith(export_bundler_state_dir ~ '/')
+    quiet: true
+    fail_msg: >-
+      The bundler directory and the state directory must be two distinct absolute paths of letters,
+      digits, dot, underscore, hyphen and slash, with no dot segment, no doubled slash and no
+      trailing slash, and neither inside the other. The vendored root must be absolute.

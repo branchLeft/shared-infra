@@ -1,0 +1,22 @@
+---
+# The order follows the export runbook: check the inputs, hold the vendored bundler to
+# its pins, then write. Part A's copy (Deliver step 4) is _bundler.yml, and the part of
+# Part C that can be declared, the state directories (Run step 2), is _state.yml.
+#
+# The role writes files and directories and nothing else. It never runs node, the
+# bundler, docker or age, never reads or writes a descriptor, a token or the audit log,
+# and starts nothing: the export itself stays the owner's.
+
+- name: Check the inputs
+  ansible.builtin.include_tasks: _inputs.yml
+
+# Before anything is written, and before the host is read: a file that is not the one
+# its pin names, or a file the pins do not name, stops the run here.
+- name: Hold the vendored bundler to its pinned sha256
+  ansible.builtin.include_tasks: _vendored.yml
+
+- name: Deliver the bundler
+  ansible.builtin.include_tasks: _bundler.yml
+
+- name: Make the export's state directories
+  ansible.builtin.include_tasks: _state.yml

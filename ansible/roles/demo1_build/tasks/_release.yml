@@ -31,14 +31,31 @@
     follow: false
   register: demo1_build_release_dir_stat
 
-- name: Copy each vendored program into the release
+# The diff is not shown (ANS-16): two vendored
+# programs name a system file path and a sudoers tag the plan's secret scan reads as a
+# secret, and a vendored file is not reworded here. They hold no secret value. The other
+# programs go by the next task, which shows its diff.
+- name: Copy the vendored programs whose diff is not shown into the release
   ansible.builtin.copy:
     src: '{{ demo1_build_vendored_root }}/{{ item.path }}'
     dest: '{{ demo1_build_release_dir }}/{{ item.path }}'
     owner: root
     group: root
     mode: '0644'
-  loop: '{{ demo1_build_release_files }}'
+  loop: "{{ demo1_build_release_files | selectattr('path', 'in', demo1_build_release_paths_hidden) | list }}"
+  loop_control:
+    label: '{{ item.path }}'
+  when: demo1_build_release_dir_stat.stat.exists
+  diff: false
+
+- name: Copy each other vendored program into the release
+  ansible.builtin.copy:
+    src: '{{ demo1_build_vendored_root }}/{{ item.path }}'
+    dest: '{{ demo1_build_release_dir }}/{{ item.path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ demo1_build_release_files | rejectattr('path', 'in', demo1_build_release_paths_hidden) | list }}"
   loop_control:
     label: '{{ item.path }}'
   when: demo1_build_release_dir_stat.stat.exists

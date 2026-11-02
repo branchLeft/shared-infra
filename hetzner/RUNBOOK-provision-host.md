@@ -376,32 +376,17 @@ docker.service` on the host is the first thing to read.
 The base sequence above installs `branchleft-compose@.service`, the shared
 template every stack's compose unit instantiates, but no per-stack override.
 Overrides are committed beside the stack that needs one, under
-`hetzner/*/systemd/`, and every `scp` in this runbook carries only
-`hetzner/provision/.` — never a sibling directory — so a freshly rebuilt
-host has the template and no override until something else installs one.
-This is the same shape a fix elsewhere in this runbook set already closed
-one layer later, at the redeploy a rebuild eventually reaches; closing it
-here means a bare rebuild never has a window where it is missing.
+`hetzner/*/systemd/`, and each is installed by the role that owns its stack:
+`edge_stack` installs the edge drop-in and `monitoring_stack` the monitoring
+drop-in. The edge1 playbook runs both roles on each gated apply, so this step
+has no command of its own. Until that gated apply has run on a freshly rebuilt
+host, the host has the template and no override.
 
 Doc 14 §3.1 keeps monitoring co-located on `edge1` until TENANT_1, so
 `edge1` is the only host carrying a committed drop-in today — re-check that
-split before reusing this step once a standalone monitoring host exists.
-`$EDGE1_IPV4` is set under step 2 above; re-set it first if you are entering
-here independently.
-
-```bash
-hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
-```
-
-The same command `RUNBOOK-monitoring.md`'s drop-in step already runs. It
-walks every committed `*/systemd/*.override.conf` and installs the lot onto
-whichever single host it's pointed at, with no per-stack mapping — safe to
-point at `edge1` here and again from that runbook later, since re-installing
-an unchanged drop-in is a no-op. It is not safe to point at `app1` or `db1`
-today: neither runs a stack with a committed drop-in, and the script would
-install `edge`'s and `monitoring`'s onto a host that starts neither. Neither
-drop-in takes effect until its unit next starts or restarts, which nothing
-has done yet on a freshly provisioned host.
+split before this step is reused once a standalone monitoring host exists.
+Neither drop-in takes effect until its unit next starts or restarts: see
+`RUNBOOK-monitoring.md` step 6 (`edge`) and step 7a (`monitoring`).
 
 ### 5. Provision a host that has no public address
 

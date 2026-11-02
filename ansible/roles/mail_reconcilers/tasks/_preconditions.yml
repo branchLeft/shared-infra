@@ -1,0 +1,47 @@
+---
+# What every step checks before it runs a program: the directory the programs run from,
+# and the three root credential files they read and write. The role never reads one.
+
+- name: Look at the install directory
+  ansible.builtin.stat:
+    path: '{{ mail_reconcilers_install_dir }}'
+    follow: false
+    get_checksum: false
+  register: mail_reconcilers_install_stat
+
+- name: Refuse an install directory that is absent, a link, not root's or open to others
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_install_stat.stat.exists
+      - mail_reconcilers_install_stat.stat.isdir
+      - (mail_reconcilers_install_stat.stat.pw_name | default('')) == 'root'
+      - mail_reconcilers_install_stat.stat.mode == mail_reconcilers_install_dir_mode
+    quiet: true
+    fail_msg: >-
+      REFUSED: {{ mail_reconcilers_install_dir }} must be a directory of root with mode
+      {{ mail_reconcilers_install_dir_mode }}. A plain apply makes it and places the programs.
+
+- name: Look at each credential file without following a link
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    follow: false
+    get_checksum: false
+  loop: '{{ mail_reconcilers_credential_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: mail_reconcilers_credential_stats
+
+- name: Refuse a credential file that is absent when required, a link, not root's or not mode 0600
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists or not item.item.required
+      - (not item.stat.exists) or (item.stat.isreg and (item.stat.pw_name | default('')) == 'root' and item.stat.mode == '0600')
+    quiet: true
+    fail_msg: >-
+      REFUSED: {{ item.item.path }}
+      {{ 'is absent. The owner places it by the one-time Stalwart bootstrap (README, Named limits), and no step runs without it.'
+         if not item.stat.exists else 'must be a regular file, not a link, of root with mode 0600.' }}
+      No program ran.
+  loop: '{{ mail_reconcilers_credential_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'

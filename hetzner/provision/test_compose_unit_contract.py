@@ -252,6 +252,7 @@ SCANNED_SUFFIXES = frozenset(
         ".gotmpl",
         ".in",
         ".j2",
+        ".js",
         ".json",
         ".local",
         ".md",

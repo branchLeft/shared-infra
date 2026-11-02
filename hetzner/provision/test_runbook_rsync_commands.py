@@ -283,14 +283,21 @@ class RunbookRsyncCommandTests(unittest.TestCase):
         self.assertIn(
             "alertmanager.yml",
             section,
-            "the --delete/missing-alertmanager.yml window must be explained where the "
-            "reader meets --delete, i.e. inside the copy step itself",
+            "the copy step must say where alertmanager.yml comes from, inside the step itself",
+        )
+        # workspace#2536: the role copies and never deletes, so the --delete window (an
+        # un-restarted copy leaving no alertmanager.yml on disk) cannot recur. The guard is the
+        # role's invariant now: no deletion, and the restart's ExecStartPre writes the file.
+        self.assertIn(
+            "never deletes",
+            normalized,
+            "the copy step must say the role never deletes, so an un-restarted copy cannot "
+            "remove alertmanager.yml",
         )
         self.assertIn(
-            "on disk at all",
+            "ExecStartPre",
             normalized,
-            "the copy step must state that an un-restarted copy leaves no "
-            "alertmanager.yml on disk at all, not just that it gets deleted",
+            "the copy step must say the restart's ExecStartPre is what writes alertmanager.yml",
         )
 
 

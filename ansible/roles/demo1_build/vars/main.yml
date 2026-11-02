@@ -44,6 +44,15 @@ demo1_build_sudoers_path: /etc/sudoers.d/branchleft-slot
 # demo1_build_release_files. Nothing is read from the network.
 demo1_build_vendored_root: '{{ role_path }}/files/ghost-platform'
 
+# The paths in demo1_build_release_files whose diff the plan does not show: one names a
+# system file path and the other a sudoers no-password tag, which the plan's secret scan
+# would withhold the whole plan of the host over. The other programs are copied by a task
+# that shows its diff. ansible/checks/test_plan_diff_scan.py fails if a path listed here has
+# no such line, or if a program left out of it has one.
+demo1_build_release_paths_hidden:
+  - demo-host/provision/demo_uid_claims.py
+  - demo-host/provision/render_slot_sudoers.py
+
 # The staged programs. One release directory per pinned commit, root-owned and
 # writable by nobody else; the programs import one another from it.
 demo1_build_base_dir: /opt/branchleft/demo-host

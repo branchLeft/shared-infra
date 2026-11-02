@@ -359,3 +359,48 @@ The lint job runs `run_role_unit_tests.sh` once, and it runs the unit tests of e
 fails, runs no test, or skips or expected-fails a test: a role suite is a control, and a skipped
 test is a control that does not run, so `OK (skipped=N)` and `OK (expected failures=N)` both fail
 the step and name the role.
+
+## test_plan_diff_scan.py: no copied file trips the plan's secret scan
+
+The gated apply asks each host what a run would change, in check mode, with a diff. Before the plan
+is shown to the approver, a scan reads that diff and withholds all of it when any line looks like a
+secret. A role that copies a whole file (a program, a compose file) puts the file into the diff as it
+changes, so one line that merely reads like a secret, such as a docstring sentence or an environment
+variable reference, withholds the plan of the host: nothing can be approved.
+
+The control is a task keyword, `diff: false`, set on the copy or template task whose file is not
+secret but reads as secret-like text. The scan is a backstop, never loosened to fit a file (ANS-16).
+There is no list of exceptions (owner ruling of 2 Nov 2026). A line that is prose is reworded so it no
+longer matches. `diff: false` is set only on the task of a file whose matching line is a variable
+reference or a name that cannot change, and each such task carries a comment citing ANS-16.
+
+What the test enforces, over every `copy` and `template` task of the roles the playbooks list:
+
+- A task whose source has a matching line sets `diff: false`, on the task or on a block around it.
+  `no_log` alone does not count: it hides the result, not the diff.
+- A task that sets `diff: false` hides only files that match. A file with no matching line under
+  it is a finding, so a loop that mixes the two is split into a hidden task and a visible one, with
+  a constant list of the hidden files in the role's `vars/` (`control_plane`, `monitoring_stack`,
+  `demo1_build`). The test resolves those loops through `intersect`, `difference`, `selectattr` and
+  `rejectattr` against a list, and no other filter. A task that sets `no_log` is not held to this:
+  it renders a secret into the file, which its source does not show.
+- A source the test cannot find or resolve is a finding unless the task sets `diff: false`. Inline
+  `content` and `remote_src` are skipped, as there is no local file. One list is made while the
+  role runs: `edge_stack_deliver` is the static CrowdSec files of the role's vars plus the files
+  directly in `crowdsec/acquis.d`, found by a `find` on the controller, and the test makes the same
+  list from the checkout, so the CrowdSec and acquisition files stay visible in the plan and a
+  matching line in one fails.
+
+A finding names the task file, the task, the source and the line number, never the text of the line.
+The test reads the source of a task, not the text Ansible renders from it; a template whose rendered
+text differs from its source is judged by its source.
+
+The pattern is the `credential-assignment` entry of the backstop in the step "Judge the answers,
+scan the diff and write the result" of the `ssh-check-hosts` action in branchLeft/github-workflows,
+at the tag `ansible-gated-apply.yml` pins (v1.0.19 when this was written). The workflow runs it as
+`grep -Eiq` on the diff, line by line, in the C locale. The test translates it: `re.I` for `-i`,
+`re.A` so that `\s` is the ASCII set the C locale gives the POSIX space class, `\s` for
+`[[:space:]]`, and a split on the newline alone (not `str.splitlines`, which also splits on form
+feeds). A test runs the workflow's own expression through `grep -Ei` on sample lines and compares
+verdicts. The other entries of the backstop name key material and tokens that no role file holds, so
+they are not copied.

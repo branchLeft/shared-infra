@@ -1,0 +1,122 @@
+---
+# Internal to the role. The export runbook's Deliver step 4 as a convergent state: the
+# bundler's directory, its dist directory, the pinned files, and the COMMIT file. The
+# pins were checked in _vendored.yml before this file runs, so everything copied here is
+# the pinned bytes.
+#
+# The runbook's `mkdir`, `rm -rf dist`, `scp` and `cat > COMMIT` become modules. The
+# differences from the runbook, all deliberate: the directories are 0700 and the files
+# 0600 (only root reads them; scp left them world-readable), and the old dist is not
+# removed before the new one is copied. Files are replaced one at a time and then the
+# files that are no longer in the release are removed, so there is no moment in which
+# dist is missing.
+
+# A link or a plain file in place of a directory would send the writes below somewhere
+# else, or make them fail half way. Look without following links and refuse before any
+# write.
+- name: Look at the paths the role is about to write, without following links
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+  loop:
+    - '{{ export_bundler_dir }}'
+    - '{{ export_bundler_dist_dir }}'
+    - '{{ export_bundler_state_dir }}'
+    - '{{ export_bundler_state_subdirs[0] }}'
+    - '{{ export_bundler_state_subdirs[1] }}'
+  register: export_bundler_targets
+
+- name: Refuse a link or a file where a directory belongs
+  ansible.builtin.assert:
+    that:
+      - not item.stat.exists or (item.stat.isdir and not item.stat.islnk)
+    quiet: true
+    fail_msg: >-
+      {{ item.item }} exists and is not a plain directory (it is a link or a file). The role does not
+      follow links or replace files. Nothing has been written.
+  loop: '{{ export_bundler_targets.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Make the bundler directory
+  ansible.builtin.file:
+    path: '{{ export_bundler_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Make the dist directory
+  ansible.builtin.file:
+    path: '{{ export_bundler_dist_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# In check mode on a host that has not had the bundler, the directories above do not
+# exist yet and copy refuses a destination whose directory is missing, so the copies are
+# skipped there and the plan shows the directories alone. On a host that already has the
+# directories the copies run in check mode and report exactly.
+- name: Look at the dist directory
+  ansible.builtin.stat:
+    path: '{{ export_bundler_dist_dir }}'
+    follow: false
+  register: export_bundler_dist_stat
+
+# The diff is not shown for the pinned files listed in export_bundler_release_files_hidden
+# (ANS-16, vars/main.yml). Each has a line the plan's secret scan matches and no secret, so
+# the plan would be withheld over it. The bytes are the same and the pin check is above.
+- name: Copy the pinned files whose diff is not shown
+  ansible.builtin.copy:
+    src: '{{ export_bundler_vendored_root }}/{{ item.path }}'
+    dest: '{{ export_bundler_dir }}/{{ item.path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  loop: "{{ export_bundler_release_files | selectattr('path', 'in', export_bundler_release_files_hidden) | list }}"
+  loop_control:
+    label: '{{ item.path }}'
+  diff: false
+  when: export_bundler_dist_stat.stat.exists
+
+# The other pinned files: their diff is shown in the plan.
+- name: Copy each other pinned file
+  ansible.builtin.copy:
+    src: '{{ export_bundler_vendored_root }}/{{ item.path }}'
+    dest: '{{ export_bundler_dir }}/{{ item.path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  loop: "{{ export_bundler_release_files | rejectattr('path', 'in', export_bundler_release_files_hidden) | list }}"
+  loop_control:
+    label: '{{ item.path }}'
+  when: export_bundler_dist_stat.stat.exists
+
+- name: Look for files under the host's dist directory
+  ansible.builtin.find:
+    paths: '{{ export_bundler_dist_dir }}'
+    file_type: any
+    hidden: true
+    recurse: true
+    follow: false
+  register: export_bundler_host_found
+  when: export_bundler_dist_stat.stat.exists
+
+# What the runbook's `rm -rf dist` did, made convergent: whatever an earlier build left
+# that the release no longer has is removed, and the pinned files are left alone.
+- name: Remove what the pinned release does not hold from dist
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop: '{{ (export_bundler_host_found.files | default([])) | map(attribute="path") | difference(export_bundler_dist_paths) | list }}'
+  when: export_bundler_dist_stat.stat.exists
+
+- name: Record which ghost-platform commit the files were built from
+  ansible.builtin.copy:
+    content: "{{ export_bundler_source_sha }}\n"
+    dest: '{{ export_bundler_commit_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  when: export_bundler_dist_stat.stat.exists

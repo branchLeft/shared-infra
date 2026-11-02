@@ -272,8 +272,9 @@ class RealTree(unittest.TestCase):
         # The order is the point: the loader sets the four SMTP facts the website role requires and
         # the slots the slot-keys role requires, so both must follow it, and all must follow the
         # two pull roles (check_enrolment R11). The host baseline installs Docker, which the
-        # website role needs, so it too sits before the role. The deploy tooling goes last but one
-        # and the slot keys last: the slot program needs the wrapper the tooling installs.
+        # website role needs, so it too sits before the role. The deploy tooling goes before the
+        # slot keys: the slot program needs the wrapper the tooling installs. The export bundler
+        # is last.
         playbook = _mapping_list(_read(ROOT / "ansible" / "playbooks" / "app1.yml"))
         applied = [Path(str(entry.get("role", entry))).name for entry in playbook]
         self.assertEqual(
@@ -287,6 +288,7 @@ class RealTree(unittest.TestCase):
                 "website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "export_bundler",
             ],
         )
 
@@ -309,6 +311,7 @@ class Mutations(unittest.TestCase):
             "deploy_slot_keys",
             "monitoring_stack",
             "ntfy_pager",
+            "node_exporter",
             "exporters_and_collectors",
             "nextcloud_stack",
             "backup_worker",

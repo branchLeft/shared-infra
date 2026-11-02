@@ -66,13 +66,13 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
 # host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
-# installed Docker), then app1's deploy_tooling and deploy_slot_keys (last, in that order: the slot
-# keys need the wrapper the tooling installs), db1's host_baseline, db1_stack and
-# db1_backup_timers (after the loader, which goes first; db1_grants would follow the timers and
-# is not applied), ops1's host_inputs (first), control_plane after the status page, then
-# nextcloud_stack, backup_worker and backup_restore (the restore reads the worker's variables, so
-# it follows), then control_plane_db last (it asserts the directory control_plane makes), and
-# demo1's two build roles.
+# installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that order: the slot
+# keys need the wrapper the tooling installs) and app1's export_bundler (last of all), db1's
+# host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
+# db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
+# (first), control_plane after the status page, then nextcloud_stack, backup_worker and
+# backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
+# last (it asserts the directory control_plane makes), and demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -82,6 +82,7 @@ APPLIED_ON_MAIN = {
         "ci_login",
         "deploy_tooling",
         "edge_stack",
+        "node_exporter",
         "exporters_and_collectors",
         "ntfy_pager",
         "monitoring_stack",
@@ -96,6 +97,7 @@ APPLIED_ON_MAIN = {
         "backup_worker",
         "backup_restore",
         "control_plane_db",
+        "node_exporter",
     ],
     "app1": [
         "host_inputs",
@@ -104,8 +106,16 @@ APPLIED_ON_MAIN = {
         "website_app1",
         "deploy_tooling",
         "deploy_slot_keys",
+        "export_bundler",
     ],
-    "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers"],
+    "db1": [
+        "host_inputs",
+        "host_baseline",
+        "db1_stack",
+        "db1_backup_timers",
+        "node_exporter",
+        "db1_grants",
+    ],
     "demo1": ["demo1_build", "demo1_egress_spool"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
@@ -262,13 +272,15 @@ class HostRoleLists(unittest.TestCase):
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
     # Safety class: db1 is the production database host. It applies the two pull roles, the loader
-    # of its private inputs, the host baseline, the stack, then the backup timers, and none of the
-    # other roles on its list, which R9 allows because a playbook may apply a subset. Red when any
-    # role is added or moved, green with the six named in this order. db1_grants is held back and
-    # would have to follow the timers.
-    def test_db1_applies_the_pull_roles_the_loader_the_baseline_the_stack_then_the_timers(
-        self,
-    ) -> None:
+    # of its private inputs, the host baseline, the stack, the backup timers, the node exporter,
+    # then the grants, and none of the other roles on its list, which R9 allows because a playbook
+    # may apply a subset. Red when any role is added, dropped, doubled or moved (the grants before
+    # the timers or the stack), green with the eight named in this order. The grants come last
+    # because the role checks the dump programs the timers deliver against pinned digests before
+    # it changes the dump account. tunnel_account is held back: it has no main entry (a play
+    # reaches it only with tasks_from, which R2 refuses), it runs on db1 and on a replica host
+    # with no enrolled playbook, and its five input files are not carried by the loader.
+    def test_db1_applies_the_grants_last_after_the_stack_and_the_timers(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
         self.assertEqual(
@@ -280,9 +292,11 @@ class HostRoleLists(unittest.TestCase):
                 "host_baseline",
                 "db1_stack",
                 "db1_backup_timers",
+                "node_exporter",
+                "db1_grants",
             ],
         )
-        for held_back in ("db1_grants", "tunnel_account"):
+        for held_back in ("tunnel_account",):
             self.assertNotIn(held_back, names)
         self.assertEqual(check(ROOT), [])
 
@@ -292,7 +306,7 @@ class HostRoleLists(unittest.TestCase):
     # then the three monitoring roles: the collectors, the pager, and the monitoring stack last
     # (it hashes the pager's files and decides the one restart of its unit). The edge stack is
     # ahead of the monitoring roles so that a monitoring failure cannot hold the edge delivery.
-    # Red when any role moves or is dropped, green with the eleven named in this order.
+    # Red when any role moves or is dropped, green with the twelve named in this order.
     def test_edge1_applies_the_edge_stack_then_the_pager_before_the_monitoring_stack(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
@@ -307,6 +321,7 @@ class HostRoleLists(unittest.TestCase):
                 "ci_login",
                 "deploy_tooling",
                 "edge_stack",
+                "node_exporter",
                 "exporters_and_collectors",
                 "ntfy_pager",
                 "monitoring_stack",
@@ -327,7 +342,8 @@ class HostRoleLists(unittest.TestCase):
     # copy, last, so their failure holds nothing else back. The restore reads the worker's
     # variables in the same play, so it follows the worker. The database role is last: it
     # asserts the directory control_plane makes and holds nothing else back. Red when any role
-    # moves or is dropped, green with the eleven named in this order.
+    # moves or is dropped, green with the twelve named in this order. The node exporter is last, so
+    # its disk check cannot hold any other role back.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,
     ) -> None:
@@ -347,6 +363,7 @@ class HostRoleLists(unittest.TestCase):
                 "backup_worker",
                 "backup_restore",
                 "control_plane_db",
+                "node_exporter",
             ],
         )
         self.assertLess(names.index("backup_worker"), names.index("backup_restore"))
@@ -357,8 +374,9 @@ class HostRoleLists(unittest.TestCase):
 
     # Safety class: app1 applies the deploy tooling, which installs the sudo-run deploy wrapper and
     # the Docker firewall policy, then the deploy slot keys, which grant SSH keys to the deploy
-    # account. Both come last, tooling first, so a failure in either cannot hold the website back
-    # and the slot program finds its wrapper. The play states class app and variant standard, and
+    # account. Both come after the website, tooling first, so a failure in either cannot hold the
+    # website back and the slot program finds its wrapper; the export bundler follows them, last.
+    # The play states class app and variant standard, and
     # the checker's table (HOST_PLAY_VARS) says the same; the slots come from the loader's row, not
     # from the play. Red when the table's app1 row is deleted (R2), when the slots leave the
     # loader's row (the registry test), or when either deploy role moves before the loader (R11),
@@ -380,6 +398,7 @@ class HostRoleLists(unittest.TestCase):
                 "website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "export_bundler",
             ],
         )
         self.assertEqual(

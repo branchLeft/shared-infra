@@ -1,0 +1,5 @@
+---
+# A plain apply passes neither: the role places the programs and runs none of them.
+# A step request sets both on the command line, never in an inventory.
+mail_reconcilers_step: ''
+mail_reconcilers_credential: ''
