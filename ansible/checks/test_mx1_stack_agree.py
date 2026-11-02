@@ -21,6 +21,7 @@ import types
 import unittest
 from pathlib import Path
 from typing import NoReturn, cast
+from unittest import mock
 
 from check_pins import load_yaml
 
@@ -121,7 +122,14 @@ def load_module(name: str, path: Path) -> types.ModuleType:
     if spec is None or spec.loader is None:
         refuse(f"{path.name} cannot be imported")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # A cache written beside a program under mail/provision is a file the mail_reconcilers unit
+    # test then finds unclassified, so the load writes none.
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.dont_write_bytecode = previous
     return module
 
 
@@ -488,6 +496,17 @@ class Mx1AgreeTest(unittest.TestCase):
             (role / "target.yml").write_text("dest: /etc/mailgun-shim/env\n")
             (role / "files" / "link.yml").symlink_to(role / "target.yml")
             self.assertNotIn("/etc/mailgun-shim/env", host_text(role))
+
+
+class LoadModuleTest(unittest.TestCase):
+    def test_loading_a_program_writes_no_bytecode_beside_it(self) -> None:
+        program = PROVISION / "render_shim_env.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / program.name
+            copy.write_bytes(program.read_bytes())
+            with mock.patch.object(sys, "dont_write_bytecode", False):
+                load_module("render_shim_env_copy", copy)
+            self.assertFalse((Path(tmp) / "__pycache__").exists())
 
 
 def fixture_compose(volumes: list[object], extra: str = "") -> tuple[object, str]:
