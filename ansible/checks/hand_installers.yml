@@ -43,9 +43,6 @@ hetzner/provision/branchleft_host_egress.sh:
 hetzner/provision/branchleft_nat.sh:
   reason: pending-role
   role: egress_nat
-hetzner/provision/install-systemd-drop-ins.sh:
-  reason: pending-role
-  role: host_baseline
 hetzner/provision/nat-gateway.sh:
   reason: pending-role
   role: egress_nat

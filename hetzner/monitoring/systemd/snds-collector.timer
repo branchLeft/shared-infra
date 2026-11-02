@@ -1,6 +1,6 @@
 # Installed at /etc/systemd/system/snds-collector.timer alongside
 # snds-collector.service -- see that file's header for why this pair is not
-# handled by install-systemd-drop-ins.sh.
+# handled by the monitoring_stack role.
 [Unit]
 Description=Run the SNDS reputation collector on a schedule
 

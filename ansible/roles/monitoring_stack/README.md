@@ -28,8 +28,7 @@ It does four things:
    and the `.tmpl` files hold placeholders a later step fills.
 3. It installs `hetzner/monitoring/systemd/monitoring.override.conf` as
    `/etc/systemd/system/branchleft-compose@monitoring.service.d/override.conf`,
-   the destination `hetzner/provision/install-systemd-drop-ins.sh` uses for the
-   instance named `monitoring`. It reloads systemd when that file changed, or when
+   the destination for the instance named `monitoring`. It reloads systemd when that file changed, or when
    a restart is due. The drop-in that bounds the edge instance on the same host is
    not installed here: the `edge_stack` role owns the edge unit and installs it.
 4. It restarts the monitoring unit when the fingerprint of what the unit runs
