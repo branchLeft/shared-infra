@@ -169,6 +169,8 @@
         mode: '0644'
       when: ansible_check_mode
 
+    # The list is made while the role runs (tasks/_classify.yml); ansible/checks/test_plan_diff_scan.py
+    # makes the same list from the checkout and fails if any of these files reads as secret.
     - name: Deliver the CrowdSec files
       ansible.builtin.copy:
         src: '{{ edge_stack_source_dir }}/{{ item }}'

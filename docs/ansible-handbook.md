@@ -148,6 +148,7 @@ WHITEBOARD_INTRO_TEXT
 | `edge_firewall`            | [README](../ansible/roles/edge_firewall/README.md)            |
 | `edge_stack`               | [README](../ansible/roles/edge_stack/README.md)               |
 | `egress_nat`               | [README](../ansible/roles/egress_nat/README.md)               |
+| `export_bundler`           | [README](../ansible/roles/export_bundler/README.md)           |
 | `exporters_and_collectors` | [README](../ansible/roles/exporters_and_collectors/README.md) |
 | `host_baseline`            | [README](../ansible/roles/host_baseline/README.md)            |
 | `monitoring_stack`         | [README](../ansible/roles/monitoring_stack/README.md)         |

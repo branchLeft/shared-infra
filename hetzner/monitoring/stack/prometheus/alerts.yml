@@ -140,7 +140,7 @@ groups:
             it can read the database.
             Check MySQL itself first (db1: docker ps, then the mysql
             container logs). If MySQL is healthy, this is the exporter
-            credential: mysqld_exporter v0.20.0 expands $ in a config value
+            login, because mysqld_exporter v0.20.0 expands $ in a config value
             as a shell variable, so a password containing one authenticates
             as a truncated string while still serving 200. db/RUNBOOK-db.md
             in branchLeft/ghost-platform carries the rotation.

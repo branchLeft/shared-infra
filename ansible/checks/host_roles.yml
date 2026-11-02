@@ -14,6 +14,7 @@ edge1:
   - ci_login
   - deploy_tooling
   - edge_stack
+  - node_exporter
   - exporters_and_collectors
   - ntfy_pager
   - monitoring_stack
@@ -27,10 +28,12 @@ ops1:
   - backup_worker
   - backup_restore
   - control_plane_db
+  - node_exporter
 app1:
   - host_inputs
   - deploy_tooling
   - deploy_slot_keys
+  - export_bundler
   - website_app1
   - breakglass_grant_host
   - host_baseline
@@ -41,6 +44,7 @@ db1:
   - db1_grants
   - tunnel_account
   - host_baseline
+  - node_exporter
 demo1:
   - demo1_build
   - demo1_egress_spool

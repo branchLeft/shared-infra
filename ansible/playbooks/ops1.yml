@@ -51,3 +51,4 @@
     - role: ../roles/backup_worker # noqa: role-name[path]
     - role: ../roles/backup_restore # noqa: role-name[path]
     - role: ../roles/control_plane_db # noqa: role-name[path]
+    - role: ../roles/node_exporter # noqa: role-name[path]
