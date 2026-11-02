@@ -167,6 +167,18 @@ class RealTree(unittest.TestCase):
         self.assertGreaterEqual(len(hand_steps(ROOT)), 5)
 
 
+class NextcloudStepsOneToSix(unittest.TestCase):
+    """Steps 1 to 6 of the nextcloud runbook are the nextcloud_stack role: none may edit a host."""
+
+    def test_no_hand_step_before_section_seven_and_the_pointer_names_the_role(self) -> None:
+        text = (ROOT / "hetzner/RUNBOOK-nextcloud.md").read_text(encoding="utf-8")
+        head, marker, _ = text.partition("\n## 7. ")
+        self.assertTrue(marker, "section 7 of the nextcloud runbook is missing")
+        self.assertIn("ansible/roles/nextcloud_stack", head)
+        steps = [body for info, body in fences(head) if is_hand_step(info, body)]
+        self.assertEqual(steps, [])
+
+
 class Classifier(unittest.TestCase):
     def test_an_ssh_block_that_writes_a_file_is_a_hand_step(self) -> None:
         body = "ssh root@host 'tee /etc/x.conf' < x.conf"
