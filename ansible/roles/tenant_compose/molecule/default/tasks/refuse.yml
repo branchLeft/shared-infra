@@ -1,0 +1,83 @@
+---
+# Applies the role with input it must refuse and asserts three things: the refusal names the
+# rule in refuse_expect, no stack was started, and no watched file changed. The caller sets
+# refuse_title, refuse_specs, refuse_expect and refuse_watch (paths whose content must not
+# change), and may set refuse_spool_port and refuse_started (the starts a refusal leaves
+# behind, as a map from stack to count; none by default). If the role accepts the input, the block's last
+# task fails with a message that is not the rule's, so the rescue's assertion goes red.
+- name: Look at the watched files before
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop: '{{ refuse_watch }}'
+  register: tenant_compose_refuse_before
+
+- name: Count the starts before
+  ansible.builtin.include_tasks: starts.yml
+
+- name: Remember the counts before
+  ansible.builtin.set_fact:
+    tenant_compose_scenario_counts_before: '{{ tenant_compose_scenario_start_counts }}'
+
+- name: Refuse one input
+  block:
+    - name: Build the tenants' stacks
+      ansible.builtin.include_tasks: build.yml
+      vars:
+        phase_specs: '{{ refuse_specs }}'
+
+    - name: Build the spool's text
+      ansible.builtin.set_fact:
+        tenant_compose_scenario_spool_text: "{{ lookup('ansible.builtin.template', 'spool.compose.yml.j2') }}"
+      vars:
+        spool_port: '{{ refuse_spool_port | default(8095) }}'
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.tenant_compose
+      vars:
+        tenant_compose_stacks: '{{ tenant_compose_scenario_stacks }}'
+        tenant_compose_mail_spool_text: '{{ tenant_compose_scenario_spool_text }}'
+
+    - name: Fail because the role accepted the input
+      ansible.builtin.fail:
+        msg: THE-ROLE-ACCEPTED-THE-INPUT
+  rescue:
+    - name: Assert the role refused with the rule
+      ansible.builtin.assert:
+        that:
+          - refuse_expect in stopped_with
+        quiet: true
+        fail_msg: "{{ refuse_title }}: the role did not stop with '{{ refuse_expect }}'. It stopped with: {{ stopped_with }}"
+      vars:
+        # A failed command carries its reason in stderr, an assertion in msg.
+        stopped_with: "{{ ansible_failed_result.msg | default('') }} {{ ansible_failed_result.stderr | default('') }}"
+
+- name: Look at the watched files after
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop: '{{ refuse_watch }}'
+  register: tenant_compose_refuse_after
+
+- name: Count the starts after
+  ansible.builtin.include_tasks: starts.yml
+
+- name: Assert only the expected starts happened and no watched file changed
+  ansible.builtin.assert:
+    that:
+      - (tenant_compose_scenario_start_counts[item.key] | int) - (tenant_compose_scenario_counts_before[item.key] | int) == item.value | int
+      - tenant_compose_checksums_before == tenant_compose_checksums_after
+    quiet: true
+    fail_msg: '{{ refuse_title }}: the refused run started a stack other than {{ refuse_started | default({}) }} or changed a file it was to leave alone.'
+  loop: '{{ tenant_compose_scenario_expected_defaults | combine(refuse_started | default({})) | dict2items }}'
+  loop_control:
+    label: '{{ item.key }}'
+  vars:
+    tenant_compose_checksums_before: "{{ tenant_compose_refuse_before.results | map(attribute='stat.checksum') | list }}"
+    tenant_compose_checksums_after: "{{ tenant_compose_refuse_after.results | map(attribute='stat.checksum') | list }}"
+    tenant_compose_scenario_expected_defaults:
+      tenant-a: 0
+      tenant-b: 0
+      tenant-c: 0
+      mail-spool: 0

@@ -2,28 +2,26 @@
 # Internal to the role. Installs the egress program and its unit, enables the
 # unit and runs the program again when either file changed. The program builds
 # the two policy chains and puts the jump into DOCKER-USER; this role never
-# writes a firewall rule itself. Each file is fetched on its own from the one
-# home of the programs and held to its pinned sha256, so a digit flipped in a
-# pin, or a file changed at the commit, stops the role at the download.
+# writes a firewall rule itself. Each file is copied from the role's own
+# files/ghost-platform, which _vendored.yml has already held to its pinned sha256
+# before anything was written. Nothing here reads from the network.
 
 # Mode 0755 and root ownership are load-bearing: systemd runs this file as root
 # at every boot, so a group- or world-writable copy is a root shell for
 # whoever can write it. The program is on disk before the unit that names it.
-- name: Install the egress program, held to its pinned sha256
-  ansible.builtin.get_url:
-    url: '{{ demo1_egress_spool_source_base_url }}/{{ demo1_egress_spool_egress_script_src }}'
+- name: Install the egress program
+  ansible.builtin.copy:
+    src: '{{ demo1_egress_spool_vendored_root }}/{{ demo1_egress_spool_egress_script_src }}'
     dest: '{{ demo1_egress_spool_egress_script_dest }}'
-    checksum: 'sha256:{{ demo1_egress_spool_egress_script_sha }}'
     owner: root
     group: root
     mode: '0755'
   register: demo1_egress_spool_script
 
-- name: Install the egress unit, held to its pinned sha256
-  ansible.builtin.get_url:
-    url: '{{ demo1_egress_spool_source_base_url }}/{{ demo1_egress_spool_egress_unit_src }}'
+- name: Install the egress unit
+  ansible.builtin.copy:
+    src: '{{ demo1_egress_spool_vendored_root }}/{{ demo1_egress_spool_egress_unit_src }}'
     dest: '{{ demo1_egress_spool_egress_unit_dest }}'
-    checksum: 'sha256:{{ demo1_egress_spool_egress_unit_sha }}'
     owner: root
     group: root
     mode: '0644'

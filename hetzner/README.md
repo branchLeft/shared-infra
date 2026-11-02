@@ -165,7 +165,7 @@ a host's only route off the subnet is the network's own gateway, and Hetzner
 resolves that against this table. It is unprotected on purpose — deleting it
 detaches nothing and loses no state, and moving the gateway to another host
 has to stay an ordinary apply. The forwarding at the far end is not Pulumi's:
-`provision/nat-gateway.sh` installs it, and
+the `egress_nat` role installs it on edge1 (the reconciler is `provision/branchleft_nat.sh`), and
 `RUNBOOK-provision-host.md` carries the order the two have to happen in.
 
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`
@@ -559,6 +559,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@website`                               | `branchLeft/website`, `deploy/compose.yml`                                                               | no                |
 | `branchleft-compose@db`                                    | `branchLeft/ghost-platform`, `db/stack/compose.yml`                                                      | no                |
 | `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`                             | no                |
+| `branchleft-compose@tenant-a`, a placeholder tenant slug   | nowhere: rendered, as for `blog`, by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`             | no                |
 | `branchleft-compose@demo-`, the prefix of each demo slot   | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
 | `branchleft-compose@demo-0-a`, one named demo instance     | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
 | `branchleft-compose@demo-host`, which is not an instance   | nowhere: the directory the `demo1_build` role stages `branchLeft/ghost-platform`'s demo programs into    | no                |

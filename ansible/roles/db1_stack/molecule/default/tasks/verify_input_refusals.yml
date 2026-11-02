@@ -1,0 +1,200 @@
+---
+# The refusal cases of the password, the downloads, the key pin and the toolchain
+# packages, included by verify.yml in the `refusals` scenario only. Moved
+# out of verify.yml as they were: each case applies the role with one input made bad
+# and requires that the role stops at the named task. They apply the role once per case
+# and change nothing on the host. They are the largest share of the verify time, which
+# is why they have a scenario of their own.
+#
+# ----- Inputs the role must refuse, before it changes anything -----
+# The unsafe-character refusal is the control that matters most: a password
+# with one of these characters is accepted by the exporter, which then
+# authenticates as another string than the one the database holds. Each case
+# is the probe sentinel with the character in the middle, so a refusal that
+# echoed its input would hold the probe, and the log scan at the end would
+# fail.
+- name: Refuse a password with a character outside the allowed set
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an exporter password with a character outside the allowed set
+    refused_password: "{{ verify_probe ~ '%c' | format(verify_code) ~ 'tail' }}"
+  loop: '{{ verify_unsafe_codes }}'
+  loop_control:
+    loop_var: verify_code
+    label: code point {{ verify_code }}
+
+# The allowed set is exact: every ASCII code point is checked against the
+# pattern the role reads, and only the letters, the digits and the four
+# punctuation characters match. The role's own use of that pattern is the
+# refusal cases above and below. This loop is what fails when the set is
+# widened by a character the cases above never try.
+- name: Assert the password pattern accepts exactly the allowed ASCII characters
+  ansible.builtin.assert:
+    that:
+      - (('%c' | format(verify_code)) is match(db1_stack_verify_vars.db1_stack_password_alphabet_pattern)) == (verify_code in verify_allowed_codes)
+    fail_msg: The password pattern does not accept exactly the allowed characters; code point {{ verify_code }} is on the wrong side.
+    quiet: true
+  loop: '{{ range(0, 128) | list }}'
+  loop_control:
+    loop_var: verify_code
+    label: code point {{ verify_code }}
+
+# A final line break is the case a pattern ending in a dollar sign accepts.
+- name: Refuse a password that ends in a line break
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an exporter password with a character outside the allowed set
+    refused_password: "{{ verify_probe ~ '%c' | format(10) }}"
+
+- name: Refuse a password with a character in front of the rest
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an exporter password with a character outside the allowed set
+    refused_password: "{{ '%c' | format(36) ~ verify_probe }}"
+
+- name: Refuse a password one character short of the minimum
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an exporter password shorter than the minimum length
+    refused_password: '{{ verify_probe[:19] }}'
+
+- name: Refuse a short password
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an exporter password shorter than the minimum length
+    refused_password: Abc123
+
+- name: Refuse an empty password
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an empty exporter password
+    refused_password: ''
+
+# YAML reads an unquoted run of digits as a number.
+- name: Refuse a password that YAML read as a number
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an exporter password that is not text
+    refused_password: 12345678901234567890
+
+- name: Refuse a missing password
+  ansible.builtin.include_tasks: refused_without_password.yml
+
+# A value of the wrong shape, with the sentinel inside it. Ansible's own
+# argument check runs first, in a task no keyword reaches, so the role cannot
+# hide what it prints. It converts a mapping or a list to text for a text
+# option and hands the role the original, so these reach the role's own
+# check, which refuses them without printing them. The log scan at the end
+# requires that the sentinel is printed nowhere.
+- name: Refuse a password that is a mapping
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an exporter password that is not text
+    refused_password:
+      EXAMPLE_KEY: '{{ verify_probe }}'
+
+- name: Refuse a password that is a list
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an exporter password that is not text
+    refused_password:
+      - '{{ verify_probe }}'
+
+# The download and package-file rules.
+- name: Refuse a download pinned by an md5 digest
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+    refused_downloads:
+      - url: '{{ verify_downloads[0].url }}'
+        dest: '{{ scenario_libaio_path }}'
+        checksum: md5:d41d8cd98f00b204e9800998ecf8427e
+
+- name: Refuse a download with an empty digest
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+    refused_downloads:
+      - url: '{{ verify_downloads[0].url }}'
+        dest: '{{ scenario_libaio_path }}'
+        checksum: ''
+
+- name: Refuse a download whose digest is a URL
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+    refused_downloads:
+      - url: '{{ verify_downloads[0].url }}'
+        dest: '{{ scenario_libaio_path }}'
+        checksum: https://example.invalid/PLACEHOLDER.sha256
+
+- name: Refuse a download whose digest ends in a line break
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a download entry that is not pinned by a sha256 or sha512 digest
+    refused_downloads:
+      - url: '{{ verify_downloads[0].url }}'
+        dest: '{{ scenario_libaio_path }}'
+        checksum: "{{ verify_downloads[0].checksum ~ '%c' | format(10) }}"
+
+# A well-formed digest that is not the file's: the download module refuses
+# the file. This is a module failure, not an assertion, and it is the
+# designed result.
+- name: Refuse a download whose digest is not the file's
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Download each pinned artefact and check its digest
+    refused_downloads:
+      - url: '{{ verify_downloads[0].url }}'
+        dest: '/var/cache/db1-stack/OTHER.deb'
+        checksum: 'sha256:{{ "0" * 64 }}'
+    refused_debs: []
+
+- name: Refuse a package file that is a URL
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a package file that is not the destination of a pinned download
+    refused_debs:
+      - https://example.invalid/PLACEHOLDER.deb
+
+- name: Refuse a package file that no pinned download wrote
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a package file that is not the destination of a pinned download
+    refused_debs:
+      - /srv/db1-stack/age_1.0.0-1_all.deb
+
+# The key file is compared with the digest pinned in the role.
+- name: Refuse a key file whose digest is not the pinned one
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a repository key whose digest is not the pinned one
+    refused_key_sha256: '{{ "0" * 64 }}'
+
+- name: Refuse a pin that is not a digest
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a repository key whose digest is not the pinned one
+    refused_key_sha256: NOT_A_DIGEST
+
+# The installed version is checked, not assumed: the placeholder age package
+# is on a 1.0 line, which stands in for a client on another line.
+- name: Refuse a toolchain package that is not on the pinned line
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a MySQL toolchain that is not on the pinned line
+    refused_checked_packages:
+      - age
+
+- name: Refuse a toolchain package that is not installed
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse a MySQL toolchain that is not on the pinned line
+    refused_checked_packages:
+      - no-such-package
+
+# Nothing above changed anything: the host is as the converge left it.
+- name: Assert the refusals left the host as it was
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'

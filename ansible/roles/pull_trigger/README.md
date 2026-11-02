@@ -333,13 +333,14 @@ agent. It is listed so that the owner's steps are in one place:
    settings of the environment and cannot be tested from the repository.
 4. Add the step entries to the host's inventory file, in a reviewed pull request.
 
-Wiring a host is not done by this role or by its pull request. Adding the
-`control_plane` and `control_plane_db` roles to `playbooks/ops1.yml`, setting
-`pull_trigger_steps` for ops1, and writing the shared-infra caller of the reusable
-`ansible-gated-apply.yml` with the github-workflows tag it pins, are one ticket,
-[ISSUE branchLeft/workspace#2351](https://github.com/branchLeft/workspace/issues/2351).
-The ops1 enrolment ticket (branchLeft/workspace#2340) does not do them. Until that ticket
-is done the default empty list allows no step on any host. The first live run also waits
+Wiring a host is not done by this role or by its pull request. For ops1 the roles
+(`control_plane` and `control_plane_db` in `playbooks/ops1.yml`) and the allow-list
+(`pull_trigger_steps` in `owner_vars/ops1.yml`) are done. Still to do under
+[ISSUE branchLeft/workspace#2531](https://github.com/branchLeft/workspace/issues/2531) are
+the shared-infra caller of the reusable `ansible-gated-apply.yml` with the github-workflows
+tag it pins, which needs a step sender that does not yet exist there, and the one-time host
+steps above. The ops1 enrolment ticket (branchLeft/workspace#2340) does not do them. A host
+with no `pull_trigger_steps` has the default empty list, which allows no step. The first live run also waits
 on [ISSUE branchLeft/workspace#2483](https://github.com/branchLeft/workspace/issues/2483)
 (the signer ops1 trusts) and [ISSUE branchLeft/workspace#2338](https://github.com/branchLeft/workspace/issues/2338)
 (the reusable workflow in a form a caller can use).

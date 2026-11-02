@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  standalone: true
+  author: branchLeft
+  # Molecule derives a fully qualified role name from the namespace, or from
+  # the author when there is none, and refuses an upper-case author.
+  namespace: branchleft
+  description: Delivers each tenant's rendered compose stack and the host's mail spool, and restarts a stack only when it must.
+  license: PolyForm-Shield-1.0.0
+  min_ansible_version: '2.21.5'

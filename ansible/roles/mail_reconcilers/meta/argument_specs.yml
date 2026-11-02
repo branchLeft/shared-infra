@@ -1,0 +1,29 @@
+---
+argument_specs:
+  main:
+    short_description: Place the mail host's reconciler programs, and run one of four only when named and confirmed
+    description: >-
+      On a plain apply, places the reconciler programs under /root/mail-provision and runs
+      none of them. A step runs only when its tag (mail_reconcilers_ followed by its id) is
+      named on the command line and mail_reconcilers_step is that id. The steps are configure
+      (reconcile Stalwart's settings), mailboxes (create the mailboxes), mint (create one
+      submission credential) and collector (create the collector's credential and its sender
+      scope, after a dry run). Every step refuses unless the administrator credential file
+      exists and the credential files are root's with mode 0600. Program output is hidden.
+    author: branchLeft
+    options:
+      mail_reconcilers_step:
+        type: str
+        default: ''
+        description: >-
+          The step this run confirms, one of configure, mailboxes, mint and collector. Empty
+          on a plain apply. The closed list is in vars/main.yml, not here. A value outside it,
+          or a step tag named without this value equal to its id, is refused. Not set in an
+          inventory or a play, which would defeat the second key.
+      mail_reconcilers_credential:
+        type: str
+        default: ''
+        description: >-
+          The credential the mint step creates, one of website, blog, shim, alerting,
+          nextcloud and zitadel. Empty on a plain apply, and required by mint alone. One
+          credential per request. The closed table is in vars/main.yml.

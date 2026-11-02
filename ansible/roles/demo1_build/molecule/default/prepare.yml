@@ -15,11 +15,10 @@
   vars:
     broker_deploy_templates: '{{ playbook_dir }}/../../../broker_deploy/templates'
   tasks:
-    - name: Install sudo, which holds visudo, and the certificates the program download needs
+    - name: Install sudo, which holds visudo
       ansible.builtin.apt:
         name:
           - sudo
-          - ca-certificates
         state: present
         update_cache: true
         cache_valid_time: 3600

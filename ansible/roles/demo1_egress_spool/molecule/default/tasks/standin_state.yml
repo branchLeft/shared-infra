@@ -11,6 +11,27 @@
 #   port      the line docker port prints (default 8081/tcp -> 127.0.0.1:8095)
 #   bind      the address the endpoint listens on (default 127.0.0.1)
 #   open      whether the endpoint answers the drain path with no token (default false)
+#   images    the images that are on the host, as the role's image check finds them (default:
+#             the golden Compose file's image and the bumped pin the converge step writes)
+- name: Write the images the stand-in docker holds
+  ansible.builtin.copy:
+    # The header line keeps the content from ever rendering empty, which ansible.builtin.copy
+    # refuses; an empty list renders the header alone. Each image is one line after it.
+    content: |
+      # stand-in docker images, one per line
+      {% for image in standin_images %}
+      {{ image }}
+      {% endfor %}
+    dest: /var/lib/standin-docker/images
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    standin_golden_compose: '{{ playbook_dir }}/../../files/ghost-platform/render-core/test/golden/mail-spool-compose.demo1.yml'
+    standin_golden_image: >-
+      {{ lookup('ansible.builtin.file', standin_golden_compose) | regex_findall("image: '([^']+)'") | first }}
+    standin_images: '{{ (standin_override | default({})).images | default([standin_golden_image, standin_bumped_pin]) }}'
+
 - name: Write what the stand-in docker inspect reports
   ansible.builtin.copy:
     content: |

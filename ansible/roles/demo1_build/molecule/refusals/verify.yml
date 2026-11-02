@@ -83,3 +83,7 @@
           - demo1_build_verify_generator.stat.checksum == '80bd64fccb1f56260a7dc1824e783548a80a14a691942060cfff1aba9a058319'
         quiet: true
         fail_msg: The staged generator is not the pinned render_slot_sudoers.py.
+
+    # The cases ran with GitHub and its registry unreachable (molecule.yml).
+    - name: Assert that GitHub and its registry were unreachable
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/blocked_outbound.yml'

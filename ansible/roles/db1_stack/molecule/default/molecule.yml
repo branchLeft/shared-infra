@@ -51,6 +51,18 @@ provisioner:
     # lacks no_log shows it in the log, and verify fails (ANS-16).
     ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
     ANSIBLE_VERBOSITY: '3'
+    # Pipelining sends a module to the container's Python on standard input, in
+    # one docker exec, where the default makes six (find the home directory, make
+    # a temporary directory, copy the module, make it executable, run it, remove
+    # it). The role runs about 110 times in one verify and each run is hundreds of
+    # tasks, so the saving is most of the time. db1_grants, edge_stack,
+    # host_inputs and tenant_compose set it too. Nothing here uses become.
+    ANSIBLE_PIPELINING: 'true'
+    # The timing of every task, slowest first, printed at the end of each play, so
+    # a builder sees where a run's time goes (README, "Timing a run"). The callback
+    # is in ansible.posix 2.2.2, which the ansible 14.5.0 package bundles and pins.
+    ANSIBLE_CALLBACKS_ENABLED: 'ansible.posix.profile_tasks'
+    ANSIBLE_PROFILE_TASKS_SORT_ORDER: 'desc'
   inventory:
     # Every password below is a throwaway SENTINEL made for this run by
     # prepare.yml on the controller, in a file under scenario_sentinel_dir, and

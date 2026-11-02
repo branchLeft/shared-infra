@@ -1,0 +1,78 @@
+---
+# Guarded step migrate: apply the pending migrations to the portal database with
+# the image's own program, which creates no role and sets no password. Its inputs
+# are the administrator URL file alone. The marker is keyed by the image digest.
+
+- name: Name the step and its marker
+  ansible.builtin.set_fact:
+    control_plane_db_this_step: migrate
+    control_plane_db_marker: 'migrate-{{ control_plane_db_apps_image | ansible.builtin.regex_replace("^.*@sha256:", "") }}'
+
+- name: Check the request, the image and the marker of migrate
+  ansible.builtin.import_tasks: _guard.yml
+
+- name: Run migrate, then take the administrator URL file off the disk
+  block:
+    - name: Run migrate unless its marker exists
+      when: not control_plane_db_marker_stat.stat.exists
+      block:
+        - name: Check the administrator URL file
+          ansible.builtin.import_tasks: _inputs.yml
+          vars:
+            control_plane_db_input_files:
+              - '{{ control_plane_db_admin_url_file }}'
+
+        - name: Look for the stack network
+          ansible.builtin.command:
+            argv:
+              - docker
+              - network
+              - inspect
+              - '{{ control_plane_db_network }}'
+          changed_when: false
+          when: not ansible_check_mode
+
+        - name: Check the image carries the migrate-only flag
+          ansible.builtin.import_tasks: _image.yml
+          vars:
+            control_plane_db_image_needle: '--migrate-only'
+
+        - name: Apply the pending migrations
+          ansible.builtin.command:
+            argv: >-
+              {{ ['docker', 'run', '--rm', '--label', 'branchleft.task=portal-migrate',
+                  '--network', control_plane_db_network]
+                 + control_plane_db_container_limits
+                 + ['-w', '/app/portal/data',
+                    '-v', control_plane_db_admin_url_file ~ ':/provision/' ~ control_plane_db_admin_url_name ~ ':ro',
+                    '-e', 'PORTAL_ADMIN_URL_FILE=/provision/' ~ control_plane_db_admin_url_name,
+                    '-e', 'NODE_OPTIONS=--max-old-space-size=192',
+                    control_plane_db_apps_image, 'node', 'dist/provision/provisionMain.js', '--migrate-only'] }}
+          register: control_plane_db_run
+          changed_when: true
+          failed_when: false
+          # The program redacts what it prints, but its driver errors can quote the
+          # administrator URL. The next task shows only its own refusal lines.
+          no_log: true
+          when: not ansible_check_mode
+
+        - name: Refuse a migrate that did not end clean
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_run.rc == 0
+              - "'portal database migrated' in control_plane_db_run.stdout_lines"
+              - "'post-check passed: the server matches the manifest' in control_plane_db_run.stdout_lines"
+            quiet: true
+            fail_msg: >-
+              REFUSED: migrate did not end clean (exit {{ control_plane_db_run.rc }}). The
+              program's refusal lines: {{ (control_plane_db_run.stdout_lines + control_plane_db_run.stderr_lines)
+              | select('match', control_plane_db_refusal_line_pattern) | map('truncate', 200) | list }}
+          when: not ansible_check_mode
+
+        - name: Record that migrate ran for this image
+          ansible.builtin.import_tasks: _marker.yml
+  always:
+    - name: Remove the administrator URL file on every way out
+      ansible.builtin.file:
+        path: '{{ control_plane_db_admin_url_file }}'
+        state: absent

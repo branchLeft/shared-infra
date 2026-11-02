@@ -1,0 +1,35 @@
+---
+# The role's container-only test (ANS-15). The harness sets ROLE_TEST_RUN_ID, so the
+# instance name is unique to one run; unset, the name is one the Docker daemon rejects.
+dependency:
+  name: galaxy
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base, the production Debian release, trusted by digest.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    pre_build_image: true
+    # systemd needs a cgroup mount this scenario does not grant; sleep keeps it alive.
+    command: sleep infinity
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every run appends to one log, which verify searches for the throwaway secrets.
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '1'
+  inventory:
+    group_vars:
+      all:
+        # Throwaways made from the harness's run id: never committed.
+        scenario_run: "{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
+        scenario_needles:
+          - 'ADMINSECRET-{{ scenario_run }}'
+          - 'APPSECRET-{{ scenario_run }}'
+          - 'BODYSECRET-{{ scenario_run }}'
+verifier:
+  name: ansible

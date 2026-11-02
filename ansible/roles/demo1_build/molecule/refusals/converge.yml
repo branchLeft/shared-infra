@@ -5,7 +5,7 @@
 # default scenario applies the role only a few times (its shard is bound by the
 # time limit); here the role is not applied. The first play stages the pinned
 # programs, which holds the generator the grant is compared with, with the role's
-# own release tasks and the real download. Every other play runs
+# own release tasks and its own vendored copies. Every other play runs
 # tasks/_sudoers_check.yml alone against an edited grant, or, for the link cases,
 # tasks/_dirs.yml alone against a link planted in place of a directory. That is all
 # these cases can see: with no install in this scenario, whether a refusal comes
@@ -332,10 +332,22 @@
               The role failed on the eighth slot for a reason other than the slot table:
               {{ ansible_failed_result.msg | default('') }}
 
-# A program whose pinned sha256 is wrong must stop the release step at the
-# download. The file on the host is already right, so a refusal changes nothing.
-# The assertion names the checksum, so a failure of any other kind does not pass
-# for this one.
+# The programs are the role's own copies, held to their pinned sha256 on the machine
+# that runs the role before anything is written to the host. The control comes first:
+# the copies as they are, against the pins as they are, are accepted. Without it, a
+# check that refused every program would pass the cases after it.
+- name: Accept the vendored programs against their pins
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Run the vendored-program check with the role's own pins
+      ansible.builtin.include_role:
+        name: branchleft.demo1_build
+        tasks_from: _vendored.yml
+      when: not ansible_check_mode
+
+# One digit of one pin is changed. The refusal must name the program, so a failure of
+# any other kind does not pass for this one.
 - name: Refuse a program whose pin is wrong
   hosts: all
   gather_facts: false
@@ -349,10 +361,10 @@
     - name: Prove a wrong pin is refused
       when: not ansible_check_mode
       block:
-        - name: Stage the release with one digit of one pin changed
+        - name: Run the vendored-program check with one digit of one pin changed
           ansible.builtin.include_role:
             name: branchleft.demo1_build
-            tasks_from: _release.yml
+            tasks_from: _vendored.yml
           vars:
             demo1_build_release_files: >-
               {{ [{'path': 'demo-host/provision/branchleft_slot.py',
@@ -363,9 +375,64 @@
           ansible.builtin.fail:
             msg: The role accepted a program whose pinned checksum was wrong.
       rescue:
-        - name: Assert the failure was the checksum
+        - name: Assert the failure named the program and its pin
           ansible.builtin.assert:
             that:
-              - "'did not match' in (ansible_failed_result | string | lower)"
+              - "'demo-host/provision/branchleft_slot.py in the role' in (ansible_failed_result | string)"
+              - "'does not match its pin' in (ansible_failed_result | string)"
             quiet: true
-            fail_msg: The role failed on the wrong pin for a reason other than the checksum.
+            fail_msg: The role failed on the wrong pin for a reason other than the pin of that program.
+
+# The whole role, with a release directory this host has never had and the same wrong
+# pin. The refusal must come before the role writes anything, so the release directory
+# its source commit names must not exist afterwards. The role's other steps would have
+# made it first.
+- name: Refuse a program whose pin is wrong before anything is written
+  hosts: all
+  gather_facts: false
+  vars:
+    converge_fresh_sha: 0123456789abcdef0123456789abcdef01234567
+  tasks:
+    - name: Read the role's own pins
+      ansible.builtin.include_vars:
+        file: '{{ playbook_dir }}/../../defaults/main.yml'
+        name: converge_defaults
+      when: not ansible_check_mode
+
+    - name: Prove a wrong pin stops the whole role before it writes
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with a new source commit and one digit of one pin changed
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+          vars:
+            demo1_build_source_sha: '{{ converge_fresh_sha }}'
+            demo1_build_release_files: >-
+              {{ [{'path': 'demo-host/provision/branchleft_slot.py',
+              'sha256': '3e2279f0067d91296e1b309f6cbe71a3d276d7ccdbbd58aa4f99f81ce85ba80b'}]
+              + (converge_defaults.demo1_build_release_files | rejectattr('path', 'equalto', 'demo-host/provision/branchleft_slot.py') | list) }}
+
+        - name: Fail if the wrong pin was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a program whose pinned checksum was wrong.
+      rescue:
+        - name: Assert the failure named the program and its pin
+          ansible.builtin.assert:
+            that:
+              - "'demo-host/provision/branchleft_slot.py in the role' in (ansible_failed_result | string)"
+              - "'does not match its pin' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed on the wrong pin for a reason other than the pin of that program.
+
+        - name: Look for the release directory the new source commit would have made
+          ansible.builtin.stat:
+            path: '/opt/branchleft/demo-host/releases/{{ converge_fresh_sha }}'
+            follow: false
+          register: demo1_build_converge_fresh_release
+
+        - name: Assert that nothing was written
+          ansible.builtin.assert:
+            that:
+              - not demo1_build_converge_fresh_release.stat.exists
+            quiet: true
+            fail_msg: The role wrote a release directory before it refused the wrong pin.

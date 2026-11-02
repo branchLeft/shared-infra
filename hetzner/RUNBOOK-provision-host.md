@@ -25,7 +25,7 @@ than a step inside it.
 | `10-harden-updates-fail2ban.sh` | Installs and enables `unattended-upgrades` and `fail2ban`, with an SSH jail this repo owns                                                         |
 | `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                                              |
 | `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses                            |
-| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and the unit that reasserts it at boot, then runs it once                                       |
+| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and its boot unit, then runs it once. On edge1 the `egress_nat` role does this (step 2)         |
 | `app-host-isolation.sh`         | **App hosts only.** Installs the `DOCKER-USER` isolation-policy reconciler and the unit that reasserts it at boot, then runs it once               |
 | `provision_deploy_slot.py`      | **Per stack, not per host.** Grants one keypair a forced command reaching one stack, and renders `authorized_keys` from its own register           |
 
@@ -35,7 +35,9 @@ makes this the right response to "I am not sure whether that host is current".
 
 `nat-gateway.sh` is deliberately outside `run-all.sh`. Exactly one host in the
 estate is the gateway, and the script refuses to run anywhere the estate's
-egress could not work from.
+egress could not work from. On edge1, the gateway, the `egress_nat` role
+delivers the same reconciler and unit through the gated pull (step 2), so nobody
+runs the script there by hand; the script stays as code.
 
 `app-host-isolation.sh` is deliberately outside `run-all.sh` too, for the
 matching reason: it is scoped to app hosts, and its reconciler
@@ -50,7 +52,8 @@ only route off the subnet is the private network's own gateway. Nothing is
 routed there until the network stack declares a default route, and nothing
 forwards at the far end until one host has been provisioned as the gateway.
 Both halves are `branchLeft/shared-infra`'s: the route is in
-`hetzner/network.ts`, the forwarding is `provision/nat-gateway.sh`.
+`hetzner/network.ts`, the forwarding is the NAT reconciler
+(`provision/branchleft_nat.sh`), which the `egress_nat` role delivers to edge1.
 
 **Both have to be live before the private-only host is created**, not merely
 before this runbook is run against it. Cloud-init installs `ca-certificates`,
@@ -235,6 +238,22 @@ ciphertext, and neither may be committed.
 
 ### 2. Make the gateway forward
 
+Nothing is run by hand for the forwarding itself. The `egress_nat` role delivers it:
+edge1's playbook applies the role with `egress_nat_gateway_enabled` on, a value the
+owner-only checks pin to edge1 alone (a second gateway would loop the estate's
+egress). The role installs the NAT reconciler and its unit from `hetzner/provision`,
+runs it, and puts the previous files back if the run fails. The route to the host is
+the gated `ansible-delivery` run on `main` (the plan job, the approval, then the
+apply); wait for that run to finish on edge1 before step 3, and before any
+private-only host is created.
+
+A freshly created or rebuilt edge1 first gets the gated pull from a one-time root
+bootstrap that the owner runs by hand, as described in
+[ansible/roles/ansible_runtime/README.md](../ansible/roles/ansible_runtime/README.md)
+("How it is delivered"). That README says the command is in the owner's edge1
+runbook; no runbook in this repository carries it, so the owner supplies it, and
+nothing on edge1 is gated until that bootstrap has run.
+
 From the repository root, not from `hetzner/` — the paths below are
 repo-root-relative, and step 1 left the shell one directory down. Set
 `edge1`'s address once, from a lookup rather than a literal — every command
@@ -244,15 +263,19 @@ those steps independently, later:
 ```bash
 cd ~/branchLeft/shared-infra
 EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
-scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@"$EDGE1_IPV4":/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/nat-gateway.sh'
 ```
 
-Idempotent, and the right response to "is that host still the gateway". Re-run
-it after a Docker reinstall: the rules live in netfilter, and the chain they
-are inserted into is one Docker owns.
+A second apply does not put back a rule that was lost while the unit stays active.
+The one such case is a Docker reinstall: the rules live in netfilter, and the chain
+they are inserted into is one Docker owns. After a Docker reinstall, run the reconciler
+again by restarting its unit, then repeat step 3:
 
-The trailing `/.` on the `scp` source is load-bearing: without it, `scp -r`
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'systemctl restart branchleft-nat.service'
+```
+
+The steps below that copy `hetzner/provision/` to a host with `scp -r` share two
+details. The trailing `/.` on the `scp` source is load-bearing: without it, `scp -r`
 copies the directory _inside_ the destination once the destination already
 exists, nesting a stale copy under a fresh one on any re-run. The destination
 itself must carry **no** trailing slash — `scp` in SFTP mode fails outright on
@@ -266,9 +289,8 @@ may run a different one. CPython recompiles on a source size/mtime mismatch
 rather than trusting a foreign `.pyc`, so this is not a live defect, but a
 stray bytecode file is still confusing to find mid-incident and has no
 business being the host's copy of anything the repository doesn't itself
-contain. The `find … -prune -exec rm -rf` above runs before anything else on
-the host reads the directory, and is repeated at every other `scp -r
-hetzner/provision/.` below for the same reason.
+contain. The `find … -prune -exec rm -rf` in each of those commands runs before
+anything else on the host reads the directory.
 
 ### 3. Confirm the gateway is forwarding
 
@@ -354,32 +376,17 @@ docker.service` on the host is the first thing to read.
 The base sequence above installs `branchleft-compose@.service`, the shared
 template every stack's compose unit instantiates, but no per-stack override.
 Overrides are committed beside the stack that needs one, under
-`hetzner/*/systemd/`, and every `scp` in this runbook carries only
-`hetzner/provision/.` — never a sibling directory — so a freshly rebuilt
-host has the template and no override until something else installs one.
-This is the same shape a fix elsewhere in this runbook set already closed
-one layer later, at the redeploy a rebuild eventually reaches; closing it
-here means a bare rebuild never has a window where it is missing.
+`hetzner/*/systemd/`, and each is installed by the role that owns its stack:
+`edge_stack` installs the edge drop-in and `monitoring_stack` the monitoring
+drop-in. The edge1 playbook runs both roles on each gated apply, so this step
+has no command of its own. Until that gated apply has run on a freshly rebuilt
+host, the host has the template and no override.
 
 Doc 14 §3.1 keeps monitoring co-located on `edge1` until TENANT_1, so
 `edge1` is the only host carrying a committed drop-in today — re-check that
-split before reusing this step once a standalone monitoring host exists.
-`$EDGE1_IPV4` is set under step 2 above; re-set it first if you are entering
-here independently.
-
-```bash
-hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
-```
-
-The same command `RUNBOOK-monitoring.md`'s drop-in step already runs. It
-walks every committed `*/systemd/*.override.conf` and installs the lot onto
-whichever single host it's pointed at, with no per-stack mapping — safe to
-point at `edge1` here and again from that runbook later, since re-installing
-an unchanged drop-in is a no-op. It is not safe to point at `app1` or `db1`
-today: neither runs a stack with a committed drop-in, and the script would
-install `edge`'s and `monitoring`'s onto a host that starts neither. Neither
-drop-in takes effect until its unit next starts or restarts, which nothing
-has done yet on a freshly provisioned host.
+split before this step is reused once a standalone monitoring host exists.
+Neither drop-in takes effect until its unit next starts or restarts: see
+`RUNBOOK-monitoring.md` step 6 (`edge`) and step 7a (`monitoring`).
 
 ### 5. Provision a host that has no public address
 

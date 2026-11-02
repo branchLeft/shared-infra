@@ -280,21 +280,38 @@
       - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
       - '{{ playbook_dir }}/request.yml'
   tasks:
+    # The JSON callback reports each task as skipped or not. A recap cannot show
+    # a skipped gate, so the effect and the marker are each read by name.
     - name: Request the step again with its tag and confirmation
       ansible.builtin.command:
         argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_one', '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_ONE'] }}"
+      environment:
+        ANSIBLE_STDOUT_CALLBACK: json
       register: oneoff_guarded_tasks_run_again
       failed_when: false
       changed_when: false
 
-    - name: Assert the second request succeeded and reported no change
+    - name: Assert the second request succeeded, changed nothing, and skipped the effect and the marker
       ansible.builtin.assert:
         that:
           - oneoff_guarded_tasks_run_again.rc == 0
-          - oneoff_guarded_tasks_run_again.stdout is search('changed=0 ')
-          - oneoff_guarded_tasks_run_again.stdout is not search('changed=[1-9]')
+          - oneoff_guarded_tasks_again_changed == 0
+          - oneoff_guarded_tasks_again_effect | length == 1
+          - (oneoff_guarded_tasks_again_effect[0].hosts.values() | first).get('skipped', false)
+          - oneoff_guarded_tasks_again_marker | length == 1
+          - (oneoff_guarded_tasks_again_marker[0].hosts.values() | first).get('skipped', false)
         quiet: true
-        fail_msg: A second request of EXAMPLE_STEP_ONE with its marker present reported a change, or failed.
+        fail_msg: A second request of EXAMPLE_STEP_ONE with its marker present changed something, failed, or ran a task it should skip.
+      vars:
+        oneoff_guarded_tasks_again_plays: '{{ oneoff_guarded_tasks_run_again.stdout | from_json }}'
+        oneoff_guarded_tasks_again_tasks: '{{ oneoff_guarded_tasks_again_plays.plays[0].tasks }}'
+        oneoff_guarded_tasks_again_changed: '{{ oneoff_guarded_tasks_again_plays.stats.values() | map(attribute="changed") | sum }}'
+        oneoff_guarded_tasks_again_effect: >-
+          {{ oneoff_guarded_tasks_again_tasks
+          | selectattr('task.name', 'search', 'Run the placeholder effect of EXAMPLE_STEP_ONE') | list }}
+        oneoff_guarded_tasks_again_marker: >-
+          {{ oneoff_guarded_tasks_again_tasks
+          | selectattr('task.name', 'search', 'Write the marker of EXAMPLE_STEP_ONE') | list }}
 
 # 7. A step whose effect fails writes no marker, and the next request tries again.
 - name: Request EXAMPLE_STEP_TWO, whose effect fails, twice
@@ -398,3 +415,144 @@
           - oneoff_guarded_tasks_fresh_stat.results[1].stat.exists
         quiet: true
         fail_msg: The first request on a fresh state directory did not leave a root-owned 0755 directory holding the marker.
+
+# 9. A check-mode request for step two reports its marker as a change, with the
+# destination and text the step sets, and skips its effect (a command is not run
+# in check mode). Nothing is written. Step two's marker is reached only when its
+# effect succeeds, which it never does here, so this check is the only one that
+# reads that marker task.
+- name: Request EXAMPLE_STEP_TWO in check mode with the diff
+  hosts: localhost
+  gather_facts: false
+  vars:
+    oneoff_guarded_tasks_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+  tasks:
+    - name: Request the step in check mode with its tag, confirmation and diff
+      ansible.builtin.command:
+        argv:
+          "{{ oneoff_guarded_tasks_request + ['--check', '--diff', '--tags', 'oneoff_guarded_tasks_step_two',
+          '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_TWO'] }}"
+      environment:
+        ANSIBLE_STDOUT_CALLBACK: json
+      register: oneoff_guarded_tasks_step_two_check
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the marker of step two is a change with its destination and text, and its effect is skipped
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_step_two_check.rc == 0
+          - oneoff_guarded_tasks_two_effect | length == 1
+          - (oneoff_guarded_tasks_two_effect[0].hosts.values() | first).get('skipped', false)
+          - oneoff_guarded_tasks_two_marker | length == 1
+          - (oneoff_guarded_tasks_two_marker[0].hosts.values() | first).get('changed', false)
+          - oneoff_guarded_tasks_two_diff.after | trim == 'EXAMPLE_STEP_TWO'
+          - oneoff_guarded_tasks_two_diff | to_json is search('/EXAMPLE_STEP_TWO')
+        quiet: true
+        fail_msg: In check mode step two did not report its marker as a change with the step-two destination and text, or its effect was not skipped.
+      vars:
+        oneoff_guarded_tasks_two_tasks: '{{ (oneoff_guarded_tasks_step_two_check.stdout | from_json).plays[0].tasks }}'
+        oneoff_guarded_tasks_two_result: '{{ oneoff_guarded_tasks_two_marker[0].hosts.values() | first }}'
+        oneoff_guarded_tasks_two_diff: >-
+          {{ oneoff_guarded_tasks_two_result.diff
+          if oneoff_guarded_tasks_two_result.diff is mapping
+          else oneoff_guarded_tasks_two_result.diff | first }}
+        oneoff_guarded_tasks_two_effect: >-
+          {{ oneoff_guarded_tasks_two_tasks
+          | selectattr('task.name', 'search', 'Run the failing placeholder command of EXAMPLE_STEP_TWO') | list }}
+        oneoff_guarded_tasks_two_marker: >-
+          {{ oneoff_guarded_tasks_two_tasks
+          | selectattr('task.name', 'search', 'Write the marker of EXAMPLE_STEP_TWO') | list }}
+
+- name: Check the step-two check-mode run wrote no marker
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the marker of EXAMPLE_STEP_TWO
+      ansible.builtin.stat:
+        path: '{{ scenario_state_dir }}/EXAMPLE_STEP_TWO'
+      register: oneoff_guarded_tasks_two_after_check
+
+    - name: Assert the check run wrote no marker of step two
+      ansible.builtin.assert:
+        that:
+          - not oneoff_guarded_tasks_two_after_check.stat.exists
+        quiet: true
+        fail_msg: A check-mode request of EXAMPLE_STEP_TWO wrote its marker.
+
+# 10. A marker that already holds other text is not overwritten, and the effect
+# is not run, when step two is requested: the gate on the effect and the gate on
+# the marker both hold. The marker is planted here, because step two's own effect
+# never succeeds to write one.
+- name: Plant a step-two marker that holds other text
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Write a step-two marker with other text
+      ansible.builtin.copy:
+        content: "OLD_EXAMPLE_STEP_TWO\n"
+        dest: '{{ scenario_state_dir }}/EXAMPLE_STEP_TWO'
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: Request EXAMPLE_STEP_TWO with its marker present
+  hosts: localhost
+  gather_facts: false
+  vars:
+    oneoff_guarded_tasks_request:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+  tasks:
+    - name: Request the step with its tag and confirmation while its marker exists
+      ansible.builtin.command:
+        argv: "{{ oneoff_guarded_tasks_request + ['--tags', 'oneoff_guarded_tasks_step_two', '-e', 'oneoff_guarded_tasks_confirm=EXAMPLE_STEP_TWO'] }}"
+      environment:
+        ANSIBLE_STDOUT_CALLBACK: json
+      register: oneoff_guarded_tasks_two_present
+      failed_when: false
+      changed_when: false
+
+    - name: Assert the request succeeded and skipped the effect and the marker of step two
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_two_present.rc == 0
+          - oneoff_guarded_tasks_two_present_effect | length == 1
+          - (oneoff_guarded_tasks_two_present_effect[0].hosts.values() | first).get('skipped', false)
+          - oneoff_guarded_tasks_two_present_marker | length == 1
+          - (oneoff_guarded_tasks_two_present_marker[0].hosts.values() | first).get('skipped', false)
+        quiet: true
+        fail_msg: A request of EXAMPLE_STEP_TWO with its marker present ran the effect or the marker of step two, so the gates of step two do not hold.
+      vars:
+        oneoff_guarded_tasks_two_present_tasks: '{{ (oneoff_guarded_tasks_two_present.stdout | from_json).plays[0].tasks }}'
+        oneoff_guarded_tasks_two_present_effect: >-
+          {{ oneoff_guarded_tasks_two_present_tasks
+          | selectattr('task.name', 'search', 'Run the failing placeholder command of EXAMPLE_STEP_TWO') | list }}
+        oneoff_guarded_tasks_two_present_marker: >-
+          {{ oneoff_guarded_tasks_two_present_tasks
+          | selectattr('task.name', 'search', 'Write the marker of EXAMPLE_STEP_TWO') | list }}
+
+- name: Check the marker of step two still holds the text it was given
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the marker of EXAMPLE_STEP_TWO
+      ansible.builtin.command:
+        argv:
+          - cat
+          - '{{ scenario_state_dir }}/EXAMPLE_STEP_TWO'
+      register: oneoff_guarded_tasks_two_text
+      changed_when: false
+
+    - name: Assert the marker of step two was not overwritten
+      ansible.builtin.assert:
+        that:
+          - oneoff_guarded_tasks_two_text.stdout == 'OLD_EXAMPLE_STEP_TWO'
+        quiet: true
+        fail_msg: The marker of step two was overwritten by a request that should have skipped it.

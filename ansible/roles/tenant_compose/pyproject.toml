@@ -1,0 +1,24 @@
+[project]
+name = "tenant-compose-role"
+version = "0.0.0"
+# The oldest interpreter any target host provides (PY-3): Debian 13 ships Python 3.13.
+requires-python = ">=3.13"
+
+[tool.mypy]
+strict = true
+python_version = "3.13"
+# The module is a single file in library/, imported by the tests by its own name.
+mypy_path = "$MYPY_CONFIG_FILE_DIR/library"
+disallow_any_explicit = true
+
+# ANS-2: Ansible's own imports are untyped, so the override names the ansible.*
+# modules and nothing else. A blanket ignore_missing_imports is not the override.
+# PyYAML ships no types; its one import in the module carries its own narrow ignore.
+[[tool.mypy.overrides]]
+module = ["ansible.*"]
+ignore_missing_imports = true
+
+[tool.ruff]
+# The repository's ruff policy (ansible/pyproject.toml), with this role's Python floor.
+extend = "../../pyproject.toml"
+target-version = "py313"

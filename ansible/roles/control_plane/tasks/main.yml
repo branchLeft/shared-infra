@@ -248,14 +248,28 @@
 # Copied with explicit modes, not rsync. The runbook's rsync used --delete, so a
 # file removed from the repository was removed from the host; this does not
 # delete, and a file dropped from the list stays on the host until removed by hand.
-- name: Deliver the stack's files
+# The diff is not shown (ANS-16): the compose files
+# set environment variables named like passwords from other variables, and the plan's secret
+# scan would withhold the whole plan of the host over them. They hold no secret value. The
+# other files go by the next task, which shows its diff.
+- name: Deliver the stack's compose files
   ansible.builtin.copy:
     src: 'stack/{{ item }}'
     dest: '{{ control_plane_project_dir }}/{{ item }}'
     owner: root
     group: root
     mode: '0644'
-  loop: '{{ control_plane_stack_files }}'
+  loop: '{{ control_plane_stack_files | intersect(control_plane_stack_files_hidden) }}'
+  diff: false
+
+- name: Deliver the stack's other files
+  ansible.builtin.copy:
+    src: 'stack/{{ item }}'
+    dest: '{{ control_plane_project_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ control_plane_stack_files | difference(control_plane_stack_files_hidden) }}'
 
 # The next four tasks (the database start, the init phase and its stamp, the sign-in
 # service start) are for a host where the stack is not yet deployed: they start the database

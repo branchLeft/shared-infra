@@ -9,6 +9,7 @@ the workflow.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,29 @@ LIBRARY_FAILING = (
     "    def test_library_value(self) -> None:\n"
     "        self.assertEqual(3, VALUE)\n"
 )
+SKIPPING = (
+    "import unittest\n\n\n"
+    "class Skipping(unittest.TestCase):\n"
+    "    @unittest.skip('not yet')\n"
+    "    def test_skipped(self) -> None:\n"
+    "        self.assertTrue(False)\n"
+)
+PARTIALLY_SKIPPING = (
+    "import unittest\n\n\n"
+    "class Partly(unittest.TestCase):\n"
+    "    def test_passes(self) -> None:\n"
+    "        self.assertTrue(True)\n\n"
+    "    @unittest.skip('not yet')\n"
+    "    def test_skipped(self) -> None:\n"
+    "        self.assertTrue(False)\n"
+)
+EXPECTED_FAILURE = (
+    "import unittest\n\n\n"
+    "class Expected(unittest.TestCase):\n"
+    "    @unittest.expectedFailure\n"
+    "    def test_known_broken(self) -> None:\n"
+    "        self.assertEqual(1, 2)\n"
+)
 
 
 def write(path: Path, text: str) -> None:
@@ -61,8 +85,17 @@ def role_with_test(ansible: Path, name: str, text: str) -> Path:
     return role
 
 
-def run_script(ansible: Path) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "PYTHON": sys.executable}
+def fake_python(directory: Path, lines: list[str]) -> Path:
+    """An interpreter that prints the given lines and exits 0, for summaries no real run prints."""
+    path = directory / "fake-python"
+    body = "".join(f"printf '%s\\n' {shlex.quote(line)}\n" for line in lines)
+    write(path, f"#!/bin/sh\n{body}exit 0\n")
+    path.chmod(0o755)
+    return path
+
+
+def run_script(ansible: Path, python: str = sys.executable) -> subprocess.CompletedProcess[str]:
+    env = {**os.environ, "PYTHON": python}
     return subprocess.run(  # noqa: S603 - the fixed script in this repository, run with this suite's interpreter
         [str(SCRIPT), str(ansible)],
         capture_output=True,
@@ -81,6 +114,11 @@ class RoleUnitTestScript(unittest.TestCase):
 
     def assert_red(self, result: subprocess.CompletedProcess[str]) -> None:
         self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+
+    def run_with_summary(self, lines: list[str]) -> subprocess.CompletedProcess[str]:
+        role_with_test(self.ansible, "shimmed", PASSING)
+        python = fake_python(Path(self.tmp.name), lines)
+        return run_script(self.ansible, str(python))
 
     def test_empty_discovery_fails(self) -> None:
         result = run_script(self.ansible)
@@ -126,6 +164,54 @@ class RoleUnitTestScript(unittest.TestCase):
         self.assert_red(result)
         self.assertIn("test_broken_assertion", result.stdout)
         self.assertIn("gamma: unit tests failed", result.stdout)
+
+    def test_a_fully_skipped_suite_fails_and_is_named(self) -> None:
+        role_with_test(self.ansible, "skipper", SKIPPING)
+        result = run_script(self.ansible)
+        self.assert_red(result)
+        self.assertIn("skipper: unit suites skipped or expected-failed", result.stdout)
+
+    def test_a_partly_skipped_suite_fails_and_is_named(self) -> None:
+        role_with_test(self.ansible, "partly", PARTIALLY_SKIPPING)
+        result = run_script(self.ansible)
+        self.assert_red(result)
+        self.assertIn("partly: unit suites skipped or expected-failed", result.stdout)
+
+    def test_an_expected_failure_fails_and_is_named(self) -> None:
+        role_with_test(self.ansible, "expected", EXPECTED_FAILURE)
+        result = run_script(self.ansible)
+        self.assert_red(result)
+        self.assertIn("expected: unit suites skipped or expected-failed", result.stdout)
+
+    def test_exit_zero_with_no_result_line_after_the_ran_line_fails(self) -> None:
+        result = self.run_with_summary(["Ran 3 tests in 0.001s"])
+        self.assert_red(result)
+        self.assertIn("no OK or FAILED result line", result.stdout)
+
+    def test_a_skip_is_caught_when_a_stray_ok_line_follows_the_summary(self) -> None:
+        result = self.run_with_summary(["Ran 1 test in 0.000s", "", "OK (skipped=1)", "OK"])
+        self.assert_red(result)
+        self.assertIn("shimmed: unit suites skipped or expected-failed", result.stdout)
+
+    def test_a_failed_summary_with_a_stray_ok_line_after_it_fails(self) -> None:
+        result = self.run_with_summary(["Ran 1 test in 0.000s", "", "FAILED (failures=1)", "OK"])
+        self.assert_red(result)
+        self.assertIn("shimmed: unit suites reported FAILED", result.stdout)
+
+    def test_a_zero_run_followed_by_ok_fails(self) -> None:
+        result = self.run_with_summary(["Ran 0 tests in 0.000s", "", "OK"])
+        self.assert_red(result)
+        self.assertIn("shimmed: the unit suites ran zero tests", result.stdout)
+
+    def test_no_ran_line_at_all_fails(self) -> None:
+        result = self.run_with_summary(["OK"])
+        self.assert_red(result)
+        self.assertIn("no unittest summary", result.stdout)
+
+    def test_a_result_line_that_is_not_ok_or_failed_fails(self) -> None:
+        result = self.run_with_summary(["Ran 1 test in 0.000s", "", "OKAY"])
+        self.assert_red(result)
+        self.assertIn("no OK or FAILED result line", result.stdout)
 
     def test_a_role_library_and_its_files_are_on_the_path(self) -> None:
         role = role_with_test(self.ansible, "typed", LIBRARY_PASSING)

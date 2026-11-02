@@ -1,0 +1,55 @@
+---
+# Puts the three rules the host's isolation policy writes for the spool's drain bridge in
+# place, in the order it writes them: the forward drop in DOCKER-USER, then the host
+# drop in INPUT with the established-traffic accept inserted above it.
+- name: Drop what the drain bridge forwards out
+  ansible.builtin.command:
+    argv:
+      - '{{ tenant_compose_iptables }}'
+      - -t
+      - filter
+      - -I
+      - DOCKER-USER
+      - 1
+      - -i
+      - '{{ tenant_compose_spool_bridge }}'
+      - '!'
+      - -o
+      - '{{ tenant_compose_spool_bridge }}'
+      - -j
+      - DROP
+  changed_when: true
+
+- name: Drop what the drain bridge sends to the host
+  ansible.builtin.command:
+    argv:
+      - '{{ tenant_compose_iptables }}'
+      - -t
+      - filter
+      - -I
+      - INPUT
+      - 1
+      - -i
+      - '{{ tenant_compose_spool_bridge }}'
+      - -j
+      - DROP
+  changed_when: true
+
+- name: Accept the replies to what the host sent the drain bridge
+  ansible.builtin.command:
+    argv:
+      - '{{ tenant_compose_iptables }}'
+      - -t
+      - filter
+      - -I
+      - INPUT
+      - 1
+      - -i
+      - '{{ tenant_compose_spool_bridge }}'
+      - -m
+      - conntrack
+      - --ctstate
+      - ESTABLISHED,RELATED
+      - -j
+      - ACCEPT
+  changed_when: true

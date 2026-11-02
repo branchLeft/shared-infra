@@ -1,0 +1,71 @@
+---
+argument_specs:
+  main:
+    short_description: Run the control plane's database and identity one-off steps only when named and confirmed, and record that each ran
+    description: >-
+      On a plain apply, makes the input directory the owner places the step inputs in
+      (root, group 1000, mode 0750) and runs no step. A step runs only when its tag
+      (control_plane_db_ followed by its id) is named on the command line and
+      control_plane_db_step is that id. The three steps are migrate (apply a pending
+      migration), identity (run the identity reconciler) and provision (create the
+      portal database, roles and logins, and write the two connection URL files). A
+      step writes a marker only after its effect succeeded, removes the administrator
+      URL file on every exit, and is skipped when its marker exists.
+    author: branchLeft
+    options:
+      control_plane_db_step:
+        type: str
+        default: ''
+        description: >-
+          The step this run confirms, one of migrate, identity and provision. Empty on a
+          plain apply. The gated pull sets it on the command line with the matching tag;
+          a step whose tag is named without this value equal to its id is refused with a
+          message that begins REFUSED. Set in an inventory or a play it defeats the second
+          key, so it is not set there.
+        choices:
+          - ''
+          - migrate
+          - identity
+          - provision
+      control_plane_db_apps_image:
+        type: str
+        default: ''
+        description: >-
+          The applications image, pinned by digest as NAME@sha256:64 lower-case hex
+          digits. Empty on a plain apply. A step refuses an empty value or a reference
+          without a digest. The migrate marker is keyed by this digest, so a new digest
+          is a new migration request and the same digest is skipped.
+      control_plane_db_identity_hostnames:
+        type: dict
+        description: >-
+          The three public hostnames the identity reconciler is configured with. Each is
+          required by the identity step and unused by the others.
+        default:
+          console: ''
+          portal: ''
+          identity: ''
+        options:
+          console:
+            type: str
+            default: ''
+            description: Hostname of the operator console.
+          portal:
+            type: str
+            default: ''
+            description: Hostname of the tenant portal.
+          identity:
+            type: str
+            default: ''
+            description: >-
+              Hostname of the sign-in service. The reconciler container maps it to the
+              loopback address and reaches the service on port 8300.
+      control_plane_db_identity_tenants:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The tenant list of the reconciler's configuration. Empty by default. An entry
+          names a tenant, and a tenant's identity must not be committed to a public
+          repository, so a non-empty list needs a source the owner has chosen. The
+          identity marker is keyed by a hash of the whole rendered configuration, so
+          adding an entry is a new request and an unchanged list is skipped.

@@ -1,0 +1,51 @@
+---
+# A plain apply makes the directory the owner places step inputs in and runs no
+# step. Each step is imported with the never tag, which Ansible runs only when that
+# exact tag is named, plus its own tag, and it also needs control_plane_db_step to
+# be its id (see the README, "The guard"). Nothing here carries the always tag: a
+# step run is the step's own tasks and nothing a plain apply would repeat.
+
+- name: Look at the configuration directory the step inputs live under
+  ansible.builtin.stat:
+    path: '{{ control_plane_db_config_dir }}'
+    get_checksum: false
+  register: control_plane_db_config_dir_stat
+
+# The input files are 0640 for the image's group, so what keeps every other
+# account from them is this directory. The control_plane role makes it; this role
+# does not widen it and refuses to build under one that is not.
+- name: Refuse a configuration directory that is absent, not root's, or open to others
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_config_dir_stat.stat.exists
+      - control_plane_db_config_dir_stat.stat.isdir
+      - (control_plane_db_config_dir_stat.stat.pw_name | default('')) == 'root'
+      - control_plane_db_config_dir_stat.stat.mode in ['0750', '0700']
+    quiet: true
+    fail_msg: 'REFUSED: {{ control_plane_db_config_dir }} must exist, be a directory of root and have mode 0750 or 0700 before this role builds under it.'
+
+- name: Create the directory the owner places the step inputs in
+  ansible.builtin.file:
+    path: '{{ control_plane_db_input_dir }}'
+    state: directory
+    owner: '{{ control_plane_db_input_owner }}'
+    group: '{{ control_plane_db_input_gid }}'
+    mode: '{{ control_plane_db_input_dir_mode }}'
+
+- name: Guarded step migrate
+  ansible.builtin.import_tasks: _migrate.yml
+  tags:
+    - never
+    - control_plane_db_migrate
+
+- name: Guarded step identity
+  ansible.builtin.import_tasks: _identity.yml
+  tags:
+    - never
+    - control_plane_db_identity
+
+- name: Guarded step provision
+  ansible.builtin.import_tasks: _provision.yml
+  tags:
+    - never
+    - control_plane_db_provision

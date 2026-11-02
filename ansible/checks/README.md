@@ -78,7 +78,11 @@ a role edit is not gated by anything here. The control on a role edit is the own
 deploy approval of the gated apply, which is not yet wired. Which files the reviewer App
 may merge alone is not yet decided by the owner.
 
-Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` (no other variable: a
+Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (today two rows: edge1's `deploy_tooling_host_class`
+with `egress_nat_gateway_enabled: true`, the one switch that makes a host the estate's NAT gateway, so
+only edge1 can carry it; and app1's `deploy_tooling_host_class` with `deploy_tooling_policy_variant`,
+which the role takes with no default for the class and which a host of class app must name; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
@@ -125,7 +129,8 @@ is not loaded there.
   runs only the derived `.yml` path, and `ansible-playbook` would run any other name, so
   R6 must read every file in the tree. Each enrolled `HOST.yml` has one play, with no key
   but `name`, `hosts`, `gather_facts`, `vars`, `vars_files`, `pre_tasks` and `roles`, on
-  `hosts: all`, `vars` exactly `enrolled_host: HOST` and nothing else, `vars_files` exactly the shared
+  `hosts: all`, `vars` exactly `enrolled_host: HOST` plus that host's row in `HOST_PLAY_VARS`
+  and nothing else, `vars_files` exactly the shared
   include and `../trust/HOST.yml`, then `../owner_vars/HOST.yml` if and only if that file
   exists (the playbook and the file must agree both ways), `roles` the runtime entry then the bare trigger as the
   first two entries and nothing attached to either, then only plain entries from that
@@ -167,8 +172,13 @@ is not loaded there.
   exactly the keys its host is allowed and no other, with values of the right shape. For
   edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
   `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
-  key (a source address list, say) is refused. A host with no allowed keys may have no file.
-  The check does not judge a key's text; the `ci_login` role does. The directory is the
+  key (a source address list, say) is refused. For ops1 the one key is `pull_trigger_steps`,
+  the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text. R10 reads
+  only that shape. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
+  word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
+  real file through the program's own `parse_config`. `control_plane_db_step` is never an owner
+  key: it is the role's second key and only the pull sets it. A host with no allowed keys may
+  have no file. The check does not judge a key's text; the `ci_login` role does. The directory is the
   owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
 - **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
   (owner ruling, option A), it is the first role after the two
@@ -340,3 +350,56 @@ venv cache stays cold until the Monday sweep.
 Named limit: that only an org-admin pull-request bypass can skip the queue comes from the org
 ruleset standard. The ruleset's bypass list could not be read with the App tokens, so the owner
 should confirm it from the owner's view.
+
+## run_role_unit_tests.sh: the role unit suites
+
+The lint job runs `run_role_unit_tests.sh` once, and it runs the unit tests of every
+`roles/*/tests/unit` directory found by glob, with no list to edit. A suite fails the step when it
+fails, runs no test, or skips or expected-fails a test: a role suite is a control, and a skipped
+test is a control that does not run, so `OK (skipped=N)` and `OK (expected failures=N)` both fail
+the step and name the role.
+
+## test_plan_diff_scan.py: no copied file trips the plan's secret scan
+
+The gated apply asks each host what a run would change, in check mode, with a diff. Before the plan
+is shown to the approver, a scan reads that diff and withholds all of it when any line looks like a
+secret. A role that copies a whole file (a program, a compose file) puts the file into the diff as it
+changes, so one line that merely reads like a secret, such as a docstring sentence or an environment
+variable reference, withholds the plan of the host: nothing can be approved.
+
+The control is a task keyword, `diff: false`, set on the copy or template task whose file is not
+secret but reads as secret-like text. The scan is a backstop, never loosened to fit a file (ANS-16).
+There is no list of exceptions (owner ruling of 2 Nov 2026). A line that is prose is reworded so it no
+longer matches. `diff: false` is set only on the task of a file whose matching line is a variable
+reference or a name that cannot change, and each such task carries a comment citing ANS-16.
+
+What the test enforces, over every `copy` and `template` task of the roles the playbooks list:
+
+- A task whose source has a matching line sets `diff: false`, on the task or on a block around it.
+  `no_log` alone does not count: it hides the result, not the diff.
+- A task that sets `diff: false` hides only files that match. A file with no matching line under
+  it is a finding, so a loop that mixes the two is split into a hidden task and a visible one, with
+  a constant list of the hidden files in the role's `vars/` (`control_plane`, `monitoring_stack`,
+  `demo1_build`). The test resolves those loops through `intersect`, `difference`, `selectattr` and
+  `rejectattr` against a list, and no other filter. A task that sets `no_log` is not held to this:
+  it renders a secret into the file, which its source does not show.
+- A source the test cannot find or resolve is a finding unless the task sets `diff: false`. Inline
+  `content` and `remote_src` are skipped, as there is no local file. One list is made while the
+  role runs: `edge_stack_deliver` is the static CrowdSec files of the role's vars plus the files
+  directly in `crowdsec/acquis.d`, found by a `find` on the controller, and the test makes the same
+  list from the checkout, so the CrowdSec and acquisition files stay visible in the plan and a
+  matching line in one fails.
+
+A finding names the task file, the task, the source and the line number, never the text of the line.
+The test reads the source of a task, not the text Ansible renders from it; a template whose rendered
+text differs from its source is judged by its source.
+
+The pattern is the `credential-assignment` entry of the backstop in the step "Judge the answers,
+scan the diff and write the result" of the `ssh-check-hosts` action in branchLeft/github-workflows,
+at the tag `ansible-gated-apply.yml` pins (v1.0.19 when this was written). The workflow runs it as
+`grep -Eiq` on the diff, line by line, in the C locale. The test translates it: `re.I` for `-i`,
+`re.A` so that `\s` is the ASCII set the C locale gives the POSIX space class, `\s` for
+`[[:space:]]`, and a split on the newline alone (not `str.splitlines`, which also splits on form
+feeds). A test runs the workflow's own expression through `grep -Ei` on sample lines and compares
+verdicts. The other entries of the backstop name key material and tokens that no role file holds, so
+they are not copied.

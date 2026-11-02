@@ -213,17 +213,83 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_three_db1_inputs(self) -> None:
+    def test_the_rows_name_the_edge1_ops1_db1_and_app1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
             {
+                "edge1": [
+                    "monitoring_stack_smtp_username",
+                    "monitoring_stack_smtp_password",
+                    "monitoring_stack_healthchecks_ping_url",
+                    "monitoring_stack_alert_recipient_email",
+                    "monitoring_stack_mailhost_ping_url",
+                    "monitoring_stack_grafana_admin_password",
+                    "monitoring_stack_snds_data_url",
+                    "ntfy_pager_pager_token",
+                    "ntfy_pager_watcher_token",
+                    "ntfy_pager_owner_password_hash",
+                    "ntfy_pager_machine_password_hash",
+                ],
+                "ops1": [
+                    "backup_worker_db_host",
+                    "backup_worker_db_user",
+                    "backup_worker_db_password",
+                    "backup_worker_db_ca_pem",
+                    "backup_worker_bucket",
+                    "backup_worker_s3_endpoint",
+                    "backup_worker_s3_region",
+                    "backup_worker_s3_access_key_id",
+                    "backup_worker_s3_secret_access_key",
+                    "backup_worker_tenants",
+                    "backup_restore_state_copy_recipient",
+                    "backup_restore_state_copy_dest_access_key_id",
+                    "backup_restore_state_copy_estate_bucket",
+                    "backup_restore_state_copy_estate_endpoint",
+                    "backup_restore_state_copy_estate_region",
+                    "backup_restore_state_copy_estate_access_key_id",
+                    "backup_restore_state_copy_tenant_bucket",
+                    "backup_restore_state_copy_tenant_endpoint",
+                    "backup_restore_state_copy_tenant_region",
+                    "backup_restore_state_copy_tenant_access_key_id",
+                ],
                 "db1": [
                     "db1_stack_exporter_password",
                     "db1_grants_tenants",
                     "db1_grants_ops1_host",
-                ]
+                ],
+                "app1": [
+                    "website_app1_smtp_host",
+                    "website_app1_smtp_port",
+                    "website_app1_smtp_user",
+                    "website_app1_smtp_password",
+                    "deploy_slot_keys_slots",
+                ],
             },
+        )
+
+    def test_app1_applies_the_loader_then_the_website_role_and_the_deploy_roles(self) -> None:
+        # The order is the point: the loader sets the four SMTP facts the website role requires and
+        # the slots the slot-keys role requires, so both must follow it, and all must follow the
+        # two pull roles (check_enrolment R11). The host baseline installs Docker, which the
+        # website role needs, so it too sits before the role. The deploy tooling goes before the
+        # slot keys: the slot program needs the wrapper the tooling installs. The export bundler
+        # is last.
+        playbook = _mapping_list(_read(ROOT / "ansible" / "playbooks" / "app1.yml"))
+        applied = [Path(str(entry.get("role", entry))).name for entry in playbook]
+        self.assertEqual(
+            applied,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                LOADER,
+                "host_baseline",
+                "breakglass_grant_host",
+                "website_app1",
+                "deploy_tooling",
+                "deploy_slot_keys",
+                "export_bundler",
+            ],
         )
 
 
@@ -234,12 +300,31 @@ class Mutations(unittest.TestCase):
         self.ansible = Path(temp.name) / "ansible"
         real = ROOT / "ansible"
         leave_out = shutil.ignore_patterns("molecule", "tests", "files", "templates")
-        for role in (LOADER, "db1_stack", "db1_grants", "db1_backup_timers", "tunnel_account"):
+        for role in (
+            LOADER,
+            "db1_stack",
+            "db1_grants",
+            "db1_backup_timers",
+            "tunnel_account",
+            "website_app1",
+            "deploy_tooling",
+            "deploy_slot_keys",
+            "monitoring_stack",
+            "ntfy_pager",
+            "node_exporter",
+            "exporters_and_collectors",
+            "nextcloud_stack",
+            "backup_worker",
+            "backup_restore",
+        ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
         shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
         (self.ansible / "playbooks").mkdir()
-        shutil.copy(real / "playbooks" / "db1.yml", self.ansible / "playbooks" / "db1.yml")
+        for host in ("db1", "app1", "edge1", "ops1"):
+            shutil.copy(
+                real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
+            )
 
     def _edit(self, relative: str, old: str, new: str) -> None:
         path = self.ansible / relative
@@ -302,8 +387,115 @@ class Mutations(unittest.TestCase):
         self._expect("pull_trigger_signers is a protected or internal name")
 
     def test_a_host_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
-        self._edit("checks/host_roles.yml", "  - host_inputs\n", "")
+        self._edit("checks/host_roles.yml", "db1:\n  - host_inputs\n", "db1:\n")
         self._expect("host_inputs is not on db1's list")
+
+    def test_app1_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
+        self._edit("checks/host_roles.yml", "app1:\n  - host_inputs\n", "app1:\n")
+        self._expect("host_inputs is not on app1's list")
+
+    def test_an_app1_row_name_that_is_no_roles_required_argument_is_found(self) -> None:
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "    - website_app1_smtp_password\n",
+            "    - website_app1_smtp_passwrod\n",
+        )
+        self._expect("website_app1_smtp_passwrod is not a required argument")
+
+    def test_a_default_for_the_website_roles_smtp_port_is_found(self) -> None:
+        path = self.ansible / "roles" / "website_app1" / "defaults" / "main.yml"
+        path.write_text(
+            path.read_text(encoding="utf-8") + "website_app1_smtp_port: '25'\n", encoding="utf-8"
+        )
+        self._expect("role website_app1 gives website_app1_smtp_port a default")
+
+    def test_the_website_role_applied_before_the_loader_on_app1_is_found(self) -> None:
+        self._edit(
+            "playbooks/app1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/website_app1 # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/app1.yml applies a role before host_inputs")
+
+    def test_an_app1_input_the_loader_sets_with_no_row_is_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - website_app1_smtp_user\n", "")
+        self._expect("the input task sets")
+
+    # Safety class: the deploy slots are private (tenant stack names and public keys), so the loader
+    # is their only route onto a pulled host. Red with the name taken from app1's row while the
+    # loader still sets it, green with the row as it is.
+    def test_the_deploy_slots_dropped_from_app1s_row_are_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - deploy_slot_keys_slots\n", "")
+        self._expect("the input task sets")
+
+    def test_a_misspelt_deploy_slots_name_in_app1s_row_is_found(self) -> None:
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "    - deploy_slot_keys_slots\n",
+            "    - deploy_slot_keys_slotz\n",
+        )
+        self._expect("deploy_slot_keys_slotz is not a required argument")
+
+    def test_a_default_for_the_deploy_slots_is_found(self) -> None:
+        path = self.ansible / "roles" / "deploy_slot_keys" / "defaults" / "main.yml"
+        path.write_text("deploy_slot_keys_slots: []\n", encoding="utf-8")
+        self._expect("role deploy_slot_keys gives deploy_slot_keys_slots a default")
+
+    def test_the_deploy_slots_role_applied_before_the_loader_on_app1_is_found(self) -> None:
+        self._edit(
+            "playbooks/app1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/deploy_slot_keys # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/app1.yml applies a role before host_inputs")
+
+    # Safety class (secrets): the ops1 and edge1 rows are the whole of what their files may hold.
+    # Each is red when a key is dropped from the row or a role is applied ahead of the loader, and
+    # green on the real tree (test_the_copy_passes_before_any_mutation).
+    def test_an_ops1_input_the_loader_sets_with_no_row_is_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - backup_worker_db_password\n", "")
+        self._expect("the input task sets")
+
+    def test_an_edge1_input_the_loader_sets_with_no_row_is_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - ntfy_pager_pager_token\n", "")
+        self._expect("the input task sets")
+
+    def test_an_ops1_row_name_that_is_no_roles_required_argument_is_found(self) -> None:
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "    - backup_restore_state_copy_recipient\n",
+            "    - backup_restore_state_copy_recipeint\n",
+        )
+        self._expect("backup_restore_state_copy_recipeint is not a required argument")
+
+    def test_a_default_for_an_edge1_input_is_found(self) -> None:
+        path = self.ansible / "roles" / "monitoring_stack" / "defaults" / "main.yml"
+        path.write_text("---\nmonitoring_stack_smtp_password: x\n", encoding="utf-8")
+        self._expect("role monitoring_stack gives monitoring_stack_smtp_password a default")
+
+    def test_ops1_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
+        self._edit("checks/host_roles.yml", "ops1:\n  - host_inputs\n", "ops1:\n")
+        self._expect("host_inputs is not on ops1's list")
+
+    def test_a_backup_role_applied_before_the_loader_on_ops1_is_found(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/backup_worker # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/ops1.yml applies a role before host_inputs")
+
+    def test_the_monitoring_stack_applied_before_the_loader_on_edge1_is_found(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/monitoring_stack # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/edge1.yml applies a role before host_inputs")
 
     def test_a_host_playbook_that_does_not_apply_the_loader_is_found(self) -> None:
         self._edit(

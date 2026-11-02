@@ -1,0 +1,96 @@
+---
+# Constants of the control-plane stack, not inputs: a caller cannot override
+# them with an inventory variable, because role vars outrank inventory vars.
+
+# The three step ids. pull_trigger holds the same closed list; a unit test fails
+# when the two differ.
+control_plane_db_step_ids:
+  - migrate
+  - identity
+  - provision
+
+# The step id as the gated pull sends it, and the text it must be. \Z, not $, so a
+# trailing line break does not pass.
+control_plane_db_step_pattern: '^[a-z][a-z0-9_]{0,31}\Z'
+
+# Digest-pinned image reference. A tag is not a pin.
+control_plane_db_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
+
+# A password written into a connection URL must survive as one URL component, so
+# only the RFC 3986 unreserved characters are accepted, and at least 24 of them.
+control_plane_db_password_pattern: '^[A-Za-z0-9._~-]{24,}\Z'
+
+# The one line break the program strips from the end of a secret file it reads.
+control_plane_db_trailing_break_pattern: '\r?\n\Z'
+
+control_plane_db_config_dir: /etc/branchleft/control-plane
+control_plane_db_input_dir: /etc/branchleft/control-plane/provision
+control_plane_db_state_dir: /var/lib/branchleft/control-plane-db
+control_plane_db_stack_state_dir: /var/lib/branchleft/control-plane
+
+# The files the owner places in the input directory before a step. The names are
+# the ones the applications image's program is told about by its *_FILE variables.
+control_plane_db_admin_url_name: admin-url
+control_plane_db_tenant_password_name: tenant-password
+control_plane_db_owner_password_name: owner-password
+control_plane_db_provisioner_password_name: provisioner-password
+control_plane_db_admin_url_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_admin_url_name }}'
+control_plane_db_tenant_password_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_tenant_password_name }}'
+control_plane_db_owner_password_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_owner_password_name }}'
+control_plane_db_provisioner_password_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_provisioner_password_name }}'
+
+# The input files' owner, group and mode. The group is the applications image's
+# user, which reads them through a read-only mount and nothing else can.
+control_plane_db_input_owner: root
+control_plane_db_input_gid: 1000
+control_plane_db_input_mode: '0640'
+control_plane_db_input_dir_mode: '0750'
+control_plane_db_image_user: '1000:1000'
+
+# The two connection URL files the applications read, and the one login each holds.
+# The provisioner login has no URL file: nothing reads it.
+control_plane_db_portal_url_file: '{{ control_plane_db_config_dir }}/portal-database-url'
+control_plane_db_console_url_file: '{{ control_plane_db_config_dir }}/console-database-url'
+control_plane_db_tenant_login: portal_tenant_login
+control_plane_db_owner_login: portal_owner_login
+control_plane_db_database_host: db
+control_plane_db_database_name: portal
+
+# The part of a connection URL after the password.
+control_plane_db_url_tail: '@{{ control_plane_db_database_host }}:5432/{{ control_plane_db_database_name }}'
+
+control_plane_db_network: control-plane_default
+
+# Identity reconciler.
+control_plane_db_pat_file: '{{ control_plane_db_stack_state_dir }}/zitadel-state/reconciler.pat'
+control_plane_db_work_dir: '{{ control_plane_db_stack_state_dir }}/reconciler-work'
+control_plane_db_outputs_file: '{{ control_plane_db_config_dir }}/identity-outputs.json'
+control_plane_db_identity_port: 8300
+
+# Every container the role starts runs as the image's user with no added
+# privilege, a memory cap, and nothing writable but what a step mounts.
+control_plane_db_container_limits:
+  - --user
+  - '{{ control_plane_db_image_user }}'
+  - --memory
+  - 256m
+  - --cap-drop
+  - ALL
+  - --security-opt
+  - no-new-privileges:true
+
+# The lines of a program's output a failed step may show. The program redacts what
+# it prints; any other line is withheld because the task has no_log.
+control_plane_db_refusal_line_pattern: '^(provision failed|refused|migrate refused|extra |missing |drift|Cannot find module|takes no arguments)'
+
+# A hostname is lower-case labels of letters, digits and hyphen, joined by dots.
+control_plane_db_hostname_pattern: '^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*\Z'
+
+# The reconciler's configuration, rendered once. The identity marker is keyed by
+# the hash of exactly this text, so a changed hostname or tenant list is a new
+# request and an unchanged one is skipped.
+control_plane_db_identity_config:
+  hostnames: '{{ control_plane_db_identity_hostnames }}'
+  tenants: '{{ control_plane_db_identity_tenants }}'
+control_plane_db_identity_config_json: '{{ control_plane_db_identity_config | ansible.builtin.to_json(sort_keys=True) }}'
+control_plane_db_identity_config_hash: '{{ control_plane_db_identity_config_json | ansible.builtin.hash("sha256") }}'

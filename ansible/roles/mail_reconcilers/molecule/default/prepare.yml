@@ -1,0 +1,45 @@
+---
+# Stand-ins for what the programs call: a Stalwart admin API on loopback and docker.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the stand-in's directories
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /usr/local/lib/stand-in
+        - /var/tmp/stand-in
+
+    - name: Install the stand-in API
+      ansible.builtin.copy:
+        src: stand_in_stalwart.py
+        dest: /usr/local/lib/stand-in/stalwart.py
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the stand-in docker command
+      ansible.builtin.copy:
+        content: "#!/bin/sh\necho \"$@\" >> /var/tmp/stand-in/docker.calls\n"
+        dest: /usr/local/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Start the stand-in API
+      ansible.builtin.command:
+        argv: [python3, /usr/local/lib/stand-in/stalwart.py]
+      async: 86400
+      poll: 0
+      changed_when: true
+
+    - name: Wait for the stand-in API to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8080
+        timeout: 30

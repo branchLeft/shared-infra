@@ -26,6 +26,11 @@ hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml
 hetzner/edge/validation/Caddyfile.enforcing
 hetzner/edge/validation/Caddyfile.authoring
 
+# Files a role carries byte for byte from branchLeft/ghost-platform and holds to a pinned
+# sha256 (ansible/roles/demo1_build, ansible/roles/demo1_egress_spool). A formatter that
+# rewrote one would break its pin.
+ansible/roles/*/files/ghost-platform/
+
 # Written by `hetzner/dns/zonecheck.py capture`, not by hand. A recapture must
 # produce a diff of only the records that changed, which it cannot if a
 # formatter re-wraps the arrays it writes.

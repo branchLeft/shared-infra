@@ -1,0 +1,205 @@
+---
+# Guarded step provision: create the portal database, its roles and logins with the
+# image's own program, then write the two connection URL files the applications
+# read. The owner places the administrator URL and the three passwords first. The
+# marker is one constant, and a provision never repeats on a host that has one.
+
+- name: Name the step and its marker
+  ansible.builtin.set_fact:
+    control_plane_db_this_step: provision
+    control_plane_db_marker: provision
+
+- name: Check the request, the image and the marker of provision
+  ansible.builtin.import_tasks: _guard.yml
+
+- name: Run provision, then take its inputs off the disk
+  block:
+    - name: Run provision unless its marker exists
+      when: not control_plane_db_marker_stat.stat.exists
+      block:
+        - name: Check the administrator URL file and the three password files
+          ansible.builtin.import_tasks: _inputs.yml
+          vars:
+            control_plane_db_input_files:
+              - '{{ control_plane_db_admin_url_file }}'
+              - '{{ control_plane_db_tenant_password_file }}'
+              - '{{ control_plane_db_owner_password_file }}'
+              - '{{ control_plane_db_provisioner_password_file }}'
+
+        - name: Read the three passwords
+          ansible.builtin.slurp:
+            src: '{{ item }}'
+          loop:
+            - '{{ control_plane_db_tenant_password_file }}'
+            - '{{ control_plane_db_owner_password_file }}'
+            - '{{ control_plane_db_provisioner_password_file }}'
+          register: control_plane_db_password_reads
+          no_log: true
+
+        # The program strips one trailing line break, so the same is done here. The
+        # shape check below is a count, so its refusal can name the cause and never a
+        # value. The list order is the read order: tenant, owner, provisioner.
+        - name: Work out the passwords as the program reads them
+          ansible.builtin.set_fact:
+            control_plane_db_passwords: >-
+              {{ control_plane_db_password_reads.results | map(attribute='content')
+                 | map('ansible.builtin.b64decode')
+                 | map('ansible.builtin.regex_replace', control_plane_db_trailing_break_pattern, '') | list }}
+          no_log: true
+
+        - name: Refuse a password that is not made of URL-safe characters, or is too short
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_passwords | select('ansible.builtin.match', control_plane_db_password_pattern) | list | length == 3
+            quiet: true
+            fail_msg: >-
+              REFUSED: a password file does not hold 24 or more of letters, digits, dot, underscore,
+              tilde and hyphen. A password is written into a connection URL and must survive as one component.
+
+        - name: Look at the two connection URL files
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            get_checksum: false
+          loop:
+            - '{{ control_plane_db_portal_url_file }}'
+            - '{{ control_plane_db_console_url_file }}'
+          register: control_plane_db_url_stats
+
+        - name: Read the connection URL files that exist
+          ansible.builtin.slurp:
+            src: '{{ item.item }}'
+          loop: '{{ control_plane_db_url_stats.results }}'
+          loop_control:
+            label: '{{ item.item }}'
+          register: control_plane_db_url_reads
+          when: item.stat.exists
+          no_log: true
+
+        # A provision on a host that already has URL files, with no marker, would give
+        # both logins new passwords while the running applications hold the old ones.
+        # It proceeds only when each file that exists already holds the URL these
+        # passwords make, which is the retry of a run that stopped before its marker.
+        - name: Work out whether each URL file that exists is the one these passwords make
+          ansible.builtin.set_fact:
+            control_plane_db_portal_url: 'postgres://{{ control_plane_db_tenant_login }}:{{ control_plane_db_passwords[0] }}{{ control_plane_db_url_tail }}'
+            control_plane_db_console_url: 'postgres://{{ control_plane_db_owner_login }}:{{ control_plane_db_passwords[1] }}{{ control_plane_db_url_tail }}'
+          no_log: true
+
+        - name: Work out whether the URL files on the host agree with these passwords
+          ansible.builtin.set_fact:
+            control_plane_db_urls_agree: >-
+              {{ (not control_plane_db_url_stats.results[0].stat.exists
+                  or (control_plane_db_url_reads.results[0].content | ansible.builtin.b64decode | ansible.builtin.trim) == control_plane_db_portal_url)
+                 and
+                 (not control_plane_db_url_stats.results[1].stat.exists
+                  or (control_plane_db_url_reads.results[1].content | ansible.builtin.b64decode | ansible.builtin.trim) == control_plane_db_console_url) }}
+          no_log: true
+
+        - name: Refuse a provision that would rotate the passwords the applications hold
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_urls_agree | ansible.builtin.bool
+            quiet: true
+            fail_msg: >-
+              REFUSED: a connection URL file already exists and is not the one these passwords make,
+              and no provision marker exists. Provisioning would give the logins new passwords while
+              the applications hold the old ones. The owner decides; nothing was changed.
+
+        - name: Look for the stack network
+          ansible.builtin.command:
+            argv:
+              - docker
+              - network
+              - inspect
+              - '{{ control_plane_db_network }}'
+          changed_when: false
+          when: not ansible_check_mode
+
+        - name: Check the image carries the provisioner login
+          ansible.builtin.import_tasks: _image.yml
+          vars:
+            control_plane_db_image_needle: PORTAL_PROVISIONER_PASSWORD_FILE
+
+        - name: Create the portal database, its roles and logins
+          ansible.builtin.command:
+            argv: >-
+              {{ ['docker', 'run', '--rm', '--label', 'branchleft.task=portal-provision',
+                  '--network', control_plane_db_network]
+                 + control_plane_db_container_limits
+                 + ['-w', '/app/portal/data',
+                    '-v', control_plane_db_admin_url_file ~ ':/provision/' ~ control_plane_db_admin_url_name ~ ':ro',
+                    '-v', control_plane_db_tenant_password_file ~ ':/provision/' ~ control_plane_db_tenant_password_name ~ ':ro',
+                    '-v', control_plane_db_owner_password_file ~ ':/provision/' ~ control_plane_db_owner_password_name ~ ':ro',
+                    '-v', control_plane_db_provisioner_password_file ~ ':/provision/' ~ control_plane_db_provisioner_password_name ~ ':ro',
+                    '-e', 'PORTAL_ADMIN_URL_FILE=/provision/' ~ control_plane_db_admin_url_name,
+                    '-e', 'PORTAL_TENANT_PASSWORD_FILE=/provision/' ~ control_plane_db_tenant_password_name,
+                    '-e', 'PORTAL_OWNER_PASSWORD_FILE=/provision/' ~ control_plane_db_owner_password_name,
+                    '-e', 'PORTAL_PROVISIONER_PASSWORD_FILE=/provision/' ~ control_plane_db_provisioner_password_name,
+                    '-e', 'NODE_OPTIONS=--max-old-space-size=192',
+                    control_plane_db_apps_image, 'node', 'dist/provision/provisionMain.js'] }}
+          register: control_plane_db_run
+          changed_when: true
+          failed_when: false
+          no_log: true
+          when: not ansible_check_mode
+
+        - name: Refuse a provision that did not end clean
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_run.rc == 0
+              - "'portal database provisioned' in control_plane_db_run.stdout_lines"
+              - "'post-check passed: the server matches the manifest' in control_plane_db_run.stdout_lines"
+            quiet: true
+            fail_msg: >-
+              REFUSED: provision did not end clean (exit {{ control_plane_db_run.rc }}). The
+              program's refusal lines: {{ (control_plane_db_run.stdout_lines + control_plane_db_run.stderr_lines)
+              | select('match', control_plane_db_refusal_line_pattern) | map('truncate', 200) | list }}
+          when: not ansible_check_mode
+
+        # The parent directory is root's at 0750, so the files are out of every other
+        # account's reach from the moment they exist, whatever mode they begin with.
+        - name: Write the tenant portal's connection URL file
+          ansible.builtin.copy:
+            content: "{{ control_plane_db_portal_url }}\n"
+            dest: '{{ control_plane_db_portal_url_file }}'
+            owner: '{{ control_plane_db_input_owner }}'
+            group: '{{ control_plane_db_input_gid }}'
+            mode: '{{ control_plane_db_input_mode }}'
+          no_log: true
+          diff: false
+
+        - name: Write the operator console's connection URL file
+          ansible.builtin.copy:
+            content: "{{ control_plane_db_console_url }}\n"
+            dest: '{{ control_plane_db_console_url_file }}'
+            owner: '{{ control_plane_db_input_owner }}'
+            group: '{{ control_plane_db_input_gid }}'
+            mode: '{{ control_plane_db_input_mode }}'
+          no_log: true
+          diff: false
+
+        - name: Record that provision ran
+          ansible.builtin.import_tasks: _marker.yml
+  always:
+    - name: Remove the administrator URL file on every way out
+      ansible.builtin.file:
+        path: '{{ control_plane_db_admin_url_file }}'
+        state: absent
+
+    - name: Read whether provision is now recorded
+      ansible.builtin.stat:
+        path: '{{ control_plane_db_state_dir }}/{{ control_plane_db_marker }}'
+        get_checksum: false
+      register: control_plane_db_marker_after
+
+    # The passwords stay until the step is recorded, so a failed run can be asked
+    # for again with the same files. Once it is recorded they are not needed.
+    - name: Remove the password files once provision is recorded
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ control_plane_db_tenant_password_file }}'
+        - '{{ control_plane_db_owner_password_file }}'
+        - '{{ control_plane_db_provisioner_password_file }}'
+      when: control_plane_db_marker_after.stat.exists

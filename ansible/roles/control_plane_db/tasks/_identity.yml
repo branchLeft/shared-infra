@@ -1,0 +1,140 @@
+---
+# Guarded step identity: run the identity reconciler in the applications image,
+# against the sign-in service on loopback, with a configuration rendered here. It
+# reads the service account's token from the sign-in service's state directory,
+# which the service itself wrote; this role never creates or copies it. The
+# marker is keyed by a hash of the rendered configuration.
+
+- name: Name the step and its marker
+  ansible.builtin.set_fact:
+    control_plane_db_this_step: identity
+    control_plane_db_marker: 'identity-{{ control_plane_db_identity_config_hash }}'
+
+- name: Check the request, the image and the marker of identity
+  ansible.builtin.import_tasks: _guard.yml
+
+# Before the block that cleans up, so a refusal leaves a directory it names alone.
+- name: Look at the reconciler's working directory
+  ansible.builtin.stat:
+    path: '{{ control_plane_db_work_dir }}'
+    get_checksum: false
+  register: control_plane_db_work_stat
+  when: not control_plane_db_marker_stat.stat.exists
+
+- name: Refuse a working directory that an earlier attempt left
+  ansible.builtin.assert:
+    that:
+      - not control_plane_db_work_stat.stat.exists
+    quiet: true
+    fail_msg: >-
+      REFUSED: {{ control_plane_db_work_dir }} already exists. An earlier attempt left it;
+      the role does not reuse or delete it. The owner reads it and removes it.
+  when: not control_plane_db_marker_stat.stat.exists
+
+- name: Run identity, then remove the working directory
+  block:
+    - name: Run identity unless its marker exists
+      when: not control_plane_db_marker_stat.stat.exists
+      block:
+        - name: Refuse a hostname that is empty or not a hostname
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_identity_hostnames[item] is string
+              - control_plane_db_identity_hostnames[item] is match(control_plane_db_hostname_pattern)
+            quiet: true
+            fail_msg: 'REFUSED: control_plane_db_identity_hostnames.{{ item }} must be set to a lower-case hostname.'
+          loop:
+            - console
+            - portal
+            - identity
+
+        - name: Look at the service account's token
+          ansible.builtin.stat:
+            path: '{{ control_plane_db_pat_file }}'
+            get_checksum: false
+          register: control_plane_db_pat_stat
+
+        # The sign-in service writes this file on its first start. Whatever else is
+        # there, it is not made, copied or widened here.
+        - name: Refuse a service account token that is absent, a link, not the image user's, or open to others
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_pat_stat.stat.exists
+              - control_plane_db_pat_stat.stat.isreg
+              - control_plane_db_pat_stat.stat.uid | string == control_plane_db_image_user.split(':')[0]
+              - control_plane_db_pat_stat.stat.mode == '0600'
+            quiet: true
+            fail_msg: >-
+              REFUSED: {{ control_plane_db_pat_file }} must be a regular file of the image user,
+              mode 0600. The sign-in service writes it on its first start; this role never creates it.
+
+        - name: Make the working directory
+          ansible.builtin.file:
+            path: '{{ control_plane_db_work_dir }}'
+            state: directory
+            owner: '{{ control_plane_db_image_user.split(":")[0] }}'
+            group: '{{ control_plane_db_image_user.split(":")[1] }}'
+            mode: '0700'
+
+        - name: Note that this run made the working directory
+          ansible.builtin.set_fact:
+            control_plane_db_work_owned: true
+
+        - name: Write the reconciler's configuration
+          ansible.builtin.copy:
+            content: '{{ control_plane_db_identity_config_json }}'
+            dest: '{{ control_plane_db_work_dir }}/config.json'
+            owner: '{{ control_plane_db_image_user.split(":")[0] }}'
+            group: '{{ control_plane_db_image_user.split(":")[1] }}'
+            mode: '0600'
+
+        - name: Run the identity reconciler
+          ansible.builtin.command:
+            argv: >-
+              {{ ['docker', 'run', '--rm', '--label', 'branchleft.task=identity-reconciler',
+                  '--network', 'host']
+                 + control_plane_db_container_limits
+                 + ['-w', '/app/services/identity',
+                    '--add-host', control_plane_db_identity_hostnames.identity ~ ':127.0.0.1',
+                    '-v', control_plane_db_pat_file ~ ':/state/reconciler.pat:ro',
+                    '-v', control_plane_db_work_dir ~ ':/work',
+                    '-e', 'ZITADEL_URL=http://' ~ control_plane_db_identity_hostnames.identity ~ ':' ~ control_plane_db_identity_port,
+                    '-e', 'ZITADEL_TOKEN_FILE=/state/reconciler.pat',
+                    control_plane_db_apps_image, 'node', 'dist/cli.js', '/work/config.json', '/work/outputs.json'] }}
+          register: control_plane_db_run
+          changed_when: true
+          failed_when: false
+          no_log: true
+          when: not ansible_check_mode
+
+        - name: Refuse a reconciler run that failed or reported drift
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_run.rc == 0
+              - (control_plane_db_run.stdout_lines + control_plane_db_run.stderr_lines) | select('search', '(^|\W)drift(\W|$)') | list | length == 0
+            quiet: true
+            fail_msg: >-
+              REFUSED: identity did not end clean (exit {{ control_plane_db_run.rc }}). Drift is a
+              manual change and is never overwritten here. The program's refusal lines:
+              {{ (control_plane_db_run.stdout_lines + control_plane_db_run.stderr_lines)
+              | select('match', control_plane_db_refusal_line_pattern) | map('truncate', 200) | list }}
+          when: not ansible_check_mode
+
+        - name: Install the identifiers the stack reads
+          ansible.builtin.copy:
+            src: '{{ control_plane_db_work_dir }}/outputs.json'
+            dest: '{{ control_plane_db_outputs_file }}'
+            remote_src: true
+            owner: '{{ control_plane_db_input_owner }}'
+            group: '{{ control_plane_db_input_gid }}'
+            mode: '{{ control_plane_db_input_mode }}'
+          when: not ansible_check_mode
+
+        - name: Record that identity ran for this configuration
+          ansible.builtin.import_tasks: _marker.yml
+  always:
+    - name: Remove the working directory this run made
+      ansible.builtin.file:
+        path: '{{ control_plane_db_work_dir }}'
+        state: absent
+      when: control_plane_db_work_owned | default(false)

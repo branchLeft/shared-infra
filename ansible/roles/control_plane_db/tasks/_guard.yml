@@ -1,0 +1,38 @@
+---
+# What every step checks before it reads an input or starts a container. The
+# importing file sets control_plane_db_this_step and control_plane_db_marker.
+
+- name: Refuse a step requested by its tag without its confirmation
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_step is string
+      - control_plane_db_step is match(control_plane_db_step_pattern)
+      - control_plane_db_step == control_plane_db_this_step
+    quiet: true
+    fail_msg: >-
+      REFUSED: {{ control_plane_db_this_step }} was requested by its tag without
+      control_plane_db_step set to {{ control_plane_db_this_step }}, so it did not run.
+
+- name: Refuse an image that is not pinned by digest
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_apps_image is string
+      - control_plane_db_apps_image is match(control_plane_db_image_pattern)
+    quiet: true
+    fail_msg: 'REFUSED: control_plane_db_apps_image must be NAME@sha256: followed by 64 lower-case hex digits. A tag is not a pin.'
+
+# Root owns the markers, so the account the services run as cannot write or remove
+# the record that a step ran.
+- name: Create the state directory of the step markers
+  ansible.builtin.file:
+    path: '{{ control_plane_db_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Read the marker of the step
+  ansible.builtin.stat:
+    path: '{{ control_plane_db_state_dir }}/{{ control_plane_db_marker }}'
+    get_checksum: false
+  register: control_plane_db_marker_stat
