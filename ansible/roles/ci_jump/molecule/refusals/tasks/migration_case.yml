@@ -112,6 +112,12 @@
       no_log: true
       diff: false
 
+    # The refusal code is checked against this case's own read-back, not against a result that an
+    # earlier case or the scenario left behind (the register outlives its task).
+    - name: Empty the read-back of any earlier case, so this case is checked against its own
+      ansible.builtin.set_fact:
+        ci_jump_readback: {}
+
     - name: Run the role's step with the scenario's values
       block:
         - name: Run the step
@@ -132,15 +138,17 @@
             msg: 'The step succeeded where it must fail with {{ migration_expect }}.'
           when: migration_expect | length > 0
       rescue:
+        # The failed result is not printed: it can carry a path with the account's name.
         - name: Fail if the step failed where it must succeed
           ansible.builtin.fail:
-            msg: 'The step failed where it must succeed: {{ ansible_failed_result | to_json }}'
+            msg: 'The step failed where it must succeed, at {{ ansible_failed_task.name }}.'
           when: migration_expect | length == 0
 
         - name: Assert the failure was the one this case is for
           ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
           vars:
             expect_phrase: '{{ migration_expect }}'
+            expect_result: '{{ ci_jump_readback }}'
 
     - name: Look at the hand-made files and the new files afterwards
       ansible.builtin.stat:

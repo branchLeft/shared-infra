@@ -251,11 +251,34 @@
       no_log: true
       diff: false
 
+    # The configuration sshd reads never names a file that is not there. The new drop-in goes (or is
+    # put back as it was) before sshd is checked and reloaded, and the new key file is touched only
+    # after that reload. A reload that fails stops the play here, loudly, and the marker stays for
+    # the next run.
     - name: Remove the sshd drop-in when there was none before
       ansible.builtin.file:
         path: '{{ ci_jump_sshd_dropin }}'
         state: absent
       when: not ci_jump_before.results[0].stat.exists
+
+    - name: Check the whole sshd configuration with the previous files back
+      ansible.builtin.command:
+        argv: [sshd, -t]
+      changed_when: false
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Reload sshd with the previous files back
+      ansible.builtin.systemd_service:
+        name: '{{ ci_jump_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode
+
+    - name: Note that no reload of sshd is owed, the previous files being back
+      ansible.builtin.file:
+        path: '{{ ci_jump_reload_marker }}'
+        state: absent
+      when: not ansible_check_mode
 
     - name: Put back the key file that was there before
       ansible.builtin.copy:
@@ -274,29 +297,11 @@
         state: absent
       when: not ci_jump_before.results[1].stat.exists
 
-    # A reload that fails here (another file makes the whole configuration bad) must not hide the
-    # cause below: the running sshd keeps its old settings, and the marker stays so the next run
-    # reloads.
-    - name: Reload sshd with the previous files back
-      ansible.builtin.systemd_service:
-        name: '{{ ci_jump_sshd_service }}'
-        state: reloaded
-      register: ci_jump_rollback_reload
-      when: not ansible_check_mode
-      failed_when: false
-
-    - name: Note that no reload of sshd is owed when the rollback reloaded it
-      ansible.builtin.file:
-        path: '{{ ci_jump_reload_marker }}'
-        state: absent
-      when: not ansible_check_mode and ci_jump_rollback_reload is succeeded
-
-    - name: Fail with the cause, after the previous files are back
+    # The message names the step and nothing else: no path, and no result text, since a module's
+    # message can carry the account's name (a failed removal prints the path it failed on).
+    - name: Fail with the step that failed, after the previous files are back
       ansible.builtin.fail:
-        msg: >-
-          The jump account's files did not pass their check or read-back. The previous key file
-          and sshd drop-in, and any file of the earlier layout, are back in place.
-          {{ ansible_failed_result.msg | default('') }}
+        msg: 'ci_jump migration failed at {{ ansible_failed_task.name }}; old files restored.'
 
   always:
     - name: Empty the copies of the previous files

@@ -125,3 +125,27 @@
           - "('permitopen ' ~ scenario_listed ~ ':22 ' ~ scenario_own ~ ':22') in ci_jump_scenario_verify_sshd.stdout_lines"
         quiet: true
         fail_msg: A refusal case left the sshd configuration changed.
+
+    # The migration cases end in forced failures (a read-back refused after the write, and after the
+    # old files were removed). Each failure is printed by the role's rescue, so the part of this
+    # scenario's log that covers those cases must hold no account name. The account's name is held
+    # out of every public log (ANS-16). The control: the rescues of the cases ran.
+    - name: Read the log of every run
+      ansible.builtin.slurp:
+        src: '{{ scenario_log_path }}'
+      delegate_to: localhost
+      register: ci_jump_refusals_log
+      no_log: true
+
+    - name: Assert the forced failures of the migration cases show no account name
+      ansible.builtin.assert:
+        that:
+          - "'PLAY [Run the migration and reload cases]' in ci_jump_refusals_log_text"
+          - migration_log is search('Assert the failure was the one this case is for')
+          - scenario_jump_user not in migration_log
+        quiet: true
+        fail_msg: The log of the forced failures of the migration cases shows the account (the name is not shown).
+      vars:
+        ci_jump_refusals_log_text: '{{ ci_jump_refusals_log.content | b64decode }}'
+        migration_log_from: "{{ ci_jump_refusals_log_text.split('PLAY [Run the migration and reload cases]') | last }}"
+        migration_log: "{{ migration_log_from.split('PLAY [Verify the instance]') | first }}"
