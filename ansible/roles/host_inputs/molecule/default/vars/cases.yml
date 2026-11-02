@@ -219,6 +219,27 @@ host_inputs_verify_cases:
     content: "{{ host_inputs_test_doc | combine({'db1_grants_ops1_host': false}) | to_json }}"
     code: missing-key
     names: db1_grants_ops1_host
+  # ----- app1's tenant stacks: the list is required, and an empty one delivers nothing -----
+  - name: app1 stacks missing
+    kind: content
+    content: >-
+      {{ host_inputs_test_app1_doc | dict2items | rejectattr('key', 'equalto', 'tenant_compose_stacks')
+      | list | items2dict | to_json }}
+    host: app1
+    code: missing-key
+    names: tenant_compose_stacks
+  - name: app1 stacks is an empty list
+    kind: content
+    content: "{{ host_inputs_test_app1_doc | combine({'tenant_compose_stacks': []}) | to_json }}"
+    host: app1
+    code: missing-key
+    names: tenant_compose_stacks
+  - name: app1 stacks is null
+    kind: content
+    content: "{{ host_inputs_test_app1_doc | combine({'tenant_compose_stacks': none}) | to_json }}"
+    host: app1
+    code: missing-key
+    names: tenant_compose_stacks
   # ----- The host -----
   - name: a host with no row
     kind: content

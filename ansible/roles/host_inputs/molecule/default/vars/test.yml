@@ -28,12 +28,42 @@ host_inputs_test_doc:
   db1_grants_tenants: '{{ host_inputs_test_tenants }}'
   db1_grants_ops1_host: '{{ host_inputs_test_ops1_host }}'
 
-# What the owner would place for app1: exactly the row's four names.
+# app1's tenant stacks: two made-up tenants (uids in the 309xx range, the role's own).
+# Each secrets text holds a sentinel, so the scan can tell a leak of the list from a
+# leak of the host's other inputs. The compose texts are not secret and hold `${...}`
+# references and a `{% raw %}` block on purpose: they must arrive as written.
+host_inputs_test_stack_secret_a: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-stack-a chars=ascii_letters,digits length=40') }}"
+host_inputs_test_stack_secret_b: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-stack-b chars=ascii_letters,digits length=40') }}"
+host_inputs_test_stacks:
+  - slug: tenant-a
+    uid: 30901
+    compose_text: |
+      name: tenant-a
+      services:
+        ghost:
+          image: ${IMAGE}
+          environment:
+            database__connection__password: ${GHOST_database__connection__password}
+    secrets_env_text: "GHOST_database__connection__password={{ host_inputs_test_stack_secret_a }}\n"
+    image_env_text: "IMAGE=registry.example.test/tenant-a@sha256:{{ 'ab' * 32 }}\n"
+  - slug: tenant-b
+    uid: 30902
+    compose_text: |
+      name: tenant-b
+      services:
+        ghost:
+          image: ${IMAGE}
+          command: '{% raw %}{{ 7 * 7 }}{% endraw %}'
+    secrets_env_text: "GHOST_database__connection__password={{ host_inputs_test_stack_secret_b }}\n"
+    image_env_text: "IMAGE=registry.example.test/tenant-b@sha256:{{ 'cd' * 32 }}\n"
+
+# What the owner would place for app1: exactly the row's five names.
 host_inputs_test_app1_doc:
   website_app1_smtp_host: '{{ host_inputs_test_smtp_host }}'
   website_app1_smtp_port: '{{ host_inputs_test_smtp_port }}'
   website_app1_smtp_user: '{{ host_inputs_test_smtp_user }}'
   website_app1_smtp_password: '{{ host_inputs_test_smtp_password }}'
+  tenant_compose_stacks: '{{ host_inputs_test_stacks }}'
 
 # Template syntax in a value must reach the role that uses it as the characters the
 # owner typed, and not be evaluated a second time on the host.

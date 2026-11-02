@@ -38,3 +38,6 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/breakglass_grant_host # noqa: role-name[path]
     - role: ../roles/website_app1 # noqa: role-name[path]
+    # Last: it restarts the tenants' live stacks, so a failure here must not hold the website
+    # back, and it needs the deploy tooling's directories and unit to be in place first.
+    - role: ../roles/tenant_compose # noqa: role-name[path]

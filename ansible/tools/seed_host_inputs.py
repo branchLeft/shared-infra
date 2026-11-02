@@ -9,16 +9,29 @@ import argparse
 import getpass
 import json
 import os
+import re
 import secrets
 import stat
+import subprocess
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Final, NoReturn, TextIO
 
 CONFIG_DIR: Final = "/etc/branchleft"
+# Where a tenant's stack lives and which program claims its uid: the tenant_compose role's own
+# constants (vars/main.yml), held to them by a test. The program is called with one argument.
+STACK_ROOT: Final = "/opt/branchleft"
+VOLUME_PROGRAM: Final = "/root/platform-provision/provision_tenant_volume.py"
+CLAIMS_TIMEOUT_SECONDS: Final = 30
+# The shapes the role's module accepts, so a claim that it would refuse never names a path.
+SLUG_PATTERN: Final = re.compile(r"[a-z]([a-z0-9-]*[a-z0-9])?")
+SLUG_MAX_LENGTH: Final = 26
+CLAIM_PATTERN: Final = re.compile(r"([a-z][a-z0-9-]*)=([0-9]+)")
+SPOOL_SLUG: Final = "mail-spool"
+UID_RANGE: Final = range(30000, 31000)
 DEST_NAME: Final = "host-inputs.json"
 # Every directory above the file, root first: the loader's own list, held to it by a test.
 ANCESTORS: Final[tuple[str, ...]] = ("/", "/etc", "/etc/branchleft")
@@ -30,8 +43,10 @@ MAX_BYTES: Final = 1 << 20
 ENV: Final = "env"
 WHOLE: Final = "whole"
 RECIPIENTS: Final = "recipients"
+STACKS: Final = "stacks"
+STACKS_KEY: Final = "tenant_compose_stacks"
 
-type Value = str | list[dict[str, str]]
+type Value = str | Sequence[Mapping[str, str | int]]
 
 
 @dataclass(frozen=True)
@@ -90,6 +105,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "website_app1_smtp_port",
         "website_app1_smtp_user",
         "website_app1_smtp_password",
+        "tenant_compose_stacks",
     ),
 }
 
@@ -168,6 +184,9 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "website_app1_smtp_port": (_env("website.env", "CONTACT_SMTP_PORT"),),
     "website_app1_smtp_user": (_env("website.env", "CONTACT_SMTP_USER"),),
     "website_app1_smtp_password": (_env("website.env", "CONTACT_SMTP_PASSWORD"),),
+    # Not a file: the tenants the volume program lists, each with the three files its stack
+    # has on the host. The source's filename is the program, for the notes.
+    STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
@@ -182,6 +201,12 @@ MESSAGES: Final[dict[str, str]] = {
     "bad-key": "that name is not in this host's row",
     "no-value": "no value was given",
     "read-back": "the file was written but did not read back as written; inspect it",
+    "no-stacks": "no tenant stacks could be read from the live files; nothing was changed",
+    "stacks-dropped": (
+        "a claimed tenant has no stack on the host, or a tenant the file holds would drop out; "
+        "nothing was changed"
+    ),
+    "claims": "the volume program could not be run or did not list its claims",
 }
 REASONS: Final[dict[str, str]] = {
     "src-type": "not a regular file",
@@ -211,6 +236,31 @@ class Context:
     ask_path: Callable[[str], str]
     out: TextIO
     err: TextIO
+    stack_root: Path
+    list_claims: Callable[[], str]
+
+
+# The one process this tool starts: the volume program, by its fixed path, with one fixed
+# argument, no shell, no input and a clean environment. Its output is read and never printed, and
+# it is run only when it is a regular file that root owns and nobody else can write.
+def run_volume_program() -> str:
+    try:
+        info = os.lstat(VOLUME_PROGRAM)
+        if not stat.S_ISREG(info.st_mode) or info.st_uid != ROOT_UID or info.st_mode & 0o022:
+            raise SeedError("claims")
+        done = subprocess.run(  # noqa: S603
+            [VOLUME_PROGRAM, "--list-claims"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=CLAIMS_TIMEOUT_SECONDS,
+            check=False,
+            env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin"},
+        )
+        if done.returncode != 0:
+            raise SeedError("claims")
+        return done.stdout.decode("utf-8")
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise SeedError("claims") from None
 
 
 def production_context() -> Context:
@@ -224,6 +274,8 @@ def production_context() -> Context:
         ask_path=input,
         out=sys.stdout,
         err=sys.stderr,
+        stack_root=Path(STACK_ROOT),
+        list_claims=run_volume_program,
     )
 
 
@@ -263,6 +315,32 @@ def parse_recipients(text: str) -> list[dict[str, str]] | None:
             return None
         tenants.append(tenant)
     return tenants
+
+
+def parse_claims(text: str) -> list[tuple[str, int]] | None:
+    """The slug=uid lines the volume program lists, or None when any line would be refused.
+
+    A line the role's module would refuse never names a path here: the slug has its shape, the
+    uid its range, and neither is repeated. The mail spool is not a tenant."""
+    claims: list[tuple[str, int]] = []
+    for line in text.split("\n"):
+        if not line:
+            continue
+        match = CLAIM_PATTERN.fullmatch(line)
+        if match is None:
+            return None
+        slug, uid = match.group(1), int(match.group(2))
+        if (
+            SLUG_PATTERN.fullmatch(slug) is None
+            or len(slug) > SLUG_MAX_LENGTH
+            or slug == SPOOL_SLUG
+            or uid not in UID_RANGE
+            or slug in [name for name, _ in claims]
+            or uid in [number for _, number in claims]
+        ):
+            return None
+        claims.append((slug, uid))
+    return claims
 
 
 def is_certificate(text: str) -> bool:
@@ -306,30 +384,38 @@ class Live:
         self._texts: dict[str, str | None] = {}
         self._broken: set[str] = set()
         self._envs: dict[str, tuple[dict[str, str], set[str]]] = {}
+        self.seeded: list[str] = []
+        self.skipped: list[str] = []
 
     def flag(self, note: str) -> None:
         if note not in self.problems:
             self.problems.append(note)
 
     def text(self, filename: str) -> str | None:
-        if filename in self._texts:
-            return self._texts[filename]
+        return self.read_at(filename, self.ctx.config_dir / filename)
+
+    def read_at(self, label: str, path: Path) -> str | None:
+        """A file's text, or None when absent or unusable (an unusable one is noted by label)."""
+        if label in self._texts:
+            return self._texts[label]
         found: str | None = None
         try:
-            found = read_file(self.ctx, self.ctx.config_dir / filename, exact=False)
+            found = read_file(self.ctx, path, exact=False)
         except FileNotFoundError:
             pass
         except SeedError as err:
-            self._broken.add(filename)
-            self.flag(f"{filename} ({REASONS[err.code]})")
+            self._broken.add(label)
+            self.flag(f"{label} ({REASONS[err.code]})")
         except (OSError, ValueError):
-            self._broken.add(filename)
-            self.flag(f"{filename} (link or unreadable)")
-        self._texts[filename] = found
+            self._broken.add(label)
+            self.flag(f"{label} (link or unreadable)")
+        self._texts[label] = found
         return found
 
     # Three states: found, absent (try the next place), unusable (stop; the owner is asked).
     def lookup(self, source: Source) -> tuple[str, Value | None]:
+        if source.kind == STACKS:
+            return self._stacks()
         text = self.text(source.filename)
         if text is None:
             return ("unusable" if source.filename in self._broken else "absent"), None
@@ -357,6 +443,77 @@ class Live:
             return "unusable", None
         value = values.get(source.name, "")
         return ("found", value) if value.strip() else ("absent", None)
+
+    # The tenants the volume program lists, each with the three files its stack has on the host, so
+    # that what is seeded equals what is live. A claimed tenant with none of the three has no stack
+    # on the host and is left out, by name in the report; with some of them, or any unusable or
+    # empty one, nothing is guessed (unusable). The text of a file is never noted, only its label.
+    def _stacks(self) -> tuple[str, Value | None]:
+        try:
+            claims = parse_claims(self.ctx.list_claims())
+        except SeedError:
+            self.flag("volume claims (the program could not be run)")
+            return "unusable", None
+        if claims is None:
+            self.flag("volume claims (malformed)")
+            return "unusable", None
+        stacks: list[dict[str, str | int]] = []
+        usable = True
+        for slug, uid in claims:
+            state, stack = self._stack(slug, uid)
+            if state == "unusable":
+                usable = False
+            elif stack is None:
+                self.skipped.append(slug)
+            else:
+                stacks.append(stack)
+                self.seeded.append(slug)
+        if not usable:
+            return "unusable", None
+        return ("found", stacks) if stacks else ("absent", None)
+
+    def _stack(self, slug: str, uid: int) -> tuple[str, dict[str, str | int] | None]:
+        directory = self.ctx.stack_root / slug
+        place = self._directory_state(f"{slug} directory", directory)
+        if place == "bad":
+            return "unusable", None
+        files = {
+            "compose_text": (f"{slug} compose.yml", directory / "compose.yml"),
+            "secrets_env_text": (f"{slug}.env", self.ctx.config_dir / f"{slug}.env"),
+            "image_env_text": (f"{slug}.image.env", self.ctx.config_dir / f"{slug}.image.env"),
+        }
+        texts = {
+            name: None if place == "absent" else self.read_at(label, path)
+            for name, (label, path) in files.items()
+        }
+        if any(label in self._broken for label, _ in files.values()):
+            return "unusable", None
+        if all(text is None for text in texts.values()):
+            return "absent", None
+        if any(text is None for text in texts.values()):
+            self.flag(f"{slug} (some of the stack's three files are missing)")
+            return "unusable", None
+        if any(not str(text).strip() for text in texts.values()):
+            self.flag(f"{slug} (a stack file is empty)")
+            return "unusable", None
+        return "found", {"slug": slug, "uid": uid, **{n: str(t) for n, t in texts.items()}}
+
+    def _directory_state(self, label: str, path: Path) -> str:
+        try:
+            info = os.lstat(path)
+        except FileNotFoundError:
+            return "absent"
+        except OSError:
+            self.flag(f"{label} (unreadable)")
+            return "bad"
+        if (
+            not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != self.ctx.root_uid
+            or info.st_mode & 0o022
+        ):
+            self.flag(f"{label} (not a real directory owned by root and closed)")
+            return "bad"
+        return "ok"
 
 
 def ask_certificate(ctx: Context, key: str) -> Value | None:
@@ -391,6 +548,8 @@ def ask_for(ctx: Context, key: str) -> Value | None:
         return ask_certificate(ctx, key)
     if kind == RECIPIENTS:
         return ask_tenants(ctx, key)
+    if kind == STACKS:
+        return None
     try:
         answer = ctx.ask_secret(f"{key}: ")
     except (EOFError, OSError):
@@ -407,6 +566,8 @@ class Collected:
     typed: list[str]
     missing: list[str]
     problems: list[str]
+    seeded: list[str] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
 
 
 def collect(ctx: Context, host: str) -> Collected:
@@ -435,7 +596,7 @@ def collect(ctx: Context, host: str) -> Collected:
             found[key] = answer
             typed.append(key)
     ordered = {key: found[key] for key in HOSTS[host] if key in found}
-    return Collected(ordered, from_live, typed, missing, live.problems)
+    return Collected(ordered, from_live, typed, missing, live.problems, live.seeded, live.skipped)
 
 
 def check_ancestors(ctx: Context) -> None:
@@ -535,6 +696,13 @@ def run_fill(ctx: Context, host: str, replace: bool) -> int:
     print(f"filled from live ({len(collected.live)}): {names(collected.live)}", file=ctx.out)
     print(f"typed ({len(collected.typed)}): {names(collected.typed)}", file=ctx.out)
     print(f"still missing ({len(collected.missing)}): {names(collected.missing)}", file=ctx.out)
+    if collected.seeded or collected.skipped:
+        print(
+            f"tenant stacks seeded ({len(collected.seeded)}): {names(collected.seeded)}; "
+            f"claimed with no stack on the host, left out ({len(collected.skipped)}): "
+            f"{names(collected.skipped)}",
+            file=ctx.out,
+        )
     if collected.problems:
         notes = "; ".join(collected.problems)
         print(f"unusable live sources (treated as not found): {notes}", file=ctx.out)
@@ -552,11 +720,55 @@ def size_of(value: Value) -> str:
     return f"{len(value)} entries"
 
 
+# The stacks are read from the live files, never typed, and only this key changes: every other key
+# of the existing file is carried over as it stands, so a key with no live source (one that was
+# only ever typed) is neither asked for again nor dropped.
+def known_slugs(existing: Value | None) -> list[str]:
+    """The slugs the existing key names. Only a name of the slug's own shape is kept, so that a
+    malformed entry of the file is never printed."""
+    if not isinstance(existing, list):
+        return []
+    slugs: list[str] = []
+    for entry in existing:
+        slug = entry.get("slug") if isinstance(entry, dict) else None
+        if isinstance(slug, str) and SLUG_PATTERN.fullmatch(slug) and len(slug) <= SLUG_MAX_LENGTH:
+            slugs.append(slug)
+    return slugs
+
+
+# A write of the stacks never makes a tenant the role manages drop out: the role would stop
+# delivering that tenant's files without a word. It is refused when a claimed tenant has no stack
+# on the host (the fill leaves such a tenant out; a write over a file that exists does not), and
+# when a slug the file already holds is not in the new list. Only slug names are printed.
+def read_stacks(ctx: Context, existing: Value | None = None) -> Value:
+    live = Live(ctx)
+    state, value = live.lookup(SOURCES[STACKS_KEY][0])
+    print(
+        f"tenant stacks seeded ({len(live.seeded)}): {names(live.seeded)}; "
+        f"claimed with no stack on the host, left out ({len(live.skipped)}): "
+        f"{names(live.skipped)}",
+        file=ctx.out,
+    )
+    if live.problems:
+        print(f"unusable live sources: {'; '.join(live.problems)}", file=ctx.out)
+    if state != "found" or value is None:
+        raise SeedError("no-stacks")
+    kept = set(live.seeded)
+    dropped = [slug for slug in known_slugs(existing) if slug not in kept]
+    if live.skipped or dropped:
+        print(f"tenants that would drop out ({len(dropped)}): {names(dropped)}", file=ctx.out)
+        raise SeedError("stacks-dropped")
+    return value
+
+
 def run_set(ctx: Context, host: str, key: str) -> int:
     if key not in HOSTS[host]:
         raise SeedError("bad-key")
     document = load_existing(ctx, host)
-    value = ask_for(ctx, key)
+    if SOURCES[key][0].kind == STACKS:
+        value: Value | None = read_stacks(ctx, document.get(key))
+    else:
+        value = ask_for(ctx, key)
     if value is None:
         raise SeedError("no-value")
     document[key] = value

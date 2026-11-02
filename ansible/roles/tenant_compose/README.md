@@ -228,23 +228,80 @@ Each row was done by an edit, one run, and a restore.
 
 A role reaches a host only through the gated workflow (ANS-17): a plan job in check mode, the
 approval of the protected environment, `ansible-pull` of that exact commit of `main`, and a second
-run that must report zero changes. **Nothing applies this role to a host yet.** It is not in any
-host playbook or in the enrolment register; the host playbooks are being rewired separately, and
-wiring this role into them follows that work.
+run that must report zero changes. **Only `app1` applies this role.** `playbooks/app1.yml` applies
+it as its last role, and `app1` is the only host with it on its list in `ansible/checks/host_roles.yml`.
+It is last because it restarts the tenants' live stacks: a failure there must not hold the website
+role back.
 
 The wiring has three requirements:
 
 - The role runs after the deploy tooling role, which makes the directories, installs the template
   unit and, on an app host, the isolation policy that fences in the spool's drain bridge. The role
-  reads that policy back, but the order is the playbook's to keep.
-- The role runs after the tenant onboarding role, which installs the volume program.
-- The stacks' text and the secrets must reach a host that pulls its own commit with no extra
-  variables. Where they are kept, and how a host reads them, is the owner's decision. The role takes
-  them as arguments with no default, so its code is the same whatever the answer.
+  reads that policy back, but the order is the playbook's to keep. A test
+  (`ansible/checks/test_tenant_compose_wiring.py`) fails when `tenant_compose` is applied before
+  `deploy_tooling` in a playbook that applies both.
+- The role runs after the tenant onboarding role, which installs the volume program. **That role
+  is not applied to app1 yet:** today the program is the hand-installed one, and the role fails
+  closed, naming it, when the program is absent.
+- The stacks' text and the secrets reach a host that pulls its own commit with no extra variables
+  through the `host_inputs` loader, which sets `tenant_compose_stacks` from the host's one
+  root-only file (`/etc/branchleft/host-inputs.json`, root:root, `0600`; the file's shape is in
+  `ansible/roles/host_inputs/README.md`). The role takes them as an argument with no default, so a
+  host without the key stops at `host_inputs[missing-key]` before any role runs.
+  `ansible/tools/seed_host_inputs.py --host app1 --set tenant_compose_stacks` fills the key from
+  the tenants' live files and leaves every other key of the file as it was, so the first apply
+  changes no file. Do not use `--replace` on a file that already holds keys with no live source (it
+  rebuilds the whole file and would ask for them again).
+
+Named limits of this wiring:
+
+1. **The mail spool is not wired.** `tenant_compose_mail_spool_text` keeps its role default (empty),
+   because the loader refuses an input that has a default and an empty value. Wiring the spool
+   needs its own change; the spool on app1 stays as it is.
+2. **A new tenant's stack does not reach the file by itself.** The seed reads the stacks that exist
+   today. Getting a newly rendered stack into the file is the renderer path's change, a separate
+   one; until it exists, a new site needs the file edited by the owner.
+3. **The pin in the file goes stale by design.** The role writes a tenant's pin once and never
+   replaces it, so the pin in the file only matters for a tenant that has none.
+4. **The first apply restarts every tenant stack once** (see "When a stack is restarted"), and
+   the plan job's check-mode output is the preview.
 
 In a plan (check mode) the role reads everything it needs and says, in a line, which stacks it
 would restart and which tenants' volumes it would make; the restart, the volume program and the
 unit's state are not run, and the plan says so.
+
+### Rotating a tenant secret or changing its compose
+
+After the first apply, the role is the only writer of a tenant's files. Every gated or nightly
+apply writes the text in `host-inputs.json` over `/etc/branchleft/<slug>.env` and
+`/opt/branchleft/<slug>/compose.yml`, and restarts the stack if they differ. So an edit made on the
+host to either file, however it was made, is put back by the next apply, and the stack restarts on
+the old value. The plan job hides the secret's diff, so the revert shows only as "changed".
+
+A rotation, or a change to a compose file, must therefore go through `host-inputs.json`, in one
+sitting, as root on app1:
+
+1. Change the live file (`/etc/branchleft/<slug>.env` or `/opt/branchleft/<slug>/compose.yml`).
+2. At once, run the command below. It reads every tenant's live files again, changes that key only,
+   and prints tenant names and never a text.
+3. Only then let an apply run. It finds the file and the host agree, and restarts that one stack
+   once, because the stamp on the host is not the stamp of the new text.
+
+```text
+python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host app1 --set tenant_compose_stacks
+```
+
+The command refuses, and writes nothing, when a tenant would drop out of the list: a slug already
+in the file that the new read does not return, or a claimed tenant with no stack on the host. It
+names the slugs and never a text. Without this the role would stop managing that tenant, silently.
+The tool has no path to remove a tenant on purpose; that is a later change, and until it exists a
+tenant stays listed (decommissioning is a different job, and the role never removes a stack). If a
+stack is unusable, mend its files and run the command again.
+
+If an apply runs between steps 1 and 2 it writes the old text back, and step 2 would then seed the
+old text too; check the file is as you left it before you seed. Never use `--replace` for this: it
+rebuilds the whole file, and a key that only ever had a typed value (such as
+`deploy_slot_keys_slots`) is asked for again, or lost if the tool run does not know it.
 
 ## How to change it safely
 
