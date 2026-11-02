@@ -23,12 +23,11 @@ from collections.abc import Iterator
 RUNBOOK = pathlib.Path(__file__).resolve().parent.parent / "RUNBOOK-monitoring.md"
 ENV_FILE = "/etc/branchleft/monitoring.env"
 
+# The one hand block left. No role writes STALWART_PROMETHEUS_SECRET, so its block is the
+# only runnable path to that key. The other four (the value block, the copy, the drop-in
+# call and the rollback) retired with the monitoring_stack wiring (workspace#2536).
 INTERIM = {
-    "s3-value-block",
     "s3-stalwart-block",
-    "s4-rsync",
-    "s5-script-call",
-    "s13-rollback",
 }
 
 MARKER = re.compile(r"^<!-- interim-hand-block: (\S+) -->$")

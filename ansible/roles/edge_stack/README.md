@@ -173,7 +173,7 @@ A role reaches a host only through the gated workflow (ANS-17), never by running
 2. The owner places `/etc/branchleft/edge.env` (root, 0600). The role asserts it and fails the run loudly until it is there.
 3. `branchleft-deploy` writes `edge.image.env` with the live digest.
 4. The check-mode output for edge1 is put on the PR before the approval; every class that would be acted on is named in it.
-5. The gated run on `main`. It installs the edge unit's drop-in itself ("The unit's drop-in"), so nothing else needs to have placed it. The hand script `hetzner/provision/install-systemd-drop-ins.sh` installs the same file; the role finds it already there and changes nothing. The first apply adopts the host's existing files where they equal `hetzner/edge/stack` and acts only on a class that differs (see "Adoption"): if the plan job shows a Caddy restart rather than an adoption, reject the apply and read the difference first.
+5. The gated run on `main`. It installs the edge unit's drop-in itself ("The unit's drop-in"), so nothing else needs to have placed it. The first apply adopts the host's existing files where they equal `hetzner/edge/stack` and acts only on a class that differs (see "Adoption"): if the plan job shows a Caddy restart rather than an adoption, reject the apply and read the difference first.
 
 ## How to change it safely
 
