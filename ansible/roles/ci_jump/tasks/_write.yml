@@ -1,0 +1,152 @@
+---
+# The root-owned key file and the sshd drop-in, written together, checked as a whole, reloaded and
+# read back; a failed check or a failed read-back puts the previous files back and reloads sshd
+# again. The same shape as the tunnel_account role's replica half. Runs under --check: the files
+# are compared and nothing changes; the whole-configuration check, the reload and the read-back
+# are skipped there because nothing was written (ANS-10: the reason is that sshd -t and sshd -T
+# read the files on disk, which a plan has not changed). No message names a value (ANS-16): the
+# drop-in holds the account's name, so every task that handles it hides its result and its diff.
+- name: Look at the directory of the sshd drop-ins
+  ansible.builtin.stat:
+    path: '{{ ci_jump_sshd_config_dir }}'
+  register: ci_jump_dropin_dir_stat
+  check_mode: false
+
+- name: Refuse a host without the sshd drop-in directory
+  ansible.builtin.assert:
+    that:
+      - ci_jump_dropin_dir_stat.stat.exists
+      - ci_jump_dropin_dir_stat.stat.isdir
+    quiet: true
+    fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
+
+- name: Make the directory of the key file, root's and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ ci_jump_key_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# No checksum: the files hold the account's name and its keys.
+- name: Look for the current key file and sshd drop-in
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - '{{ ci_jump_sshd_dropin }}'
+    - '{{ ci_jump_key_file }}'
+  register: ci_jump_before
+  check_mode: false
+
+# Kept in memory, not on disk: a rollback writes these back byte for byte.
+- name: Keep the current sshd drop-in and key file for a rollback
+  ansible.builtin.slurp:
+    src: '{{ item.item }}'
+  loop: '{{ ci_jump_before.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: item.stat.exists
+  register: ci_jump_prev
+  check_mode: false
+  no_log: true
+
+- name: Write both files, check the whole configuration, reload sshd and read them back
+  block:
+    - name: Write the key file
+      ansible.builtin.template:
+        src: authorized_keys.j2
+        dest: '{{ ci_jump_key_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      register: ci_jump_keys_written
+      no_log: true
+      diff: false
+
+    - name: Write the sshd drop-in
+      ansible.builtin.template:
+        src: sshd-drop-in.conf.j2
+        dest: '{{ ci_jump_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      register: ci_jump_dropin_written
+      no_log: true
+      diff: false
+
+    # Checked as a whole, because sshd -t on a single drop-in cannot see the main configuration.
+    - name: Check the whole sshd configuration before it is reloaded
+      ansible.builtin.command:
+        argv: [sshd, -t]
+      changed_when: false
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Reload sshd when either file changed
+      ansible.builtin.systemd_service:
+        name: '{{ ci_jump_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode and (ci_jump_keys_written.changed or ci_jump_dropin_written.changed)
+
+    - name: Read the files back and ask sshd what it applies to the account
+      ansible.builtin.import_tasks: _readback.yml
+      when: not ansible_check_mode
+
+  rescue:
+    - name: Put back the sshd drop-in that was there before
+      ansible.builtin.copy:
+        content: '{{ ci_jump_prev.results[0].content | b64decode }}'
+        dest: '{{ ci_jump_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: ci_jump_before.results[0].stat.exists
+      no_log: true
+      diff: false
+
+    - name: Remove the sshd drop-in when there was none before
+      ansible.builtin.file:
+        path: '{{ ci_jump_sshd_dropin }}'
+        state: absent
+      when: not ci_jump_before.results[0].stat.exists
+
+    - name: Put back the key file that was there before
+      ansible.builtin.copy:
+        content: '{{ ci_jump_prev.results[1].content | b64decode }}'
+        dest: '{{ ci_jump_key_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      when: ci_jump_before.results[1].stat.exists
+      no_log: true
+      diff: false
+
+    - name: Remove the key file when there was none before
+      ansible.builtin.file:
+        path: '{{ ci_jump_key_file }}'
+        state: absent
+      when: not ci_jump_before.results[1].stat.exists
+
+    # A reload that fails here (another file makes the whole configuration bad) must not hide the
+    # cause below: the running sshd keeps its old settings.
+    - name: Reload sshd with the previous files back
+      ansible.builtin.systemd_service:
+        name: '{{ ci_jump_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode
+      failed_when: false
+
+    - name: Fail with the cause, after the previous files are back
+      ansible.builtin.fail:
+        msg: >-
+          The jump account's files did not pass their check or read-back. The previous key file
+          and sshd drop-in are back in place. {{ ansible_failed_result.msg | default('') }}
+
+  always:
+    - name: Empty the copies of the previous files
+      ansible.builtin.set_fact:
+        ci_jump_prev: {}
+      no_log: true

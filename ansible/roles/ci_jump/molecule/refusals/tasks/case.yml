@@ -72,7 +72,8 @@
       vars:
         ci_jump_manage_keys: true
         ci_jump_user: '{{ converge_case.user | default(scenario_jump_user) }}'
-        ci_jump_destinations: '{{ converge_case.destinations | default([scenario_listed]) }}'
+        ci_jump_own_address: '{{ converge_case.own_address | default(scenario_own) }}'
+        ci_jump_destinations: '{{ converge_case.destinations | default([scenario_listed, scenario_own]) }}'
         ci_jump_keys: >-
           {{ converge_case.key_entries | default([{'key': ci_jump_scenario_pub_jump}, {'key': ci_jump_scenario_pub_second}]) }}
 

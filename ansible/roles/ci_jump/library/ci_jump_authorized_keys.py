@@ -1,16 +1,18 @@
 #!/usr/bin/python
-"""Read and judge the authorized_keys options of the CI jump account.
+"""Read and judge what the CI jump account's sshd drop-in and root-owned key file must hold.
 
-This is the one home of every rule about the jump account's key lines. It never writes: the
-role writes the file with ansible.posix.authorized_key and asks this module to judge the
-inputs before the write (plan) and the file after it (verify). A third action (report) only
-describes what the host holds today, so a first run can be read before anything is enabled.
+This is the one home of every rule about the jump account's key lines and its sshd Match block.
+It never writes: the role writes the two files and asks this module to judge the inputs before
+the write (plan) and the host after it (verify). A third action (report) only describes what
+the host holds today, so a plan can be read before anything is enabled.
 
-Everything it prints is built from a closed vocabulary: option names, a host name or address
-and a port, a key type and a short fingerprint. Key bodies, comment fields and every other
-option value are never printed, and no refusal carries a value, only a code and an entry
-number. A last guard withholds any line that would read as a credential assignment to the
-plan scan (SCAN_PATTERN), so the plan of a host is never withheld because of this module.
+Everything it prints is built from a closed vocabulary: option names, a host name or address and
+a port, a key type, a short fingerprint, a per-account index and the class of a shell. No account
+name is ever printed (the name of the jump account is held out of the public log), key bodies,
+comment fields and every other option value are never printed, and no refusal carries a value,
+only a code and an entry number. A last guard withholds any line that would read as a credential
+assignment to the plan scan (SCAN_PATTERN), so the plan of a host is never withheld because of
+this module.
 """
 
 import base64
@@ -20,23 +22,25 @@ import hashlib
 import os
 import pwd
 import re
+import stat
 from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
 from typing import Protocol
 
 from ansible.module_utils.basic import AnsibleModule
 
 DOCUMENTATION = r"""
 module: ci_jump_authorized_keys
-short_description: Judge the CI jump account's authorized_keys options
+short_description: Judge the CI jump account's sshd drop-in and key file
 description:
-  - C(report) lists every local account whose key files carry forwarding options, with the
-    options, a key type and a short fingerprint per line. It needs no input and changes nothing.
-  - C(plan) refuses inputs and a host the role must not write to, and shows the live lines
-    against the wanted ones, destination by destination.
-  - C(verify) reads the file back after the write and compares it with the wanted lines exactly.
-  - Never writes. Never prints a key body, a comment or an option value other than the
-    destinations.
+  - C(report) describes, with no account name, the local accounts whose key files carry
+    forwarding options, found per account with C(sshd -T -C), and says for each destination
+    whether it is in the owner's list. It changes nothing.
+  - C(plan) refuses inputs and a host the role must not write to, and shows the live key file
+    and sshd settings against the wanted ones, destination by destination.
+  - C(verify) reads both files back after the write, compares them with the wanted text
+    exactly, and requires sshd's own answer for the account to be exactly what the role means.
+  - Never writes. Never prints an account name, a key body, a comment or an option value other
+    than the destinations.
 version_added: "1.0.0"
 author:
   - branchLeft
@@ -47,7 +51,14 @@ options:
     required: true
     choices: [report, plan, verify]
   user:
-    description: The jump account. Needed by plan and verify.
+    description: The jump account. Needed by plan and verify; never printed.
+    type: str
+    default: ""
+  own_address:
+    description: >-
+      The jump host's own private IPv4 address. It is the address sshd -T -C is asked about,
+      and it must be one of the destinations, because the runner reaches the jump host itself
+      through the jump. Needed by plan and verify.
     type: str
     default: ""
   destinations:
@@ -92,27 +103,58 @@ lines:
   elements: str
 """
 
-# What the written lines are made of. The role's vars/main.yml holds the same two values for
-# its template; ansible/checks/test_ci_jump_pins.py holds the two copies equal.
+# What the written files are made of. The role's vars/main.yml holds the same values for its
+# templates; ansible/checks/test_ci_jump_pins.py holds the two copies equal.
 PINNED_PORT = 22
 PINNED_FIXED_OPTIONS = ("restrict", "port-forwarding")
+PINNED_COMMAND = "/usr/sbin/nologin"
+KEY_DIR = "/etc/ssh/ci-jump"
+KEY_FILE = "/etc/ssh/ci-jump/authorized_keys"
+DROPIN_FILE = "/etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf"
+# The files are root's and nobody else's to change: the account must never edit its own keys.
+ROOT_FILE_MODE = 0o644
+ROOT_DIR_MODE = 0o755
 # A shell whose last path word is one of these cannot run a remote command.
 REFUSED_SHELL_NAMES = frozenset(("nologin", "false"))
-# The connection sshd -T evaluates Match blocks for. The jump key is used from runners that
-# have no fixed address, so a Match block keyed on a real address is not seen (README).
+# The connection sshd -T -C evaluates Match blocks for, when the caller names no address of
+# its own. The jump key is used from runners that have no fixed address, so a Match block keyed
+# on a real runner address is not seen (README).
 STAND_IN_HOST = "ci-jump-check.invalid"
 STAND_IN_ADDRESS = "192.0.2.1"
 SSHD_PATH = "/usr/sbin/sshd"
 DEFAULT_KEY_FILES = (".ssh/authorized_keys", ".ssh/authorized_keys2")
-MANAGED_KEY_FILE = ".ssh/authorized_keys"
 MAX_FILE_BYTES = 1_000_000
+# What sshd -T must say for the jump account once the drop-in is in place: keyword, then the
+# one value it prints. permitopen is judged apart, as a set, because the owner's list is its value.
+EXPECTED_EFFECTIVE = {
+    "authenticationmethods": "publickey",
+    "authorizedkeyscommand": "none",
+    "authorizedkeysfile": KEY_FILE,
+    "allowtcpforwarding": "local",
+    "disableforwarding": "no",
+    "gatewayports": "no",
+    "allowagentforwarding": "no",
+    "allowstreamlocalforwarding": "no",
+    "x11forwarding": "no",
+    "permittty": "no",
+    "permittunnel": "no",
+    "permituserrc": "no",
+    "forcecommand": PINNED_COMMAND,
+}
+# The refusal each keyword has when sshd's answer differs. Remote forwarding is the one that
+# matters most: a key line that allows port forwarding also allows -R unless sshd says local.
+EFFECTIVE_CODES = {
+    "allowtcpforwarding": "E-SSHD-FORWARDING",
+    "disableforwarding": "E-SSHD-FORWARDING",
+    "authorizedkeyscommand": "E-SSHD-KEYSCOMMAND",
+    "authorizedkeysfile": "E-SSHD-FILE",
+}
 
 # Copied from the plan scan of the gated apply: branchLeft/github-workflows,
 # .github/actions/ssh-check-hosts/action.yml, the credential-assignment row of `patterns`
 # (line 434 at tag v1.0.19), which that action applies with grep -Ei to each line of a host's
-# plan. [[:space:]] is written \s. Drift from the original is unchecked until
-# branchLeft/shared-infra#574 lands a test that holds the two equal; then this copy is
-# replaced by an import of its constant.
+# plan. [[:space:]] is written \s. The copy is not held equal to the original by any test yet;
+# when one exists, this copy is replaced by an import of its constant.
 SCAN_PATTERN = re.compile(
     r"(passw(or)?d|passphrase|secret|token|api[_-]?key|private[_-]?key|credential)"
     r'[A-Za-z0-9_.-]*"?\s*[:=]\s*"?[^\s"]{4,}',
@@ -196,6 +238,17 @@ class KeyLine:
     text: str
 
 
+@dataclasses.dataclass(frozen=True)
+class FileInfo:
+    """Who owns a path and how it can be changed, read without following a link."""
+
+    uid: int
+    gid: int
+    mode: int
+    regular: bool
+    directory: bool
+
+
 class Host(Protocol):
     """What the module needs from the machine it runs on, so a test can supply a fake."""
 
@@ -204,11 +257,17 @@ class Host(Protocol):
         ...
 
     def read(self, path: str) -> str | None:
-        """The text of a file, or None when it is absent, too large or unreadable."""
+        """The text of a regular file, or None when it is absent, a link, too large or
+        unreadable."""
         ...
 
-    def sshd_test(self, user: str | None) -> dict[str, list[str]]:
-        """The effective sshd settings, keyword to values, for a stand-in connection of user."""
+    def info(self, path: str) -> FileInfo | None:
+        """The owner and mode of a path, or None when it is absent."""
+        ...
+
+    def sshd_test(self, user: str | None, address: str) -> dict[str, list[str]]:
+        """The effective sshd settings, keyword to values, for a connection of user from
+        address."""
         ...
 
 
@@ -467,17 +526,76 @@ def check_keys(keys: object) -> list[tuple[str, str]]:
     return found
 
 
+def check_own_address(own: object, destinations: Sequence[str]) -> str:
+    """Return the jump host's own address, or refuse one that is unset, not an IPv4 address, or
+    not among the destinations.
+
+    The runner reaches every host through the jump, the jump host itself included, so a list
+    that lacks the jump host's own address fails the plan of every host and cannot be corrected
+    by the pull it would block.
+
+    Raises:
+        RefusalError: for each of those.
+    """
+    if not isinstance(own, str) or not own:
+        raise RefusalError("E-OWN-EMPTY", "the jump host's own address is not named")
+    labels = own.split(".")
+    if len(labels) != 4 or not all(
+        label.isascii() and label.isdigit() and len(label) <= 3 and int(label) <= 255
+        for label in labels
+    ):
+        raise RefusalError("E-OWN-SHAPE", "the jump host's own address is not an IPv4 address")
+    if own.lower() not in (item.lower() for item in destinations):
+        raise RefusalError(
+            "E-DEST-OWN", "the destination list lacks the jump host's own address on port 22"
+        )
+    return own
+
+
 def wanted_options(destinations: Sequence[str]) -> str:
-    """The options of every line the role writes: the fixed pair, then one permitopen each."""
+    """The options of every line the role writes: the fixed pair, one permitopen each, then the
+    forced command, in the order the runbook's hand-made line has."""
     return ",".join(
-        [*PINNED_FIXED_OPTIONS, *(f'permitopen="{item}:{PINNED_PORT}"' for item in destinations)]
+        [
+            *PINNED_FIXED_OPTIONS,
+            *(f'permitopen="{item}:{PINNED_PORT}"' for item in destinations),
+            f'command="{PINNED_COMMAND}"',
+        ]
     )
 
 
 def wanted_lines(destinations: Sequence[str], keys: Sequence[tuple[str, str]]) -> list[str]:
-    """The exact lines the file must hold: options, key type, key body, nothing else."""
+    """The exact lines the key file must hold: options, key type, key body, nothing else."""
     options = wanted_options(destinations)
     return [f"{options} {key_type} {body}" for key_type, body in keys]
+
+
+def wanted_dropin(user: str, destinations: Sequence[str]) -> str:
+    """The exact text of the sshd drop-in: a Match block for the account, closed by Match all.
+
+    The PermitOpen here and the permitopen of every key line are one list, the destinations.
+    """
+    permit = " ".join(f"{item}:{PINNED_PORT}" for item in destinations)
+    return "\n".join(
+        [
+            "# Written by the ci_jump role. Change the owner's variables, not this file.",
+            f"Match User {user}",
+            f"    AuthorizedKeysFile {KEY_FILE}",
+            "    AuthenticationMethods publickey",
+            "    AllowTcpForwarding local",
+            f"    PermitOpen {permit}",
+            "    GatewayPorts no",
+            "    AllowAgentForwarding no",
+            "    AllowStreamLocalForwarding no",
+            "    X11Forwarding no",
+            "    PermitTTY no",
+            "    PermitTunnel no",
+            "    PermitUserRC no",
+            f"    ForceCommand {PINNED_COMMAND}",
+            "Match all",
+            "",
+        ]
+    )
 
 
 # ---------------------------------------------------------------------------------------
@@ -548,75 +666,128 @@ def check_account(account: Account | None) -> Account:
     return account
 
 
-def check_sshd(host: Host, account: Account) -> list[str]:
-    """Refuse an sshd that would let a key line be bypassed or voided, and return the key files.
+def shell_class(shell: str) -> str:
+    """Name the kind of a login shell without naming the shell: nologin, false or login."""
+    base = os.path.basename(shell)
+    return base if base in REFUSED_SHELL_NAMES else "login"
+
+
+def _sshd(host: Host, user: str, address: str) -> dict[str, list[str]]:
+    """Ask sshd for the effective settings, or refuse when it cannot answer.
 
     Raises:
-        RefusalError: for each way the effective settings for the account defeat the key line.
+        RefusalError: when sshd -T fails.
     """
     try:
-        settings = host.sshd_test(account.name)
+        return host.sshd_test(user, address)
     except HostError:
         raise RefusalError("E-SSHD-UNAVAILABLE", "sshd -T could not be read") from None
-    forwarding = settings.get("allowtcpforwarding", ["yes"])[-1].split()[0]
-    disabled = settings.get("disableforwarding", ["no"])[-1].split()[0]
-    if forwarding in ("no", "remote") or disabled == "yes":
-        raise RefusalError(
-            "E-SSHD-FORWARDING", "sshd switches TCP forwarding off for the jump account"
-        )
-    if [value.strip() for value in settings.get("authorizedkeyscommand", ["none"])] != ["none"]:
+
+
+def _values(settings: Mapping[str, list[str]], keyword: str, default: str) -> list[str]:
+    """Every word sshd printed for a keyword, lower-cased, or the default when it printed none."""
+    return " ".join(settings.get(keyword, [default])).lower().split()
+
+
+def check_unfixable(settings: Mapping[str, list[str]]) -> None:
+    """Refuse, before anything is written, what the drop-in cannot put right.
+
+    Raises:
+        RefusalError: when forwarding is disabled outright or a keys command could add keys.
+    """
+    if _values(settings, "disableforwarding", "no") != ["no"]:
+        raise RefusalError("E-SSHD-FORWARDING", "sshd disables all forwarding for the jump account")
+    if _values(settings, "authorizedkeyscommand", "none") != ["none"]:
         raise RefusalError(
             "E-SSHD-KEYSCOMMAND",
             "sshd runs a keys command for the jump account, which could add keys",
         )
-    if [value.strip() for value in settings.get("permitopen", ["any"])] != ["any"]:
-        raise RefusalError(
-            "E-SSHD-PERMITOPEN", "sshd sets a PermitOpen of its own; the key line is the one home"
-        )
-    files = key_files(settings, account)
-    managed = os.path.normpath(os.path.join(account.home, MANAGED_KEY_FILE))
-    if managed not in files:
-        raise RefusalError("E-SSHD-FILE", "sshd does not read the file the role manages")
-    for path in files:
-        if path == managed:
-            continue
-        other = host.read(path)
-        if other is not None and parse_file(other)[0]:
+
+
+def check_effective(settings: Mapping[str, list[str]], destinations: Sequence[str]) -> None:
+    """Refuse unless sshd's own answer for the jump account is exactly what the role means.
+
+    Remote forwarding is refused here: a key line with port-forwarding allows ssh -R unless
+    sshd says AllowTcpForwarding local for the account.
+
+    Raises:
+        RefusalError: with the code of the first setting that differs.
+    """
+    for keyword, expected in EXPECTED_EFFECTIVE.items():
+        if _values(settings, keyword, "") != [expected.lower()]:
+            code = EFFECTIVE_CODES.get(keyword, "E-SSHD-EFFECTIVE")
             raise RefusalError(
-                "E-SSHD-KEYS2", "a second key file sshd reads for the jump account holds key lines"
+                code, f"sshd does not apply the wanted {keyword} to the jump account"
             )
-    return files
+    live = sorted(_values(settings, "permitopen", "any"))
+    wanted = sorted(f"{item}:{PINNED_PORT}".lower() for item in destinations)
+    if live != wanted:
+        raise RefusalError(
+            "E-SSHD-PERMITOPEN", "sshd's PermitOpen for the jump account is not the owner's list"
+        )
+
+
+def _root_owned(info: FileInfo | None, directory: bool) -> bool:
+    """True when the path exists, is root's, and nobody else can change it."""
+    if info is None or info.uid != 0 or info.gid != 0:
+        return False
+    if directory:
+        return info.directory and info.mode == ROOT_DIR_MODE
+    return info.regular and info.mode == ROOT_FILE_MODE
+
+
+def _destinations_of(lines: Sequence[KeyLine]) -> list[str]:
+    """The hosts the permitopen options of the lines name, in the order met."""
+    found: list[str] = []
+    for line in lines:
+        for value in sorted(permitopen_set(line)):
+            host_part = value.rpartition(":")[0]
+            if host_part not in found:
+                found.append(host_part)
+    return found
 
 
 def plan_lines(
-    account: Account,
     host: Host,
+    user: str,
+    settings: Mapping[str, list[str]],
     destinations: Sequence[str],
     keys: Sequence[tuple[str, str]],
 ) -> list[str]:
-    """Show the live key lines against the wanted ones, destination by destination."""
-    managed = os.path.normpath(os.path.join(account.home, MANAGED_KEY_FILE))
-    text = host.read(managed)
+    """Show the live key file and sshd settings against the wanted ones, destination by
+    destination. The account is never named."""
+    text = host.read(KEY_FILE)
     live, not_understood = parse_file(text) if text is not None else ([], 0)
     wanted = wanted_options(destinations)
     out = [
-        f"ci_jump plan for account {clean(account.name)}, every key line wanted with the options"
-        f" {', '.join(PINNED_FIXED_OPTIONS)} and one permitopen per destination",
-        f"live file has {len(live)} key line(s) and {not_understood} line(s) not understood"
-        if text is not None
-        else "live file is absent and would be created",
+        "ci_jump plan for the jump account: every key line is wanted with the options"
+        f" {', '.join(PINNED_FIXED_OPTIONS)}, one permitopen per destination and a forced"
+        " command, and sshd gets the same list as its PermitOpen",
+        (
+            f"key file has {len(live)} key line(s) and {not_understood} line(s) not understood,"
+            f" root-owned {'yes' if _root_owned(host.info(KEY_FILE), False) else 'no'}"
+            if text is not None
+            else "key file is absent and would be created"
+        ),
     ]
-    live_destinations: list[str] = []
-    for line in live:
-        for value in sorted(permitopen_set(line)):
-            host_part = value.rpartition(":")[0]
-            if host_part not in live_destinations:
-                live_destinations.append(host_part)
+    dropin = host.read(DROPIN_FILE)
+    if dropin is None:
+        out.append("sshd drop-in is absent and would be created")
+    elif dropin == wanted_dropin(user, destinations):
+        out.append("sshd drop-in is identical to the wanted text")
+    else:
+        out.append("sshd drop-in differs from the wanted text and would be replaced")
+    live_key_destinations = _destinations_of(live)
+    live_sshd = [value.rpartition(":")[0] for value in _values(settings, "permitopen", "any")]
     for item in destinations:
-        live_now = "yes" if item in live_destinations else "no"
-        out.append(f"destination {item} port {PINNED_PORT} live {live_now} wanted yes")
-    for item in live_destinations:
-        if item not in destinations:
+        in_keys = "yes" if item in live_key_destinations else "no"
+        in_sshd = "yes" if item in live_sshd else "no"
+        out.append(
+            f"destination {item} port {PINNED_PORT} key file live {in_keys} wanted yes,"
+            f" sshd PermitOpen live {in_sshd} wanted yes"
+        )
+    for item in dict.fromkeys([*live_key_destinations, *live_sshd]):
+        if item not in destinations and item != "any":
             out.append(f"destination {clean(item)} live yes wanted no, so it would be removed")
     wanted_fps = {fingerprint(body): (key_type, body) for key_type, body in keys}
     live_by_fp = {fingerprint(line.body): line for line in live}
@@ -638,52 +809,89 @@ def plan_lines(
     return [safe_line(item) for item in out]
 
 
+def _checked_inputs(
+    user: object,
+    own: object,
+    destinations: object,
+    keys: object,
+    owned: Mapping[str, str],
+) -> tuple[str, str, list[str], list[tuple[str, str]]]:
+    """Judge every input, in the order that tells the owner the most: the account, the
+    destinations, the jump host's own address, the keys.
+
+    Raises:
+        RefusalError: for the first rule that is broken.
+    """
+    name = check_user(user, owned)
+    dests = check_destinations(destinations)
+    return name, check_own_address(own, dests), dests, check_keys(keys)
+
+
 def do_plan(
-    host: Host, user: object, destinations: object, keys: object, owned: Mapping[str, str]
+    host: Host,
+    user: object,
+    own: object,
+    destinations: object,
+    keys: object,
+    owned: Mapping[str, str],
 ) -> list[str]:
     """Judge the inputs, then the host, and show live against wanted.
 
     Raises:
         RefusalError: for the first rule that is broken, inputs before host.
     """
-    name = check_user(user, owned)
-    dests = check_destinations(destinations)
-    parsed_keys = check_keys(keys)
+    name, own_address, dests, parsed_keys = _checked_inputs(user, own, destinations, keys, owned)
     account = check_account(find_account(host, name))
-    check_sshd(host, account)
-    return plan_lines(account, host, dests, parsed_keys)
+    settings = _sshd(host, account.name, own_address)
+    check_unfixable(settings)
+    return plan_lines(host, name, settings, dests, parsed_keys)
 
 
 def do_verify(
-    host: Host, user: object, destinations: object, keys: object, owned: Mapping[str, str]
+    host: Host,
+    user: object,
+    own: object,
+    destinations: object,
+    keys: object,
+    owned: Mapping[str, str],
 ) -> list[str]:
-    """Read the file back and compare it with the wanted lines exactly, and read sshd again.
+    """Read both files back and compare them with the wanted text exactly, then require sshd's
+    own answer for the account to be what the role means.
 
     Raises:
-        RefusalError: when the file is not exactly the wanted lines, or the host is refused.
+        RefusalError: when sshd's answer or either file is not exactly what was wanted.
     """
-    name = check_user(user, owned)
-    dests = check_destinations(destinations)
-    parsed_keys = check_keys(keys)
+    name, own_address, dests, parsed_keys = _checked_inputs(user, own, destinations, keys, owned)
     account = check_account(find_account(host, name))
-    check_sshd(host, account)
-    managed = os.path.normpath(os.path.join(account.home, MANAGED_KEY_FILE))
-    text = host.read(managed)
+    check_effective(_sshd(host, account.name, own_address), dests)
+    if not _root_owned(host.info(KEY_DIR), True):
+        raise RefusalError("E-READBACK-MISMATCH", "the key directory is not root's at mode 0755")
+    for path in (KEY_FILE, DROPIN_FILE):
+        if not _root_owned(host.info(path), False):
+            raise RefusalError(
+                "E-READBACK-MISMATCH", "a managed file is not root's regular file at mode 0644"
+            )
+    text = host.read(KEY_FILE)
     if text is None:
-        raise RefusalError("E-READBACK-MISMATCH", "the managed file cannot be read back")
+        raise RefusalError("E-READBACK-MISMATCH", "the managed key file cannot be read back")
     live = sorted(line.strip() for line in text.splitlines() if line.strip())
     if live != sorted(wanted_lines(dests, parsed_keys)):
         raise RefusalError(
-            "E-READBACK-MISMATCH", "the managed file is not exactly the wanted lines"
+            "E-READBACK-MISMATCH", "the managed key file is not exactly the wanted lines"
+        )
+    if host.read(DROPIN_FILE) != wanted_dropin(name, dests):
+        raise RefusalError(
+            "E-READBACK-MISMATCH", "the managed sshd drop-in is not exactly the wanted text"
         )
     return [
-        f"ci_jump read back {len(live)} key line(s) for account {clean(account.name)}, each exactly"
-        f" the wanted options for {len(dests)} destination(s) on port {PINNED_PORT}"
+        f"ci_jump read back {len(live)} key line(s) and the sshd drop-in, each exactly the wanted"
+        f" text for {len(dests)} destination(s) on port {PINNED_PORT}; sshd applies local"
+        " forwarding only, with the same list as its PermitOpen"
     ]
 
 
 # ---------------------------------------------------------------------------------------
-# The report.
+# The report. It names no account: the jump account's name is held out of the public log.
 
 
 def _setting(settings: Mapping[str, list[str]], keyword: str, default: str, limit: int = 40) -> str:
@@ -692,77 +900,125 @@ def _setting(settings: Mapping[str, list[str]], keyword: str, default: str, limi
     return " ".join(clean(word, limit) for word in words)[:limit]
 
 
-def _forwarding_summary(settings: Mapping[str, list[str]]) -> str:
-    return (
-        "sshd for this account"
-        f" AuthorizedKeysCommand {_setting(settings, 'authorizedkeyscommand', 'none')},"
-        f" AuthorizedKeysFile {_setting(settings, 'authorizedkeysfile', '', 160)},"
-        f" AllowTcpForwarding {_setting(settings, 'allowtcpforwarding', 'yes', 12)},"
-        f" DisableForwarding {_setting(settings, 'disableforwarding', 'no', 12)},"
-        f" PermitOpen {_setting(settings, 'permitopen', 'any')}"
-    )
+def _file_label(paths: Sequence[str]) -> str:
+    """Say whether a key file is the managed one, without printing a path that could hold a name."""
+    return "managed" if list(paths) == [KEY_FILE] else "other"
 
 
-def do_report(host: Host, owned: Mapping[str, str]) -> tuple[list[str], list[dict[str, object]]]:
-    """Describe the accounts whose key lines carry forwarding options. Reads, never writes."""
-    out = ["ci_jump report, read only, nothing was changed"]
-    try:
-        global_settings: dict[str, list[str]] = host.sshd_test(None)
-    except HostError:
-        global_settings = {}
-        out.append("sshd -T could not be read, so the default key files are assumed")
-    else:
-        out.append(
-            "sshd globally"
-            f" AuthorizedKeysCommand {_setting(global_settings, 'authorizedkeyscommand', 'none')},"
-            f" AuthorizedKeysFile {_setting(global_settings, 'authorizedkeysfile', '', 160)}"
+def _carrying_lines(host: Host, files: Sequence[str]) -> list[KeyLine]:
+    """The key lines of the given files that carry a forwarding option."""
+    found: list[KeyLine] = []
+    for path in files:
+        text = host.read(path)
+        if text is None:
+            continue
+        lines, _ = parse_file(text)
+        found.extend(
+            line
+            for line in lines
+            if {name for name, _ in line.options}
+            & {"permitopen", "port-forwarding", "permitlisten"}
         )
+    return found
+
+
+def _report_destinations(
+    index: int,
+    lines: Sequence[KeyLine],
+    settings: Mapping[str, list[str]],
+    listed: Sequence[str],
+) -> list[str]:
+    """One line per live destination, saying where it is live and whether the owner lists it."""
+    in_keys = _destinations_of(lines)
+    in_sshd = [
+        value.rpartition(":")[0]
+        for value in _values(settings, "permitopen", "any")
+        if value != "any"
+    ]
+    out: list[str] = []
+    for item in dict.fromkeys([*in_keys, *in_sshd]):
+        out.append(
+            f"account {index} destination {clean(item)} port {PINNED_PORT}"
+            f" in key lines {'yes' if item in in_keys else 'no'},"
+            f" in sshd PermitOpen {'yes' if item in in_sshd else 'no'},"
+            f" in the owner's list {'yes' if item in listed else 'no'}"
+        )
+    out.extend(
+        f"account {index} destination {clean(item)} is in the owner's list and not in its key lines"
+        for item in listed
+        if item not in in_keys
+    )
+    return out
+
+
+def do_report(
+    host: Host,
+    owned: Mapping[str, str],
+    listed: Sequence[str],
+    address: str,
+) -> tuple[list[str], list[dict[str, object]]]:
+    """Describe the accounts whose key files carry forwarding options, found per account with
+    sshd -T -C so a Match block's AuthorizedKeysFile is followed. Reads, never writes, and
+    prints no account name: an account is its index in this report."""
+    out = ["ci_jump report, read only, nothing was changed"]
     owner_of = {name: role for role, name in owned.items()}
     structured: list[dict[str, object]] = []
+    examined = 0
+    unanswered = 0
     for account in sorted(host.accounts(), key=lambda item: item.name):
-        carrying: list[tuple[str, KeyLine]] = []
-        for path in key_files(global_settings, account):
-            text = host.read(path)
-            if text is None:
-                continue
-            lines, _ = parse_file(text)
-            carrying.extend(
-                (os.path.basename(path), line)
-                for line in lines
-                if {name for name, _ in line.options}
-                & {"permitopen", "port-forwarding", "permitlisten"}
-            )
+        try:
+            settings = host.sshd_test(account.name, address)
+        except HostError:
+            unanswered += 1
+            continue
+        examined += 1
+        files = key_files(settings, account)
+        carrying = _carrying_lines(host, files)
         if not carrying:
             continue
-        sets = {permitopen_set(line) for _, line in carrying}
+        index = len(structured) + 1
         owner = owner_of.get(account.name, "none")
-        shown = clean(account.name)
-        out.append(
-            f"account {shown} shell {clean(account.shell)} owned by role {clean(owner, 32)},"
-            f" {len(carrying)} key line(s) with forwarding options"
+        sets = {permitopen_set(line) for line in carrying}
+        owned_by_root = all(
+            _root_owned(host.info(path), False) for path in files if host.read(path)
         )
-        for number, (label, line) in enumerate(carrying, start=1):
+        out.append(
+            f"account {index} shell class {shell_class(account.shell)} owned by role"
+            f" {clean(owner, 32)}, {len(carrying)} key line(s) with forwarding options,"
+            f" key file {_file_label(files)}, root-owned {'yes' if owned_by_root else 'no'}"
+        )
+        for number, line in enumerate(carrying, start=1):
             out.append(
-                f"account {shown} line {number} in {clean(label, 40)} key {line.key_type}"
+                f"account {index} line {number} key {line.key_type}"
                 f" fingerprint {fingerprint(line.body)} options {describe_options(line)}"
             )
-        same = "yes" if len(sets) == 1 else "no"
-        out.append(f"account {shown} all key lines carry the same permitopen set {same}")
-        try:
-            out.append(_forwarding_summary(host.sshd_test(account.name)))
-        except HostError:
-            out.append("sshd could not be evaluated for this account")
+        out.append(
+            f"account {index} all key lines carry the same permitopen set"
+            f" {'yes' if len(sets) == 1 else 'no'}"
+        )
+        out.extend(_report_destinations(index, carrying, settings, listed))
+        out.append(
+            f"account {index} sshd AuthorizedKeysCommand"
+            f" {_setting(settings, 'authorizedkeyscommand', 'none')},"
+            f" AuthorizedKeysFile {_file_label(files)},"
+            f" AllowTcpForwarding {_setting(settings, 'allowtcpforwarding', 'yes', 12)},"
+            f" DisableForwarding {_setting(settings, 'disableforwarding', 'no', 12)},"
+            f" PermitOpen {len(_values(settings, 'permitopen', 'any'))} entr(ies)"
+        )
         structured.append(
             {
-                "account": account.name,
-                "shell": account.shell,
+                "index": index,
+                "shell_class": shell_class(account.shell),
                 "owner": owner,
                 "lines": len(carrying),
                 "same_permitopen": len(sets) == 1,
+                "allowtcpforwarding": _values(settings, "allowtcpforwarding", "yes"),
             }
         )
-    if not structured:
-        out.append("no account has key lines with forwarding options")
+    out.append(
+        f"examined {examined} account(s), {unanswered} could not be evaluated by sshd,"
+        f" {len(structured)} carry forwarding options in their key files"
+    )
     return [safe_line(item) for item in out], structured
 
 
@@ -784,24 +1040,51 @@ class RealHost:
         ]
 
     def read(self, path: str) -> str | None:
-        """Read a file as text, or None when it is absent, too large or unreadable."""
+        """Read a regular file as text, or None when it is absent, a link, a pipe, too large or
+        unreadable.
+
+        The last part of the path is opened with O_NOFOLLOW, so a link there is refused, and
+        O_NONBLOCK, so a pipe swapped in by a local account cannot hold the pull; the opened
+        descriptor is then checked with fstat, so what is read is the regular file checked.
+        """
         try:
-            target = Path(path)
-            if not target.is_file() or target.stat().st_size > MAX_FILE_BYTES:
-                return None
-            return target.read_text(encoding="utf-8", errors="replace")
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
         except OSError:
             return None
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode) or details.st_size > MAX_FILE_BYTES:
+                return None
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                return handle.read(MAX_FILE_BYTES + 1).decode("utf-8", errors="replace")
+        except OSError:
+            return None
+        finally:
+            os.close(descriptor)
 
-    def sshd_test(self, user: str | None) -> dict[str, list[str]]:
-        """Run sshd -T, with a stand-in connection when a user is given.
+    def info(self, path: str) -> FileInfo | None:
+        """Who owns a path and its mode, read without following a link."""
+        try:
+            details = os.lstat(path)
+        except OSError:
+            return None
+        return FileInfo(
+            details.st_uid,
+            details.st_gid,
+            stat.S_IMODE(details.st_mode),
+            stat.S_ISREG(details.st_mode),
+            stat.S_ISDIR(details.st_mode),
+        )
+
+    def sshd_test(self, user: str | None, address: str) -> dict[str, list[str]]:
+        """Run sshd -T, for a connection of user from address when a user is given.
 
         Raises:
             HostError: when sshd cannot print its settings.
         """
         command = [SSHD_PATH, "-T"]
         if user is not None:
-            command += ["-C", f"user={user},host={STAND_IN_HOST},addr={STAND_IN_ADDRESS}"]
+            command += ["-C", f"user={user},host={STAND_IN_HOST},addr={address}"]
         code, output = self._run(command)
         if code != 0:
             raise HostError
@@ -815,7 +1098,8 @@ class RealHost:
 
 ARGUMENT_SPEC: dict[str, dict[str, object]] = {
     "action": {"type": "str", "required": True, "choices": ["report", "plan", "verify"]},
-    "user": {"type": "str", "default": ""},
+    "user": {"type": "str", "default": "", "no_log": True},
+    "own_address": {"type": "str", "default": ""},
     "destinations": {"type": "list", "elements": "raw", "default": []},
     "keys": {"type": "list", "elements": "raw", "default": [], "no_log": True},
     "owned_accounts": {"type": "dict", "default": {}},
@@ -854,13 +1138,32 @@ def main() -> None:
         owned = owned_from(params["owned_accounts"])
         action = params["action"]
         if action == "report":
-            lines, accounts = do_report(host, owned)
+            lines, accounts = do_report(
+                host,
+                owned,
+                [item for item in params["destinations"] if isinstance(item, str)],
+                params["own_address"] or STAND_IN_ADDRESS,
+            )
             module.exit_json(changed=False, lines=lines, accounts=accounts)
         elif action == "plan":
-            lines = do_plan(host, params["user"], params["destinations"], params["keys"], owned)
+            lines = do_plan(
+                host,
+                params["user"],
+                params["own_address"],
+                params["destinations"],
+                params["keys"],
+                owned,
+            )
             module.exit_json(changed=False, lines=lines)
         else:
-            lines = do_verify(host, params["user"], params["destinations"], params["keys"], owned)
+            lines = do_verify(
+                host,
+                params["user"],
+                params["own_address"],
+                params["destinations"],
+                params["keys"],
+                owned,
+            )
             module.exit_json(changed=False, lines=lines)
     except RefusalError as error:
         module.fail_json(msg=str(error))

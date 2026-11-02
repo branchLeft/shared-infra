@@ -1,13 +1,14 @@
 ---
 # Test setup only, never part of the role. It makes the instance look as edge1 does before the
-# role is enabled: the jump account with a nologin shell and a locked-out password, a hand-made
-# key file whose one line allows a host the new list will not (so a converge must replace it),
-# and a real sshd of its own. The sshd listens on 127.0.0.1:2222, where the jump connections
-# arrive, and also on port 22 of two more loopback addresses, which stand for the hosts behind
-# the jump: one will be on the list, one will not. It also carries a Match block for another
-# user with forwarding off, which the role's sshd read must evaluate. The key pairs are made
-# here, inside the container, for this run only: no key leaves it except the public halves the
-# converge reads.
+# role is enabled, following the ci-jump runbook's hand-made layout: the jump account with a
+# nologin shell and no home directory, a root-owned key file outside any home whose one line
+# allows a host the new list will not (so a converge must replace it), and a drop-in with a Match
+# block for the account that carries the same old destination. The real OpenSSH server runs as
+# ssh.service. It listens on 127.0.0.1:2222, where the jump connections arrive, and on port 22 of
+# three more loopback addresses, which stand for the hosts behind the jump: one will be on the
+# list, one will not, and one is the jump host's own address. A Match block for another user,
+# with forwarding off, is the test's own. The key pairs are made here, inside the container, for
+# this run only: no key leaves it except the public halves the converge reads.
 - name: Prepare the instance
   hosts: all
   gather_facts: false
@@ -21,14 +22,25 @@
         update_cache: true
         cache_valid_time: 3600
 
-    # nologin, the shell the role requires, and a password field that is not locked, so sshd's own
-    # account check passes it and a password still cannot be used.
-    - name: Make the jump account
+    # As the runbook makes it: a system account with no home directory (the home is
+    # /nonexistent) and a nologin shell. The password field is not locked, so sshd's own account
+    # check passes it in a container that has no PAM, and a password still cannot be used.
+    - name: Make the jump account as the runbook does
       ansible.builtin.user:
         name: '{{ scenario_jump_user }}'
         comment: CI jump account
+        system: true
         shell: /usr/sbin/nologin
-        create_home: true
+        home: /nonexistent
+        create_home: false
+        password: '*'
+      no_log: true
+
+    - name: Make the account other users' Match block is for
+      ansible.builtin.user:
+        name: '{{ scenario_other_user }}'
+        shell: /usr/sbin/nologin
+        create_home: false
         password: '*'
       no_log: true
 
@@ -78,35 +90,28 @@
       register: ci_jump_scenario_prepare_old
       no_log: true
 
-    - name: Make the account's .ssh directory as the host has it
+    - name: Make the directory of the hand-made key file as the runbook does
       ansible.builtin.file:
-        path: '/home/{{ scenario_jump_user }}/.ssh'
-        state: directory
-        owner: '{{ scenario_jump_user }}'
-        group: '{{ scenario_jump_user }}'
-        mode: '0700'
-
-    # The state before the role: a line that allows the unlisted address and an old key. The
-    # converge must replace it with exactly the declared lines.
-    - name: Put the hand-made key file in place
-      ansible.builtin.copy:
-        content: >-
-          restrict,port-forwarding,permitopen="{{ scenario_unlisted }}:22"
-          {{ ci_jump_scenario_prepare_old.content | b64decode | trim }}
-        dest: '/home/{{ scenario_jump_user }}/.ssh/authorized_keys'
-        owner: '{{ scenario_jump_user }}'
-        group: '{{ scenario_jump_user }}'
-        mode: '0600'
-      no_log: true
-      diff: false
-
-    - name: Make the directory sshd separates privileges in
-      ansible.builtin.file:
-        path: /run/sshd
+        path: /etc/ssh/ci-jump
         state: directory
         owner: root
         group: root
         mode: '0755'
+
+    # The state before the role: a line that allows the unlisted address, an old key and the
+    # forced command, as the runbook's step writes it. The converge must replace it with exactly
+    # the declared lines.
+    - name: Put the hand-made key file in place
+      ansible.builtin.copy:
+        content: >-
+          restrict,port-forwarding,permitopen="{{ scenario_unlisted }}:22",command="/usr/sbin/nologin"
+          {{ ci_jump_scenario_prepare_old.content | b64decode | trim }}
+        dest: /etc/ssh/ci-jump/authorized_keys
+        owner: root
+        group: root
+        mode: '0644'
+      no_log: true
+      diff: false
 
     - name: Make the SSH server's host keys
       ansible.builtin.command:
@@ -115,20 +120,16 @@
           - -A
         creates: /etc/ssh/ssh_host_ed25519_key
 
-    # Close to the Debian defaults: key authentication only, StrictModes on, the default
-    # AuthorizedKeysFile. Only the listeners and the pid file are the test's, and PAM is off
-    # because a container has no login session for it to open. A drop-in beats the main file
-    # because the main file includes the directory first. The role reads this configuration
-    # through sshd -T, so no reload is needed after a case changes it. The Match block is
-    # for a user that is not the jump account; the scenario observes that sshd -T -C
-    # evaluates it for that user and not for the jump account.
+    # Close to the Debian defaults: key authentication only, StrictModes on. Only the listeners
+    # are the test's, and PAM is off because a container has no login session for it to open. The
+    # Match block ends with Match all so that it covers nothing the drop-ins after it hold.
     - name: Put the test SSH server's configuration in place
       ansible.builtin.copy:
         content: |
           ListenAddress 127.0.0.1:{{ scenario_ssh_port }}
           ListenAddress {{ scenario_listed }}:22
           ListenAddress {{ scenario_unlisted }}:22
-          PidFile /run/sshd-ci-jump-test.pid
+          ListenAddress {{ scenario_own }}:22
           UsePAM no
           PasswordAuthentication no
           KbdInteractiveAuthentication no
@@ -136,10 +137,36 @@
           StrictModes yes
           Match User {{ scenario_other_user }}
             AllowTcpForwarding no
+          Match all
         dest: /etc/ssh/sshd_config.d/10-ci-jump-test.conf
         owner: root
         group: root
         mode: '0644'
+
+    # The drop-in the runbook's step writes by hand, with the old destination.
+    - name: Put the hand-made sshd drop-in in place
+      ansible.builtin.copy:
+        content: |
+          Match User {{ scenario_jump_user }}
+              AuthorizedKeysFile /etc/ssh/ci-jump/authorized_keys
+              AuthenticationMethods publickey
+              AllowTcpForwarding local
+              PermitOpen {{ scenario_unlisted }}:22
+              GatewayPorts no
+              AllowAgentForwarding no
+              AllowStreamLocalForwarding no
+              X11Forwarding no
+              PermitTTY no
+              PermitTunnel no
+              PermitUserRC no
+              ForceCommand /usr/sbin/nologin
+          Match all
+        dest: /etc/ssh/sshd_config.d/50-branchleft-ci-jump.conf
+        owner: root
+        group: root
+        mode: '0644'
+      no_log: true
+      diff: false
 
     - name: Check the whole SSH server configuration
       ansible.builtin.command:
@@ -148,15 +175,12 @@
           - -t
       changed_when: false
 
-    - name: Start the test SSH server
-      ansible.builtin.command:
-        argv:
-          - /usr/sbin/sshd
-          - -E
-          - '{{ scenario_record_dir }}/sshd.log'
-        creates: /run/sshd-ci-jump-test.pid
+    - name: Start the SSH server as the service the role reloads
+      ansible.builtin.systemd_service:
+        name: ssh
+        state: restarted
 
-    - name: Wait for the test SSH server to listen on each address
+    - name: Wait for the SSH server to listen on each address
       ansible.builtin.wait_for:
         host: '{{ item.host }}'
         port: '{{ item.port }}'
@@ -165,3 +189,4 @@
         - { host: 127.0.0.1, port: '{{ scenario_ssh_port }}' }
         - { host: '{{ scenario_listed }}', port: 22 }
         - { host: '{{ scenario_unlisted }}', port: 22 }
+        - { host: '{{ scenario_own }}', port: 22 }

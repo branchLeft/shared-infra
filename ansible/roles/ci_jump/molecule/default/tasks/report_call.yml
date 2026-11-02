@@ -9,4 +9,8 @@
       root: root
       ci_login: ansible-ci
       tunnel_account: dbtunnel
+    destinations:
+      - '{{ scenario_listed }}'
+      - '{{ scenario_own }}'
+    own_address: '{{ scenario_own }}'
   register: ci_jump_scenario_verify_report

@@ -43,18 +43,31 @@ TREES = ("playbooks", "trust", "owner_vars")
 TREE_RULES = {"playbooks": "R2", "trust": "R5", "owner_vars": "R10"}
 OWNER_VARS_DIR = "owner_vars"
 # The keys a host's owner_vars file holds, exactly. A host named nowhere here may have no file.
-OWNER_VARS_KEYS = {
-    "edge1": frozenset(
-        (
-            "ci_login_keys",
-            "ci_login_manage_keys",
-            "ci_jump_keys",
-            "ci_jump_manage_keys",
-            "ci_jump_user",
-            "ci_jump_destinations",
-        )
-    ),
+CI_LOGIN_VARS = frozenset(("ci_login_keys", "ci_login_manage_keys"))
+# The variables of the ci_jump role. Every host that applies the role carries all of them in its
+# own owner_vars file, with its own jump account, address, destinations and keys.
+JUMP_VARS = frozenset(
+    (
+        "ci_jump_keys",
+        "ci_jump_manage_keys",
+        "ci_jump_user",
+        "ci_jump_own_address",
+        "ci_jump_destinations",
+    )
+)
+# The hosts that apply ci_jump, one entry each. check() requires this to equal the hosts whose
+# row in host_roles.yml lists the role, so a host cannot gain the role without its owner_vars
+# keys, nor the keys without the role.
+JUMP_HOSTS = frozenset(("edge1",))
+JUMP_ROLE = "ci_jump"
+_BASE_OWNER_KEYS = {
+    "edge1": CI_LOGIN_VARS,
     "ops1": frozenset(("pull_trigger_steps",)),
+}
+OWNER_VARS_KEYS = {
+    host: _BASE_OWNER_KEYS.get(host, frozenset())
+    | (JUMP_VARS if host in JUMP_HOSTS else frozenset())
+    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS)
 }
 STEPS_KEY = "pull_trigger_steps"
 # Only the shape of an allow-list entry. Which ids, tags and words are valid is the program's
@@ -700,8 +713,9 @@ def _jump_key_problems(doc: dict[str, object]) -> list[str]:
     problems: list[str] = []
     if "ci_jump_manage_keys" in doc and not isinstance(doc["ci_jump_manage_keys"], bool):
         problems.append("ci_jump_manage_keys must be a bool")
-    if "ci_jump_user" in doc and not isinstance(doc["ci_jump_user"], str):
-        problems.append("ci_jump_user must be text")
+    for name in ("ci_jump_user", "ci_jump_own_address"):
+        if name in doc and not isinstance(doc[name], str):
+            problems.append(f"{name} must be text")
     destinations = doc.get("ci_jump_destinations", [])
     if not isinstance(destinations, list) or not all(
         isinstance(item, str) for item in destinations
@@ -764,6 +778,21 @@ def _check_owner_vars(directory: Path, enrolled: set[str], findings: list[str]) 
         findings.extend(f"{label}: {problem}" for problem in _owner_key_problems(doc))
 
 
+def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> None:
+    """R10: the hosts that list the ci_jump role are exactly JUMP_HOSTS, the hosts whose
+    owner_vars file may carry the jump account's variables. Each such host has its own jump
+    account, address, destinations and keys, so the rule is the same for every one of them."""
+    applying = {host for host, roles in host_roles.items() if JUMP_ROLE in roles}
+    findings.extend(
+        f"R10 {HOST_ROLES_FILE}: {host} lists {JUMP_ROLE} but is not in JUMP_HOSTS"
+        for host in sorted(applying - JUMP_HOSTS)
+    )
+    findings.extend(
+        f"R10 {HOST_ROLES_FILE}: {host} is in JUMP_HOSTS but does not list {JUMP_ROLE}"
+        for host in sorted(JUMP_HOSTS - applying)
+    )
+
+
 def check(root: Path) -> list[str]:
     """Return one finding per broken rule, or an empty list when the tree passes."""
     findings: list[str] = []
@@ -798,6 +827,7 @@ def check(root: Path) -> list[str]:
         _check_enrolled(stem, plays, host_roles.get(stem, []), stem in owner_stems, findings)
     _check_derivation(includes, findings)
     _check_owner_vars(owner_vars, set(enrolled), findings)
+    _check_jump_hosts(host_roles, findings)
 
     trust_files = _yml_files(trust)
     trust_stems = {path.stem for path in trust_files}

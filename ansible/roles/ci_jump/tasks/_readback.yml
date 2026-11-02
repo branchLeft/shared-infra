@@ -1,11 +1,14 @@
 ---
-# The module builds the lines it expects from the inputs for itself, apart from the template that
-# wrote them, and compares the file with them exactly. It also asks sshd again what it would do for
-# the account, so a write that sshd does not honour is a stop and not a success.
-- name: Read the key file back and compare it with the wanted lines
+# The module builds the files it expects from the inputs for itself, apart from the templates that
+# wrote them, and compares them exactly. It also asks sshd, for the account and from the jump
+# host's own address, what it would apply, and requires local forwarding only, the owner's list as
+# PermitOpen and the rest of the runbook's settings. A write that sshd does not honour, or that
+# lets a key bind a port on the jump host (ssh -R), is a stop and not a success.
+- name: Read both files back and ask sshd what it applies to the account
   ci_jump_authorized_keys:
     action: verify
     user: '{{ ci_jump_user }}'
+    own_address: '{{ ci_jump_own_address }}'
     destinations: '{{ ci_jump_destinations }}'
     keys: "{{ ci_jump_keys | map(attribute='key') | list }}"
     owned_accounts: '{{ ci_jump_owned_accounts }}'
@@ -15,7 +18,7 @@
   no_log: true
   diff: false
 
-- name: Stop if the file is not what was wanted
+- name: Stop if the files or sshd are not what was wanted
   ansible.builtin.assert:
     that:
       - ci_jump_readback.msg is not defined

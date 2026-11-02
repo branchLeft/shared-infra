@@ -1,12 +1,15 @@
 ---
 argument_specs:
   main:
-    short_description: Own the options on the CI jump account's key lines
+    short_description: Own the jump account's root-owned key file and sshd Match block
     description: >-
-      Always describes, read only, which accounts on the host carry forwarding options in their
-      key files. Only when ci_jump_manage_keys is true does it make the jump account's
-      authorized_keys exactly one line per declared key, each with the options restrict,
-      port-forwarding, one permitopen per declared destination on port 22, and nothing else.
+      Always describes, read only and without naming an account, which accounts on the host
+      carry forwarding options in their key files. Only when ci_jump_manage_keys is true does it
+      make the jump account's root-owned key file exactly one line per declared key, each with
+      the options restrict, port-forwarding, one permitopen per declared destination on port 22
+      and a forced nologin command, and write the sshd drop-in whose Match block for the account
+      allows local forwarding to the same destinations and nothing else. It then reads both
+      back, and sshd's own answer for the account, and refuses unless remote forwarding is off.
       It never creates or edits an account.
     author: branchLeft
     options:
@@ -15,24 +18,33 @@ argument_specs:
         default: false
         description: >-
           When false the role only reports and changes nothing, whatever the other variables hold.
-          When true the role checks every input and the host, then makes the key file exactly the
-          declared lines.
+          When true the role checks every input and the host, then writes the two files.
       ci_jump_user:
         type: str
         default: ''
         description: >-
           The jump account, which must already exist with a shell of nologin or false. Read only
-          when ci_jump_manage_keys is true. The role refuses root and the accounts the ci_login and
-          tunnel_account roles own.
+          when ci_jump_manage_keys is true. The role refuses root and the accounts the ci_login
+          and tunnel_account roles own. The name is never printed by the role.
+      ci_jump_own_address:
+        type: str
+        default: ''
+        description: >-
+          The jump host's own private IPv4 address. It must be one of the destinations, because
+          the runner reaches the jump host itself through the jump, and sshd is asked about the
+          account for a connection from this address. Read only when ci_jump_manage_keys is true
+          (the report uses it when it is set).
       ci_jump_destinations:
         type: list
         elements: str
         default: []
         description: >-
           The hosts the jump key may reach, each a host name or an IPv4 address with no port, the
-          exact text the client sends to the jump host. The role adds port 22 itself. An empty list
-          is refused and never read as allow-all; a wildcard, a port, a quote, a comma, a space, an
-          IPv6 form and a repeat are each refused. Read only when ci_jump_manage_keys is true.
+          exact text the client sends to the jump host. The role adds port 22 itself, and writes
+          this one list to every key line's permitopen and to the Match block's PermitOpen. An
+          empty list is refused and never read as allow-all; a wildcard, a port, a quote, a comma,
+          a space, an IPv6 form and a repeat are each refused. The list must hold
+          ci_jump_own_address. Read only when ci_jump_manage_keys is true.
       ci_jump_keys:
         type: list
         elements: dict
