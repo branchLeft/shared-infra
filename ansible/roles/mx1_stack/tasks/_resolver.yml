@@ -1,0 +1,84 @@
+---
+# The local recursive resolver (65-install-local-resolver.sh). Why it has no forwarders, how
+# /etc/resolv.conf is protected and what idempotent means here: mail/provision/65-install-local-resolver.md.
+#
+# The class is read first and acted on only when it is due, like the Compose classes; its action is
+# a series of steps, then a restart of unbound, then the recursion probe, and the stamp is written
+# after the probe.
+- name: Read the packages the host has
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Read the units the host has
+  ansible.builtin.service_facts:
+
+- name: Read the root anchor
+  ansible.builtin.stat:
+    path: '{{ mx1_stack_root_anchor }}'
+    get_checksum: false
+  register: mx1_stack_anchor
+
+- name: Read the system resolver file
+  ansible.builtin.stat:
+    path: '{{ mx1_stack_resolv_conf }}'
+    checksum_algorithm: sha256
+  register: mx1_stack_resolv_before
+
+- name: Work out the resolver's state
+  ansible.builtin.set_fact:
+    mx1_stack_resolver_missing: '{{ mx1_stack_resolver_packages | ansible.builtin.difference(ansible_facts.packages.keys() | ansible.builtin.list) }}'
+    mx1_stack_anchor_state: "{{ 'bootstrapped' if (mx1_stack_anchor.stat.exists and mx1_stack_anchor.stat.size > 0) else 'absent' }}"
+    mx1_stack_unbound_running: >-
+      {{ (ansible_facts.services['unbound.service'] | ansible.builtin.default({})).state
+      | ansible.builtin.default('') == 'running' }}
+    mx1_stack_resolvconf_masked: >-
+      {{ (ansible_facts.services[mx1_stack_resolvconf_unit] | ansible.builtin.default({})).status
+      | ansible.builtin.default('') == 'masked' }}
+
+- name: Decide whether the resolver is due
+  mx1_stack_stamp:
+    action: decide
+    stamp_path: '{{ mx1_stack_resolver_stamp }}'
+    files:
+      resolver_dropin: '{{ mx1_stack_resolver_dropin }}'
+    values:
+      resolver_packages: "{{ mx1_stack_resolver_packages | ansible.builtin.sort | ansible.builtin.join(' ') }}"
+      resolver_anchor: '{{ mx1_stack_anchor_state }}'
+    expected:
+      resolver_dropin: "{{ mx1_stack_resolver_dropin_text | ansible.builtin.hash('sha256') }}"
+    live_ok: >-
+      {{ mx1_stack_resolver_missing | ansible.builtin.length == 0 and mx1_stack_unbound_running
+      and mx1_stack_resolvconf_masked and mx1_stack_anchor_state == 'bootstrapped' }}
+  register: mx1_stack_resolver_decision
+  changed_when: false
+
+- name: Say what the resolver would do
+  ansible.builtin.debug:
+    msg:
+      class: resolver
+      due: '{{ mx1_stack_resolver_decision.due }}'
+      adopt: '{{ mx1_stack_resolver_decision.adopt }}'
+      reasons: '{{ mx1_stack_resolver_decision.reasons }}'
+      missing_packages: '{{ mx1_stack_resolver_missing }}'
+  when: mx1_stack_resolver_decision.due or mx1_stack_resolver_decision.adopt
+
+- name: Mark the resolver pending before anything is changed
+  mx1_stack_stamp:
+    action: mark
+    stamp_path: '{{ mx1_stack_resolver_stamp }}'
+  when: mx1_stack_resolver_decision.due
+
+- name: Act on the resolver
+  ansible.builtin.include_tasks: _resolver_act.yml
+  when: mx1_stack_resolver_decision.due
+
+- name: Record the resolver as converged
+  mx1_stack_stamp:
+    action: record
+    stamp_path: '{{ mx1_stack_resolver_stamp }}'
+    files:
+      resolver_dropin: '{{ mx1_stack_resolver_dropin }}'
+    values:
+      resolver_packages: "{{ mx1_stack_resolver_packages | ansible.builtin.sort | ansible.builtin.join(' ') }}"
+      resolver_anchor: '{{ mx1_stack_anchor_state }}'
+  when: mx1_stack_resolver_decision.due or mx1_stack_resolver_decision.adopt

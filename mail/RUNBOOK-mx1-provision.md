@@ -11,6 +11,13 @@ change at the registrar, described under "The MX cutover" below. Read "What
 this does not prove" at the end before relying on anything here for real mail
 traffic.
 
+The `mx1_stack` role (`ansible/roles/mx1_stack`) will replace scripts 30, 63, 65 and 70 once
+`branchLeft/shared-infra#352` wires its playbook; until then they stay the way to run those four
+steps by hand, and nothing here changes. The role's README says what it adds (a scoped recreate of
+only the container whose host input changed, and a freshness read-back before it records a
+stamp) and why it departs from script 63, which leaves Caddy running on an old Caddyfile after a
+content-only change. Do not run script 70 by hand once the role has been applied.
+
 ## What the scripts do
 
 All under `mail/provision/`, run in order by `run-all.sh`. Every script

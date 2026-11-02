@@ -1,0 +1,41 @@
+---
+argument_specs:
+  main:
+    short_description: Keep the mx1 host's Stalwart project, mailgun-shim project and local resolver in step with the repository
+    description: >-
+      Refuses, before it writes anything, a host that Compose would read differently from
+      the role (a second compose file, an override file, a .env beside the shim's compose
+      file, a COMPOSE_ key or a wrong owner or mode on Stalwart's .env), a compose file whose
+      image is not pinned by digest, a host without the shim's drain token, a port 53 held by
+      anything but unbound and a stamp it cannot read. Then, for each of three classes (the
+      Stalwart project, the mailgun-shim project, the local resolver), it acts only when the
+      class is due: its stamp is missing or pending, an input differs from the stamp or from
+      the repository, a container does not have the content of a file it reads, or the live
+      state is not ok. A host with no stamp that is already in the state the repository
+      describes, with healthy containers on the pinned images that have the current content
+      of their files, is adopted by writing the stamp and nothing else. Acting means Compose's
+      own up (which recreates a service whose compose file or image changed), then a forced
+      recreate of exactly the services whose mounted file or create-time file the running
+      container does not have, then a read-back that every such container has it. The stamp
+      is written only after that read-back and the health check. It also delivers the DNSBL
+      check and its cron entry. It never makes the shim's drain token, never removes a
+      volume, an orphan container or a file, and never touches the host's reboot or
+      Prometheus steps.
+    author: branchLeft
+    options:
+      mx1_stack_stalwart_health_tries:
+        type: int
+        default: 30
+        description: How many times, at the interval below, Stalwart's container is read for healthy after it was acted on.
+      mx1_stack_health_interval:
+        type: int
+        default: 2
+        description: Seconds between two reads of a container's health.
+      mx1_stack_recursion_tries:
+        type: int
+        default: 5
+        description: How many times the local resolver is asked for a name before the run fails.
+      mx1_stack_recursion_interval:
+        type: int
+        default: 2
+        description: Seconds between two asks of the local resolver.

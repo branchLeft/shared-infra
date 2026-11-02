@@ -1,0 +1,30 @@
+---
+# Keeps the files a case is about to change, so put_back.yml can restore them exactly: the content,
+# the owner and mode and the modification time (a container's freshness is judged by it). The files
+# are named by keep_paths. A secret may be among them, so nothing here prints or logs a value.
+- name: Look at the files
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+  loop: '{{ keep_paths }}'
+  register: mx1_stack_keep_stats
+
+- name: Read the files
+  ansible.builtin.slurp:
+    src: '{{ item }}'
+  loop: '{{ keep_paths }}'
+  register: mx1_stack_keep_content
+  no_log: true
+
+- name: Keep them
+  vars:
+    mx1_stack_keep_one:
+      mode: '{{ item.0.stat.mode }}'
+      mtime: '{{ item.0.stat.mtime }}'
+      content: '{{ item.1.content }}'
+  ansible.builtin.set_fact:
+    mx1_stack_kept: '{{ mx1_stack_kept | ansible.builtin.default({}) | ansible.builtin.combine({item.0.item: mx1_stack_keep_one}) }}'
+  loop: '{{ mx1_stack_keep_stats.results | zip(mx1_stack_keep_content.results) | list }}'
+  loop_control:
+    label: '{{ item.0.item }}'
+  no_log: true

@@ -313,6 +313,14 @@ class SelectionTest(unittest.TestCase):
         self.assertIn("hetzner/control-plane/stack", reads)
         self.assertIn("ansible/roles/egress_nat", reads["hetzner/provision/branchleft-nat.service"])
 
+    def test_a_mail_script_the_mx1_stack_role_reads_runs_that_role(self) -> None:
+        # A control on the real tree: the role links the compose file and the Caddyfile.
+        reads = ci_select.reads_by_path(ROOT)
+        for path in ("mail/provision/Caddyfile", "mail/provision/docker-compose.yml"):
+            with self.subTest(path=path):
+                self.assertIn("ansible/roles/mx1_stack", reads.get(path, set()))
+                self.assertIn("ansible/roles/mx1_stack", paths_of(self.pull_request(path)))
+
     def test_a_file_outside_ansible_that_no_role_reads_runs_no_shard(self) -> None:
         for path in ("hetzner/RUNBOOK-edge.md", "hetzner/dns/zone.json", "mail/README.md"):
             with self.subTest(path=path):
@@ -374,6 +382,26 @@ class TreeFixtureTest(unittest.TestCase):
         link.parent.mkdir(parents=True)
         link.symlink_to("../../../../hetzner/x/z.conf")
         self.assertEqual(["loner"], self.names("hetzner/x/z.conf"))
+
+    def test_a_literal_mail_path_and_a_link_into_mail_count_as_reads(self) -> None:
+        self.write("ansible/roles/mailer/molecule/default/verify.yml", "src: mail/provision/x.sh\n")
+        self.write("mail/provision/x.sh", "x\n")
+        self.write("mail/provision/Caddyfile", "x\n")
+        self.write("mail/README.md", "x\n")
+        self.shards.append(
+            {
+                "name": "mailer",
+                "path": "ansible/roles/mailer",
+                "scenario": "default",
+                "kind": "role",
+            }
+        )
+        link = self.root / "ansible/roles/mailer/files/Caddyfile"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("../../../../mail/provision/Caddyfile")
+        self.assertEqual(["mailer"], self.names("mail/provision/x.sh"))
+        self.assertEqual(["mailer"], self.names("mail/provision/Caddyfile"))
+        self.assertEqual([], self.names("mail/README.md"))
 
     def test_a_deleted_role_selects_nothing_for_itself(self) -> None:
         self.assertEqual([], self.names("ansible/roles/gone/tasks/main.yml"))

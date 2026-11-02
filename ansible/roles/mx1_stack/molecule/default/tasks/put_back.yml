@@ -1,0 +1,20 @@
+---
+# Puts back the files keep.yml kept, named by keep_paths: the content in place (so a file that a
+# bind mount or a running program holds keeps its inode), the owner root, the mode and the
+# modification time it had.
+- name: Put the files back
+  ansible.builtin.copy:
+    content: '{{ mx1_stack_kept[item].content | ansible.builtin.b64decode }}'
+    dest: '{{ item }}'
+    owner: root
+    group: root
+    mode: '{{ mx1_stack_kept[item].mode }}'
+    unsafe_writes: true
+  loop: '{{ keep_paths }}'
+  no_log: true
+
+- name: Give them back the modification time they had
+  ansible.builtin.command:
+    argv: [touch, -m, -d, '@{{ mx1_stack_kept[item].mtime }}', '{{ item }}']
+  loop: '{{ keep_paths }}'
+  changed_when: true

@@ -4,6 +4,10 @@ Delivers the `mx1` half of [branchLeft/shared-infra#42](https://github.com/branc
 which is the last unmet acceptance criterion of
 [branchLeft/workspace#222](https://github.com/branchLeft/workspace/issues/222).
 
+The `mx1_stack` role (`ansible/roles/mx1_stack`, not wired into a playbook yet) creates the
+`STALWART_PROMETHEUS_SECRET` line in `/opt/stalwart/.env` on its own first apply and never prints
+or rotates it; the Prometheus scrape-side steps below stay owner steps and are not part of the role.
+
 ## What is wrong
 
 Ghost's members magic-link endpoint is an unauthenticated trigger that makes the
