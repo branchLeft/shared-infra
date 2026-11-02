@@ -14,11 +14,13 @@
 # host with a public interface, so every role can run it unconditionally.
 #
 # nat-gateway.sh is the one script in this directory that is neither base nor
-# role-specific, and it is not called below. Exactly one host in the estate is
-# the gateway, and a second one masquerading the subnet builds a path nothing
-# routes to -- which no guard in either script catches. The closing notice is
-# there because a rebuilt gateway otherwise comes back fully provisioned, with
-# no forwarding and no warning that any is missing.
+# role-specific, and it is not called below; it now only refuses. Exactly one
+# host in the estate is the gateway, and a second one masquerading the subnet
+# builds a path nothing routes to -- which no guard in either script catches.
+# The gateway is made by the edge_firewall and egress_nat roles, applied to
+# edge1 by the gated pull. The closing notice is there because a rebuilt gateway
+# otherwise comes back fully provisioned, with no forwarding and no warning that
+# any is missing.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,5 +38,6 @@ done
 
 echo "=== base provisioning complete ==="
 echo "note: this set does not configure the estate's NAT gateway. If this host"
-echo "      is the gateway, nat-gateway.sh has to be run as well; on every"
-echo "      other host it must not be. RUNBOOK-provision-host.md says which."
+echo "      is the gateway (edge1), the edge_firewall and egress_nat roles make it"
+echo "      one through the gated pull; on every other host they must not be"
+echo "      applied. RUNBOOK-provision-host.md says which."

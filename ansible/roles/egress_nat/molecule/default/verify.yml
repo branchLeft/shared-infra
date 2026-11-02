@@ -129,41 +129,40 @@
       register: egress_nat_verify_rules
       changed_when: false
 
-    - name: Read the forwarding drop-in the reconciler wrote
-      ansible.builtin.slurp:
-        src: /etc/sysctl.d/99-branchleft-nat.conf
-      register: egress_nat_verify_dropin
-
-    - name: Read the drop-in's owner and mode
+    # The forwarding sysctl drop-in is the edge_firewall role's alone now. The reconciler
+    # must not have written it.
+    - name: Look for the forwarding drop-in
       ansible.builtin.stat:
         path: /etc/sysctl.d/99-branchleft-nat.conf
-      register: egress_nat_verify_dropin_stat
+      register: egress_nat_verify_dropin
 
     - name: Read the calls the reconciler made to the sysctl command
       ansible.builtin.slurp:
         src: /run/egress-nat-sysctl-calls
       register: egress_nat_verify_sysctl_calls
 
-    - name: Assert the reconciler inserted each rule once, wrote the drop-in and turned forwarding on
+    - name: Assert the reconciler inserted only the two forwarding accepts, and neither masqueraded nor set forwarding
       ansible.builtin.assert:
         that:
-          - egress_nat_verify_masquerade | ansible.builtin.length == 1
+          - egress_nat_verify_masquerade | ansible.builtin.length == 0
           - egress_nat_verify_forward_out | ansible.builtin.length == 1
           - egress_nat_verify_forward_in | ansible.builtin.length == 1
-          - (egress_nat_verify_dropin.content | ansible.builtin.b64decode) == 'net.ipv4.ip_forward = 1\n'
-          - egress_nat_verify_dropin_stat.stat.pw_name == 'root'
-          - egress_nat_verify_dropin_stat.stat.gr_name == 'root'
-          - egress_nat_verify_dropin_stat.stat.mode == '0644'
-          - '"-q -w net.ipv4.ip_forward=1" in (egress_nat_verify_sysctl_calls.content | ansible.builtin.b64decode)'
+          - not egress_nat_verify_dropin.stat.exists
+          - '"-n net.ipv4.ip_forward" in egress_nat_verify_sysctl_text'
+          - '" -w " not in (" " ~ egress_nat_verify_sysctl_text)'
+          - '"ip_forward=" not in egress_nat_verify_sysctl_text'
         quiet: true
         fail_msg: >-
-          The NAT reconciler did not leave exactly one masquerade rule and one rule of each forwarding direction
-          for {{ egress_nat_verify_subnet }} out of {{ egress_nat_uplink_dev }}, or did not write its drop-in, or did not turn forwarding on.
+          The NAT reconciler must leave one rule of each forwarding direction for {{ egress_nat_verify_subnet }} out of
+          {{ egress_nat_uplink_dev }} and nothing else: no masquerade rule (the edge_firewall role owns it), no sysctl
+          drop-in, and no write of net.ipv4.ip_forward (it reads the value and refuses when it is not 1).
           nat: {{ egress_nat_verify_nat_lines }} filter: {{ egress_nat_verify_filter_lines }}
+          sysctl calls: {{ egress_nat_verify_sysctl_text }}
       vars:
+        egress_nat_verify_sysctl_text: '{{ egress_nat_verify_sysctl_calls.content | ansible.builtin.b64decode }}'
         egress_nat_verify_nat_lines: '{{ egress_nat_verify_rules.results[0].stdout_lines }}'
         egress_nat_verify_filter_lines: '{{ egress_nat_verify_rules.results[1].stdout_lines }}'
-        egress_nat_verify_masquerade_pattern: '^-A POSTROUTING -s {{ egress_nat_verify_subnet }} -o {{ egress_nat_uplink_dev }} -j MASQUERADE$'
+        egress_nat_verify_masquerade_pattern: '^-A POSTROUTING -s {{ egress_nat_verify_subnet }} .*-j MASQUERADE$'
         egress_nat_verify_forward_out_pattern: '^-A FORWARD -s {{ egress_nat_verify_subnet }} -o {{ egress_nat_uplink_dev }} -j ACCEPT$'
         egress_nat_verify_forward_in_pattern: '^-A FORWARD -d {{ egress_nat_verify_subnet }} -i {{ egress_nat_uplink_dev }} .*ESTABLISHED.* -j ACCEPT$'
         egress_nat_verify_masquerade: >-

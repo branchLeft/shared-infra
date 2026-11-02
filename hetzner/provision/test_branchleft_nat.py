@@ -19,6 +19,7 @@ from runbook_sections import runbook_section
 
 SCRIPT = os.path.join(os.path.dirname(__file__), "branchleft_nat.sh")
 UNIT = os.path.join(os.path.dirname(__file__), "branchleft-nat.service")
+HAND_INSTALLER = os.path.join(os.path.dirname(__file__), "nat-gateway.sh")
 RUNBOOK = os.path.join(
     os.path.dirname(__file__), "..", "RUNBOOK-provision-host.md"
 )
@@ -34,18 +35,44 @@ done
 exit 0
 """
 
+# -C on the nat table is the legacy masquerade lookup, and is answered on its own
+# variable; every other -C is a forwarding accept.
 FAKE_IPTABLES = """#!/usr/bin/env bash
 args="$*"
 printf '%s\\n' "$args" >> "$FAKE_IPTABLES_LOG"
 case "$args" in
     *"-S DOCKER-USER"*) exit "${FAKE_IPTABLES_DOCKER_USER_EXIT:-1}" ;;
+    "-t nat -C "*) exit "${FAKE_IPTABLES_LEGACY_MASQ_EXIT:-1}" ;;
     *" -C "*) exit "${FAKE_IPTABLES_CHECK_EXIT:-1}" ;;
     *" -I "*) exit "${FAKE_IPTABLES_INSERT_EXIT:-0}" ;;
 esac
 exit 0
 """
 
+# `nft list table ip branchleft_edge_nat` answers with the captured kernel text when the table is
+# there and fails like the kernel does when it is not.
+FAKE_NFT = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_NFT_LOG"
+case "$*" in
+    "list table ip branchleft_edge_nat")
+        if [[ "${FAKE_NFT_TABLE:-1}" == "1" ]]; then
+            printf '%s' "$FAKE_NFT_TABLE_TEXT"
+            exit 0
+        fi
+        echo "Error: No such file or directory" >&2
+        exit 1
+        ;;
+esac
+exit 0
+"""
+
+# The runtime value of net.ipv4.ip_forward. The reconciler only reads it; any other sysctl call
+# is logged so that a test can show it never writes one.
 FAKE_SYSCTL = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "$FAKE_SYSCTL_LOG"
+case "$*" in
+    "-n net.ipv4.ip_forward") printf '%s\\n' "${FAKE_SYSCTL_FORWARD:-1}"; exit 0 ;;
+esac
 exit 0
 """
 
@@ -66,6 +93,17 @@ EDGE_ADDRESSES = "\n".join(
     ]
 )
 
+# A real capture: `nft list table ip branchleft_edge_nat` from nftables v1.1.3 on Debian 13, taken in
+# a container after loading the table the edge_firewall role renders, with the uplink named eth0.
+NFT_NAT_TABLE_CAPTURE = (
+    "table ip branchleft_edge_nat {\n"
+    "\tchain postrouting {\n"
+    "\t\ttype nat hook postrouting priority srcnat; policy accept;\n"
+    '\t\tip saddr 10.20.1.0/24 oifname "eth0" masquerade\n'
+    "\t}\n"
+    "}\n"
+)
+
 
 class NatGatewayTests(unittest.TestCase):
     def setUp(self):
@@ -76,12 +114,14 @@ class NatGatewayTests(unittest.TestCase):
         os.makedirs(bin_dir)
         self._write_fake(os.path.join(bin_dir, "ip"), FAKE_IP)
         self._write_fake(os.path.join(bin_dir, "iptables"), FAKE_IPTABLES)
+        self._write_fake(os.path.join(bin_dir, "nft"), FAKE_NFT)
         self._write_fake(os.path.join(bin_dir, "sysctl"), FAKE_SYSCTL)
         self._write_fake(os.path.join(bin_dir, "systemctl"), FAKE_SYSTEMCTL)
         self.bin_dir = bin_dir
 
-        self.sysctl_conf = os.path.join(self.tmp.name, "99-branchleft-nat.conf")
         self.iptables_log = os.path.join(self.tmp.name, "iptables.log")
+        self.nft_log = os.path.join(self.tmp.name, "nft.log")
+        self.sysctl_log = os.path.join(self.tmp.name, "sysctl.log")
 
     @staticmethod
     def _write_fake(path, content):
@@ -99,10 +139,17 @@ class NatGatewayTests(unittest.TestCase):
         rule_present=False,
         subnet=None,
         drop_iptables=False,
+        drop_nft=False,
         insert_exit="0",
+        nft_table=True,
+        legacy_masquerade=False,
+        forwarding="1",
+        nat_table_text=NFT_NAT_TABLE_CAPTURE,
     ):
         if drop_iptables:
             os.remove(os.path.join(self.bin_dir, "iptables"))
+        if drop_nft:
+            os.remove(os.path.join(self.bin_dir, "nft"))
         env = dict(os.environ)
         env.update(
             {
@@ -112,9 +159,14 @@ class NatGatewayTests(unittest.TestCase):
                 "FAKE_IPTABLES_LOG": self.iptables_log,
                 "FAKE_IPTABLES_DOCKER_USER_EXIT": "0" if docker_user else "1",
                 "FAKE_IPTABLES_CHECK_EXIT": "0" if rule_present else "1",
+                "FAKE_IPTABLES_LEGACY_MASQ_EXIT": "0" if legacy_masquerade else "1",
                 "FAKE_IPTABLES_INSERT_EXIT": insert_exit,
+                "FAKE_NFT_LOG": self.nft_log,
+                "FAKE_NFT_TABLE": "1" if nft_table else "0",
+                "FAKE_NFT_TABLE_TEXT": nat_table_text,
+                "FAKE_SYSCTL_LOG": self.sysctl_log,
+                "FAKE_SYSCTL_FORWARD": forwarding,
                 "FAKE_SYSTEMCTL_DOCKER_ACTIVE_EXIT": "0" if docker_active else "1",
-                "BRANCHLEFT_NAT_SYSCTL_CONF": self.sysctl_conf,
             }
         )
         if subnet is not None:
@@ -136,27 +188,34 @@ class NatGatewayTests(unittest.TestCase):
     def inserted(self):
         return [call for call in self.iptables_calls() if " -I " in call]
 
-    def test_installs_the_three_rules_the_path_needs(self):
+    def sysctl_calls(self):
+        if not os.path.exists(self.sysctl_log):
+            return []
+        with open(self.sysctl_log, encoding="utf-8") as handle:
+            return [line.rstrip("\n") for line in handle]
+
+    def test_installs_the_two_forwarding_accepts_and_nothing_else(self):
         result = self.run_script()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             self.inserted(),
             [
-                "-t nat -I POSTROUTING 1 -s 10.20.1.0/24 -o eth0 -j MASQUERADE",
                 "-t filter -I DOCKER-USER 1 -s 10.20.1.0/24 -o eth0 -j ACCEPT",
                 "-t filter -I DOCKER-USER 1 -d 10.20.1.0/24 -i eth0 "
                 "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
             ],
         )
 
-    def test_masquerade_is_scoped_to_the_subnet_and_the_uplink(self):
-        # An unscoped MASQUERADE would launder any source this host can be
-        # made to forward through its public address.
-        self.run_script()
-        masquerade = [call for call in self.inserted() if "MASQUERADE" in call]
-        self.assertEqual(len(masquerade), 1)
-        self.assertIn("-s 10.20.1.0/24", masquerade[0])
-        self.assertIn("-o eth0", masquerade[0])
+    def test_inserts_no_masquerade_and_writes_no_sysctl(self):
+        # The masquerade and the forwarding sysctl have one home each, the edge_firewall role.
+        # The reconciler may look for the masquerade and read the forwarding value; it must
+        # never add the one or set the other. Red if either returns to this script.
+        result = self.run_script(nft_table=False, legacy_masquerade=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([c for c in self.inserted() if "MASQUERADE" in c], [])
+        self.assertEqual([c for c in self.iptables_calls() if " -A " in c], [])
+        self.assertEqual([c for c in self.sysctl_calls() if "-w" in c.split()], [])
+        self.assertEqual([c for c in self.sysctl_calls() if "ip_forward=" in c], [])
 
     def test_the_return_direction_is_accepted_only_for_established_flows(self):
         self.run_script()
@@ -198,19 +257,56 @@ class NatGatewayTests(unittest.TestCase):
         result = self.run_script(rule_present=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.inserted(), [])
-        self.assertEqual(len([c for c in self.iptables_calls() if " -C " in c]), 3)
+        self.assertEqual(
+            len([c for c in self.iptables_calls() if " -C " in c and "-t filter" in c]), 2
+        )
 
-    def test_enables_forwarding_persistently(self):
-        self.run_script()
-        with open(self.sysctl_conf, encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), "net.ipv4.ip_forward = 1\n")
-
-    def test_leaves_an_already_correct_sysctl_drop_in_alone(self):
-        with open(self.sysctl_conf, "w", encoding="utf-8") as handle:
-            handle.write("net.ipv4.ip_forward = 1\n")
-        result = self.run_script()
+    # A gateway with the forwarding accepts and no masquerade passes every check of its own and
+    # has no outbound internet. These are the guard against that, each red if its refusal goes.
+    def test_accepts_the_masquerade_in_the_nftables_table(self):
+        result = self.run_script(nft_table=True, legacy_masquerade=False)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn("already up to date", result.stdout)
+        self.assertIn("masqueraded by the edge_firewall nftables table", result.stdout)
+
+    def test_accepts_the_legacy_masquerade_rule_while_the_table_is_not_there_yet(self):
+        # The order of a migration: the role loads and confirms its table before it removes the
+        # legacy rule, so a host may carry either; never neither.
+        result = self.run_script(nft_table=False, legacy_masquerade=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("masqueraded by the legacy iptables rule", result.stdout)
+
+    def test_refuses_when_no_masquerade_exists_anywhere(self):
+        result = self.run_script(nft_table=False, legacy_masquerade=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no masquerade for 10.20.1.0/24 exists", result.stderr)
+        self.assertIn("apply the edge_firewall role before this one", result.stderr)
+        self.assertEqual(self.inserted(), [])
+        self.assertNotIn("forwarding 10.20.1.0/24", result.stdout)
+
+    def test_refuses_when_nft_is_not_installed_and_there_is_no_legacy_rule(self):
+        # `nft` missing must read as "no table", not as a crash that `set -e` hides.
+        result = self.run_script(drop_nft=True, legacy_masquerade=False)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no masquerade for 10.20.1.0/24 exists", result.stderr)
+
+    def test_an_nft_table_without_a_masquerade_rule_is_not_a_masquerade(self):
+        # The table can be there with the masquerade rule gone (a hand edit, a failed load).
+        # Presence of the table is not the fact the estate's egress needs.
+        env_table = NFT_NAT_TABLE_CAPTURE.replace(
+            'ip saddr 10.20.1.0/24 oifname "eth0" masquerade', "counter"
+        )
+        result = self.run_script(
+            nft_table=True, legacy_masquerade=False, nat_table_text=env_table
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("no masquerade for 10.20.1.0/24 exists", result.stderr)
+
+    def test_refuses_when_forwarding_is_off(self):
+        result = self.run_script(forwarding="0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("net.ipv4.ip_forward is not 1", result.stderr)
+        self.assertEqual(self.inserted(), [])
+        self.assertEqual([c for c in self.sysctl_calls() if "-w" in c.split()], [])
 
     def test_refuses_a_host_whose_default_route_holds_no_public_address(self):
         # The routing loop: a private-only host's default route is the network
@@ -223,7 +319,6 @@ class NatGatewayTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("holds no public address", result.stderr)
         self.assertEqual(self.inserted(), [])
-        self.assertFalse(os.path.exists(self.sysctl_conf))
 
     def test_refuses_a_public_host_whose_default_route_leaves_the_private_nic(self):
         # The discriminating case for the guard's scoping. This host *does*
@@ -293,8 +388,63 @@ class NatGatewayTests(unittest.TestCase):
         self.assertTrue(all("ens3" in call for call in self.inserted()))
 
 
+class NatGatewayHandInstallerTests(unittest.TestCase):
+    """nat-gateway.sh used to install this reconciler and its unit by hand. The reconciler no
+    longer masquerades, so a host built that way would forward with no masquerade and no outbound
+    internet. The script must refuse, on every host, and install nothing."""
+
+    def test_refuses_and_installs_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            bin_dir = os.path.join(tmp, "bin")
+            os.makedirs(bin_dir)
+            log = os.path.join(tmp, "calls.log")
+            for name in ("install", "systemctl", "cmp", "cp", "mv"):
+                path = os.path.join(bin_dir, name)
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write(f'#!/usr/bin/env bash\necho "{name} $*" >> "{log}"\n')
+                os.chmod(path, 0o755)
+            env = dict(os.environ)
+            env["PATH"] = f"{bin_dir}:/usr/bin:/bin"
+            result = subprocess.run(
+                ["bash", HAND_INSTALLER],
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("refusing", result.stderr)
+            self.assertIn("edge_firewall", result.stderr)
+            self.assertFalse(os.path.exists(log), "the refusing installer ran a command")
+
+
+class SingleHomeTests(unittest.TestCase):
+    """The reconciler's text, not its behaviour: the masquerade and the forwarding sysctl each
+    have one home (the edge_firewall role), and the reconciler carries neither. The behaviour
+    tests above hold the same fact with fakes; this holds it against a new line that a fake would
+    not exercise, such as a branch only a real kernel reaches."""
+
+    def setUp(self):
+        with open(SCRIPT, encoding="utf-8") as handle:
+            self.code = [
+                line for line in handle.read().splitlines() if not line.lstrip().startswith("#")
+            ]
+
+    def test_no_line_inserts_or_appends_to_the_nat_table(self):
+        for line in self.code:
+            with self.subTest(line=line):
+                self.assertNotRegex(line, r"ensure_rule\s+nat\b")
+                self.assertNotRegex(line, r"iptables\s+-t\s+nat\s+-[IA]\b")
+
+    def test_no_line_writes_the_sysctl_drop_in_or_sets_forwarding(self):
+        for line in self.code:
+            with self.subTest(line=line):
+                self.assertNotIn("99-branchleft-nat.conf", line)
+                self.assertNotRegex(line, r"sysctl\s+(-q\s+)?-w")
+
+
 class UnitFileTests(unittest.TestCase):
-    """branchleft-nat.service is installed verbatim by nat-gateway.sh, so its
+    """branchleft-nat.service is installed verbatim by the egress_nat role, so its
     content -- not merely its presence -- is what a later `docker.service`
     restart depends on to reassert the estate's NAT rules."""
 
@@ -316,6 +466,19 @@ class UnitFileTests(unittest.TestCase):
     def test_keeps_the_after_ordering_a_docker_less_host_relies_on(self):
         self.assertIn("After=network-online.target docker.service", self.lines)
 
+    def test_runs_after_the_firewall_unit_that_loads_the_masquerade_it_checks_for(self):
+        # At boot the reconciler refuses when no masquerade exists, and the masquerade is loaded
+        # by branchleft-firewall.service. Without this ordering a boot could race the two and
+        # leave the gateway unit failed with a masquerade that arrives a moment later.
+        self.assertIn("After=branchleft-firewall.service", self.lines)
+        self.assertIn("Wants=branchleft-firewall.service", self.lines)
+
+    def test_does_not_require_the_firewall_unit(self):
+        # Requires would stop the reconciler when the firewall load fails, hiding the one message
+        # that says what is missing. Wants orders and pulls without making the failure silent.
+        self.assertNotIn("Requires=branchleft-firewall.service", self.lines)
+        self.assertNotIn("BindsTo=branchleft-firewall.service", self.lines)
+
 
 def _extract_gateway_check_patterns():
     """Pull the three `grep` invocations out of RUNBOOK-provision-host.md's
@@ -332,18 +495,18 @@ def _extract_gateway_check_patterns():
     return [(flag == " -E", pattern) for flag, pattern in matches]
 
 
-# The two DOCKER-USER lines are copied verbatim from a real `iptables -S`
-# capture taken against edge1 in its known-correct state. The POSTROUTING
-# line is not itself a capture, but it is not a free guess either: iptables
-# renders an insert's flags back in the order they were given, with no
-# reordering possible for a rule that carries only one flag of each kind --
-# which is exactly what `branchleft_nat.sh` passes for the masquerade rule.
-NAT_POSTROUTING_SNAPSHOT = "-A POSTROUTING -s 10.20.1.0/24 -o eth0 -j MASQUERADE\n"
+# The masquerade line is the real capture above (NFT_NAT_TABLE_CAPTURE), taken from the kernel's
+# own text. The two DOCKER-USER lines are copied verbatim from a real `iptables -S` capture taken
+# against edge1 in its known-correct state; the masquerade is no longer an iptables rule, so
+# `iptables -t nat -S POSTROUTING` is not asked about it any more.
 DOCKER_USER_SNAPSHOT = (
     "-A DOCKER-USER -d 10.20.1.0/24 -i eth0 -m conntrack "
     "--ctstate RELATED,ESTABLISHED -j ACCEPT\n"
     "-A DOCKER-USER -s 10.20.1.0/24 -o eth0 -j ACCEPT\n"
 )
+# What `iptables -t nat -S POSTROUTING` shows on a healthy gateway now: Docker's own rule, and no
+# masquerade for the estate. The old pattern would have reported the gateway broken.
+IPTABLES_POSTROUTING_ON_A_HEALTHY_GATEWAY = "-P POSTROUTING ACCEPT\n-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE\n"
 
 
 class RunbookGatewayCheckTests(unittest.TestCase):
@@ -372,12 +535,54 @@ class RunbookGatewayCheckTests(unittest.TestCase):
         )
         return result.returncode
 
-    def test_masquerade_pattern_matches_a_real_postrouting_capture(self):
+    def test_masquerade_pattern_matches_the_real_nft_capture(self):
         self.assertEqual(
+            self._grep(self.masquerade_flag, self.masquerade_pattern, NFT_NAT_TABLE_CAPTURE),
+            0,
+        )
+
+    def test_masquerade_pattern_is_the_nftables_one_not_the_iptables_one(self):
+        # The check moved because `iptables -t nat -S POSTROUTING` cannot see an nftables table.
+        # Run against what that command shows on a healthy gateway, the pattern must not match,
+        # and the pattern must not be one that could: it names the nft rule's own words.
+        self.assertTrue(self.masquerade_flag, "the nft pattern uses extended regular expressions")
+        self.assertIn("oifname", self.masquerade_pattern)
+        self.assertNotEqual(
             self._grep(
-                self.masquerade_flag, self.masquerade_pattern, NAT_POSTROUTING_SNAPSHOT
+                self.masquerade_flag,
+                self.masquerade_pattern,
+                IPTABLES_POSTROUTING_ON_A_HEALTHY_GATEWAY,
             ),
             0,
+        )
+
+    def test_masquerade_pattern_fails_on_a_table_with_no_masquerade(self):
+        # The sabotage the unit test stands for: a capture with no masquerade, red.
+        without = NFT_NAT_TABLE_CAPTURE.replace(
+            'ip saddr 10.20.1.0/24 oifname "eth0" masquerade\n', ""
+        )
+        self.assertNotEqual(
+            self._grep(self.masquerade_flag, self.masquerade_pattern, without), 0
+        )
+
+    def test_masquerade_pattern_fails_on_an_unscoped_masquerade(self):
+        # A masquerade for every source launders any packet this host can be made to forward.
+        unscoped = NFT_NAT_TABLE_CAPTURE.replace("ip saddr 10.20.1.0/24 ", "")
+        self.assertNotEqual(
+            self._grep(self.masquerade_flag, self.masquerade_pattern, unscoped), 0
+        )
+
+    def test_masquerade_pattern_fails_on_a_masquerade_for_another_subnet(self):
+        other = NFT_NAT_TABLE_CAPTURE.replace("10.20.1.0/24", "10.21.1.0/24")
+        self.assertNotEqual(
+            self._grep(self.masquerade_flag, self.masquerade_pattern, other), 0
+        )
+
+    def test_masquerade_pattern_does_not_match_a_dot_that_is_any_character(self):
+        # The dots in the subnet are escaped in the pattern: 10x20x1x0/24 is not the estate.
+        lookalike = NFT_NAT_TABLE_CAPTURE.replace("10.20.1.0/24", "10x20x1x0/24")
+        self.assertNotEqual(
+            self._grep(self.masquerade_flag, self.masquerade_pattern, lookalike), 0
         )
 
     def test_outbound_accept_pattern_matches_a_real_docker_user_capture(self):
@@ -427,6 +632,27 @@ class RunbookRestartCheckTests(unittest.TestCase):
         # issue names: the masquerade rule surviving while the accepts do not.
         self.assertEqual(len(patterns), 6)
 
+    def test_checks_the_firewall_unit_and_that_nftables_is_masked(self):
+        # The boot-time block must assert both halves of the flush-survival design: the role's
+        # own unit is what restores the tables at boot, and nftables.service is masked so that
+        # neither a restart nor an unattended upgrade can run `nft flush ruleset`.
+        first_block = self.section.split("```bash")[1].split("```", 1)[0]
+        self.assertIn("systemctl is-enabled branchleft-firewall.service", first_block)
+        self.assertRegex(
+            first_block, r'test "\$\(systemctl is-enabled nftables\.service\)" = masked'
+        )
+
+    def test_no_check_asks_iptables_about_the_masquerade(self):
+        # `iptables -t nat -S POSTROUTING` cannot see an nftables table. A check of the
+        # masquerade that still asks it would report a healthy gateway broken, or, written
+        # loosely, would pass on Docker's own masquerade rule.
+        self.assertNotIn("iptables -t nat -S POSTROUTING | grep", self.section)
+
+    def test_compares_the_tables_before_and_after_the_restart(self):
+        restart_block = [b for b in self.section.split("```bash")[1:] if "restart docker" in b][0]
+        self.assertIn("TABLES_BEFORE", restart_block)
+        self.assertIn('test "$TABLES_BEFORE" = "$TABLES_AFTER"', restart_block)
+
 
 def _extract_restart_check_script():
     """Pull the exact remote command body out of the restart-and-reverify
@@ -459,15 +685,30 @@ case "$*" in
         fi
         exit 0
         ;;
-    "restart docker.service") exit 0 ;;
+    "restart docker.service") : > "$FAKE_RESTARTED"; exit 0 ;;
 esac
 exit 0
 """
 
 FAKE_IPTABLES_SHOW = """#!/usr/bin/env bash
 case "$*" in
-    "-t nat -S POSTROUTING") printf '%s' "$NAT_POSTROUTING_SHOW"; exit 0 ;;
     "-t filter -S DOCKER-USER") printf '%s' "$DOCKER_USER_SHOW"; exit 0 ;;
+esac
+exit 1
+"""
+
+# The role's two tables as `nft` prints them. After a restart of Docker they must read the same;
+# FAKE_NFT_FLUSH_ON_RESTART=1 makes the fake lose them when Docker is restarted, which is what a
+# restart of nftables.service (`nft flush ruleset`) would do to a host.
+FAKE_NFT_SHOW = """#!/usr/bin/env bash
+if [[ "${FAKE_NFT_FLUSH_ON_RESTART:-0}" == "1" && -f "$FAKE_RESTARTED" ]]; then
+    echo "Error: No such file or directory" >&2
+    exit 1
+fi
+case "$*" in
+    "-s list table inet branchleft_edge") printf '%s' "$NFT_FILTER_TABLE"; exit 0 ;;
+    "-s list table ip branchleft_edge_nat"|"list table ip branchleft_edge_nat")
+        printf '%s' "$NFT_NAT_TABLE"; exit 0 ;;
 esac
 exit 1
 """
@@ -493,8 +734,10 @@ class RunbookRestartCheckExecutionTests(unittest.TestCase):
         os.makedirs(bin_dir)
         self._write_fake(os.path.join(bin_dir, "systemctl"), FAKE_SYSTEMCTL_RESTART_CHECK)
         self._write_fake(os.path.join(bin_dir, "iptables"), FAKE_IPTABLES_SHOW)
+        self._write_fake(os.path.join(bin_dir, "nft"), FAKE_NFT_SHOW)
         self.bin_dir = bin_dir
         self.called_marker = os.path.join(self.tmp.name, "systemctl-called")
+        self.restarted_marker = os.path.join(self.tmp.name, "docker-restarted")
 
     @staticmethod
     def _write_fake(path, content):
@@ -503,15 +746,18 @@ class RunbookRestartCheckExecutionTests(unittest.TestCase):
         mode = stat.S_IMODE(os.stat(path).st_mode)
         os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
-    def run_block(self, ts_before, ts_after):
+    def run_block(self, ts_before, ts_after, nat_table=NFT_NAT_TABLE_CAPTURE, flush=False):
         env = dict(os.environ)
         env.update(
             {
                 "PATH": f"{self.bin_dir}:/usr/bin:/bin",
                 "FAKE_SYSTEMCTL_CALLED": self.called_marker,
+                "FAKE_RESTARTED": self.restarted_marker,
                 "FAKE_SYSTEMCTL_TS_BEFORE": ts_before,
                 "FAKE_SYSTEMCTL_TS_AFTER": ts_after,
-                "NAT_POSTROUTING_SHOW": NAT_POSTROUTING_SNAPSHOT,
+                "FAKE_NFT_FLUSH_ON_RESTART": "1" if flush else "0",
+                "NFT_FILTER_TABLE": "table inet branchleft_edge {\n}\n",
+                "NFT_NAT_TABLE": nat_table,
                 "DOCKER_USER_SHOW": DOCKER_USER_SNAPSHOT,
             }
         )
@@ -538,6 +784,30 @@ class RunbookRestartCheckExecutionTests(unittest.TestCase):
         # has to abort before those checks get a chance to print success.
         same_timestamp = "Thu 2026-08-20 09:00:00 UTC"
         result = self.run_block(same_timestamp, same_timestamp)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("gateway survives a docker restart", result.stdout)
+
+    def test_fails_when_the_restart_took_the_roles_tables_with_it(self):
+        # The hazard the role is built around: something on the restart path ran
+        # `nft flush ruleset` and the role's tables are gone. The reconciler reran, the
+        # timestamp moved, and DOCKER-USER is intact; only the comparison of the tables
+        # before and after catches it.
+        result = self.run_block(
+            "Thu 2026-08-20 09:00:00 UTC", "Thu 2026-08-20 13:47:00 UTC", flush=True
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("gateway survives a docker restart", result.stdout)
+
+    def test_fails_when_the_nat_table_carries_no_masquerade_after_the_restart(self):
+        # The tables are unchanged by the restart, but the masquerade was never there: the
+        # pattern, not the comparison, must fail the block.
+        result = self.run_block(
+            "Thu 2026-08-20 09:00:00 UTC",
+            "Thu 2026-08-20 13:47:00 UTC",
+            nat_table=NFT_NAT_TABLE_CAPTURE.replace(
+                'ip saddr 10.20.1.0/24 oifname "eth0" masquerade\n', ""
+            ),
+        )
         self.assertNotEqual(result.returncode, 0)
         self.assertNotIn("gateway survives a docker restart", result.stdout)
 

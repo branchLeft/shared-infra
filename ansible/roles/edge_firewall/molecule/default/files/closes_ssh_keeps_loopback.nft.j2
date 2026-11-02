@@ -1,0 +1,24 @@
+# Test scaffolding, not part of the role. A bad set the guard must refuse: it parses, it
+# loads, it keeps the loopback accept by address and the established-traffic accept, and
+# it does not accept the control port. A connection to 127.0.0.1 still works under it; a
+# connection to the host's own private address does not, which is why the guard connects
+# to the latter.
+add table inet {{ edge_firewall_table }}
+delete table inet {{ edge_firewall_table }}
+table inet {{ edge_firewall_table }} {
+    chain input {
+        type filter hook input priority 0; policy drop;
+        ct state established,related accept
+        iif "lo" ip saddr 127.0.0.0/8 ip daddr 127.0.0.0/8 accept
+        # Only this set has the line below, so the rejected listing can be told from the good one.
+        ip saddr 192.0.2.99 accept comment "scenario bad set"
+    }
+}
+add table ip {{ edge_firewall_nat_table }}
+delete table ip {{ edge_firewall_nat_table }}
+table ip {{ edge_firewall_nat_table }} {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr {{ edge_firewall_nat_source }} oifname "{{ edge_firewall_uplink }}" masquerade
+    }
+}

@@ -65,11 +65,26 @@ def docker_user_policy_script(db1: str = DB1) -> str:
     return f'DB_HOST="${{BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST:-{db1}}}"\n'
 
 
+def edge1_playbook(subnet_cidr: str = SUBNET_CIDR) -> str:
+    """The part of ansible/playbooks/edge1.yml the checker reads: the play var that hands the
+    edge_firewall role the subnet it masquerades. The comment line names the variable the way the
+    real header does, to show that prose is not read as the value."""
+    return (
+        "# edge_firewall_nat_source: 192.0.2.0/24 is how a comment would name it.\n"
+        "- name: Bring edge1 under the pull\n"
+        "  vars:\n"
+        "    enrolled_host: edge1\n"
+        f"    edge_firewall_nat_source: {subnet_cidr}\n"
+        "    edge_firewall_enforce: false\n"
+    )
+
+
 def runbook(
     subnet_cidr: str = SUBNET_CIDR,
     edge1: str = EDGE1,
     second_cidr: str | None = None,
     db1: str = DB1,
+    escaped_cidr: str | None = None,
 ) -> str:
     """A runbook with one bare edge1 reference and two verification blocks,
     matching the shape RUNBOOK-provision-host.md actually has: several
@@ -77,9 +92,10 @@ def runbook(
     gateway's own address, and one verification line naming db1 as the single
     host a DOCKER-USER accept rule renders back with a `/32`."""
     second_cidr = subnet_cidr if second_cidr is None else second_cidr
+    escaped = (subnet_cidr if escaped_cidr is None else escaped_cidr).replace(".", "\\.")
     return (
         f"The gateway is `edge1`, at `{edge1}`, which is the address the route names.\n"
-        f'  iptables -t nat -S POSTROUTING | grep -- "-s {subnet_cidr} .*-j MASQUERADE"\n'
+        f'  nft list table ip branchleft_edge_nat | grep -E -- "ip saddr {escaped} oifname .+ masquerade"\n'
         f'  iptables -t filter -S DOCKER-USER | grep -- "-s {subnet_cidr} .*-j ACCEPT"\n'
         f'  iptables -t nat -S POSTROUTING | grep -- "-s {second_cidr} .*-j MASQUERADE"\n'
         f'  iptables -t filter -S DOCKER-USER | grep -- "-d {db1}/32 -p tcp --dport 3306 -j ACCEPT"\n'
@@ -109,6 +125,8 @@ class TreeBuilder:
         runbook_second_subnet: str | None = None,
         runbook_edge1: str = EDGE1,
         runbook_db1: str = DB1,
+        runbook_escaped_subnet: str | None = None,
+        playbook_subnet: str = SUBNET_CIDR,
     ) -> "TreeBuilder":
         # Every shell-side value defaults to the *original* literal, not to
         # whatever `plan_*` is this call -- so overriding only `plan_subnet`,
@@ -128,8 +146,15 @@ class TreeBuilder:
         )
         self.write(
             "hetzner/RUNBOOK-provision-host.md",
-            runbook(runbook_subnet, runbook_edge1, runbook_second_subnet, runbook_db1),
+            runbook(
+                runbook_subnet,
+                runbook_edge1,
+                runbook_second_subnet,
+                runbook_db1,
+                runbook_escaped_subnet,
+            ),
         )
+        self.write("ansible/playbooks/edge1.yml", edge1_playbook(playbook_subnet))
         return self
 
 
@@ -202,7 +227,103 @@ class SubnetDriftTests(unittest.TestCase):
                 nat_subnet="10.20.2.0/24",
                 runbook_subnet="10.20.2.0/24",
                 runbook_second_subnet="10.20.2.0/24",
+                playbook_subnet="10.20.2.0/24",
             )
+            self.assertEqual(capd.check(tree.root), [])
+
+
+class EdgeFirewallSourceDriftTests(unittest.TestCase):
+    """The subnet edge1's playbook hands the edge_firewall role is a literal the module cannot
+    import. A stale one loads a masquerade for the wrong subnet: every check of the role passes
+    and the plan's real subnet has no outbound internet."""
+
+    def test_a_playbook_subnet_left_stale_after_the_plan_moved_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(
+                plan_subnet="10.20.2.0/24",
+                nat_subnet="10.20.2.0/24",
+                runbook_subnet="10.20.2.0/24",
+                # only the playbook is stale
+            )
+            failures = capd.check(tree.root)
+            playbook = [f for f in failures if "edge1.yml" in f]
+            self.assertEqual(len(playbook), 1, failures)
+            self.assertIn(str(tree.root / "ansible" / "playbooks" / "edge1.yml"), playbook[0])
+            self.assertIn("10.20.1.0/24", playbook[0])
+            self.assertIn("10.20.2.0/24", playbook[0])
+
+    def test_a_playbook_that_stops_carrying_the_subnet_fails_rather_than_passing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            tree.write("ansible/playbooks/edge1.yml", "- name: Bring edge1 under the pull\n")
+            failures = capd.check(tree.root)
+            self.assertTrue(
+                any("edge1.yml" in f and "found none" in f for f in failures), failures
+            )
+
+    def test_a_subnet_that_is_only_in_a_comment_is_not_the_play_var(self):
+        # The comment in the fixture names a different subnet; the check must not read it.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            self.assertEqual(capd.check(tree.root), [])
+
+    def test_a_quoted_playbook_subnet_is_read(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(
+                plan_subnet="10.20.2.0/24",
+                nat_subnet="10.20.2.0/24",
+                runbook_subnet="10.20.2.0/24",
+            )
+            tree.write(
+                "ansible/playbooks/edge1.yml",
+                '- vars:\n    edge_firewall_nat_source: "10.20.1.0/24"\n',
+            )
+            self.assertTrue(any("edge1.yml" in f for f in capd.check(tree.root)))
+
+    def test_a_missing_playbook_fails_loudly(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
+            (tree.root / "ansible" / "playbooks" / "edge1.yml").unlink()
+            self.assertTrue(any("edge1.yml: cannot read" in f for f in capd.check(tree.root)))
+
+
+class EscapedRunbookSubnetTests(unittest.TestCase):
+    """The runbook's nftables masquerade check writes the subnet with escaped dots. It is a
+    literal like any other: left stale it would look for a masquerade the plan no longer
+    describes, and find it, because the role was never told the new subnet either."""
+
+    def test_a_stale_escaped_subnet_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(
+                plan_subnet="10.20.2.0/24",
+                nat_subnet="10.20.2.0/24",
+                runbook_subnet="10.20.2.0/24",
+                runbook_second_subnet="10.20.2.0/24",
+                playbook_subnet="10.20.2.0/24",
+                runbook_escaped_subnet="10.20.1.0/24",  # only the escaped literal is stale
+            )
+            failures = capd.check(tree.root)
+            runbook = [f for f in failures if "RUNBOOK-provision-host.md" in f]
+            self.assertEqual(len(runbook), 1, failures)
+            self.assertIn("10.20.1.0/24", runbook[0])
+            self.assertIn("10.20.2.0/24", runbook[0])
+
+    def test_an_escaped_subnet_that_agrees_passes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound(
+                plan_subnet="10.20.2.0/24",
+                nat_subnet="10.20.2.0/24",
+                runbook_subnet="10.20.2.0/24",
+                runbook_second_subnet="10.20.2.0/24",
+                playbook_subnet="10.20.2.0/24",
+            )
+            self.assertEqual(capd.check(tree.root), [])
+
+    def test_the_unescaping_does_not_disturb_the_plain_literals(self):
+        # With dots unescaped the escaped literal reads as 10.20.1.0/24 and the plain ones are
+        # unchanged: three occurrences in the fixture, all agreeing, nothing reported.
+        with tempfile.TemporaryDirectory() as tmp:
+            tree = TreeBuilder(pathlib.Path(tmp)).sound()
             self.assertEqual(capd.check(tree.root), [])
 
 

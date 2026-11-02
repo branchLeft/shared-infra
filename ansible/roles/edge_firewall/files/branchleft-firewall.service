@@ -1,0 +1,29 @@
+# Loads edge1's own nftables tables (the input filter and the estate NAT) at boot.
+# Installed by the edge_firewall role. It loads one file, the rules the role last
+# confirmed, and nothing else.
+#
+# Deliberately NOT nftables.service: that unit's ExecStop is `nft flush ruleset`, which
+# removes every table on the host, Docker's chains and rules included, and a package
+# upgrade restarts it. The role masks nftables.service. This unit has no ExecStop, so
+# stopping or restarting it flushes nothing: the file it loads deletes and redefines only
+# the role's own two tables, in one atomic transaction.
+[Unit]
+Description=branchLeft edge firewall (own nftables tables only)
+Documentation=file:///etc/branchleft-firewall/active.nft
+Wants=network-pre.target
+Before=network-pre.target
+DefaultDependencies=no
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+StandardInput=null
+ProtectSystem=full
+ProtectHome=true
+ExecStart=/usr/sbin/nft -f /etc/branchleft-firewall/active.nft
+ExecReload=/usr/sbin/nft -f /etc/branchleft-firewall/active.nft
+
+[Install]
+WantedBy=sysinit.target

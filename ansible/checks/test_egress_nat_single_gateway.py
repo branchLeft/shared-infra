@@ -101,10 +101,17 @@ class EgressNatSingleGateway(unittest.TestCase):
     def test_the_playbook_turns_the_gateway_on_for_edge1(self) -> None:
         self.assertIs(_play_vars(GATEWAY_HOST).get(SWITCH), True)
 
-    def test_the_checker_table_pins_edge1_to_exactly_the_class_and_the_switch(self) -> None:
+    def test_the_checker_table_pins_edge1_to_the_class_and_the_switch(self) -> None:
+        # The row also pins the two edge_firewall variables; test_edge_firewall_single_home.py
+        # holds the whole row.
+        row = HOST_PLAY_VARS[GATEWAY_HOST]
         self.assertEqual(
-            HOST_PLAY_VARS[GATEWAY_HOST],
+            {CLASS_KEY: row[CLASS_KEY], SWITCH: row[SWITCH]},
             {CLASS_KEY: "gateway", SWITCH: True},
+        )
+        self.assertEqual(
+            set(row) - {CLASS_KEY, SWITCH},
+            {"edge_firewall_nat_source", "edge_firewall_enforce"},
         )
 
     # (b) no other host can become a second gateway, by any file.

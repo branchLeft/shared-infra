@@ -66,8 +66,10 @@ export const subnet = new hcloud.NetworkSubnet(
  * Docker signing key — and, more durably, cannot receive the unattended
  * security upgrades `provision/10-harden-updates-fail2ban.sh` enables. The
  * gateway is the edge host because it is the only host this estate owns that
- * already terminates public traffic; `provision/branchleft_nat.sh` is what
- * makes the address at the other end actually forward.
+ * already terminates public traffic; the `edge_firewall` role (the
+ * masquerade, in its own nftables table, and the forwarding sysctl) and
+ * `provision/branchleft_nat.sh` (the forwarding accepts) are what make the
+ * address at the other end actually forward.
  *
  * Additive: it neither reads nor writes a property of the network or the
  * subnet, so neither is replaced by its presence.

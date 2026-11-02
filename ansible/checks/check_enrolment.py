@@ -121,10 +121,18 @@ EXPECTED_ROLES = [
 # class app must also name the policy variant the role expects its firewall chain to be. The
 # egress_nat role makes a host the estate's NAT gateway only when egress_nat_gateway_enabled is
 # true (a bool, so the string "true" does not match), and a second gateway loops the estate's
-# egress, so edge1 alone carries that switch. R2 allows no `vars` on a role entry, so these rows
-# are their one home.
+# egress, so edge1 alone carries that switch. The edge_firewall role loads a host firewall and the
+# gateway's masquerade: edge_firewall_nat_source is the estate subnet it masquerades and
+# edge_firewall_enforce is the default-drop switch, false (monitor mode) until the owner merges the
+# one-line flip here and in the playbook, so no pull and no other host can turn it on. R2 allows no
+# `vars` on a role entry, so these rows are their one home.
 HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
-    "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
+    "edge1": {
+        "deploy_tooling_host_class": "gateway",
+        "egress_nat_gateway_enabled": True,
+        "edge_firewall_nat_source": "10.20.1.0/24",
+        "edge_firewall_enforce": False,
+    },
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
 }
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))

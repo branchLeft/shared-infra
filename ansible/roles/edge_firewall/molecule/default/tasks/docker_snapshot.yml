@@ -1,0 +1,20 @@
+---
+# Test scaffolding. Reads the rules the scenario stands in for Docker's (iptables-save, which
+# shows the filter and nat tables the iptables front end owns, and not the role's own tables)
+# and keeps them as edge_firewall_docker_now: the lines, with the comment lines and the
+# packet counters taken out, since counters change with every packet.
+- name: Read the stand-in Docker rules
+  ansible.builtin.command:
+    argv: [iptables-save]
+  register: edge_firewall_docker_raw
+  changed_when: false
+
+- name: Keep them without comments and counters
+  ansible.builtin.set_fact:
+    edge_firewall_docker_now: >-
+      {{
+        edge_firewall_docker_raw.stdout_lines
+        | reject('match', '^#')
+        | map('regex_replace', '\[[0-9]+:[0-9]+\]', '[0:0]')
+        | list
+      }}

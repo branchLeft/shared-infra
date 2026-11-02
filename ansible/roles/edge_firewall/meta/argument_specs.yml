@@ -1,0 +1,33 @@
+---
+argument_specs:
+  main:
+    short_description: Load edge1's own nftables input filter and estate NAT behind a guard that rolls back if SSH stops answering
+    description: >-
+      Masks nftables.service (before the package is installed, so that no start
+      or restart of that unit can flush Docker's rules), installs nftables, sets
+      and persists IPv4 forwarding, and loads two tables of its own: an inet
+      input filter and an ip NAT table that masquerades the estate subnet out of
+      the host's uplink. After the load it connects to the host's own private
+      address on the control port (a path that does not match the loopback
+      accept). If that fails, the previous rules are restored and the role fails.
+      When it passes, the rules become the file the role's own boot unit loads,
+      and the legacy iptables masquerade rule is removed. The role never flushes
+      the ruleset and owns no forward chain.
+    author: branchLeft
+    options:
+      edge_firewall_nat_source:
+        type: str
+        required: true
+        description: >-
+          The estate subnet whose traffic leaving through the uplink is
+          masqueraded, as a dotted /24 (for example 10.20.1.0/24). The host must
+          hold an address in it, and the uplink must hold a public address, or
+          the role refuses before anything is loaded. Anything else, including a
+          newline, is refused.
+      edge_firewall_enforce:
+        type: bool
+        description: >-
+          False is monitor mode: the input policy is accept and rules that
+          would refuse a packet log it. True is enforce mode: the input policy is
+          drop. Flip it only after the log from monitor mode has been read.
+        default: false

@@ -4,19 +4,23 @@
 `hetzner-host/addressPlan.ts` is the one place `NETWORK_CIDR`, `SUBNET_CIDR`
 and `HOST_IPS`/`APP_HOST_IPS` are decided. `hetzner/network.ts` and
 `hetzner/egress.ts` import that module, so Pulumi always sees a plan change.
-The NAT gateway script, the DOCKER-USER isolation-policy script, and the
-provisioning runbook cannot: the scripts run on a host with no repository
-checkout to import from, and the runbook is prose a human reads, not code
-anything executes. All three therefore carry a copy of the plan's subnet
-and/or a host address as a literal, and nothing stops those literals drifting
-from the module that is supposed to be their source.
+The NAT gateway script, the DOCKER-USER isolation-policy script, edge1's
+playbook (where the edge_firewall role is given the subnet it masquerades) and
+the provisioning runbook cannot: the scripts run on a host with no repository
+checkout to import from, the playbook is YAML Ansible reads, and the runbook is
+prose a human reads, not code anything executes. All of them therefore carry a
+copy of the plan's subnet and/or a host address as a literal, and nothing stops
+those literals drifting from the module that is supposed to be their source.
 
 **A drifted literal presents as success.** The NAT script's own
 `only a /24 subnet is understood` guard validates its own literal against
 itself, so it stays green after the literal goes stale -- it was never
 checking the literal against the plan. The runbook's verification block greps
-for the MASQUERADE rule it expects and finds it, correct for the subnet it
-still names. Either way the host that is actually misconfigured is the one
+for the masquerade rule it expects and finds it, correct for the subnet it
+still names. The playbook's `edge_firewall_nat_source` is the worst of the
+three: the role loads a masquerade for exactly that subnet, every check of the
+role passes, and the private hosts of the plan's real subnet have no outbound
+internet. Either way the host that is actually misconfigured is the one
 outside the plan's current range, and every check available reports it
 healthy.
 
@@ -37,6 +41,10 @@ below:
   inside the plan's `NETWORK_CIDR` *and* matches none of the plan's current
   values -- outside the estate's own range it isn't an estate address at all,
   and inside it, it may simply be some other host's real, current address.
+* **The runbook's nftables check writes the subnet with escaped dots**
+  (`10\\.20\\.1\\.0/24`, a regular expression), which no address-shaped
+  pattern matches. The subnet check unescapes them first, so a stale value in
+  that one grep is read like any other.
 * **A value that only appears in a comment is not the live export.** This
   module's house style narrates reasoning at length, including earlier
   decisions, so a stale value sitting in prose ahead of the real `export
@@ -189,6 +197,12 @@ _BARE_IPV4_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b(?!/)")
 # expected value and its own message, instead of folding into whichever
 # subnet check happens to run over the same file.
 _HOST_SLASH_32_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}/32\b")
+# The subnet edge1's playbook hands the edge_firewall role: a YAML line at the start of a line
+# (a comment is not matched), with the value optionally quoted. Only the value is captured.
+_EDGE_FIREWALL_SOURCE_RE = re.compile(
+    r"^[ \t]*edge_firewall_nat_source:[ \t]*['\"]?(\d{1,3}(?:\.\d{1,3}){3}/\d{1,2})['\"]?[ \t]*$",
+    re.M,
+)
 
 
 def _within(literal: str, network: ipaddress.IPv4Network) -> bool:
@@ -214,6 +228,7 @@ def _check_literals(
     expected: str,
     expected_label: str,
     plan: AddressPlan,
+    unescape_dots: bool = False,
 ) -> list[str]:
     """Every `pattern` match in `path` must equal `expected`, once literals
     that are not a copy of anything in the plan are set aside.
@@ -233,6 +248,9 @@ def _check_literals(
         text = path.read_text()
     except OSError as exc:
         return [f"{path}: cannot read ({exc})"]
+    if unescape_dots:
+        # A regular expression written in prose: `10\.20\.1\.0/24` names the subnet.
+        text = text.replace("\\.", ".")
 
     found = pattern.findall(text)
     if not found:
@@ -281,6 +299,14 @@ def check(root: pathlib.Path) -> list[str]:
     failures += _check_literals(
         root / "hetzner" / "RUNBOOK-provision-host.md",
         _CIDR_RE,
+        plan.subnet_cidr,
+        "SUBNET_CIDR",
+        plan,
+        unescape_dots=True,
+    )
+    failures += _check_literals(
+        root / "ansible" / "playbooks" / "edge1.yml",
+        _EDGE_FIREWALL_SOURCE_RE,
         plan.subnet_cidr,
         "SUBNET_CIDR",
         plan,

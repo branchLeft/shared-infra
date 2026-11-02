@@ -18,26 +18,28 @@ than a step inside it.
 
 ## What each script does
 
-| Script                          | Effect                                                                                                                                             |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `00-harden-ssh.sh`              | Reasserts the key-only SSH drop-in, then fails the run if `sshd -T` shows another drop-in outranking it                                            |
-| `05-configure-host-egress.sh`   | Installs the private-host-egress reconciler and the unit that reasserts it at boot, then runs it once. A no-op on any host with a public interface |
-| `10-harden-updates-fail2ban.sh` | Installs and enables `unattended-upgrades` and `fail2ban`, with an SSH jail this repo owns                                                         |
-| `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                                              |
-| `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses                            |
-| `nat-gateway.sh`                | **Gateway host only.** Installs the NAT reconciler and its boot unit, then runs it once. On edge1 the `egress_nat` role does this (step 2)         |
-| `app-host-isolation.sh`         | **App hosts only.** Installs the `DOCKER-USER` isolation-policy reconciler and the unit that reasserts it at boot, then runs it once               |
-| `provision_deploy_slot.py`      | **Per stack, not per host.** Grants one keypair a forced command reaching one stack, and renders `authorized_keys` from its own register           |
+| Script                          | Effect                                                                                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `00-harden-ssh.sh`              | Reasserts the key-only SSH drop-in, then fails the run if `sshd -T` shows another drop-in outranking it                                                |
+| `05-configure-host-egress.sh`   | Installs the private-host-egress reconciler and the unit that reasserts it at boot, then runs it once. A no-op on any host with a public interface     |
+| `10-harden-updates-fail2ban.sh` | Installs and enables `unattended-upgrades` and `fail2ban`, with an SSH jail this repo owns                                                             |
+| `20-install-docker.sh`          | Installs Docker CE from Docker's apt repo, and reconciles the signing key and apt source on every run                                                  |
+| `30-install-deploy-tooling.sh`  | Installs `branchleft-compose@.service` and `/usr/local/sbin/branchleft-deploy`, and verifies the sudoers drop-in parses                                |
+| `nat-gateway.sh`                | **Refuses to run.** The gateway is edge1 and the `edge_firewall` and `egress_nat` roles make it one (step 2); this script no longer installs a gateway |
+| `app-host-isolation.sh`         | **App hosts only.** Installs the `DOCKER-USER` isolation-policy reconciler and the unit that reasserts it at boot, then runs it once                   |
+| `provision_deploy_slot.py`      | **Per stack, not per host.** Grants one keypair a forced command reaching one stack, and renders `authorized_keys` from its own register               |
 
 `run-all.sh` runs the first five in order. Every one of them is idempotent:
 re-running the set is a no-op on a host that is already correct, which is what
 makes this the right response to "I am not sure whether that host is current".
 
-`nat-gateway.sh` is deliberately outside `run-all.sh`. Exactly one host in the
-estate is the gateway, and the script refuses to run anywhere the estate's
-egress could not work from. On edge1, the gateway, the `egress_nat` role
-delivers the same reconciler and unit through the gated pull (step 2), so nobody
-runs the script there by hand; the script stays as code.
+`nat-gateway.sh` is deliberately outside `run-all.sh`, and it no longer makes a
+host a gateway. Exactly one host in the estate is the gateway, edge1, and the
+masquerade that makes it one lives in the `edge_firewall` role's nftables table,
+not in the reconciler this script installs, so a host built by this script alone
+would forward with no masquerade and no outbound internet. The script therefore
+refuses and names the roles; the gated pull (step 2) is the only way edge1 becomes
+the gateway.
 
 `app-host-isolation.sh` is deliberately outside `run-all.sh` too, for the
 matching reason: it is scoped to app hosts, and its reconciler
@@ -52,8 +54,10 @@ only route off the subnet is the private network's own gateway. Nothing is
 routed there until the network stack declares a default route, and nothing
 forwards at the far end until one host has been provisioned as the gateway.
 Both halves are `branchLeft/shared-infra`'s: the route is in
-`hetzner/network.ts`, the forwarding is the NAT reconciler
-(`provision/branchleft_nat.sh`), which the `egress_nat` role delivers to edge1.
+`hetzner/network.ts`, the forwarding is the `edge_firewall` role (the masquerade,
+in its own nftables table, and the forwarding sysctl) and the NAT reconciler
+(`provision/branchleft_nat.sh`, the forwarding accepts in `DOCKER-USER`), which the
+`egress_nat` role delivers to edge1.
 
 **Both have to be live before the private-only host is created**, not merely
 before this runbook is run against it. Cloud-init installs `ca-certificates`,
@@ -238,11 +242,16 @@ ciphertext, and neither may be committed.
 
 ### 2. Make the gateway forward
 
-Nothing is run by hand for the forwarding itself. The `egress_nat` role delivers it:
-edge1's playbook applies the role with `egress_nat_gateway_enabled` on, a value the
-owner-only checks pin to edge1 alone (a second gateway would loop the estate's
-egress). The role installs the NAT reconciler and its unit from `hetzner/provision`,
-runs it, and puts the previous files back if the run fails. The route to the host is
+Nothing is run by hand for the forwarding itself. Two roles deliver it, in this order.
+The `edge_firewall` role loads edge1's own nftables tables (the input filter and the
+estate's masquerade), sets forwarding, masks `nftables.service`, and removes the
+masquerade rule the old reconciler wrote, only after its own table is confirmed. Then
+the `egress_nat` role, with `egress_nat_gateway_enabled` on (a value the owner-only
+checks pin to edge1 alone, since a second gateway would loop the estate's egress),
+installs the NAT reconciler and its unit from `hetzner/provision`, runs it, and puts
+the previous files back if the run fails. The reconciler now inserts only the two
+`DOCKER-USER` forwarding accepts, and refuses to run (so the apply fails) if forwarding
+is off or the nftables masquerade table is not there. The route to the host is
 the gated `ansible-delivery` run on `main` (the plan job, the approval, then the
 apply); wait for that run to finish on edge1 before step 3, and before any
 private-only host is created.
@@ -266,9 +275,11 @@ EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys
 ```
 
 A second apply does not put back a rule that was lost while the unit stays active.
-The one such case is a Docker reinstall: the rules live in netfilter, and the chain
-they are inserted into is one Docker owns. After a Docker reinstall, run the reconciler
-again by restarting its unit, then repeat step 3:
+The one such case is a Docker reinstall: the `DOCKER-USER` accepts live in a chain
+Docker owns. After a Docker reinstall, run the reconciler again by restarting its
+unit, then repeat step 3. The masquerade is not affected: it is in the
+`edge_firewall` role's own nftables table, which Docker does not touch, and
+`branchleft-firewall.service` restores it at every boot:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" 'systemctl restart branchleft-nat.service'
@@ -301,21 +312,25 @@ here independently.
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   set -e
   test "$(sysctl -n net.ipv4.ip_forward)" = 1
-  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
+  nft list table ip branchleft_edge_nat | grep -E -- "ip saddr 10\.20\.1\.0/24 oifname .+ masquerade"
   iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
   iptables -t filter -S DOCKER-USER | grep -E -- "-d 10.20.1.0/24 .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT"
   systemctl is-enabled branchleft-nat.service
+  systemctl is-enabled branchleft-firewall.service
+  test "$(systemctl is-enabled nftables.service)" = masked
   echo "gateway ok"
 '
 ```
 
-Expect three rule lines, `enabled`, and `gateway ok`. It exits non-zero on the
+Expect three rule lines, two `enabled` lines, and `gateway ok`. It exits non-zero on the
 first thing that is missing, and the output stops there — so the last line
 printed is the check that passed, and the one after it is what to fix.
 
 **All three rules are checked, not just the masquerade, and that is the point
-of this block.** The masquerade lives in the `nat` table, which Docker does not
-own, so it survives almost everything. The two rules that carry the actual
+of this block.** The masquerade lives in the `edge_firewall` role's own nftables
+table, which Docker does not own and which `iptables` cannot list (an `iptables -t nat
+-S POSTROUTING` shows only Docker's own rules, and would report the masquerade missing
+on a healthy gateway), so it survives almost everything. The two rules that carry the actual
 permission are the filter-chain accepts, and they live in `DOCKER-USER` — a
 chain Docker does own, and which `iptables -F`, a `firewall-cmd --reload` or a
 change of firewall backend removes on its own. With those gone, the masquerade
@@ -335,25 +350,33 @@ instead — substitute the chain name. Neither is true of `edge1`, which runs
 the Caddy and CrowdSec stack.
 
 A missing `enabled` is the failure that only shows up at the next reboot, when
-the estate silently loses its egress.
+the estate silently loses its egress. The last line checks the other half of the
+design: `nftables.service` is masked, because stopping or restarting it runs
+`nft flush ruleset`, which removes every table on the host, Docker's included.
 
 The three rule checks above only prove the rules are present now, not that
 anything caused them to be re-asserted. Docker never flushes `DOCKER-USER`
-across a restart, and the masquerade rule lives in the `nat` table, which
-Docker does not own at all -- so on a host that is already correctly
+across a restart, and the masquerade rule lives in the role's own nftables table,
+which Docker does not own at all -- so on a host that is already correctly
 configured, all three rules survive a `docker.service` restart whether or
 not `PartOf=docker.service` actually reran the reconciler. Proving that needs
 a second signal: `branchleft-nat.service`'s own activation timestamp,
-captured before and after the restart. Prove both, once, after provisioning:
+captured before and after the restart. The block also saves the role's two nftables
+tables before the restart and compares them after it: a restart of Docker must not
+change them, and the same comparison catches a restart that flushed the ruleset.
+Prove both, once, after provisioning:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   set -e
   BEFORE="$(systemctl show -p ActiveEnterTimestamp --value branchleft-nat.service)"
+  TABLES_BEFORE="$(nft -s list table inet branchleft_edge; nft -s list table ip branchleft_edge_nat)"
   systemctl restart docker.service
   AFTER="$(systemctl show -p ActiveEnterTimestamp --value branchleft-nat.service)"
   test "$BEFORE" != "$AFTER"
-  iptables -t nat -S POSTROUTING | grep -- "-s 10.20.1.0/24 .*-j MASQUERADE"
+  TABLES_AFTER="$(nft -s list table inet branchleft_edge; nft -s list table ip branchleft_edge_nat)"
+  test "$TABLES_BEFORE" = "$TABLES_AFTER"
+  nft list table ip branchleft_edge_nat | grep -E -- "ip saddr 10\.20\.1\.0/24 oifname .+ masquerade"
   iptables -t filter -S DOCKER-USER | grep -- "-s 10.20.1.0/24 .*-j ACCEPT"
   iptables -t filter -S DOCKER-USER | grep -E -- "-d 10.20.1.0/24 .*ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED) -j ACCEPT"
   echo "gateway survives a docker restart, reconciler reran at $AFTER"

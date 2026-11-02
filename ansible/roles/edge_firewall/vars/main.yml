@@ -1,0 +1,70 @@
+---
+# Constants of the role, not inputs: a caller cannot set them from a play, and the
+# unit tests hold each to the rest of the repository (the Compose files, the Hetzner
+# firewall and the Prometheus scrape list) in ansible/checks/test_edge_firewall_flows_agree.py.
+
+# The two tables the role owns. Nothing else is read, changed or flushed.
+edge_firewall_table: branchleft_edge
+edge_firewall_nat_table: branchleft_edge_nat
+
+# The rules the role confirmed (active.nft, loaded at boot by the role's own unit) and the
+# listing the kernel gave for them (active.list). previous.nft is the file the guard restores.
+edge_firewall_rules_dir: /etc/branchleft-firewall
+
+# The name of the template the rules are rendered from. A constant so that the Molecule
+# scenario can hand the guard a bad set of its own (a test seam, see molecule/default/tasks/probe.yml);
+# no play sets it.
+edge_firewall_rules_template: rules.nft.j2
+
+# The sysctl drop-in that persists forwarding. It has one writer: this role.
+# hetzner/provision/branchleft_nat.sh used to write it and no longer does.
+edge_firewall_sysctl_file: /etc/sysctl.d/99-branchleft-nat.conf
+
+# The role's own boot unit. It loads rules_dir/active.nft and has no ExecStop, so stopping
+# it flushes nothing. nftables.service is masked instead of used: its stop is `flush ruleset`.
+edge_firewall_unit_name: branchleft-firewall.service
+edge_firewall_unit_dir: /etc/systemd/system
+edge_firewall_nftables_mask_path: /etc/systemd/system/nftables.service
+edge_firewall_nft_binary: /usr/sbin/nft
+
+# The control connection. The guard connects to the host's own private address on this
+# port: that packet arrives on the loopback interface with a non-loopback source and
+# destination, so it matches the real accept for this port and not the 127.0.0.0/8 rule.
+edge_firewall_control_port: 22
+
+# Public TCP ports, accepted from any source. They are the ports of hetzner-host/firewalls.ts
+# EDGE_RULES (80, 443; 22 is the control port). Docker normally DNATs them to the Caddy
+# container, so they are forwarded and never reach this chain; they are accepted here too so that
+# a listener of the userland proxy (IPv6, or a hairpin) is not silently closed in enforce mode.
+edge_firewall_public_tcp_ports:
+  - 80
+  - 443
+
+# TCP ports published on edge1's private address (10.20.1.10) by the Compose stacks, reached from
+# the monitoring stack's bridge, the edge stack's bridge and the owner's SSH tunnels:
+#   2586 ntfy (the pager, behind Caddy), 3000 Grafana, 6060 CrowdSec, 9091 Caddy metrics.
+# Docker DNATs them, so in the normal case they are forwarded; they are accepted from the
+# Docker bridges (and from the host itself) in case a flow lands on the userland proxy.
+edge_firewall_bridge_tcp_ports:
+  - 2586
+  - 3000
+  - 6060
+  - 9091
+
+# Published ports that reach their container by DNAT alone and need no input rule. Empty today.
+# A port listed here must be published by a Compose file (the flows test fails otherwise).
+edge_firewall_dnat_only_tcp_ports: []
+
+# The text the kernel log line begins with. The owner reads the log of monitor mode for it.
+edge_firewall_log_prefix: 'branchleft-fw would-drop: '
+
+# Used to join the two tables' listings. A quoted scalar, so that it is a real newline.
+edge_firewall_newline: "\n"
+
+# The shapes the string inputs and derived values must have. Each ends in \Z, not $: $ also
+# matches just before a trailing newline, \Z matches only at the end of the string.
+edge_firewall_source_pattern: '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.0/24\Z'
+edge_firewall_interface_pattern: '^[A-Za-z0-9_.-]+\Z'
+edge_firewall_address_pattern: '^[0-9]{1,3}(\.[0-9]{1,3}){3}\Z'
+# Addresses that are not public: the reconciler this role replaces refused an uplink holding only these.
+edge_firewall_private_pattern: '^(10\.|192\.168\.|127\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[01])\.)'
