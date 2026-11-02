@@ -41,7 +41,7 @@ UNITS: dict[str, tuple[str, ...]] = {
 }
 
 # The jobs that never skip, because they read the whole tree or most of it
-# (branchLeft/workspace#2952). scripts-tests and pulumi-inventory-audit were
+# scripts-tests and pulumi-inventory-audit were
 # ruled by the owner; the other four were found by tracing what their tests
 # open. Changing this set is a reviewed edit to test_ci_skip.py as well.
 ALWAYS_RUN: frozenset[str] = frozenset(

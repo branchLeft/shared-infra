@@ -1,6 +1,6 @@
 # test_ci_skip.py
 
-Pins the changed-path skip in `ci.yml` (branchLeft/workspace#2952). A wrong path
+Pins the changed-path skip in `ci.yml`. A wrong path
 map skips a required check without any sign, so the file proves the map, and then
 proves the proof.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin tests for the changed-path skip in ci.yml (branchLeft/workspace#2952).
+"""Pin tests for the changed-path skip in ci.yml.
 
 A wrong path map skips a required check silently, so this file proves the map
 two ways and proves the proof: the real code and workflow pass every invariant,
