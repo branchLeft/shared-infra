@@ -132,6 +132,23 @@ the repository have unit tests: from `ansible/roles/deploy_tooling` run
 `PYTHONPATH=library python -m unittest discover -s tests/unit`, and from the repository
 root run `python -m unittest discover -s ansible/checks`. CI runs all of them.
 
+The test is four scenarios, each its own parallel CI shard, so that none takes more than
+a few minutes of the 25-minute limit (`ansible/README.md`, "Sharing steps between
+scenarios"). `default` runs every step and the cases that are quick; the other three apply
+the role once and run only `verify`, each with its own share of the cases, and leave out
+the steps that plan and the second apply, which `default` runs:
+
+| Scenario         | Cases (task files under `molecule/default/tasks/`)                                   |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `retry`          | `case_compose_retry.yml`, which waits on the compose unit's own timers (about 310 s) |
+| `sudoers`        | `case_sudoers.yml` and `case_sudoers_content.yml`                                    |
+| `chains_parents` | `case_parent_directories.yml` and `case_chain.yml`                                   |
+| `default`        | the rest of phase i and phases ii to viii (`phase_standard.yml` and the phase files) |
+
+Add a case to exactly one scenario's verify play: `ansible/checks/test_deploy_tooling_cases_covered.py`
+fails on a case file that no scenario runs, on one that two run, and on a scenario that skips
+`verify`. Run one scenario with `--scenario <name>` on the harness command above.
+
 Only `ip` is a stand-in in the container: the policy program picks its variant from the
 output of `ip -4 -o addr show scope global`, so the test's `ip` prints a chosen address
 when a file says so. The firewall is the real one, the real program runs through its
