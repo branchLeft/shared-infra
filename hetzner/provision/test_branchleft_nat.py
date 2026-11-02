@@ -560,7 +560,7 @@ class RunbookScpCommandTests(unittest.TestCase):
 
     def test_every_scp_site_copies_provision_dot_to_a_slash_free_destination(self):
         commands = _extract_scp_commands()
-        self.assertEqual(len(commands), 5, commands)
+        self.assertEqual(len(commands), 4, commands)
         for command in commands:
             tokens = command.split()
             source = next(t for t in tokens if t.startswith("hetzner/provision"))
@@ -616,7 +616,7 @@ class RunbookPycacheCleanupTests(unittest.TestCase):
 
     def test_every_scp_site_is_followed_by_the_pycache_cleanup(self):
         sites = _scp_sites_with_following_context()
-        self.assertEqual(len(sites), 5, [command for command, _ in sites])
+        self.assertEqual(len(sites), 4, [command for command, _ in sites])
         for command, context in sites:
             with self.subTest(command=command):
                 self.assertIn(

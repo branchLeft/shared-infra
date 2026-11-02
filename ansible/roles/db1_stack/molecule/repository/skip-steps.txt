@@ -1,0 +1,10 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# This scenario applies the role once and runs the repository-file cases against the configured
+# host (verify.yml, the part named repository). The steps that plan, and the second apply
+# that checks idempotence, are the default scenario's, which runs all eight steps. Running
+# every case in one verify took about twenty minutes.
+check-fresh
+idempotence
+molecule-check

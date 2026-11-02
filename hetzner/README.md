@@ -165,7 +165,7 @@ a host's only route off the subnet is the network's own gateway, and Hetzner
 resolves that against this table. It is unprotected on purpose — deleting it
 detaches nothing and loses no state, and moving the gateway to another host
 has to stay an ordinary apply. The forwarding at the far end is not Pulumi's:
-`provision/nat-gateway.sh` installs it, and
+the `egress_nat` role installs it on edge1 (the reconciler is `provision/branchleft_nat.sh`), and
 `RUNBOOK-provision-host.md` carries the order the two have to happen in.
 
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`

@@ -261,8 +261,10 @@ pattern. A statement it does not list is refused.
 
 The role must not be applied to the live host until each of these is true.
 
-1. The program directory `/opt/branchleft/db/provision` is delivered with the
-   pinned bytes (the dump programs and the provisioning program).
+1. The program directory `/opt/branchleft/db/provision` is delivered by
+   `db1_backup_timers`, including `provision_tenant_db.py`, at the pinned digest.
+   That role must have applied once on db1 (a real apply, not check mode) before
+   this role is planned.
 2. The ops1 password file is placed once, by hand, as `printf '%s'` of the password
    into `/etc/branchleft/db1-backup-ops1.pw`, root-owned, mode `0600`, no trailing
    newline.

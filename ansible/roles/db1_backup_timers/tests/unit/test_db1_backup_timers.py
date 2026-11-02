@@ -112,5 +112,60 @@ class PinTests(unittest.TestCase):
         self.assertIn("raw.githubusercontent.com/branchLeft/ghost-platform/", _scalar("db1_backup_timers_ghost_raw_base"))
 
 
+class CrossRoleTests(unittest.TestCase):
+    """db1_grants runs a program that this role delivers; the two roles' pins must agree."""
+
+    GRANTS_VARS = ROLE.parent / "db1_grants" / "vars" / "main.yml"
+
+    def _grants_list(self, key: str) -> list[str]:
+        items: list[str] = []
+        inside = False
+        for line in self.GRANTS_VARS.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{key}:"):
+                inside = True
+                continue
+            if inside:
+                match = re.match(r"^  - (\S+)\s*$", line)
+                if match:
+                    items.append(match.group(1))
+                elif line.strip():
+                    break
+        return items
+
+    def _grants_mapping(self, key: str) -> dict[str, str]:
+        pairs: dict[str, str] = {}
+        inside = False
+        for line in self.GRANTS_VARS.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{key}:"):
+                inside = True
+                continue
+            if inside:
+                match = re.match(r"^  (\S+): (\S+)\s*$", line)
+                if match:
+                    pairs[match.group(1)] = match.group(2)
+                elif line.strip():
+                    break
+        return pairs
+
+    def test_every_file_db1_grants_runs_is_delivered_here_at_the_same_digest(self) -> None:
+        staged = self._grants_list("db1_grants_staged_files")
+        self.assertTrue(staged, "db1_grants_staged_files is empty or not read")
+        delivered = set(_list_under("db1_backup_timers_provision_files"))
+        mine = _mapping_under("db1_backup_timers_program_sha256")
+        theirs = self._grants_mapping("db1_grants_program_sha256")
+        for name in staged:
+            self.assertIn(name, delivered, f"db1_grants runs {name}, which this role does not deliver")
+            self.assertIn(name, mine, f"{name} is delivered here with no pinned digest")
+            self.assertEqual(mine[name], theirs.get(name), f"{name} is pinned to a different digest in db1_grants")
+
+    def test_db1_grants_pins_the_commit_this_role_fetches_at(self) -> None:
+        grants_commit = next(
+            line.split(":", 1)[1].strip()
+            for line in self.GRANTS_VARS.read_text(encoding="utf-8").splitlines()
+            if line.startswith("db1_grants_source_commit:")
+        )
+        self.assertEqual(grants_commit, _scalar("db1_backup_timers_ghost_commit"))
+
+
 if __name__ == "__main__":
     unittest.main()

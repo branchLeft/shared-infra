@@ -43,7 +43,15 @@ TREES = ("playbooks", "trust", "owner_vars")
 TREE_RULES = {"playbooks": "R2", "trust": "R5", "owner_vars": "R10"}
 OWNER_VARS_DIR = "owner_vars"
 # The keys a host's owner_vars file holds, exactly. A host named nowhere here may have no file.
-OWNER_VARS_KEYS = {"edge1": frozenset(("ci_login_keys", "ci_login_manage_keys"))}
+OWNER_VARS_KEYS = {
+    "edge1": frozenset(("ci_login_keys", "ci_login_manage_keys")),
+    "ops1": frozenset(("pull_trigger_steps",)),
+}
+STEPS_KEY = "pull_trigger_steps"
+# Only the shape of an allow-list entry. Which ids, tags and words are valid is the program's
+# rule alone (pull_trigger.py: STEP_IDS, _step_from, WORD_PATTERN), and test_step_allowlist.py
+# feeds the real file through the program's own parser, so none of it is copied here.
+STEP_ENTRY = frozenset(("id", "tag", "word"))
 OWNER_KEY_ENTRY = frozenset(("key", "mode"))
 OWNER_KEY_MODES = frozenset(("apply", "check"))
 README_EXCEPTIONS = frozenset(("playbooks/README.md", "trust/README.md"))
@@ -110,9 +118,12 @@ EXPECTED_ROLES = [
 # owner merges every edit here, so the value is decided by this table and not by the playbook.
 # A host not in the table gets enrolled_host alone. deploy_tooling_host_class has no default in
 # the role (ANS-7), so a host that applies the role must name its class here, and a host of
-# class app must also name the policy variant the role expects its firewall chain to be.
-HOST_PLAY_VARS: dict[str, dict[str, str]] = {
-    "edge1": {"deploy_tooling_host_class": "gateway"},
+# class app must also name the policy variant the role expects its firewall chain to be. The egress_nat
+# role makes a host the estate's NAT gateway only when egress_nat_gateway_enabled is true (a bool, so
+# the string "true" does not match), and a second gateway loops the estate's egress, so edge1
+# alone carries that switch. R2 allows no `vars` on a role entry, so these rows are their one home.
+HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
+    "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
 }
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
@@ -129,8 +140,13 @@ EXPECTED_COMMON = {
 }
 
 
+# The one definition of the loader every read uses: libyaml's C parser where PyYAML was built
+# with it (the pinned wheel is), else the pure-Python SafeLoader. Both build only plain data.
+_BASE_LOADER: type[yaml.SafeLoader] = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 # PyYAML ships no type stubs and the lock has no types-PyYAML, so mypy sees SafeLoader as Any.
-class _AnyTagLoader(yaml.SafeLoader):  # type: ignore[misc]
+class _AnyTagLoader(_BASE_LOADER):  # type: ignore[misc]
     """SafeLoader with every tag accepted. Ansible's loader takes !unsafe and !vault, and a
     list that carries such a value still runs as plays, so the README play-list parse must
     not refuse to read one. Only the README play-list check uses it."""
@@ -147,21 +163,41 @@ def _construct_any_tag(loader: yaml.SafeLoader, suffix: str, node: yaml.Node) ->
 _AnyTagLoader.add_multi_constructor("", _construct_any_tag)
 
 
+# What a parse gave, by loader and file text: the document, or the error message. The text is
+# the key because a rewrite in place keeps the path, the size and perhaps the mtime, and a
+# stale parse here would be a false green in a safety check; the same text parses the same
+# whichever path it was read from, so one parse serves every copy of the tree. A caller must
+# not change a document it is handed: they are shared. None does: _mapping and _plays copy.
+_PARSED: dict[tuple[type[yaml.SafeLoader], str], tuple[object, str | None]] = {}
+
+
 def _load(
-    path: Path, findings: list[str], label: str, loader: type[yaml.SafeLoader] = yaml.SafeLoader
+    path: Path, findings: list[str], label: str, loader: type[yaml.SafeLoader] = _BASE_LOADER
 ) -> object:
     """The one YAML reader, for every rule, for R6 and for the README play-list check. The
     loader is the only difference: the README check passes _AnyTagLoader, the same reader with
     every tag accepted. A missing file is reported by its own rule, not here. An unparseable
-    file is a finding under the caller's label."""
+    file is a finding under the caller's label. The file is read on every call; only the
+    parse of a text already seen is skipped."""
     if not path.is_file():
         return None
     try:
-        # The loader is always a SafeLoader subclass whose only addition turns any tag into a
-        # plain list, dict or string, so no Python object is built here.
-        doc: object = yaml.load(path.read_text(encoding="utf-8"), Loader=loader)  # noqa: S506
-    except (OSError, ValueError, yaml.YAMLError) as error:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as error:
         findings.append(f"{label}: cannot be read as YAML: {error}")
+        return None
+    parsed = _PARSED.get((loader, text))
+    if parsed is None:
+        try:
+            # The loader is always a SafeLoader subclass whose only addition turns any tag into
+            # a plain list, dict or string, so no Python object is built here.
+            parsed = (yaml.load(text, Loader=loader), None)  # noqa: S506
+        except (ValueError, yaml.YAMLError) as error:
+            parsed = (None, str(error))
+        _PARSED[(loader, text)] = parsed
+    doc, error_text = parsed
+    if error_text is not None:
+        findings.append(f"{label}: cannot be read as YAML: {error_text}")
         return None
     return doc
 
@@ -630,10 +666,27 @@ def _yml_files(directory: Path) -> list[Path]:
     return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix == ".yml")
 
 
+def _step_shape_problems(steps: object) -> list[str]:
+    """The shape of pull_trigger_steps: a list of mappings with exactly id, tag and word, all
+    text. Whether an id is on the program's closed list, a tag is the id's own and a word is
+    well formed is judged by the program (see STEP_ENTRY), not here."""
+    if not isinstance(steps, list):
+        return [f"{STEPS_KEY} must be a list of {sorted(STEP_ENTRY)} entries"]
+    problems: list[str] = []
+    for entry in steps:
+        if not isinstance(entry, dict) or set(entry) != STEP_ENTRY:
+            problems.append(f"a {STEPS_KEY} entry must hold exactly {sorted(STEP_ENTRY)}")
+        elif not all(isinstance(value, str) for value in entry.values()):
+            problems.append(f"a {STEPS_KEY} entry needs a text id, tag and word")
+    return problems
+
+
 def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     """What is wrong with the values of an owner_vars file, by key. A missing key is reported
     by the caller, which compares the key set."""
     problems: list[str] = []
+    if STEPS_KEY in doc:
+        problems.extend(_step_shape_problems(doc[STEPS_KEY]))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")
     keys = doc.get("ci_login_keys", [])
