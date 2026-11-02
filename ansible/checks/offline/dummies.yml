@@ -1,0 +1,26 @@
+# Overrides of the typed dummies, for a variable whose consumer needs a value of a shape the
+# type does not give. Each entry declares its type; a unit test checks it against the role's
+# argument_specs, and that the name is used by a role. The key and address below are
+# throwaways: the key is a public half whose private half was deleted when it was made.
+overrides:
+  host_baseline_docker_arch:
+    type: str
+    value: amd64
+  tunnel_account_in:
+    type: dict
+    value:
+      from_address: 192.0.2.20
+      db1_public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
+      replica_host: 192.0.2.30
+      replica_host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
+      db1_subnet_prefix: 10.0.0.
+  nextcloud_stack_generated:
+    type: dict
+    value:
+      results:
+        - stdout: DUMMY_generated_1
+        - stdout: DUMMY_generated_2
+        - stdout: DUMMY_generated_3
+  tunnel_account_db1_source_address:
+    type: str
+    value: 10.0.0.5

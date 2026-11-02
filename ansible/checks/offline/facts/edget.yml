@@ -1,0 +1,4 @@
+# Facts edget's roles read, as a Debian 13 (trixie) cx23 server reports them.
+architecture: x86_64
+distribution_release: trixie
+packages: {}
