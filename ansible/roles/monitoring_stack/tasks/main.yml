@@ -92,6 +92,10 @@
 # and the .tmpl files hold the placeholders a later step fills, so none of them
 # may pass through Jinja. The source is the stack directory in the repository,
 # reached through the link files/stack, so there is one copy of every file.
+#
+# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the files hold
+# placeholder names, paths and environment variables named like passwords or tokens, which
+# the plan's secret scan would withhold the whole plan of the host over. None holds a secret.
 - name: Deliver the stack's files
   ansible.builtin.copy:
     src: 'stack/{{ item }}'
@@ -100,6 +104,7 @@
     group: root
     mode: '0644'
   loop: '{{ monitoring_stack_files }}'
+  diff: false
 
 - name: Create the drop-in directory of the monitoring instance
   ansible.builtin.file:

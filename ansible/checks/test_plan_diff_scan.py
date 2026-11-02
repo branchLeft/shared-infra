@@ -9,7 +9,10 @@ an environment variable reference, withholds the plan of the host: nothing can b
 The control is a task keyword, `diff: false`, set on the copy or template task whose file is not
 secret but reads as secret-like text. The scan is a backstop, never loosened to fit a file
 (ANS-16). This module holds the scan's pattern as a constant and fails when a task the playbooks
-reach copies a file with a matching line and does not set `diff: false`.
+reach copies a file with a matching line and does not set `diff: false`. There is no list of
+exceptions (owner ruling of 2 Nov 2026, workspace#2348): a line that is prose is reworded so it
+no longer matches, and `diff: false` is set only on the task of a file whose matching line is a
+variable reference or a name that cannot change.
 
 The pattern is the `credential-assignment` entry of the backstop in the workflow step "Judge the
 answers, scan the diff and write the result" of the ssh-check-hosts action, in
@@ -60,36 +63,14 @@ DEPTH = 6
 Env = dict[str, object]
 Finding = tuple[str, str, str]
 
-# Tasks that copy a file the scan reads as secret, or whose source the check cannot name (a list
-# made on the host), and set no diff: false. Each has the defect this check exists for, found
-# when the check was written, and none has failed a plan yet, because a diff reaches the scan
-# only when the file is first delivered or changes near such a line. They are listed so that
-# the check is green and still fails for every new one. Setting diff: false on a task, or
-# fixing the file, removes its entry: a listed task that no longer has a finding fails the
-# test, so the list can only shrink. The reach of each is the plan of its host.
-KNOWN_UNSAFE = (
-    ("ansible/roles/control_plane/tasks/main.yml", "Deliver the stack's files"),
-    (
-        "ansible/roles/db1_stack/tasks/_compose.yml",
-        "Render the compose file the deploy program reads",
-    ),
-    ("ansible/roles/demo1_build/tasks/_release.yml", "Copy each vendored program into the release"),
-    ("ansible/roles/demo1_egress_spool/tasks/_compose.yml", "Place the rendered Compose file"),
-    ("ansible/roles/edge_stack/tasks/_deliver.yml", "Deliver the CrowdSec files"),
-    (
-        "ansible/roles/exporters_and_collectors/tasks/_snds_collector.yml",
-        "Install the collector program",
-    ),
-    ("ansible/roles/monitoring_stack/tasks/main.yml", "Deliver the stack's files"),
-    ("ansible/roles/nextcloud_stack/tasks/main.yml", "Deliver the stack's files"),
-    ("ansible/roles/nextcloud_stack/tasks/main.yml", "Install the drop-in of the instance"),
-    ("ansible/roles/ntfy_pager/tasks/main.yml", "Deliver the renderer"),
-)
-
 
 def matching_lines(text: str) -> list[int]:
-    """Return the 1-based number of each line of ``text`` the scan matches."""
-    return [n for n, line in enumerate(text.splitlines(), 1) if CREDENTIAL_ASSIGNMENT.search(line)]
+    """Return the 1-based number of each line of ``text`` the scan matches.
+
+    grep splits its input on the newline alone, so this does too: str.splitlines also splits on
+    form feeds and other separators, which would move a match to another line.
+    """
+    return [n for n, line in enumerate(text.split("\n"), 1) if CREDENTIAL_ASSIGNMENT.search(line)]
 
 
 def _evaluate(expression: re.Match[str], env: Env, depth: int) -> object:
@@ -285,7 +266,33 @@ class RegexCase(unittest.TestCase):
         "token",
         "tokens are listed here: abcdef",
         "private-key:\tvalue1",
+        "sshd can expose the authenticating credential. ExposeAuthInfo writes the key",
+        "      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set it in the env file}",
+        "NO_RATE_TOKENS = frozenset(('', 'none'))",
+        "this is the exporter's login, because the exporter expands a value",
     )
+
+    # One line of each kind, with whether the scan must match it: prose that reads as a secret,
+    # a variable reference that cannot be reworded, a prose line reworded so it no longer reads
+    # as a secret, and a line with no secret word at all.
+    KINDS = (
+        ("prose that matches", "the authenticating credential: ExposeAuthInfo writes it", True),
+        ("variable reference", "MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set it}", True),
+        ("prose reworded", "the authenticating credential. ExposeAuthInfo writes it", False),
+        ("no secret word", "image: docker.io/library/postgres:17-alpine", False),
+    )
+
+    def test_each_kind_of_line_is_classed(self) -> None:
+        """Prose and variable references match, reworded prose and plain lines do not."""
+        for kind, line, expected in self.KINDS:
+            with self.subTest(kind=kind):
+                self.assertEqual(bool(CREDENTIAL_ASSIGNMENT.search(line)), expected)
+
+    def test_lines_are_split_on_newline_only(self) -> None:
+        """A form feed is not a line break to grep, so it does not move a match to a later line."""
+        text = "a\nb\x0cpassword: abcd1234\nc\n"
+        self.assertEqual(matching_lines(text), [2])
+        self.assertEqual(len(text.splitlines()), 4)
 
     def test_known_lines_match_or_do_not(self) -> None:
         """Lines of each kind the scan is known to hit or to pass are classed so."""
@@ -440,19 +447,17 @@ class RealTreeCase(unittest.TestCase):
     """The roles this repository's playbooks name."""
 
     def test_every_copied_file_that_reads_as_secret_has_diff_false(self) -> None:
-        """No task copies a file with a line the plan's scan matches without diff: false."""
+        """No task copies a file with a line the plan's scan matches without diff: false.
+
+        There is no list of exceptions: a file that reads as secret is reworded, or, when it is a
+        variable reference that cannot change, its task sets diff: false.
+        """
         findings, scanned = findings_for(ROOT)
-        new = [f"{f}: task {n!r} {m}" for f, n, m in findings if (f, n) not in KNOWN_UNSAFE]
-        self.assertEqual(new, [], "\n".join(new))
+        found = [f"{f}: task {n!r} {m}" for f, n, m in findings]
+        self.assertEqual(found, [], "\n".join(found))
         # The walk must have read the files the fix is about, or a pass proves nothing.
         self.assertTrue(any(s.endswith("provision_deploy_slot.py") for s in scanned))
         self.assertTrue(any(s.endswith("website_app1/files/compose.yml") for s in scanned))
-
-    def test_the_list_of_known_unsafe_tasks_holds_only_tasks_still_unsafe(self) -> None:
-        """A task fixed with diff: false must leave the list, so the list only shrinks."""
-        current = {(f, n) for f, n, _m in findings_for(ROOT)[0]}
-        stale = [pair for pair in KNOWN_UNSAFE if pair not in current]
-        self.assertEqual(stale, [], f"{stale} no longer has a finding: remove it from the list")
 
 
 if __name__ == "__main__":

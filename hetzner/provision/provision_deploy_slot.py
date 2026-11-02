@@ -28,7 +28,7 @@ path, and therefore nothing for any later code to validate correctly.
 
 The alternative shape -- one shared account, and the wrapper deciding from
 which key authenticated -- is not impossible. sshd can be told to expose the
-authenticating credential: `ExposeAuthInfo` writes the accepted key to a file
+authenticating credential. `ExposeAuthInfo` writes the accepted key to a file
 named by `SSH_USER_AUTH`, and `AuthorizedKeysCommand` receives the key's
 fingerprint as `%f`. Both are server-side and neither is writable by the
 account. It loses on a different property: every such design still has to

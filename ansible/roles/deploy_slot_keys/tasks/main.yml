@@ -14,12 +14,6 @@
 # rule name and an entry number, read out by the assertion after the module, so the cause
 # of a stop shows in the log without a name or a key.
 
-# The program holds no secret. Its documentation reads as secret-like text to the secret scan
-# of the plan's diff, which then withholds the plan of the host, so its diff is not shown. The
-# task is not hidden (no_log is not set, and the module task below reads its changed flag), and
-# the file is reviewed in its pull request. The scan is not loosened to fit the file;
-# ansible/checks/test_plan_diff_scan.py fails when a copied file reads as secret and its task
-# does not set diff: false.
 - name: Install the slot provisioning program
   ansible.builtin.copy:
     src: '{{ deploy_slot_keys_programs_dir }}/{{ deploy_slot_keys_program_source }}'
@@ -28,7 +22,6 @@
     group: root
     mode: '{{ deploy_slot_keys_program_mode }}'
   register: deploy_slot_keys_program
-  diff: false
 
 - name: Make the deploy slots exactly the declared list
   deploy_slot_keys_reconcile:

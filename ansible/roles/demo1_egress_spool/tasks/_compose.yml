@@ -22,6 +22,9 @@
     follow: false
   register: demo1_egress_spool_project_stat
 
+# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the vendored
+# compose file sets an environment variable named like a token from another variable, which
+# the plan's secret scan would withhold the whole plan of the host over. It holds no secret value.
 - name: Place the rendered Compose file
   ansible.builtin.copy:
     src: '{{ demo1_egress_spool_vendored_root }}/{{ demo1_egress_spool_compose_src }}'
@@ -31,6 +34,7 @@
     mode: '0644'
   register: demo1_egress_spool_compose
   when: demo1_egress_spool_project_stat.stat.exists
+  diff: false
 
 # Compose merges compose.override.yml over compose.yml when both sit in the
 # project directory. It takes the running image from the pin file, which is the

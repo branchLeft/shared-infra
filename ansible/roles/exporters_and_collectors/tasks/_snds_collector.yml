@@ -10,6 +10,9 @@
     group: root
     mode: '0755'
 
+# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the program names a
+# constant like a token list, which the plan's secret scan would withhold the whole plan of
+# the host over. The program holds no secret value.
 - name: Install the collector program
   ansible.builtin.copy:
     src: 'snds/{{ exporters_and_collectors_snds_program }}'
@@ -17,6 +20,7 @@
     owner: root
     group: root
     mode: '0644'
+  diff: false
 
 - name: Create the textfile directory the collector writes its metrics to
   ansible.builtin.file:
