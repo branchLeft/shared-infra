@@ -64,14 +64,31 @@
     follow: false
   register: export_bundler_dist_stat
 
-- name: Copy each pinned file
+# The diff is not shown for the pinned files listed in export_bundler_release_files_hidden
+# (ANS-16, vars/main.yml). Each has a line the plan's secret scan matches and no secret, so
+# the plan would be withheld over it. The bytes are the same and the pin check is above.
+- name: Copy the pinned files whose diff is not shown
   ansible.builtin.copy:
     src: '{{ export_bundler_vendored_root }}/{{ item.path }}'
     dest: '{{ export_bundler_dir }}/{{ item.path }}'
     owner: root
     group: root
     mode: '0600'
-  loop: '{{ export_bundler_release_files }}'
+  loop: "{{ export_bundler_release_files | selectattr('path', 'in', export_bundler_release_files_hidden) | list }}"
+  loop_control:
+    label: '{{ item.path }}'
+  diff: false
+  when: export_bundler_dist_stat.stat.exists
+
+# The other pinned files: their diff is shown in the plan.
+- name: Copy each other pinned file
+  ansible.builtin.copy:
+    src: '{{ export_bundler_vendored_root }}/{{ item.path }}'
+    dest: '{{ export_bundler_dir }}/{{ item.path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  loop: "{{ export_bundler_release_files | rejectattr('path', 'in', export_bundler_release_files_hidden) | list }}"
   loop_control:
     label: '{{ item.path }}'
   when: export_bundler_dist_stat.stat.exists
