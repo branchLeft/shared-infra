@@ -317,7 +317,7 @@
         destinations: ['{{ scenario_listed }}', '{{ scenario_own }}', '{{ scenario_unlisted }}']
         files: [{ path: '{{ case_after }}', content: "NoSuchKeyword yes\n", absent_after: true }]
         restore: '{{ case_reload }}'
-        expect: did not pass their check or read-back
+        expect: Check the whole sshd configuration before it is reloaded
       - name: a read-back that sshd refuses after the write, the previous files go back
         tasks_from: _write.yml
         destinations: ['{{ scenario_listed }}', '{{ scenario_own }}', '{{ scenario_unlisted }}']
@@ -326,7 +326,7 @@
             content: "Match User {{ scenario_jump_user }}\n  AllowTcpForwarding yes\nMatch all\n"
             absent_after: true
         restore: '{{ case_reload }}'
-        expect: E-SSHD-FORWARDING
+        expect: Stop if the files or sshd are not what was wanted
   tasks:
     - name: Read the public keys the cases use
       ansible.builtin.slurp:

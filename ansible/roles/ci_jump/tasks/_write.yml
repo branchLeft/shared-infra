@@ -261,9 +261,14 @@
         state: absent
       when: not ci_jump_before.results[0].stat.exists
 
+    # A check that fails here is not a reason to hide the step: it means sshd cannot take the previous
+    # files either. Then nothing is reloaded, the new key file stays (the running sshd still serves
+    # from it), the marker stays, and the step is named below. The reload itself is never ignored.
     - name: Check the whole sshd configuration with the previous files back
       ansible.builtin.command:
         argv: [sshd, -t]
+      register: ci_jump_rescue_check
+      failed_when: false
       changed_when: false
       when: not ansible_check_mode
       no_log: true
@@ -272,13 +277,13 @@
       ansible.builtin.systemd_service:
         name: '{{ ci_jump_sshd_service }}'
         state: reloaded
-      when: not ansible_check_mode
+      when: not ansible_check_mode and ci_jump_rescue_check.rc | default(1) == 0
 
     - name: Note that no reload of sshd is owed, the previous files being back
       ansible.builtin.file:
         path: '{{ ci_jump_reload_marker }}'
         state: absent
-      when: not ansible_check_mode
+      when: not ansible_check_mode and ci_jump_rescue_check.rc | default(1) == 0
 
     - name: Put back the key file that was there before
       ansible.builtin.copy:
@@ -287,7 +292,7 @@
         owner: root
         group: root
         mode: '0644'
-      when: ci_jump_before.results[1].stat.exists
+      when: ci_jump_before.results[1].stat.exists and ci_jump_rescue_check.rc | default(1) == 0
       no_log: true
       diff: false
 
@@ -295,7 +300,7 @@
       ansible.builtin.file:
         path: '{{ ci_jump_key_file }}'
         state: absent
-      when: not ci_jump_before.results[1].stat.exists
+      when: not ci_jump_before.results[1].stat.exists and ci_jump_rescue_check.rc | default(1) == 0
 
     # The message names the step and nothing else: no path, and no result text, since a module's
     # message can carry the account's name (a failed removal prints the path it failed on).
