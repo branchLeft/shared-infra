@@ -1,0 +1,146 @@
+---
+# Fixed by the role, not by the inventory: none of these is an input. Each is a path or a name the
+# hand scripts under mail/provision, the runbooks and the DNSBL check already agree on, so a caller
+# cannot move one. ansible/checks/test_mx1_stack_agree.py holds them against those scripts.
+
+# ----- Stalwart's project (30-deploy-stalwart.sh) -----
+mx1_stack_stalwart_project: stalwart
+mx1_stack_stalwart_dir: /opt/stalwart
+mx1_stack_stalwart_compose_name: docker-compose.yml
+mx1_stack_stalwart_compose_file: /opt/stalwart/docker-compose.yml
+mx1_stack_stalwart_env_file: /opt/stalwart/.env
+mx1_stack_stalwart_env_key: STALWART_PROMETHEUS_SECRET
+
+# ----- The mailgun-shim's project (63-deploy-mailgun-shim.sh) -----
+mx1_stack_shim_project: mailgun-shim
+mx1_stack_shim_dir: /etc/mailgun-shim
+mx1_stack_shim_compose_name: shim-compose.yml
+mx1_stack_shim_compose_file: /etc/mailgun-shim/shim-compose.yml
+mx1_stack_shim_caddyfile: /etc/mailgun-shim/Caddyfile
+mx1_stack_shim_env_file: /etc/mailgun-shim/env
+mx1_stack_shim_data_dir: /var/lib/mailgun-shim
+mx1_stack_shim_throttle_file: /var/lib/mailgun-shim/throttle.json
+# The shim image runs as the unprivileged node user, and its sqlite database lives on the data bind mount.
+mx1_stack_shim_data_uid: '1000'
+mx1_stack_shim_healthz_url: http://127.0.0.1:8825/healthz
+# Compose waits for this many reads, at the same interval as Stalwart's.
+mx1_stack_shim_health_tries: 30
+mx1_stack_shim_hostname: mx1.branchleft.co.uk
+mx1_stack_shim_tls_port: 8443
+mx1_stack_stalwart_tls_port: 443
+
+# The flat label:secret file the 6x scripts share, and the label of the shim's drain token in it.
+# The token is read on the host only; the role never makes it.
+mx1_stack_credentials_file: /root/.stalwart-service-credentials
+mx1_stack_drain_label: shim-drain-token
+
+# ----- The stamps -----
+mx1_stack_stamp_dir: /var/lib/branchleft
+mx1_stack_stalwart_stamp: /var/lib/branchleft/mx1.stalwart.applied
+mx1_stack_shim_stamp: /var/lib/branchleft/mx1.shim.applied
+mx1_stack_resolver_stamp: /var/lib/branchleft/mx1.resolver.applied
+
+# ----- The local resolver (65-install-local-resolver.sh) -----
+mx1_stack_resolver_dropin: /etc/unbound/unbound.conf.d/10-branchleft-local-recursive.conf
+mx1_stack_resolvconf_unit: unbound-resolvconf.service
+mx1_stack_root_anchor: /var/lib/unbound/root.key
+mx1_stack_resolv_conf: /etc/resolv.conf
+mx1_stack_recursion_name: deb.debian.org
+# unbound-anchor and dns-root-data are Recommends, and the host sets APT::Install-Recommends false,
+# so they are named. bind9-dnsutils ships the dig the recursion check needs.
+mx1_stack_resolver_packages:
+  - unbound
+  - unbound-anchor
+  - dns-root-data
+  - bind9-dnsutils
+
+# ----- The DNSBL check (70-schedule-dnsbl-check.sh) -----
+mx1_stack_dnsbl_dir: /root/mail-provision
+mx1_stack_dnsbl_script: /root/mail-provision/check_dnsbl_blocklist.py
+mx1_stack_dnsbl_cron: /etc/cron.d/dnsbl-check
+mx1_stack_dnsbl_cron_text: |
+  # Managed by ansible/roles/mx1_stack. Changes made here by hand are overwritten.
+  SHELL=/bin/bash
+  5 * * * * root python3 /root/mail-provision/check_dnsbl_blocklist.py >> /var/log/dnsbl-check.cron.log 2>&1
+
+# ----- What the repository says each file is (read from files/, which links to mail/provision) -----
+# The texts are variables so that a test can put a different text through the role. rstrip=false
+# keeps the last line break: the host's file is these bytes.
+mx1_stack_stalwart_compose_text: "{{ lookup('ansible.builtin.file', 'docker-compose.yml', rstrip=false) }}"
+mx1_stack_shim_compose_text: "{{ lookup('ansible.builtin.file', 'shim-compose.yml', rstrip=false) }}"
+mx1_stack_shim_caddyfile_text: "{{ lookup('ansible.builtin.file', 'shim.Caddyfile', rstrip=false) }}"
+mx1_stack_resolver_dropin_text: "{{ lookup('ansible.builtin.file', '10-branchleft-local-recursive.conf', rstrip=false) }}"
+mx1_stack_dnsbl_script_text: "{{ lookup('ansible.builtin.file', 'check_dnsbl_blocklist.py.txt', rstrip=false) }}"
+
+# ----- The audit: every host input to both compose files -----
+# This table is the single home of what a container reads from the host. The tasks, the probe's
+# arguments and ansible/checks/test_mx1_stack_agree.py all read it, and nothing copies it. The
+# test fails when a compose file gains a bind mount, an env_file or a ${VAR} that has no row
+# here, and when a row names something the compose file does not hold, so a new input cannot
+# be added without saying what a change to it must do.
+#
+# kind:
+#   compose_file  Compose reads it with -f; its own config hash decides a recreate (image pin, ports).
+#   create_env    read when the container is created (env_file, or ${VAR} from the project's .env):
+#                 a restart never re-reads it, so a change needs a recreate of the service.
+#   bind_file     one file mounted into the container: a rename leaves the container on the old inode
+#                 and Caddy reads its file only at start, so a change needs a recreate of the service.
+#   bind_dir      a directory mounted whole: its contents are live in the container, nothing to do.
+# Named volumes hold no host file and have no row: stalwart-etc, stalwart-data, caddy-data, caddy-config.
+mx1_stack_container_inputs:
+  - name: stalwart_compose
+    project: stalwart
+    service: '*'
+    container: ''
+    path: /opt/stalwart/docker-compose.yml
+    kind: compose_file
+    container_path: ''
+    source: docker-compose.yml
+  - name: stalwart_env
+    project: stalwart
+    service: stalwart
+    container: stalwart
+    path: /opt/stalwart/.env
+    kind: create_env
+    container_path: ''
+    source: ''
+  - name: shim_compose
+    project: mailgun-shim
+    service: '*'
+    container: ''
+    path: /etc/mailgun-shim/shim-compose.yml
+    kind: compose_file
+    container_path: ''
+    source: shim-compose.yml
+  - name: shim_env
+    project: mailgun-shim
+    service: mailgun-shim
+    container: mailgun-shim
+    path: /etc/mailgun-shim/env
+    kind: create_env
+    container_path: ''
+    source: ''
+  - name: shim_data
+    project: mailgun-shim
+    service: mailgun-shim
+    container: mailgun-shim
+    path: /var/lib/mailgun-shim
+    kind: bind_dir
+    container_path: /data
+    source: ''
+  - name: shim_caddyfile
+    project: mailgun-shim
+    service: caddy
+    container: mailgun-shim-caddy
+    path: /etc/mailgun-shim/Caddyfile
+    kind: bind_file
+    container_path: /etc/caddy/Caddyfile
+    source: shim.Caddyfile
+
+# The rows a container reads and a freshness read judges, by project (the probe takes these as they are).
+mx1_stack_stalwart_fresh_inputs: >-
+  {{ mx1_stack_container_inputs | selectattr('project', 'equalto', mx1_stack_stalwart_project)
+  | selectattr('kind', 'in', ['create_env', 'bind_file']) | list }}
+mx1_stack_shim_fresh_inputs: >-
+  {{ mx1_stack_container_inputs | selectattr('project', 'equalto', mx1_stack_shim_project)
+  | selectattr('kind', 'in', ['create_env', 'bind_file']) | list }}

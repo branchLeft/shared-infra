@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ansible.yml"
 FILTER = re.compile(r"watched=\(\n(.*?)\n\s*\)", re.DOTALL)
 # The directories watched whole, whatever they hold now or later.
-WHOLE = ("ansible/", "hetzner/")
+WHOLE = ("ansible/", "hetzner/", "mail/provision/")
 
 
 def parse_watched(workflow_text: str) -> list[str]:
@@ -63,7 +63,7 @@ class WatchedPathsTest(unittest.TestCase):
         detail = [f"{path} (read by {', '.join(sorted(self.reads[path]))})" for path in missing]
         self.assertEqual([], detail, "these paths are read by role tests but not in the filter")
 
-    def test_ansible_and_hetzner_are_watched_whole(self) -> None:
+    def test_ansible_hetzner_and_the_mail_scripts_are_watched_whole(self) -> None:
         # A file named one by one is a file the next edit forgets to name.
         for directory in WHOLE:
             with self.subTest(directory=directory):

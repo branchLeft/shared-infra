@@ -53,8 +53,9 @@ LINT_ONLY = (
 )
 
 # The repository directories a role test reads outside ansible/.
-OUTSIDE = r"(?:hetzner-host|hetzner)"
-# A literal path in a file, such as '{{ verify_repo }}/hetzner/provision/x.service'.
+OUTSIDE = r"(?:hetzner-host|hetzner|mail)"
+# A literal path in a file, such as '{{ verify_repo }}/hetzner/provision/x.service' or
+# 'mail/provision/65-install-local-resolver.sh' (the mx1_stack role reads the mail host's scripts).
 LITERAL = re.compile(r"(?<![\w.-])(" + OUTSIDE + r"/[A-Za-z0-9_./@-]+)")
 # A path built in Python, such as REPO / "hetzner" / "provision".
 JOINED = re.compile(r'"(' + OUTSIDE + r')"((?:\s*/\s*"[^"]+")+)')

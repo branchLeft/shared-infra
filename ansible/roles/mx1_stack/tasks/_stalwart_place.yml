@@ -1,0 +1,9 @@
+---
+# The files Stalwart's project reads from the repository, placed once the class is marked pending.
+- name: Deliver Stalwart's compose file
+  ansible.builtin.copy:
+    content: '{{ mx1_stack_stalwart_compose_text }}'
+    dest: '{{ mx1_stack_stalwart_compose_file }}'
+    owner: root
+    group: root
+    mode: '0644'

@@ -1,0 +1,46 @@
+---
+# One refusal: applies the role to the host as the caller has made it bad, and asserts that the
+# role stopped at the named task with the named words in its message, and (unless the case says
+# otherwise) that nothing the role writes moved, no container was touched and no call to up was made.
+#   refuse_task      the name of the task the role must stop at
+#   refuse_phrase    words of that task's message (no quotation mark in them)
+#   refuse_absent    words the message must not hold (a value that must never be printed)
+#   refuse_allow     files the case expects to have moved
+#   refuse_unmoved   false for a case that expects the role to have written something before it stopped
+# The caller puts the host in its bad state first and undoes it after; run_caddyfile, run_dropin and
+# the other run_ variables of run_role.yml are passed through.
+- name: Apply the role to the bad host and expect it to stop
+  block:
+    - name: Record the host
+      ansible.builtin.include_tasks: snapshot.yml
+      vars:
+        snap_label: refuse_before
+
+    - name: Apply the role
+      ansible.builtin.include_tasks: run_role.yml
+
+    - name: Record the host
+      ansible.builtin.include_tasks: snapshot.yml
+      vars:
+        snap_label: refuse_after
+
+    - name: Assert the role stopped at the guard, with its own words
+      ansible.builtin.assert:
+        that:
+          - mx1_stack_run.failed
+          - mx1_stack_run.task == refuse_task
+          - refuse_phrase in mx1_stack_run.text
+          - refuse_absent | ansible.builtin.default([]) | select('in', mx1_stack_run.text) | list | length == 0
+        quiet: true
+        fail_msg: >-
+          Expected the role to stop at "{{ refuse_task }}" with "{{ refuse_phrase }}". It
+          {{ 'stopped at ' ~ mx1_stack_run.task ~ ': ' ~ mx1_stack_run.text if mx1_stack_run.failed else 'finished' }}.
+
+    - name: Assert nothing moved
+      ansible.builtin.include_tasks: untouched.yml
+      vars:
+        snap_before: refuse_before
+        snap_after: refuse_after
+        allow_paths: '{{ refuse_allow | ansible.builtin.default([]) }}'
+        reason: a refused run places and restarts nothing
+      when: refuse_unmoved | ansible.builtin.default(true)
