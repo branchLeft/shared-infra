@@ -1,0 +1,278 @@
+---
+# The outcome, in sections that each start from a clean slate. Every request is an
+# ansible-playbook run of request.yml on the controller, as the gated pull would make it.
+# "Calls" are the requests the stand-in API logged, so zero calls means no program ran.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    # Empty runs every section.
+    verify_sections: []
+    verify_dir: /root/mail-provision
+    verify_service: /root/.stalwart-service-credentials
+    verify_admin: /root/.stalwart-admin-credentials
+    verify_mailbox: /root/.stalwart-mailbox-credentials
+    # Files the stack role owns, tests and notes: none is ever placed.
+    verify_foreign: '^(30-|63-|65-|70-|run-all|shim-compose|render_shim|check_dnsbl|docker-compose|Caddyfile|rotate_admin|test_)|[.]md$'
+    # A case's credential files and stand-in state, by name.
+    verify_file_sets:
+      admin: [{ path: '{{ verify_admin }}', kind: file, mode: '0600' }]
+      admin_0644: [{ path: '{{ verify_admin }}', kind: file, mode: '0644' }]
+      admin_link: [{ path: '{{ verify_admin }}', kind: link }]
+      mailbox_0644:
+        - { path: '{{ verify_admin }}', kind: file, mode: '0600' }
+        - { path: '{{ verify_mailbox }}', kind: file, mode: '0644' }
+      service_0644:
+        - { path: '{{ verify_admin }}', kind: file, mode: '0600' }
+        - { path: '{{ verify_service }}', kind: file, mode: '0644' }
+      none: []
+    verify_states:
+      none: {}
+      mint:
+        Domain: { d1: { id: d1, name: branchleft.co.uk } }
+        Account:
+          a1: { id: a1, name: info, domainId: d1 }
+          a2: { id: a2, name: blog, domainId: d1 }
+      collector:
+        Domain: { d2: { id: d2, name: trypublicpress.co.uk } }
+    verify_labels:
+      website: info-website-submission
+      blog: blog-ghost-smtp
+      collector: collector-smtp
+    verify_texts:
+      tripwire: 'REFUSED: a step tag was requested'
+      row: 'REFUSED: mail_reconcilers_credential must be one of'
+      dry_run_2: 'the collector dry run phase did not end clean (exit 2)'
+      admin_mode: 'REFUSED: {{ verify_admin }} must be a regular file'
+      admin_absent: 'REFUSED: {{ verify_admin }} is absent'
+      mailbox_mode: 'REFUSED: {{ verify_mailbox }} must be a regular file'
+      service_mode: 'REFUSED: {{ verify_service }} must be a regular file'
+    # Cases: tag (or tags), the step and credential sent with -e, and what to expect.
+    verify_guard_cases:
+      - { name: no confirmation, tag: collector, text: tripwire }
+      - { name: wrong confirmation, tag: mint, step: collector, text: tripwire }
+      - { name: tag not requested, tag: collector, step: mint, text: tripwire }
+      - { name: id outside the list, tag: mint, step: rotate, text: tripwire }
+      - { name: id with a line break, tag: mint, step: "mint\n", text: tripwire }
+    verify_row_cases:
+      - { name: rotate, step: mint, cred: rotate, text: row }
+      - { name: admin, step: mint, cred: admin, text: row }
+      - { name: collector, step: mint, cred: collector, text: row }
+      - { name: row with a line break, step: mint, cred: "blog\n", text: row }
+    verify_mint_cases:
+      - { name: website, step: mint, cred: website, calls: 4, label: website }
+      - { name: blog, step: mint, cred: blog, calls: 4, label: blog }
+    verify_check_cases:
+      - { name: configure, step: configure, check: true }
+      - { name: mailboxes, step: mailboxes, check: true }
+      - { name: mint, step: mint, cred: website, check: true }
+    verify_files_cases:
+      - { name: admin file 0644, step: mailboxes, files: admin_0644, text: admin_mode }
+      - { name: admin file absent, step: configure, files: none, text: admin_absent }
+      - { name: admin file a link, step: mailboxes, files: admin_link, text: admin_mode }
+      - { name: mailbox file 0644, step: mailboxes, files: mailbox_0644, text: mailbox_mode }
+      - { name: service file 0644, step: mailboxes, files: service_0644, text: service_mode }
+  tasks:
+    # 1. A plain apply placed the programs, and only those.
+    - name: A plain apply
+      when: verify_sections | length == 0 or 'plain' in verify_sections
+      block:
+        - name: Look at the install directory and what is in it
+          ansible.builtin.find:
+            paths: '{{ verify_dir }}'
+            hidden: true
+            file_type: any
+          register: mail_reconcilers_verify_plain_found
+
+        - name: Look at the directory itself
+          ansible.builtin.stat:
+            path: '{{ verify_dir }}'
+          register: mail_reconcilers_verify_plain_dir
+
+        - name: Assert the nineteen programs are there, root's and 0755, and none the stack role owns
+          ansible.builtin.assert:
+            that:
+              - mail_reconcilers_verify_plain_dir.stat.isdir
+              - mail_reconcilers_verify_plain_dir.stat.pw_name == 'root'
+              - mail_reconcilers_verify_plain_dir.stat.mode == '0755'
+              - mail_reconcilers_verify_plain_found.matched == 19
+              - mail_reconcilers_verify_plain_found.files | map(attribute='mode') | unique | list == ['0755']
+              - mail_reconcilers_verify_plain_found.files | map(attribute='pw_name') | unique | list == ['root']
+              - mail_reconcilers_verify_plain_found.files | map(attribute='path') | map('basename') | select('search', verify_foreign) | list | length == 0
+            quiet: true
+            fail_msg: A plain apply did not leave exactly the nineteen programs, root's with mode 0755.
+
+    # 2. A tag without its matching confirmation is refused before any program runs, and
+    # two tags with one confirmed step run only that step.
+    - name: The guard
+      when: verify_sections | length == 0 or 'guard' in verify_sections
+      block:
+        - name: Request each unconfirmed or wrongly confirmed step
+          ansible.builtin.include_tasks: tasks/case.yml
+          loop: '{{ verify_guard_cases }}'
+          loop_control: { loop_var: case, label: '{{ case.name }}' }
+
+        - name: Request two tags with the collector confirmed
+          ansible.builtin.include_tasks: tasks/case.yml
+          vars:
+            case:
+              name: two step tags with the collector confirmed
+              tags: mail_reconcilers_mint,mail_reconcilers_collector
+              step: collector
+              label: collector
+
+        - name: Assert only the confirmed step ran
+          ansible.builtin.assert:
+            that:
+              - mail_reconcilers_verify_calls | map(attribute='jmap') | select('search', 'AppPassword/set') | list | length == 1
+              - mail_reconcilers_verify_calls | map(attribute='jmap') | select('search', 'Account/set') | list | length == 1
+            quiet: true
+            fail_msg: Two tags with the collector confirmed did not run the collector alone.
+
+    # 3. The mint step takes one row of the closed table, and runs that row's wrapper.
+    - name: The credential table
+      when: verify_sections | length == 0 or 'table' in verify_sections
+      block:
+        - name: Request each credential outside the table
+          ansible.builtin.include_tasks: tasks/case.yml
+          loop: '{{ verify_row_cases }}'
+          loop_control: { loop_var: case, label: '{{ case.name }}' }
+
+        - name: Mint two credentials, each recorded under its own label
+          ansible.builtin.include_tasks: tasks/case.yml
+          loop: '{{ verify_mint_cases }}'
+          loop_control: { loop_var: case, label: '{{ case.name }}' }
+
+    # 4. The preconditions refuse before a program runs: no call reaches the stand-in.
+    - name: The preconditions
+      when: verify_sections | length == 0 or 'preconditions' in verify_sections
+      block:
+        - name: Request a step over each wrong credential file
+          ansible.builtin.include_tasks: tasks/case.yml
+          loop: '{{ verify_files_cases }}'
+          loop_control: { loop_var: case, label: '{{ case.name }}' }
+
+    # 5. A check-mode request runs no program that writes, and only the collector's dry run.
+    - name: Check mode
+      when: verify_sections | length == 0 or 'check' in verify_sections
+      block:
+        - name: Request configure, mailboxes and a mint in check mode
+          ansible.builtin.include_tasks: tasks/case.yml
+          loop: '{{ verify_check_cases }}'
+          loop_control: { loop_var: case, label: '{{ case.name }}' }
+
+        - name: Request the collector in check mode
+          ansible.builtin.include_tasks: tasks/case.yml
+          vars:
+            case: { name: collector, step: collector, check: true }
+
+        - name: Look for the service file
+          ansible.builtin.stat:
+            path: '{{ verify_service }}'
+          register: mail_reconcilers_verify_check_service
+
+        - name: Assert the dry run only read, and wrote nothing
+          ansible.builtin.assert:
+            that:
+              - mail_reconcilers_verify_calls | length > 0
+              - mail_reconcilers_verify_calls | map(attribute='jmap') | select('search', '/set$') | list | length == 0
+              - not mail_reconcilers_verify_check_service.stat.exists
+            quiet: true
+            fail_msg: A check-mode request of the collector wrote to the stand-in or recorded a credential.
+
+    # 6. The collector's real run starts only after a dry run that ended clean.
+    - name: The collector gate
+      when: verify_sections | length == 0 or 'collector' in verify_sections
+      block:
+        - name: Request the collector while its sending domain is absent
+          ansible.builtin.include_tasks: tasks/case.yml
+          vars:
+            case: { name: domain absent, step: collector, state: none, text: dry_run_2, calls: 1 }
+
+        - name: Request the collector while its sending domain exists
+          ansible.builtin.include_tasks: tasks/case.yml
+          vars:
+            case: { name: domain present, step: collector, label: collector }
+
+        - name: Count the restarts of Stalwart the stand-in docker was asked for
+          ansible.builtin.command:
+            argv: [grep, -c, restart stalwart, /var/tmp/stand-in/docker.calls]
+          register: mail_reconcilers_verify_restarts
+          changed_when: false
+
+        - name: Assert the dry run came first, then the real run stored the scope and made one credential
+          ansible.builtin.assert:
+            that:
+              - mail_reconcilers_verify_restarts.stdout == '1'
+              - mail_reconcilers_verify_calls | map(attribute='jmap') | select('search', 'MtaStageMail/set') | list | length == 1
+              - mail_reconcilers_verify_calls | map(attribute='jmap') | select('search', 'AppPassword/set') | list | length == 1
+              - (mail_reconcilers_verify_calls | map(attribute='jmap') | list).index('x:MtaStageMail/set') > 3
+            quiet: true
+            fail_msg: The real run did not store the scope once, restart once and create one credential after the dry run.
+
+    # 7. A failing call's body, which the programs echo, reaches no output.
+    - name: The leak control
+      when: verify_sections | length == 0 or 'leak' in verify_sections
+      block:
+        - name: Reset, with the collector's domain present
+          ansible.builtin.include_tasks: tasks/reset.yml
+          vars:
+            reset_files: '{{ verify_file_sets.admin }}'
+            reset_state: '{{ verify_states.collector }}'
+
+        - name: Make the stand-in answer every request with a 500 whose body carries a throwaway
+          ansible.builtin.copy:
+            content: 'BODYSECRET-{{ scenario_run }}'
+            dest: /var/tmp/stand-in/fail
+            mode: '0644'
+          no_log: true
+
+        - name: Request the collector while the API fails
+          ansible.builtin.include_tasks: tasks/ask.yml
+          vars:
+            ask_name: the collector while the API fails
+            ask_tags: mail_reconcilers_collector
+            ask_extra: { mail_reconcilers_step: collector }
+
+        - name: Assert the failure is refused at the dry run and the program's error line is withheld
+          ansible.builtin.assert:
+            that:
+              - mail_reconcilers_verify_ask.rc != 0
+              - "'the collector dry run phase did not end clean (exit 1)' in (mail_reconcilers_verify_ask.stdout ~ mail_reconcilers_verify_ask.stderr)"
+              - "'HTTP 500' not in (mail_reconcilers_verify_ask.stdout ~ mail_reconcilers_verify_ask.stderr)"
+            quiet: true
+            fail_msg: A failing API call was not refused at the dry run, or the program's error line reached the output.
+
+    # 8. Nothing in the run's log holds a throwaway secret.
+    - name: The log holds no secret
+      when: verify_sections | length == 0 or 'log' in verify_sections
+      block:
+        - name: Write the throwaways to a file on the controller
+          ansible.builtin.copy:
+            content: "{{ scenario_needles | join('\n') }}\n"
+            dest: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/needles.txt"
+            mode: '0600'
+          delegate_to: localhost
+          no_log: true
+
+        - name: Search the controller's log of every run for the throwaways
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -c
+              - -F
+              - -f
+              - "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/needles.txt"
+              - "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+          delegate_to: localhost
+          register: mail_reconcilers_verify_log_scan
+          changed_when: false
+          failed_when: mail_reconcilers_verify_log_scan.rc not in [0, 1]
+          no_log: true
+
+        - name: Assert no line of the log holds a throwaway
+          ansible.builtin.assert:
+            that:
+              - mail_reconcilers_verify_log_scan.rc == 1
+            quiet: true
+            fail_msg: A throwaway secret is in the log of the run, so a task that handles it is missing no_log.
