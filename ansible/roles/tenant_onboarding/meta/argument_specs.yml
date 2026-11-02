@@ -1,0 +1,38 @@
+---
+argument_specs:
+  main:
+    short_description: Make a tenant's volumes and UID claim, and enable its compose unit, only when named and confirmed
+    description: >-
+      Installs the tenant volume program and its register from ghost-platform at one
+      pinned commit, each checked against its pinned digest. A plain apply installs
+      those and runs no tenant step. Two guarded steps are imported with the never tag
+      and their own step tag. PROVISION_TENANT_VOLUMES runs the program to create one
+      tenant's three volumes and claim its UID. ENABLE_TENANT_UNIT enables the tenant's
+      compose unit without starting it. Each runs only when its tag is named and
+      tenant_onboarding_confirm names its step id. The role reads no secret.
+    author: branchLeft
+    options:
+      tenant_onboarding_confirm:
+        # raw, not str: a list or a mapping must reach the role's own step id check
+        # and be refused there by name, not by Ansible's type error.
+        type: raw
+        description: >-
+          The step id this run confirms, PROVISION_TENANT_VOLUMES or ENABLE_TENANT_UNIT.
+          Empty on a plain apply. A guarded step runs only when its tag is named and this
+          is exactly its step id.
+        default: ''
+      tenant_onboarding_slug:
+        type: str
+        description: >-
+          The tenant's slug for one request, given on the command line. The tenant
+          program checks it against the slug rules and the reserved names; this role only
+          types it. Never committed to a file.
+        default: ''
+      tenant_onboarding_uid:
+        # raw, not int: an empty default and a value given as text both reach the
+        # role's own check, which names a value that is not digits.
+        type: raw
+        description: >-
+          The UID for one tenant, given on the command line with PROVISION_TENANT_VOLUMES.
+          The tenant program checks the range and whether the UID is free. Digits only here.
+        default: ''
