@@ -9,7 +9,14 @@
 export { Host } from './host';
 export type { HostArgs, HostRole } from './host';
 
-export { EDGE_RULES, INTERNAL_RULES } from './firewalls';
+export {
+  assertSshSourceAddress,
+  EDGE_RULES,
+  edgeRulesSshFrom,
+  INTERNAL_RULES,
+  sshFromOneAddressViolations,
+  sshRestrictedRules,
+} from './firewalls';
 
 export {
   assertDeployPublicKey,
@@ -20,5 +27,19 @@ export {
 } from './cloudInit';
 export type { CloudInitArgs, Enrolment, PullBootstrap, PullBootstrapFile } from './cloudInit';
 
-export { APP_HOST_IPS, ESTATE_LOCATION, HOST_IPS, NETWORK_CIDR, SUBNET_CIDR } from './addressPlan';
-export type { EstateLocation, EuCentralLocation } from './addressPlan';
+export {
+  ADDRESS_REGISTER,
+  APP_HOST_IPS,
+  duplicateAddresses,
+  ESTATE_LOCATION,
+  HOST_IPS,
+  NETWORK_CIDR,
+  SUBNET_CIDR,
+  TENANTS_HOST_IPS,
+} from './addressPlan';
+export type {
+  AddressProject,
+  EstateLocation,
+  EuCentralLocation,
+  RegisteredAddress,
+} from './addressPlan';

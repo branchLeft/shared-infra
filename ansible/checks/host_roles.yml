@@ -17,6 +17,13 @@ edge1:
   - exporters_and_collectors
   - ntfy_pager
   - monitoring_stack
+# edge-t, the tenants project's base host. The name has no hyphen because HOST_NAME allows
+# [a-z][a-z0-9]*. egress_nat makes it the gateway of the tenants network (one gateway per
+# network, test_egress_nat_single_gateway.py). ci_login and deploy_tooling follow once the
+# ci_jump role is on main; the edge stack follows as a later change.
+edget:
+  - host_baseline
+  - egress_nat
 ops1:
   - host_inputs
   - host_baseline

@@ -79,9 +79,13 @@ deploy approval of the gated apply, which is not yet wired. Which files the revi
 may merge alone is not yet decided by the owner.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
-host in `HOST_PLAY_VARS` in `check_enrolment.py` (today two rows: edge1's `deploy_tooling_host_class`
-with `egress_nat_gateway_enabled: true`, the one switch that makes a host the estate's NAT gateway, so
-only edge1 can carry it; and app1's `deploy_tooling_host_class` with `deploy_tooling_policy_variant`,
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (today three rows: edge1's `deploy_tooling_host_class`
+with `egress_nat_gateway_enabled: true`, the one switch that makes a host a NAT gateway; edget's
+`egress_nat_gateway_enabled: true` alone (edget is the server edge-t, the tenants network's gateway:
+a network does not span hcloud projects, so there is one gateway per network, edge1 for the estate's
+and edget for the tenants', and `test_egress_nat_single_gateway.py` refuses a second on either; the
+logical name has no hyphen because `HOST_NAME` allows `[a-z][a-z0-9]*`); and app1's
+`deploy_tooling_host_class` with `deploy_tooling_policy_variant`,
 which the role takes with no default for the class and which a host of class app must name; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,

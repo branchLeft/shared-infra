@@ -4,7 +4,7 @@ import * as pulumi from '@pulumi/pulumi';
 import type { EuCentralLocation } from './addressPlan';
 import { renderCloudInit } from './cloudInit';
 import type { Enrolment } from './cloudInit';
-import { EDGE_RULES, INTERNAL_RULES } from './firewalls';
+import { EDGE_RULES, INTERNAL_RULES, sshRestrictedRules } from './firewalls';
 
 /**
  * The create pattern for a platform host: server, firewall, private-network attachment
@@ -47,6 +47,19 @@ export interface HostArgs {
    * field. See `Enrolment`.
    */
   enrolment?: Enrolment;
+  /**
+   * Narrows the role's SSH rule to this one public IPv4 address (as a /32).
+   * Absent, the rule set is the role's own, byte for byte. Present, it is the
+   * same set with the SSH source replaced and nothing else changed: the input
+   * can narrow SSH and cannot widen a source or add a port, which is why it is
+   * a typed address and not a free list of rules. A bare dotted-quad only; a
+   * CIDR, an IPv6 address, a hostname or a private, loopback, link-local,
+   * shared or reserved address is refused. A plain string is refused before any
+   * resource exists; an output (another stack's value) is checked when it
+   * resolves. Refused on a host with no public networking, which has no public
+   * SSH rule to narrow.
+   */
+  sshSourceIp?: pulumi.Input<string>;
   networkId: pulumi.Input<string>;
   /** Fixed private address from the estate's address plan. */
   privateIp: pulumi.Input<string>;
@@ -100,8 +113,19 @@ export class Host extends pulumi.ComponentResource {
   constructor(args: HostArgs, opts?: pulumi.ComponentResourceOptions) {
     super('branchleft:hetzner:Host', args.name, {}, opts);
 
-    const rules = args.role === 'edge' ? EDGE_RULES : INTERNAL_RULES;
+    const roleRules = args.role === 'edge' ? EDGE_RULES : INTERNAL_RULES;
     const wantsPublicNetworking = args.publicNetworking ?? true;
+    if (args.sshSourceIp !== undefined && !wantsPublicNetworking) {
+      throw new Error(
+        `${args.name} has no public networking, so it has no public SSH rule for sshSourceIp to narrow.`
+      );
+    }
+    let rules: pulumi.Input<hcloud.types.input.FirewallRule[]> = roleRules;
+    if (typeof args.sshSourceIp === 'string') {
+      rules = sshRestrictedRules(roleRules, args.sshSourceIp);
+    } else if (args.sshSourceIp !== undefined) {
+      rules = pulumi.output(args.sshSourceIp).apply((ip) => sshRestrictedRules(roleRules, ip));
+    }
     const protection = args.protection ?? true;
     const labels = {
       role: args.role,
