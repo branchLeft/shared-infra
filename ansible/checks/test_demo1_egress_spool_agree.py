@@ -11,6 +11,7 @@ references are not allowed (ANS-12), so each copy stays and this test keeps them
 from __future__ import annotations
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
 from typing import NoReturn, cast
@@ -26,6 +27,8 @@ PLAYBOOK = ROOT / "ansible" / "playbooks" / "demo1.yml"
 # test them or to explain them, which writes nothing.
 HOST_DIRS = ("defaults", "vars", "tasks", "handlers", "templates", "files", "meta")
 HOST_SUFFIXES = (".yml", ".yaml", ".j2", ".service", ".sh", ".py", ".conf", ".timer")
+# Where a role keeps its copy of files taken from ghost-platform, under files/.
+VENDORED = ("files", "ghost-platform")
 SLOT_NAMES = re.compile(r"default\(\[([^\]]*)\]\)")
 OWNED = (
     "demo1_egress_spool_egress_script_dest",
@@ -84,8 +87,17 @@ def mapping_of(value: object) -> dict[str, object]:
     return cast("dict[str, object]", value)
 
 
+def is_vendored(path: Path, role: Path) -> bool:
+    """Return whether a path is under the role's copy of files taken from ghost-platform."""
+    return path.relative_to(role).parts[: len(VENDORED)] == VENDORED
+
+
 def host_text(role: Path) -> str:
-    """Return the text of every file of a role that runs on a host, in a fixed order."""
+    """Return the text of every file of a role that runs on a host, in a fixed order.
+
+    The role's vendored copies of ghost-platform's files are left out: they are upstream's
+    text, held to their pins, and not the role's own statement of what it owns.
+    """
     parts: list[str] = []
     for name in HOST_DIRS:
         base = role / name
@@ -93,7 +105,7 @@ def host_text(role: Path) -> str:
             parts.extend(
                 path.read_text(encoding="utf-8")
                 for path in sorted(base.rglob("*"))
-                if path.is_file() and path.suffix in HOST_SUFFIXES
+                if path.is_file() and path.suffix in HOST_SUFFIXES and not is_vendored(path, role)
             )
     return "\n".join(parts)
 
@@ -268,6 +280,18 @@ class SpoolAgreeTest(unittest.TestCase):
             with self.subTest(roles=roles):
                 found = disagreements(dict(base, playbook_roles=roles))
                 self.assertTrue(found)
+
+    def test_a_vendored_file_is_not_the_roles_own_statement(self) -> None:
+        owned = cast("dict[str, str]", facts()["owned"])
+        path = next(iter(owned.values()))
+        with tempfile.TemporaryDirectory() as tmp:
+            role = Path(tmp)
+            (role / "files" / "ghost-platform").mkdir(parents=True)
+            (role / "tasks").mkdir()
+            (role / "files" / "ghost-platform" / "upstream.sh").write_text(f"dest: {path}\n")
+            self.assertNotIn(path, host_text(role))
+            (role / "tasks" / "main.yml").write_text(f"dest: {path}\n")
+            self.assertIn(path, host_text(role))
 
     def test_the_slot_table_is_seven_slots_from_30001(self) -> None:
         base = facts()

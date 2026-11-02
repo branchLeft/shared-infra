@@ -14,7 +14,11 @@ the order the standard sets for a role README (ANS-14).
 
 In this order, and it stops at the first refusal:
 
-1. **Inputs.** A wrong shape fails by name before anything else happens.
+1. **Inputs.** A wrong shape fails by name before anything else happens. Then
+   **the vendored files** (`_vendored.yml`): each of the three files under
+   `files/ghost-platform` is hashed on the machine that runs the role and must be a plain
+   file with its pinned sha256, or the run stops and names the file, before the host is read
+   or written.
 2. **The host.** Read only. The host's own name is `demo1` (under the pull the inventory name is
    `localhost`, so the role reads the name from the host itself). Docker is running. `DOCKER-USER`
    exists in both `iptables` and `ip6tables`. `/etc/branchleft`, `/opt/branchleft` and
@@ -25,15 +29,26 @@ In this order, and it stops at the first refusal:
    `/etc/staff-group-for-usr-local`. The test image is `debian:trixie` underneath, so it has the
    first. A host with the second is refused, because the program in that directory runs as root at
    every boot: change its group and mode, or remove the group's write bit, and run again.)
-3. **The egress policy.** Downloads the egress program to `/usr/local/sbin/branchleft-demo-egress`
-   (mode 0755) and its unit to `/etc/systemd/system/` (0644), each held to its sha256. Enables the
+3. **The egress policy.** Copies the egress program to `/usr/local/sbin/branchleft-demo-egress`
+   (mode 0755) and its unit to `/etc/systemd/system/` (0644) from the role's own copies, which
+   step 1 held to their sha256. Enables the
    unit, and runs the program again only when either file changed. Then reads the loaded rules
    back, in both families (the table below says what is asserted).
-4. **The spool.** Checks the drain token file, downloads the Compose file and places the override
-   that takes the image from the pin file, checks their posture, creates the image pin file once,
-   creates the queue volume and gives it to the spool's account, orders the spool's unit after the
-   egress unit with a drop-in, enables and starts the spool's unit. Then reads the running
-   container back, and its image against the pin file.
+4. **The spool.** Checks the drain token file, copies the Compose file and places the override
+   that takes the image from the pin file and sets `pull_policy: never`, checks their posture,
+   creates the image pin file once, **checks that the image the pin file names is already on the
+   host** (`_image.yml`), creates the queue volume and gives it to the spool's account, orders the
+   spool's unit after the egress unit with a drop-in, enables and starts the spool's unit. Then
+   reads the running container back, and its image against the pin file.
+
+The role makes no request to the network. The host has no route to GitHub or to the container
+registry, so it never pulls the spool's image: the shared Compose unit runs
+`docker compose pull` before every start, which fails with no registry, and the override's
+`pull_policy: never` makes Compose skip it (observed with an unresolvable registry: without the
+setting `docker compose pull` exits 1; with it, it reports the image skipped and exits 0).
+How the image gets onto the host is not decided yet. **Until it is, step 4 refuses on a host
+that does not hold the image**: in a real run with a message saying the host never pulls, and in
+a plan with a visible "Spool image NOT on host" line.
 
 What it does **not** do, each on purpose:
 
@@ -84,8 +99,7 @@ first. The role's message says the same, and does not do it itself: a role that 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares every variable and
 [`defaults/main.yml`](defaults/main.yml) holds them. There is no required input and no secret.
 
-- `demo1_egress_spool_source_sha`: the ghost-platform commit the three files are fetched at.
-- `demo1_egress_spool_source_base_url`: the URL prefix at that commit.
+- `demo1_egress_spool_source_sha`: the ghost-platform commit the vendored files were taken from.
 - `demo1_egress_spool_files`: the three files, each with its path from the repository root and
   its sha256: the egress program, the egress unit and the rendered Compose file.
 - `demo1_egress_spool_drain_port`: the host port of the drain endpoint (default 8095). It is
@@ -97,14 +111,35 @@ the networks, the patterns). A caller cannot override them.
 
 ### The pin
 
-The files come from `branchLeft/ghost-platform` commit
-`19622ee9c88bf918949f675a85897cfb64c65a24`, never copied into this repository. The Compose file
-is the committed golden of the renderer in that repository, so the image digest, the networks and
-the one published port are written there and nowhere here. Each download is held to its sha256,
-so a commit moved without its checksums, or a checksum moved without its commit, fails at the
-download of the first file that differs. To bump the pin, change the commit, compute each
-checksum with `git show <commit>:<path> | shasum -a 256` in ghost-platform, and change
-`defaults/main.yml` and `meta/argument_specs.yml` together.
+The files are copies of the ones in `branchLeft/ghost-platform` at commit
+`19622ee9c88bf918949f675a85897cfb64c65a24`, carried under `files/ghost-platform` at the paths they
+have there. The Compose file is the committed golden of the renderer in that repository, so the
+image digest, the networks and the one published port are written there and nowhere else here.
+Each file is held to its sha256 on the machine that runs the role before anything is written, so a
+file changed without its checksum, or a checksum changed without its file, stops the role at
+`_vendored.yml` and names the file. CI runs the same comparison without a container
+(`ansible/checks/test_demo1_no_github_fetch.py`).
+
+### Vendored files
+
+The files arrive on the demo host in the signed commit it checks out, so the host needs no route
+to GitHub and its egress allowlist holds the package mirrors only. To bump them, in one change:
+
+1. In ghost-platform, at the new commit, compute each checksum with
+   `git show <commit>:<path> | shasum -a 256`.
+2. Write each file into `files/ghost-platform` with
+   `git show <commit>:<path> > ansible/roles/demo1_egress_spool/files/ghost-platform/<path>`, so
+   the bytes are the commit's and nothing re-wraps them.
+3. Change `demo1_egress_spool_source_sha` and every checksum in `defaults/main.yml`, and the same
+   values in `meta/argument_specs.yml`.
+
+Named limit: CI no longer compares the carried bytes with ghost-platform. It holds them to the pin
+in this repository, so a change to a file and its pin together passes. The review of such a change
+is a review of file content, not of a commit sha; a CI step that checks out ghost-platform at the
+pinned commit and diffs is filed as follow-up. The vendored files are not scanned by the no-fetch
+check, which reads the role's own tasks and variables: they are upstream's text, and root runs
+them. `ansible/checks/test_demo1_egress_spool_agree.py` leaves them out of the text it reads for
+the same reason.
 
 ## Requirements
 
@@ -116,7 +151,8 @@ checksum with `git show <commit>:<path> | shasum -a 256` in ghost-platform, and 
 - Docker running (installed by the `host_baseline` role, applied to the host as a step of its
   own), the shared Compose template unit, the two root-owned directories, and the owner's token
   file, all in place before the role runs.
-- Network from the host to `raw.githubusercontent.com` on a real apply.
+- No network from the host: the role fetches nothing and pulls no image (the spool's image must
+  already be on the host).
 
 ## What it changes on a host
 
@@ -125,7 +161,8 @@ checksum with `git show <commit>:<path> | shasum -a 256` in ghost-platform, and 
 - The rules the program builds: the two policy chains in both families, the jump in
   `DOCKER-USER` and the jumps in `INPUT`. The role itself writes no rule.
 - `/opt/branchleft/mail-spool/` (`root:root` `0755`), the Compose file in it (`0644`) and beside
-  it `compose.override.yml` (`0644`), which sets the image from the pin file.
+  it `compose.override.yml` (`0644`), which sets the image from the pin file and sets
+  `pull_policy: never`.
 - `/etc/branchleft/mail-spool.image.env` (`root:root` `0600`), created once with one line,
   `IMAGE=<the image in the Compose file>`. See below for why it is never rewritten.
 - `/etc/systemd/system/branchleft-compose@mail-spool.service.d/10-egress-first.conf` (`0644`), a
@@ -214,24 +251,26 @@ makes bad, and checks the step refuses with its own message. Every group starts 
 the same step on the good state must be accepted. Without it a step that refused everything would
 pass every case. Whatever a case changed is put back in every outcome.
 
-| Control                                                    | Bad value that must be refused                                                                                        | How the bad value is made                |
-| ---------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
-| The jump is the first rule in `DOCKER-USER`                | No jump (`refused_no_jump.yml`); an accept ahead of it                                                                | `iptables -D` and `-I` on the real chain |
-| Both policy chains hold their rules once, in both families | A missing established return, a missing REJECT per bridge                                                             | `-D` by rule number on the real chains   |
-| `INPUT` jumps to the input policy for each bridge          | A missing jump; a missing chain                                                                                       | `-D`, `-F`, `-X` on the real chains      |
-| The egress unit is active and enabled                      | A unit that is not enabled                                                                                            | `systemctl disable`                      |
-| Docker is active; `DOCKER-USER` exists in both families    | Docker stopped; no `DOCKER-USER` in `ip6tables`                                                                       | `systemctl stop`; `-X` on the real chain |
-| The directories the role relies on are root's              | `/usr/local/sbin` writable by others                                                                                  | `chmod`                                  |
-| The token file is 0600, root's and holds a value           | Mode 0644; no value; no line; absent                                                                                  | `chmod`, a replaced file, `mv`           |
-| `docker port` is exactly `127.0.0.1:<port>`                | `0.0.0.0:8095`; a second published port                                                                               | The stand-in docker prints it            |
-| The container joins the drain and slot networks only       | An extra network; a missing slot network                                                                              | The stand-in docker reports it           |
-| The root filesystem is read-only; the container healthy    | A writable root; a container still starting                                                                           | The stand-in docker reports it           |
-| One listener, on `127.0.0.1`                               | A listener on `0.0.0.0`                                                                                               | The stand-in endpoint binds there        |
-| An unauthenticated `GET /drain` returns 401                | A `200`                                                                                                               | The stand-in endpoint answers it         |
-| The image pin file is one digest-pinned `IMAGE=` line      | A tag; two lines                                                                                                      | A replaced file                          |
-| The Compose file posture                                   | Published on `0.0.0.0`; a second port; the token as a value; an extra or missing network; a tag; no service           | `replace` on the file on the host        |
-| The inputs; the host name; the template path               | A branch for the commit; a credential in the URL; a short file list; port 80; another host name; a template elsewhere | The step run with the bad variable       |
-| The downloads are held to their pins                       | A checksum that is not the file's (both steps that download)                                                          | The step run with another checksum       |
+| Control                                                    | Bad value that must be refused                                                                              | How the bad value is made                |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| The jump is the first rule in `DOCKER-USER`                | No jump (`refused_no_jump.yml`); an accept ahead of it                                                      | `iptables -D` and `-I` on the real chain |
+| Both policy chains hold their rules once, in both families | A missing established return, a missing REJECT per bridge                                                   | `-D` by rule number on the real chains   |
+| `INPUT` jumps to the input policy for each bridge          | A missing jump; a missing chain                                                                             | `-D`, `-F`, `-X` on the real chains      |
+| The egress unit is active and enabled                      | A unit that is not enabled                                                                                  | `systemctl disable`                      |
+| Docker is active; `DOCKER-USER` exists in both families    | Docker stopped; no `DOCKER-USER` in `ip6tables`                                                             | `systemctl stop`; `-X` on the real chain |
+| The directories the role relies on are root's              | `/usr/local/sbin` writable by others                                                                        | `chmod`                                  |
+| The token file is 0600, root's and holds a value           | Mode 0644; no value; no line; absent                                                                        | `chmod`, a replaced file, `mv`           |
+| `docker port` is exactly `127.0.0.1:<port>`                | `0.0.0.0:8095`; a second published port                                                                     | The stand-in docker prints it            |
+| The container joins the drain and slot networks only       | An extra network; a missing slot network                                                                    | The stand-in docker reports it           |
+| The root filesystem is read-only; the container healthy    | A writable root; a container still starting                                                                 | The stand-in docker reports it           |
+| One listener, on `127.0.0.1`                               | A listener on `0.0.0.0`                                                                                     | The stand-in endpoint binds there        |
+| An unauthenticated `GET /drain` returns 401                | A `200`                                                                                                     | The stand-in endpoint answers it         |
+| The image pin file is one digest-pinned `IMAGE=` line      | A tag; two lines                                                                                            | A replaced file                          |
+| The Compose file posture                                   | Published on `0.0.0.0`; a second port; the token as a value; an extra or missing network; a tag; no service | `replace` on the file on the host        |
+| The inputs; the host name; the template path               | A branch for the commit; a short file list; port 80; another host name; a template elsewhere                | The step run with the bad variable       |
+| The vendored files are held to their pins                  | A pin that is not the egress program's; a pin that is not the Compose file's (the control is the real pins) | The step run with another pin            |
+| The spool's image is on the host                           | No image on the host; a pin file naming an image the host lacks (the control is the host as delivered)      | The stand-in docker holds no such image  |
+| The override sets `pull_policy: never`                     | An override without it (the control is the override as the role writes it)                                  | `replace` on the file on the host        |
 
 Also covered, each with its control on the good value:
 
@@ -284,8 +323,9 @@ enrols the host and lists this role after `demo1_build`, and demo1 takes its com
 a pull. The bundle that carries it is sent by CI through edge1 and arrives with shared-infra#511,
 which is not yet merged, so until it lands no run reaches this role. A bootstrap run of demo1.yml
 applies all four of its roles as root, because the roles carry no tags, so the bootstrap waits for
-the egress decision (Desk decision demo1-github-files) and the broker_deploy precondition. What the
-owner provides before a run, once:
+the broker_deploy precondition and for the spool image to be on the host (the egress decision,
+Desk decision demo1-github-files, is made: the files travel in the signed commit and the
+allowlist stays at the package mirrors). What the owner provides before a run, once:
 the token file `/etc/branchleft/mail-spool.env` (root, mode 0600, one `SHIM_DRAIN_TOKEN=` line),
 if the host holds none. The role asserts it and never writes it.
 
@@ -293,7 +333,8 @@ if the host holds none. The role asserts it and never writes it.
 
 1. Change the tasks, the defaults and `meta/argument_specs.yml` together: the spec and the
    defaults must agree.
-2. To bump the pin, change the commit and every checksum in one change (above).
+2. To bump the pin, change the commit, the vendored files and every checksum in one change
+   (above, "Vendored files").
 3. Keep every task able to run under `--check --diff`.
 4. If a task reports changed on a second run, fix the task with a module, `changed_when`,
    `creates` or `removes`. Never weaken the idempotence step.

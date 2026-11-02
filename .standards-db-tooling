@@ -1,2 +1,2 @@
 ansible/roles/db1_grants/molecule/default/files/fakes/fake_mysql.py
-ansible/roles/demo1_build/molecule/default/files/ghost-platform/demo-host/provision/branchleft_slot.py
+ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/branchleft_slot.py

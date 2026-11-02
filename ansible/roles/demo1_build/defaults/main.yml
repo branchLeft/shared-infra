@@ -3,20 +3,22 @@
 # every value below has a default, and the pinned programs are public.
 
 # The one home of the demo host's programs is branchLeft/ghost-platform, at
-# demo-host/provision/. They are downloaded from this commit, and each file is
-# held to the sha256 below. The only copies in this repository are the Molecule
-# fixtures under molecule/default/files/, which the role test serves instead of
-# GitHub; the same checksums hold them, so a fixture that drifts from the pin
-# fails the test. A bump updates the fixtures in the same change. Bump the commit
-# and every checksum in one change: a checksum that does not match the file at
-# the commit fails the download. The commit must be at or after the ghost-platform
-# commit that moved the drain flags to /var/lib/branchleft-broker/drain-flags
+# demo-host/provision/. This role carries a copy of each program under
+# files/ghost-platform, at the same paths, and the host takes them from the signed
+# commit CI pushes to it; the host never fetches them from anywhere. Each file is
+# held to the sha256 below, on the machine that runs the role, before the role
+# writes anything to the host. The commit below names the ghost-platform commit
+# the copies were taken from: it is the name of the release directory and the
+# record of where the bytes came from. A bump moves the new files into
+# files/ghost-platform and changes this commit and every checksum in one change
+# (README, "Vendored files"): a copy that does not match its pin stops the role
+# before it writes. The commit must be at or after the ghost-platform commit that
+# moved the drain flags to /var/lib/branchleft-broker/drain-flags
 # (0a23634b652a37260d77e656ded3c37ff24d62ec); the role also refuses an installed
 # sidecar that does not name that directory.
 demo1_build_source_sha: 5e52f78427cab104438057164e4baa16b329875c
-demo1_build_source_base_url: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ demo1_build_source_sha }}'
 
-# Every program the role fetches, one URL and one sha256 each, relative to the
+# Every program the role carries, one path and one sha256 each, relative to the
 # repository root. This is the import closure of the programs the role runs
 # (render_*, the wrapper's constants) plus the two programs systemd runs and the
 # owner's go-live step. provision_socket_dirs.py and drain_flag_dir.py are not
