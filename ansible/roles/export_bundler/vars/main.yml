@@ -12,6 +12,12 @@ export_bundler_release_path_pattern: '^(package\.json|dist/[A-Za-z0-9]+\.js)$'
 export_bundler_path_pattern: '^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$'
 export_bundler_path_dots_pattern: '(^|/)\.{1,2}(/|$)'
 
+# Where the role's copy of the bundler is, on the machine that runs the role. A constant,
+# not an input: a caller's play or inventory variables cannot change it. Only the role's
+# refusals scenario overrides it, with a task variable on its include_role, to point at a
+# copy it has altered. Nothing is read from the network.
+export_bundler_vendored_root: '{{ role_path }}/files/ghost-platform/services/export-bundler'
+
 # The directories under the host's bundler directory and state directory.
 export_bundler_dist_dir: '{{ export_bundler_dir }}/dist'
 export_bundler_commit_file: '{{ export_bundler_dir }}/COMMIT'

@@ -56,17 +56,20 @@ The variables the role reads, their types and defaults are in `meta/argument_spe
 the role starts and fails the role on a mismatch. `defaults/main.yml` holds the same defaults, and the table of
 pinned files is the one home of the bundler's identity.
 
-| Variable                       | Default                                        | What it is                                                      |
-| ------------------------------ | ---------------------------------------------- | --------------------------------------------------------------- |
-| `export_bundler_source_sha`    | the pinned ghost-platform commit               | Written to `COMMIT`. A bump changes it with the files and pins. |
-| `export_bundler_release_files` | `package.json` and 22 files in `dist/`         | One path and one sha256 each. The role writes exactly these.    |
-| `export_bundler_vendored_root` | `files/ghost-platform/services/export-bundler` | Where the copy is, where the role runs. Only tests change it.   |
-| `export_bundler_dir`           | `/root/export-bundler`                         | The bundler on the host.                                        |
-| `export_bundler_state_dir`     | `/root/export-bundler-state`                   | The export's state directory on the host.                       |
+| Variable                       | Default                                | What it is                                                      |
+| ------------------------------ | -------------------------------------- | --------------------------------------------------------------- |
+| `export_bundler_source_sha`    | the pinned ghost-platform commit       | Written to `COMMIT`. A bump changes it with the files and pins. |
+| `export_bundler_release_files` | `package.json` and 22 files in `dist/` | One path and one sha256 each. The role writes exactly these.    |
+| `export_bundler_dir`           | `/root/export-bundler`                 | The bundler on the host.                                        |
+| `export_bundler_state_dir`     | `/root/export-bundler-state`           | The export's state directory on the host.                       |
 
 No variable of this role is a secret, and none is required. The host's play variables are pinned by the enrolment
 check (R2), so a caller cannot override the table of pins on app1: the table can change only by a change to this
 role, which the owner merges.
+
+Where the vendored copy is (`export_bundler_vendored_root`) is not an input. It is a constant in `vars/main.yml`, as
+in `demo1_build`, so a caller's play or inventory variables cannot point the role at another copy. Only the
+`refusals` scenario overrides it, with a task variable on its own `include_role`, to point at a copy it has altered.
 
 ## Requirements
 

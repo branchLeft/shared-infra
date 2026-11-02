@@ -67,10 +67,6 @@ export_bundler_release_files:
   - path: dist/tenantConfig.js
     sha256: 1b025d1eb93cd46558a1e0ffd6c98d918c079e0e175a3c53ae22da786e500c63
 
-# Where the role's copy of the bundler is, on the machine that runs the role. Only the
-# role's tests change it, to point at a copy they have altered; no host's variables do.
-export_bundler_vendored_root: '{{ role_path }}/files/ghost-platform/services/export-bundler'
-
 # Where the bundler goes on the host (the export runbook's Deliver step 4), and the
 # directory the export runs keep their flags, output, audit log and descriptors in (Run
 # step 2). Both are root's and closed to everyone else.

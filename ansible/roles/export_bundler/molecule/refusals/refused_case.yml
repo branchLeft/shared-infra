@@ -7,10 +7,15 @@
 - name: Run the role against the case in converge_case
   hosts: all
   gather_facts: false
-  vars:
-    export_bundler_converge_refused: false
-    export_bundler_converge_failure: ''
   tasks:
+    # A fact set by the rescue below outlives its play and outranks any play variable, so the
+    # reset has to be a fact too: a case that was accepted must not inherit an earlier case's
+    # refusal and pass the assertion on its stale text.
+    - name: Forget the result of every earlier case
+      ansible.builtin.set_fact:
+        export_bundler_converge_refused: false
+        export_bundler_converge_failure: ''
+
     - name: Make the directory the link will lead to, when the case says so
       ansible.builtin.file:
         path: '{{ converge_case.link_target }}'
