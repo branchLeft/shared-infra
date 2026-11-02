@@ -1,9 +1,9 @@
 # Inventories
 
 This directory holds the inventories and the group variables that go with
-them. It holds two hosts: `edge1`, in the group `edge`, which has no group
-variables now. Its values, and its trusted signer list, are loaded by
-`playbooks/edge1.yml` through `vars_files`, and `db1`, in the group `db`,
+them. It holds three hosts: `edge1`, in the group `edge`, and `mx1`, in the group `mx`,
+which have no group variables now. Their values, and their trusted signer lists, are
+loaded by `playbooks/edge1.yml` and `playbooks/mx1.yml` through `vars_files`, and `db1`, in the group `db`,
 which has no group variables because its inputs are private and reach the host
 through its delivery channel (`roles/db1_grants`). `playbooks/db1.yml` is under the
 pull and loads its trust file, `trust/db1.yml`, through `vars_files`. A role
