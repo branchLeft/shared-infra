@@ -260,11 +260,16 @@ above errs towards running more.
 
 These tests hold the CI workflows to what `ci_select.py` assumes:
 
-- the shard job waits for the lint job, so a lint error starts no container;
+- the shard job waits for the quick lint gate (yamllint and `test_ci_select.py`) and not for
+  the full lint, so a malformed file starts no container and the shards start sooner;
 - the shard job runs only when discover chose shards, and refuses the entry that stands
   for none;
-- the gate job (the check the ruleset requires) fails unless the lint passed, and fails
-  when shards were chosen and did not all pass;
+- the gate job (the check the ruleset requires) fails unless the quick gate and the full lint
+  both passed, and fails when shards were chosen and did not all pass. The gate's own script
+  is run under bash against a table of outcomes, with a control that cuts the full-lint
+  refusal out and shows the table sees it go;
+- the quick gate builds its tool environment with the same steps as the full lint, and the
+  full lint keeps every step it had;
 - the merge queue still triggers the workflow, and the weekly sweep is scheduled;
 - the lint and every shard restore the tool environment from a SHA-pinned `actions/cache`
   keyed on the lock files, and install only on a miss;
