@@ -1,10 +1,26 @@
 ---
-# One entry per tasks file. There is no main entry: a caller names the half it
-# runs with tasks_from. The run-time inputs are not role arguments: each half
-# reads them from root-only files in tunnel_account_inputs_dir (vars/main.yml),
-# which the operator places once. The files and the half that reads each one are
-# listed in the description of each entry. No input has a default.
+# One entry per tasks file. The main entry is db1's half and nothing else: it is
+# what a pulled playbook applies, because a pulled playbook may not name a half
+# with tasks_from. The replica half and the teardown are reached only by
+# tasks_from, run by the owner by hand. The run-time inputs are not role
+# arguments: each half reads them from root-only files in
+# tunnel_account_inputs_dir (vars/main.yml), which the operator places once. The
+# files and the half that reads each one are listed in the description of each
+# entry. No input has a default.
 argument_specs:
+  main:
+    short_description: Install db1's half of the replica tunnel, as a pulled playbook runs it
+    description: >-
+      The entry a plain role entry in a pulled playbook runs. It is db1's half
+      and nothing else: it includes the db1 entry, so it creates the tunnel
+      account and db1's key (once), then reads three root-only input files from
+      tunnel_account_inputs_dir (replica_host, replica_host_key and
+      db1_subnet_prefix), pins the host key, writes the target file, installs the
+      tunnel unit and starts or restarts it. It takes no variable and chooses
+      nothing. A missing or unsafe input fails the run, in a check run too.
+      The replica half and the teardown are not reachable from here.
+    author: branchLeft
+    options: {}
   db1_key:
     short_description: Create db1's tunnel key and the account that owns it
     description: >-

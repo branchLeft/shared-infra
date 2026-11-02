@@ -23,6 +23,11 @@ What the role does, in the order of `tasks/main.yml`:
    program has a 64-digit sha256, the slot table is digits and not repeated, and
    the wrapper path is an absolute path with no dot segment, doubled slash or
    trailing slash.
+   **Holds each vendored program to its pin** (`_vendored.yml`), right after,
+   and before anything is read from the host or written to it: each of the ten
+   programs under `files/ghost-platform` is hashed on the machine that runs the
+   role and must be a plain file with its pinned sha256, or the run stops and
+   names the file.
 2. **Checks what `broker_deploy` left** (`_preconditions.yml`), read-only: the
    `broker` account exists; `/etc/branchleft`, `/var/lib/branchleft`, `/usr/local`,
    `/usr/local/sbin`, `/usr/local/lib` and `/opt` are root-owned directories that
@@ -30,11 +35,12 @@ What the role does, in the order of `tasks/main.yml`:
    them); the broker's slots directory is `broker:broker` `0755`; and, when
    `broker.env` exists, it holds exactly one drain-flag line,
    `BROKER_DRAIN_FLAG_DIR=/var/lib/branchleft-broker/drain-flags`.
-3. **Stages the programs** (`_release.yml`): ten programs, each fetched on its own
-   with `get_url` from `raw.githubusercontent.com` at the pinned commit and held to
-   its pinned sha256, into `/opt/branchleft/demo-host/releases/<commit>/demo-host/provision/`
+3. **Stages the programs** (`_release.yml`): the ten programs, each copied with
+   `copy` from the role's own `files/ghost-platform` (which step 1 has held to the
+   pins), into `/opt/branchleft/demo-host/releases/<commit>/demo-host/provision/`
    (root, `0755` directories, `0644` files). `current` links to the release. The
-   role then reads each file back and decides whether the release is whole.
+   role then reads each file back, compares it with its pin again, and decides
+   whether the release is whole. Nothing is fetched from the network.
 4. **Compares the sudoers grant with the pinned generator** (`_sudoers_check.yml`),
    read-only, and before any program is installed, so a grant it refuses leaves
    the wrapper uninstalled by that run: the file is a regular file, `root:root`,
@@ -149,9 +155,8 @@ file reaches the release.
 [`defaults/main.yml`](defaults/main.yml) holds them. There is no required input and
 no secret.
 
-- `demo1_build_source_sha`: the ghost-platform commit the programs are fetched at.
-- `demo1_build_source_base_url`: the raw URL at that commit (a test can point it at
-  a copy).
+- `demo1_build_source_sha`: the ghost-platform commit the vendored programs were
+  taken from. It names the release directory.
 - `demo1_build_release_files`: each program's path under the commit and its sha256.
 - `demo1_build_slot_names`: the slot table, taken from `broker_deploy_slot_names`
   when that is set; the role checks it against the slots in the generator's grant.
@@ -173,15 +178,35 @@ drain flags out of the slot directory to
 `/var/lib/branchleft-broker/drain-flags`. A pin older than that commit puts flags
 where the broker does not look; the role refuses a sidecar that does so.
 
-Two values must agree: the commit and the checksums. The role fetches each file
-by its commit, so a changed commit with the old checksums fails at the download of
-the first file that differs, and so does a changed checksum. The check runs at the
-real download; CI runs it on every pull request, because the Molecule scenario
-stages a copy of the ten files and downloads them from that copy, held to the same
-pins (below). To change the pin,
-change the commit, compute each checksum with
-`git show <commit>:<path> | shasum -a 256` in ghost-platform, and change
-`defaults/main.yml` and `meta/argument_specs.yml` together.
+Two things must agree: the files under `files/ghost-platform` and the checksums.
+The role never fetches a file; it holds the copy it carries to the pins, on the
+machine that runs it, before it writes anything (step 1). A changed file with the
+old checksum fails there, and so does a changed checksum. CI runs the same
+comparison without a container (`ansible/checks/test_demo1_no_github_fetch.py`),
+and the Molecule scenarios run the role itself.
+
+### Vendored files
+
+The ten programs are carried in `files/ghost-platform/demo-host/provision/`, at
+the paths they have in ghost-platform. They arrive on the demo host in the signed
+commit it checks out, so the host needs no route to GitHub, and its egress
+allowlist holds the package mirrors only. To bump them, in one change:
+
+1. In ghost-platform, at the new commit, compute each checksum with
+   `git show <commit>:<path> | shasum -a 256`.
+2. Write each file into `files/ghost-platform` with
+   `git show <commit>:<path> > ansible/roles/demo1_build/files/ghost-platform/<path>`,
+   so the bytes are the commit's and nothing re-wraps them.
+3. Change `demo1_build_source_sha` and every checksum in `defaults/main.yml`, and
+   the same values in `meta/argument_specs.yml`.
+
+Named limit: CI no longer compares the carried bytes with ghost-platform. It holds
+them to the pin in this repository, so a change to a file and its pin together
+passes. The review of such a change is a review of file content, not of a commit
+sha; a CI step that checks out ghost-platform at the pinned commit and diffs is
+filed as follow-up. The vendored files are also not scanned by the no-fetch check,
+which reads the role's own tasks and variables: they are upstream's text, and root
+runs them.
 
 ## Requirements
 
@@ -191,7 +216,7 @@ change the commit, compute each checksum with
 - Target: Debian 13 with Python 3 (`/usr/bin/python3`), systemd, and `sudo` (for
   `visudo`). The role runs as root.
 - `broker_deploy` applied on the host first.
-- Network from the host to `raw.githubusercontent.com` on a real apply.
+- No network from the host: the role fetches nothing (the programs are vendored).
 
 ## What it changes on a host
 
@@ -311,20 +336,21 @@ A plan makes no change on the host. Every program the role runs in check mode on
 prints, and every program that writes is skipped there with its reason stated at
 the task. In order:
 
-| Task                                                     | In check mode                                                                                                                                                |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Reads (`stat`, `slurp`, `getent`, `find`, `visudo -csf`) | Run.                                                                                                                                                         |
-| Pinned renderers (stdout only)                           | Run with `check_mode: false`, only on a host that has the release; otherwise skipped, because there is no release to run.                                    |
-| Sudoers grant against the generator                      | Compared where the release is staged. On a host with none it is skipped and the plan prints "Sudoers grant NOT verified", with the reason; it never fails.   |
-| Directories, links, accounts, files, units               | Modules report what would change.                                                                                                                            |
-| `get_url` of the programs                                | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `get_url` cannot write into a missing directory. |
-| Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                       |
-| `demo_uid_claims.py`                                     | Never run.                                                                                                                                                   |
-| Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                   |
-| Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                                |
-| Same-filesystem check of the staged move                 | Run where the move would run (no flag directory, no marker): reads and refuses, so a plan on a host whose state root and broker directory are split stops.   |
-| Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                       |
-| Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                  |
+| Task                                                     | In check mode                                                                                                                                              |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reads (`stat`, `slurp`, `getent`, `find`, `visudo -csf`) | Run.                                                                                                                                                       |
+| Pinned renderers (stdout only)                           | Run with `check_mode: false`, only on a host that has the release; otherwise skipped, because there is no release to run.                                  |
+| Sudoers grant against the generator                      | Compared where the release is staged. On a host with none it is skipped and the plan prints "Sudoers grant NOT verified", with the reason; it never fails. |
+| Directories, links, accounts, files, units               | Modules report what would change.                                                                                                                          |
+| Hash of each vendored program (`_vendored.yml`)          | Run: reads where the role runs and refuses a program that is not its pin.                                                                                  |
+| `copy` of the programs                                   | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `copy` cannot write into a missing directory.  |
+| Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                     |
+| `demo_uid_claims.py`                                     | Never run.                                                                                                                                                 |
+| Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                 |
+| Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                              |
+| Same-filesystem check of the staged move                 | Run where the move would run (no flag directory, no marker): reads and refuses, so a plan on a host whose state root and broker directory are split stops. |
+| Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                     |
+| Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                |
 
 The `plan` scenario's `converge.yml` runs the role in check mode and compares a list of
 watched paths before and after: a path that did not exist must still not exist and
@@ -397,8 +423,8 @@ head (the record is the harness log at each head; the limit has not been raised)
 | `check-configured` | 2 min 8   | under 1 s  |
 | `molecule-check`   | 7 min 55  | 4 min 16   |
 
-The first application of the role in `default` takes about 140 s (the downloads,
-the units and the integrity read-back), the second about 100 s, and the two refusal
+The first application of the role in `default` takes about 140 s (measured when
+the programs were still downloaded; the copies, the units and the integrity read-back), the second about 100 s, and the two refusal
 plays that follow about 30 s and 3 s. What is in `refusals` is every case that needs
 no install: the grant edits (ten), the wrong-pin case, the eighth-slot case, the
 `/usr/bin/passwd` wrapper-path case, and the directory cases. What stays in
@@ -432,13 +458,15 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
   template with its own defaults and installs them. The role is therefore tested
   against the real component's output, and not against a fixture written to match.
 - The pinned programs are the real ones, run: the renderers, the claim program and
-  the checks of the sidecar's text. The scenario reads them from a copy in
-  `molecule/default/files/ghost-platform/`, staged by `prepare.yml` at
-  `/opt/branchleft-test-fixtures/ghost-platform`, with `demo1_build_source_base_url`
-  set to that `file://` URL in `molecule.yml`. The copy is the commit's own bytes,
-  and the role's download holds each file to its pin, so a copy that differs fails
-  the scenario. The scenario makes no request to `raw.githubusercontent.com`
-  (workspace#2824); a real apply still does.
+  the checks of the sidecar's text. The scenario uses the role's own
+  `files/ghost-platform/`, the same files a real apply copies, with no second copy;
+  the role holds each to its pin, so a file that differs fails the scenario. Both
+  scenarios run with `raw.githubusercontent.com` and `ghcr.io` mapped to the
+  container's own loopback (`etc_hosts` in `molecule.yml`), and `verify.yml` asserts
+  that both names resolve only there and that a request to either gets no answer
+  (`molecule/default/tasks/blocked_outbound.yml`), so a role that reached for either
+  would fail on a runner with internet too. A real apply makes no such request
+  either.
 - The real `visudo` checks the grant, and systemd reads the units.
 
 ### What does not run for real
@@ -521,8 +549,10 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   left behind. The control that the check does not refuse everything is the accepted
   case of `refused_link.yml`, which runs the step on the real paths, on one filesystem;
 - an eighth slot in the role's slot table, refused by the slot-table assertion;
-- a pinned checksum with one digit changed, which stops the role at the download,
-  naming the checksum.
+- a pinned checksum with one digit changed, which stops the role at the vendored
+  check, naming the program and before anything is written: the control is the
+  same check with the real pins, and the whole-role case uses a source commit the
+  host has no release directory for and asserts that none was made.
 
 What `refusals` cannot see is an install, since it never applies the role. It
 also cannot stage a stand-in for the generator: the real one is staged through
@@ -585,7 +615,10 @@ assertion fires in its place or a later one is the only one left:
 | `_programs.yml` run before `_sudoers_check.yml`                                                           | default, `converge`                     | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run)  |
 | The NOT verified notice removed, or printed on a configured host                                          | plan, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                   |
 | The dot-segment condition of `_inputs.yml` removed                                                        | default, `converge`                     | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                  |
-| The checksum of the download task removed                                                                 | refusals, `converge`                    | "did not match" at the download, for the case with one digit of a pin changed                                              |
+| The checksum comparison of `_vendored.yml` removed                                                        | refusals, `converge`                    | "The role accepted a program whose pinned checksum was wrong", for the case with one digit of a pin changed                |
+| `_vendored.yml` moved after another step of `main.yml`                                                    | CI, `test_demo1_no_github_fetch.py`     | "main.yml includes ... first, not _inputs.yml then _vendored.yml"                                                          |
+| `etc_hosts` removed from `molecule.yml`                                                                   | default and refusals, `verify`          | "resolves to an address outside the container, so the block on it is not in force"                                         |
+| The old `get_url` task put back                                                                           | CI, `test_demo1_no_github_fetch.py`     | the file and line of the `get_url` and of the `raw.githubusercontent.com` URL                                              |
 | The socket directory mode changed                                                                         | default, `verify`                       | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                      |
 | The drain-flag directory's owner changed to root                                                          | default, `verify`                       | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."           |
 | The candidate written as a `Caddyfile`                                                                    | default, `verify`                       | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                     |
@@ -705,9 +738,10 @@ therefore not reachable from this role.
 
 ## How to change it safely
 
-1. To change the release, change `demo1_build_source_sha` and every checksum in
-   `demo1_build_release_files` together, in `defaults/main.yml` and in
-   `meta/argument_specs.yml`. A checksum that does not match fails the download.
+1. To change the release, change `demo1_build_source_sha`, the files under
+   `files/ghost-platform` and every checksum in `demo1_build_release_files`
+   together, in `defaults/main.yml` and in `meta/argument_specs.yml` (see "Vendored
+   files"). A file that does not match its checksum stops the role before it writes.
 2. Keep every task able to run under `--check --diff`. A task that writes a file a
    program owns is skipped in check mode with a stated reason; a task that only reads
    may use `check_mode: false`.

@@ -5,6 +5,11 @@
 # to be replaced by the named role). A role name is read, not checked against
 # ansible/roles/, so a role may be listed before its directory merges (as host_roles.yml).
 # An entry whose script is gone fails the test too.
+# The first is a vendored copy of a ghost-platform file, byte for byte and held to its
+# sha256 by the role that installs it (demo1_egress_spool), so it is code the role
+# places and not a hand path.
+ansible/roles/demo1_egress_spool/files/ghost-platform/demo-host/provision/branchleft_demo_egress.sh:
+  reason: stays-as-code
 hetzner/provision/00-harden-ssh.sh:
   reason: pending-role
   role: host_baseline

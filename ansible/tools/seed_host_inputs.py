@@ -30,8 +30,11 @@ MAX_BYTES: Final = 1 << 20
 ENV: Final = "env"
 WHOLE: Final = "whole"
 RECIPIENTS: Final = "recipients"
+# Typed only: the slots have no live file, so the hand install never held them.
+SLOTS: Final = "slots"
+SLOT_ADOPT: Final = "adopt"
 
-type Value = str | list[dict[str, str]]
+type Value = str | list[dict[str, str]] | list[dict[str, str | bool]]
 
 
 @dataclass(frozen=True)
@@ -90,6 +93,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "website_app1_smtp_port",
         "website_app1_smtp_user",
         "website_app1_smtp_password",
+        "deploy_slot_keys_slots",
     ),
 }
 
@@ -168,6 +172,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "website_app1_smtp_port": (_env("website.env", "CONTACT_SMTP_PORT"),),
     "website_app1_smtp_user": (_env("website.env", "CONTACT_SMTP_USER"),),
     "website_app1_smtp_password": (_env("website.env", "CONTACT_SMTP_PASSWORD"),),
+    "deploy_slot_keys_slots": (Source(SLOTS, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
@@ -385,12 +390,51 @@ def ask_tenants(ctx: Context, key: str) -> Value | None:
             tenants.append(tenant)
 
 
+def parse_slot_line(line: str) -> dict[str, str | bool] | None:
+    """A stack, then the public key, then the literal word adopt if the stack is already run.
+
+    The key keeps its inner spaces; the role checks its shape and the stack's, on the host.
+    """
+    words = line.split()
+    adopt = len(words) > 2 and words[-1] == SLOT_ADOPT
+    key_words = words[1:-1] if adopt else words[1:]
+    if not words or not key_words:
+        return None
+    return {"stack": words[0], "public_key": " ".join(key_words), "adopt_existing": adopt}
+
+
+def ask_slots(ctx: Context, key: str) -> Value | None:
+    """Slot lines until an empty one. A malformed line, or a stack or key given twice, refuses the
+    whole list: nothing is written, and the line is never echoed."""
+    slots: list[dict[str, str | bool]] = []
+    while True:
+        prompt = f"{key}: slot as 'stack public_key [adopt]' ({len(slots)} so far), "
+        try:
+            line = ctx.ask_secret(prompt + "empty line to end: ")
+        except (EOFError, OSError):
+            return None
+        if not line.strip():
+            return slots or None
+        slot = parse_slot_line(line.strip())
+        repeats = slot is not None and any(
+            kept["stack"] == slot["stack"] or kept["public_key"] == slot["public_key"]
+            for kept in slots
+        )
+        if slot is None or repeats:
+            print("that line is not 'stack public_key [adopt]', or repeats one.", file=ctx.err)
+            print("nothing is written; run again.", file=ctx.err)
+            return None
+        slots.append(slot)
+
+
 def ask_for(ctx: Context, key: str) -> Value | None:
     kind = SOURCES[key][0].kind
     if kind == WHOLE:
         return ask_certificate(ctx, key)
     if kind == RECIPIENTS:
         return ask_tenants(ctx, key)
+    if kind == SLOTS:
+        return ask_slots(ctx, key)
     try:
         answer = ctx.ask_secret(f"{key}: ")
     except (EOFError, OSError):
@@ -416,6 +460,8 @@ def collect(ctx: Context, host: str) -> Collected:
     pending: list[str] = []
     for key in HOSTS[host]:
         for source in SOURCES[key]:
+            if source.kind == SLOTS:
+                break
             state, value = live.lookup(source)
             if state == "found" and value is not None:
                 found[key] = value

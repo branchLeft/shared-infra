@@ -76,16 +76,27 @@ The file is one JSON object, for db1:
 JSON, not YAML, so that no value is coerced to another type and the file is written with
 `json.dumps`, never from a value typed into a command line. For app1
 the file is one JSON object of four strings, the port included (`"587"`, not `587`,
-because the website role's argument is a string):
+because the website role's argument is a string), and the list of deploy slots the
+`deploy_slot_keys` role makes the host hold:
 
 ```text
 {
   "website_app1_smtp_host": "<string>",
   "website_app1_smtp_port": "<string>",
   "website_app1_smtp_user": "<string>",
-  "website_app1_smtp_password": "<string>"
+  "website_app1_smtp_password": "<string>",
+  "deploy_slot_keys_slots": [
+    {"stack": "<stack name>", "public_key": "<one OpenSSH public key>", "adopt_existing": false}
+  ]
 }
 ```
+
+`deploy_slot_keys_slots` must hold at least one slot, because this loader counts an empty
+list as no value (`host_inputs[missing-key]`) and stops the whole pull, the website role
+included. The role's own rule that an empty list means "not declared" never comes into play on
+this route. A slot is exactly the argument spec of `deploy_slot_keys`: `stack` and `public_key`
+are required, and `adopt_existing` is a JSON boolean that must be `true` only for a stack the
+host already runs.
 
 For edge1 the file is one JSON object of eleven keys, each the name of a required argument
 of `monitoring_stack` (seven) or `ntfy_pager` (four). The values must equal what is live on
@@ -188,9 +199,13 @@ the database roles depend on it. db1 also needs its signer in `ansible/trust/db1
 before any pull runs. On app1 the loader is followed by `website_app1`, and the same holds:
 the first app1 run after this change stops here with `host_inputs[file-missing]`, before
 the website role starts, until the owner has placed `/etc/branchleft/host-inputs.json` on
-app1 (root:root, `0600`, the four keys above). The tool places it: `seed_host_inputs.py --host
-app1` reads the four keys from the `website.env` that the website role's env file holds (the
-same four `CONTACT_SMTP_*` lines), so the values equal what is live.
+app1 (root:root, `0600`, the four SMTP keys above and, since the deploy slot keys were wired
+to app1, `deploy_slot_keys_slots` with at least one slot: until it is there the same stop
+happens, as `host_inputs[missing-key]`). The tool places it: `seed_host_inputs.py --host app1`
+reads the four keys from the `website.env` that the website role's env file holds (the same four
+`CONTACT_SMTP_*` lines), so the values equal what is live, and it takes the slots at a hidden
+prompt, one line each (`stack public_key [adopt]`), so the public keys are never typed into a
+command line or committed.
 
 ## Bootstrap and rotation
 

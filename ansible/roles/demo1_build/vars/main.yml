@@ -39,6 +39,11 @@ demo1_build_broker_env_file: /etc/branchleft/broker.env
 demo1_build_preseed_marker: /etc/branchleft/demo1-drain-flags-preseeded
 demo1_build_sudoers_path: /etc/sudoers.d/branchleft-slot
 
+# Where the role's copies of the programs are, on the machine that runs the role.
+# The paths under it are the paths in the ghost-platform repository, the paths in
+# demo1_build_release_files. Nothing is read from the network.
+demo1_build_vendored_root: '{{ role_path }}/files/ghost-platform'
+
 # The staged programs. One release directory per pinned commit, root-owned and
 # writable by nobody else; the programs import one another from it.
 demo1_build_base_dir: /opt/branchleft/demo-host

@@ -2,7 +2,8 @@
 # Internal to the role. Delivers the mail spool in the order it needs: the
 # drain token the owner placed is checked, the pinned Compose file is placed and
 # held to its posture, the image pin file the shared Compose unit insists on is
-# created once, the queue's volume is made and given to the spool's account, and
+# created once, the image it names is checked to be on the host (the host never
+# pulls), the queue's volume is made and given to the spool's account, and
 # the unit is enabled and started. The start is best effort: its outcome is read
 # from the running container by _readback_spool.yml, which is what decides.
 - name: Check the drain token the owner placed
@@ -26,6 +27,11 @@
     force: false
   register: demo1_egress_spool_image_env
   when: demo1_egress_spool_compose_now.stat.exists
+
+# The host never pulls: the spool is started only with its image already on the host.
+# Refused here, before the volume is made or the unit is started.
+- name: Check the spool's image is on the host
+  ansible.builtin.include_tasks: _image.yml
 
 # The queue lives on a Docker volume the Compose file declares external, so it
 # must exist before the stack starts, and no slot's wipe can reach it. The CLI is

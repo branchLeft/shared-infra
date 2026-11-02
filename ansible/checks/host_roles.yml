@@ -5,7 +5,7 @@
 
 # A role is named by its directory under ansible/roles/. The check does not look at
 # that directory, so a name may be listed before its role merges. A host with no
-# entry may apply the two pull roles and nothing else. Planned, not listed: control_plane_db.
+# entry may apply the two pull roles and nothing else.
 edge1:
   - host_inputs
   - host_baseline
@@ -25,6 +25,7 @@ ops1:
   - nextcloud_stack
   - backup_worker
   - backup_restore
+  - control_plane_db
 app1:
   - host_inputs
   - deploy_tooling

@@ -17,6 +17,8 @@ db1_backup_timers_ghost_raw_base: 'https://raw.githubusercontent.com/branchLeft/
 # The programs the units run, and the modules they import from the same
 # directory: the closure of dump_nightly, ship_binlogs, prune_backups,
 # dump_tenant and promotion_gate. Each is fetched from db/provision at the commit.
+# provision_tenant_db.py is also here, and no unit of this role runs it: the
+# db1_grants role runs it and only consumes it, so this role is its one deliverer.
 db1_backup_timers_provision_files:
   - bounded_snapshot.py
   - dump_nightly.py
@@ -24,6 +26,7 @@ db1_backup_timers_provision_files:
   - extract_tenant_binlog.py
   - naming.py
   - objectstorage.py
+  - provision_tenant_db.py
   - prune_backups.py
   - promotion_gate.py
   - ship_binlogs.py
@@ -45,6 +48,7 @@ db1_backup_timers_program_sha256:
   naming.py: 288a31eed9758644d6a73928b949bc3607c905adfc2f2f4f563701dc740f6480
   objectstorage.py: 1559ad94f6348c65fc4f3840385c70ab012ca76eb9cd98ba835360594e54589c
   promotion_gate.py: ee81177192b2a762ef9b0d61a630fd5676d94961ecb6773ce884f90b2404bb08
+  provision_tenant_db.py: d4115369168125ea0e72f46aa66f90a2443d6f26fda603dd8a76ec882e4d5e3e
   prune_backups.py: c8cab2f42f8b73a8d7040f7db7db2c083b21a109460761f836daef480d401c56
   ship_binlogs.py: e8cce2f3efe8b2dda28d279854864435aacb13f11066112c85566a458d4f66c3
   check_toolchain_version.py: 9b245e2a801075ef593e4527fc9fad56958a3dbe15f97c7c408ddffc2bf7388a

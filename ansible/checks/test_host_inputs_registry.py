@@ -263,14 +263,17 @@ class RealTree(unittest.TestCase):
                     "website_app1_smtp_port",
                     "website_app1_smtp_user",
                     "website_app1_smtp_password",
+                    "deploy_slot_keys_slots",
                 ],
             },
         )
 
-    def test_app1_applies_the_loader_then_the_website_role_after_the_pull_roles(self) -> None:
-        # The order is the point: the loader sets the four SMTP facts the role requires, so the
-        # role must follow it, and both must follow the two pull roles (check_enrolment R11). The
-        # host baseline installs Docker, which the role needs, so it too sits before the role.
+    def test_app1_applies_the_loader_then_the_website_role_and_the_deploy_roles(self) -> None:
+        # The order is the point: the loader sets the four SMTP facts the website role requires and
+        # the slots the slot-keys role requires, so both must follow it, and all must follow the
+        # two pull roles (check_enrolment R11). The host baseline installs Docker, which the
+        # website role needs, so it too sits before the role. The deploy tooling goes last but one
+        # and the slot keys last: the slot program needs the wrapper the tooling installs.
         playbook = _mapping_list(_read(ROOT / "ansible" / "playbooks" / "app1.yml"))
         applied = [Path(str(entry.get("role", entry))).name for entry in playbook]
         self.assertEqual(
@@ -282,6 +285,8 @@ class RealTree(unittest.TestCase):
                 "host_baseline",
                 "breakglass_grant_host",
                 "website_app1",
+                "deploy_tooling",
+                "deploy_slot_keys",
             ],
         )
 
@@ -300,6 +305,8 @@ class Mutations(unittest.TestCase):
             "db1_backup_timers",
             "tunnel_account",
             "website_app1",
+            "deploy_tooling",
+            "deploy_slot_keys",
             "monitoring_stack",
             "ntfy_pager",
             "exporters_and_collectors",
@@ -411,6 +418,35 @@ class Mutations(unittest.TestCase):
     def test_an_app1_input_the_loader_sets_with_no_row_is_found(self) -> None:
         self._edit("roles/host_inputs/vars/main.yml", "    - website_app1_smtp_user\n", "")
         self._expect("the input task sets")
+
+    # Safety class: the deploy slots are private (tenant stack names and public keys), so the loader
+    # is their only route onto a pulled host. Red with the name taken from app1's row while the
+    # loader still sets it, green with the row as it is.
+    def test_the_deploy_slots_dropped_from_app1s_row_are_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - deploy_slot_keys_slots\n", "")
+        self._expect("the input task sets")
+
+    def test_a_misspelt_deploy_slots_name_in_app1s_row_is_found(self) -> None:
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "    - deploy_slot_keys_slots\n",
+            "    - deploy_slot_keys_slotz\n",
+        )
+        self._expect("deploy_slot_keys_slotz is not a required argument")
+
+    def test_a_default_for_the_deploy_slots_is_found(self) -> None:
+        path = self.ansible / "roles" / "deploy_slot_keys" / "defaults" / "main.yml"
+        path.write_text("deploy_slot_keys_slots: []\n", encoding="utf-8")
+        self._expect("role deploy_slot_keys gives deploy_slot_keys_slots a default")
+
+    def test_the_deploy_slots_role_applied_before_the_loader_on_app1_is_found(self) -> None:
+        self._edit(
+            "playbooks/app1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/deploy_slot_keys # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/app1.yml applies a role before host_inputs")
 
     # Safety class (secrets): the ops1 and edge1 rows are the whole of what their files may hold.
     # Each is red when a key is dropped from the row or a role is applied ahead of the loader, and
