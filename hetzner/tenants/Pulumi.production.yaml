@@ -23,3 +23,12 @@ config:
   # registered only in the estate project fails the apply.
   branchleft-hetzner-tenants:ownerSshKeyNames:
     - rob@branchleft.co.uk
+  # edge-t, the project's public host (web edge, SSH entry, NAT gateway). CPX22 is
+  # The owner's ruling of 2 Nov 2026 (option B), for edge-t, db-t1 and app-t1. Check
+  # `Available:` and never `Recommended:` immediately before an apply, and never
+  # substitute a type. `edgetDeployPublicKey` is absent for the reason
+  # `dbt1DeployPublicKey` is: it is the public half of a key generated for edge-t
+  # at the first apply, and a preview without it fails on the missing key.
+  # `dbt1Enabled` is absent too, and the program reads absent as false: db-t1 is
+  # declared only after edge-t's route and NAT are live and proven.
+  branchleft-hetzner-tenants:edgetServerType: cpx22

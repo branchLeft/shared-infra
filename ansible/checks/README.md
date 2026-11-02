@@ -79,11 +79,15 @@ deploy approval of the gated apply, which is not yet wired. Which files the revi
 may merge alone is not yet decided by the owner.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
-host in `HOST_PLAY_VARS` in `check_enrolment.py` (today two rows: edge1's `deploy_tooling_host_class`
-with `egress_nat_gateway_enabled: true`, the one switch that makes a host the estate's NAT gateway, and
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (today three rows: edge1's `deploy_tooling_host_class`
+with `egress_nat_gateway_enabled: true`, the one switch that makes a host a NAT gateway, and
 the `edge_firewall` role's `edge_firewall_nat_source` (the estate subnet it masquerades) and
 `edge_firewall_enforce` (`false`, monitor mode, until the owner merges the one-line flip to default-drop),
-so only edge1 can carry any of them; and app1's `deploy_tooling_host_class` with `deploy_tooling_policy_variant`,
+so only edge1 can carry those two; edget's `egress_nat_gateway_enabled: true` alone (edget is the server edge-t,
+the tenants network's gateway: a network does not span hcloud projects, so there is one gateway per network,
+edge1 for the estate's and edget for the tenants', and `test_egress_nat_single_gateway.py` refuses a second on
+either; the logical name has no hyphen because `HOST_NAME` allows `[a-z][a-z0-9]*`); and app1's
+`deploy_tooling_host_class` with `deploy_tooling_policy_variant`,
 which the role takes with no default for the class and which a host of class app must name; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
@@ -314,8 +318,9 @@ as in `hand_installers.yml`. The test fails on more blocks than listed, on a run
 listed, and on fewer blocks than listed, so the count only falls: lower it in the PR that moves a
 step into a role. Read-only checks over `ssh` and blocks fenced as `text` do not count.
 It counts blocks, so rewriting one hand step into another keeps the count; a reviewer reads that.
-The `Ansible` workflow watches `ansible/` and `hetzner/` only, so a change to a runbook under
-`mail/` or at the repository root does not start it; `mail/` is owner-gated by CODEOWNERS.
+The `Ansible` workflow watches `ansible/`, `hetzner/` and `mail/provision/` only (the last because
+the `mx1_stack` role links and checks the mail host's scripts there), so a change to a runbook
+under `mail/` or at the repository root does not start it; `mail/` is owner-gated by CODEOWNERS.
 
 ## merge_group_proof.py: when a delivery may skip its re-test
 

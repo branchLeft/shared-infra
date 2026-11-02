@@ -1,0 +1,30 @@
+---
+# Order: everything that can refuse runs first and only reads, so a refusal leaves the host exactly
+# as it was and a plan (check mode) shows it. Then Stalwart's project, the mailgun-shim's project,
+# the local resolver and the DNSBL check, in the order the hand scripts 30, 63, 65 and 70 ran.
+#
+# No task here notifies a handler. A notification is lost when a later task fails, and the next run
+# would find every file in place and never act. The stamp of each class, written last and only after
+# the read-back, is what remembers that a class was not finished.
+- name: Refuse a host or a repository the role must not act on
+  ansible.builtin.include_tasks: _preflight.yml
+
+- name: Make the directory of the stamps
+  ansible.builtin.file:
+    path: '{{ mx1_stack_stamp_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Keep Stalwart's project in step with the repository
+  ansible.builtin.include_tasks: _stalwart.yml
+
+- name: Keep the mailgun-shim's project in step with the repository
+  ansible.builtin.include_tasks: _shim.yml
+
+- name: Keep the local resolver in step with the repository
+  ansible.builtin.include_tasks: _resolver.yml
+
+- name: Deliver the DNSBL check and its cron entry
+  ansible.builtin.include_tasks: _dnsbl.yml

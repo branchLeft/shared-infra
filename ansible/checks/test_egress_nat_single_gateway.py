@@ -1,12 +1,15 @@
-"""Check that edge1 plays the egress_nat role as the estate's one NAT gateway, and only edge1 does.
+"""Check that each network has exactly one NAT gateway, and no other host plays that role.
 
 The role installs the gateway half (the NAT reconciler and its unit) only when
-`egress_nat_gateway_enabled` is true, and its default is false. A second gateway is a routing
-loop that takes the estate's egress (`hetzner/provision/branchleft_nat.sh`), so the switch is
-set in one place: edge1's play vars, pinned by `HOST_PLAY_VARS` in the owner-only checks (R2).
-This test holds the playbook, the table, the host's list in `host_roles.yml` and every other
-file under `ansible/` to that one home. A change to one alone fails here, and a second host that
-names the switch is refused by name, whichever file it is written in.
+`egress_nat_gateway_enabled` is true, and its default is false. A second gateway on one network
+is a routing loop that takes that network's egress (`hetzner/provision/branchleft_nat.sh`), so
+the switch is set in one place per network: the gateway's own play vars, pinned by
+`HOST_PLAY_VARS` in the owner-only checks (R2). A network does not span hcloud projects, so the
+estate's network (gateway edge1) and the tenants network (gateway edget, the server edge-t) each
+have one. This test holds each playbook, the table, the host's list in `host_roles.yml` and
+every other file under `ansible/` to that one home per network. A change to one alone fails
+here, a host that names the switch without being a listed gateway is refused by name whichever
+file it is written in, and a second gateway for a network that already has one is refused.
 """
 
 from __future__ import annotations
@@ -21,13 +24,15 @@ ANSIBLE = ROOT / "ansible"
 SWITCH = "egress_nat_gateway_enabled"
 CLASS_KEY = "deploy_tooling_host_class"
 ROLE = "egress_nat"
-GATEWAY_HOST = "edge1"
-OTHER_HOSTS = ("ops1", "app1", "db1", "demo1")
+# Every host that may be a gateway, and the network it is the gateway of. A new gateway is a
+# new row here, in the same owner-merged change that adds its pin to HOST_PLAY_VARS.
+GATEWAYS = {"edge1": "estate", "edget": "tenants"}
 # The role owns the switch (its default, spec, tasks and tests), and the checks own the pin.
-# Anywhere else in ansible/, a file that names the switch is a second home for it.
+# Anywhere else in ansible/, a file that names the switch is a second home for it, except a
+# gateway's own playbook.
 ROLE_DIR = ANSIBLE / "roles" / ROLE
 CHECKS_DIR = ANSIBLE / "checks"
-SWITCH_HOME = ANSIBLE / "playbooks" / f"{GATEWAY_HOST}.yml"
+SWITCH_HOMES = {ANSIBLE / "playbooks" / f"{host}.yml" for host in GATEWAYS}
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -76,10 +81,16 @@ def _listed_roles() -> dict[str, list[str]]:
     }
 
 
+def _other_hosts() -> list[str]:
+    """Every host with a playbook that is not a listed gateway."""
+    stems = sorted(path.stem for path in (ANSIBLE / "playbooks").glob("*.yml"))
+    return [stem for stem in stems if stem not in GATEWAYS]
+
+
 def _files_naming_the_switch_outside_its_homes() -> list[str]:
     """The paths under ansible/ that name the switch outside its homes.
 
-    Its homes are the role, the checks and edge1's playbook.
+    Its homes are the role, the checks and each gateway's own playbook.
 
     Markdown is prose and is not read. Every other file is, so an inventory, a group or host
     variable file, an owner_vars or trust file, a pattern, another role or another playbook
@@ -87,7 +98,7 @@ def _files_naming_the_switch_outside_its_homes() -> list[str]:
     """
     found: list[str] = []
     for path in sorted(ANSIBLE.rglob("*")):
-        if not path.is_file() or path.suffix == ".md" or path == SWITCH_HOME:
+        if not path.is_file() or path.suffix == ".md" or path in SWITCH_HOMES:
             continue
         if ROLE_DIR in path.parents or CHECKS_DIR in path.parents:
             continue
@@ -97,14 +108,16 @@ def _files_naming_the_switch_outside_its_homes() -> list[str]:
 
 
 class EgressNatSingleGateway(unittest.TestCase):
-    # (a) edge1 sets the switch, and the table pins it, exactly.
-    def test_the_playbook_turns_the_gateway_on_for_edge1(self) -> None:
-        self.assertIs(_play_vars(GATEWAY_HOST).get(SWITCH), True)
+    # (a) each gateway sets the switch, and the table pins it, exactly.
+    def test_each_gateway_playbook_turns_the_gateway_on(self) -> None:
+        for host in GATEWAYS:
+            with self.subTest(host=host):
+                self.assertIs(_play_vars(host).get(SWITCH), True)
 
     def test_the_checker_table_pins_edge1_to_the_class_and_the_switch(self) -> None:
         # The row also pins the two edge_firewall variables; test_edge_firewall_single_home.py
         # holds the whole row.
-        row = HOST_PLAY_VARS[GATEWAY_HOST]
+        row = HOST_PLAY_VARS["edge1"]
         self.assertEqual(
             {CLASS_KEY: row[CLASS_KEY], SWITCH: row[SWITCH]},
             {CLASS_KEY: "gateway", SWITCH: True},
@@ -114,44 +127,58 @@ class EgressNatSingleGateway(unittest.TestCase):
             {"edge_firewall_nat_source", "edge_firewall_enforce"},
         )
 
-    # (b) no other host can become a second gateway, by any file.
-    def test_no_other_host_is_pinned_to_the_switch(self) -> None:
-        for host, pinned in HOST_PLAY_VARS.items():
-            if host != GATEWAY_HOST:
-                with self.subTest(host=host):
-                    self.assertNotIn(SWITCH, pinned)
+    def test_the_checker_table_pins_edget_to_exactly_the_switch(self) -> None:
+        self.assertEqual(HOST_PLAY_VARS["edget"], {SWITCH: True})
+
+    # (b) one gateway per network, and no host outside the listed gateways.
+    def test_no_network_has_two_gateways(self) -> None:
+        self.assertEqual(len(set(GATEWAYS.values())), len(GATEWAYS))
+
+    def test_the_hosts_pinned_to_the_switch_are_the_listed_gateways_exactly(self) -> None:
+        pinned = {host for host, values in HOST_PLAY_VARS.items() if SWITCH in values}
+        self.assertEqual(pinned, set(GATEWAYS))
 
     def test_no_other_playbook_sets_the_switch(self) -> None:
-        for host in OTHER_HOSTS:
+        for host in _other_hosts():
             with self.subTest(host=host):
                 self.assertNotIn(SWITCH, _play_vars(host))
 
-    def test_no_file_outside_the_role_the_checks_and_edge1s_playbook_names_the_switch(self) -> None:
+    def test_no_file_outside_the_role_the_checks_and_a_gateways_playbook_names_the_switch(
+        self,
+    ) -> None:
         self.assertEqual(_files_naming_the_switch_outside_its_homes(), [])
 
-    # (c) the role is on edge1's list alone, and applied once on edge1, after host_baseline.
-    def test_the_role_is_on_edge1s_list_alone(self) -> None:
+    # (c) the role is on the gateways' lists alone, and applied once on each, after host_baseline.
+    def test_the_role_is_on_the_gateways_lists_alone(self) -> None:
         for host, names in _listed_roles().items():
             with self.subTest(host=host):
-                if host == GATEWAY_HOST:
+                if host in GATEWAYS:
                     self.assertEqual(names.count(ROLE), 1)
                 else:
                     self.assertNotIn(ROLE, names)
 
-    def test_edge1_applies_the_role_once_after_host_baseline_and_before_ci_login(self) -> None:
-        names = _role_names(GATEWAY_HOST)
-        self.assertEqual(names.count(ROLE), 1)
-        self.assertLess(names.index("host_baseline"), names.index(ROLE))
+    def test_each_gateway_applies_the_role_once_after_host_baseline(self) -> None:
+        for host in GATEWAYS:
+            with self.subTest(host=host):
+                names = _role_names(host)
+                self.assertEqual(names.count(ROLE), 1)
+                self.assertLess(names.index("host_baseline"), names.index(ROLE))
+
+    def test_edge1_applies_the_role_before_ci_login(self) -> None:
+        names = _role_names("edge1")
         self.assertLess(names.index(ROLE), names.index("ci_login"))
 
     def test_no_other_playbook_applies_the_role(self) -> None:
-        for host in OTHER_HOSTS:
+        for host in _other_hosts():
             with self.subTest(host=host):
                 self.assertNotIn(ROLE, _role_names(host))
 
     def test_the_role_entry_is_bare_so_the_switch_cannot_hide_in_it(self) -> None:
-        roles = _play(GATEWAY_HOST).get("roles")
-        self.assertIn({"role": f"../roles/{ROLE}"}, roles if isinstance(roles, list) else [])
+        for host in GATEWAYS:
+            with self.subTest(host=host):
+                roles = _play(host).get("roles")
+                role_list = roles if isinstance(roles, list) else []
+                self.assertIn({"role": f"../roles/{ROLE}"}, role_list)
 
 
 if __name__ == "__main__":

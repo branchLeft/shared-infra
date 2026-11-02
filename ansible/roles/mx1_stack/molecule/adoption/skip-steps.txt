@@ -1,0 +1,11 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# This scenario applies the role once, by the converge it shares with the default scenario, and
+# then runs the cases for a host with no stamp in verify.yml: each takes the stamps away, puts the
+# host in one state and applies the role again. The plans, the second apply that checks
+# idempotence and Molecule's own check are the default scenario's, which runs all eight steps.
+check-fresh
+idempotence
+check-configured
+molecule-check

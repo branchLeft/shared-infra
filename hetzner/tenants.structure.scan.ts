@@ -1,16 +1,27 @@
 import * as ts from 'typescript';
 
 export type ReasonCode =
-  'forbidden-constructor' | 'unresolved-constructor' | 'host-count' | 'host-gate';
+  'forbidden-constructor' | 'unresolved-constructor' | 'host-count' | 'host-gate' | 'route-gate';
 
-/** The only members `new` may construct, by module. Host is counted and gate-checked separately. */
+/**
+ * The only members `new` may construct, by module. Host is counted and gate-checked
+ * separately, and so is NetworkRoute. StackReference reads another stack's outputs
+ * and registers no provider resource.
+ */
 const ALLOWED_MEMBERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
-  ['@pulumi/hcloud', new Set(['Network', 'NetworkSubnet'])],
-  ['@pulumi/pulumi', new Set(['Config'])],
+  ['@pulumi/hcloud', new Set(['Network', 'NetworkSubnet', 'NetworkRoute'])],
+  ['@pulumi/pulumi', new Set(['Config', 'StackReference'])],
   ['@branchleft/hetzner-host', new Set(['Host'])],
 ]);
 
+/** The number of `new Host(...)` the program declares: edge-t, and db-t1 behind its switch. */
+export const EXPECTED_HOST_COUNT = 2;
+
 const HOST_MODULE = '@branchleft/hetzner-host';
+const ROUTE_MODULE = '@pulumi/hcloud';
+const ROUTE_MEMBER = 'NetworkRoute';
+const VERIFY_NAME = 'verified';
+const NETWORK_ID_KEY = 'networkId';
 const GATE_NAME = 'gateRegistration';
 const TRANSFORMATIONS_KEY = 'transformations';
 
@@ -43,7 +54,8 @@ interface DeclarationIndex {
   readonly bindings: Map<string, Binding>;
 }
 
-type Construction = 'allowed' | 'host' | 'forbidden-constructor' | 'unresolved-constructor';
+type Construction =
+  'allowed' | 'host' | 'route' | 'forbidden-constructor' | 'unresolved-constructor';
 
 const DECLARING_KINDS: ReadonlySet<ts.SyntaxKind> = new Set([
   ts.SyntaxKind.VariableDeclaration,
@@ -287,6 +299,9 @@ function classifyConstruction(node: ts.NewExpression, index: DeclarationIndex): 
   if (ALLOWED_MEMBERS.get(value.module)?.has(value.member) !== true) {
     return 'forbidden-constructor';
   }
+  if (value.module === ROUTE_MODULE && value.member === ROUTE_MEMBER) {
+    return 'route';
+  }
   return value.module === HOST_MODULE ? 'host' : 'allowed';
 }
 
@@ -362,19 +377,77 @@ function describeViolation(code: ReasonCode, node: ts.Node, sourceFile: ts.Sourc
   return `${code} line ${line}: ${firstLine.trimEnd()}`;
 }
 
+/**
+ * A route is gated when its props are an object literal whose single `networkId`
+ * is a call of the file's own `verified` (possibly followed by `.apply(...)`),
+ * with no spread after it that could replace it. An ungated route is created
+ * even when the project check refuses.
+ */
+function isGatedRoute(route: ts.NewExpression, index: DeclarationIndex): boolean {
+  const args = route.arguments ?? [];
+  const props = args[1];
+  if (
+    args.some(ts.isSpreadElement) ||
+    props === undefined ||
+    !ts.isObjectLiteralExpression(props)
+  ) {
+    return false;
+  }
+  const keys = props.properties.map(propertyKeyText);
+  const positions = props.properties.flatMap((property, position) =>
+    ts.isSpreadAssignment(property) ? [] : keys[position] === NETWORK_ID_KEY ? [position] : []
+  );
+  const [position] = positions;
+  const entry = position === undefined ? undefined : props.properties[position];
+  if (
+    positions.length !== 1 ||
+    position === undefined ||
+    entry === undefined ||
+    !ts.isPropertyAssignment(entry) ||
+    props.properties.some((property, at) => at > position && ts.isSpreadAssignment(property)) ||
+    props.properties.some(
+      (property, at) => !ts.isSpreadAssignment(property) && keys[at] === undefined
+    )
+  ) {
+    return false;
+  }
+  let current = unwrap(entry.initializer);
+  while (
+    ts.isCallExpression(current) &&
+    ts.isPropertyAccessExpression(current.expression) &&
+    current.expression.name.text === 'apply'
+  ) {
+    current = unwrap(current.expression.expression);
+  }
+  return (
+    ts.isCallExpression(current) &&
+    ts.isIdentifier(current.expression) &&
+    current.expression.text === VERIFY_NAME &&
+    current.arguments.length === 1 &&
+    index.declarations.get(VERIFY_NAME)?.length === 1 &&
+    index.bindings.has(VERIFY_NAME)
+  );
+}
+
 function describeHostViolations(
   hosts: readonly ts.NewExpression[],
   index: DeclarationIndex,
   sourceFile: ts.SourceFile
 ): string[] {
-  const [first] = hosts;
-  if (first === undefined) {
-    return ['host-count line 1: expected exactly one new Host(...), found none'];
+  const messages: string[] = [];
+  if (hosts.length === 0) {
+    messages.push(
+      `host-count line 1: expected exactly ${EXPECTED_HOST_COUNT} new Host(...), found none`
+    );
+  } else if (hosts.length !== EXPECTED_HOST_COUNT) {
+    messages.push(...hosts.map((host) => describeViolation('host-count', host, sourceFile)));
   }
-  if (hosts.length > 1) {
-    return hosts.map((host) => describeViolation('host-count', host, sourceFile));
-  }
-  return isGatedHost(first, index) ? [] : [describeViolation('host-gate', first, sourceFile)];
+  messages.push(
+    ...hosts
+      .filter((host) => !isGatedHost(host, index))
+      .map((host) => describeViolation('host-gate', host, sourceFile))
+  );
+  return messages;
 }
 
 function collectNewExpressions(sourceFile: ts.SourceFile): ts.NewExpression[] {
@@ -391,8 +464,9 @@ function collectNewExpressions(sourceFile: ts.SourceFile): ts.NewExpression[] {
 
 /**
  * Reads TypeScript source text and returns one message per violation: a `new`
- * of anything but Network, NetworkSubnet, Config or Host, or a Host
- * declaration count or gate that is not exactly one gated Host. Parses only.
+ * of anything but Network, NetworkSubnet, NetworkRoute, Config, StackReference
+ * or Host; a route whose network id is not gated by `verified`; or a Host count
+ * that is not exactly EXPECTED_HOST_COUNT, or a Host without the gate. Parses only.
  */
 export function scanTenantsSource(text: string): string[] {
   const sourceFile = ts.createSourceFile(
@@ -409,6 +483,10 @@ export function scanTenantsSource(text: string): string[] {
     const construction = classifyConstruction(node, index);
     if (construction === 'host') {
       hosts.push(node);
+    } else if (construction === 'route') {
+      if (!isGatedRoute(node, index)) {
+        messages.push(describeViolation('route-gate', node, sourceFile));
+      }
     } else if (construction !== 'allowed') {
       messages.push(describeViolation(construction, node, sourceFile));
     }

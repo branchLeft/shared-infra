@@ -1,16 +1,25 @@
-import { ESTATE_LOCATION, Host, NETWORK_CIDR, SUBNET_CIDR } from '@branchleft/hetzner-host';
+import {
+  ESTATE_LOCATION,
+  Host,
+  NETWORK_CIDR,
+  SUBNET_CIDR,
+  TENANTS_HOST_IPS,
+} from '@branchleft/hetzner-host';
 import * as hcloud from '@pulumi/hcloud';
 import * as pulumi from '@pulumi/pulumi';
 
+import { internetEgressRoute } from './egress';
 import { checkProjectResults } from './projectGuard';
 
 /**
- * The tenants project's network and its one database host, db-t1.
- * Gated on the project check: the network and subnet, the Host's network
- * wiring, and the Host's firewall, server and PrimaryIp (the transformation
- * below). A resource declared outside the Host must depend on the verified
- * value itself, because an ungated resource is created even when the check
- * refuses.
+ * The tenants project's network, its base host edge-t (web edge, SSH entry and
+ * NAT gateway), the network's default route via edge-t, and its one database
+ * host, db-t1, which is declared only once `dbt1Enabled` is true.
+ * Gated on the project check: the network, subnet and route, the Hosts'
+ * network wiring, and each Host's firewall, server and PrimaryIp (the
+ * transformation below). A resource declared outside a Host must depend on the
+ * verified value itself, because an ungated resource is created even when the
+ * check refuses.
  */
 
 const TENANTS_PROJECT_FIX =
@@ -86,27 +95,48 @@ export const tenantsSubnet = new hcloud.NetworkSubnet(
   { protect: true, parent: tenantsNetwork }
 );
 
-/** db-t1's fixed private address on the tenants network. */
-export const TENANTS_DB_PRIVATE_IP = '10.20.1.20';
+/**
+ * The estate stack's outputs. A DIY (non-Pulumi-Cloud) backend fixes the
+ * organisation segment to the literal `organization`, as `estate.ts` does for
+ * the network stack. edge1's public address is read here, from state, and
+ * never written into this repository: it is the one address edge-t accepts SSH
+ * from. A project that has not applied the estate stack, or an output that is
+ * not a public IPv4 address, fails the preview instead of planning a firewall.
+ */
+const estateStack = new pulumi.StackReference('organization/branchleft-hetzner-estate/production');
+const edge1PublicIpv4 = verified(estateStack.requireOutput('edge1PublicIpv4').apply(String));
 
 /**
- * The shared MySQL host. Private only; `publicNetworking` is fixed at creation.
- * The network id waits on the subnet so the server cannot be created first.
+ * The network id the hosts attach to. It waits on the subnet so no server can
+ * be created before the subnet that holds its address exists.
  */
-export const dbT1 = new Host(
+const hostNetworkId = pulumi
+  .all([tenantsProjectVerified, tenantsNetwork.id, tenantsSubnet.id])
+  .apply(([, networkId]) => networkId);
+
+/**
+ * The tenants project's one public host, doing for this project what edge1
+ * does for the estate: the web edge (its Caddy configuration is not declared
+ * here), the SSH entry (port 22 only from edge1's public address), and the
+ * NAT gateway the private-only hosts reach the internet through. It is enrolled
+ * in the gated Ansible delivery as `edget` (the logical name only: the server
+ * and its hostname are `edge-t`). It is created with a deploy key and enrolled
+ * by the owner's hand bootstrap, as db1, app1 and ops1 were: the component's
+ * `enrolment` document is edge1's playbook and would start it here.
+ */
+export const edgeT = new Host(
   {
-    name: 'db-t1',
-    role: 'db',
+    name: 'edge-t',
+    role: 'edge',
     location: ESTATE_LOCATION,
     image,
     ownerSshKeyNames,
-    networkId: pulumi
-      .all([tenantsProjectVerified, tenantsNetwork.id, tenantsSubnet.id])
-      .apply(([, networkId]) => networkId),
-    serverType: config.require('dbt1ServerType'),
-    privateIp: TENANTS_DB_PRIVATE_IP,
-    deployPublicKey: config.require('dbt1DeployPublicKey'),
-    publicNetworking: false,
+    networkId: hostNetworkId,
+    serverType: config.require('edgetServerType'),
+    privateIp: TENANTS_HOST_IPS.edgeT,
+    deployPublicKey: config.require('edgetDeployPublicKey'),
+    sshSourceIp: edge1PublicIpv4,
+    publicNetworking: true,
     environment: 'production',
     protection: true,
     backups: false,
@@ -114,5 +144,70 @@ export const dbT1 = new Host(
   { transformations: [gateRegistration] }
 );
 
-export const dbT1Location = dbT1.server.location;
-export const dbT1PrivateIp = TENANTS_DB_PRIVATE_IP;
+/**
+ * The tenants network's default route, via edge-t. The same construction as
+ * the estate's (`network.ts`): `internetEgressRoute` validates the gateway,
+ * and `provision/branchleft_nat.sh`, run on edge-t by the `egress_nat` role,
+ * is what makes the address at the other end forward.
+ *
+ * The network id goes through `verified`, because a resource declared outside
+ * a Host is created even when the project check refuses. `protect: false` is
+ * explicit, not absent: a child inherits `protect` from its parent, and the
+ * network carries `protect: true`. Hetzner serialises actions per network, so
+ * the route waits on the subnet and on edge-t (a component's dependency covers
+ * its network attachment), the two actions it would otherwise race.
+ */
+export const tenantsEgressRoute = new hcloud.NetworkRoute(
+  'tenants-internet-egress',
+  {
+    // The spread comes first so it cannot replace the gated network id, which
+    // tenants.structure.scan.ts requires.
+    ...internetEgressRoute(TENANTS_HOST_IPS.edgeT),
+    networkId: verified(tenantsNetwork.id).apply((id) => Number(id)),
+  },
+  {
+    parent: tenantsNetwork,
+    protect: false,
+    dependsOn: [tenantsSubnet, edgeT],
+  }
+);
+
+/**
+ * db-t1 is declared only when `dbt1Enabled` is true, and it defaults to false.
+ * It is private-only and needs edge-t's route and NAT live before its first
+ * boot (cloud-init fetches packages), so it is switched on in a later reviewed
+ * change, after the NAT path is proven with Docker running on edge-t.
+ */
+const dbt1Enabled = config.getBoolean('dbt1Enabled') ?? false;
+
+/**
+ * The shared MySQL host. Private only; `publicNetworking` is fixed at creation.
+ * The network id waits on the subnet so the server cannot be created first, and
+ * the host waits on the egress route so it cannot boot before it has a path out.
+ */
+export const dbT1 = dbt1Enabled
+  ? new Host(
+      {
+        name: 'db-t1',
+        role: 'db',
+        location: ESTATE_LOCATION,
+        image,
+        ownerSshKeyNames,
+        networkId: hostNetworkId,
+        serverType: config.require('dbt1ServerType'),
+        privateIp: TENANTS_HOST_IPS.dbT1,
+        deployPublicKey: config.require('dbt1DeployPublicKey'),
+        publicNetworking: false,
+        environment: 'production',
+        protection: true,
+        backups: false,
+      },
+      { transformations: [gateRegistration], dependsOn: [tenantsEgressRoute] }
+    )
+  : undefined;
+
+export const dbT1Location = dbT1?.server.location;
+export const dbT1PrivateIp = TENANTS_HOST_IPS.dbT1;
+
+export const edgeTPublicIpv4 = edgeT.publicIpv4;
+export const edgeTPrivateIp = TENANTS_HOST_IPS.edgeT;

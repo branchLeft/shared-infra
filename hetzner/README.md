@@ -47,7 +47,7 @@ both read it.
 | -------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
 | mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                |
 | org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                              |
-| tenants  | Built fresh: `edge-t`, `app-t1`, `db-t1`                                  | a Read probe token only, until a stack needs one                                                                    |
+| tenants  | Built fresh: `edge-t`, `db-t1` (switch off), `app-t1`                     | a Read probe token only, until a stack needs one                                                                    |
 | demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                    |
 | dns      | The branchleft.co.uk DNS zone and no hosts                                | `HCLOUD_TOKEN`, exported by hand per `hetzner/dns/RUNBOOK-dns-cutover.md` — `hetzner/dns/`'s stack, no CI apply yet |
 | backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                    |
