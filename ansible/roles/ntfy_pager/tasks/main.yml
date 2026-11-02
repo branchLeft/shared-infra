@@ -89,7 +89,7 @@
 # changed renderer reaches the unit when monitoring_stack next restarts it: the
 # renderer is part of that role's fingerprint.
 #
-# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the renderer maps
+# The diff is not shown (ANS-16): the renderer maps
 # placeholder names to environment variable names like passwords and tokens, which the plan's
 # secret scan would withhold the whole plan of the host over. It holds no secret value.
 - name: Deliver the renderer

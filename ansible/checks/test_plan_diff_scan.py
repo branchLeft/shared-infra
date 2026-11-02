@@ -1,29 +1,8 @@
 """A file a role copies whole must not trip the plan's secret scan, or it has no approvable plan.
 
-The gated apply asks each host what a run would change, in check mode, with a diff. Before the
-plan is shown to the approver, a scan reads that diff and withholds all of it when any line looks
-like a secret. A role that copies a whole file (a program, a compose file) puts the file into the
-diff as it changes, so one line that merely reads like a secret, such as a docstring sentence or
-an environment variable reference, withholds the plan of the host: nothing can be approved.
-
-The control is a task keyword, `diff: false`, set on the copy or template task whose file is not
-secret but reads as secret-like text. The scan is a backstop, never loosened to fit a file
-(ANS-16). This module holds the scan's pattern as a constant and fails when a task the playbooks
-reach copies a file with a matching line and does not set `diff: false`. There is no list of
-exceptions (owner ruling of 2 Nov 2026, workspace#2348): a line that is prose is reworded so it
-no longer matches, and `diff: false` is set only on the task of a file whose matching line is a
-variable reference or a name that cannot change.
-
-The pattern is the `credential-assignment` entry of the backstop in the workflow step "Judge the
-answers, scan the diff and write the result" of the ssh-check-hosts action, in
-branchLeft/github-workflows, at the tag ansible-gated-apply.yml pins (v1.0.19 when this was
-written). The workflow runs it as `grep -Eiq` on the diff in the C locale. It is translated here:
-`re.I` for `-i`, `re.A` so that `\\s` is the ASCII set the C locale gives the POSIX space class,
-and `\\s` for `[[:space:]]`. The other entries of the backstop name key material and tokens that
-no role file holds, so they are not copied.
-
-The check reads the source of a task, not the text Ansible renders from it. A template whose
-rendered text differs from its source is judged by its source.
+This module holds the scan's `credential-assignment` pattern as a constant and fails when a task
+the playbooks reach copies a file with a matching line and does not set `diff: false`, or sets it
+over a file that does not match. See README.md, "test_plan_diff_scan.py".
 """
 
 from __future__ import annotations

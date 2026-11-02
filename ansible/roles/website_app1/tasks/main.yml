@@ -71,7 +71,7 @@
 # website repository held (its deploy/compose.yml). It names no image of its
 # own: the unit's environment supplies IMAGE, which branchleft-deploy writes.
 #
-# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348).
+# The diff is not shown (ANS-16).
 # The file holds no secret. It names environment variables the host supplies, which reads as
 # secret-like text to the secret scan of the plan's diff, and that scan then withholds the
 # plan of the host, so its diff is not shown. The task is not hidden (no_log is not set): the

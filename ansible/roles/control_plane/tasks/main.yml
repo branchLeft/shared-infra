@@ -248,7 +248,7 @@
 # Copied with explicit modes, not rsync. The runbook's rsync used --delete, so a
 # file removed from the repository was removed from the host; this does not
 # delete, and a file dropped from the list stays on the host until removed by hand.
-# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the compose files
+# The diff is not shown (ANS-16): the compose files
 # set environment variables named like passwords from other variables, and the plan's secret
 # scan would withhold the whole plan of the host over them. They hold no secret value. The
 # other files go by the next task, which shows its diff.

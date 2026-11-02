@@ -22,7 +22,7 @@
     follow: false
   register: demo1_egress_spool_project_stat
 
-# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the vendored
+# The diff is not shown (ANS-16): the vendored
 # compose file sets an environment variable named like a token from another variable, which
 # the plan's secret scan would withhold the whole plan of the host over. It holds no secret value.
 - name: Place the rendered Compose file

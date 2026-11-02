@@ -83,7 +83,7 @@
 # from ${IMAGE}, which the template does. The role does not run docker compose.
 # Skipped in check mode with a stated reason (ANS-10): the directory it is written
 # to is created by the task above, which check mode does not perform.
-# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the file sets an
+# The diff is not shown (ANS-16): the file sets an
 # environment variable named like a password from another variable, which the plan's secret
 # scan would withhold the whole plan of the host over. It holds no secret value.
 - name: Render the compose file the deploy program reads

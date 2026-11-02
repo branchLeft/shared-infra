@@ -56,7 +56,7 @@
     group: root
     mode: '0755'
 
-# The diff is not shown (ANS-16; owner ruling of 2 Nov 2026, workspace#2348): the compose file
+# The diff is not shown (ANS-16): the compose file
 # sets environment variables named like passwords from other variables, which the plan's
 # secret scan would withhold the whole plan of the host over. It holds no secret value.
 - name: Deliver the stack's files
