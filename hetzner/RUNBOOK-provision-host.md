@@ -431,6 +431,21 @@ this host (a second gateway masquerading the subnet builds a path nothing
 routes to), and `app-host-isolation.sh` is the next step below if this host
 is an app host.
 
+### A second network, a second gateway
+
+The tenants project has its own network (a network does not span hcloud
+projects), so it has its own gateway: `edge-t`, declared in
+`hetzner/tenants.ts` with the route that names it, and delivered the NAT
+reconciler by the `egress_nat` role as the Ansible host `edget`. One gateway
+per network is the rule, not one in the estate: a second gateway on the same
+network loops that network's egress. The same ordering applies as for edge1 —
+the route and the forwarding must be live before a private-only host in that
+project is created, and `db-t1` stays off (`dbt1Enabled`) until they are. The
+forwarding has only been proven with Docker's FORWARD chain on edge1; prove it
+on `edge-t` with Docker running before `db-t1`'s first boot (for example from a
+network namespace on `edge-t` itself, which costs nothing), and record the
+result on branchLeft/workspace#2898.
+
 ### What this does not solve
 
 The gateway is a single point of failure for every private host's outbound

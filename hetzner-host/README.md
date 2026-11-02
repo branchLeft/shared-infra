@@ -15,6 +15,16 @@ each dependent creating its own copy of shared infrastructure.
 
 - `Host`, `HostArgs`, `HostRole` — the component and its arguments.
 - `EDGE_RULES`, `INTERNAL_RULES` — per-role firewall rule sets.
+- `HostArgs.sshSourceIp`, `sshRestrictedRules`, `edgeRulesSshFrom`,
+  `assertSshSourceAddress`, `sshFromOneAddressViolations` — the optional
+  narrowing of a public host's SSH rule to one public IPv4 address (a /32), and
+  the function that states what such a rule set must look like. Absent, a host
+  gets its role's rule set byte for byte; present, only the SSH source changes,
+  so the input can narrow SSH and cannot widen it or add a port. A CIDR, an IPv6
+  address, a hostname, or a private, loopback, link-local, shared or reserved
+  address is refused, before anything is created when the value is a plain
+  string and when an output resolves otherwise. It is refused on a host with no
+  public networking.
 - `renderCloudInit`, `CloudInitArgs`, `assertDeployPublicKey` — the first-boot
   user-data and the validation that protects it.
 - `Enrolment`, `PullBootstrap`, `PullBootstrapFile`, `assertEnrolment`,
@@ -23,8 +33,12 @@ each dependent creating its own copy of shared infrastructure.
   enrolment of an edge host into the gated pull, and its validation
   ("Enrolment" below).
 - `NETWORK_CIDR`, `SUBNET_CIDR`, `HOST_IPS`, `APP_HOST_IPS`,
-  `ESTATE_LOCATION`, `EuCentralLocation`, `EstateLocation` — the shared
-  address plan every host and its peers are named from.
+  `TENANTS_HOST_IPS`, `ESTATE_LOCATION`, `EuCentralLocation`,
+  `EstateLocation` — the shared address plan every host and its peers are named
+  from. The tenants project reuses the estate's range (a network does not span
+  projects), so `ADDRESS_REGISTER` lists every private address of both projects,
+  built from those constants, and `duplicateAddresses` finds an address held
+  twice; `addressRegister.test.ts` refuses one.
 
 ## `Host`
 
