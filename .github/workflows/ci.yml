@@ -43,6 +43,22 @@ name: CI
 #      `production-mail` (scripts/choose-apply-environment.py,
 #      scripts/test_ci_apply_environments.py).
 #
+# Six of the credential-free check jobs skip their own steps when a pull
+# request or merge queue entry changes nothing they read (mail-typecheck,
+# mail-provision-checks, edge-config-validate, monitoring-config-validate,
+# nextcloud1-config-validate, control-plane-config-validate). The job still
+# runs and reports, so every required check name still arrives and the ruleset
+# is untouched; only its steps are guarded, on the output of the
+# `.github/actions/ci-skip` step that follows Checkout. scripts/ci_skip.py
+# holds the one path map and fails open: an unmapped path, an empty or unreadable
+# diff, or any event other than pull_request and merge_group runs the job, so the
+# push to `main` runs every job in full (rules: scripts/ci_skip.md). The other
+# six check jobs never skip, because what they read is the whole tree or
+# enough of it that no hand-kept map could be trusted: scripts-tests and
+# pulumi-inventory-audit walk the tree for committed secrets, and typecheck,
+# hetzner-typecheck, hetzner-host-typecheck and hetzner-provision-checks read
+# across directories (scripts/test_ci_skip.py pins that set).
+#
 # There is deliberately no `pulumi preview` job on pull requests. It is the
 # obvious next step, but it means handing credentials to a job running
 # unmerged code, and a bearer token would work from anywhere, which makes the
@@ -134,10 +150,22 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: mail-typecheck
+
       - name: Setup pnpm
+        if: steps.skip.outputs.run != 'false'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
 
       - name: Setup Node
+        if: steps.skip.outputs.run != 'false'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: mail/.nvmrc
@@ -146,11 +174,13 @@ jobs:
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
+        if: steps.skip.outputs.run != 'false'
         run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
+        if: steps.skip.outputs.run != 'false'
         run: pnpm exec tsc --noEmit
 
   mail-provision-checks:
@@ -171,11 +201,23 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: mail-provision-checks
+
       - name: Shellcheck
+        if: steps.skip.outputs.run != 'false'
         run: shellcheck mail/provision/*.sh
 
       - name: Python unit tests
-        run: python3 -m unittest discover -s mail/provision -p 'test_*.py' -v
+        if: steps.skip.outputs.run != 'false'
+        run: python3 scripts/trace_reads.py --unit mail-provision-checks -- -m unittest discover -s mail/provision -p 'test_*.py' -v
 
   hetzner-typecheck:
     name: Type check (hetzner)
@@ -414,8 +456,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: edge-config-validate
+
       # The runner is amd64 and so is the edge, so no emulation is involved.
       - name: Build the edge Caddy image
+        if: steps.skip.outputs.run != 'false'
         # Static tag, not one built from `github.sha`: a `${{ }}` inside a `run:`
         # body is substituted before the shell parses the line. The runner is
         # isolated per job, so there is nothing for a unique tag to disambiguate.
@@ -424,6 +477,7 @@ jobs:
       # The Compose file is not rendered, so nothing else would notice a typo in
       # it until a deploy failed on the host.
       - name: Check the Compose file resolves
+        if: steps.skip.outputs.run != 'false'
         env:
           IMAGE: ghcr.io/branchleft/edge-caddy@sha256:0000000000000000000000000000000000000000000000000000000000000000
           CROWDSEC_BOUNCER_KEY: validation-only
@@ -438,6 +492,7 @@ jobs:
       # rendered file its own formatter disagrees with makes every later diff
       # ambiguous about whether the config or the layout moved.
       - name: Load every rendered configuration through Caddy
+        if: steps.skip.outputs.run != 'false'
         run: |
           status=0
           for config in hetzner/edge/stack/Caddyfile hetzner/edge/validation/Caddyfile.*; do
@@ -476,13 +531,25 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: monitoring-config-validate
+
       # render_alertmanager_config.py's own unit tests -- the pure
       # string-substitution logic that stands in for Alertmanager's lack of
       # `{env.X}` support (see that script's docstring).
       - name: Python unit tests
-        run: python3 -m unittest discover -s hetzner/monitoring -p 'test_*.py' -v
+        if: steps.skip.outputs.run != 'false'
+        run: python3 scripts/trace_reads.py --unit monitoring-config-validate -- -m unittest discover -s hetzner/monitoring -p 'test_*.py' -v
 
       - name: Check the Compose file resolves
+        if: steps.skip.outputs.run != 'false'
         env:
           GRAFANA_ADMIN_PASSWORD: validation-only
         run: docker compose -f hetzner/monitoring/stack/compose.yml config -q
@@ -492,6 +559,7 @@ jobs:
       # accept from one they reject, the same gap `edge-config-validate` closes
       # for Caddy.
       - name: Validate the Prometheus config and alert rules
+        if: steps.skip.outputs.run != 'false'
         # `chmod a+r` first: these images run as a non-root user, and a bind
         # mount is read as that container-side user regardless of who wrote
         # the file. A fresh checkout here is 0644, but a workstation checkout
@@ -520,6 +588,7 @@ jobs:
       # fire. Its own `rule_files:` entry is relative to itself, so the mount
       # layout below has to mirror hetzner/monitoring/'s own directory shape.
       - name: Test the alert rules with promtool
+        if: steps.skip.outputs.run != 'false'
         run: |
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
@@ -543,6 +612,7 @@ jobs:
             test rules alert_rules_deadline_test.yml
 
       - name: Render the Alertmanager config with placeholder secrets
+        if: steps.skip.outputs.run != 'false'
         env:
           SMTP_USERNAME: validation-user
           SMTP_PASSWORD: validation/pass&word
@@ -556,6 +626,7 @@ jobs:
         run: python3 hetzner/monitoring/stack/render_alertmanager_config.py
 
       - name: Validate the Alertmanager config
+        if: steps.skip.outputs.run != 'false'
         # render_alertmanager_config.py writes this file `0600` and, when it
         # runs as root, chowns it to the uid the alertmanager image runs as.
         # This job is not root, so no chown happens and the file stays owned
@@ -577,6 +648,7 @@ jobs:
       # it: each line names the exact receiver set an alert must reach, and
       # --verify.receivers fails the step on any other set.
       - name: Test the Alertmanager routing
+        if: steps.skip.outputs.run != 'false'
         run: |
           route() {
             docker run --rm \
@@ -639,6 +711,7 @@ jobs:
       # the access rules back from the server itself: anonymous holds nothing,
       # the owner reads, both publishers only write, and the tokens exist.
       - name: Validate the ntfy config and its access rules
+        if: steps.skip.outputs.run != 'false'
         run: |
           image=docker.io/binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da
           cid=$(docker run -d --rm --label branchleft.agent=ci-ntfy-validate \
@@ -667,17 +740,18 @@ jobs:
           grep -q '403' <<<"$anon"
 
       - name: Remove the rendered ntfy config
-        if: always()
+        if: always() && steps.skip.outputs.run != 'false'
         run: rm -f hetzner/monitoring/stack/ntfy/server.yml
 
       # Never committed: it carries the placeholder secrets rendered above,
       # and the real thing carries real ones -- the same reason RUNBOOK-monitoring.md
       # tells the operator to re-render rather than to hand-edit this file.
       - name: Remove the rendered Alertmanager config
-        if: always()
+        if: always() && steps.skip.outputs.run != 'false'
         run: rm -f hetzner/monitoring/stack/alertmanager/alertmanager.yml
 
       - name: Validate the blackbox_exporter config
+        if: steps.skip.outputs.run != 'false'
         run: |
           chmod a+r hetzner/monitoring/stack/blackbox/blackbox.yml
           docker run --rm \
@@ -708,7 +782,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: nextcloud1-config-validate
+
       - name: Check the Compose file resolves
+        if: steps.skip.outputs.run != 'false'
         env:
           NEXTCLOUD_DB_PASSWORD: validation-only
           NEXTCLOUD_REDIS_PASSWORD: validation-only
@@ -729,7 +814,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: control-plane-config-validate
+
       - name: Check the Compose file resolves, with and without the applications
+        if: steps.skip.outputs.run != 'false'
         env:
           IMAGE: ghcr.io/branchleft/portal-apps@sha256:0000000000000000000000000000000000000000000000000000000000000000
           CONTROL_PLANE_DB_ADMIN_PASSWORD: validation-only
@@ -746,6 +842,7 @@ jobs:
       # init overlay is the control case: it must carry the sentinel, or the
       # negative check above it could not have failed.
       - name: Check the rendered runtime config holds no administrator credential
+        if: steps.skip.outputs.run != 'false'
         env:
           IMAGE: ghcr.io/branchleft/portal-apps@sha256:0000000000000000000000000000000000000000000000000000000000000000
           COMPOSE_PROFILES: apps
@@ -768,14 +865,17 @@ jobs:
       # text match misses a quoted key. The control case must exit 1 exactly,
       # so a checker that stopped matching cannot pass the step silently.
       - name: Set up Python
+        if: steps.skip.outputs.run != 'false'
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
       - name: Install the YAML parser the stack-keys check uses
+        if: steps.skip.outputs.run != 'false'
         run: python3 -m pip install --quiet pyyaml==6.0.3
 
       - name: Check the stack files' parsed keys, and that the check still rejects a quoted env_file
+        if: steps.skip.outputs.run != 'false'
         run: |
           checker=hetzner/provision/stack_keys_check.py
           stack=hetzner/control-plane/stack
