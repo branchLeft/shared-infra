@@ -14,6 +14,7 @@ it back and they pass.
 """
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,61 @@ STEPS: dict[str, tuple[str, str]] = {
 }
 
 SHELL_MODULES = ("ansible.builtin.shell", "ansible.builtin.raw", "ansible.builtin.script")
+
+
+def _is_comment_line(line: str, suffix: str) -> bool:
+    """A comment-only line: its first non-space characters are # in any file, or // in .js and .ts.
+
+    A trailing comment on a code line is not a comment-only line and still counts.
+    """
+    stripped = line.lstrip()
+    return stripped.startswith("#") or (suffix in (".js", ".ts") and stripped.startswith("//"))
+
+
+# The program has one installer, ROLE. tenant_compose calls it by its installed path and never
+# installs it, so it is the one other role allowed to name it. No other role or pattern may.
+CALLER_ROLES = frozenset({"tenant_compose"})
+
+
+def _offenders(roles_dir: Path, patterns_dir: Path, role: Path) -> list[str]:
+    """Files outside ROLE and CALLER_ROLES that name the program in code."""
+    others = [
+        path
+        for base in (roles_dir, patterns_dir)
+        for path in base.rglob("*")
+        if path.is_file() and role not in path.parents
+    ]
+    offenders = []
+    for path in others:
+        if path.is_relative_to(roles_dir) and path.relative_to(roles_dir).parts[0] in CALLER_ROLES:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue
+        code = "\n".join(
+            line for line in text.splitlines() if not _is_comment_line(line, path.suffix)
+        )
+        if "provision_tenant_volume" in code:
+            offenders.append(str(path.relative_to(roles_dir.parent)))
+    return offenders
+
+
+def _fixture_tree(base: Path) -> tuple[Path, Path, Path]:
+    """A roles/ tree with tenant_onboarding and a second role, and an empty patterns/."""
+    roles_dir = base / "roles"
+    patterns_dir = base / "patterns"
+    role = roles_dir / "tenant_onboarding"
+    (role / "tasks").mkdir(parents=True)
+    (roles_dir / "other" / "files").mkdir(parents=True)
+    (roles_dir / "other" / "tasks").mkdir(parents=True)
+    patterns_dir.mkdir()
+    return roles_dir, patterns_dir, role
+
+
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 class NotATaskListError(TypeError):
@@ -149,23 +205,50 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(shipped, [], "the role must not hold a copy of the tenant program")
 
     def test_no_other_role_or_pattern_names_the_program(self) -> None:
-        # The program has one installer. Another role that installed it would be a second
-        # home, and a second copy of the register it reads beside it.
-        others = [
-            path
-            for base in (ROLES_DIR, PATTERNS_DIR)
-            for path in base.rglob("*")
-            if path.is_file() and ROLE not in path.parents
-        ]
-        offenders = []
-        for path in others:
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError):
-                continue
-            if "provision_tenant_volume" in text:
-                offenders.append(str(path.relative_to(ROLES_DIR.parent)))
-        self.assertEqual(offenders, [], "another role or pattern names the tenant program")
+        # The program has one installer: tenant_onboarding. Another role that installed it
+        # would be a second home, and a second copy of the register it reads beside it.
+        # tenant_compose is the one allowed caller: it calls the program by path and never
+        # installs it. Any third role or pattern that names the program fails.
+        self.assertEqual(
+            _offenders(ROLES_DIR, PATTERNS_DIR, ROLE),
+            [],
+            "a role or pattern other than tenant_compose names the tenant program",
+        )
+
+    def test_a_comment_naming_the_program_is_not_an_offender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            roles_dir, patterns_dir, role = _fixture_tree(Path(tmp))
+            _write(roles_dir / "other" / "tasks" / "notes.yml", "# provision_tenant_volume: note\n")
+            _write(
+                roles_dir / "other" / "files" / "helper.ts", "// provision_tenant_volume: note\n"
+            )
+            self.assertEqual(_offenders(roles_dir, patterns_dir, role), [])
+
+    def test_only_tenant_compose_may_call_the_program_by_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            roles_dir, patterns_dir, role = _fixture_tree(Path(tmp))
+            _write(
+                roles_dir / "tenant_compose" / "vars" / "main.yml",
+                "tenant_compose_volume_program: /root/x/provision_tenant_volume.py\n",
+            )
+            _write(
+                roles_dir / "other" / "tasks" / "main.yml",
+                "- name: run\n  ansible.builtin.command: provision_tenant_volume --x\n",
+            )
+            offenders = _offenders(roles_dir, patterns_dir, role)
+            self.assertEqual(len(offenders), 1, offenders)
+            self.assertTrue(offenders[0].endswith("other/tasks/main.yml"), offenders)
+
+    def test_a_code_line_naming_the_program_is_an_offender(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            roles_dir, patterns_dir, role = _fixture_tree(Path(tmp))
+            _write(
+                roles_dir / "other" / "tasks" / "main.yml",
+                "- name: run\n  ansible.builtin.command: provision_tenant_volume --x\n",
+            )
+            offenders = _offenders(roles_dir, patterns_dir, role)
+            self.assertEqual(len(offenders), 1)
+            self.assertTrue(offenders[0].endswith("other/tasks/main.yml"), offenders)
 
 
 class PinTests(unittest.TestCase):
