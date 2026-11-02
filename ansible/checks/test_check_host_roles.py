@@ -681,7 +681,9 @@ class HostRoleLists(unittest.TestCase):
     def test_a_host_with_no_list_gets_only_the_pull_roles(self) -> None:
         trust = "---\npull_trigger_signers: []\n"
         # Built on app1, which has no owner_vars file; ops1's play loads one, and mx9 has none.
-        new = self.original["app1"].replace("app1", "mx9")
+        # app1's pinned play vars come out too: mx9 has no row in HOST_PLAY_VARS, so its vars must
+        # be exactly enrolled_host, and this test is about the roles.
+        new = self.original["app1"].replace(PINNED_PLAY_VARS["app1"], "").replace("app1", "mx9")
         for extra, passes in (("", True), (_entry("host_baseline"), False)):
             with self.subTest(extra=extra):
                 (self.ansible / "playbooks" / "mx9.yml").write_text(new + extra, encoding="utf-8")
