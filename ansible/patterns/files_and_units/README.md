@@ -198,17 +198,15 @@ hand, and it behaves like this:
 From the repository root, with Docker running locally and Python 3.12 or later.
 `ansible/README.md` describes the harness and the tools in full.
 
+Create the virtual environment and install the pinned tools with the one install
+recipe in [ansible/README.md](../../README.md), "Run the harness". The install
+commands are kept only there, so the recipe has one home; `.venv` is git-ignored.
+A machine with no network uses the download-then-install route in that same file,
+"Install, and install with no network". Then, from the repository root:
+
 ```text
-python3 -m venv .venv
-.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt
-.venv/bin/pip install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt
 .venv/bin/python ansible/harness/run_harness.py ansible/patterns/files_and_units
 ```
-
-The first pip install is the pinned pip that the lock's parity test asks for. The
-second installs the pinned tools and the collections. `.venv` is git-ignored. A
-machine with no network uses the download-then-install route in
-[ansible/README.md](../../README.md), "Install, and install with no network".
 
 The harness lints the role and runs the scenario in `molecule/default/` on one
 container, and exits non-zero if any step fails. It removes its container when it
