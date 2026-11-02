@@ -276,9 +276,9 @@ class HostRoleLists(unittest.TestCase):
     # may apply a subset. Red when any role is added, dropped, doubled or moved (the grants before
     # the timers or the stack), green with the eight named in this order. The grants come last
     # because the role checks the dump programs the timers deliver against pinned digests before
-    # it changes the dump account. tunnel_account is held back: it has no main entry (a play reaches it only with
-    # tasks_from, which R2 refuses), it runs on db1 and on a replica host with no enrolled
-    # playbook, and its five input files are not carried by the loader.
+    # it changes the dump account. tunnel_account is held back: it has no main entry (a play
+    # reaches it only with tasks_from, which R2 refuses), it runs on db1 and on a replica host
+    # with no enrolled playbook, and its five input files are not carried by the loader.
     def test_db1_applies_the_grants_last_after_the_stack_and_the_timers(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
