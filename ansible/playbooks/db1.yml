@@ -35,3 +35,4 @@
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/db1_stack # noqa: role-name[path]
     - role: ../roles/db1_backup_timers # noqa: role-name[path]
+    - role: ../roles/node_exporter # noqa: role-name[path]

@@ -309,6 +309,7 @@ class Mutations(unittest.TestCase):
             "deploy_slot_keys",
             "monitoring_stack",
             "ntfy_pager",
+            "node_exporter",
             "exporters_and_collectors",
             "nextcloud_stack",
             "backup_worker",

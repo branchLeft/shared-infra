@@ -25,9 +25,6 @@ hetzner/provision/20-install-docker.sh:
 hetzner/provision/30-install-deploy-tooling.sh:
   reason: pending-role
   role: deploy_tooling
-hetzner/provision/40-install-node-exporter.sh:
-  reason: pending-role
-  role: exporters_and_collectors
 hetzner/provision/45-install-db-tunnel.sh:
   reason: pending-role
   role: db_tunnel
