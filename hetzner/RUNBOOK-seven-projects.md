@@ -45,6 +45,13 @@ are not touched by any step here. `backup` and `demo-dns` hold no host at any
 point — they exist to bound a bucket and a DNS zone respectively, nothing
 more.
 
+## A server joins the project of its trust tier
+
+1. **The rule.** A server joins the project of its trust tier. A new project is allowed only for a new trust tier, or for a credential that must not reach its neighbours. Never one project per server. A tier is the line already drawn between org, tenants, demos and mail; a credential that must be fenced is the reason `dns`, `demo-dns` and `backup` exist.
+2. **The per-server-project pattern**, as org already runs it (`hetzner/network.ts`: edge1 is web edge, NAT and jump). A project that holds more than one server has one private network, with an address range no other project uses (the whole-estate address register). It has **one edge**, the only host with a public interface, doing three jobs: public HTTPS, source-NAT egress for the private-only hosts, and the single SSH entry through restricted no-shell accounts. Every other host in the project is private-only. In a less-trusted project the edge's SSH is open only from the more-trusted project's edge (edge1's public address, as for demo1). A project with one host is its own edge and needs no gateway. A second gateway host exists only for a purpose that conflicts with the edge's, for example a host that holds a secret the edge must not hold (the storage gateway).
+3. **Tenants is the second project built this way**, with edge-t as its edge ([ISSUE branchLeft/workspace#2898](https://github.com/branchLeft/workspace/issues/2898)).
+4. One line: projects that fence a single storage key are under a separate discussion and are not covered by this rule yet.
+
 ## Blast radius
 
 - **Creates:** five empty projects (`tenants`, `demos`, `dns`, `backup`,
