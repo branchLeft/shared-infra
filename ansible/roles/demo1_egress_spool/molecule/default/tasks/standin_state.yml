@@ -15,10 +15,9 @@
 #             the golden Compose file's image and the bumped pin the converge step writes)
 - name: Write the images the stand-in docker holds
   ansible.builtin.copy:
-    content: |
-      {% for image in standin_images %}
-      {{ image }}
-      {% endfor %}
+    # One image per line with a trailing newline, as the loop wrote it. An empty list is a
+    # lone newline, not an empty string: ansible.builtin.copy refuses empty content.
+    content: "{{ (standin_images | join('\\n')) ~ '\\n' }}"
     dest: /var/lib/standin-docker/images
     owner: root
     group: root

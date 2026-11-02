@@ -32,10 +32,12 @@ case $1 in
     # named in $state/images (tasks/standin_state.yml writes it) is on this stand-in host.
     case $2 in
       inspect)
-        grep -qxF -- "$3" "$state/images" 2>/dev/null || {
+        # An empty images file is one blank line, which -x would match an empty name against,
+        # so an empty name is refused first.
+        if [ -z "$3" ] || ! grep -qxF -- "$3" "$state/images" 2>/dev/null; then
           echo "Error: No such image: $3" >&2
           exit 1
-        }
+        fi
         echo '[]'
         ;;
       *) exit 1 ;;
