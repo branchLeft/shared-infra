@@ -226,12 +226,30 @@ function paramNamePattern(): string {
 /** The log fields the token can appear in: the request line, a refused sign-in's Referer, Ghost's 302. */
 const BREAK_GLASS_LOG_FIELDS = ['request>uri', 'request>headers>Referer', 'resp_headers>Location'];
 
+/**
+ * Retention of every edge log, set explicitly rather than left to Caddy's own
+ * defaults. The owner decided 30 days on 2026-08-24: well inside the 90-day
+ * ceiling the website privacy notice commits to, and far
+ * longer than abuse investigation or incident response needs. Caddy's default
+ * happens to be about 90 days, so leaving it unset would keep the notice true by
+ * coincidence rather than by policy.
+ */
+const LOG_RETENTION = '720h';
+
+/** Caddy's own defaults for rotation size and file count, stated so the directive is complete. */
+const LOG_ROLL_SIZE = '100MiB';
+const LOG_ROLL_KEEP = 10;
+
 function logDirective(path: string): string[] {
   // Any parameter whose name starts with the token's, in any case, loses its value.
   const pattern = `(?i)([?&]${paramNamePattern()})[^&#]*`;
   return [
     'log {',
-    `\toutput file ${path}`,
+    `\toutput file ${path} {`,
+    `\t\troll_size ${LOG_ROLL_SIZE}`,
+    `\t\troll_keep ${LOG_ROLL_KEEP}`,
+    `\t\troll_keep_for ${LOG_RETENTION}`,
+    '\t}',
     '\tformat filter {',
     '\t\twrap json',
     ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t\t${field} regexp "${pattern}" "$1=REDACTED"`),

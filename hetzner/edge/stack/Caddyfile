@@ -20,7 +20,11 @@
 
 branchleft.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -61,7 +65,11 @@ branchleft.co.uk {
 
 www.branchleft.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -80,7 +88,11 @@ www.branchleft.co.uk {
 
 blog.branchleft.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -122,7 +134,11 @@ blog.branchleft.co.uk {
 
 cloud.branchleft.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -163,7 +179,11 @@ cloud.branchleft.co.uk {
 
 book.branchleft.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -182,7 +202,11 @@ book.branchleft.co.uk {
 
 portal.publicpress.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -223,7 +247,11 @@ portal.publicpress.co.uk {
 
 console.branchleft.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -274,7 +302,11 @@ console.branchleft.co.uk {
 
 id.publicpress.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -315,7 +347,11 @@ id.publicpress.co.uk {
 
 ntfy.branchleft.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -356,7 +392,11 @@ ntfy.branchleft.co.uk {
 
 publicpress.co.uk {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -381,7 +421,11 @@ publicpress.co.uk {
 
 http://edge-probe.invalid:8080 {
 	log {
-		output file /var/log/caddy/probe.log
+		output file /var/log/caddy/probe.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -416,7 +460,11 @@ http://edge-probe.invalid:8080 {
 
 :8080 {
 	log {
-		output file /var/log/caddy/probe.log
+		output file /var/log/caddy/probe.log {
+			roll_size 100MiB
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
