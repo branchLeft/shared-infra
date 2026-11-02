@@ -1,4 +1,4 @@
-"""Unit tests for the exporters_and_collectors role's fact gathering: the contract of its files.
+"""Unit tests for the node_exporter role's fact gathering: the contract of its files.
 
 The pulled playbooks set gather_facts: false, so the role cannot read the facts it uses
 until it gathers them itself. The Molecule scenario proves the role on a host. These

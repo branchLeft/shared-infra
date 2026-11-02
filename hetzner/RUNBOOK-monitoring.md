@@ -1012,25 +1012,19 @@ exact ordering mistake branchLeft/workspace#1149 exists to prevent.
 Same shape as "5. Provision a host that has no public address" above, reached
 through the `edge1` jump host — `$EDGE1_IPV4` is set there; re-set it first if
 entering here independently. **Native binary, not a Compose service**:
-`40-install-node-exporter.sh`'s own header explains why — ops1 runs
-`app-host-isolation.sh`'s `DOCKER-USER` policy, which drops every forwarded
-packet to the subnet with no carve-out for this host, and a published
-container port is forwarded traffic. A process bound to the host's own
-private address and reached over `INPUT` is not.
+The native install is the `node_exporter` role (`ansible/roles/node_exporter`),
+applied by ops1's gated pull, not a hand copy. The role's own README explains why
+the exporter is native: ops1 runs `app-host-isolation.sh`'s `DOCKER-USER` policy,
+which drops every forwarded packet to the subnet with no carve-out for this host,
+and a published container port is forwarded traffic. A process bound to the
+host's own private address and reached over `INPUT` is not.
 
-```bash
-cd ~/branchLeft/shared-infra
-HOST_PRIVATE_IP=10.20.1.50   # ops1 -- HOST_IPS.ops1, unchanged in value by the host rename, only in key name
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@"$HOST_PRIVATE_IP":/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/40-install-node-exporter.sh'
-```
-
-Expect the script's own closing line, `40-install-node-exporter: done,
-listening on 10.20.1.50:9100`. If it instead prints `no address in
-10.20.1.0/24 found on this host`, stop — that means this ran against the
-wrong host or the private network is not attached, not a problem the script
-can reconcile around.
+There is no command to run by hand here. The step is the owner's gate approval of
+the ops1 pull once the role is on `main`. After that apply, read the result on
+ops1: `systemctl is-active node_exporter.service` prints `active`, and the
+exporter listens on `10.20.1.50:9100`. If the role refuses with `no address in
+10.20.1.0/24` or with a mount at or above 70 percent, stop and fix the host;
+the role does not reconcile either of those.
 
 ### 15b. The firewall rule this does not need, stated rather than left silent
 
