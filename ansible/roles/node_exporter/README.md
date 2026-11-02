@@ -67,11 +67,12 @@ names them. None of the variables is a secret.
 ## Where it is applied
 
 - `ops1`, last, in `ansible/playbooks/ops1.yml`.
-- `db1`, last, in `ansible/playbooks/db1.yml`.
+- `db1`, after the database stack and the backup timers and before `db1_grants`, in
+  `ansible/playbooks/db1.yml`. A disk refusal here also holds back a grants change.
+  That is fail-safe: the grants then stay as they were.
 - `edge1`, before `exporters_and_collectors`, in `ansible/playbooks/edge1.yml`.
 
-It is last on the two hosts where its disk check could refuse, so a refusal holds
-nothing else back.
+On `ops1`, the last role, a disk refusal holds nothing else back.
 
 ## Deliberate differences from the scripts
 

@@ -67,11 +67,11 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
 # host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
 # installed Docker), then app1's deploy_tooling and deploy_slot_keys (last, in that order: the slot
-# keys need the wrapper the tooling installs), db1's host_baseline, db1_stack and
-# db1_backup_timers (after the loader, which goes first; db1_grants would follow the timers and
-# is not applied), ops1's host_inputs (first), control_plane after the status page, then
-# nextcloud_stack, backup_worker and backup_restore (the restore reads the worker's variables, so
-# it follows), then control_plane_db last (it asserts the directory control_plane makes), and
+# keys need the wrapper the tooling installs), db1's host_baseline, db1_stack, db1_backup_timers
+# and db1_grants (after the loader, which goes first; db1_grants follows the timers, which deliver
+# the dump programs it checks), ops1's host_inputs (first), control_plane after the status page,
+# then nextcloud_stack, backup_worker and backup_restore (the restore reads the worker's variables,
+# so it follows), then control_plane_db last (it asserts the directory control_plane makes), and
 # demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
@@ -107,7 +107,14 @@ APPLIED_ON_MAIN = {
         "deploy_tooling",
         "deploy_slot_keys",
     ],
-    "db1": ["host_inputs", "host_baseline", "db1_stack", "db1_backup_timers", "node_exporter"],
+    "db1": [
+        "host_inputs",
+        "host_baseline",
+        "db1_stack",
+        "db1_backup_timers",
+        "node_exporter",
+        "db1_grants",
+    ],
     "demo1": ["demo1_build", "demo1_egress_spool"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
@@ -264,13 +271,15 @@ class HostRoleLists(unittest.TestCase):
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
     # Safety class: db1 is the production database host. It applies the two pull roles, the loader
-    # of its private inputs, the host baseline, the stack, then the backup timers, and none of the
-    # other roles on its list, which R9 allows because a playbook may apply a subset. Red when any
-    # role is added or moved, green with the six named in this order. db1_grants is held back and
-    # would have to follow the timers.
-    def test_db1_applies_the_pull_roles_the_loader_the_baseline_the_stack_then_the_timers(
-        self,
-    ) -> None:
+    # of its private inputs, the host baseline, the stack, the backup timers, the node exporter,
+    # then the grants, and none of the other roles on its list, which R9 allows because a playbook
+    # may apply a subset. Red when any role is added, dropped, doubled or moved (the grants before
+    # the timers or the stack), green with the eight named in this order. The grants come last
+    # because the role checks the dump programs the timers deliver against pinned digests before
+    # it changes the dump account. tunnel_account is held back: it has no main entry (a play reaches it only with
+    # tasks_from, which R2 refuses), it runs on db1 and on a replica host with no enrolled
+    # playbook, and its five input files are not carried by the loader.
+    def test_db1_applies_the_grants_last_after_the_stack_and_the_timers(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "db1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
         self.assertEqual(
@@ -283,9 +292,10 @@ class HostRoleLists(unittest.TestCase):
                 "db1_stack",
                 "db1_backup_timers",
                 "node_exporter",
+                "db1_grants",
             ],
         )
-        for held_back in ("db1_grants", "tunnel_account"):
+        for held_back in ("tunnel_account",):
             self.assertNotIn(held_back, names)
         self.assertEqual(check(ROOT), [])
 
