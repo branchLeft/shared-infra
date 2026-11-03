@@ -16,19 +16,27 @@ import re
 import unittest
 from pathlib import Path
 
-ROLE = Path(__file__).resolve().parents[2]
+ROLE = Path(__file__).resolve().parents[2] / "ansible" / "roles" / "db1_stack"
 MOLECULE = ROLE / "molecule"
 DEFAULT = MOLECULE / "default"
 VERIFY = DEFAULT / "verify.yml"
 PART_WHEN = re.compile(r"verify_part == '([^']+)'")
 
 
+class VerifyPartsError(Exception):
+    """verify.yml does not hold the verify_parts list these tests read."""
+
+
 def listed_parts() -> list[str]:
-    """Return the names in verify_parts, in verify.yml."""
+    """Return the names in verify_parts, in verify.yml.
+
+    Raises:
+        VerifyPartsError: verify.yml has no verify_parts list.
+    """
     text = VERIFY.read_text(encoding="utf-8")
     block = re.search(r"^ {4}verify_parts:\n((?: {6}- \S+\n)+)", text, re.MULTILINE)
     if block is None:
-        raise AssertionError("verify.yml has no verify_parts list")
+        raise VerifyPartsError(str(VERIFY))
     return re.findall(r"- (\S+)", block.group(1))
 
 

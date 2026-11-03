@@ -250,7 +250,7 @@ To run one group of cases alone, name its scenario in the steps above: `-s refus
 runs the six image pin cases and `-s refusals_compose` the eight second compose file cases,
 each after its own create, prepare and converge with the same `-s`. The cases are shared
 out by part (`verify_parts` in `molecule/default/verify.yml`), and
-`tests/unit/test_verify_parts.py` fails when a part is not run by any scenario.
+`ansible/checks/test_db1_stack_verify_parts.py` fails when a part is not run by any scenario.
 
 The log of every play is `$MOLECULE_EPHEMERAL_DIRECTORY/ansible.log` and holds a time
 on each line; the time between two `TASK [` lines is the time of the first.
