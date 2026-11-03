@@ -177,6 +177,32 @@ jobs:
       - name: Python unit tests
         run: python3 -m unittest discover -s mail/provision -p 'test_*.py' -v
 
+  shim-image-starts:
+    name: Shim image starts (mail/provision)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Renders the shim's environment file from main exactly as 63 does, then
+    # starts the digest shim-compose.yml pins with it and asks the compose
+    # healthcheck (main once rendered an environment the pinned image could
+    # not start with, and nothing noticed). The container runs
+    # with no network and a placeholder credential, on the runner's own docker
+    # daemon, and never touches mx1.
+    #
+    # Deliberately NOT in `mail-plan`'s `needs`. It pulls an image from the
+    # registry, and gating a mail plan on a registry outage would couple an
+    # unrelated path to a network dependency. It gates review, not the plan, and
+    # can be a required pull-request check. The pull retries once.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start the pinned image with the rendered environment
+        run: python3 mail/provision/check_shim_image_starts.py
+
   hetzner-typecheck:
     name: Type check (hetzner)
     runs-on: ubuntu-latest
