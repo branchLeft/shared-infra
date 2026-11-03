@@ -1,0 +1,22 @@
+---
+# A delay of 0 between the health requests must not divide by zero when the
+# retry count is worked out. The role's delay is a constant, so the test sets
+# it as a role parameter, which outranks the constant. The page answers at once,
+# so the role completes and the stamp it recorded before is still there.
+- name: Apply the role with a health delay of zero
+  ansible.builtin.include_role:
+    name: branchleft.status_page
+  vars:
+    status_page_health_delay: 0
+
+- name: Read the stamp after the zero delay
+  ansible.builtin.stat:
+    path: /opt/branchleft/status/.status_page_stamp
+  register: status_page_zero_delay_stamp
+
+- name: Assert the role completed and the stamp is recorded
+  ansible.builtin.assert:
+    that:
+      - status_page_zero_delay_stamp.stat.exists
+    quiet: true
+    fail_msg: The role did not complete with a health delay of zero.
