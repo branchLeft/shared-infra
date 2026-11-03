@@ -74,7 +74,10 @@ What it does, in this order:
    host already runs needs it). A slot line that is malformed, or repeats a stack or a key, is
    refused and the whole list is left missing, so nothing is written and the line is never shown.
    The role checks each slot's shape on the host, so the tool judges none of it. An empty answer,
-   or no terminal, leaves the key missing.
+   or no terminal, leaves the key missing. edge1's `ci_jump_user`, the CI jump account's name, is
+   typed in the same way: it exists on no live file, and it is held out of the repository and of
+   every log, so the prompt is hidden and the name is never printed (a fill asks for it last; on
+   a host whose file already exists, add it once with `--set ci_jump_user`, see below).
 4. If any key is missing, writes nothing, names the missing keys, and exits 1. A rerun then needs
    no `--replace`, and the loader never meets a half file.
 5. Writes a temporary file in `/etc/branchleft` created exclusively with mode `0600`, owner
@@ -88,7 +91,9 @@ What it does, in this order:
 0600`, one JSON object with keys inside the row, and KEY must be in the row. The new value is
 asked with `getpass`; nothing else changes; the file is replaced atomically as above. It prints
 the key name and the byte length of the new value, to catch a truncated paste, and never the
-value. Do not run the fill step with `--replace` between a `--set` and the apply that delivers it:
+value. On edge1 whose file was placed before the jump account existed, this is the one-time owner
+step that adds the twelfth key, as root on the host:
+`python3 -I seed_host_inputs.py --host edge1 --set ci_jump_user`. Do not run the fill step with `--replace` between a `--set` and the apply that delivers it:
 the fill reads the live files, which still hold the old value.
 
 Output is key names in three lists (filled from live, typed, still missing), the unusable live

@@ -13,7 +13,8 @@ enrolled in the gated pull, except that `demo1` takes its commit by push and nev
 first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
 `roles/egress_nat` (the estate's NAT gateway; edge1 alone, with `egress_nat_gateway_enabled` pinned
 in `checks/check_enrolment.py`), then
-`roles/ci_login`, then `roles/deploy_tooling`, then `roles/edge_stack`, then
+`roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
+until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
 `roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
 `roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then

@@ -230,6 +230,7 @@ class RealTree(unittest.TestCase):
                     "ntfy_pager_watcher_token",
                     "ntfy_pager_owner_password_hash",
                     "ntfy_pager_machine_password_hash",
+                    "ci_jump_user",
                 ],
                 "ops1": [
                     "backup_worker_db_host",
@@ -306,6 +307,7 @@ class Mutations(unittest.TestCase):
             "db1_grants",
             "db1_backup_timers",
             "tunnel_account",
+            "ci_jump",
             "website_app1",
             "deploy_tooling",
             "deploy_slot_keys",
@@ -377,6 +379,12 @@ class Mutations(unittest.TestCase):
             "        required: true\n        no_log: true\n        default: changeme\n",
         )
         self._expect("role db1_stack gives db1_stack_exporter_password a default")
+
+    def test_a_default_given_to_the_jump_accounts_name_is_found(self) -> None:
+        path = self.ansible / "roles" / "ci_jump" / "defaults" / "main.yml"
+        path.write_text(path.read_text(encoding="utf-8") + "ci_jump_user: ''\n", encoding="utf-8")
+        self._expect("role ci_jump gives ci_jump_user a default")
+        self._expect("ci_jump_user is not a required argument")
 
     def test_a_protected_name_in_a_row_is_found(self) -> None:
         self._edit(

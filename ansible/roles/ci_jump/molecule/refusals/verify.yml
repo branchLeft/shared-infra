@@ -1,0 +1,151 @@
+---
+# What the refusal cases must leave behind: the host as the first play delivered it. The expected
+# values are written out here, not read from the role, so a case that left the host changed, or a
+# write step that did not put the previous files back, is a failure and not a test that agrees
+# with it.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the public keys the scenario made
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - jump
+        - second
+      register: ci_jump_scenario_verify_pubs
+      no_log: true
+
+    - name: Look at the files and the directory the cases changed or made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /etc/ssh/authorized_keys.d
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/authorized_keys.d/branchleft-jump.real
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+        - /etc/ssh/sshd_config.d/05-case-ahead.conf
+        - /etc/ssh/sshd_config.d/99-case-after.conf
+      register: ci_jump_scenario_verify_stat
+
+    # The cases that migrate from the hand-made layout end with the role's own run, so none of that
+    # layout, and no path holding the account's name, may be left under /etc/ssh.
+    - name: Find every path under /etc/ssh that holds the account's name
+      ansible.builtin.find:
+        paths: /etc/ssh
+        patterns: '*{{ scenario_jump_user }}*'
+        recurse: true
+        hidden: true
+        file_type: any
+      register: ci_jump_scenario_verify_named
+      no_log: true
+
+    - name: Read the key file and the drop-in
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+      register: ci_jump_scenario_verify_files
+      no_log: true
+
+    - name: Assert the files are as delivered and the case files are gone
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_stat.results[0].stat.mode == '0755'
+          - ci_jump_scenario_verify_stat.results[0].stat.pw_name == 'root'
+          - ci_jump_scenario_verify_stat.results[1].stat.mode == '0644'
+          - ci_jump_scenario_verify_stat.results[1].stat.pw_name == 'root'
+          - ci_jump_scenario_verify_stat.results[1].stat.isreg
+          - not ci_jump_scenario_verify_stat.results[2].stat.exists
+          - ci_jump_scenario_verify_stat.results[3].stat.mode == '0644'
+          - ci_jump_scenario_verify_stat.results[3].stat.pw_name == 'root'
+          - not ci_jump_scenario_verify_stat.results[4].stat.exists
+          - not ci_jump_scenario_verify_stat.results[5].stat.exists
+          - ci_jump_scenario_verify_named.matched == 0
+          - (ci_jump_scenario_verify_files.results[0].content | b64decode).splitlines() | map('trim') | sort == expected | sort
+          - (ci_jump_scenario_verify_files.results[1].content | b64decode) == expected_dropin
+        quiet: true
+        fail_msg: A refusal case left the key file, the drop-in or a file of its own changed.
+      vars:
+        verify_options: 'restrict,port-forwarding,permitopen="{{ scenario_listed }}:22",permitopen="{{ scenario_own }}:22",command="/usr/sbin/nologin"'
+        verify_jump: "{{ (ci_jump_scenario_verify_pubs.results[0].content | b64decode).split(' ')[0:2] | join(' ') }}"
+        verify_second: "{{ (ci_jump_scenario_verify_pubs.results[1].content | b64decode).split(' ')[0:2] | join(' ') }}"
+        expected:
+          - '{{ verify_options }} {{ verify_jump }}'
+          - '{{ verify_options }} {{ verify_second }}'
+        expected_dropin: |
+          # Written by the ci_jump role. Change the owner's variables, not this file.
+          Match User {{ scenario_jump_user }}
+              AuthorizedKeysFile /etc/ssh/authorized_keys.d/branchleft-jump
+              AuthenticationMethods publickey
+              AllowTcpForwarding local
+              PermitOpen {{ scenario_listed }}:22 {{ scenario_own }}:22
+              GatewayPorts no
+              AllowAgentForwarding no
+              AllowStreamLocalForwarding no
+              X11Forwarding no
+              PermitTTY no
+              PermitTunnel no
+              PermitUserRC no
+              ForceCommand /usr/sbin/nologin
+          Match all
+
+    - name: Look at the jump account's shell
+      ansible.builtin.getent:
+        database: passwd
+        key: '{{ scenario_jump_user }}'
+      no_log: true
+
+    - name: Assert the shell is nologin again
+      ansible.builtin.assert:
+        that:
+          - getent_passwd[scenario_jump_user][5] == '/usr/sbin/nologin'
+        quiet: true
+        fail_msg: A refusal case left the shell of the jump account changed.
+
+    - name: Ask sshd what it evaluates for the jump account
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sshd
+          - -T
+          - -C
+          - 'user={{ scenario_jump_user }},host=x,addr={{ scenario_own }}'
+      register: ci_jump_scenario_verify_sshd
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Assert sshd applies what the role wrote
+      ansible.builtin.assert:
+        that:
+          - "'allowtcpforwarding local' in ci_jump_scenario_verify_sshd.stdout_lines"
+          - "'authorizedkeyscommand none' in ci_jump_scenario_verify_sshd.stdout_lines"
+          - "('permitopen ' ~ scenario_listed ~ ':22 ' ~ scenario_own ~ ':22') in ci_jump_scenario_verify_sshd.stdout_lines"
+        quiet: true
+        fail_msg: A refusal case left the sshd configuration changed.
+
+    # The migration cases end in forced failures (a read-back refused after the write, and after the
+    # old files were removed). Each failure is printed by the role's rescue, so the part of this
+    # scenario's log that covers those cases must hold no account name. The account's name is held
+    # out of every public log (ANS-16). The control: the rescues of the cases ran.
+    - name: Read the log of every run
+      ansible.builtin.slurp:
+        src: '{{ scenario_log_path }}'
+      delegate_to: localhost
+      register: ci_jump_refusals_log
+      no_log: true
+
+    - name: Assert the forced failures of the migration cases show no account name
+      ansible.builtin.assert:
+        that:
+          - "'PLAY [Run the migration and reload cases]' in ci_jump_refusals_log_text"
+          - migration_log is search('Assert the failure was the one this case is for')
+          - scenario_jump_user not in migration_log
+        quiet: true
+        fail_msg: The log of the forced failures of the migration cases shows the account (the name is not shown).
+      vars:
+        ci_jump_refusals_log_text: '{{ ci_jump_refusals_log.content | b64decode }}'
+        migration_log_from: "{{ ci_jump_refusals_log_text.split('PLAY [Run the migration and reload cases]') | last }}"
+        migration_log: "{{ migration_log_from.split('PLAY [Verify the instance]') | first }}"

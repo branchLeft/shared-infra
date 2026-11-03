@@ -191,6 +191,7 @@
     ntfy_pager_watcher_token: "{{ host_inputs_doc['ntfy_pager_watcher_token'] | default(omit) }}"
     ntfy_pager_owner_password_hash: "{{ host_inputs_doc['ntfy_pager_owner_password_hash'] | default(omit) }}"
     ntfy_pager_machine_password_hash: "{{ host_inputs_doc['ntfy_pager_machine_password_hash'] | default(omit) }}"
+    ci_jump_user: "{{ host_inputs_doc['ci_jump_user'] | default(omit) }}"
     backup_worker_db_host: "{{ host_inputs_doc['backup_worker_db_host'] | default(omit) }}"
     backup_worker_db_user: "{{ host_inputs_doc['backup_worker_db_user'] | default(omit) }}"
     backup_worker_db_password: "{{ host_inputs_doc['backup_worker_db_password'] | default(omit) }}"

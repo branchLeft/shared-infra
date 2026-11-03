@@ -136,6 +136,24 @@ CI_LOGIN_PATHS = [
     "ansible/owner_vars/edge1.yml",
 ]
 
+# ci_jump writes the options of the jump account's key lines, which decide which private hosts
+# the gated run may reach through edge1. The whole role is the owner's, its module and the molecule
+# plays that prove the restriction included.
+CI_JUMP_PATHS = [
+    "ansible/roles/ci_jump/tasks/main.yml",
+    "ansible/roles/ci_jump/tasks/_guards.yml",
+    "ansible/roles/ci_jump/tasks/_keys.yml",
+    "ansible/roles/ci_jump/tasks/_readback.yml",
+    "ansible/roles/ci_jump/templates/authorized_keys.j2",
+    "ansible/roles/ci_jump/vars/main.yml",
+    "ansible/roles/ci_jump/library/ci_jump_authorized_keys.py",
+    "ansible/roles/ci_jump/tests/unit/test_ci_jump_authorized_keys.py",
+    "ansible/roles/ci_jump/molecule/default/verify.yml",
+    "ansible/roles/ci_jump/molecule/refusals/converge.yml",
+    "ansible/roles/ci_jump/README.md",
+    "ansible/checks/test_ci_jump_pins.py",
+]
+
 # The owner-run writer of a host's inputs file runs as root, takes every input value and writes
 # the file the loader reads, so it is the owner's alone. Its test holds the proofs of what it
 # keeps secret, so the test is the owner's too.
@@ -215,6 +233,9 @@ class CodeownersTests(unittest.TestCase):
 
     def test_the_ci_login_role_and_the_owner_vars_are_owned_by_the_owner(self) -> None:
         self.assert_owned(CI_LOGIN_PATHS)
+
+    def test_the_ci_jump_role_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(CI_JUMP_PATHS)
 
     def test_the_seeding_tool_is_owned_by_the_owner(self) -> None:
         self.assert_owned(SEEDING_TOOL_PATHS)

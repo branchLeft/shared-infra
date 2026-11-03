@@ -1,0 +1,358 @@
+---
+# The phases, in this order. Each starts from the state the last one left, so the order is part
+# of the test. The play ends with the host put back as the converge left it, which is what the
+# check-mode run that follows verify needs to find.
+#
+#   1  the connections, over the real sshd the role reloaded: the key reaches the listed address
+#      and the jump host's own address on port 22 and nothing else (another live address,
+#      another port, a remote command, a key not in the file), and the jump host refuses to open
+#      a port of its own for the key (ssh -R)
+#   2  the converged files: owner, modes, the exact lines, the old line gone, no comment, and the
+#      sshd drop-in whose Match block carries the same list; the hand-made layout the prepare
+#      made, whose paths hold the account's name, is gone, and no path under /etc/ssh holds the
+#      name any more
+#   3  what sshd evaluates for the account and for a user under another Match block, observed
+#      with sshd -T -C
+#   4  the control: with another address on the list the same connection goes through, so the
+#      refusal in phase 1 is the configuration's doing; then the list is put back and it is
+#      refused again
+#   5  the report, run over the converged host: it names no account
+#   6  the role applied once more in check mode, then the log of every run (the check run of a host
+#      that still had the hand-made layout, the converge, the idempotence run and that check run)
+#      read for a key body, and for the account's name, which must be nowhere in them
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_options: 'restrict,port-forwarding,permitopen="{{ scenario_listed }}:22",permitopen="{{ scenario_own }}:22",command="/usr/sbin/nologin"'
+  tasks:
+    - name: Read the public keys the scenario made
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - jump
+        - second
+        - old
+        - intruder
+      register: ci_jump_scenario_verify_pubs
+      no_log: true
+
+    # Phase 1. A stdio forward (-W) is what the pipeline's ProxyJump asks of the jump host.
+    - name: Forward to the listed address and to the jump host's own address with each key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ item.key }}'
+        attempt_target: '{{ item.target }}:22'
+        attempt_expect: through
+      loop:
+        - { key: jump, target: '{{ scenario_listed }}' }
+        - { key: second, target: '{{ scenario_listed }}' }
+        - { key: jump, target: '{{ scenario_own }}' }
+
+    - name: Forward to a live address that is not on the list
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: jump
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: refused
+
+    - name: Forward to the listed address on another port that has a live listener
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: jump
+        attempt_target: '{{ scenario_listed }}:{{ scenario_ssh_port }}'
+        attempt_expect: refused
+
+    - name: Forward to the jump host's own loopback, which is not on the list
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: second
+        attempt_target: '127.0.0.1:22'
+        attempt_expect: refused
+
+    # The case the reviewer found open: a key line with port-forwarding also allows ssh -R
+    # unless sshd says AllowTcpForwarding local for the account. The jump host must refuse to
+    # open a port of its own, for each key, towards a listed address and towards an unlisted one.
+    - name: Ask the jump host to open a port of its own and send it to a host
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ item.key }}'
+        attempt_target: '{{ item.target }}:22'
+        attempt_expect: no_remote_forward
+      loop:
+        - { key: jump, target: '{{ scenario_listed }}' }
+        - { key: second, target: '{{ scenario_unlisted }}' }
+
+    - name: Present a key that is in no file, and the key of the line the role replaced
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: '{{ item }}'
+        attempt_target: '{{ scenario_listed }}:22'
+        attempt_expect: denied
+      loop:
+        - intruder
+        - old
+
+    - name: Ask for remote commands, which a restricted key on a nologin account never runs
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: jump
+        attempt_command: '{{ item }}'
+        attempt_expect: no_command
+      loop:
+        - touch /tmp/EXAMPLE_MARKER
+        - '/bin/sh -c "touch /tmp/EXAMPLE_MARKER"'
+        - id
+        - ''
+
+    # Phase 2.
+    - name: Look at the key directory, the key file and the sshd drop-in
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /etc/ssh/authorized_keys.d
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+      register: ci_jump_scenario_verify_stat
+
+    - name: Read the key file
+      ansible.builtin.slurp:
+        src: /etc/ssh/authorized_keys.d/branchleft-jump
+      register: ci_jump_scenario_verify_file
+      no_log: true
+
+    - name: Read the sshd drop-in
+      ansible.builtin.slurp:
+        src: /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+      register: ci_jump_scenario_verify_dropin
+      no_log: true
+
+    # The migration. The prepare made the hand-made layout at paths made from the account's name;
+    # the converge moved to the new files and removed those. The name is looked for in every path
+    # under /etc/ssh, files and directories alike, so a path of the role that is made from it,
+    # or a leftover of the old layout, is found whatever it is called.
+    - name: Look at the hand-made layout the prepare made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - '/etc/ssh/{{ scenario_jump_user }}'
+        - '/etc/ssh/{{ scenario_jump_user }}/authorized_keys'
+        - '/etc/ssh/sshd_config.d/50-branchleft-{{ scenario_jump_user }}.conf'
+        - /run/branchleft-jump-reload-owed
+      register: ci_jump_scenario_verify_old
+      no_log: true
+
+    - name: Find every path under /etc/ssh that holds the account's name
+      ansible.builtin.find:
+        paths: /etc/ssh
+        patterns: '*{{ scenario_jump_user }}*'
+        recurse: true
+        hidden: true
+        file_type: any
+      register: ci_jump_scenario_verify_named
+      no_log: true
+
+    - name: Assert the hand-made layout is gone and no path under /etc/ssh holds the account's name
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_old.results | map(attribute='stat') | map(attribute='exists') | select | list | length == 0
+          - ci_jump_scenario_verify_named.matched == 0
+        quiet: true
+        fail_msg: >-
+          A path of the hand-made layout is still there, or a path under /etc/ssh holds the
+          account's name (the name is not shown). Matched {{ ci_jump_scenario_verify_named.matched }}.
+
+    # The expected lines are written out here, not read from the role: the options, the key type
+    # and the body, no comment. The old line and the old key are gone.
+    - name: Assert the key file is exactly the declared lines, root's and closed to the account
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_stat.results[0].stat.mode == '0755'
+          - ci_jump_scenario_verify_stat.results[0].stat.pw_name == 'root'
+          - ci_jump_scenario_verify_stat.results[1].stat.mode == '0644'
+          - ci_jump_scenario_verify_stat.results[1].stat.pw_name == 'root'
+          - ci_jump_scenario_verify_stat.results[1].stat.gr_name == 'root'
+          # The writer leaves no comment, so each line is trimmed only for the final newline.
+          - (ci_jump_scenario_verify_file.content | b64decode).splitlines() | map('trim') | sort == expected | sort
+          - (ci_jump_scenario_verify_file.content | b64decode).splitlines() | length == 2
+          - "'PLACEHOLDER' not in (ci_jump_scenario_verify_file.content | b64decode)"
+          - 'scenario_unlisted not in (ci_jump_scenario_verify_file.content | b64decode)'
+        quiet: true
+        fail_msg: The key file is not exactly the declared lines.
+      vars:
+        expected:
+          - "{{ verify_options }} {{ (ci_jump_scenario_verify_pubs.results[0].content | b64decode).split(' ')[0:2] | join(' ') }}"
+          - "{{ verify_options }} {{ (ci_jump_scenario_verify_pubs.results[1].content | b64decode).split(' ')[0:2] | join(' ') }}"
+
+    # The drop-in is written out here too. Its PermitOpen is the same list as the key lines'.
+    - name: Assert the sshd drop-in is exactly the runbook's block with the one list
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_stat.results[2].stat.mode == '0644'
+          - ci_jump_scenario_verify_stat.results[2].stat.pw_name == 'root'
+          - (ci_jump_scenario_verify_dropin.content | b64decode) == expected_dropin
+        quiet: true
+        fail_msg: The sshd drop-in is not exactly the wanted text.
+      vars:
+        expected_dropin: |
+          # Written by the ci_jump role. Change the owner's variables, not this file.
+          Match User {{ scenario_jump_user }}
+              AuthorizedKeysFile /etc/ssh/authorized_keys.d/branchleft-jump
+              AuthenticationMethods publickey
+              AllowTcpForwarding local
+              PermitOpen {{ scenario_listed }}:22 {{ scenario_own }}:22
+              GatewayPorts no
+              AllowAgentForwarding no
+              AllowStreamLocalForwarding no
+              X11Forwarding no
+              PermitTTY no
+              PermitTunnel no
+              PermitUserRC no
+              ForceCommand /usr/sbin/nologin
+          Match all
+
+    # Phase 3. sshd -T -C is how the role asks what sshd would do for a connection; the test
+    # configuration has a Match block for one other user, with forwarding off.
+    - name: Ask sshd what it evaluates for each user
+      ansible.builtin.command:
+        argv:
+          - /usr/sbin/sshd
+          - -T
+          - -C
+          - 'user={{ item }},host=x,addr={{ scenario_own }}'
+      loop:
+        - '{{ scenario_jump_user }}'
+        - '{{ scenario_other_user }}'
+      register: ci_jump_scenario_verify_sshd
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    # The result is hidden because the user is named in it; the lines are shown by index.
+    - name: Record what sshd evaluates, by index
+      ansible.builtin.debug:
+        msg: >-
+          sshd -T -C user number {{ ansible_loop.index }}
+          {{ item.stdout_lines | select('match', '^(allowtcpforwarding|disableforwarding|authorizedkeyscommand|authorizedkeysfile|permitopen) ') | list }}
+      loop: '{{ ci_jump_scenario_verify_sshd.results }}'
+      loop_control:
+        extended: true
+        label: 'user number {{ ansible_loop.index }}'
+
+    - name: Assert the Match blocks are seen for their users and only for them
+      ansible.builtin.assert:
+        that:
+          - "'allowtcpforwarding local' in ci_jump_scenario_verify_sshd.results[0].stdout_lines"
+          - "'allowtcpforwarding no' in ci_jump_scenario_verify_sshd.results[1].stdout_lines"
+          - "'authorizedkeyscommand none' in ci_jump_scenario_verify_sshd.results[0].stdout_lines"
+          - "'authorizedkeysfile /etc/ssh/authorized_keys.d/branchleft-jump' in ci_jump_scenario_verify_sshd.results[0].stdout_lines"
+          - "('permitopen ' ~ scenario_listed ~ ':22 ' ~ scenario_own ~ ':22') in ci_jump_scenario_verify_sshd.results[0].stdout_lines"
+          - "'permitopen any' in ci_jump_scenario_verify_sshd.results[1].stdout_lines"
+        quiet: true
+        fail_msg: sshd -T -C did not evaluate the Match blocks as the role relies on.
+
+    # Phase 4. The control, then the list put back.
+    - name: Put a second address on the list
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+      vars:
+        apply_destinations:
+          - '{{ scenario_listed }}'
+          - '{{ scenario_own }}'
+          - '{{ scenario_unlisted }}'
+
+    - name: Forward to the second address, now listed
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: jump
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: through
+
+    - name: Put the list back
+      ansible.builtin.include_tasks: tasks/apply_role.yml
+
+    - name: Forward to the second address, listed no longer
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_key: jump
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: refused
+
+    # Phase 5. The report, run by the module over the converged host.
+    - name: Run the report over the converged host
+      ansible.builtin.include_tasks: tasks/report_call.yml
+
+    - name: Assert the report describes the account by index, its destinations and its fingerprints
+      ansible.builtin.assert:
+        that:
+          - ci_jump_scenario_verify_report.changed is false
+          - ci_jump_scenario_verify_report.accounts | length == 1
+          - ci_jump_scenario_verify_report.accounts[0].index == 1
+          - ci_jump_scenario_verify_report.accounts[0].shell_class == 'nologin'
+          - ci_jump_scenario_verify_report.accounts[0].same_permitopen
+          - ci_jump_scenario_verify_report.accounts[0].allowtcpforwarding == ['local']
+          - >-
+            (ci_jump_scenario_verify_report.lines | join('\n'))
+            is search('account 1 destination ' ~ scenario_listed ~ ' port 22 in key lines yes, in sshd PermitOpen yes, in the owner.s list yes')
+          - >-
+            (ci_jump_scenario_verify_report.lines | join('\n'))
+            is search('account 1 destination ' ~ scenario_own ~ ' port 22 in key lines yes, in sshd PermitOpen yes, in the owner.s list yes')
+          - (ci_jump_scenario_verify_report.lines | join('\n')) is search('key file managed, root-owned yes')
+          - scenario_jump_user not in (ci_jump_scenario_verify_report | to_json)
+          - >-
+            ci_jump_scenario_verify_pubs.results | map(attribute='content') | map('b64decode')
+            | map('split', ' ') | map(attribute='1')
+            | select('in', ci_jump_scenario_verify_report.lines | join('\n')) | list | length == 0
+        quiet: true
+        fail_msg: The report is not what the role relies on.
+
+    - name: Record the report
+      ansible.builtin.debug:
+        msg: '{{ ci_jump_scenario_verify_report.lines }}'
+
+    # Phase 6. Verbosity 1 prints every task's arguments into this log, so a task that handles a
+    # key and lacks no_log would show the key. The canary proves the log shows an argument at all.
+    # The account's name is held out of the public log, so it must not be in the log of any run of
+    # the role: not in the output of a task of the role (including the check run added below), and
+    # not anywhere else in the log before this play. This play's own client commands name it.
+    # The log so far holds the check run over the host as the prepare left it, the converge, the
+    # idempotence run and the phases above. A check run over the converged host is added to it.
+    - name: Apply the role in check mode over the converged host
+      ansible.builtin.include_tasks:
+        file: tasks/apply_role.yml
+        apply:
+          check_mode: true
+
+    - name: Read the log of every run
+      ansible.builtin.slurp:
+        src: '{{ scenario_log_path }}'
+      delegate_to: localhost
+      register: ci_jump_scenario_verify_log
+      no_log: true
+
+    - name: Assert the log shows the canary, no key body, and no account name anywhere
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in (ci_jump_scenario_verify_log.content | b64decode)"
+          # The control for the name scan: the log does carry the host's play recap and the role's
+          # task headers, so a scan of it that found nothing was looking at something.
+          - "'PLAY RECAP' in before_verify"
+          - "'branchleft.ci_jump : ' in before_verify"
+          # Everything the runs before this play logged: the prepare, the check run over the host
+          # as the prepare left it, the converge and the idempotence run.
+          - scenario_jump_user not in before_verify
+          - >-
+            ci_jump_scenario_verify_pubs.results | map(attribute='content') | map('b64decode')
+            | map('split', ' ') | map(attribute='1')
+            | select('in', ci_jump_scenario_verify_log.content | b64decode) | list | length == 0
+          - (role_segments | length) > 0
+          - scenario_jump_user not in (role_segments | join('\n'))
+        quiet: true
+        fail_msg: The log is missing the canary, shows a key body, or shows the account (the name is not shown).
+      vars:
+        before_verify: "{{ (ci_jump_scenario_verify_log.content | b64decode).split('PLAY [Verify]')[0] }}"
+        # Everything from a task header of the role to the next task or play header.
+        role_segments: >-
+          {{ ci_jump_scenario_verify_log.content | b64decode
+          | regex_findall('(?s)\| TASK \[branchleft\.ci_jump : .*?(?=\| TASK \[|\| PLAY \[|\Z)') }}

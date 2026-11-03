@@ -1,0 +1,16 @@
+---
+# Read only, so it also runs in check mode and always reports no change. The module prints option
+# names, host names and ports, key types and short fingerprints, an index per account and the
+# class of its shell, and nothing else: no account name, so the result is safe in a public plan.
+- name: Read the forwarding options every account holds
+  ci_jump_authorized_keys:
+    action: report
+    owned_accounts: '{{ ci_jump_owned_accounts }}'
+    destinations: '{{ ci_jump_destinations }}'
+    own_address: '{{ ci_jump_own_address }}'
+  register: ci_jump_report
+  changed_when: false
+
+- name: Show what the host holds today
+  ansible.builtin.debug:
+    msg: '{{ ci_jump_report.lines }}'

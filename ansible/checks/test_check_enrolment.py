@@ -12,11 +12,14 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml  # type: ignore[import-untyped]
 from check_enrolment import (
     _BASE_LOADER,
     _PARSED,
+    JUMP_HOSTS,
+    JUMP_VARS,
     OWNER_VARS_KEYS,
     ROOT,
     _AnyTagLoader,
@@ -51,6 +54,13 @@ class Sabotage(unittest.TestCase):
         text = path.read_text(encoding="utf-8")
         self.assertIn(old, text, f"the sabotage matched nothing in {relative}")
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def _reset(self) -> None:
+        """Put edge1's owner_vars file back as it is on main, between two sabotages of one test."""
+        shutil.copy(
+            ROOT / "ansible" / "owner_vars" / "edge1.yml",
+            self.ansible / "owner_vars" / "edge1.yml",
+        )
 
     def _write(self, relative: str, text: str) -> None:
         path = self.ansible / relative
@@ -994,6 +1004,10 @@ class Sabotage(unittest.TestCase):
         self._owner_vars(
             "---\nci_login_manage_keys: true\nci_login_keys:\n"
             f"  - key: {key} a\n    mode: apply\n  - key: {key} b\n    mode: check\n"
+            "ci_jump_manage_keys: true\n"
+            "ci_jump_own_address: 10.0.0.2\n"
+            "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
+            f"ci_jump_keys:\n  - key: {key} c\n"
         )
         self.assertEqual(check(self.root), [])
 
@@ -1063,6 +1077,117 @@ class Sabotage(unittest.TestCase):
         self._write("owner_vars/app1.yml", "---\nci_login_keys: []\n")
         self._assert_one("R10 owner_vars/app1.yml: this host has no owner_vars keys")
         self._assert_one("R2 app1.yml: vars_files must be exactly")
+
+    # R10 for the ci_jump values: each of the four keys is required, and each has a shape.
+    def test_r10_owner_vars_lacks_a_ci_jump_key(self) -> None:
+        for name in (
+            "ci_jump_manage_keys: false\n",
+            "ci_jump_own_address: ''\n",
+            "ci_jump_destinations: []\n",
+            "ci_jump_keys: []\n",
+        ):
+            with self.subTest(name=name):
+                self._edit("owner_vars/edge1.yml", name, "")
+                self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_owner_vars_ci_jump_flag_is_text(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml", "ci_jump_manage_keys: false", "ci_jump_manage_keys: 'false'"
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: ci_jump_manage_keys must be a bool")
+
+    # The jump account's name is the owner's secret: it is never a key of this public file, in any
+    # spelling of value, and reaches the role through the host's private inputs file only.
+    def test_r10_owner_vars_refuses_the_jump_accounts_name(self) -> None:
+        for value in ("''", "jumper", "[jumper]"):
+            with self.subTest(value=value):
+                self._edit(
+                    "owner_vars/edge1.yml",
+                    "ci_jump_keys: []\n",
+                    f"ci_jump_keys: []\nci_jump_user: {value}\n",
+                )
+                self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_the_jump_account_is_not_among_the_keys_a_host_may_set(self) -> None:
+        self.assertNotIn("ci_jump_user", JUMP_VARS)
+        self.assertEqual(
+            JUMP_VARS,
+            {"ci_jump_keys", "ci_jump_manage_keys", "ci_jump_own_address", "ci_jump_destinations"},
+        )
+
+    def test_r10_owner_vars_ci_jump_own_address_is_a_number(self) -> None:
+        self._edit("owner_vars/edge1.yml", "ci_jump_own_address: ''", "ci_jump_own_address: 5")
+        self._assert_one("R10 owner_vars/edge1.yml: ci_jump_own_address must be text")
+
+    # R10 per jump host: the rule is the same for every host that applies the role, and a host
+    # cannot gain the role without its owner_vars keys, nor the keys without the role.
+    def test_r10_the_jump_keys_are_allowed_for_every_jump_host_and_for_no_other(self) -> None:
+        for host in JUMP_HOSTS:
+            self.assertTrue(JUMP_VARS <= OWNER_VARS_KEYS[host], host)
+        for host, keys in OWNER_VARS_KEYS.items():
+            if host not in JUMP_HOSTS:
+                self.assertFalse(JUMP_VARS & keys, host)
+
+    def test_r10_a_host_that_lists_ci_jump_is_a_jump_host(self) -> None:
+        self._edit("checks/host_roles.yml", "ops1:\n", "ops1:\n  - ci_jump\n")
+        self._assert_one("R10 checks/host_roles.yml: ops1 lists ci_jump but is not in JUMP_HOSTS")
+
+    def test_r10_a_jump_host_that_does_not_list_ci_jump(self) -> None:
+        self._edit("checks/host_roles.yml", "  - ci_login\n  - ci_jump\n", "  - ci_login\n")
+        self._assert_one("R10 checks/host_roles.yml: edge1 is in JUMP_HOSTS but does not list")
+
+    def test_r10_a_second_jump_host_has_the_same_rule(self) -> None:
+        # ops1 stands for a second jump host: its table row gains the jump keys, its file holds
+        # them, and the same shape rules apply to its values.
+        with (
+            mock.patch.dict(
+                OWNER_VARS_KEYS, {"ops1": OWNER_VARS_KEYS["ops1"] | JUMP_VARS}, clear=False
+            ),
+            mock.patch("check_enrolment.JUMP_HOSTS", frozenset((*JUMP_HOSTS, "ops1"))),
+        ):
+            self._edit("checks/host_roles.yml", "ops1:\n", "ops1:\n  - ci_jump\n")
+            ops1 = self.ansible / "owner_vars" / "ops1.yml"
+            text = ops1.read_text(encoding="utf-8")
+            ops1.write_text(
+                text + "ci_jump_manage_keys: false\nci_jump_own_address: ''\n"
+                "ci_jump_destinations: []\nci_jump_keys: []\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(check(self.root), [])
+            ops1.write_text(text + "ci_jump_manage_keys: 'no'\n", encoding="utf-8")
+            self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
+
+    def test_r10_owner_vars_ci_jump_destinations_hold_a_mapping(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_jump_destinations: []",
+            "ci_jump_destinations:\n  - host: db-t1",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: ci_jump_destinations must be a list of text")
+        self._reset()
+        self._edit(
+            "owner_vars/edge1.yml", "ci_jump_destinations: []", "ci_jump_destinations: db-t1"
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: ci_jump_destinations must be a list of text")
+
+    def test_r10_owner_vars_ci_jump_keys_is_not_a_list(self) -> None:
+        self._edit("owner_vars/edge1.yml", "ci_jump_keys: []", "ci_jump_keys: nothing")
+        self._assert_one("R10 owner_vars/edge1.yml: ci_jump_keys must be a list")
+
+    # R10: a ci_jump key entry is the key and nothing else, so a per-key destination list or a
+    # per-key option has no place in the file.
+    def test_r10_owner_vars_ci_jump_entry_carries_more_than_a_key(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_jump_keys: []",
+            "ci_jump_keys:\n  - key: x\n    destinations: [db-t1]",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: a ci_jump_keys entry must hold exactly")
+        self._reset()
+        self._edit("owner_vars/edge1.yml", "ci_jump_keys: []", "ci_jump_keys:\n  - key: 5")
+        self._assert_one("R10 owner_vars/edge1.yml: a ci_jump_keys entry needs a text key")
 
     # ops1's owner_vars file holds the step allow-list and nothing else (wiring ws#2531). The
     # positive control first: the real file passes, and it is the one key, so a check that
@@ -1254,7 +1379,11 @@ class Sabotage(unittest.TestCase):
 
     # R9 through R2: the role is applied only while it is on edge1's list (sabotage e).
     def test_r2_deploy_tooling_off_the_list(self) -> None:
-        self._edit("checks/host_roles.yml", "  - ci_login\n  - deploy_tooling\n", "  - ci_login\n")
+        self._edit(
+            "checks/host_roles.yml",
+            "  - ci_login\n  - ci_jump\n  - deploy_tooling\n",
+            "  - ci_login\n  - ci_jump\n",
+        )
         self._assert_one("R2 edge1.yml: role deploy_tooling is not on edge1's list")
 
 
