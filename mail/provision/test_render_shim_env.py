@@ -511,6 +511,25 @@ class MainOrchestrationTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.env_path))
         self.assertIn("malformed", self.stderr.getvalue())
 
+    def test_an_empty_recorded_smtp_secret_is_refused_and_writes_nothing(self):
+        # The role refuses an empty secret, and so must this script: a rendered SMTP_PASS=
+        # line starts the shim with a blank password.
+        self.write_creds(f"other-label:unrelated\n{SMTP_LABEL}:\n")
+        before = self.read(self.creds_path)
+        self.assertEqual(1, self.run_main())
+        self.assertFalse(os.path.exists(self.env_path))
+        self.assertEqual(before, self.read(self.creds_path))
+        self.assertIn(SMTP_LABEL, self.stderr.getvalue())
+
+    def test_an_empty_recorded_drain_token_is_refused_and_not_rendered(self):
+        self.write_compose(OTHER_DIGEST)
+        self.write_creds(f"{DRAIN_LABEL}:\n")
+        before = self.read(self.creds_path)
+        self.assertEqual(1, self.run_main(CONTRACTS_PATH=self.table_with_drain_digest()))
+        self.assertFalse(os.path.exists(self.env_path))
+        self.assertEqual(before, self.read(self.creds_path))
+        self.assertIn(DRAIN_LABEL, self.stderr.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

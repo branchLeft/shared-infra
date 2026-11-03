@@ -1,30 +1,9 @@
 #!/usr/bin/env python3
 """Renders /etc/mailgun-shim/env for the shim image shim-compose.yml pins.
-Run by 63-deploy-mailgun-shim.sh on every deploy -- re-rendering is idempotent
-by construction (the same secret in always produces the same file out) and
-safe to repeat: the file is written atomically, so a crash or disk-full
-mid-write can never leave a truncated or half-written env file for docker
-compose to read.
 
-What the env must hold depends on the image: each shim image reads its own set
-of variables. shim-env-contracts.json (beside this file, the one home of that
-table) maps each pinned image digest to a contract -- the secret's label in
-SERVICE_CREDENTIALS_PATH and the exact env lines. This script reads the single
-digest out of the compose file compose itself reads (SHIM_COMPOSE_PATH) and
-renders that digest's contract. A digest the table does not list is REFUSED,
-with nothing written: the env of an image nobody described is a guess, and a
-wrong guess stops the container at start or runs it unauthenticated.
-
-Two secrets, two kinds. An SMTP submission credential (mint=false) is created
-by 62-provision-shim-submission-credential.sh on Stalwart, so this script only
-reads it and never writes the credentials file. A drain token (mint=true) has
-no remote system to create it on: it is generated locally on first use
-(secrets.token_urlsafe, matching rotate_admin_credential.py's own generation)
-and recorded in the same flat label:secret file, so a re-run reuses it rather
-than minting a new one and locking out whatever already holds the old one.
-
-Never prints a secret, or any string containing it, to stdout or stderr --
-only mode-600 file writes.
+Run by 63-deploy-mailgun-shim.sh on every deploy. The contract table, the two
+kinds of secret and every refusal are explained in render_shim_env.md beside
+this file. Never prints a secret, or any string containing it, to stdout or stderr.
 """
 from __future__ import annotations
 
@@ -153,6 +132,17 @@ def find_credential_secret(
     return None
 
 
+def refuse_empty_secret(secret: str, label: str, path: str) -> str:
+    """Pure. Returns `secret`, or refuses an empty one: an empty value renders as a bare
+    `NAME=` line, and the image would start with a blank password or token.
+    """
+    if not secret:
+        raise ContractError(
+            f"the secret under {label!r} in {path} is empty -- refusing to render an empty value"
+        )
+    return secret
+
+
 def generate_drain_token() -> str:
     """The only impure step in provisioning the token -- separated out so a
     test can substitute a deterministic value at this one call site rather
@@ -195,7 +185,7 @@ def ensure_drain_token(credentials_path: str, label: str) -> str:
 
     existing = find_credential_secret(credentials_text, label, path=credentials_path)
     if existing is not None:
-        return existing
+        return refuse_empty_secret(existing, label, credentials_path)
 
     token = generate_drain_token()
     append_credential_atomic(credentials_path, label, token)
@@ -218,7 +208,7 @@ def read_recorded_secret(credentials_path: str, label: str) -> str:
             f"no {label!r} entry in {credentials_path} -- run "
             "62-provision-shim-submission-credential.sh first"
         )
-    return secret
+    return refuse_empty_secret(secret, label, credentials_path)
 
 
 def render_env_file(contract: dict, secret: str) -> str:
