@@ -1,0 +1,4 @@
+---
+# The same host the default scenario starts from, imported so it has one home.
+- name: Prepare the host as the default scenario does
+  ansible.builtin.import_playbook: ../default/prepare.yml
