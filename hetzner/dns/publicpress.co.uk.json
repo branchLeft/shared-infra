@@ -17,11 +17,77 @@
     "at most 255 characters each."
   ],
   "zone": "publicpress.co.uk",
-  "rrsets": [],
+  "rrsets": [
+    {
+      "name": "@",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    },
+    {
+      "name": "@",
+      "type": "MX",
+      "ttl": 3600,
+      "values": [
+        "10 mx00.ionos.co.uk.",
+        "10 mx01.ionos.co.uk."
+      ]
+    },
+    {
+      "name": "@",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=spf1 ip4:167.233.252.240 ip6:2a01:4f8:1c18:866::1 -all\""
+      ]
+    },
+    {
+      "name": "_dmarc",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=DMARC1; p=none; adkim=s; aspf=s\""
+      ]
+    },
+    {
+      "name": "_domainconnect",
+      "type": "CNAME",
+      "ttl": 3600,
+      "values": [
+        "_domainconnect.ionos.com."
+      ]
+    },
+    {
+      "name": "autodiscover",
+      "type": "CNAME",
+      "ttl": 3600,
+      "values": [
+        "adsredir.ionos.info."
+      ]
+    },
+    {
+      "name": "id",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    },
+    {
+      "name": "portal",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
+    }
+  ],
   "probe_names": [
-    "@",
     "*",
     "*.sites",
+    "@",
     "_25._tcp",
     "_25._tcp.mx1",
     "_443._tcp",
