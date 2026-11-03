@@ -279,11 +279,11 @@ The role must not be applied to the live host until each of these is true.
    `db1_grants_tenants` and `db1_grants_ops1_host` among its keys.
 6. The `db1_backup_timers` role is in the playbook before this one, so the dump
    code (`naming.py`, `dump_nightly.py`) is delivered before the dump account
-   changes. `db1_backup_timers` delivers `provision_tenant_db.py` (since
-   PR shared-infra#557), pinned by digest, in a real apply only: its fetch is
-   skipped in check mode. Until that apply has happened on db1, a plan of this
-   role stops with `program-missing`, in check mode too (ISSUE
-   branchLeft/workspace#2861 is open for the plan of a fresh db1).
+   changes. `db1_backup_timers` delivers `provision_tenant_db.py`, pinned
+   by digest, in a real apply only: its fetch is skipped in check mode. Until
+   that apply has happened on db1, a plan of this role stops with
+   `program-missing`, in check mode too (ISSUE branchLeft/workspace#2861 is open
+   for the plan of a fresh db1).
 
 ## Differences from the family base
 
