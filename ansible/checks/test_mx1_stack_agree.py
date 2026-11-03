@@ -14,6 +14,7 @@ env_file or a ${VAR} without a row fails here, so a new input cannot be added wi
 from __future__ import annotations
 
 import importlib.util
+import json
 import re
 import sys
 import tempfile
@@ -29,6 +30,10 @@ ROOT = Path(__file__).resolve().parents[2]
 ROLES = ROOT / "ansible" / "roles"
 ROLE = "mx1_stack"
 PROVISION = ROOT / "mail" / "provision"
+# The table of what each pinned shim image reads: one file in mail/provision, linked into the role.
+TABLE_NAME = "shim-env-contracts.json"
+# A secret that stands in for the real one in every comparison of two renders.
+PLACEHOLDER_SECRET = "T" * 43  # noqa: S105
 # The directories of a role that run on a host (the scenarios and the README name paths to test
 # them or explain them, which writes nothing).
 HOST_DIRS = ("defaults", "vars", "tasks", "handlers", "templates", "files", "meta")
@@ -131,6 +136,21 @@ def load_module(name: str, path: Path) -> types.ModuleType:
     finally:
         sys.dont_write_bytecode = previous
     return module
+
+
+def json_of(path: Path) -> dict[str, object]:
+    """Return the parsed JSON object of a file.
+
+    Raises:
+        Mx1AgreeError: when the file cannot be read as a JSON object.
+    """
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        refuse(f"{path.name} cannot be read as JSON")
+    if not isinstance(document, dict):
+        refuse(f"{path.name} is not a JSON object")
+    return cast("dict[str, object]", document)
 
 
 def host_text(role: Path) -> str:
@@ -364,6 +384,10 @@ def facts(root: Path = ROOT) -> dict[str, object]:
         "script_cron_path": script_assignment(cron, "DROPIN"),
         "shim_env_role": load_module("mx1_envfile", role / "library" / "mx1_stack_envfile.py"),
         "shim_env_script": load_module("render_shim_env", provision / "render_shim_env.py"),
+        "role_table": json_of(role / "files" / TABLE_NAME),
+        "script_table": json_of(provision / TABLE_NAME),
+        "table_link": (role / "files" / TABLE_NAME).is_symlink()
+        and (role / "files" / TABLE_NAME).resolve() == (provision / TABLE_NAME).resolve(),
         "composes": composes,
         "rows": [
             {key: str(value) for key, value in mapping_of(row).items()}
@@ -372,6 +396,70 @@ def facts(root: Path = ROOT) -> dict[str, object]:
         "others": others,
         "placed": placed_kinds(role, role_vars),
     }
+
+
+def contracts_of(table: dict[str, object]) -> dict[str, dict[str, object]]:
+    """Return a contract table's contracts by name, or none when it holds no such mapping."""
+    contracts = table.get("contracts")
+    if not isinstance(contracts, dict):
+        return {}
+    return {
+        str(name): cast("dict[str, object]", contract)
+        for name, contract in contracts.items()
+        if isinstance(contract, dict)
+    }
+
+
+def shim_env_disagreements(f: dict[str, object]) -> list[str]:
+    """Return one line for each way the role and render_shim_env.py differ on the shim's env.
+
+    The two read one table, and each renders every contract in it. Both are compared contract by
+    contract, so a drift in one environment line, or in the table the role was handed, is named,
+    and so is a digest pinned in shim-compose.yml that either renderer would refuse.
+    """
+    found: list[str] = []
+    role_module = cast("types.ModuleType", f["shim_env_role"])
+    script_module = cast("types.ModuleType", f["shim_env_script"])
+    role_table = cast("dict[str, object]", f["role_table"])
+    script_table = cast("dict[str, object]", f["script_table"])
+    if not f["table_link"]:
+        found.append(f"the role's {TABLE_NAME} is not a link to the one file in mail/provision")
+    if role_table != script_table:
+        found.append(f"the role's contract table is not mail/provision/{TABLE_NAME}")
+    role_contracts, script_contracts = contracts_of(role_table), contracts_of(script_table)
+    for name in sorted(set(role_contracts) | set(script_contracts)):
+        if name not in role_contracts or name not in script_contracts:
+            found.append(f"contract {name} is not in both renderers' tables")
+        elif role_module.render_shim_env(
+            role_contracts[name], PLACEHOLDER_SECRET
+        ) != script_module.render_env_file(script_contracts[name], PLACEHOLDER_SECRET):
+            found.append(
+                f"the shim environment file of contract {name} is not render_shim_env.py's"
+            )
+    compose_doc, compose_text = cast(
+        "tuple[object, str]", cast("dict[str, object]", f["composes"])["mailgun-shim"]
+    )
+    services = mapping_of(mapping_of(compose_doc)["services"])
+    image = str(mapping_of(services["mailgun-shim"])["image"])
+    try:
+        script_contract = script_module.contract_for_compose(compose_text, script_table)
+    except Exception as error:  # noqa: BLE001 -- whatever the renderer refuses with is the finding
+        found.append(f"render_shim_env.py refuses the digest shim-compose.yml pins: {error}")
+        script_contract = None
+    try:
+        role_contract = role_module.contract_for_image(image, role_table)
+    except Exception as error:  # noqa: BLE001 -- as above, for the role's module
+        found.append(f"mx1_stack_envfile refuses the digest shim-compose.yml pins: {error}")
+        role_contract = None
+    if (
+        script_contract is not None
+        and role_contract is not None
+        and script_contract["secret_label"] != role_contract["secret_label"]
+    ):
+        found.append(
+            "the two renderers read different secrets for the digest shim-compose.yml pins"
+        )
+    return found
 
 
 def disagreements(f: dict[str, object]) -> list[str]:
@@ -399,11 +487,7 @@ def disagreements(f: dict[str, object]) -> list[str]:
         found.append("the DNSBL cron line is not the line 70-schedule-dnsbl-check.sh writes")
     if str(role_vars["mx1_stack_dnsbl_cron"]) != f["script_cron_path"]:
         found.append("the DNSBL cron path is not DROPIN of 70-schedule-dnsbl-check.sh")
-    token = "T" * 43
-    role_env = cast("types.ModuleType", f["shim_env_role"]).render_shim_env(token)
-    script_env = cast("types.ModuleType", f["shim_env_script"]).render_env_file(token)
-    if role_env != script_env:
-        found.append("the shim environment file is not what render_shim_env.py renders")
+    found.extend(shim_env_disagreements(f))
     others = cast("dict[str, str]", f["others"])
     for role, text in others.items():
         found.extend(
@@ -419,6 +503,20 @@ def disagreements(f: dict[str, object]) -> list[str]:
     found.extend(row_mismatches(composes, rows))
     found.extend(kind_mismatches(rows, cast("dict[str, str]", f["placed"])))
     return found
+
+
+def drifting(real: types.ModuleType, target: dict[str, object]) -> type:
+    """Return a stand-in for render_shim_env.py that renders one contract with a wrong PORT."""
+
+    class Drifted:
+        @staticmethod
+        def render_env_file(contract: dict[str, object], secret: str) -> str:
+            text = str(real.render_env_file(contract, secret))
+            return text.replace("PORT=8080", "PORT=9090") if contract == target else text
+
+        contract_for_compose = staticmethod(real.contract_for_compose)
+
+    return Drifted
 
 
 class Mx1AgreeTest(unittest.TestCase):
@@ -466,14 +564,81 @@ class Mx1AgreeTest(unittest.TestCase):
         text = "# another comment\n" + str(base["script_cron"])
         self.assertEqual([], disagreements(dict(base, script_cron=text)))
 
-    def test_a_drifted_shim_env_is_named(self) -> None:
+    def test_a_drifted_shim_env_is_named_for_each_contract(self) -> None:
+        base = facts()
+        real = cast("types.ModuleType", base["shim_env_script"])
+        contracts = contracts_of(cast("dict[str, object]", base["script_table"]))
+        self.assertGreaterEqual(len(contracts), 2)
+        for name, drifted in contracts.items():
+            with self.subTest(contract=name):
+                found = disagreements(dict(base, shim_env_script=drifting(real, drifted)))
+                self.assertTrue(
+                    any(
+                        f"contract {name} " in line and "environment file" in line for line in found
+                    ),
+                    found,
+                )
+                others = [line for line in found if "environment file" in line]
+                self.assertEqual(1, len(others), others)
+
+    def test_a_drifted_role_render_is_named(self) -> None:
+        base = facts()
+        real = cast("types.ModuleType", base["shim_env_role"])
+
         class Drifted:
             @staticmethod
-            def render_env_file(token: str) -> str:
-                return f"PORT=9090\nSHIM_DRAIN_TOKEN={token}\n"
+            def render_shim_env(contract: dict[str, object], secret: str) -> str:
+                return str(real.render_shim_env(contract, secret)).replace(
+                    "SMTP_PORT=587", "SMTP_PORT=25"
+                )
 
-        found = disagreements(dict(facts(), shim_env_script=Drifted))
-        self.assertTrue(any("environment file" in line for line in found), found)
+            contract_for_image = staticmethod(real.contract_for_image)
+
+        found = disagreements(dict(base, shim_env_role=Drifted))
+        self.assertTrue(
+            any("contract smtp-delivery " in line and "environment file" in line for line in found),
+            found,
+        )
+
+    def test_a_role_table_that_differs_from_the_scripts_is_named(self) -> None:
+        base = facts()
+        role_table = dict(cast("dict[str, object]", base["role_table"]), digests={})
+        found = disagreements(dict(base, role_table=role_table))
+        self.assertTrue(any("contract table" in line for line in found), found)
+        self.assertTrue(
+            any("mx1_stack_envfile refuses the digest" in line for line in found), found
+        )
+
+    def test_a_table_that_is_not_the_one_file_is_named(self) -> None:
+        found = disagreements(dict(facts(), table_link=False))
+        self.assertTrue(any("not a link to the one file" in line for line in found), found)
+
+    def test_a_pinned_digest_missing_from_the_table_is_named_for_both_renderers(self) -> None:
+        base = facts()
+        table = dict(cast("dict[str, object]", base["script_table"]), digests={})
+        found = disagreements(dict(base, role_table=table, script_table=table))
+        self.assertTrue(any(line.startswith("render_shim_env.py refuses") for line in found), found)
+        self.assertTrue(any(line.startswith("mx1_stack_envfile refuses") for line in found), found)
+
+    def test_a_contract_on_one_side_only_is_named(self) -> None:
+        base = facts()
+        script_table = cast("dict[str, object]", base["script_table"])
+        contracts = dict(contracts_of(script_table))
+        del contracts["drain"]
+        found = disagreements(dict(base, role_table=dict(script_table, contracts=contracts)))
+        self.assertTrue(any("contract drain is not in both" in line for line in found), found)
+
+    def test_two_renderers_reading_different_secrets_are_named(self) -> None:
+        base = facts()
+        script_table = cast("dict[str, object]", base["script_table"])
+        contracts = {
+            name: {**contract, "secret_label": "another-label"}
+            if name == "smtp-delivery"
+            else contract
+            for name, contract in contracts_of(script_table).items()
+        }
+        found = disagreements(dict(base, role_table=dict(script_table, contracts=contracts)))
+        self.assertTrue(any("read different secrets" in line for line in found), found)
 
     def test_a_path_named_by_a_second_role_is_named(self) -> None:
         base = facts()

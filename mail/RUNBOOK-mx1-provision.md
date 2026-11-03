@@ -637,25 +637,34 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
   credential" above), send-as `blog@`, labelled `blog-shim-bulk-submission`
   — independently revocable from `61`'s transactional `blog-ghost-smtp`
   credential, so retiring or rotating the shim's bulk-mail path never
-  touches transactional mail or vice versa. **Not read by `render_shim_env.py`
-  any more** — the shim's own outbound delivery (`worker.ts`/`smtp.ts`) is
-  gone (`ghost-platform#238`, `branchLeft/workspace#1237`), so nothing in
-  this repo currently consumes this credential; it is retained because
+  touches transactional mail or vice versa. **Read by `render_shim_env.py`**
+  for the image `shim-compose.yml` pins today: that image (ghost-platform
+  `ddaeb39`) still delivers mail itself, and its `smtp-delivery` contract in
+  `shim-env-contracts.json` renders this credential as `SMTP_PASS`. A later
+  image whose outbound delivery is gone (`ghost-platform#238`,
+  `branchLeft/workspace#1237`) reads no SMTP variable, and would use the
+  `drain` contract instead; the credential is then retained because
   authenticated SMTP submission to mx1 is the only way anything reaches this
   host (HLD §03), and something has to hold it once the mail collector
   (`branchLeft/workspace#1239`) exists.
 - `63-deploy-mailgun-shim.sh` / `render_shim_env.py` — installs the compose
   file and Caddyfile, seeds `/var/lib/mailgun-shim/throttle.json` only if
-  absent, renders `/etc/mailgun-shim/env` (mode 600) — `PORT`,
-  `SHIM_DB_PATH`, `SHIM_THROTTLE_PATH` plus `SHIM_DRAIN_TOKEN` (generated on
-  the host on first use and recorded in
-  `/root/.stalwart-service-credentials` under `shim-drain-token`, the same
-  file `62`'s credential lives in, never printed) — and brings the stack up.
-  `SHIM_DRAIN_TOKEN` authenticates `GET /drain` as a bearer token
-  (`config.ts`'s `requireEnv` — an unset value fails the container closed);
-  the mail collector (`branchLeft/workspace#1239`) needs this same value to
-  call it, and moving it there is an owner step — see "Handing the drain
-  token to the collector" below.
+  absent, renders `/etc/mailgun-shim/env` (mode 600) and brings the stack up.
+  What the env holds depends on the image: `render_shim_env.py` reads the
+  digest from the installed compose file and renders that digest's contract
+  from `shim-env-contracts.json` (this directory travels to the host whole, so
+  the table does too). For the pinned digest, the `smtp-delivery` contract:
+  `PORT`, `SHIM_DB_PATH`, `SHIM_THROTTLE_PATH`, `SMTP_HOST`, `SMTP_PORT`,
+  `SMTP_SECURE`, `SMTP_USER`, and `SMTP_PASS` read from `62`'s credential in
+  `/root/.stalwart-service-credentials` (never printed, and this contract never
+  writes that file). A digest the table does not list is **refused**: exit 1,
+  naming the digest and the table, with `/etc/mailgun-shim/env` untouched, so
+  bumping the image means adding its digest and contract to the table in the
+  same change. The `drain` contract (`SHIM_DRAIN_TOKEN` authenticating
+  `GET /drain` as a bearer token; generated on the host on first use and
+  recorded under `shim-drain-token`) has no digest yet; it applies once a
+  drain image's digest is added to the table — see "Handing the drain token to
+  the collector" below.
 
 ### ACME coexistence
 
@@ -674,6 +683,10 @@ is an internal-listener setting, not a client-facing one, and that
 `acme` issuer block.
 
 ### Filling in the image digest
+
+A new digest also needs its entry in `shim-env-contracts.json` (`digests`,
+mapped to the contract that image reads), in the same commit:
+`render_shim_env.py` refuses a digest the table does not list.
 
 The mailgun-shim image (`ghcr.io/branchleft/mailgun-shim`) is built by a
 shim's own repository, so `shim-compose.yml` ships with a placeholder until a
@@ -767,8 +780,12 @@ this repo, a PR, or a chat transcript.
 
 ### Handing the drain token to the collector — owner action, once #1239 exists
 
-`render_shim_env.py` generates `SHIM_DRAIN_TOKEN` on mx1 itself (on first
-`63-deploy-mailgun-shim.sh` run after this change lands) and records it in
+**This section applies once a drain image's digest is added to
+`shim-env-contracts.json`.** The digest pinned today reads no drain token, so
+`render_shim_env.py` renders none for it, and generates and records nothing
+under `shim-drain-token`. Once a drain digest is pinned and listed,
+`render_shim_env.py` generates `SHIM_DRAIN_TOKEN` on mx1 itself (on the first
+`63-deploy-mailgun-shim.sh` run with that digest) and records it in
 `/root/.stalwart-service-credentials` under the `shim-drain-token` label —
 the same file `62`'s credential lives in, never printed by either script.
 The mail collector (`branchLeft/workspace#1239`), once built and deployed to
