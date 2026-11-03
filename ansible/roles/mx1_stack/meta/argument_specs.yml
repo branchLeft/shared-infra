@@ -6,7 +6,8 @@ argument_specs:
       Refuses, before it writes anything, a host that Compose would read differently from
       the role (a second compose file, an override file, a .env beside the shim's compose
       file, a COMPOSE_ key or a wrong owner or mode on Stalwart's .env), a compose file whose
-      image is not pinned by digest, a host without the shim's drain token, a port 53 held by
+      image is not pinned by digest, a shim image whose digest the contract table does not list, a host
+      without the secret that image's contract names, a port 53 held by
       anything but unbound and a stamp it cannot read. Then, for each of three classes (the
       Stalwart project, the mailgun-shim project, the local resolver), it acts only when the
       class is due: its stamp is missing or pending, an input differs from the stamp or from
@@ -18,7 +19,7 @@ argument_specs:
       recreate of exactly the services whose mounted file or create-time file the running
       container does not have, then a read-back that every such container has it. The stamp
       is written only after that read-back and the health check. It also delivers the DNSBL
-      check and its cron entry. It never makes the shim's drain token, never removes a
+      check and its cron entry. It never makes the shim's secret, never removes a
       volume, an orphan container or a file, and never touches the host's reboot or
       Prometheus steps.
     author: branchLeft

@@ -170,24 +170,27 @@
       COMPOSE_ settings from a .env file and would change which files or project it uses. Remove
       the line by hand. Nothing was written.
 
-# ----- The shim's drain token -----
+# ----- The shim's secret -----
 
-- name: Read whether the credentials file holds the shim's drain token
+# Which secret the shim reads depends on its image: the contract table selects it by the digest the
+# compose file pins, and refuses a digest it does not list (this task fails, before anything is written).
+- name: Read whether the credentials file holds the secret the shim's pinned image reads
   mx1_stack_envfile:
     action: check_token
     credentials_path: '{{ mx1_stack_credentials_file }}'
-    label: '{{ mx1_stack_drain_label }}'
-  register: mx1_stack_drain_check
+    image: "{{ mx1_stack_shim_doc.services['mailgun-shim'].image }}"
+    contracts: '{{ mx1_stack_shim_contracts }}'
+  register: mx1_stack_secret_check
 
-- name: Refuse a host with no drain token for the shim
+- name: Refuse a host with no secret for the shim
   ansible.builtin.assert:
     that:
-      - mx1_stack_drain_check.found
+      - mx1_stack_secret_check.found
     quiet: true
     fail_msg: >-
-      {{ mx1_stack_credentials_file }} holds no entry labelled {{ mx1_stack_drain_label }}. The drain
-      token is made once by the owner, on the host, and recorded there; this role never makes it.
-      Nothing was written.
+      {{ mx1_stack_credentials_file }} holds no entry labelled {{ mx1_stack_secret_check.label }}. The
+      secret is made once by the owner's hand scripts, on the host, and recorded there; this role never
+      makes it, for any image. Nothing was written.
 
 # ----- Port 53 -----
 

@@ -34,8 +34,11 @@ environment while the compose file pinned an image whose config loader requires
 `--expect-smtp-host-missing` runs the same flow and inverts the expectation: the
 container must stop, its log must name the missing `SMTP_HOST`, and it must hold
 none of `SQLITE_CANTOPEN`, `EACCES` or `EPERM`. A mount or permission failure
-therefore cannot pass for the stale-environment failure. `SHIM_RENDERER` names
-the program that renders the environment (default: `render_shim_env.py`).
+therefore cannot pass for the stale-environment failure. Without
+`SHIM_RENDERER`, the control environment is the `drain` contract's output, the
+very file `main` rendered before the fix. With it, the named program renders the
+environment instead (in the normal run it is also the renderer under test,
+default `render_shim_env.py`).
 
 Every failure prints a `CONTROL-REASON:` line (`smtp-host-missing`,
 `mount-or-permission`, `other`) so a red run shows which fault it was.
@@ -45,7 +48,7 @@ Every failure prints a `CONTROL-REASON:` line (`smtp-host-missing`,
 It runs the pinned image against a placeholder SMTP credential and no network, so
 it says nothing about whether Stalwart accepts the real credential, or whether
 mail leaves mx1. It also cannot show what is running on mx1 now: that is a
-host-observable fact, read on the host by Rob.
+host-observable fact, read on the host by the owner.
 
 ## Why it is not `test_*`
 

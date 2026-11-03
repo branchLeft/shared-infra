@@ -203,6 +203,13 @@ jobs:
       - name: Start the pinned image with the rendered environment
         run: python3 mail/provision/check_shim_image_starts.py
 
+      # The control: the environment main rendered before the fix must still stop this image,
+      # and for the missing SMTP_HOST only, never a mount or permission error. A check that
+      # cannot fail is not a check.
+      - name: Control, the stale drain-only environment stops the same image
+        if: ${{ !cancelled() }}
+        run: python3 mail/provision/check_shim_image_starts.py --expect-smtp-host-missing
+
   hetzner-typecheck:
     name: Type check (hetzner)
     runs-on: ubuntu-latest

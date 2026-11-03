@@ -1,6 +1,6 @@
 ---
 # Test setup only, never part of the role. It makes the instance look as the mx1 host does
-# before the role runs: the credentials file the hand route shares (with the shim's drain token
+# before the role runs: the credentials file the hand route shares (with the shim's secret
 # in it, a throwaway made for this run), the apt setting the host has, and stand-ins for what the
 # instance has instead of an engine and a network (docker, dig, openssl and a front for
 # unbound-checkconf), with the shim's own health answer. The stand-ins record what they are asked
@@ -64,14 +64,16 @@
         - { src: standin-openssl, dest: /usr/local/bin/openssl }
         - { src: standin-unbound-checkconf, dest: /usr/local/bin/unbound-checkconf }
 
-    # The flat label:secret file the 6x hand scripts share. The drain token is made once by the
-    # owner on the real host; here it is the run's throwaway. Another label is there so the role
-    # is shown to read only its own.
-    - name: Put the credentials file in place, with the shim's drain token in it
+    # The flat label:secret file the 6x hand scripts share. The SMTP submission credential the
+    # pinned image reads is made on the real host by script 62; here it is the run's throwaway.
+    # Two other labels are there, one of them the other contract's, so the role is shown to read
+    # only the label its image's contract names.
+    - name: Put the credentials file in place, with the shim's secret in it
       ansible.builtin.copy:
         content: |
           stalwart-admin:THROWAWAY-ADMIN-NOT-FOR-THE-SHIM
-          shim-drain-token:{{ scenario_drain_token }}
+          shim-drain-token:THROWAWAY-OTHER-CONTRACT-NOT-FOR-THIS-IMAGE
+          blog-shim-bulk-submission:{{ scenario_shim_secret }}
         dest: /root/.stalwart-service-credentials
         owner: root
         group: root

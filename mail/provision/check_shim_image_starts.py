@@ -95,6 +95,19 @@ def render_env(work: pathlib.Path, renderer: str) -> pathlib.Path:
     return env_file
 
 
+def render_drain_env(work: pathlib.Path) -> pathlib.Path:
+    """The control's environment: the drain contract's output, which is exactly what main
+    rendered before the fix and which the pinned image cannot start with.
+    """
+    import render_shim_env as renderer  # noqa: PLC0415 -- only the control needs it
+
+    env_file = work / "env"
+    contract = renderer.load_table()["contracts"]["drain"]
+    env_file.write_text(renderer.render_env_file(contract, PLACEHOLDER_SECRET), encoding="utf-8")
+    env_file.chmod(0o600)
+    return env_file
+
+
 def wait_for_health(container: str, script: str) -> tuple[bool, str]:
     """Poll the compose healthcheck inside the container; stop at once if it exits."""
     deadline = time.monotonic() + START_SECONDS
@@ -117,7 +130,10 @@ def run(expect_missing: bool) -> int:
     pull_with_one_retry(image)
     with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         work = pathlib.Path(tmp)
-        env_file = render_env(work, renderer)
+        if expect_missing and "SHIM_RENDERER" not in os.environ:
+            env_file = render_drain_env(work)
+        else:
+            env_file = render_env(work, renderer)
         data = work / "data"
         data.mkdir()
         # The runner is not uid 1000 and the image runs as node (1000): open the directory
