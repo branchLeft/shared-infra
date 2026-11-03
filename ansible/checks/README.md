@@ -249,9 +249,34 @@ run needs, from the event and the files it changed. The rules, in the order they
 - a changed file under `ansible/` that nothing here recognises executes every shard,
   because a new kind of file must be named in the program before it may skip a shard;
 - a changed file in a role or pattern executes that role's or pattern's shards, and the
-  shards of every role or pattern that names it;
+  shards of every role or pattern that reaches it, followed to the end (a cycle ends). A
+  role reaches another when a file of it names it textually (`branchleft.name`, `../name`,
+  `roles/name`, `patterns/name`, a README included), or when the structured scan reads one
+  of these:
+  - `include_role` or `import_role` (block, inline `{name: x}` or `name=x`), and a play's
+    `roles:` or a role's `dependencies:` (`- x`, `- role: x`, `- { role: x }`, an inline
+    list), naming `branchleft.x`, a bare `x`, or a path ending in `x`. A `{{ variable }}` is
+    followed through the same role's own definitions of it (each must resolve, three deep);
+    a `{{ playbook_dir }}` path is tried from the file's directory and each one above it up
+    to the role's root; a name built with a trailing `~ "/x"` names `x`;
+  - `import_playbook`, when the file it names lies in another role or pattern;
+  - `notify:` of a handler that the role does not define itself (by `name:` or `listen:`)
+    but another role or pattern does;
+  - a symlink in the role whose target lies in another role or pattern;
 - a changed file outside `ansible/` executes the shards of every role or pattern that
-  reads it.
+  reads it;
+- a reference the scan cannot map to a role or pattern executes every shard whenever a role
+  or pattern changed: a collection role, a name that is not a role here, a variable with no
+  literal definition, a playbook outside any role, a handler defined nowhere, a symlink that
+  is dangling, leaves the repository or points at a file under `ansible/` that no rule names,
+  a line that names `include_role`, `import_role` or `roles:` in a form the scan does not read
+  (a flow-style task, `action: include_role name=x`, a quoted key), and any file the scan
+  cannot read. Such a reference may be a way the changed role is
+  reached that the selection cannot see. A change that selects no role (a README, a
+  lint-only file) still executes no shard, and the log names the first few such references.
+  `test_ci_select.py` holds the real tree to none, so a new templated role name that the scan
+  cannot place fails there before it sends every pull request to every shard; make the name
+  literal, or give it through a variable of the same role with a literal value.
 
 A shard that is wrongly left out is a gate that passes without running, so every rule
 above errs towards running more.
