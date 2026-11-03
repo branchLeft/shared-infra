@@ -53,13 +53,13 @@ reached. The role holds no SQL; the grants are the applications image's closed m
 (`portal/data/provision/manifest.ts` in the Ghost platform repository), which the program
 checks before and after it acts and refuses to repair.
 
-| Login                      | What it can do                                                                                               | Defined by                                                | Reached how                                                                                             |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `postgres` (administrator) | Everything. It is the migration role: `migrate` and `provision` run as it, and nothing else does.            | The `db` image's first start                              | `admin-url`, owner-placed, read by one container, removed on every exit; `pg_hba.conf`: three databases |
-| `zitadel`                  | Owns its own database and runs the sign-in service's own setup migrations there (so it holds DDL there).     | The sign-in service's `init` phase, run once by the owner | The stack network; `pg_hba.conf`: its own database only                                                 |
-| `portal_tenant_login`      | Member of `portal_tenant` alone: the tenant portal's access; no BYPASSRLS; nothing beyond the manifest.      | The program's manifest, created by `provision`            | The tenant portal's URL file; `pg_hba.conf`: `portal` only                                              |
-| `portal_owner_login`       | Member of `portal_owner` alone: the operator console's access; the role (not the login) with BYPASSRLS.      | The program's manifest, created by `provision`            | The console's URL file; `pg_hba.conf`: `portal` only                                                    |
-| `portal_provisioner_login` | Member of `portal_provisioner` alone: INSERT and SELECT on the demo-state and hostname-register tables only. | The program's manifest, created by `provision`            | No file: the program connects as it once to prove the boundary; `pg_hba.conf`: `portal` only            |
+| Login                      | What it can do                                                                                               | Defined by                                                | Reached how                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `postgres` (administrator) | Everything. It is the migration role: `migrate` and `provision` run as it, and nothing else does.            | The `db` image's first start                              | `admin-url`, owner-placed, read by one container, removed on every exit; `pg_hba.conf`: three databases                               |
+| `zitadel`                  | Owns its own database and runs the sign-in service's own setup migrations there (so it holds DDL there).     | The sign-in service's `init` phase, run once by the owner | The stack network; `pg_hba.conf`: its own database only                                                                               |
+| `portal_tenant_login`      | Member of `portal_tenant` alone: the tenant portal's access; no BYPASSRLS; nothing beyond the manifest.      | The program's manifest, created by `provision`            | The tenant portal's URL file; `pg_hba.conf`: `portal` only                                                                            |
+| `portal_owner_login`       | Member of `portal_owner` alone: the operator console's access; the role (not the login) with BYPASSRLS.      | The program's manifest, created by `provision`            | The console's URL file; `pg_hba.conf`: `portal` only                                                                                  |
+| `portal_provisioner_login` | Member of `portal_provisioner` alone: INSERT and SELECT on the demo-state and hostname-register tables only. | The program's manifest, created by `provision`            | No URL file yet: the lifecycle worker (not built) is its runtime user; provisioning connects as it once; `pg_hba.conf`: `portal` only |
 
 The migration role is the administrator. It is a named login, reached only through the
 owner-placed `admin-url` file that the step removes on every way out, and it is never given
@@ -70,10 +70,11 @@ platform repository, so it is a follow-up there and not built here.
 
 What bounds each login is two things the repository tests. `pg_hba.conf` admits each login to
 its own database and refuses every other pair, shown against a real PostgreSQL by
-`hetzner/provision/test_control_plane_hba_server.py`. The portal logins' lack of DDL is shown
+`hetzner/provision/test_control_plane_hba_server.py`. The tenant login's lack of DDL is shown
 by the program's own boundary check (a tenant login creating in the `public` schema must be
-refused), which is cited and not copied. The zitadel login's rights inside its own database
-are the vendor's, not ours to narrow: it is bounded by `pg_hba.conf` alone, and that is a
+refused), which is cited and not copied. The owner and provisioner logins are not probed for
+DDL there; the manifest's ACL checks cover their schema rights. The zitadel login's rights inside its
+own database are the vendor's, not ours to narrow: it is bounded by `pg_hba.conf` alone, and that is a
 named limit below.
 
 ## Interface

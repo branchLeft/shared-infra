@@ -400,6 +400,13 @@ class ControlPlaneStackTests(unittest.TestCase):
             allowed.setdefault(user, set()).update(databases)
         self.assertEqual({user: frozenset(databases) for user, databases in allowed.items()}, EXPECTED_DATABASES)
 
+    def test_every_accepting_host_rule_admits_only_the_stack_network(self):
+        accepting = [r for r in hba_rules() if r[0] == "host" and r[-1] != "reject"]
+        self.assertTrue(accepting)
+        for rule in accepting:
+            with self.subTest(rule=rule):
+                self.assertEqual(rule[3], "samenet")
+
     def test_the_local_socket_admits_only_the_administrator(self):
         local = [r for r in hba_rules() if r[0] == "local" and r[-1] != "reject"]
         self.assertEqual(local, [["local", "all", "postgres", "scram-sha-256"]])

@@ -48,13 +48,13 @@ control_plane_db_input_dir_mode: '0750'
 control_plane_db_image_user: '1000:1000'
 
 # The two connection URL files the applications read, and the one login each holds.
-# The provisioner login has no URL file: nothing reads it.
+# The provisioner login has no URL file yet: its runtime user, the lifecycle worker, is not built.
 control_plane_db_portal_url_file: '{{ control_plane_db_config_dir }}/portal-database-url'
 control_plane_db_console_url_file: '{{ control_plane_db_config_dir }}/console-database-url'
 control_plane_db_tenant_login: portal_tenant_login
 control_plane_db_owner_login: portal_owner_login
-# The third login, the provisioning program's own. It holds no URL file: the program
-# connects as it once, after its transaction commits, to prove the boundary.
+# The third login is the lifecycle worker's runtime login. It holds no URL file: the
+# provisioning program connects as it once, after its transaction commits, to prove the boundary.
 control_plane_db_provisioner_login: portal_provisioner_login
 control_plane_db_database_host: db
 control_plane_db_database_name: portal
