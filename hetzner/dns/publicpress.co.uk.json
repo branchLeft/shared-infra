@@ -5,7 +5,7 @@
     "every authoritative server against.",
     "",
     "Captured by `zonecheck.py capture` from the registrar's authoritative servers",
-    "(raw answers in captures/publicpress.co.uk.ionos-dig.txt), which refuse zone",
+    "(answers in captures/publicpress.co.uk.ionos-dig.txt, dig banners stripped), which refuse zone",
     "transfers. A record is only here if its name is in probe_names, so a new name",
     "must be added there before it can be captured or compared. Absent names are",
     "compared too: every probe name that holds no record must be NXDOMAIN at both",

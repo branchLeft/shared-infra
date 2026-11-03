@@ -10,7 +10,8 @@ repeated: the stack, its token and its passphrase already exist.
 
 Read from all four IONOS authoritative servers (`ns1049.ui-dns.de`,
 `ns1088.ui-dns.org`, `ns1094.ui-dns.biz`, `ns1098.ui-dns.com`), which agree, by
-`zonecheck.py capture` run on a GitHub runner. The raw dig output is
+`zonecheck.py capture` run on a GitHub runner. The dig answers, with dig's
+banners stripped by `zonecheck.py strip-transcript`, are
 `captures/publicpress.co.uk.ionos-dig.txt`; CI re-proves on every run that
 `publicpress.co.uk.json` declares exactly what that transcript shows
 (`zonecheck.py check-capture`).
@@ -162,9 +163,18 @@ FAILED` is a stop.
 In the IONOS panel, open **Domains & SSL → publicpress.co.uk → DNS** and check
 it lists exactly the 11 records in the table at the top (the MX counts twice),
 besides the NS records. **Any extra record is a stop**: add its name to
-`probe_names` in `hetzner/dns/publicpress.co.uk.json`, re-run
-`python3 hetzner/dns/zonecheck.py capture --server ns1049.ui-dns.de --zone-file hetzner/dns/publicpress.co.uk.json --out hetzner/dns/publicpress.co.uk.json --transcript hetzner/dns/captures/publicpress.co.uk.ionos-dig.txt --dig-time 5 --dig-tries 3`
-from a network that does not intercept port 53, land that by PR, and apply
+`probe_names` in `hetzner/dns/publicpress.co.uk.json`, re-run the capture from a network that does not intercept port 53, which writes
+the verbose transcript to a temporary file and then the minimal form to the
+committed path:
+
+```text
+VERBOSE=$(mktemp)
+python3 hetzner/dns/zonecheck.py capture --server ns1049.ui-dns.de --zone-file hetzner/dns/publicpress.co.uk.json --out hetzner/dns/publicpress.co.uk.json --transcript "$VERBOSE" --dig-time 5 --dig-tries 3
+python3 hetzner/dns/zonecheck.py strip-transcript < "$VERBOSE" > hetzner/dns/captures/publicpress.co.uk.ionos-dig.txt
+rm "$VERBOSE"
+```
+
+then land that by PR, and apply
 before going on.
 
 ### 7. Optional: lower the TTLs first

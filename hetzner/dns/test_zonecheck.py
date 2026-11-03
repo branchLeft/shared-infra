@@ -579,6 +579,56 @@ class TranscriptTest(unittest.TestCase):
         self.assertIn("before its first query header", err)
 
 
+class StripTranscriptTest(unittest.TestCase):
+    """A verbose capture transcript reduces to the lines check-capture reads."""
+
+    VERBOSE = "\n".join([
+        ";;; QUERY publicpress.co.uk. A @ns1049.ui-dns.de",
+        ";; Got answer:",
+        ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 56978",
+        ";; flags: qr aa; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1",
+        "",
+        ";; OPT PSEUDOSECTION:",
+        "; EDNS: version: 0, flags:; udp: 1220",
+        ";; ANSWER SECTION:",
+        "publicpress.co.uk.\t3600\tIN\tA\t46.225.95.167",
+        "",
+        ";;; QUERY zz-no-such-name-4f1c.publicpress.co.uk. A @ns1049.ui-dns.de",
+        ";; Got answer:",
+        ";; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 1",
+        ";; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1",
+        "",
+        ";; AUTHORITY SECTION:",
+        "publicpress.co.uk.\t3600\tIN\tSOA\tns1049.ui-dns.de. hostmaster.publicpress.co.uk. 1 3600 600 86400 300",
+        "",
+        ";; Query time: 12 msec",
+        ";; SERVER: 46.225.95.1#53(46.225.95.1) (UDP)",
+    ]) + "\n"
+
+    MINIMAL = "\n".join([
+        ";;; QUERY publicpress.co.uk. A @ns1049.ui-dns.de",
+        ";; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 56978",
+        ";; flags: qr aa; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1",
+        "publicpress.co.uk.\t3600\tIN\tA\t46.225.95.167",
+        ";;; QUERY zz-no-such-name-4f1c.publicpress.co.uk. A @ns1049.ui-dns.de",
+        ";; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 1",
+        ";; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1",
+        "publicpress.co.uk.\t3600\tIN\tSOA\tns1049.ui-dns.de. hostmaster.publicpress.co.uk. 1 3600 600 86400 300",
+    ]) + "\n"
+
+    def test_verbose_reduces_to_the_minimal_form(self):
+        self.assertEqual(zonecheck.strip_transcript(self.VERBOSE), self.MINIMAL)
+
+    def test_minimal_form_is_a_fixed_point(self):
+        self.assertEqual(zonecheck.strip_transcript(self.MINIMAL), self.MINIMAL)
+
+    def test_stripping_keeps_what_check_capture_reads(self):
+        verbose = zonecheck.zone_from_transcript(self.VERBOSE, "publicpress.co.uk")
+        minimal = zonecheck.zone_from_transcript(zonecheck.strip_transcript(self.VERBOSE), "publicpress.co.uk")
+        self.assertEqual(minimal[0].rrsets, verbose[0].rrsets)
+        self.assertEqual(minimal[1:], verbose[1:])
+
+
 class CheckedInPublicPressTest(unittest.TestCase):
     """The committed publicpress.co.uk pair: declared must equal captured.
 

@@ -498,6 +498,23 @@ def _add_dig_timings(parser: argparse.ArgumentParser) -> None:
                         help="dig +tries (default %(default)s)")
 
 
+_MINIMAL_KEEP = re.compile(r"^(;;; QUERY |;; ->>HEADER<<- |;; flags: )")
+_RECORD_LINE = re.compile(r"^[^;\s].*\sIN\s")
+
+
+def strip_transcript(text: str) -> str:
+    """The minimal form of a verbose capture transcript: what check-capture reads.
+
+    Keeps each query header, its status and flags lines, and the answer
+    records. Dig's banners, OPT sections, timings and blank lines are dropped.
+    """
+    return "".join(
+        line + "\n"
+        for line in text.splitlines()
+        if _MINIMAL_KEEP.match(line) or _RECORD_LINE.match(line)
+    )
+
+
 def main(argv: list[str] | None = None, run: Runner = _run_dig) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -526,7 +543,15 @@ def main(argv: list[str] | None = None, run: Runner = _run_dig) -> int:
     chk.add_argument("--transcript", type=pathlib.Path, required=True)
     chk.add_argument("--zone-file", type=pathlib.Path, required=True)
 
+    sub.add_parser(
+        "strip-transcript",
+        help="read a verbose capture transcript on stdin, write its minimal form to stdout (no queries)",
+    )
+
     args = parser.parse_args(argv)
+    if args.command == "strip-transcript":
+        sys.stdout.write(strip_transcript(sys.stdin.read()))
+        return 0
     try:
         existing = load_zone(args.zone_file)
         if args.command == "check-capture":
