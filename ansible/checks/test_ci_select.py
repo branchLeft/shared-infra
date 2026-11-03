@@ -661,6 +661,22 @@ class StructuredScanTest(unittest.TestCase):
                 self.assertEqual(1, len(scan.unresolved), scan.unresolved)
                 self.assertTrue(scan.unresolved[0][0].startswith("ansible/roles/b/tasks/main.yml:"))
 
+    def assert_runs_every_shard(self, text: str) -> None:
+        """Assert that ``text`` in role b is unresolved, so a change to role a runs every shard."""
+        case = Case({**PLAIN, role_file("b"): text}, (role_file("a"),), None)
+        scan = self.scan(case.files)
+        self.assertEqual(1, len(scan.unresolved), scan.unresolved)
+        self.assertEqual(expected_names(case), self.selected(case))
+
+    def test_a_flow_style_include_role_task_that_cannot_be_read_runs_every_shard(self) -> None:
+        self.assert_runs_every_shard("- {include_role: {name: a}}\n")
+
+    def test_an_action_include_role_with_key_value_arguments_runs_every_shard(self) -> None:
+        self.assert_runs_every_shard("- action: include_role name=a\n")
+
+    def test_a_quoted_include_role_key_that_cannot_be_read_runs_every_shard(self) -> None:
+        self.assert_runs_every_shard('- "include_role": {name: a}\n')
+
     def test_a_name_through_a_variable_resolves_when_every_definition_does(self) -> None:
         files = {
             **PLAIN,

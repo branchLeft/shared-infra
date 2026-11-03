@@ -269,7 +269,9 @@ run needs, from the event and the files it changed. The rules, in the order they
   or pattern changed: a collection role, a name that is not a role here, a variable with no
   literal definition, a playbook outside any role, a handler defined nowhere, a symlink that
   is dangling, leaves the repository or points at a file under `ansible/` that no rule names,
-  and any file the scan cannot read. Such a reference may be a way the changed role is
+  a line that names `include_role`, `import_role` or `roles:` in a form the scan does not read
+  (a flow-style task, `action: include_role name=x`, a quoted key), and any file the scan
+  cannot read. Such a reference may be a way the changed role is
   reached that the selection cannot see. A change that selects no role (a README, a
   lint-only file) still executes no shard, and the log names the first few such references.
   `test_ci_select.py` holds the real tree to none, so a new templated role name that the scan

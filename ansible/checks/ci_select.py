@@ -208,6 +208,9 @@ PLAYBOOK_CALL = re.compile(
 )
 # A list of roles: a play's ``roles:`` or a role's ``dependencies:`` in meta/main.yml.
 ROLE_LIST = re.compile(r"^(\s*)(?:roles|dependencies)\s*:\s*(.*?)\s*$")
+# A line that names a role call or a role list in any form. One that no parser above reads is
+# unresolved, so a form the scan does not parse cannot narrow a selection.
+ROLE_MENTION = re.compile(r"\b(?:include_role|import_role)\b|\broles[\"']?\s*:")
 # A handler notification, or the name a handler listens for.
 NOTIFY_KEY = re.compile(r"^(\s*)(?:-\s+)?notify\s*:\s*(.*?)\s*$")
 LISTEN_KEY = re.compile(r"^(\s*)(?:-\s+)?listen\s*:\s*(.*?)\s*$")
@@ -496,34 +499,48 @@ class RoleScan:
             self.scan_link(unit, link)
 
     def scan_line(self, unit: str, file: str, lines: list[str], number: int, line: str) -> None:
-        """Read the one reference a line may hold."""
+        """Read the one reference a line may hold, or record it as unresolved.
+
+        A line that names ``include_role``, ``import_role`` or ``roles:`` in a form ``read_key``
+        does not parse (a flow-style task, ``action: include_role``, a quoted key) cannot be
+        mapped to a unit. It is unresolved, so every shard runs.
+        """
+        where = f"{file}:{number + 1}"
+        if not self.read_key(unit, file, lines, number, line, where) and ROLE_MENTION.search(line):
+            self.fail(where, line)
+
+    def read_key(
+        self, unit: str, file: str, lines: list[str], number: int, line: str, where: str
+    ) -> bool:
+        """Read a line whose key is a reference key, and return whether one was read."""
         head = line.lstrip(" -")
         for prefix in MODULE_PREFIXES:
             if head.startswith(prefix):
                 head = head[len(prefix) :]
         if not head.startswith(KEY_STARTS):
-            return
-        where = f"{file}:{number + 1}"
+            return False
         call = ROLE_CALL.match(line)
         if call is not None:
             name = self.role_name(lines, number, call)
             found = None if name is None else self.resolve(file, unit, name)
             self.reach(unit, found, where, f"{line.strip()} {name or '(no name)'}")
-            return
+            return True
         playbook = PLAYBOOK_CALL.match(line)
         if playbook is not None:
             self.reach(unit, self.playbook(unit, file, playbook.group(1)), where, line)
-            return
+            return True
         listed = ROLE_LIST.match(line)
         if listed is not None:
             for found in self.role_list(unit, file, lines, number, listed):
                 self.reach(unit, found, where, line)
-            return
+            return True
         notify = NOTIFY_KEY.match(line)
         if notify is not None:
             names = key_values(lines, number, len(notify.group(1)), notify.group(2))
             for name in names if names is not None else [None]:
                 self.reach(unit, self.handler(unit, name), where, line)
+            return True
+        return False
 
     @staticmethod
     def role_name(lines: list[str], number: int, call: re.Match[str]) -> str | None:
