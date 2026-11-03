@@ -54,7 +54,7 @@ server from it comes back `REFUSED` with no `aa` flag, so `zonecheck.py` exits 2
 Run steps 4 and 5 from a network that does not (a phone hotspot), or from the
 GitHub runner.
 
-## Rob's steps
+## The owner's steps
 
 ### 1. Credentials
 
@@ -96,7 +96,7 @@ cd ~/branchLeft/shared-infra/hetzner/dns
 pulumi preview --diff
 ```
 
-Expected: 11 to create and nothing else — `hcloud:index/zone:Zone`
+Expected: 11 resources to create — `hcloud:index/zone:Zone`
 `publicpress-co-uk` and 10 `hcloud:index/zoneRrset:ZoneRrset`, each named
 `publicpress-co-uk-` followed by the owner and type (`publicpress-co-uk-apex-a`,
 `publicpress-co-uk-apex-mx`, `publicpress-co-uk-apex-txt`,
@@ -105,6 +105,11 @@ Expected: 11 to create and nothing else — `hcloud:index/zone:Zone`
 `publicpress-co-uk-portal-a`, `publicpress-co-uk-s1-ionos._domainkey-cname`,
 `publicpress-co-uk-s2-ionos._domainkey-cname`). **Any update, replace or delete
 of a `branchleft-co-uk` resource is a stop**: it means a URN moved.
+
+The stack outputs change as well, and the preview shows it: `zone` and `rrsets`
+are removed, and `zones` and `authoritativeNameserversByZone` are added.
+`authoritativeNameservers` keeps its value. Removing an output changes no
+resource, so it is not a stop.
 
 ### 3. Apply
 
