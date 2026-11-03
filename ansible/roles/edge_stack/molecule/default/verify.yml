@@ -50,7 +50,7 @@
         path: '{{ edge_stack_verify_real_stack }}/{{ item }}'
         checksum_algorithm: sha256
       loop:
-        - Caddyfile
+        - caddy/Caddyfile
         - compose.yml
         - crowdsec/config.yaml.local
       register: edge_stack_verify_real_stats
@@ -202,7 +202,7 @@
           vars:
             edge_stack_verify_variant_name: p2
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p2\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p2\n" }
 
         - name: Apply the role
           ansible.builtin.include_tasks: tasks/run_role.yml
@@ -366,7 +366,7 @@
           vars:
             edge_stack_verify_variant_name: p6
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p6\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p6\n" }
               - { path: compose.yml, append: "\n# case p6\n" }
               - { path: crowdsec/config.yaml.local, append: "\n# case p6\n" }
 
@@ -407,7 +407,7 @@
         - name: Tear the Caddyfile on the host, in place
           ansible.builtin.copy:
             content: "# torn\n"
-            dest: '{{ edge_stack_verify_dir }}/Caddyfile'
+            dest: '{{ edge_stack_verify_dir }}/caddy/Caddyfile'
             owner: root
             group: root
             mode: '0644'
@@ -456,7 +456,7 @@
           vars:
             edge_stack_verify_variant_name: p8
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p8\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p8\n" }
               - { path: compose.yml, append: "\n# case p8\n" }
               - { path: crowdsec/config.yaml.local, append: "\n# case p8\n" }
 
@@ -621,7 +621,7 @@
           vars:
             edge_stack_verify_variant_name: p10
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p10\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p10\n" }
 
         - name: Apply the role
           ansible.builtin.include_tasks: tasks/run_role.yml
@@ -661,7 +661,7 @@
           vars:
             edge_stack_verify_variant_name: p11
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p11\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p11\n" }
 
         - name: Make the reload fail
           ansible.builtin.file:
@@ -824,7 +824,7 @@
           vars:
             edge_stack_verify_variant_name: p12
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p12\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p12\n" }
 
         - name: Make the container show the old Caddyfile
           ansible.builtin.file:
@@ -877,7 +877,7 @@
           vars:
             edge_stack_verify_variant_name: p13
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# BROKEN-CADDYFILE\n" }
+              - { path: caddy/Caddyfile, append: "\n# BROKEN-CADDYFILE\n" }
               - { path: compose.yml, append: "\n# case p13\n" }
 
         - name: Apply the role
@@ -912,7 +912,7 @@
           vars:
             edge_stack_verify_variant_name: p14
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p14\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p14\n" }
               - { path: compose.yml, append: "\n# BROKEN-COMPOSE\n" }
 
         - name: Apply the role
@@ -1002,7 +1002,7 @@
           vars:
             edge_stack_verify_variant_name: pins
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case pins\n" }
+              - { path: caddy/Caddyfile, append: "\n# case pins\n" }
 
         - name: Refuse a tag, a second line, trailing text and an empty file
           ansible.builtin.include_tasks: tasks/pin_case.yml
@@ -1146,7 +1146,7 @@
           vars:
             edge_stack_verify_variant_name: p18
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p18\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p18\n" }
 
         - name: Hold the deploy lock for twenty-five seconds, as a running deploy does
           ansible.builtin.command:
@@ -1463,7 +1463,7 @@
             edge_stack_verify_variant_edits:
               - { path: compose.yml, append: "\n# case p22\n" }
               - { path: crowdsec/config.yaml.local, append: "\n# case p22\n" }
-              - { path: Caddyfile, append: "\n# case p22\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p22\n" }
 
         - name: Make CrowdSec's Local API not answer
           ansible.builtin.file:
@@ -1529,7 +1529,7 @@
           vars:
             edge_stack_verify_variant_name: p23
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p23\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p23\n" }
               - { path: crowdsec/config.yaml.local, append: "\n# case p23\n" }
 
         - name: Apply the role
@@ -1600,7 +1600,7 @@
           loop:
             - /opt/branchleft/edge
             - /opt/branchleft/edge/crowdsec/acquis.d
-            - /opt/branchleft/edge/Caddyfile
+            - /opt/branchleft/edge/caddy/Caddyfile
           register: edge_stack_verify_p24_stats
 
         - name: Assert the Caddyfile was created whole, root's and mode 0644, in directories of 0755, and every class was acted on once and recorded
@@ -1634,7 +1634,7 @@
           vars:
             edge_stack_verify_variant_name: pinmove
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case pin move\n" }
+              - { path: caddy/Caddyfile, append: "\n# case pin move\n" }
 
         - name: Ask the stand-in to move the pin while it validates the Caddyfile
           ansible.builtin.copy:

@@ -26,7 +26,7 @@
     path: '{{ item }}'
     checksum_algorithm: sha256
   loop:
-    - /opt/branchleft/edge/Caddyfile
+    - /opt/branchleft/edge/caddy/Caddyfile
     - /opt/branchleft/edge/compose.yml
     - /opt/branchleft/edge/crowdsec/config.yaml.local
     - /var/lib/standin-mount/Caddyfile

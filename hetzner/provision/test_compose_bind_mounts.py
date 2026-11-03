@@ -37,6 +37,22 @@ DEPLOY_TIME_SOURCES = {
     },
 }
 
+# Single-file bind mounts that exist today and are not the Caddyfile's defect.
+# Each is a committed file mounted by itself, so a deploy that replaces it by
+# rename leaves the running container on the old inode. They are pinned here, by
+# exact path, so this check bites on any NEW one; each is separate work to retire
+# or to prove safe, and the test below fails a stale entry.
+SINGLE_FILE_MOUNTS = {
+    "control-plane": {"./pg_hba.conf"},
+    "edge": {"./crowdsec/config.yaml.local"},
+    "monitoring": {
+        "./alertmanager/email.gotmpl",
+        "./blackbox/blackbox.yml",
+        "./prometheus/alerts.yml",
+        "./prometheus/prometheus.yml",
+    },
+}
+
 
 def stack_compose_files() -> dict[str, pathlib.Path]:
     """Every committed stack, keyed by the directory holding its `stack/`."""
@@ -89,6 +105,58 @@ class RelativeBindMountTests(unittest.TestCase):
                     set(),
                     f"{stack} exempts sources it no longer mounts: {sorted(sources - declared)}",
                 )
+
+
+def single_file_mounts(compose: pathlib.Path) -> list[str]:
+    """Relative mount sources that resolve to one committed file, in file order."""
+    return [
+        source
+        for source in relative_bind_sources(compose)
+        if (compose.parent / source).resolve().is_file()
+    ]
+
+
+class SingleFileMountTests(unittest.TestCase):
+    """A deploy replaces a file by writing a new one and renaming it into place.
+    A container bind-mounted to the old file keeps the old inode, so it reads the
+    old bytes: a `caddy validate` or a reload run inside it checks and loads
+    configuration that is no longer on the host. Mount the directory instead.
+    """
+
+    def test_no_new_single_file_mount_is_added(self):
+        for stack, compose in stack_compose_files().items():
+            allowed = SINGLE_FILE_MOUNTS.get(stack, set())
+            for source in single_file_mounts(compose):
+                if source in allowed:
+                    continue
+                with self.subTest(stack=stack, source=source):
+                    self.fail(
+                        f"{compose} bind-mounts the single file {source}. A deploy replaces "
+                        "a file by rename, so the running container keeps the old inode and "
+                        "reads the old bytes. Put the file in its own directory and mount "
+                        "the directory."
+                    )
+
+    def test_no_pinned_single_file_mount_outlives_the_mount(self):
+        composes = stack_compose_files()
+        for stack, sources in SINGLE_FILE_MOUNTS.items():
+            with self.subTest(stack=stack):
+                self.assertIn(stack, composes, f"{stack} is pinned but has no stack/compose.yml")
+                present = set(single_file_mounts(composes[stack]))
+                self.assertEqual(
+                    sources - present,
+                    set(),
+                    f"{stack} pins single-file mounts it no longer has: {sorted(sources - present)}",
+                )
+
+    def test_a_directory_mount_is_not_a_single_file_mount(self):
+        compose = HETZNER / "edge" / "stack" / "compose.yml"
+        self.assertNotIn("./crowdsec/acquis.d", single_file_mounts(compose))
+
+    def test_the_edge_caddyfile_is_mounted_as_a_directory(self):
+        compose = HETZNER / "edge" / "stack" / "compose.yml"
+        self.assertNotIn("./Caddyfile", relative_bind_sources(compose))
+        self.assertIn("./caddy", relative_bind_sources(compose))
 
 
 class CrowdsecAcquisitionMountTests(unittest.TestCase):
