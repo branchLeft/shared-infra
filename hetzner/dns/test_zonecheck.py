@@ -72,6 +72,7 @@ class FakeServer:
     def __init__(self, records, ns, aa=True, rcode_override=None):
         self.records = {k: (ttl, list(v)) for k, (ttl, v) in records.items()}
         self.records[("@", "NS")] = (86400, ns)
+        self.records[("@", "SOA")] = (86400, [f"{ns[0]} hostmaster.example.test. 2017060113 28800 7200 604800 600"])
         self.aa = aa
         self.rcode_override = rcode_override
 
@@ -398,6 +399,295 @@ class MainTest(unittest.TestCase):
     def test_empty_server_list_is_a_usage_error(self):
         with self.assertRaises(SystemExit), redirect_stderr(io.StringIO()):
             zonecheck.main(["compare", "--left", ",", "--right", "x"], runner({}))
+
+
+class DigTimingsTest(unittest.TestCase):
+    def test_defaults_are_unchanged(self):
+        run = runner(two_providers())
+        zonecheck.query("ns1.registrar.example", "example.test.", "A", run)
+        self.assertIn("+time=3", run.calls[0])
+        self.assertIn("+tries=2", run.calls[0])
+
+    def test_flags_reach_every_dig_in_a_compare(self):
+        run = runner(two_providers())
+        out, err = io.StringIO(), io.StringIO()
+        zone_file = write_zone(pathlib.Path(tempfile.mkdtemp()))
+        argv = [
+            "compare", "--zone-file", str(zone_file), "--left", ",".join(LEFT), "--right", ",".join(RIGHT),
+            "--dig-time", "7", "--dig-tries", "5",
+        ]
+        with redirect_stdout(out), redirect_stderr(err):
+            code = zonecheck.main(argv, run)
+        self.assertEqual(code, 0)
+        self.assertTrue(run.calls)
+        for call in run.calls:
+            self.assertIn("+time=7", call)
+            self.assertIn("+tries=5", call)
+            self.assertNotIn("+time=3", call)
+
+    def test_flags_reach_every_dig_in_a_capture(self):
+        run = runner(two_providers())
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        zone_file = write_zone(tmp)
+        with redirect_stdout(io.StringIO()):
+            code = zonecheck.main(
+                ["capture", "--zone-file", str(zone_file), "--server", LEFT[0], "--out", str(tmp / "o.json"),
+                 "--dig-time", "9", "--dig-tries", "4"],
+                run,
+            )
+        self.assertEqual(code, 0)
+        for call in run.calls:
+            self.assertIn("+time=9", call)
+            self.assertIn("+tries=4", call)
+
+
+class TranscriptTest(unittest.TestCase):
+    """capture --transcript, and check-capture over what it wrote."""
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.zone_file = write_zone(self.tmp)
+        self.transcript = self.tmp / "dig.txt"
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = zonecheck.main(
+                ["capture", "--zone-file", str(self.zone_file), "--server", LEFT[0],
+                 "--out", str(self.tmp / "captured.json"), "--transcript", str(self.transcript)],
+                runner(two_providers()),
+            )
+        self.assertEqual(code, 0)
+        self.text = self.transcript.read_text()
+
+    def check(self, zone_file=None, transcript=None):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = zonecheck.main(
+                ["check-capture", "--zone-file", str(zone_file or self.zone_file),
+                 "--transcript", str(transcript or self.transcript)],
+                runner({}),
+            )
+        return code, out.getvalue(), err.getvalue()
+
+    def test_transcript_holds_every_answer_verbatim_with_apex_soa_and_ns(self):
+        self.assertIn(";;; QUERY example.test. SOA @ns1.registrar.example", self.text)
+        self.assertIn(";;; QUERY example.test. NS @ns1.registrar.example", self.text)
+        self.assertIn("2017060113 28800 7200 604800 600", self.text)
+        self.assertIn(";; flags: qr aa;", self.text)
+        # One block per name and type, except the apex NS, which capture leaves
+        # to the provider; the transcript then adds that NS and the SOA.
+        names = zonecheck.load_zone(self.zone_file).names()
+        self.assertEqual(self.text.count(";;; QUERY "), len(names) * len(zonecheck.PROBE_TYPES) + 1)
+
+    def test_a_matching_pair_is_equal_and_makes_no_query(self):
+        code, out, _ = self.check()
+        self.assertEqual(code, 0)
+        self.assertIn("zone file equals transcript", out)
+
+    def test_a_record_dropped_from_the_zone_file_is_a_diff(self):
+        data = json.loads(self.zone_file.read_text())
+        data["rrsets"] = [r for r in data["rrsets"] if (r["name"], r["type"]) != ("_dmarc", "TXT")]
+        dropped = self.tmp / "dropped.json"
+        dropped.write_text(json.dumps(data))
+        code, out, _ = self.check(zone_file=dropped)
+        self.assertEqual(code, 1)
+        self.assertIn("DIFF _dmarc TXT: in the transcript, not declared in the zone file", out)
+
+    def test_one_value_dropped_from_a_multi_value_rrset_is_a_diff(self):
+        data = json.loads(self.zone_file.read_text())
+        for rrset in data["rrsets"]:
+            if (rrset["name"], rrset["type"]) == ("@", "TXT"):
+                rrset["values"] = rrset["values"][:1]
+        dropped = self.tmp / "dropped.json"
+        dropped.write_text(json.dumps(data))
+        code, out, _ = self.check(zone_file=dropped)
+        self.assertEqual(code, 1)
+        self.assertIn("DIFF @ TXT: declared", out)
+
+    def test_a_changed_ttl_is_a_diff(self):
+        data = json.loads(self.zone_file.read_text())
+        data["rrsets"][0]["ttl"] = 60
+        changed = self.tmp / "changed.json"
+        changed.write_text(json.dumps(data))
+        code, out, _ = self.check(zone_file=changed)
+        self.assertEqual(code, 1)
+        self.assertIn("ttl 60", out)
+
+    def test_an_extra_declared_record_is_a_diff(self):
+        data = json.loads(self.zone_file.read_text())
+        data["rrsets"].append({"name": "absent", "type": "A", "ttl": 3600, "values": ["192.0.2.99"]})
+        extra = self.tmp / "extra.json"
+        extra.write_text(json.dumps(data))
+        code, out, _ = self.check(zone_file=extra)
+        self.assertEqual(code, 1)
+        self.assertIn("DIFF absent A: declared in the zone file, not in the transcript", out)
+
+    def test_a_record_dropped_from_the_transcript_is_a_diff(self):
+        lines = [
+            line for line in self.text.splitlines()
+            if not (line.startswith("_dmarc.example.test.") and "\tTXT\t" in line)
+        ]
+        self.assertLess(len(lines), len(self.text.splitlines()))
+        cut = self.tmp / "cut.txt"
+        cut.write_text("\n".join(lines) + "\n")
+        code, out, _ = self.check(transcript=cut)
+        self.assertEqual(code, 1)
+        self.assertIn("DIFF _dmarc TXT: declared in the zone file, not in the transcript", out)
+
+    def test_a_query_missing_from_the_transcript_is_a_diff_even_with_no_record_in_it(self):
+        blocks = self.text.split(";;; QUERY ")
+        kept = [b for b in blocks if not b.startswith("absent.example.test. MX ")]
+        self.assertEqual(len(kept), len(blocks) - 1)
+        cut = self.tmp / "cut.txt"
+        cut.write_text(";;; QUERY ".join(kept))
+        code, out, _ = self.check(transcript=cut)
+        self.assertEqual(code, 1)
+        self.assertIn("absent MX: probed by the zone file, absent from the transcript", out)
+
+    def test_a_missing_apex_soa_is_a_diff(self):
+        blocks = self.text.split(";;; QUERY ")
+        kept = [b for b in blocks if not b.startswith("example.test. SOA ")]
+        cut = self.tmp / "cut.txt"
+        cut.write_text(";;; QUERY ".join(kept))
+        code, out, _ = self.check(transcript=cut)
+        self.assertEqual(code, 1)
+        self.assertIn("@ SOA: probed by the zone file, absent from the transcript", out)
+
+    def test_a_probed_name_that_exists_but_is_not_declared_is_a_diff(self):
+        # The case that found publicpress.co.uk's s1-ionos._domainkey: a name
+        # answers NOERROR with no data because a name sits below it.
+        data = json.loads(self.zone_file.read_text())
+        data["rrsets"] = [r for r in data["rrsets"] if r["name"] != "sel._domainkey"]
+        undeclared = self.tmp / "undeclared.json"
+        undeclared.write_text(json.dumps(data))
+        code, out, _ = self.check(zone_file=undeclared)
+        self.assertEqual(code, 1)
+        self.assertIn("sel._domainkey TXT", out)
+        self.assertIn("_domainkey: rcode NOERROR in the transcript, NXDOMAIN expected", out)
+
+    def test_a_non_authoritative_transcript_is_refused(self):
+        refused = self.tmp / "refused.txt"
+        refused.write_text(self.text.replace(";; flags: qr aa;", ";; flags: qr;", 1))
+        code, _, err = self.check(transcript=refused)
+        self.assertEqual(code, 2)
+        self.assertIn("not authoritative", err)
+
+    def test_text_before_the_first_query_is_refused(self):
+        junk = self.tmp / "junk.txt"
+        junk.write_text("not a transcript\n" + self.text)
+        code, _, err = self.check(transcript=junk)
+        self.assertEqual(code, 2)
+        self.assertIn("before its first query header", err)
+
+
+class CheckedInPublicPressTest(unittest.TestCase):
+    """The committed publicpress.co.uk pair: declared must equal captured.
+
+    Mail authentication must survive the move, so the test fails when any
+    declared record is dropped from the file -- every one, by name -- and when
+    any is dropped from the transcript. The transcript is raw IONOS output
+    read from a runner whose port 53 is not intercepted; see
+    RUNBOOK-dns-publicpress-cutover.md.
+    """
+
+    HERE = pathlib.Path(__file__).resolve().parent
+    ZONE_FILE = HERE / "publicpress.co.uk.json"
+    TRANSCRIPT = HERE / "captures" / "publicpress.co.uk.ionos-dig.txt"
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.assertTrue(self.ZONE_FILE.exists(), "the publicpress.co.uk zone file is not committed")
+        self.assertTrue(self.TRANSCRIPT.exists(), "the IONOS capture transcript is not committed")
+        self.data = json.loads(self.ZONE_FILE.read_text())
+        self.text = self.TRANSCRIPT.read_text()
+
+    def check(self, zone_file=None, transcript=None):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = zonecheck.main(
+                ["check-capture", "--zone-file", str(zone_file or self.ZONE_FILE),
+                 "--transcript", str(transcript or self.TRANSCRIPT)],
+                runner({}),
+            )
+        return code, out.getvalue(), err.getvalue()
+
+    def test_declared_equals_captured(self):
+        code, out, err = self.check()
+        self.assertEqual((code, err), (0, ""), out)
+
+    def test_mail_records_are_declared(self):
+        rrsets = zonecheck.load_zone(self.ZONE_FILE).rrsets
+        self.assertIn(("@", "MX"), rrsets)
+        self.assertTrue(any(v.startswith('"v=spf1 ') for v in rrsets[("@", "TXT")][1]))
+        self.assertTrue(any(v.startswith('"v=DMARC1;') for v in rrsets[("_dmarc", "TXT")][1]))
+        # Found by a dictionary probe, not by the first capture: _domainkey
+        # answered NOERROR with no data, so a name sat below it.
+        self.assertEqual(rrsets[("s1-ionos._domainkey", "CNAME")][1], frozenset({"s1.dkim.ionos.com."}))
+        self.assertEqual(rrsets[("s2-ionos._domainkey", "CNAME")][1], frozenset({"s2.dkim.ionos.com."}))
+
+    def test_the_transcript_shows_the_apex_soa_and_ns_that_are_not_declared(self):
+        self.assertIn("\tSOA\t", self.text)
+        rrsets = zonecheck.load_zone(self.ZONE_FILE).rrsets
+        self.assertNotIn(("@", "NS"), rrsets)
+        self.assertNotIn(("@", "SOA"), rrsets)
+
+    def test_every_probe_name_holds_what_the_transcript_says_or_is_absent(self):
+        zone = zonecheck.load_zone(self.ZONE_FILE)
+        self.assertIn("zz-no-such-name-4f1c", zone.probe_names)
+        self.assertEqual(zone.expected_rcode("zz-no-such-name-4f1c"), "NXDOMAIN")
+
+    def test_dropping_any_one_declared_record_fails_naming_it(self):
+        self.assertGreater(len(self.data["rrsets"]), 0)
+        for rrset in self.data["rrsets"]:
+            with self.subTest(record=f"{rrset['name']} {rrset['type']}"):
+                dropped = dict(self.data)
+                dropped["rrsets"] = [r for r in self.data["rrsets"] if r is not rrset]
+                path = self.tmp / "dropped.json"
+                path.write_text(json.dumps(dropped))
+                code, out, _ = self.check(zone_file=path)
+                self.assertEqual(code, 1)
+                self.assertIn(f"DIFF {rrset['name']} {rrset['type']}: in the transcript, not declared", out)
+
+    def test_dropping_a_mail_record_in_particular_fails(self):
+        # The sabotage the PR records: _dmarc, then the SPF-bearing apex TXT.
+        for name, rtype in (("_dmarc", "TXT"), ("@", "TXT"), ("@", "MX")):
+            with self.subTest(record=f"{name} {rtype}"):
+                dropped = dict(self.data)
+                dropped["rrsets"] = [r for r in self.data["rrsets"] if (r["name"], r["type"]) != (name, rtype)]
+                path = self.tmp / "dropped.json"
+                path.write_text(json.dumps(dropped))
+                code, out, _ = self.check(zone_file=path)
+                self.assertEqual(code, 1)
+                self.assertIn(f"DIFF {name} {rtype}", out)
+
+    def test_dropping_one_record_from_the_transcript_fails(self):
+        for rrset in self.data["rrsets"]:
+            with self.subTest(record=f"{rrset['name']} {rrset['type']}"):
+                owner = zonecheck.fqdn(rrset["name"], self.data["zone"])
+                # dig pads the owner column with a space or a tab: read fields.
+                cut_lines = [
+                    line for line in self.text.splitlines()
+                    if not (len(line.split(None, 4)) == 5
+                            and line.split(None, 4)[0] == owner
+                            and line.split(None, 4)[3] == rrset["type"])
+                ]
+                self.assertLess(len(cut_lines), len(self.text.splitlines()))
+                path = self.tmp / "cut.txt"
+                path.write_text("\n".join(cut_lines) + "\n")
+                code, out, _ = self.check(transcript=path)
+                self.assertEqual(code, 1)
+                self.assertIn(f"DIFF {rrset['name']} {rrset['type']}: declared in the zone file", out)
+
+    def test_an_extra_declared_record_fails(self):
+        extra = dict(self.data)
+        extra["rrsets"] = [
+            *self.data["rrsets"],
+            {"name": "www", "type": "A", "ttl": 3600, "values": ["192.0.2.1"]},
+        ]
+        path = self.tmp / "extra.json"
+        path.write_text(json.dumps(extra))
+        code, out, _ = self.check(zone_file=path)
+        self.assertEqual(code, 1)
+        self.assertIn("DIFF www A", out)
 
 
 class CheckedInZoneTest(unittest.TestCase):
