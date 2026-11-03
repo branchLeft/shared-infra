@@ -1,0 +1,5 @@
+# Facts app1's roles read, as a Debian 13 (trixie) cx23 server reports them.
+# The roles that read them are found by a unit test; a new read forces an edit here.
+architecture: x86_64
+distribution_release: trixie
+packages: {}

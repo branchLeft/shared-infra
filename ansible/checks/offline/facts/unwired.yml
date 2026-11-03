@@ -1,0 +1,5 @@
+# Facts the roles no playbook applies read. They run on no host yet, so this is a stand-in.
+packages: {}
+services: {}
+all_ipv4_addresses:
+  - 192.0.2.10
