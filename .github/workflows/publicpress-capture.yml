@@ -12,30 +12,37 @@ permissions:
   contents: read
 
 jobs:
-  probe-domainkey:
-    # `_domainkey` answers NOERROR with no data at IONOS, so a name sits below
-    # it that the probe list does not know. Read-only dictionary probe.
+  capture:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Probe selectors below _domainkey
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: dig version
+        run: dig -v
+
+      - name: Capture from ns1049.ui-dns.de, with the raw transcript
+        run: >
+          mkdir out && python3 hetzner/dns/zonecheck.py capture
+          --server ns1049.ui-dns.de
+          --zone-file hetzner/dns/publicpress.co.uk.json
+          --out out/publicpress.co.uk.json
+          --transcript out/publicpress.co.uk.ionos-dig.txt
+          --dig-time 5 --dig-tries 3
+
+      - name: Capture from the other three IONOS servers, which must agree
         run: |
-          set -f
-          selectors="default mail dkim k1 k2 k3 s1 s2 selector1 selector2 google mandrill mailo smtp email key1 key2 m1 mx mxvault pm ionos ionos1 ionos2 1und1 s1-ionos s2-ionos mail-ionos ionos-mail dkim1 dkim2 dkimkey dk dkey domainkey publicpress branchleft stalwart mx1 mx2 mta zoho zmail sendgrid smtpapi mg mailgun amazonses ses protonmail protonmail2 protonmail3 fm1 fm2 fm3 everlytickey1 turbo-smtp mimecast20190104 scph0920 sig1 s1024 s2048 x 20230601 20210112 201602 2016 2017 2018 2019 2020 2021 2022 2023 2024 2025 2026 test pp press id portal cm cm1 cm2 hs1 hs2 krs sailthru neolane cloudflare _wildcard"
-          for d in $(seq 0 100); do
-            day=$(date -u -d "2026-08-01 + $d days" +%Y%m%d)
-            selectors="$selectors v1-rsa-$day v1-ed25519-$day"
+          for server in ns1094.ui-dns.biz ns1088.ui-dns.org ns1098.ui-dns.com; do
+            python3 hetzner/dns/zonecheck.py capture --server "$server" \
+              --zone-file hetzner/dns/publicpress.co.uk.json \
+              --out "out/other-$server.json" --dig-time 5 --dig-tries 3
+            diff out/publicpress.co.uk.json "out/other-$server.json"
           done
-          selectors="$selectors *"
-          for sel in $selectors; do
-            for type in TXT CNAME; do
-              out=$(dig +norec +noall +comments +answer +time=5 +tries=3 @ns1049.ui-dns.de "$sel._domainkey.publicpress.co.uk" "$type")
-              if echo "$out" | grep -q "^$sel\._domainkey\.publicpress\.co\.uk\."; then
-                echo "FOUND $sel $type"; echo "$out"
-              fi
-              if ! echo "$out" | grep -q "status: NXDOMAIN"; then
-                echo "NOT-NXDOMAIN $sel $type"; echo "$out" | grep status
-              fi
-            done
-          done
-          echo "probe done"
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: publicpress-capture
+          path: out/
