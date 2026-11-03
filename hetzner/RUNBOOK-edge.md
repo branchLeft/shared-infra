@@ -827,6 +827,33 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
 The wrapper does this itself when a restart fails. Running it by hand is for the
 case where the stack started cleanly and is behaving wrongly.
 
+## Log retention
+
+Every edge log keeps 30 days (`roll_keep_for 720h`), rolls daily at 00:00 UTC
+(`roll_at 00:00`) and keeps up to 31 rolled files (`roll_keep 31`). The values are
+`LOG_RETENTION`, `LOG_ROLL_AT` and `LOG_ROLL_KEEP` in `hetzner/edge/render.ts`.
+
+A change to any of these is a log output option, and Caddy reads those only when the
+server starts. `caddy reload` does not apply it. After a deploy that changes retention or
+rotation, recreate the caddy container with the `--force-recreate caddy` command in the
+§10a restart fallback, and then run the check below. Do not change the role's reload behaviour to get around this.
+
+Read-only check on edge1, after the deploy. It asks the running Caddy for the configuration
+it loaded and prints the rotation settings it found, with a count for each:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
+  cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a
+  docker compose exec -T caddy wget -qO- http://localhost:2019/config/ | grep -o "\"roll_[a-z_]*\":[^,}]*" | sort | uniq -c
+  grep -c "output file" Caddyfile'
+```
+
+Expect, on every log, `"roll_at":["00:00"]`, `"roll_keep":31` and `"roll_keep_days":30`,
+each with the same count, and that count equal to the last line (the number of `output
+file` blocks on disk). A `"roll_keep_days":90`, a `"roll_keep":10`, or no `"roll_at"` line
+means edge1 is still running the old configuration: recreate the caddy container and run the
+check again.
+
 ## What this stack deliberately does not do
 
 - **It does not share signals with the CrowdSec community blocklist.**
