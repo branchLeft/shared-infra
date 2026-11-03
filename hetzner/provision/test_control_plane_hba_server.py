@@ -239,6 +239,7 @@ def differences(actual: dict[tuple[str, str], bool], expected: dict[tuple[str, s
 class ControlPlaneHbaServerTests(unittest.TestCase):
     servers: dict[str, Server]
     matrices: dict[str, dict[tuple[str, str], bool]]
+    vacuous: set[str]
     _directory: tempfile.TemporaryDirectory[str]
 
     @classmethod
@@ -255,10 +256,13 @@ class ControlPlaneHbaServerTests(unittest.TestCase):
         real = stack.PG_HBA.read_text(encoding="utf-8")
         directory = pathlib.Path(cls._directory.name)
         cls.servers = {"real": Server(run_id, "real", real, admin_password, directory)}
+        cls.vacuous = set()
         for label, (sabotage, _flips) in SABOTAGES.items():
             sabotaged = sabotage(real)
             if sabotaged == real:
-                raise AssertionError(f"the sabotage {label} changed nothing, so its control case would prove nothing")
+                # Its own test fails, and the others still run against the real file.
+                cls.vacuous.add(label)
+                continue
             cls.servers[label] = Server(run_id, label, sabotaged, admin_password, directory)
         # Registered before anything starts, so a failed start still removes what began.
         for server in cls.servers.values():
@@ -284,6 +288,7 @@ class ControlPlaneHbaServerTests(unittest.TestCase):
 
     def _assert_sabotage_flips(self, label: str) -> None:
         _sabotage, flips = SABOTAGES[label]
+        self.assertNotIn(label, self.vacuous, f"the sabotage {label} changed nothing, so this control case proves nothing")
         self.assertEqual(differences(self.matrices[label], expected_matrix()), flips)
 
 

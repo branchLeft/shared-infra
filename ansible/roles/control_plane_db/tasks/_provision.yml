@@ -17,6 +17,11 @@
     - name: Run provision unless its marker exists
       when: not control_plane_db_marker_stat.stat.exists
       block:
+        # First, before any secret file is looked at or read: a database that would
+        # refuse the program's own proof is found out here, with nothing yet taken.
+        - name: Check the database runs on rules that admit the three portal logins
+          ansible.builtin.import_tasks: _hba.yml
+
         - name: Check the administrator URL file and the three password files
           ansible.builtin.import_tasks: _inputs.yml
           vars:

@@ -827,7 +827,7 @@
             that:
               - control_plane_db_ask_result.rc == 0
               - control_plane_db_ask_result.stdout is search('changed=0 ')
-              - control_plane_db_verify_calls | length == 4
+              - control_plane_db_verify_calls | length == 5
             quiet: true
             fail_msg: A second provision changed something or started a container.
 
@@ -881,6 +881,7 @@
             ask_tags: control_plane_db_provision
             ask_extra: { control_plane_db_step: provision }
             refused_text: 'REFUSED: a connection URL file already exists and is not the one these passwords make'
+            refused_calls: 1
 
         - name: Read the URL file the refusal had to leave alone
           ansible.builtin.slurp:
@@ -1016,7 +1017,145 @@
             ask_tags: control_plane_db_provision
             ask_extra: { control_plane_db_step: provision }
             refused_text: 'REFUSED: the image does not carry PORTAL_PROVISIONER_PASSWORD_FILE'
-            refused_calls: 3
+            refused_calls: 4
+
+    # 9b. provision refuses a database that is not running on rules that admit the three
+    # portal logins, before it reads any input.
+    - name: Section provision rules
+      when: verify_sections | length == 0 or 'provision_hba' in verify_sections
+      block:
+        - name: Start from a clean slate
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Place the four inputs
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Request provision with the rules in order
+          ansible.builtin.import_tasks: tasks/ask.yml
+          vars:
+            ask_name: provision with rules that admit the three logins
+            ask_tags: control_plane_db_provision
+            ask_extra: { control_plane_db_step: provision }
+
+        - name: Read the calls
+          ansible.builtin.import_tasks: tasks/calls.yml
+
+        - name: Assert the first call read the running database's rules and the step ran
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_ask_result.rc == 0
+              - control_plane_db_verify_calls[0].argv == ['exec', 'control-plane-db-1', 'cat', '/etc/postgresql/pg_hba.conf']
+              - control_plane_db_verify_calls | selectattr('argv', 'contains', 'dist/provision/provisionMain.js') | list | length == 1
+            quiet: true
+            fail_msg: provision did not read the running database's access rules before it acted.
+
+        - name: Start from a clean slate for the stale case
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the running database hold rules without the provisioner login
+          ansible.builtin.copy:
+            content: "stale-hba\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the four inputs for the stale case
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Refuse a database that holds other rules than the delivered file
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a database holding rules other than the delivered file
+            ask_tags: control_plane_db_provision
+            ask_extra: { control_plane_db_step: provision }
+            refused_text: 'REFUSED: the control-plane database (control-plane-db-1) is not running, or it holds a pg_hba.conf that differs'
+            refused_calls: 1
+
+        - name: Look at what the refusal left
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_state }}/provision'
+            - '{{ verify_input_dir }}/admin-url'
+            - '{{ verify_config }}/portal-database-url'
+          register: control_plane_db_verify_stale_stats
+
+        - name: Assert the refusal wrote nothing, and took the administrator URL file off the disk
+          ansible.builtin.assert:
+            that:
+              - not control_plane_db_verify_stale_stats.results[0].stat.exists
+              - not control_plane_db_verify_stale_stats.results[1].stat.exists
+              - not control_plane_db_verify_stale_stats.results[2].stat.exists
+            quiet: true
+            fail_msg: A provision refused for stale rules wrote a marker or a URL file, or left the administrator URL file.
+
+        - name: Start from a clean slate for the missing-container case
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the database container absent
+          ansible.builtin.copy:
+            content: "no-db\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the four inputs for the missing-container case
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Refuse when the database container cannot be read
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a database container that does not exist
+            ask_tags: control_plane_db_provision
+            ask_extra: { control_plane_db_step: provision }
+            refused_text: 'REFUSED: the control-plane database (control-plane-db-1) is not running, or it holds a pg_hba.conf that differs'
+            refused_calls: 1
+
+        - name: Start from a clean slate for the missing-rule case
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Deliver and run rules that lack the provisioner login's, so the two agree
+          ansible.builtin.lineinfile:
+            path: /opt/branchleft/control-plane/pg_hba.conf
+            regexp: '^host\s+portal\s+portal_provisioner_login\s'
+            state: absent
+
+        - name: Place the four inputs for the missing-rule case
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Refuse a delivered file with no rule for the provisioner login, though the database agrees with it
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a delivered file with no rule for the provisioner login
+            ask_tags: control_plane_db_provision
+            ask_extra: { control_plane_db_step: provision }
+            refused_text: 'has no accepting rule for the portal login portal_provisioner_login'
+            refused_calls: 0
+
+        - name: Start from a clean slate for the absent-file case
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Remove the delivered file
+          ansible.builtin.file:
+            path: /opt/branchleft/control-plane/pg_hba.conf
+            state: absent
+
+        - name: Place the four inputs for the absent-file case
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Refuse a host that has no delivered rules
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a host with no delivered pg_hba.conf
+            ask_tags: control_plane_db_provision
+            ask_extra: { control_plane_db_step: provision }
+            refused_text: 'is not a regular file on this host'
+            refused_calls: 0
+
+        - name: Put the delivered rules back for the sections that follow
+          ansible.builtin.import_tasks: tasks/reset.yml
 
     # 10. identity: the configuration is rendered from the inputs, the container is given
     # the token read-only and nothing else of the host's, the identifiers are installed

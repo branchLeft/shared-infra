@@ -42,6 +42,14 @@
   loop_control:
     label: '{{ item.path }}'
 
+- name: Deliver the stack's access rules again, as prepare.yml did
+  ansible.builtin.copy:
+    src: '{{ scenario_hba_source }}'
+    dest: /opt/branchleft/control-plane/pg_hba.conf
+    owner: root
+    group: root
+    mode: '0644'
+
 - name: Write the service account token as the sign-in service writes it
   ansible.builtin.copy:
     content: "THROWAWAY-TOKEN-{{ scenario_run }}\n"
