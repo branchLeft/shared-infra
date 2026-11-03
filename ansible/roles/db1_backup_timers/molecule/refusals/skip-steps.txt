@@ -1,0 +1,6 @@
+# The default scenario runs all eight steps; this one runs the refusal cases in verify.
+# Why these four are left out: the README, "Tests".
+check-fresh
+idempotence
+check-configured
+molecule-check
