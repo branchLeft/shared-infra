@@ -524,10 +524,21 @@ describe('the rendered Caddyfile', () => {
     const rendered = render(ENFORCING);
     const explicit =
       rendered.match(
-        /output file \/var\/log\/caddy\/\S+ \{\n\t+roll_size 100MiB\n\t+roll_keep 10\n\t+roll_keep_for 720h\n\t+\}/g
+        /output file \/var\/log\/caddy\/\S+ \{\n\t+roll_size 100MiB\n\t+roll_keep 31\n\t+roll_keep_for 720h\n\t+roll_at 00:00\n\t+\}/g
       ) ?? [];
     expect(explicit.length).toBeGreaterThan(0);
     expect(rendered.match(/output file /g)).toHaveLength(explicit.length);
+  });
+
+  it('bounds every edge log retention at or below 2160h (the 90-day ceiling the privacy notice states)', () => {
+    // The age prune only runs when a file rolls, so every log also needs a clock
+    // roll (roll_at) or a quiet edge holds entries past the retention.
+    const rendered = render(ENFORCING);
+    const hours = [...rendered.matchAll(/roll_keep_for (\d+)h/g)].map((m) => Number(m[1]));
+    const outputs = rendered.match(/output file /g) ?? [];
+    expect(hours).toHaveLength(outputs.length);
+    expect(Math.max(...hours)).toBeLessThanOrEqual(2160);
+    expect(rendered.match(/roll_at 00:00/g)).toHaveLength(outputs.length);
   });
 
   it('keys the throttle on the direct peer, not on a header a client controls', () => {
@@ -1151,8 +1162,9 @@ const BLOG_BLOCK = `
 	log {
 		output file /var/log/caddy/access.log {
 			roll_size 100MiB
-			roll_keep 10
+			roll_keep 31
 			roll_keep_for 720h
+			roll_at 00:00
 		}
 		format filter {
 			wrap json
@@ -1406,6 +1418,7 @@ describe('the break-glass token in the rendered Caddyfile', () => {
     '\t\t\troll_size ',
     '\t\t\troll_keep ',
     '\t\t\troll_keep_for ',
+    '\t\t\troll_at ',
     '\t\t}',
     '\t\tformat filter {',
     '\t\t\twrap json',

@@ -236,9 +236,17 @@ const BREAK_GLASS_LOG_FIELDS = ['request>uri', 'request>headers>Referer', 'resp_
  */
 const LOG_RETENTION = '720h';
 
-/** Caddy's own defaults for rotation size and file count, stated so the directive is complete. */
+/**
+ * Rotation. `roll_keep_for` only prunes files that have already been rolled, so a
+ * roll must happen even on a quiet edge. `roll_at 00:00` (UTC) rolls daily on the
+ * clock; `roll_interval` would not, because it rolls only on the next write. Caddy
+ * v2.11.4 accepts `roll_at` (github.com/DeRuina/timberjack v1.4.2, rotation on a
+ * background timer). The count is 31, so 30 daily rolls are kept: Caddy's default
+ * of 10 would cap a daily roll at 10 days and silently shorten the retention.
+ */
+const LOG_ROLL_AT = '00:00';
 const LOG_ROLL_SIZE = '100MiB';
-const LOG_ROLL_KEEP = 10;
+const LOG_ROLL_KEEP = 31;
 
 function logDirective(path: string): string[] {
   // Any parameter whose name starts with the token's, in any case, loses its value.
@@ -249,6 +257,7 @@ function logDirective(path: string): string[] {
     `\t\troll_size ${LOG_ROLL_SIZE}`,
     `\t\troll_keep ${LOG_ROLL_KEEP}`,
     `\t\troll_keep_for ${LOG_RETENTION}`,
+    `\t\troll_at ${LOG_ROLL_AT}`,
     '\t}',
     '\tformat filter {',
     '\t\twrap json',
