@@ -44,10 +44,31 @@ ADMITTED_TO_AUTHENTICATION = "password authentication failed"
 # worked would be a secret to keep. It is the same for every probe.
 PROBE_PASSWORD = "wrong-on-purpose-for-the-hba-probe"
 
+# The login the full provision's last step and every migrate-only run connect as. The
+# manifest (ghost-platform, portal/data/provision/manifest.ts) makes it not a superuser,
+# with no BYPASSRLS, owning the portal database. This test cannot run that program, so it
+# stands the login in with Postgres' own defaults and shows what the server does with it.
+MIGRATOR = "portal_migrator_login"
+
+# Three actions only a superuser may take. Each is run as the migrator on a server where it
+# has no attribute, where the server must refuse it for want of privilege, and again on a
+# server where the administrator made it a superuser, where each must succeed, so a probe
+# that could not tell the two apart would not pass.
+SUPERUSER_ONLY_ACTIONS = {
+    "create a role": "create role made_by_the_migrator",
+    "read the password verifiers": "select count(*) from pg_authid",
+    "alter the server's settings": "alter system set work_mem = '8MB'",
+}
+REFUSED_FOR_WANT_OF_PRIVILEGE = "permission denied"
+# DDL in its own database: what a migration does.
+OWN_DATABASE_DDL = "create table migrated (id integer); alter table migrated add column note text; drop table migrated"
+
 START_TIMEOUT_SECONDS = 90
 COMMAND_TIMEOUT_SECONDS = 60
 
 RULE_PROVISIONER = re.compile(r"^host\s+portal\s+portal_provisioner_login\s.*\n", re.MULTILINE)
+RULE_MIGRATOR = re.compile(r"^host\s+portal\s+portal_migrator_login\s.*\n", re.MULTILINE)
+RULE_MIGRATOR_DATABASES = re.compile(r"^(host\s+)portal(\s+portal_migrator_login\b)", re.MULTILINE)
 RULE_OWNER_DATABASES = re.compile(r"^(host\s+)portal(\s+portal_owner_login\b)", re.MULTILINE)
 FIRST_REJECT = re.compile(r"^local\s+all\s+all\s+reject", re.MULTILINE)
 
@@ -86,6 +107,16 @@ def dropping_the_provisioner_rule(text: str) -> str:
     return RULE_PROVISIONER.sub("", text)
 
 
+def dropping_the_migrator_rule(text: str) -> str:
+    """The file with the migrator login's rule deleted."""
+    return RULE_MIGRATOR.sub("", text)
+
+
+def letting_the_migrator_into_the_administrators_database(text: str) -> str:
+    """The file with the migrator login's rule widened to the postgres database."""
+    return RULE_MIGRATOR_DATABASES.sub(r"\1portal,postgres\2", text, count=1)
+
+
 def letting_the_sign_in_login_into_portal(text: str) -> str:
     """The file with one more rule: the sign-in service's login on the portal database."""
     return FIRST_REJECT.sub("host portal zitadel samenet scram-sha-256\n\\g<0>", text, count=1)
@@ -101,6 +132,11 @@ def letting_the_owner_login_into_the_sign_in_database(text: str) -> str:
 # that must flip, so a sabotage that changed nothing, or the wrong thing, is red.
 SABOTAGES = {
     "no_provisioner_rule": (dropping_the_provisioner_rule, {("portal_provisioner_login", "portal"): False}),
+    "no_migrator_rule": (dropping_the_migrator_rule, {("portal_migrator_login", "portal"): False}),
+    "migrator_in_postgres_database": (
+        letting_the_migrator_into_the_administrators_database,
+        {("portal_migrator_login", "postgres"): True},
+    ),
     "sign_in_login_in_portal": (letting_the_sign_in_login_into_portal, {("zitadel", "portal"): True}),
     "owner_login_in_sign_in_database": (
         letting_the_owner_login_into_the_sign_in_database,
@@ -129,6 +165,7 @@ class Server:
         self.hba_file.write_text(hba_text, encoding="utf-8")
         self.hba_file.chmod(0o644)
         self._admin_password = admin_password
+        self._migrator_password = ""
         self.started = False
 
     def start(self) -> None:
@@ -214,6 +251,86 @@ class Server:
             return False
         raise AssertionError(f"{login} on {database}: neither refused by the file nor failed at the password: {result.stderr!r}")
 
+    def psql(
+        self,
+        login: str,
+        database: str,
+        password: str,
+        *,
+        command: str | None = None,
+        stdin: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run psql as a login that really exists. The password reaches psql by environment name only."""
+        arguments = [
+            "docker",
+            "exec",
+            "--interactive",
+            "--env",
+            "PGPASSWORD",
+            self.name,
+            "psql",
+            "--host=127.0.0.1",
+            "--port=5432",
+            f"--username={login}",
+            f"--dbname={database}",
+            "--no-password",
+            "--no-psqlrc",
+            "--set=ON_ERROR_STOP=1",
+            "--tuples-only",
+            "--no-align",
+        ]
+        arguments.append(f"--command={command}" if command is not None else "--file=-")
+        return subprocess.run(
+            arguments,
+            env={**os.environ, "PGPASSWORD": password},
+            input=stdin or "",
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=False,
+        )
+
+    def create_migrator(self, migrator_password: str, *, superuser: bool) -> None:
+        """Have the administrator make the portal database and the migrator, as the manifest's owner of it.
+
+        The role is made with Postgres defaults, so no attribute is granted: not superuser,
+        not createrole, not createdb, not replication, not bypassrls. The superuser case adds
+        the one attribute the boundary rests on. The migrator's password goes by standard
+        input, so it is in no argument, no file and no process listing.
+        """
+        attribute = " SUPERUSER" if superuser else ""
+        result = self.psql(
+            "postgres",
+            "postgres",
+            self._admin_password,
+            stdin=(
+                f"CREATE ROLE {MIGRATOR} LOGIN{attribute} PASSWORD '{migrator_password}';\n"
+                f"CREATE DATABASE portal OWNER {MIGRATOR};\n"
+            ),
+        )
+        if result.returncode != 0:
+            # The first line only: a later one can quote the statement, and the statement holds the password.
+            first_line = result.stderr.splitlines()[0] if result.stderr else ""
+            raise AssertionError(f"{self.name} could not make the migrator: {first_line!r}")
+        self._migrator_password = migrator_password
+
+    def as_migrator(self, database: str, command: str) -> subprocess.CompletedProcess[str]:
+        """Run one command as the migrator, through the delivered file."""
+        return self.psql(MIGRATOR, database, self._migrator_password, command=command)
+
+    def migrator_attributes(self) -> str:
+        """The migrator's superuser, createrole, createdb, replication and bypassrls flags, read by the administrator."""
+        result = self.psql(
+            "postgres",
+            "postgres",
+            self._admin_password,
+            command=(
+                "select rolsuper, rolcreaterole, rolcreatedb, rolreplication, rolbypassrls "
+                f"from pg_roles where rolname = '{MIGRATOR}'"
+            ),
+        )
+        return result.stdout.strip()
+
     def matrix(self) -> dict[tuple[str, str], bool]:
         """The admit-or-refuse answer for every probed login and database."""
         pairs = [(login, database) for login in PROBED_LOGINS for database in PROBED_DATABASES]
@@ -238,6 +355,7 @@ def differences(actual: dict[tuple[str, str], bool], expected: dict[tuple[str, s
 
 class ControlPlaneHbaServerTests(unittest.TestCase):
     servers: dict[str, Server]
+    superuser_server: Server
     matrices: dict[str, dict[tuple[str, str], bool]]
     vacuous: set[str]
     _directory: tempfile.TemporaryDirectory[str]
@@ -267,15 +385,65 @@ class ControlPlaneHbaServerTests(unittest.TestCase):
         # Registered before anything starts, so a failed start still removes what began.
         for server in cls.servers.values():
             cls.addClassCleanup(server.remove)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(cls.servers)) as pool:
-            list(pool.map(lambda server: server.start(), cls.servers.values()))
+        # The control server: the same real file, but the administrator makes the migrator a superuser.
+        cls.superuser_server = Server(run_id, "superuser", real, admin_password, directory)
+        cls.addClassCleanup(cls.superuser_server.remove)
+        everything = [*cls.servers.values(), cls.superuser_server]
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(everything)) as pool:
+            list(pool.map(lambda server: server.start(), everything))
         cls.matrices = {label: server.matrix() for label, server in cls.servers.items()}
+        # After the matrix, which is read before any login exists, the migrator is made on the
+        # real file's server with Postgres' defaults and on the control server as a superuser.
+        # Random per run, and never printed.
+        cls.servers["real"].create_migrator(secrets.token_urlsafe(32), superuser=False)
+        cls.superuser_server.create_migrator(secrets.token_urlsafe(32), superuser=True)
 
     def test_the_real_file_admits_each_login_to_its_own_database_and_refuses_the_rest(self) -> None:
         self.assertEqual(differences(self.matrices["real"], expected_matrix()), {})
 
     def test_the_provisioner_login_reaches_authentication_on_the_portal_database(self) -> None:
         self.assertTrue(self.matrices["real"][("portal_provisioner_login", "portal")])
+
+    def test_the_migrator_login_reaches_authentication_on_the_portal_database_alone(self) -> None:
+        matrix = self.matrices["real"]
+        self.assertTrue(matrix[(MIGRATOR, "portal")])
+        for database in PROBED_DATABASES:
+            if database != "portal":
+                self.assertFalse(matrix[(MIGRATOR, database)], database)
+
+    def test_dropping_the_migrator_rule_is_seen(self) -> None:
+        self._assert_sabotage_flips("no_migrator_rule")
+
+    def test_letting_the_migrator_into_the_postgres_database_is_seen(self) -> None:
+        self._assert_sabotage_flips("migrator_in_postgres_database")
+
+    def test_the_migrator_made_with_postgres_defaults_holds_no_attribute(self) -> None:
+        # rolsuper, rolcreaterole, rolcreatedb, rolreplication, rolbypassrls
+        self.assertEqual(self.servers["real"].migrator_attributes(), "f|f|f|f|f")
+        # A superuser's other flags are stored false; rolsuper alone is what the control server changes.
+        self.assertEqual(self.superuser_server.migrator_attributes(), "t|f|f|f|f")
+
+    def test_the_migrator_can_change_its_own_database_through_the_delivered_file(self) -> None:
+        result = self.servers["real"].as_migrator("portal", OWN_DATABASE_DDL)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_the_migrator_is_refused_each_superuser_only_action(self) -> None:
+        for action, command in SUPERUSER_ONLY_ACTIONS.items():
+            with self.subTest(action=action):
+                result = self.servers["real"].as_migrator("portal", command)
+                self.assertNotEqual(result.returncode, 0, f"the migrator was allowed to {action}")
+                self.assertIn(REFUSED_FOR_WANT_OF_PRIVILEGE, result.stderr)
+
+    def test_the_migrator_is_refused_by_the_file_on_another_database_even_with_its_own_password(self) -> None:
+        result = self.servers["real"].as_migrator("postgres", "select 1")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(REFUSED_BY_THE_FILE, result.stderr)
+
+    def test_a_migrator_made_a_superuser_is_allowed_each_action_so_the_probes_can_tell(self) -> None:
+        for action, command in SUPERUSER_ONLY_ACTIONS.items():
+            with self.subTest(action=action):
+                result = self.superuser_server.as_migrator("portal", command)
+                self.assertEqual(result.returncode, 0, f"the superuser could not {action}: {result.stderr}")
 
     def test_dropping_the_provisioner_rule_is_seen(self) -> None:
         self._assert_sabotage_flips("no_provisioner_rule")
