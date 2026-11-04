@@ -3,9 +3,9 @@
 
 Run as a preflight inside a CI deploy job, against the same stack state
 `pulumi up` is about to act on, seconds earlier and with the same credentials.
-One script serves all three Hetzner stacks (`branchleft-mail`,
-`branchleft-hetzner-network`, `branchleft-hetzner-estate`) because they share
-one provider and one failure mode. The GCP edge stack had its own equivalent
+One script serves all four Hetzner stacks (`branchleft-mail`,
+`branchleft-hetzner-network`, `branchleft-hetzner-estate`,
+`branchleft-hetzner-dns`) because they share one provider and one failure mode. The GCP edge stack had its own equivalent
 guard, `assert-no-edge-deletes.py`, removed with that program in the GCP
 wind-down (branchLeft/workspace#1000).
 
@@ -29,7 +29,8 @@ names.
 `hcloud:index/networkRoute:NetworkRoute` is deliberately unprotected:
 network.ts gives the egress route `protect: false` on purpose, because
 deleting it detaches nothing, loses no state, and moving the gateway to
-another host has to stay an ordinary apply.
+another host has to stay an ordinary apply. `hcloud:index/zoneRrset:ZoneRrset`
+is unprotected for the same reason: only the zone itself is.
 
 What this cannot prove, both limits real:
 
@@ -73,6 +74,11 @@ PROTECTED_TYPES = {
     # a refactor can surface them as first-class resources at any time, and
     # the day that happens is not the day anyone re-reads this list.
     "hcloud:index/primaryIp:PrimaryIp",
+    # Deleting or replacing a DNS zone takes the website, the edge and mail
+    # down together. Its records (`hcloud:index/zoneRrset:ZoneRrset`) are
+    # deliberately NOT protected: removing a record must stay an ordinary
+    # apply, the same reasoning as the egress route below.
+    "hcloud:index/zone:Zone",
 }
 
 # What `--verify-coverage` expects to find declared in each program directory,
@@ -86,8 +92,10 @@ COVERAGE_BY_DIR = {
     "mail": {"hcloud.Server", "hcloud.Firewall"},
     # hetzner/network.ts declares the network and subnet; hetzner/estate.ts
     # (same directory -- the estate project's `main` points at ../estate.ts)
-    # declares edge1 through the Host component.
-    "hetzner": {"hcloud.Network", "hcloud.NetworkSubnet", "Host"},
+    # declares edge1 through the Host component; hetzner/dns.ts (same
+    # directory -- the dns project's `main` points at ../dns.ts) declares the
+    # zones.
+    "hetzner": {"hcloud.Network", "hcloud.NetworkSubnet", "Host", "hcloud.Zone"},
 }
 
 # Any Pulumi step op containing either word destroys, or schedules the
@@ -215,6 +223,9 @@ _ESTATE_STACK = "urn:pulumi:production::branchleft-hetzner-estate::"
 _URN_EDGE1 = (
     f"{_ESTATE_STACK}branchleft:hetznerHost:Host$hcloud:index/server:Server::edge1-server"
 )
+_DNS_STACK = "urn:pulumi:production::branchleft-hetzner-dns::"
+_URN_ZONE = f"{_DNS_STACK}hcloud:index/zone:Zone::branchleft-co-uk"
+_URN_RRSET = f"{_DNS_STACK}hcloud:index/zoneRrset:ZoneRrset::branchleft-co-uk-www-a"
 
 
 def _plan(*steps: tuple[str, str]) -> dict:
@@ -258,6 +269,7 @@ _HETZNER_SOURCE = (
     "export const network = new hcloud.Network('platform', {});\n"
     "export const subnet = new hcloud.NetworkSubnet('platform-eu-central', {});\n"
     "export const edge1 = new Host({ name: 'edge1' });\n"
+    "export const zone = new hcloud.Zone('branchleft-co-uk', {});\n"
 )
 
 
@@ -277,6 +289,12 @@ def _coverage_self_test() -> int:
         ("hetzner", "hetzner, everything declared", _HETZNER_SOURCE, 0),
         ("mail", "mail, server refactored away but still mentioned", refactored, 1),
         ("hetzner", "hetzner, Host no longer constructed", _HETZNER_SOURCE.replace("new Host(", "new Ghost(", 1), 1),
+        (
+            "hetzner",
+            "hetzner, Zone no longer constructed",
+            _HETZNER_SOURCE.replace("new hcloud.Zone(", "new somethingElse(", 1),
+            1,
+        ),
     ]
 
     failed = False
@@ -346,6 +364,17 @@ def self_test() -> int:
                 ("delete", _URN_FIREWALL),
             ),
             [("mail-firewall", "delete")],
+        ),
+        ("outright delete of the DNS zone", _plan(("delete", _URN_ZONE)), [("branchleft-co-uk", "delete")]),
+        (
+            "replacement of the DNS zone",
+            _plan(("replace", _URN_ZONE)),
+            [("branchleft-co-uk", "replace")],
+        ),
+        (
+            "a record delete is deliberately an ordinary apply",
+            _plan(("delete", _URN_RRSET), ("update", _URN_RRSET)),
+            [],
         ),
         ("empty plan", _plan(), []),
     ]

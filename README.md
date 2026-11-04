@@ -53,10 +53,11 @@ inputs. Do not hand-apply any of them** — general rule and rationale:
 per-stack `paths:` filter, so an unrelated merge plans and applies nothing.
 Each apply is a plan job whose `pulumi preview` output lands in the job
 summary, then an apply job paused by its environment's approval rule
-(`production`, or `production-mail` for the mail stack alone; a Hetzner plan
-whose every change the spend gate reads as free runs in `production-free`,
-which only the reviewer App answers, and any plan the gate cannot read stays in
-`production`) until the plan has been read and approved —
+(`production`, `production-mail` for the mail stack alone, or `production-dns`
+for the DNS stack alone, whose gate accepts a required-reviewer rule only and
+is never routed; a Hetzner network or estate plan whose every change the spend
+gate reads as free runs in `production-free`, which only the reviewer App
+answers, and any plan the gate cannot read stays in `production`) until the plan has been read and approved —
 `scripts/assert-no-hetzner-deletes.py` catches the destruction class
 mechanically, the reviewer catches the plan that is green and still wrong.
 
