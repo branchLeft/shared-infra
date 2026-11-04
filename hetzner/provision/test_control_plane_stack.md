@@ -29,4 +29,12 @@ The memory constants are the owner's measurement of the host, not a vendor
 sizing figure. Raising a limit past the margin is a host-size decision, which is
 the owner's.
 
+`pg_hba.conf` is read against one table, `EXPECTED_DATABASES`: the sign-in
+service's login on its own database, the portal's three logins (tenant, owner and
+provisioner) on the portal database, and the administrator on the three databases,
+and nothing else. The provisioner is the login the provisioning program connects
+as after its transaction commits, so it needs a rule as much as the other two.
+`test_control_plane_hba_server.py` starts a real server on the file and connects
+against the same table.
+
 Bump `EXPECTED_TEST_COUNT` in `test_suite_size.py` with any change here.

@@ -47,6 +47,10 @@ provisioner:
         # Throwaways made from the harness's run id: never committed, and the
         # verify play looks for them in every run's output.
         scenario_run: "{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
+        # The stack's own access rules, read from the repository by the controller so
+        # the scenario holds no second copy. prepare.yml and reset.yml put them where the
+        # control_plane role delivers them. The path is from this scenario's directory.
+        scenario_hba_source: '{{ playbook_dir }}/../../../../../hetzner/control-plane/stack/pg_hba.conf'
         scenario_admin_url: 'postgres://postgres:ADMINSECRET-{{ scenario_run }}@db:5432/postgres'
         scenario_tenant_password: 'tenantpw-{{ scenario_run }}-0123456789abcdef'
         scenario_owner_password: 'ownerpw-{{ scenario_run }}-0123456789abcdef'

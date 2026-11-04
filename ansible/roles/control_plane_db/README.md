@@ -30,10 +30,52 @@ and after it acts, and refuses to repair anything that differs. The role does no
 SQL. What the role controls is who can reach the program's inputs, what the container is
 allowed, and whether a step may run at all.
 
+Before `provision` reads any input it checks the database's access rules (`tasks/_hba.yml`).
+It reads the `pg_hba.conf` the `control_plane` role delivered and requires an accepting rule
+for each of the three portal logins in it. It then reads the file the running `db` container
+actually holds, with `docker exec ... cat`, and requires it to equal the delivered file byte
+for byte. The program connects as the provisioner login after its transaction commits, so a
+database without that rule would create the roles and then be refused its own proof, leaving
+no marker. The stack mounts the file as a single bind mount, and a file replaced on the host
+keeps its old content inside a container that was not recreated, so the delivered file alone
+proves nothing about the server. The refusal names the cause and says to recreate the `db`
+container. Neither read involves a secret.
+
 It does not generate or choose a secret, create the sign-in service's token, restart a
 service, write the deploy wrapper's pin, apply itself to a host, or wire itself into a
 host's playbook or into the gated pull's step allow-list. Wiring is separate work, and for
 ops1 it is done (`playbooks/ops1.yml`, `owner_vars/ops1.yml`, `checks/host_roles.yml`).
+
+## Who holds what
+
+Each login of the control-plane database, what it can do, where it is defined and how it is
+reached. The role holds no SQL; the grants are the applications image's closed manifest
+(`portal/data/provision/manifest.ts` in the Ghost platform repository), which the program
+checks before and after it acts and refuses to repair.
+
+| Login                      | What it can do                                                                                               | Defined by                                                | Reached how                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `postgres` (administrator) | Everything. It is the migration role: `migrate` and `provision` run as it, and nothing else does.            | The `db` image's first start                              | `admin-url`, owner-placed, read by one container, removed on every exit; `pg_hba.conf`: three databases                               |
+| `zitadel`                  | Owns its own database and runs the sign-in service's own setup migrations there (so it holds DDL there).     | The sign-in service's `init` phase, run once by the owner | The stack network; `pg_hba.conf`: its own database only                                                                               |
+| `portal_tenant_login`      | Member of `portal_tenant` alone: the tenant portal's access; no BYPASSRLS; nothing beyond the manifest.      | The program's manifest, created by `provision`            | The tenant portal's URL file; `pg_hba.conf`: `portal` only                                                                            |
+| `portal_owner_login`       | Member of `portal_owner` alone: the operator console's access; the role (not the login) with BYPASSRLS.      | The program's manifest, created by `provision`            | The console's URL file; `pg_hba.conf`: `portal` only                                                                                  |
+| `portal_provisioner_login` | Member of `portal_provisioner` alone: INSERT and SELECT on the demo-state and hostname-register tables only. | The program's manifest, created by `provision`            | No URL file yet: the lifecycle worker (not built) is its runtime user; provisioning connects as it once; `pg_hba.conf`: `portal` only |
+
+The migration role is the administrator. It is a named login, reached only through the
+owner-placed `admin-url` file that the step removes on every way out, and it is never given
+to a runtime service (`hetzner/provision/test_control_plane_stack.py` fails if a runtime
+service names the credential). A dedicated migration login without the administrator's
+rights would change the applications program and its manifest, which belong to the Ghost
+platform repository, so it is a follow-up there and not built here.
+
+What bounds each login is two things the repository tests. `pg_hba.conf` admits each login to
+its own database and refuses every other pair, shown against a real PostgreSQL by
+`hetzner/provision/test_control_plane_hba_server.py`. The tenant login's lack of DDL is shown
+by the program's own boundary check (a tenant login creating in the `public` schema must be
+refused), which is cited and not copied. The owner and provisioner logins are not probed for
+DDL there; the manifest's ACL checks cover their schema rights. The zitadel login's rights inside its
+own database are the vendor's, not ours to narrow: it is bounded by `pg_hba.conf` alone, and that is a
+named limit below.
 
 ## Interface
 
@@ -126,6 +168,9 @@ those edits.
 | C18 the service account token is the sign-in service's, regular, 0600           | accept 0644, or a link                                           | `identity_refusals`                                           |
 | C19 a working directory this run did not make is not removed                    | remove it unconditionally                                        | `identity_refusals`                                           |
 | C20 a check-mode request starts no container and writes no marker               | not shown to fail: the container tasks are skipped in check mode | `check_mode` section (asserts the outcome only)               |
+| C21 the running database holds the delivered rules, byte for byte               | drop the comparison in `_hba.yml`                                | `provision_hba` section, unit test                            |
+| C22 the delivered rules admit each of the three portal logins                   | drop the per-login rule check in `_hba.yml`                      | `provision_hba` section, unit test                            |
+| C23 the rules are checked before any secret file is looked at or read           | move the import after the input check in `_provision.yml`        | unit test (task order)                                        |
 
 ## What the owner does
 
@@ -133,6 +178,13 @@ The role never creates a secret and never fetches one. The owner places each inp
 the host as root, by standard input, so that no value appears in an argument or in a
 shell history. Placeholders are in capitals; the real values come from the owner's
 password manager.
+
+0. After the apply that delivers a changed `pg_hba.conf`, recreate the `db` container of the
+   stack, so the running server holds the delivered rules. This is a brief restart of the
+   control-plane database (the sign-in service, the portal and the console reconnect). The
+   role never does it, because the `control_plane` role never recreates a container on a
+   running stack. `provision` refuses by name until the running file equals the delivered
+   one.
 
 1. Place the administrator URL before `migrate` or `provision`. It is a connection URL
    for the database administrator, `postgres://postgres:ADMIN_PASSWORD@db:5432/postgres`:
@@ -221,6 +273,20 @@ one-time host steps exist (see the pull_trigger README, "Step requests").
   migration. The image's `--migrate-only` mode creates no role and sets no password, and
   refuses a server that differs from its manifest; the role carries no SQL to show the
   identifiers unchanged.
+- **The access-rule check reads the rules, it does not connect.** It proves the running
+  container holds the delivered file and that the file has an accepting rule for each portal
+  login. It does not evaluate rule order; that the file admits exactly the right pairs is
+  shown by `hetzner/provision/test_control_plane_hba_server.py`, against a real server, on
+  the repository's copy of the file. A check-mode request skips the comparison with the
+  container, because a command is skipped in check mode.
+- **The container is named by Compose's convention.** The check reads `control-plane-db-1`;
+  a unit test pins the name to the compose file's project and service. A renamed container
+  stops `provision` with the refusal, never lets it through.
+- **The sign-in service's login is the vendor's.** It runs its own setup migrations as itself
+  on its own database, so it holds DDL there. What bounds it is `pg_hba.conf` (its own
+  database only). Its role attributes are the vendor's `init` phase's doing and are not
+  checked by a CI test (the vendor image is heavy); the owner can read them with
+  `\du zitadel` on the host.
 - **The marker is host-local and is not a lock.** A rebuilt host has none; two requests
   at once could both run. The gated pull serialises requests.
 - **A marker says a step ran, not what it did.** After an outside change to the identity

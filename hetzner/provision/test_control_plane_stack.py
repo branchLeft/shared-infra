@@ -123,7 +123,21 @@ def hba_rules() -> list[list[str]]:
     return rules
 
 
-PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login"}
+# The portal's three logins, the ones the applications image's program creates
+# (ghost-platform portal/data/provision/manifest.ts): the tenant portal's, the
+# operator console's and the provisioner's. The provisioner is connected to after
+# provisioning commits, so it needs its rule as much as the other two.
+PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login", "portal_provisioner_login"}
+
+# The one table of who may reach which database: pg_hba.conf must admit exactly
+# these pairs to password authentication and refuse every other. The static test
+# below reads the file against it, and test_control_plane_hba_server.py starts a
+# real server on the file and connects against the same table.
+EXPECTED_DATABASES: dict[str, frozenset[str]] = {
+    "zitadel": frozenset({"zitadel"}),
+    **{login: frozenset({"portal"}) for login in sorted(PORTAL_LOGINS)},
+    "postgres": frozenset({"postgres", "zitadel", "portal"}),
+}
 
 # Each row is one service's YAML fragment, with the sentinel value that must never be echoed.
 MASTER_KEY_ENVIRONMENT_ROWS = (
@@ -384,10 +398,14 @@ class ControlPlaneStackTests(unittest.TestCase):
                 self.assertNotEqual(user, "all")
                 self.assertNotIn(rule[3], {"all", "0.0.0.0/0", "::/0"})
             allowed.setdefault(user, set()).update(databases)
-        self.assertEqual(allowed["zitadel"], {"zitadel"})
-        for login in PORTAL_LOGINS:
-            self.assertEqual(allowed[login], {"portal"})
-        self.assertEqual(set(allowed), {"zitadel", "postgres"} | PORTAL_LOGINS)
+        self.assertEqual({user: frozenset(databases) for user, databases in allowed.items()}, EXPECTED_DATABASES)
+
+    def test_every_accepting_host_rule_admits_only_the_stack_network(self):
+        accepting = [r for r in hba_rules() if r[0] == "host" and r[-1] != "reject"]
+        self.assertTrue(accepting)
+        for rule in accepting:
+            with self.subTest(rule=rule):
+                self.assertEqual(rule[3], "samenet")
 
     def test_the_local_socket_admits_only_the_administrator(self):
         local = [r for r in hba_rules() if r[0] == "local" and r[-1] != "reject"]

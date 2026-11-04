@@ -48,11 +48,14 @@ control_plane_db_input_dir_mode: '0750'
 control_plane_db_image_user: '1000:1000'
 
 # The two connection URL files the applications read, and the one login each holds.
-# The provisioner login has no URL file: nothing reads it.
+# The provisioner login has no URL file yet: its runtime user, the lifecycle worker, is not built.
 control_plane_db_portal_url_file: '{{ control_plane_db_config_dir }}/portal-database-url'
 control_plane_db_console_url_file: '{{ control_plane_db_config_dir }}/console-database-url'
 control_plane_db_tenant_login: portal_tenant_login
 control_plane_db_owner_login: portal_owner_login
+# The third login is the lifecycle worker's runtime login. It holds no URL file: the
+# provisioning program connects as it once, after its transaction commits, to prove the boundary.
+control_plane_db_provisioner_login: portal_provisioner_login
 control_plane_db_database_host: db
 control_plane_db_database_name: portal
 
@@ -60,6 +63,27 @@ control_plane_db_database_name: portal
 control_plane_db_url_tail: '@{{ control_plane_db_database_host }}:5432/{{ control_plane_db_database_name }}'
 
 control_plane_db_network: control-plane_default
+
+# The access rules the running database was started on. The control_plane role
+# delivers the file into the stack directory; the stack's compose file mounts it into
+# the db container at the container path, as a single file. A single bind-mounted
+# file keeps the content it had when the container was created, so the rules the
+# server runs on are the container's copy, which is read here and not assumed. A unit
+# test pins the three constants below to the control_plane role and to the compose file.
+control_plane_db_hba_file: /opt/branchleft/control-plane/pg_hba.conf
+control_plane_db_hba_container: control-plane-db-1
+control_plane_db_hba_container_file: /etc/postgresql/pg_hba.conf
+
+# The logins the file must admit to the portal database, and the shape of a rule that
+# does: host, a database list holding portal, the login, any address, scram. A rule is
+# looked for by its parts, so the column spacing is free. The login is put between the
+# prefix and the suffix.
+control_plane_db_hba_logins:
+  - '{{ control_plane_db_tenant_login }}'
+  - '{{ control_plane_db_owner_login }}'
+  - '{{ control_plane_db_provisioner_login }}'
+control_plane_db_hba_rule_prefix: '(?m)^host[ \t]+(?:[^ \t,#]+,)*portal(?:,[^ \t,#]+)*[ \t]+'
+control_plane_db_hba_rule_suffix: '[ \t]+\S+[ \t]+scram-sha-256[ \t]*$'
 
 # Identity reconciler.
 control_plane_db_pat_file: '{{ control_plane_db_stack_state_dir }}/zitadel-state/reconciler.pat'

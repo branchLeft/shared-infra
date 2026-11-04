@@ -1,0 +1,77 @@
+---
+# Precondition of provision: the database must be running on access rules that admit
+# the three portal logins. The provisioning program connects as the provisioner login
+# after its transaction has committed, so a database whose rules lack that login would
+# create the roles and then refuse the program's own proof of them, with no marker.
+#
+# Two things are read, and neither is a secret (the file holds no password):
+#   1. the pg_hba.conf the control_plane role delivered to the host, which must hold an
+#      accepting rule for each of the three logins; and
+#   2. the pg_hba.conf the running db container actually holds, which must equal the
+#      delivered one byte for byte. The stack mounts the file as a single bind mount, and
+#      a replaced file keeps its old content inside a container that was not recreated,
+#      so the delivered file alone proves nothing about the server.
+# The importing file runs this before it reads any secret file. A command is skipped in
+# check mode, so the comparison with the running container is not made in one.
+
+- name: Look at the pg_hba.conf the stack delivered
+  ansible.builtin.stat:
+    path: '{{ control_plane_db_hba_file }}'
+    get_checksum: false
+  register: control_plane_db_hba_stat
+
+- name: Refuse a host with no delivered pg_hba.conf
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_hba_stat.stat.exists
+      - control_plane_db_hba_stat.stat.isreg
+    quiet: true
+    fail_msg: >-
+      REFUSED: {{ control_plane_db_hba_file }} is not a regular file on this host, so the
+      control_plane role has not delivered the stack the database runs on.
+
+- name: Read the pg_hba.conf the stack delivered
+  ansible.builtin.slurp:
+    src: '{{ control_plane_db_hba_file }}'
+  register: control_plane_db_hba_delivered
+
+- name: Refuse a delivered pg_hba.conf with no accepting rule for a portal login
+  ansible.builtin.assert:
+    that:
+      - >-
+        (control_plane_db_hba_delivered.content | ansible.builtin.b64decode)
+        | ansible.builtin.regex_findall(control_plane_db_hba_rule_prefix ~ (item | ansible.builtin.regex_escape) ~ control_plane_db_hba_rule_suffix)
+        | length > 0
+    quiet: true
+    fail_msg: >-
+      REFUSED: {{ control_plane_db_hba_file }} has no accepting rule for the portal login {{ item }},
+      so provisioning would create it and then be refused its own proof.
+  loop: '{{ control_plane_db_hba_logins }}'
+
+- name: Read the pg_hba.conf the running database holds
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - '{{ control_plane_db_hba_container }}'
+      - cat
+      - '{{ control_plane_db_hba_container_file }}'
+    # The default drops line breaks at the end of the output, which would make a
+    # file that differs only in its last line break equal.
+    strip_empty_ends: false
+  register: control_plane_db_hba_running
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Refuse a database that is not running or holds other rules than the delivered file
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_hba_running.rc == 0
+      - control_plane_db_hba_running.stdout == (control_plane_db_hba_delivered.content | ansible.builtin.b64decode)
+    quiet: true
+    fail_msg: >-
+      REFUSED: the control-plane database ({{ control_plane_db_hba_container }}) is not running, or it
+      holds a pg_hba.conf that differs from {{ control_plane_db_hba_file }}. A single bind-mounted file
+      keeps its old content until the container is recreated: recreate the db container, then ask again.
+  when: not ansible_check_mode

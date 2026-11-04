@@ -4,7 +4,7 @@
 It records every call as one JSON line, with the state of each file the call mounts
 at the moment of the call, and it answers the way the applications image's programs
 do: the lines the real ones print, read from the files they are told about. The mode
-file picks a behaviour: ok, fail, leak, drift, no-flag or no-network. It never
+file picks a behaviour: ok, fail, leak, drift, no-flag, no-network, stale-hba or no-db. It never
 starts a container and never opens a network connection.
 """
 
@@ -16,6 +16,8 @@ from pathlib import Path
 STATE = Path("/var/tmp/fake-docker")  # noqa: S108 - the test container's own scratch directory
 LOG = STATE / "calls.jsonl"
 MODE = STATE / "mode"
+# The file the stack delivered, which the stand-in database "holds" as its access rules.
+DELIVERED_HBA = Path("/opt/branchleft/control-plane/pg_hba.conf")
 MIGRATE_LINES = [
     "pre-check passed: no difference from the manifest",
     "applied migration 0003_versioned_documents",
@@ -155,6 +157,31 @@ def run_program(command: list[str], mounts: dict[str, str], env: dict[str, str])
     return 2
 
 
+def run_exec(args: list[str]) -> int:
+    """Answer the one exec the role makes: cat the access rules the running database holds.
+
+    The database is stood in for by the file the stack delivered, so the rules it "holds"
+    are that file's content exactly, with no line break added. The stale-hba mode serves
+    that content without the provisioner login's rule, as a container that was started
+    before the file was replaced would, and the no-db mode answers as a missing container.
+    """
+    if mode() == "no-db":
+        print(f"Error response from daemon: No such container: {args[0]}", file=sys.stderr)
+        return 1
+    if args[1:] != ["cat", "/etc/postgresql/pg_hba.conf"]:
+        print(f"fake docker: unknown exec {args}", file=sys.stderr)
+        return 2
+    try:
+        text = DELIVERED_HBA.read_text(encoding="utf-8")
+    except OSError:
+        print("cat: /etc/postgresql/pg_hba.conf: No such file or directory", file=sys.stderr)
+        return 1
+    if mode() == "stale-hba":
+        text = "".join(line for line in text.splitlines(keepends=True) if "portal_provisioner_login" not in line)
+    sys.stdout.write(text)
+    return 0
+
+
 def main() -> int:
     """Handle one docker call."""
     argv = sys.argv[1:]
@@ -169,6 +196,9 @@ def main() -> int:
             return 1
         print("[]")
         return 0
+    if argv[:1] == ["exec"]:
+        record(argv, {})
+        return run_exec(argv[1:])
     if argv[:1] == ["run"]:
         mounts, env, command = parse_run(argv[1:])
         record(argv, mounts)
