@@ -1,11 +1,21 @@
 # Overrides of the typed dummies, for a variable whose consumer needs a value of a shape the
 # type does not give. Each entry declares its type; a unit test checks it against the role's
-# argument_specs, and that the name is used by a role. The key and address below are
-# throwaways: the key is a public half whose private half was deleted when it was made.
+# argument_specs, and that the name is used by a role. An override sits where a host's own input
+# sits, above the role's defaults and the vars files, so an owner's empty value does not replace
+# it. The key and address below are throwaways: the key is a public half whose private half was
+# deleted when it was made.
 overrides:
   host_baseline_docker_arch:
     type: str
     value: amd64
+  ci_jump_keys:
+    type: list
+    value:
+      - key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF3xICRFpjKLiQq57/folErnf7oXJM0jK69qF5sHHm10 offline-render-dummy
+  ci_jump_destinations:
+    type: list
+    value:
+      - 192.0.2.20
   tunnel_account_in:
     type: dict
     value:

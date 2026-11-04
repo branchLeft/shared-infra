@@ -256,7 +256,10 @@ def declared_overrides(root: Path) -> dict[str, Env]:
 def build_env(root: Path, plan: HostPlan, facts: Env) -> Env:
     """Return the variables of the host's run, lowest layer first.
 
-    Dummies, the overrides, role defaults and vars, play vars, vars files, role parameters.
+    Dummies, role defaults and vars, play vars, vars files, the overrides, role parameters. The
+    overrides sit where a host's own inputs sit: the loader sets them as facts, which outrank role
+    defaults and vars and the vars files. Without that, a default of [] or the owner's empty list
+    would replace the override, and an empty authorized_keys renders nothing that validates.
     """
     roles_dir = root / "ansible" / "roles"
     all_options: dict[str, Env] = {}
@@ -268,13 +271,13 @@ def build_env(root: Path, plan: HostPlan, facts: Env) -> Env:
         env.update({name: dummy_value(name, spec) for name, spec in needed.items()})
     for key in host_input_keys(root, plan.name):
         env[key] = dummy_value(key, all_options.get(key, {}))
-    for name, entry in declared_overrides(root).items():
-        env[name] = entry.get("value")
     for use in plan.roles:
         env.update(role_variables(roles_dir / use.name))
     env.update(plan.play_vars)
     for loaded in plan.file_vars:
         env.update(loaded)
+    for name, entry in declared_overrides(root).items():
+        env[name] = entry.get("value")
     for use in plan.roles:
         env.update(use.params)
     env["_or_facts"] = facts

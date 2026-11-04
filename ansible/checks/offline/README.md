@@ -30,9 +30,11 @@ For each playbook in `ansible/playbooks/`, and for one more host called `unwired
 every role no playbook applies (those roles run by hand, or on no host yet), one
 `ansible-playbook` run on localhost replays the roles in the playbook's order:
 
-1. The variables of the run are layered, lowest first: typed dummies, the overrides in
-   `dummies.yml`, each role's defaults and vars, the playbook's vars, its vars files (the shared
-   include, the trust file, the owner's values), and the parameters on a role entry.
+1. The variables of the run are layered, lowest first: typed dummies, each role's defaults and
+   vars, the playbook's vars, its vars files (the shared include, the trust file, the owner's
+   values), the overrides in `dummies.yml`, and the parameters on a role entry. The overrides sit
+   where a host's own inputs sit: the loader sets those as facts, which outrank the files. Without
+   that, the owner's `ci_jump_keys: []` in `owner_vars/edge1.yml` would replace the override.
 2. A dummy is made for every argument_specs option that is required and has no default, and
    for every `host_inputs` key of the host, with the type the spec declares. No host-inputs
    file is read.

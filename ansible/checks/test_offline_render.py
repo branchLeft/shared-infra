@@ -98,6 +98,15 @@ class TypedDummies(unittest.TestCase):
                         f"{plan.name} {use.name} {name}",
                     )
 
+    def test_an_override_beats_the_default_of_the_role_that_reads_it(self) -> None:
+        # ci_jump's defaults give [] for both lists; the overrides must replace them, or the
+        # ci_jump authorized_keys render is empty and ssh-keygen refuses it (exit 255).
+        data = o.load_data(ROOT)
+        plan = next(p for p in o.host_plans(ROOT) if p.name == "edge1")
+        env = o.build_env(ROOT, plan, o.mapping(data.facts.get(plan.name)))
+        self.assertTrue(env["ci_jump_keys"], "the role default [] overwrote the override")
+        self.assertTrue(env["ci_jump_destinations"], "the role default [] overwrote the override")
+
 
 class Classification(unittest.TestCase):
     """The summary's extracts become one class, and a reason made of names only."""
