@@ -467,6 +467,15 @@ What the test enforces, over every `copy` and `template` task of the roles the p
   list from the checkout, so the CrowdSec and acquisition files stay visible in the plan and a
   matching line in one fails.
 
+- A file whose text on a host still matches, though the checkout's no longer does, is listed in
+  `RETIRED_MATCHES` with the line the host holds. A diff is the old text against the new one, so the
+  removed line reaches the plan (edge1, 4 Nov 2026, `prometheus/alerts.yml`, reworded in b3dfd28). The
+  test then requires the task that copies it to set `diff: false`, and accepts that hide although
+  the checkout has no matching line. It fails when the listed line no longer matches the scan or
+  the checkout matches again. The entry and the file's place in the role's hidden list are removed
+  once the apply that rewrites the text is live. It is never used for a line that can be reworded
+  in the checkout.
+
 A finding names the task file, the task, the source and the line number, never the text of the line.
 The test reads the source of a task, not the text Ansible renders from it; a template whose rendered
 text differs from its source is judged by its source.
