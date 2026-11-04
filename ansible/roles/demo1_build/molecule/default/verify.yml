@@ -317,6 +317,37 @@
         quiet: true
         fail_msg: The router unit does not run the installed router as demo-router.
 
+    # The shared template the drop-ins extend. The role installed the checkout's own file,
+    # root's and mode 0644, over the stand-in prepare placed; the expected file is read on
+    # the controller from the checkout (playbook_dir is molecule/default).
+    - name: Look at the checkout's compose template unit
+      ansible.builtin.stat:
+        path: '{{ playbook_dir }}/../../../../../hetzner/provision/branchleft-compose@.service'
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: demo1_build_verify_template_source
+
+    - name: Look at the compose template unit on the host
+      ansible.builtin.stat:
+        path: /etc/systemd/system/branchleft-compose@.service
+        follow: false
+        checksum_algorithm: sha256
+      register: demo1_build_verify_template
+
+    - name: Assert the host's template is the checkout's file, root:root mode 0644, not a link
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_template_source.stat.exists
+          - demo1_build_verify_template.stat.isreg
+          - not demo1_build_verify_template.stat.islnk
+          - demo1_build_verify_template.stat.pw_name == 'root'
+          - demo1_build_verify_template.stat.gr_name == 'root'
+          - demo1_build_verify_template.stat.mode == '0644'
+          - demo1_build_verify_template.stat.checksum == demo1_build_verify_template_source.stat.checksum
+        quiet: true
+        fail_msg: The compose template unit on the host is not the checkout's hetzner/provision file, root:root mode 0644.
+
     # systemd has read the files: a reload ran, and the units load. Nothing is
     # started or enabled.
     - name: Ask systemd about a router instance
@@ -367,6 +398,44 @@
           - (demo1_build_verify_candidate_text.content | b64decode).splitlines() | select('match', '^[(]slot[0-9]+-upstream[)] ') | list | length == 7
         quiet: true
         fail_msg: The candidate fragment is not the edge's global options and seven upstream snippets.
+
+    # The site candidates. Slot 0 has the fixture's edge input, so its candidate is
+    # root's, mode 0600; no other slot has an input, so none has a candidate. The
+    # stat reads no checksum, and the content is read with no_log (ANS-16).
+    - name: Look at the site candidate of every slot
+      ansible.builtin.stat:
+        path: '{{ verify_candidate_dir }}/site-{{ item }}.caddy'
+        follow: false
+        get_checksum: false
+      loop: '{{ verify_slots }}'
+      loop_control:
+        label: '{{ item }}'
+      register: demo1_build_verify_site_stats
+
+    - name: Assert slot 0's candidate is root's mode 0600 and no other slot has one
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_site_stats.results[0].stat.isreg
+          - demo1_build_verify_site_stats.results[0].stat.pw_name == 'root'
+          - demo1_build_verify_site_stats.results[0].stat.mode == '0600'
+          - demo1_build_verify_site_stats.results[1:] | selectattr('stat.exists') | list | length == 0
+        quiet: true
+        fail_msg: Slot 0's site candidate is not root's mode 0600, or a slot with no edge input has a candidate.
+
+    - name: Read slot 0's site candidate, hidden from the log
+      ansible.builtin.slurp:
+        src: '{{ verify_candidate_dir }}/site-0.caddy'
+      register: demo1_build_verify_site_text
+      no_log: true
+
+    - name: Assert slot 0's candidate is the gated site block of the fixture input
+      ansible.builtin.assert:
+        that:
+          - "'https://demo-0.site-fixture.invalid {' in (demo1_build_verify_site_text.content | b64decode)"
+          - "'forward_auth ' in (demo1_build_verify_site_text.content | b64decode)"
+        quiet: true
+        fail_msg: The site candidate of slot 0 is not the gated site block of the fixture input.
+      no_log: true
 
     # What the role must never do. A file named for a Caddyfile anywhere on the
     # host is the live edge or a copy of it, and a numbered slot directory under

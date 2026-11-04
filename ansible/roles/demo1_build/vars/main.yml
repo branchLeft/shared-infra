@@ -70,9 +70,27 @@ demo1_build_unit_dir: /etc/systemd/system
 demo1_build_router_unit: branchleft-health-router@.service
 demo1_build_dropin_name: colour.conf
 
+# The shared compose template unit that the colour drop-ins extend. Its one home is
+# hetzner/provision/, which the role reads from the checkout it runs, and the role keeps
+# no copy of it (ruled 4 Nov, ws#2364 comment 6630331961). deploy_tooling is the other
+# writer of this path; ansible/checks exempts demo1 for this one file only.
+demo1_build_compose_template_src: '{{ role_path }}/../../../hetzner/provision/branchleft-compose@.service'
+demo1_build_compose_template_dest: /etc/systemd/system/branchleft-compose@.service
+
 # The candidate edge fragment: staged for the owner, never the live edge.
 demo1_build_candidate_dir: /var/lib/branchleft/demo-candidates
 demo1_build_candidate_edge: /var/lib/branchleft/demo-candidates/edge-upstreams.caddy
+
+# The owner's edge input for each slot, and the site candidate the pinned site renderer
+# makes from it. {slot} is the slot number. The input is the owner's to place, as root;
+# the role only reads its shape, and the renderer reads its content. A slot with no input
+# gets no candidate, and the plan and apply say so with the notice below.
+demo1_build_site_edge_input: '{{ demo1_build_config_dir }}/demo-{slot}.edge.json'
+demo1_build_site_candidate: '/var/lib/branchleft/demo-candidates/site-{slot}.caddy'
+demo1_build_site_not_rendered_text: 'Site candidate for slot {slot} NOT rendered: no owner-placed edge JSON'
+demo1_build_site_unstaged_text: >-
+  Site candidate for slot {slot} NOT rendered: the pinned site renderer is not staged on this host
+  (check mode, first plan)
 
 # The programs placed outside the release directory. The wrapper is the only
 # one the sudoers grant names, and the only one run directly as a program.

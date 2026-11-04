@@ -66,3 +66,46 @@
         owner: root
         group: root
         mode: '0600'
+
+    # A stand-in for the shared compose template, so the refusals scenario's colour case
+    # has a template to take away and put back. The role replaces it with the real file
+    # from hetzner/provision/ (_units.yml, A-7), and verify reads the installed bytes
+    # against that file. It is only ever read, never started: no step in the role starts
+    # a unit, and verify asserts that no colour unit is active.
+    - name: Install a stand-in for the shared compose template, which the role then replaces
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Test stand-in for the shared compose template, never started
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          RemainAfterExit=yes
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    # The owner's edge input for slot 0, as the owner places it at go-live: root's, mode
+    # 0600, read only by the pinned site renderer. The hostname is a made-up name under
+    # the reserved .invalid top-level domain. It is hidden from the log (no_log), as the
+    # real input would be. Only slot 0 has one, so the other six slots must read NOT
+    # rendered.
+    - name: Place the owner's edge input for slot 0, root's and mode 0600
+      ansible.builtin.copy:
+        content: |
+          {
+            "displayHostname": "demo-0.site-fixture.invalid",
+            "admittedHostname": null,
+            "gate": {"kind": "passphrase"},
+            "requestBodyMaxSize": "10MiB",
+            "contentSecurityPolicy": "default-src 'self'",
+            "contentSecurityPolicyMode": "enforcing"
+          }
+        dest: /etc/branchleft/demo-0.edge.json
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false

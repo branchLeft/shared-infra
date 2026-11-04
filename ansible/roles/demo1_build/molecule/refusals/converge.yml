@@ -436,3 +436,61 @@
               - not demo1_build_converge_fresh_release.stat.exists
             quiet: true
             fail_msg: The role wrote a release directory before it refused the wrong pin.
+
+# The owner's edge input for slot 0, read as root by the pinned site renderer. The
+# role refuses a link, an input that is not root's, and an input open to group or
+# others, before the renderer reads it; each case names the check that fires. The
+# control case is a valid input, which the step must stage. The leak case is a
+# hostname the renderer refuses; the step must name the slot without the renderer's
+# message, and the canary must not reach the log (verify.yml reads it).
+- name: Refuse an owner's edge input that is a link
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: link
+      expect: 'is a link or not a regular file'
+
+- name: Refuse an owner's edge input that is not root's
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: owner
+      owner: broker
+      expect: 'is not root:root'
+
+- name: Refuse an owner's edge input open to others
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: mode
+      mode: '0644'
+      expect: 'must be 0600 or narrower'
+
+- name: Accept a valid owner's edge input and stage its candidate
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: valid
+      expect: ''
+
+- name: Refuse a renderer refusal without its message, the hostname a canary
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: leak
+      host: Canary-Leak-Probe.invalid
+      expect: 'refused the edge input of slot(s) 0'
+
+# The colour units. The role refuses to go on when a colour instance does not load,
+# and the message names the missing template, not its path. The control keeps the
+# stand-in, and is accepted.
+- name: Accept the colour instances with the shared compose template in place
+  ansible.builtin.import_playbook: refused_template.yml
+  vars:
+    converge_case:
+      accepted: true
+
+- name: Refuse the colour instances when the shared compose template is missing
+  ansible.builtin.import_playbook: refused_template.yml
+  vars:
+    converge_case: {}
