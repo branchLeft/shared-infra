@@ -22,12 +22,17 @@ argument_specs:
           When true the role checks every input and the host, then writes the two files.
       ci_jump_user:
         type: str
-        required: true
         no_log: true
         description: >-
-          The jump account, which must already exist with a shell of nologin or false. Required
-          and with no default, because it comes from the host's private inputs file (the
-          host_inputs role), but read only when ci_jump_manage_keys is true. The role refuses root and the accounts the ci_login
+          The jump account, which must already exist with a shell of nologin or false. It has no
+          default, because it comes from the host's private inputs file (the host_inputs role),
+          and it is not a required argument, because the file may leave it out until the owner
+          turns the role on: the tool that writes it reaches a host only with the commit that adds
+          the role, so a requirement at the door would stop the plan that has to deliver the
+          tool. It is read only when ci_jump_manage_keys is true, and then a run
+          without it stops at ci_jump[user-missing] before any task that handles it. With the flag false
+          and no name the role reports, read only, and says that the name is not yet seeded.
+          The role refuses root and the accounts the ci_login
           and tunnel_account roles own. The name is held out of the repository and of every log:
           it comes from the host's private inputs file (the host_inputs role sets it), no path
           the role writes is made from it, and the role never prints it.

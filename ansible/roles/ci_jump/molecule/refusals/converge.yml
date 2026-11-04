@@ -491,3 +491,69 @@
                 == (ci_jump_migration_reloads_after.content | b64decode).splitlines() | length
             quiet: true
             fail_msg: A run over a host that was finished reloaded sshd.
+
+# The account's name is the host's one optional input (host_inputs_optional_by_host): the file may
+# leave it out until the owner has seeded it, which is what lets the plan that delivers the
+# seeding tool pass. So the role has to be inert without it and has to refuse a flag that
+# is on without it. Neither case is given a name at all, so the variable is undefined.
+- name: Run the role with no account name set
+  hosts: all
+  gather_facts: false
+  # A plan makes no change and the second converge would repeat every case for nothing.
+  tags: [molecule-idempotence-notest]
+  vars:
+    unseeded_key_file: /etc/ssh/authorized_keys.d/branchleft-jump
+  tasks:
+    - name: No account name, flag off, then flag on
+      when: not ansible_check_mode
+      block:
+        - name: Look at the delivered key file
+          ansible.builtin.stat:
+            path: '{{ unseeded_key_file }}'
+            checksum_algorithm: sha256
+          register: ci_jump_unseeded_before
+
+        - name: With the flag off the role reports and goes on, whatever the name is
+          ansible.builtin.include_role:
+            name: branchleft.ci_jump
+          vars:
+            ci_jump_manage_keys: false
+
+        - name: With the flag on and no name the role stops with its own code
+          block:
+            - name: Run the role with the flag on
+              ansible.builtin.include_role:
+                name: branchleft.ci_jump
+              vars:
+                ci_jump_manage_keys: true
+                ci_jump_own_address: '{{ scenario_own }}'
+                ci_jump_destinations: ['{{ scenario_listed }}', '{{ scenario_own }}']
+                ci_jump_keys:
+                  - key: 'ssh-ed25519 AAAA'
+
+            - name: Fail if the role went on without a name
+              ansible.builtin.fail:
+                msg: The role went on with the flag on and no account name.
+          rescue:
+            - name: Assert it stopped at its own guard, not at some later step
+              ansible.builtin.assert:
+                that:
+                  - "'ci_jump[user-missing]' in (ansible_failed_result.msg | default(''))"
+                quiet: true
+                fail_msg: >-
+                  The flag on with no account name did not stop at ci_jump[user-missing]:
+                  {{ ansible_failed_result | to_json }}
+
+        - name: Look at the delivered key file again
+          ansible.builtin.stat:
+            path: '{{ unseeded_key_file }}'
+            checksum_algorithm: sha256
+          register: ci_jump_unseeded_after
+
+        - name: Assert neither run touched the host, and no name was ever set
+          ansible.builtin.assert:
+            that:
+              - ci_jump_unseeded_before.stat.checksum == ci_jump_unseeded_after.stat.checksum
+              - ci_jump_user is not defined
+            quiet: true
+            fail_msg: A run with no account name changed the key file or set a name.

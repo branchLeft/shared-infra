@@ -13,6 +13,17 @@
 - name: Report which accounts carry forwarding options, read only
   ansible.builtin.import_tasks: _report.yml
 
+# The account's name may be absent while the flag is false (host_inputs lets the file leave it out
+# until the owner has seeded it). The report above needs no name, so the role stays inert and
+# says so in the plan; it never stops here. With the flag true the first guard refuses instead.
+- name: Say that the account's name is not seeded yet, so the role is inert
+  ansible.builtin.debug:
+    msg: >-
+      WARNING ci_jump: the host's private inputs file holds no ci_jump_user, so this role only
+      reports and cannot be turned on. The owner seeds it with seed_host_inputs.py --set
+      ci_jump_user; until then ci_jump_manage_keys must stay false.
+  when: ci_jump_user is not defined
+
 - name: Judge the inputs and the host before anything is written
   ansible.builtin.import_tasks: _guards.yml
   when: ci_jump_manage_keys | bool
