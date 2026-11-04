@@ -24,7 +24,7 @@ permissions:
 
 jobs:
   drift-check:
-    uses: branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@v1.0.19
+    uses: branchLeft/github-workflows/.github/workflows/ansible-drift-check.yml@v1.0.20
     with:
       host-label: ansible-estate
       push-playbook: ansible/playbooks/demo1.yml
