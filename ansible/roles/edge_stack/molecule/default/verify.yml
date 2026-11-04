@@ -965,7 +965,7 @@
 
         - name: Put a link in that variant
           ansible.builtin.file:
-            src: Caddyfile
+            src: caddy/Caddyfile
             dest: '{{ edge_stack_verify_variants.p15c.path }}/Caddyfile.link'
             state: link
           delegate_to: localhost

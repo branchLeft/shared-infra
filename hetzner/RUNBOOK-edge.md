@@ -623,8 +623,9 @@ The `edge` instance is deliberately **not** given the blanket
 wholesale on every unit restart would also recreate CrowdSec, and
 `branchleft-deploy` restarts this unit for image bumps where a selective
 recreate is the correct behaviour. A Caddyfile change therefore goes through
-the reload below, which needs no recreate. The recreate survives only as the
-fallback in step 4.
+the reload below, which needs no recreate. The recreate survives only for a host
+still on the old single-file mount: its first deploy of the directory layout
+recreates caddy, as step 4 describes and the restart in step 6 performs.
 
 **Validate before reloading.** The copy is already on disk at this point, so
 the running container can parse it without adopting it:

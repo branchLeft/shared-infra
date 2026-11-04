@@ -15,6 +15,9 @@ HETZNER = pathlib.Path(__file__).resolve().parent.parent
 # absolute source is a host path this repository does not ship.
 RELATIVE_BIND_MOUNT = re.compile(r"\A\s*-\s+(?P<source>\./[^:\s]+):")
 
+# The edge Caddy directory mount, captured with its target: `- ./caddy:/target[:mode]`.
+CADDY_DIRECTORY_MOUNT = re.compile(r"\A\s*-\s+\./caddy:(?P<target>[^:\s]+)(?::[^:\s]+)?\s*\Z")
+
 # The crowdsec acquisition mount specifically, captured with its target this
 # time: `- ./crowdsec/acquis.d:/target:ro`. Its target has to match
 # `crowdsec_service.acquisition_dir` in the sibling `config.yaml.local`, and
@@ -157,6 +160,19 @@ class SingleFileMountTests(unittest.TestCase):
         compose = HETZNER / "edge" / "stack" / "compose.yml"
         self.assertNotIn("./Caddyfile", relative_bind_sources(compose))
         self.assertIn("./caddy", relative_bind_sources(compose))
+        # The image reads /etc/caddy/Caddyfile by default. A directory mounted anywhere
+        # else would start Caddy on nothing, and CI's validation loads the same target.
+        targets = [
+            m.group("target")
+            for line in compose.read_text(encoding="utf-8").splitlines()
+            if (m := CADDY_DIRECTORY_MOUNT.match(line))
+        ]
+        self.assertEqual(
+            targets,
+            ["/etc/caddy"],
+            f"{compose} mounts ./caddy at {targets}; it must be /etc/caddy, the directory "
+            "the image reads its Caddyfile from.",
+        )
 
 
 class CrowdsecAcquisitionMountTests(unittest.TestCase):
