@@ -1,34 +1,19 @@
 #!/bin/sh
-# Make the running control-plane database use the pg_hba.conf it can now see, and
-# say so only when it does. Run INSIDE the db container, as `docker exec -i <db> sh -s`
-# with this file on standard input, by the control_plane role after the deploy wrapper
-# and by hetzner/provision/test_control_plane_hba_server.py (one script, two callers).
+# Makes the running control-plane database read the pg_hba.conf on disk, and reports
+# success only once the server has reloaded it. Run INSIDE the db container, as
+# `docker exec -i <db> sh -s` with this file on standard input, by the control_plane
+# role and by hetzner/provision/test_control_plane_hba_server.py.
 #
-# The administrator's password is taken from the container's own environment
-# (POSTGRES_PASSWORD, set by the stack's compose file), so the role handles no secret
-# and no value is in an argument or in the output. The file is mounted as a directory,
-# so a replaced file is visible at once; PostgreSQL still reads it only when told to.
-#
-# Order, and why:
-#   1. The file on disk must parse. pg_hba_file_rules reads the file as it is now, one
-#      row per line, with `error` set on a line the server cannot parse. A file with an
-#      error is refused BEFORE the reload, so the server keeps the rules it holds (it
-#      would keep them anyway: PostgreSQL does not replace its rules with a file that
-#      fails to parse). The run fails, loudly, with the old rules in force.
-#   2. pg_reload_conf() sends the reload. A reload is not a restart: no connection is
-#      dropped.
-#   3. pg_conf_load_time() must move. The reload is asynchronous, so a script that sent
-#      it and went on would report success on a server that had not read the file yet.
-#      Bounded: about 10 seconds, then the run fails.
-#   4. The file must still parse, read once more after the reload.
-#
-# psql reads no standard input here (it is given --command and </dev/null), because
-# `sh -s` is reading this very script from it.
+# The order of the checks, and why each one is there, is in ../README.md under "How a
+# changed pg_hba.conf reaches the running database" (step 3). The password comes from
+# the container's POSTGRES_PASSWORD.
 set -eu
 
 PGPASSWORD="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is not set in the db container}"
 export PGPASSWORD
 
+# psql reads no standard input (it is given --command and </dev/null), because `sh -s`
+# is reading this very script from it.
 sql() {
     psql --username=postgres --dbname=postgres --no-password --no-psqlrc \
         --set=ON_ERROR_STOP=1 --tuples-only --no-align --command="$1" </dev/null
