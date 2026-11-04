@@ -83,7 +83,7 @@
     force: true
     mode: '0644'
   loop:
-    - { src: /opt/branchleft/edge/Caddyfile, name: Caddyfile }
+    - { src: /opt/branchleft/edge/caddy/Caddyfile, name: Caddyfile }
     - { src: /opt/branchleft/edge/crowdsec/config.yaml.local, name: config.yaml.local }
   loop_control:
     label: '{{ item.name }}'

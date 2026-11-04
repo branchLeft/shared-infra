@@ -10,6 +10,12 @@ pipeline's route rests on (the 2 Nov ruling, ws#2894):
   cannot be sent from edge1 straight to a tenants host and must go on through edge-t;
 * edget's own address, once the owner sets it, is the one the address plan gives edge-t.
 
+It holds one more rule, for the hosts the gated run pushes to: a host that takes its
+commit as a pushed bundle (pull_trigger_bundle_hosts, demo1 today) is a leaf of the route, never a
+hop. It is never in JUMP_HOSTS and its playbook does not apply ci_jump, so the runner goes through
+edge1 to reach it and nothing goes through it. The list is read from the pull_trigger role's
+vars, its one home, and never copied here.
+
 The tenants addresses are read from hetzner-host/addressPlan.ts (TENANTS_HOST_IPS), their one home,
 and never copied here. Each pin is shown red on a sabotaged copy of the files it reads, and green
 again on the copy left alone, which is also the real tree.
@@ -48,6 +54,9 @@ TENANTS_ENTRY = re.compile(r"(?P<name>\w+):\s*'(?P<ip>\d{1,3}(?:\.\d{1,3}){3})'"
 TENANTS_NEEDED = ("edgeT", "dbT1")
 DESTINATIONS = "ci_jump_destinations"
 OWN_ADDRESS = "ci_jump_own_address"
+# The hosts that take their commit pushed to them. The pull_trigger role's vars are the one home.
+PULL_TRIGGER_VARS = "ansible/roles/pull_trigger/vars/main.yml"
+BUNDLE_HOSTS = "pull_trigger_bundle_hosts"
 
 
 def tenants_host_ips(root: Path) -> dict[str, str]:
@@ -153,7 +162,34 @@ def _data_findings(root: Path) -> list[str]:
     return found
 
 
-def problems(root: Path) -> list[str]:
+def bundle_hosts(root: Path) -> list[str]:
+    """The pull_trigger role's bundle hosts under root. Empty when they cannot be read."""
+    return _text_list(_mapping(_document(root / PULL_TRIGGER_VARS)).get(BUNDLE_HOSTS))
+
+
+def _push_host_findings(root: Path, jump_hosts: frozenset[str]) -> list[str]:
+    """A host that is pushed its commit is a leaf: not a jump host, and its playbook does not
+    apply the jump role. An unreadable or empty list is itself a finding, or the rule would pass
+    for any host."""
+    pushed = bundle_hosts(root)
+    if not pushed:
+        return [f"{PULL_TRIGGER_VARS}: {BUNDLE_HOSTS} is empty or unreadable, so no host is held"]
+    found: list[str] = []
+    for host in pushed:
+        if host in jump_hosts:
+            found.append(
+                f"{host} takes its commit by push ({BUNDLE_HOSTS}) and is in JUMP_HOSTS: "
+                "a pushed host is a leaf of the route, never a hop"
+            )
+        if any(_is_jump_entry(entry) for entry in _role_entries(root, host)):
+            found.append(
+                f"playbooks/{host}.yml applies {ROLE_NAME} but {host} takes its commit by push: "
+                "a pushed host is a leaf of the route, never a hop"
+            )
+    return found
+
+
+def problems(root: Path, jump_hosts: frozenset[str] = JUMP_HOSTS) -> list[str]:
     """Return one finding per broken pin in the tree under ``root``."""
     found: list[str] = []
     missing = sorted(REQUIRED_HOSTS - JUMP_HOSTS)
@@ -163,6 +199,7 @@ def problems(root: Path) -> list[str]:
         found.extend(_playbook_findings(root, host))
     found.extend(_role_findings(root))
     found.extend(_data_findings(root))
+    found.extend(_push_host_findings(root, jump_hosts))
     return found
 
 
@@ -180,6 +217,12 @@ class RealTree(unittest.TestCase):
             self.assertIn(name, tenants)
         self.assertEqual(len(tenants), len(set(tenants.values())))
 
+    def test_demo1_is_a_pushed_host_and_so_a_leaf_of_the_route(self) -> None:
+        # The control of the push pin: an empty parse would hold nothing, and the rule would pass.
+        self.assertIn("demo1", bundle_hosts(ROOT))
+        self.assertEqual([], _push_host_findings(ROOT, JUMP_HOSTS))
+        self.assertFalse(set(bundle_hosts(ROOT)) & JUMP_HOSTS)
+
 
 class Sabotage(unittest.TestCase):
     """Each pin goes red on a copy of the tree with one thing broken. The copy is the files the
@@ -195,6 +238,8 @@ class Sabotage(unittest.TestCase):
             shutil.copytree(ROOT / relative, self.root / relative)
         (self.root / ADDRESS_PLAN).parent.mkdir(parents=True)
         shutil.copy(ROOT / ADDRESS_PLAN, self.root / ADDRESS_PLAN)
+        (self.root / PULL_TRIGGER_VARS).parent.mkdir(parents=True)
+        shutil.copy(ROOT / PULL_TRIGGER_VARS, self.root / PULL_TRIGGER_VARS)
 
     def _edit(self, relative: str, old: str, new: str) -> None:
         path = self.root / relative
@@ -279,6 +324,29 @@ class Sabotage(unittest.TestCase):
             f"{OWNER_VARS}/edget.yml", f"{DESTINATIONS}: []", f"{DESTINATIONS}: ['192.0.2.9']"
         )
         self._expect("does not hold ci_jump_own_address")
+
+    def test_a_pushed_host_in_jump_hosts_is_red(self) -> None:
+        # Sabotage: demo1 becomes a hop. The same tree is green with JUMP_HOSTS as it is.
+        self.assertEqual([], _push_host_findings(self.root, JUMP_HOSTS))
+        self._expect_push(frozenset((*JUMP_HOSTS, "demo1")), "demo1 takes its commit by push")
+
+    def test_a_pushed_host_that_applies_the_jump_role_is_red(self) -> None:
+        self._edit(
+            f"{PLAYBOOKS}/demo1.yml",
+            "    - role: ../roles/demo1_egress_spool # noqa: role-name[path]\n",
+            "    - role: ../roles/demo1_egress_spool # noqa: role-name[path]\n"
+            f"    - role: {ROLE_ENTRY} # noqa: role-name[path]\n",
+        )
+        self._expect_push(JUMP_HOSTS, "playbooks/demo1.yml applies ci_jump")
+
+    def test_an_empty_bundle_host_list_is_red(self) -> None:
+        # Without this an unreadable list would let every host through the push rule.
+        self._edit(PULL_TRIGGER_VARS, f"{BUNDLE_HOSTS}:\n  - demo1", f"{BUNDLE_HOSTS}: []")
+        self._expect_push(JUMP_HOSTS, "is empty or unreadable")
+
+    def _expect_push(self, jump_hosts: frozenset[str], fragment: str) -> None:
+        found = problems(self.root, jump_hosts)
+        self.assertTrue(any(fragment in line for line in found), f"{fragment!r} not in {found}")
 
     def test_an_address_plan_that_cannot_be_read_is_red(self) -> None:
         # Without this an unreadable plan would let any list through the edge1 rule.

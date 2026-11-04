@@ -1,0 +1,185 @@
+---
+# Internal to the role, included once from _candidate.yml. For each slot the owner
+# has placed an edge input for, the pinned site renderer turns that input into the
+# slot's gated site block, and the role stages the block as a root-only candidate
+# for the owner to diff against the live edge.
+#
+# The input is the owner's, at a fixed path that only root can write (vars/main.yml).
+# The role never makes it and never reads a value from it: the renderer reads the
+# file itself. Every task that handles the renderer's output is hidden (no_log and
+# diff: false, ANS-16), and no failure message carries that output, because the
+# output can echo the hostname.
+#
+# A slot with no input gets no candidate. That is a stated skip (ANS-10), not a
+# pass: the plan and the apply each print a line that says so, and
+# demo1_build_site_not_rendered names the slots. The renderer is run with no output
+# flag, so it writes nothing. The role never passes it --gate-env-out (that writes),
+# never writes the live edge, and never runs the go-live step.
+
+- name: Look at the candidate directory _candidate.yml declared
+  ansible.builtin.stat:
+    path: '{{ demo1_build_candidate_dir }}'
+    follow: false
+  register: demo1_build_site_dir_stat
+
+# get_checksum is off: a checksum of the owner's input would be a digest of a
+# sensitive file (ANS-16).
+- name: Look at each slot's edge input, without reading it
+  ansible.builtin.stat:
+    path: "{{ demo1_build_site_edge_input | replace('{slot}', item) }}"
+    follow: false
+    get_checksum: false
+  loop: '{{ demo1_build_slots }}'
+  loop_control:
+    label: '{{ item }}'
+  register: demo1_build_site_inputs
+
+- name: Note the slots that have an edge input
+  ansible.builtin.set_fact:
+    demo1_build_site_occupied: '{{ demo1_build_site_inputs.results | selectattr("stat.exists") | map(attribute="item") | list }}'
+
+# Each refusal is its own task, in this order, so a case can name the check that
+# fired. Each names the path and never a value: the path is the owner's to correct.
+- name: Refuse an edge input that is a link or not a regular file
+  ansible.builtin.assert:
+    that:
+      - not item.stat.islnk
+      - item.stat.isreg
+    quiet: true
+    fail_msg: >-
+      The edge input {{ demo1_build_site_edge_input | replace('{slot}', item.item) }} is a link or not a
+      regular file. Place a plain file there, owned by root, mode 0600.
+  loop: '{{ demo1_build_site_inputs.results | selectattr("stat.exists") | list }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Refuse an edge input that is not root's
+  ansible.builtin.assert:
+    that:
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+    quiet: true
+    fail_msg: >-
+      The edge input {{ demo1_build_site_edge_input | replace('{slot}', item.item) }} is not root:root.
+      Only root may own a file the renderer reads as root.
+  loop: '{{ demo1_build_site_inputs.results | selectattr("stat.exists") | list }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Refuse an edge input open to group or others, or with an execute bit
+  ansible.builtin.assert:
+    that:
+      - item.stat.mode in ['0000', '0200', '0400', '0600']
+    quiet: true
+    fail_msg: >-
+      The edge input {{ demo1_build_site_edge_input | replace('{slot}', item.item) }} is mode {{ item.stat.mode }}.
+      It must be 0600 or narrower.
+  loop: '{{ demo1_build_site_inputs.results | selectattr("stat.exists") | list }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# The notice for each slot with no input. It is registered so the scenarios can read
+# that it was printed: a silent skip would read as a configured host.
+- name: Say which slots have no edge input, and so no site candidate
+  ansible.builtin.debug:
+    msg: "{{ demo1_build_site_not_rendered_text | replace('{slot}', item.item) }}"
+  loop: '{{ demo1_build_site_inputs.results | rejectattr("stat.exists") | list }}'
+  loop_control:
+    label: '{{ item.item }}'
+  register: demo1_build_site_notices
+
+- name: Say which occupied slots are not rendered where no release is staged
+  ansible.builtin.debug:
+    msg: "{{ demo1_build_site_unstaged_text | replace('{slot}', item) }}"
+  loop: '{{ demo1_build_site_occupied }}'
+  loop_control:
+    label: '{{ item }}'
+  register: demo1_build_site_unstaged_notices
+  when: not (demo1_build_release_ready | default(false) | bool)
+
+# The renderer prints the whole Caddyfile for one slot, hostname included, so it is
+# run with no output flag (a read) and its output is hidden. failed_when is off: a
+# refusal is handled below by slot number, so its message, which can echo the
+# hostname, is never printed.
+- name: Render, check and stage the site candidate of each occupied slot
+  block:
+    - name: Render the site block of each occupied slot with the pinned renderer, printing it and writing nothing
+      ansible.builtin.command:
+        argv: >-
+          {{ [demo1_build_python] + demo1_build_python_flags
+          + [demo1_build_provision_dir ~ '/render_demo_site.py', '--slot', item,
+          '--edge-json', demo1_build_site_edge_input | replace('{slot}', item)] }}
+      register: demo1_build_site_renders
+      loop: '{{ demo1_build_site_occupied }}'
+      loop_control:
+        label: '{{ item }}'
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      no_log: true
+      diff: false
+      when: demo1_build_release_ready | default(false) | bool
+
+    # The list holds slot numbers only. A slot is named when its renderer exited with
+    # an error or printed nothing.
+    - name: Note the slots whose renderer refused its input, by slot number only
+      ansible.builtin.set_fact:
+        demo1_build_site_refused: |-
+          {%- set ns = namespace(out=[]) -%}
+          {%- for r in demo1_build_site_renders.results | default([]) -%}
+          {%- if not (r.skipped | default(false)) -%}
+          {%- if (r.rc | default(1)) != 0 or (r.stdout | default('') | length) == 0 -%}
+          {%- set _ = ns.out.append(r.item) -%}
+          {%- endif -%}
+          {%- endif -%}
+          {%- endfor -%}
+          {{ ns.out }}
+      no_log: true
+      when: demo1_build_release_ready | default(false) | bool
+
+    - name: Refuse when the renderer refused the input of a slot, without its message
+      ansible.builtin.assert:
+        that:
+          - demo1_build_site_refused | length == 0
+        quiet: true
+        fail_msg: >-
+          The pinned site renderer refused the edge input of slot(s) {{ demo1_build_site_refused | join(', ') }}.
+          Its message is withheld, because it can echo the hostname (ANS-16). Check each input against
+          render-core's EdgeSiteBlock.
+      when: demo1_build_release_ready | default(false) | bool
+
+    # Root's and mode 0600, in the closed candidate directory. Skipped in check mode
+    # where that directory is not there yet, as the edge fragment's copy is.
+    - name: Stage the site candidate of each occupied slot, root's and mode 0600
+      ansible.builtin.copy:
+        content: "{{ item.stdout }}\n"
+        dest: "{{ demo1_build_site_candidate | replace('{slot}', item.item) }}"
+        owner: root
+        group: root
+        mode: '0600'
+      loop: '{{ demo1_build_site_renders.results | default([]) }}'
+      loop_control:
+        label: '{{ item.item }}'
+      when:
+        - not (item.skipped | default(false))
+        - demo1_build_site_dir_stat.stat.exists
+      no_log: true
+      diff: false
+  always:
+    # no_log keeps a result out of the log, but the registered variable keeps the
+    # site blocks until the play ends. Empty it here (ANS-16).
+    - name: Empty the registered renders, which hold the site blocks
+      ansible.builtin.set_fact:
+        demo1_build_site_renders: {}
+      no_log: true
+
+# What a plan or an apply reports as not rendered on this run: every slot that has no
+# candidate, whether for want of an input or of a staged renderer. A configured host
+# with the input for slot 0 gives the six others.
+- name: Record the slots that have no site candidate on this run
+  ansible.builtin.set_fact:
+    # difference() returns the slots in no fixed order, so the list is sorted for the
+    # scenarios that compare it.
+    demo1_build_site_not_rendered: >-
+      {{ demo1_build_slots | difference(demo1_build_site_occupied
+      if (demo1_build_release_ready | default(false) | bool) else []) | sort }}

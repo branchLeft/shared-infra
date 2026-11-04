@@ -43,12 +43,17 @@ monitoring_stack_files:
 # password-file path and environment variables named like passwords, which the plan's secret
 # scan would withhold the whole plan of the host over. The rest are delivered by a task that
 # shows its diff. ansible/checks/test_plan_diff_scan.py fails if a file listed here has no
-# such line, or if a file left out of it has one.
+# such line (bar one in RETIRED_MATCHES), or if a file left out of it has one.
 monitoring_stack_files_hidden:
   - compose.yml
   - alertmanager/alertmanager.yml.tmpl
   - ntfy/server.yml.tmpl
   - prometheus/prometheus.yml
+  # Temporary, for the apply that rewrites it. The file in the
+  # repository was reworded and no longer matches, but the host still holds the old text, whose
+  # removed line the diff would show. The entry in RETIRED_MATCHES (test_plan_diff_scan.py)
+  # requires this; delete both once the apply is live.
+  - prometheus/alerts.yml
 
 # The shared Compose unit template names a stack's drop-in directory after the
 # instance, and the instance of this stack is "monitoring".

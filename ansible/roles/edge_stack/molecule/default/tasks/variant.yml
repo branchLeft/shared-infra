@@ -44,7 +44,7 @@
     path: '{{ edge_stack_verify_tmp }}/{{ edge_stack_verify_variant_name }}/{{ item }}'
     checksum_algorithm: sha256
   loop:
-    - Caddyfile
+    - caddy/Caddyfile
     - compose.yml
     - crowdsec/config.yaml.local
   register: edge_stack_verify_variant_stats

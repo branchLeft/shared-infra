@@ -146,7 +146,7 @@ build, before anything is deployed:
 docker run --rm --platform linux/amd64 \
   --env CROWDSEC_BOUNCER_KEY=validation-only \
   --env ACME_EMAIL=validation@example.invalid \
-  --volume "$PWD/hetzner/edge/stack/Caddyfile:/etc/caddy/Caddyfile:ro" \
+  --volume "$PWD/hetzner/edge/stack/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
   ghcr.io/branchleft/edge-caddy@<DIGEST> \
   caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
 ```
@@ -226,6 +226,14 @@ corrects file ownership on the receiving end, covering both files and directorie
 `rsync --no-owner --no-group` does not modify existing file ownership, so an
 explicit chown is needed to fix files that were copied with incorrect ownership
 from a previous deployment.
+
+The Caddyfile now lives in the `caddy/` directory, and the container mounts that
+directory, so the file a deploy puts there is the file the container reads. On a
+host that was deployed before this layout, the copy above creates
+`caddy/Caddyfile` and `--delete` removes the old top-level `Caddyfile`. The
+running container keeps its old mount of the removed file until the unit is
+recreated, so the first deploy of this layout is followed by a recreate of the
+caddy service (step 6), not a reload.
 
 ## 5. Enable the unit
 
@@ -419,7 +427,7 @@ entirely on the host and touches no production hostname.
 this first, and do not read 4b's result without it.
 
 The bare `:8080` block is a **catch-all** — it matches every Host, so if
-`hetzner/edge/stack/Caddyfile` was never `rsync`ed onto the host, or the
+`hetzner/edge/stack/caddy/Caddyfile` was never `rsync`ed onto the host, or the
 restart in step 6 was skipped, the catch-all answers a request for
 `edge-probe.invalid` exactly as the host-qualified block would. Status code
 alone cannot tell those apart, so each block names itself in an
@@ -603,7 +611,7 @@ Then:
 
 1. In a branch, set `rateLimit: 'enforcing'` in `hetzner/edge/posture.ts`, with
    `RATE_LIMIT_EVENTS` at the derived value.
-2. `cd hetzner && pnpm run render` — this rewrites `hetzner/edge/stack/Caddyfile`.
+2. `cd hetzner && pnpm run render` — this rewrites `hetzner/edge/stack/caddy/Caddyfile`.
 3. Commit both files together and open a pull request. `pnpm run test` fails if the
    rendered file and the posture disagree, so they cannot land apart.
 4. After merge, on an up-to-date checkout of `main`, repeat step 4 (`rsync`) and
@@ -619,7 +627,7 @@ Then:
 **Not `systemctl restart branchleft-compose@edge`.** That unit carries no
 `ExecStop` since `hetzner/provision/branchleft-compose@.service` changed, so a
 restart runs `docker compose up -d` and Compose recreates only services whose
-_config hash_ moved. A bind-mounted file's **contents** are not part of that
+_config hash_ moved. The **contents** of a bind-mounted file or directory are not part of that
 hash, so a Caddyfile-only change is a silent no-op: the command exits 0,
 `--wait` passes because the unchanged containers are already healthy, and Caddy
 goes on serving the configuration it loaded at container start. This was
@@ -631,8 +639,9 @@ The `edge` instance is deliberately **not** given the blanket
 wholesale on every unit restart would also recreate CrowdSec, and
 `branchleft-deploy` restarts this unit for image bumps where a selective
 recreate is the correct behaviour. A Caddyfile change therefore goes through
-the reload below, which needs no recreate. The recreate survives only as the
-fallback in step 4.
+the reload below, which needs no recreate. The recreate survives only for a host
+still on the old single-file mount: its first deploy of the directory layout
+recreates caddy, as step 4 describes and the restart in step 6 performs.
 
 **Validate before reloading.** The copy is already on disk at this point, so
 the running container can parse it without adopting it:
@@ -649,16 +658,17 @@ this edge serves, so a reload onto a config it cannot parse fails and leaves the
 previous configuration running. Validate first anyway, so the error is seen
 before the reload rather than in its output.
 
-**Check the mount before reloading.** The Caddyfile is a single-file bind mount,
-and `rsync` writes a new file and renames it over the old one. A container that
-was started before that copy can keep the file it was created with, and a reload
-would then load bytes that are not the ones in the repository. The two hashes
-below must match:
+**Check the mount before reloading.** The container mounts the directory
+`caddy/`, not the file, so a file that `rsync` renames into place is the file the
+container reads. This check is what proves it on the running container: a host
+still on the earlier single-file mount, or a container started before the copy,
+can hold an older file, and a reload would then load bytes that are not the ones
+in the repository. The two hashes below must match:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a
-  sha256sum Caddyfile | cut -c1-64
+  sha256sum caddy/Caddyfile | cut -c1-64
   docker compose exec -T caddy cat /etc/caddy/Caddyfile | sha256sum | cut -c1-64'
 ```
 
@@ -861,7 +871,7 @@ it loaded and prints the rotation settings it found, with a count for each:
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a
   docker compose exec -T caddy wget -qO- http://127.0.0.1:2019/config/ | grep -o "\"roll_[a-z_]*\":[^,}]*" | sort | uniq -c
-  grep -c "output file" Caddyfile'
+  grep -c "output file" caddy/Caddyfile'
 ```
 
 Expect, on every log, `"roll_at":["00:00"]`, `"roll_keep":31` and `"roll_keep_days":30`,
