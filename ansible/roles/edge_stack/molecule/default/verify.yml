@@ -1148,17 +1148,33 @@
             edge_stack_verify_variant_edits:
               - { path: caddy/Caddyfile, append: "\n# case p18\n" }
 
+        - name: Clear any readiness signal left by an earlier holder
+          ansible.builtin.file:
+            path: /run/edge-p18a.holder.ready
+            state: absent
+
+        # The holder touches the signal only after flock has taken the lock, so the
+        # signal is proof the lock is held. A fixed settle time is not: a loaded host can
+        # start the holder after the role has already validated.
         - name: Hold the deploy lock for twenty-five seconds, as a running deploy does
           ansible.builtin.command:
-            argv: [flock, /etc/branchleft/edge.deploy.lock, sleep, '25']
+            argv:
+              [
+                flock,
+                /etc/branchleft/edge.deploy.lock,
+                sh,
+                -c,
+                'touch /run/edge-p18a.holder.ready; sleep 25',
+              ]
           async: 90
           poll: 0
           register: edge_stack_verify_p18_holder
           changed_when: false
 
-        - name: Give the holder time to take the lock
+        - name: Wait until the holder has taken the lock
           ansible.builtin.wait_for:
-            timeout: 1
+            path: /run/edge-p18a.holder.ready
+            timeout: 30
 
         - name: Apply the role with a wait of two seconds
           ansible.builtin.include_tasks: tasks/run_role.yml
@@ -1175,17 +1191,30 @@
           retries: 60
           delay: 1
 
+        - name: Clear any readiness signal left by an earlier holder
+          ansible.builtin.file:
+            path: /run/edge-p18b.holder.ready
+            state: absent
+
         - name: Hold the deploy lock for twenty-five seconds again
           ansible.builtin.command:
-            argv: [flock, /etc/branchleft/edge.deploy.lock, sleep, '25']
+            argv:
+              [
+                flock,
+                /etc/branchleft/edge.deploy.lock,
+                sh,
+                -c,
+                'touch /run/edge-p18b.holder.ready; sleep 25',
+              ]
           async: 90
           poll: 0
           register: edge_stack_verify_p18_holder_b
           changed_when: false
 
-        - name: Give the holder time to take the lock
+        - name: Wait until the second holder has taken the lock
           ansible.builtin.wait_for:
-            timeout: 1
+            path: /run/edge-p18b.holder.ready
+            timeout: 30
 
         - name: Apply the role with a wait of thirty seconds
           ansible.builtin.include_tasks: tasks/run_role.yml
