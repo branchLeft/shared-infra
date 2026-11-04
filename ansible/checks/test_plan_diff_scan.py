@@ -38,13 +38,7 @@ WORKFLOW_ERE = (
 # text), and when a task shows the diff of an entry's file. Delete the entry, and the file from its
 # role's hidden list, once the apply that rewrites the text is live. Nothing is added here for a
 # line that can be reworded in the checkout.
-RETIRED_MATCHES: dict[str, str] = {
-    # Reworded in b3dfd28; edge1 still holds the old text until the apply of that commit or a
-    # later one reaches it.
-    "hetzner/monitoring/stack/prometheus/alerts.yml": (
-        "            credential: mysqld_exporter v0.20.0 expands $ in a config value"
-    ),
-}
+RETIRED_MATCHES: dict[str, str] = {}
 COPIERS = frozenset(("copy", "template"))
 INCLUDERS = frozenset(("include_tasks", "import_tasks"))
 SEARCH = {
@@ -372,10 +366,6 @@ class RegexCase(unittest.TestCase):
         ("variable reference", "MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set it}", True),
         ("prose reworded", "the authenticating credential. ExposeAuthInfo writes it", False),
         ("no secret word", "image: docker.io/library/postgres:17-alpine", False),
-        # The line edge1 still holds in alerts.yml: the removed side of the diff that withheld
-        # edge1's plan on 4 Nov, and the reworded line that replaces it.
-        ("prose on a host", "  credential: mysqld_exporter v0.20.0 expands $ in a value", True),
-        ("prose in repo", "  login, because mysqld_exporter v0.20.0 expands $ in a value", False),
     )
 
     def test_each_kind_of_line_is_classed(self) -> None:
