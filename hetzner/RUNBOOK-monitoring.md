@@ -696,7 +696,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 Expect `200`, reached only through the tunnel. Confirm the registry side too:
 
 ```bash
-grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/Caddyfile
+grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/caddy/Caddyfile
 ```
 
 Expect no match in either file -- Grafana carries no hostname, no Caddy

@@ -63,7 +63,7 @@ The paths, the stamp names, the classes and the pin pattern are constants in `va
 - `/etc/systemd/system/branchleft-compose@edge.service.d` (0755) and `override.conf` in it (0644, root:root), and one `systemctl daemon-reload` when that file changed or systemd holds an older one ("The unit's drop-in").
 - `/var/lib/branchleft` (0755; monitoring_stack creates it in the same mode, so whichever runs first creates it) and the three stamps in it (0600).
 - Candidates, while the role runs, in `/var/lib/branchleft/edge.candidate` (root, 0700), removed at the end of every run, a failed one included. A leftover would make the next check-mode run report a change.
-- The Caddyfile on a host that has none is created by the locked script, root:root 0644, before it is written, so Docker never creates a directory where the single-file mount expects a file.
+- The Caddyfile on a host that has none is created by the locked script, root:root 0644, before it is written, so Docker never creates a directory where the file is expected (the directory `caddy/` is created first, from `edge_stack_dirs`).
 - Calls: `docker run --rm` (validate, nothing contacted, no certificate issued), `docker compose ... config -q`, `systemctl restart/is-active`, `docker compose ... restart crowdsec`, `docker compose ... exec` (read-backs, `caddy reload`, `cscli lapi status`). Compose is always given the project directory and both env files, exactly as the unit has them, so `${IMAGE}` and the required keys interpolate.
 
 ### Classes
@@ -92,7 +92,7 @@ They compute and record only: none restarts a unit, a service or a container, an
 
 ### Why the Caddyfile is written in place
 
-`compose.yml` bind-mounts the Caddyfile as a single file. A rename (what `copy` does) leaves the container holding the old inode, so Caddy would reload bytes it already has. The locked script writes `cat candidate > file`, so the inode the container's mount holds is the one that changes; no reload or restart can read a half-written file, because the write is under the same lock as the reload. Named limit: a power cut during the write can leave a torn file. The next run sees it (the host file differs from the repository's), and rewrites it, but a reboot before that run would start Caddy on the torn file. Accepted.
+`compose.yml` bind-mounts the directory `caddy/`, so a rename is seen too; the write stays in place because a host that still has the earlier single-file mount, until its unit is recreated, holds the old inode and a rename would leave Caddy reloading bytes it already has. The locked script writes `cat candidate > file`, so the inode the container's mount holds is the one that changes; no reload or restart can read a half-written file, because the write is under the same lock as the reload. Named limit: a power cut during the write can leave a torn file. The next run sees it (the host file differs from the repository's), and rewrites it, but a reboot before that run would start Caddy on the torn file. Accepted.
 
 ### The locked script
 

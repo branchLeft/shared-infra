@@ -477,7 +477,7 @@ jobs:
       - name: Load every rendered configuration through Caddy
         run: |
           status=0
-          for config in hetzner/edge/stack/Caddyfile hetzner/edge/validation/Caddyfile.*; do
+          for config in hetzner/edge/stack/caddy/Caddyfile hetzner/edge/validation/Caddyfile.*; do
             output=$(docker run --rm \
               --env CROWDSEC_BOUNCER_KEY=validation-only \
               --env ACME_EMAIL=validation@example.invalid \

@@ -1329,7 +1329,7 @@ describe('the owner console and tenant portal routes', () => {
 describe('the committed stack directory', () => {
   it('is what this renderer produces from the registry and the committed posture', async () => {
     await expect(renderCaddyfile(sites, hostRedirects, POSTURE, staticSites)).toMatchFileSnapshot(
-      './stack/Caddyfile'
+      './stack/caddy/Caddyfile'
     );
     await expect(renderAppsecAcquisition(POSTURE)).toMatchFileSnapshot(
       './stack/crowdsec/acquis.d/appsec.yaml'
