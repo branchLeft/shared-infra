@@ -404,7 +404,10 @@ def ask_tenants(ctx: Context, key: str) -> Value | None:
             return tenants or None
         if PRIVATE_KEY_MARK in line:
             ctx.flush_input()
-            print("that line looks like a private key; nothing is written; run again.", file=ctx.err)
+            print(
+                "that line looks like a private key; nothing is written; run again.",
+                file=ctx.err,
+            )
             return None
         tenant = parse_tenant_line(line.strip())
         if tenant is None:

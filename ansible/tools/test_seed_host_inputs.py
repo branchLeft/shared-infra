@@ -988,7 +988,11 @@ class SlotTests(unittest.TestCase):
         expected = {
             **app1_document(),
             SLOTS_KEY: [
-                {"stack": "tenant-gamma", "public_key": "ssh-ed25519 " + "G" * 68, "adopt_existing": False}
+                {
+                    "stack": "tenant-gamma",
+                    "public_key": "ssh-ed25519 " + "G" * 68,
+                    "adopt_existing": False,
+                }
             ],
         }
         self.assertEqual(expected, rig.document())
