@@ -456,6 +456,16 @@ class FillTests(unittest.TestCase):
         self.assertIn(f"filled from live ({len(EDGE1_LIVE)}):", rig.stdout)
         self.assertNotIn(value_for(JUMP_KEY), rig.everything)
 
+    def test_edget_has_no_live_file_and_only_the_jump_account_is_typed(self) -> None:
+        # edge-t is a new host: nothing on it to read, so the one input of its row is typed.
+        rig = Rig(self)
+        self.assertEqual(0, rig.run("--host", "edget"))
+        self.assertEqual({JUMP_KEY: value_for(JUMP_KEY)}, rig.document())
+        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
+        self.assertIn(f"typed (1): {JUMP_KEY}", rig.stdout)
+        self.assertIn("still missing (0): none", rig.stdout)
+        self.assertNotIn(value_for(JUMP_KEY), rig.everything)
+
     def test_the_pager_keys_are_found_in_monitoring_env_when_the_pager_file_is_absent(self) -> None:
         rig = Rig(self)
         rig.seed_edge1(pager_in_monitoring=True)

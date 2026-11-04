@@ -20,11 +20,14 @@ edge1:
   - monitoring_stack
 # edge-t, the tenants project's base host. The name has no hyphen because HOST_NAME allows
 # [a-z][a-z0-9]*. egress_nat makes it the gateway of the tenants network (one gateway per
-# network, test_egress_nat_single_gateway.py). ci_login and deploy_tooling follow once the
-# ci_jump role is on main; the edge stack follows as a later change.
+# network, test_egress_nat_single_gateway.py). ci_jump is the jump account's key options, the
+# second hop of the pipeline's route (ws#2899); ci_login and deploy_tooling follow with the
+# edge-t server (ws#2898), and the edge stack as a later change.
 edget:
+  - host_inputs
   - host_baseline
   - egress_nat
+  - ci_jump
 ops1:
   - host_inputs
   - host_baseline

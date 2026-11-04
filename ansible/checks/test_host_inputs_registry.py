@@ -213,7 +213,7 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_edge1_ops1_db1_and_app1_inputs(self) -> None:
+    def test_the_rows_name_the_edge1_edget_ops1_db1_and_app1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
@@ -232,6 +232,7 @@ class RealTree(unittest.TestCase):
                     "ntfy_pager_machine_password_hash",
                     "ci_jump_user",
                 ],
+                "edget": ["ci_jump_user"],
                 "ops1": [
                     "backup_worker_db_host",
                     "backup_worker_db_user",
@@ -323,7 +324,7 @@ class Mutations(unittest.TestCase):
         (self.ansible / "checks").mkdir()
         shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
         (self.ansible / "playbooks").mkdir()
-        for host in ("db1", "app1", "edge1", "ops1"):
+        for host in ("db1", "app1", "edge1", "edget", "ops1"):
             shutil.copy(
                 real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
             )

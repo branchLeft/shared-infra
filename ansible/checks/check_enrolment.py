@@ -60,7 +60,7 @@ JUMP_VARS = frozenset(
 # The hosts that apply ci_jump, one entry each. check() requires this to equal the hosts whose
 # row in host_roles.yml lists the role, so a host cannot gain the role without its owner_vars
 # keys, nor the keys without the role.
-JUMP_HOSTS = frozenset(("edge1",))
+JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS,

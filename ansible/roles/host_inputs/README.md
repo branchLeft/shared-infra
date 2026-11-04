@@ -194,7 +194,8 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. Today the playbooks of edge1, ops1, db1 and app1 apply it. On edge1 the loader is
+nothing else. Today the playbooks of edge1, edget, ops1, db1 and app1 apply it. On edget (edge-t)
+its one input is `ci_jump_user`, for the `ci_jump` role. On edge1 the loader is
 followed by the roles up to `edge_stack` and then the monitoring roles, and on ops1 by the roles
 up to `control_plane` and then the backup roles; on both, the first run after this change stops
 here with `host_inputs[file-missing]`, before anything else is applied, until the owner has placed
@@ -216,8 +217,8 @@ command line or committed.
 
 The owner places the file once, on the host, as root: one JSON object whose keys are exactly
 the names in the host's row in `vars/main.yml`, owned by root:root with mode `0600`, in
-directories only root can write. The role never writes it. For edge1, ops1 and app1 the writer is
-`ansible/tools/seed_host_inputs.py --host edge1` (or `ops1`, or `app1`), which:
+directories only root can write. The role never writes it. For edge1, edget, ops1 and app1 the writer is
+`ansible/tools/seed_host_inputs.py --host edge1` (or `edget`, `ops1`, or `app1`), which:
 
 - takes each key's value from the live file the hand install wrote (its one table of
   key-to-file is held by a test to this row and to the roles that write those files), so the

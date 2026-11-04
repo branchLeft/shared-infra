@@ -181,7 +181,7 @@ is not loaded there.
   destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
   `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
   list of `{key}` entries with nothing else (a destination list per key is refused: the role
-  takes one list for every key). `JUMP_HOSTS` must equal the hosts whose row in
+  takes one list for every key). `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose row in
   `checks/host_roles.yml` lists `ci_jump`: a host cannot gain the role without its keys, nor
   the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
   the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the
@@ -251,6 +251,23 @@ matches, when the module's last-resort guard had to withhold one, or when the na
 it scans every variable name, task name and message of the role. **Drift of the copy from the
 original is not checked here**: no test holds the two equal yet. Each pin runs red on a sabotaged
 copy of its files and green once the file is put back.
+
+## test_ci_jump_hosts.py: one role on edge1 and edge-t, and the two address rules
+
+Two hosts apply `ci_jump`: edge1 and edge-t (`edget`, both in `JUMP_HOSTS`). The real-sshd proof in
+the role's `molecule/default` (a destination not on the list is refused) covers both only if the role
+is the same on both. The test fails when a jump host does not apply the role exactly once as a plain
+role entry (no `when`, `vars` or `tags` on it), and when any part of the role that runs on a host
+(tasks, templates, vars, defaults, meta, library, handlers, files) names the host or a group of
+hosts (`enrolled_host`, `inventory_hostname`, `groups`, `hostvars` and the like). It also holds the
+2 Nov ruling on the data: a tenants private address (read from `TENANTS_HOST_IPS` in
+`hetzner-host/addressPlan.ts`, its one home, never copied) in `owner_vars/edge1.yml` is refused, so
+the runner can only reach a tenants host through edge-t; edget's `ci_jump_own_address`, once set, must
+equal `TENANTS_HOST_IPS.edgeT`; and a host that lists destinations must list its own address among
+them. It fails when the address plan cannot be read, so an empty parse cannot let a list through. It
+does not see edge-t's public address, which is in no file of the repository, nor whether a listed
+address is the right one. Each pin runs red on a sabotaged copy of its files and green on the copy
+left alone.
 
 ## ci_select.py: which shards a run executes
 
