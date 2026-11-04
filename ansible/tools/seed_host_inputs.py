@@ -230,9 +230,12 @@ class Context:
 
 def flush_terminal_input() -> None:
     """Throws away what was typed or pasted ahead of the prompt, if input is a terminal."""
-    with suppress(ImportError, OSError, ValueError):
+    try:
         import termios
-
+    except ImportError:
+        return
+    # termios.error is not an OSError: a stdin that is not a terminal raises it from tcflush.
+    with suppress(OSError, ValueError, termios.error):
         termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
 
 

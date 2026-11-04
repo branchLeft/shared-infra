@@ -1065,7 +1065,7 @@ class SlotTests(unittest.TestCase):
         self.assertGreaterEqual(rig.flushes, 1)
 
     def test_a_stack_given_twice_writes_nothing_and_exits_non_zero(self) -> None:
-        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} {'B' * 68}", ""])
+        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} ssh-ed25519 {'B' * 68}", ""])
         rig.seed_app1()
         self.assertEqual(1, rig.run("--host", "app1"))
         self.assertFalse(rig.dest.exists())
@@ -1074,6 +1074,19 @@ class SlotTests(unittest.TestCase):
         rig = Rig(self, answers=[SLOT_LINE, f"tenant-beta {SLOT_KEY}", ""])
         rig.seed_app1()
         self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_refusal_with_no_terminal_gives_the_fixed_message_and_no_traceback(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} ssh-ed25519 not*base64!", ""])
+        rig.seed_app1()
+        rig.ctx.flush_input = tool.flush_terminal_input
+        # /dev/null is a real descriptor that is not a terminal: tcflush raises termios.error there.
+        with open(os.devnull) as null, mock.patch("sys.stdin", null):
+            self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn(
+            "that line is not 'stack public_key [adopt]', or repeats one.", rig.err.getvalue()
+        )
+        self.assertNotIn("Traceback", rig.err.getvalue())
         self.assertFalse(rig.dest.exists())
 
     def test_an_empty_list_writes_nothing_and_exits_non_zero(self) -> None:
