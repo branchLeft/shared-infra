@@ -1406,8 +1406,13 @@ def _outcome(text: str, loader: type) -> tuple[str, object]:
 
 class LoaderParity(unittest.TestCase):
     """The reader is libyaml's C parser where PyYAML has it. It must give, for every file the
-    check reads, exactly what the pure-Python SafeLoader gives, or a safety check would judge
-    a different document in CI than the one the pure parser reads."""
+    check reads, what the pure-Python SafeLoader gives, or a safety check would judge
+    a different document in CI than the one the pure parser reads. One divergence is known and
+    pinned below: a tab inside a plain scalar (`a: x<TAB>y`) is refused by the pure loader and
+    read by libyaml, which Ansible itself uses. On a runner whose PyYAML has no libyaml the check
+    falls back to the pure loader (see `_BASE_LOADER`) and refuses such a file, so its verdict
+    can differ from one reached with libyaml. The pinned wheel has libyaml, and
+    test_the_loader_is_libyaml_when_pyyaml_has_it says which loader a run used."""
 
     def _texts(self) -> list[tuple[Path, str]]:
         paths = sorted((*ROOT.glob("ansible/**/*.yml"), *ROOT.glob("ansible/**/*.yaml")))
@@ -1430,6 +1435,17 @@ class LoaderParity(unittest.TestCase):
                 self.assertEqual(
                     _outcome(text, _AnyTagLoader), _outcome(text, _PurePythonAnyTagLoader), "any"
                 )
+
+    def test_the_one_known_divergence_is_a_tab_inside_a_plain_scalar(self) -> None:
+        # Recorded so the class docstring cannot drift from the facts: the pure loader refuses
+        # the text, libyaml reads it. Where PyYAML has no libyaml the loaders are the same.
+        text = "a: x\ty\n"
+        pure = _outcome(text, yaml.SafeLoader)
+        self.assertEqual(pure[0], "refused")
+        if yaml.__with_libyaml__:
+            self.assertEqual(_outcome(text, _BASE_LOADER)[0], "read")
+        else:
+            self.assertEqual(_outcome(text, _BASE_LOADER), pure)
 
     def test_the_loader_refuses_what_the_pure_python_loader_refuses(self) -> None:
         for text in UNREADABLE:
@@ -1461,6 +1477,17 @@ class LoadCache(unittest.TestCase):
         self.path.write_text("signers: [bbbb]\n", encoding="utf-8")
         self.assertEqual(self.path.stat().st_size, before.st_size, "the case is a same-size edit")
         self.assertEqual(_load(self.path, [], "x"), {"signers": ["bbbb"]})
+
+    def test_a_caller_that_changes_a_loaded_value_does_not_change_the_next_load(self) -> None:
+        self.path.write_text("signers: [aaaa]\nnested: {inner: [1, 2]}\n", encoding="utf-8")
+        first = _load(self.path, [], "x")
+        if not isinstance(first, dict):
+            self.fail(f"expected a mapping, got {type(first).__name__}")
+        first["signers"].append("zzzz")
+        first["nested"]["inner"].clear()
+        first["added"] = True
+        second = _load(self.path, [], "x")
+        self.assertEqual(second, {"signers": ["aaaa"], "nested": {"inner": [1, 2]}})
 
     def test_an_unreadable_file_is_a_finding_every_time_under_the_callers_label(self) -> None:
         self.path.write_text("a: [\n", encoding="utf-8")
