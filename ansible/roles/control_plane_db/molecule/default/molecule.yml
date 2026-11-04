@@ -55,5 +55,7 @@ provisioner:
         scenario_tenant_password: 'tenantpw-{{ scenario_run }}-0123456789abcdef'
         scenario_owner_password: 'ownerpw-{{ scenario_run }}-0123456789abcdef'
         scenario_provisioner_password: 'provisionerpw-{{ scenario_run }}-0123456789abcdef'
+        scenario_migrator_password: 'migratorpw-{{ scenario_run }}-0123456789abcdef'
+        scenario_migrator_url: 'postgres://portal_migrator_login:{{ scenario_migrator_password }}@db:5432/portal'
 verifier:
   name: ansible

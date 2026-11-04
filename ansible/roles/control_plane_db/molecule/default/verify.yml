@@ -27,12 +27,14 @@
       - '{{ scenario_tenant_password }}'
       - '{{ scenario_owner_password }}'
       - '{{ scenario_provisioner_password }}'
+      - '{{ scenario_migrator_password }}'
+      - '{{ scenario_migrator_url }}'
       - 'THROWAWAY-TOKEN-{{ scenario_run }}'
       - '{{ verify_tenant_url }}'
       - '{{ verify_owner_url }}'
     scenario_needles: >-
       {{ ['ADMINSECRET-' ~ scenario_run, scenario_tenant_password, scenario_owner_password,
-          scenario_provisioner_password, 'THROWAWAY-TOKEN-' ~ scenario_run]
+          scenario_provisioner_password, scenario_migrator_password, 'THROWAWAY-TOKEN-' ~ scenario_run]
          + (scenario_plain_files | map('ansible.builtin.regex_replace', '$', '\n') | map('ansible.builtin.b64encode') | list) }}
   tasks:
     # 1. A plain apply made the input directory and ran nothing.
@@ -195,22 +197,22 @@
 
     # 3. The permission control: each input file is checked before it is mounted, and a
     # file that is wider, in another group, a link, empty or absent is refused. The
-    # administrator URL file is removed on every way out.
+    # migrator URL file is removed on every way out.
     - name: The input files are checked
       when: verify_sections | length == 0 or 'inputs' in verify_sections
       block:
         - name: Start from a clean slate
           ansible.builtin.import_tasks: tasks/reset.yml
 
-        - name: Refuse migrate with no administrator URL file
+        - name: Refuse migrate with no migrator URL file
           ansible.builtin.include_tasks: tasks/refuse.yml
           vars:
-            ask_name: no administrator URL file
+            ask_name: no migrator URL file
             ask_tags: control_plane_db_migrate
             ask_extra: { control_plane_db_step: migrate }
-            refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/admin-url must be a regular file'
+            refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/migrator-url must be a regular file'
 
-        - name: Refuse each administrator URL file that is wider, in another group, owned by another account, or empty
+        - name: Refuse each migrator URL file that is wider, in another group, owned by another account, or empty
           ansible.builtin.include_tasks: tasks/input_case.yml
           vars:
             case_name: '{{ item.name }}'
@@ -219,59 +221,59 @@
               owner: root
               group: '1000'
               mode: '0644'
-              content: '{{ scenario_admin_url }}'
+              content: '{{ scenario_migrator_url }}'
             - name: mode 0660
               owner: root
               group: '1000'
               mode: '0660'
-              content: '{{ scenario_admin_url }}'
+              content: '{{ scenario_migrator_url }}'
             - name: mode 0600
               owner: root
               group: '1000'
               mode: '0600'
-              content: '{{ scenario_admin_url }}'
+              content: '{{ scenario_migrator_url }}'
             - name: group root
               owner: root
               group: root
               mode: '0640'
-              content: '{{ scenario_admin_url }}'
+              content: '{{ scenario_migrator_url }}'
             - name: owner 1000
               owner: '1000'
               group: '1000'
               mode: '0640'
-              content: '{{ scenario_admin_url }}'
+              content: '{{ scenario_migrator_url }}'
             - { name: empty, owner: root, group: '1000', mode: '0640', content: '' }
           loop_control:
             label: '{{ item.name }}'
 
-        - name: Place a file elsewhere and link the administrator URL file to it
+        - name: Place a file elsewhere and link the migrator URL file to it
           ansible.builtin.copy:
-            content: '{{ scenario_admin_url }}'
+            content: '{{ scenario_migrator_url }}'
             dest: /var/tmp/verify-target
             owner: root
             group: '1000'
             mode: '0640'
           no_log: true
 
-        - name: Link the administrator URL file
+        - name: Link the migrator URL file
           ansible.builtin.file:
             src: /var/tmp/verify-target
-            dest: '{{ verify_input_dir }}/admin-url'
+            dest: '{{ verify_input_dir }}/migrator-url'
             state: link
 
-        - name: Refuse a link in place of the administrator URL file
+        - name: Refuse a link in place of the migrator URL file
           ansible.builtin.include_tasks: tasks/refuse.yml
           vars:
-            ask_name: a link in place of the administrator URL file
+            ask_name: a link in place of the migrator URL file
             ask_tags: control_plane_db_migrate
             ask_extra: { control_plane_db_step: migrate }
-            refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/admin-url must be a regular file, not a link'
+            refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/migrator-url must be a regular file, not a link'
 
         - name: Look at the link and its target after the refusal
           ansible.builtin.stat:
             path: '{{ item }}'
           loop:
-            - '{{ verify_input_dir }}/admin-url'
+            - '{{ verify_input_dir }}/migrator-url'
             - /var/tmp/verify-target
           register: control_plane_db_verify_link_stats
 
@@ -282,7 +284,7 @@
               - not control_plane_db_verify_link_stats.results[0].stat.islnk | default(false)
               - control_plane_db_verify_link_stats.results[1].stat.exists
             quiet: true
-            fail_msg: The removal of the administrator URL file followed a link and removed its target, or left the link.
+            fail_msg: The removal of the migrator URL file followed a link and removed its target, or left the link.
 
         - name: Widen the input directory
           ansible.builtin.file:
@@ -292,11 +294,11 @@
             group: '1000'
             mode: '0755'
 
-        - name: Place a correct administrator URL file under the widened directory
+        - name: Place a correct migrator URL file under the widened directory
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Refuse an input directory that is not root:1000 0750
           ansible.builtin.include_tasks: tasks/refuse.yml
@@ -322,11 +324,11 @@
         - name: Start from a clean slate
           ansible.builtin.import_tasks: tasks/reset.yml
 
-        - name: Place the administrator URL file
+        - name: Place the migrator URL file
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Request migrate
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -338,13 +340,13 @@
         - name: Read the stand-in's calls
           ansible.builtin.import_tasks: tasks/calls.yml
 
-        - name: Read the marker, the state directory and the administrator URL file
+        - name: Read the marker, the state directory and the migrator URL file
           ansible.builtin.stat:
             path: '{{ item }}'
           loop:
             - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
             - '{{ verify_state }}'
-            - '{{ verify_input_dir }}/admin-url'
+            - '{{ verify_input_dir }}/migrator-url'
           register: control_plane_db_verify_migrate_stats
 
         - name: Read the marker's text
@@ -352,7 +354,7 @@
             src: '{{ verify_state }}/migrate-{{ verify_digest_one }}'
           register: control_plane_db_verify_migrate_marker
 
-        - name: Assert migrate ran, the marker is root's and holds its own name, and the administrator URL file is gone
+        - name: Assert migrate ran, the marker is root's and holds its own name, and the migrator URL file is gone
           ansible.builtin.assert:
             that:
               - control_plane_db_ask_result.rc == 0
@@ -363,7 +365,7 @@
               - control_plane_db_verify_migrate_stats.results[1].stat.mode == '0755'
               - not control_plane_db_verify_migrate_stats.results[2].stat.exists
             quiet: true
-            fail_msg: migrate did not leave a root-owned marker named for its digest, or left the administrator URL file on the disk.
+            fail_msg: migrate did not leave a root-owned marker named for its digest, or left the migrator URL file on the disk.
 
         - name: Name the calls
           ansible.builtin.set_fact:
@@ -375,7 +377,7 @@
             that:
               - control_plane_db_verify_kinds == ['network', 'pull', 'run', 'run']
               - "'--migrate-only' not in control_plane_db_verify_calls[2].argv"
-              - control_plane_db_verify_calls[2].argv[-1] is search('includes[(].--migrate-only.[)]')
+              - control_plane_db_verify_calls[2].argv[-1] is search('includes[(].PORTAL_MIGRATOR_URL_FILE.[)]')
               - control_plane_db_verify_calls[3].argv[-2:] == ['dist/provision/provisionMain.js', '--migrate-only']
             quiet: true
             fail_msg: migrate did not check the network, pull the image and check the flag before it ran the migration.
@@ -391,10 +393,11 @@
               - "'--privileged' not in control_plane_db_verify_migrate_call.argv"
               - "'--cap-add' not in control_plane_db_verify_migrate_call.argv"
               - control_plane_db_verify_migrate_call.argv | select('equalto', '-v') | list | length == 1
-              - (control_plane_db_verify_migrate_call.argv | select('match', '^PORTAL_') | list) == ['PORTAL_ADMIN_URL_FILE=/provision/admin-url']
+              - (control_plane_db_verify_migrate_call.argv | select('match', '^PORTAL_') | list) == ['PORTAL_MIGRATOR_URL_FILE=/provision/migrator-url']
+              - "'admin' not in (control_plane_db_verify_migrate_call.argv | join(' ') | lower)"
               - scenario_needles | select('in', control_plane_db_verify_migrate_call.argv | join(' ')) | list | length == 0
-              - control_plane_db_verify_migrate_call.mounts['/etc/branchleft/control-plane/provision/admin-url'].mode == '0640'
-              - control_plane_db_verify_migrate_call.mounts['/etc/branchleft/control-plane/provision/admin-url'].gid == 1000
+              - control_plane_db_verify_migrate_call.mounts['/etc/branchleft/control-plane/provision/migrator-url'].mode == '0640'
+              - control_plane_db_verify_migrate_call.mounts['/etc/branchleft/control-plane/provision/migrator-url'].gid == 1000
             quiet: true
             fail_msg: The migration container was given more than the role means to give it, or a secret was put in its arguments.
 
@@ -417,11 +420,11 @@
             quiet: true
             fail_msg: A second migrate for the same digest changed something or started a container.
 
-        - name: Place the administrator URL file again and request the same digest
+        - name: Place the migrator URL file again and request the same digest
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Request migrate for the same digest with the file placed
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -433,9 +436,9 @@
         - name: Read the calls and the file
           ansible.builtin.import_tasks: tasks/calls.yml
 
-        - name: Look for the administrator URL file
+        - name: Look for the migrator URL file
           ansible.builtin.stat:
-            path: '{{ verify_input_dir }}/admin-url'
+            path: '{{ verify_input_dir }}/migrator-url'
           register: control_plane_db_verify_migrate_again_file
 
         - name: Assert a recorded migration started no container and still took the file off the disk
@@ -445,13 +448,13 @@
               - control_plane_db_verify_calls | length == 4
               - not control_plane_db_verify_migrate_again_file.stat.exists
             quiet: true
-            fail_msg: A recorded migration started a container, or left the administrator URL file.
+            fail_msg: A recorded migration started a container, or left the migrator URL file.
 
         - name: Place the file and request a new digest
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Request migrate for a second digest
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -482,7 +485,7 @@
             quiet: true
             fail_msg: A new image digest was skipped as done, or the first digest's marker was lost.
 
-    # 5. A migration that fails leaves no marker and no administrator URL file, and is
+    # 5. A migration that fails leaves no marker and no migrator URL file, and is
     # asked for again on the same digest. What the program printed is not repeated
     # beyond its own refusal lines.
     - name: Section migrate failures
@@ -499,11 +502,11 @@
             group: root
             mode: '0644'
 
-        - name: Place the administrator URL file
+        - name: Place the migrator URL file
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Request migrate while the program refuses
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -512,12 +515,12 @@
             ask_tags: control_plane_db_migrate
             ask_extra: { control_plane_db_step: migrate }
 
-        - name: Look at the marker and the administrator URL file
+        - name: Look at the marker and the migrator URL file
           ansible.builtin.stat:
             path: '{{ item }}'
           loop:
             - '{{ verify_state }}/migrate-{{ verify_digest_one }}'
-            - '{{ verify_input_dir }}/admin-url'
+            - '{{ verify_input_dir }}/migrator-url'
           register: control_plane_db_verify_failed_stats
 
         - name: Assert a refused migration is reported with the program's own line, left no marker and no file
@@ -529,7 +532,7 @@
               - not control_plane_db_verify_failed_stats.results[0].stat.exists
               - not control_plane_db_verify_failed_stats.results[1].stat.exists
             quiet: true
-            fail_msg: A failed migration left a marker or the administrator URL file, or hid the program's refusal line.
+            fail_msg: A failed migration left a marker or the migrator URL file, or hid the program's refusal line.
 
         - name: Make the program print a secret on a line of its own, then refuse
           ansible.builtin.copy:
@@ -539,11 +542,11 @@
             group: root
             mode: '0644'
 
-        - name: Place the administrator URL file again
+        - name: Place the migrator URL file again
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Request migrate while the program prints a secret
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -568,11 +571,11 @@
             group: root
             mode: '0644'
 
-        - name: Place the administrator URL file for the retry
+        - name: Place the migrator URL file for the retry
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Request migrate again
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -609,19 +612,19 @@
             group: root
             mode: '0644'
 
-        - name: Place the administrator URL file
+        - name: Place the migrator URL file
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Refuse an image that lacks the flag
           ansible.builtin.include_tasks: tasks/refuse.yml
           vars:
-            ask_name: an image without the migrate-only flag
+            ask_name: an image without the migrator login
             ask_tags: control_plane_db_migrate
             ask_extra: { control_plane_db_step: migrate }
-            refused_text: 'REFUSED: the image does not carry --migrate-only'
+            refused_text: 'REFUSED: the image does not carry PORTAL_MIGRATOR_URL_FILE'
             refused_calls: 3
 
         - name: Make the network absent
@@ -635,11 +638,11 @@
         - name: Forget the calls and place the file
           ansible.builtin.import_tasks: tasks/reset_calls.yml
 
-        - name: Place the administrator URL file again
+        - name: Place the migrator URL file again
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Request migrate with no stack network
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -667,11 +670,11 @@
         - name: Start from a clean slate
           ansible.builtin.import_tasks: tasks/reset.yml
 
-        - name: Place the administrator URL file
+        - name: Place the migrator URL file
           ansible.builtin.import_tasks: tasks/place.yml
           vars:
-            place_path: '{{ verify_input_dir }}/admin-url'
-            place_content: "{{ scenario_admin_url }}\n"
+            place_path: '{{ verify_input_dir }}/migrator-url'
+            place_content: "{{ scenario_migrator_url }}\n"
 
         - name: Request migrate in check mode
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -707,7 +710,7 @@
         - name: Start from a clean slate
           ansible.builtin.import_tasks: tasks/reset.yml
 
-        - name: Place the four inputs
+        - name: Place the five inputs
           ansible.builtin.import_tasks: tasks/place_inputs.yml
 
         - name: Request provision
@@ -726,11 +729,12 @@
           loop:
             - '{{ verify_config }}/portal-database-url'
             - '{{ verify_config }}/console-database-url'
-            - '{{ verify_state }}/provision'
+            - '{{ verify_state }}/provision-migrator'
             - '{{ verify_input_dir }}/admin-url'
             - '{{ verify_input_dir }}/tenant-password'
             - '{{ verify_input_dir }}/owner-password'
             - '{{ verify_input_dir }}/provisioner-password'
+            - '{{ verify_input_dir }}/migrator-password'
           register: control_plane_db_verify_provision_stats
 
         - name: Read the two URL files
@@ -778,11 +782,12 @@
               - control_plane_db_verify_provision_call.argv[control_plane_db_verify_provision_call.argv.index('--user') + 1] == '1000:1000'
               - control_plane_db_verify_provision_call.argv[control_plane_db_verify_provision_call.argv.index('--cap-drop') + 1] == 'ALL'
               - "'--privileged' not in control_plane_db_verify_provision_call.argv"
-              - control_plane_db_verify_provision_call.argv | select('equalto', '-v') | list | length == 4
-              - control_plane_db_verify_provision_call.argv | select('match', '^/etc/branchleft/control-plane/provision/.*:ro$') | list | length == 4
+              - control_plane_db_verify_provision_call.argv | select('equalto', '-v') | list | length == 5
+              - control_plane_db_verify_provision_call.argv | select('match', '^/etc/branchleft/control-plane/provision/.*:ro$') | list | length == 5
               - >-
                 (control_plane_db_verify_provision_call.argv | select('match', '^PORTAL_') | list | sort) == [
                 'PORTAL_ADMIN_URL_FILE=/provision/admin-url',
+                'PORTAL_MIGRATOR_PASSWORD_FILE=/provision/migrator-password',
                 'PORTAL_OWNER_PASSWORD_FILE=/provision/owner-password',
                 'PORTAL_PROVISIONER_PASSWORD_FILE=/provision/provisioner-password',
                 'PORTAL_TENANT_PASSWORD_FILE=/provision/tenant-password']
@@ -811,6 +816,28 @@
               - control_plane_db_verify_provisioner_grep.rc == 1
             quiet: true
             fail_msg: A file holds the provisioner login's password, though no application reads it.
+
+        - name: Search every file the role may have written for the migrator's password
+          ansible.builtin.command:
+            argv:
+              - grep
+              - -rl
+              - '{{ scenario_migrator_password }}'
+              - /etc/branchleft
+              - /var/lib/branchleft
+          register: control_plane_db_verify_migrator_grep
+          changed_when: false
+          failed_when: control_plane_db_verify_migrator_grep.rc not in [0, 1]
+          no_log: true
+
+        # The migrator's URL is placed per migrate request and removed on every exit, so
+        # once provision is recorded nothing on the host holds the migrator's credential.
+        - name: Assert no file holds the migrator's password once provision is recorded
+          ansible.builtin.assert:
+            that:
+              - control_plane_db_verify_migrator_grep.rc == 1
+            quiet: true
+            fail_msg: A file holds the migration login's password after provision, though no standing file is meant to.
 
         - name: Request provision again, with nothing placed
           ansible.builtin.import_tasks: tasks/ask.yml
@@ -852,6 +879,25 @@
             - { name: too short, value: 'abcdefghij' }
           loop_control:
             label: '{{ item.name }}'
+
+        - name: Start from a clean slate for the migrator password case
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        # The fourth password is counted with the others, so a migrator password that would
+        # break the URL the owner builds from it is refused before any container runs.
+        - name: Place the inputs with a migrator password holding an at sign
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+          vars:
+            place_migrator_password: 'abcdefghijklmnopqrstuvwx@yz'
+
+        - name: Refuse a migrator password that a URL treats specially
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a migrator password with an at sign
+            ask_tags: control_plane_db_provision
+            ask_extra: { control_plane_db_step: provision }
+            refused_text: 'REFUSED: a password file does not hold 24 or more of letters'
+            refused_calls: 1
 
         - name: Start from a clean slate for the rotation case
           ansible.builtin.import_tasks: tasks/reset.yml
@@ -928,7 +974,7 @@
             group: root
             mode: '0644'
 
-        - name: Place the four inputs
+        - name: Place the five inputs
           ansible.builtin.import_tasks: tasks/place_inputs.yml
 
         - name: Request provision while the program prints a secret and refuses
@@ -942,11 +988,12 @@
           ansible.builtin.stat:
             path: '{{ item }}'
           loop:
-            - '{{ verify_state }}/provision'
+            - '{{ verify_state }}/provision-migrator'
             - '{{ verify_input_dir }}/admin-url'
             - '{{ verify_input_dir }}/tenant-password'
             - '{{ verify_input_dir }}/owner-password'
             - '{{ verify_input_dir }}/provisioner-password'
+            - '{{ verify_input_dir }}/migrator-password'
             - '{{ verify_config }}/portal-database-url'
           register: control_plane_db_verify_provision_failed
 
@@ -957,8 +1004,8 @@
               - "'REFUSED: provision did not end clean' in (control_plane_db_ask_result.stdout ~ control_plane_db_ask_result.stderr)"
               - not control_plane_db_verify_provision_failed.results[0].stat.exists
               - not control_plane_db_verify_provision_failed.results[1].stat.exists
-              - control_plane_db_verify_provision_failed.results[2:5] | map(attribute='stat') | map(attribute='exists') | min
-              - not control_plane_db_verify_provision_failed.results[5].stat.exists
+              - control_plane_db_verify_provision_failed.results[2:6] | map(attribute='stat') | map(attribute='exists') | min
+              - not control_plane_db_verify_provision_failed.results[6].stat.exists
             quiet: true
             fail_msg: A failed provision wrote a URL file or a marker, left the administrator URL file, or removed the passwords a retry needs.
 
@@ -985,7 +1032,7 @@
 
         - name: Look at the marker
           ansible.builtin.stat:
-            path: '{{ verify_state }}/provision'
+            path: '{{ verify_state }}/provision-migrator'
           register: control_plane_db_verify_provision_retry
 
         - name: Assert the retry succeeded with the passwords a failure kept
@@ -999,7 +1046,7 @@
         - name: Start again from a clean slate
           ansible.builtin.import_tasks: tasks/reset.yml
 
-        - name: Make the image lack the provisioner login, after the reset
+        - name: Make the image lack the migrator login, after the reset
           ansible.builtin.copy:
             content: "no-flag\n"
             dest: /var/tmp/fake-docker/mode
@@ -1007,19 +1054,19 @@
             group: root
             mode: '0644'
 
-        - name: Place the four inputs again
+        - name: Place the five inputs again
           ansible.builtin.import_tasks: tasks/place_inputs.yml
 
-        - name: Refuse an image that predates the provisioner login
+        - name: Refuse an image that predates the migrator login
           ansible.builtin.include_tasks: tasks/refuse.yml
           vars:
-            ask_name: an image without the provisioner login
+            ask_name: an image without the migrator login
             ask_tags: control_plane_db_provision
             ask_extra: { control_plane_db_step: provision }
-            refused_text: 'REFUSED: the image does not carry PORTAL_PROVISIONER_PASSWORD_FILE'
+            refused_text: 'REFUSED: the image does not carry PORTAL_MIGRATOR_PASSWORD_FILE'
             refused_calls: 4
 
-    # 9b. provision refuses a database that is not running on rules that admit the three
+    # 9b. provision refuses a database that is not running on rules that admit the four
     # portal logins, before it reads any input.
     - name: Section provision rules
       when: verify_sections | length == 0 or 'provision_hba' in verify_sections
@@ -1027,13 +1074,13 @@
         - name: Start from a clean slate
           ansible.builtin.import_tasks: tasks/reset.yml
 
-        - name: Place the four inputs
+        - name: Place the five inputs
           ansible.builtin.import_tasks: tasks/place_inputs.yml
 
         - name: Request provision with the rules in order
           ansible.builtin.import_tasks: tasks/ask.yml
           vars:
-            ask_name: provision with rules that admit the three logins
+            ask_name: provision with rules that admit the four logins
             ask_tags: control_plane_db_provision
             ask_extra: { control_plane_db_step: provision }
 
@@ -1052,7 +1099,7 @@
         - name: Start from a clean slate for the stale case
           ansible.builtin.import_tasks: tasks/reset.yml
 
-        - name: Make the running database hold rules without the provisioner login
+        - name: Make the running database hold rules without the migrator login
           ansible.builtin.copy:
             content: "stale-hba\n"
             dest: /var/tmp/fake-docker/mode
@@ -1060,7 +1107,7 @@
             group: root
             mode: '0644'
 
-        - name: Place the four inputs for the stale case
+        - name: Place the five inputs for the stale case
           ansible.builtin.import_tasks: tasks/place_inputs.yml
 
         - name: Refuse a database that holds other rules than the delivered file
@@ -1076,7 +1123,7 @@
           ansible.builtin.stat:
             path: '{{ item }}'
           loop:
-            - '{{ verify_state }}/provision'
+            - '{{ verify_state }}/provision-migrator'
             - '{{ verify_input_dir }}/admin-url'
             - '{{ verify_config }}/portal-database-url'
           register: control_plane_db_verify_stale_stats
@@ -1101,7 +1148,7 @@
             group: root
             mode: '0644'
 
-        - name: Place the four inputs for the missing-container case
+        - name: Place the five inputs for the missing-container case
           ansible.builtin.import_tasks: tasks/place_inputs.yml
 
         - name: Refuse when the database container cannot be read
@@ -1122,7 +1169,7 @@
             regexp: '^host\s+portal\s+portal_provisioner_login\s'
             state: absent
 
-        - name: Place the four inputs for the missing-rule case
+        - name: Place the five inputs for the missing-rule case
           ansible.builtin.import_tasks: tasks/place_inputs.yml
 
         - name: Refuse a delivered file with no rule for the provisioner login, though the database agrees with it
@@ -1134,6 +1181,27 @@
             refused_text: 'has no accepting rule for the portal login portal_provisioner_login'
             refused_calls: 0
 
+        - name: Start from a clean slate for the missing migrator rule case
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Deliver and run rules that lack the migrator login's, so the two agree
+          ansible.builtin.lineinfile:
+            path: /opt/branchleft/control-plane/pg_hba.conf
+            regexp: '^host\s+portal\s+portal_migrator_login\s'
+            state: absent
+
+        - name: Place the five inputs for the missing migrator rule case
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Refuse a delivered file with no rule for the migrator login, though the database agrees with it
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a delivered file with no rule for the migrator login
+            ask_tags: control_plane_db_provision
+            ask_extra: { control_plane_db_step: provision }
+            refused_text: 'has no accepting rule for the portal login portal_migrator_login'
+            refused_calls: 0
+
         - name: Start from a clean slate for the absent-file case
           ansible.builtin.import_tasks: tasks/reset.yml
 
@@ -1142,7 +1210,7 @@
             path: /opt/branchleft/control-plane/pg_hba.conf
             state: absent
 
-        - name: Place the four inputs for the absent-file case
+        - name: Place the five inputs for the absent-file case
           ansible.builtin.import_tasks: tasks/place_inputs.yml
 
         - name: Refuse a host that has no delivered rules
@@ -1454,6 +1522,8 @@
               - '{{ scenario_owner_password }}'
               - -e
               - '{{ scenario_provisioner_password }}'
+              - -e
+              - '{{ scenario_migrator_password }}'
               - -e
               - THROWAWAY-TOKEN-{{ scenario_run }}
               - "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
