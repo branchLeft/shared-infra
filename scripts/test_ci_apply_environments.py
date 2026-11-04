@@ -1604,6 +1604,59 @@ class DnsApplyIsolationTests(unittest.TestCase):
                 self.assertTrue(flagged_by[name.split()[0]](mutated))
 
 
+PUBLICPRESS_RUNBOOK = ROOT / "hetzner" / "dns" / "RUNBOOK-dns-publicpress-cutover.md"
+
+
+def runbook_step(text: str, number: int) -> str:
+    """One numbered owner step of the publicpress runbook: from its `### N.`
+    heading to the next heading."""
+    match = re.search(rf"^### {number}\. .*?(?=^##+ )", text, re.M | re.S)
+    if not match:
+        raise AssertionError(f"step {number} not found in {PUBLICPRESS_RUNBOOK.name}")
+    return match.group(0)
+
+
+def fenced_blocks(markdown: str) -> list[str]:
+    return re.findall(r"^```[^\n]*\n(.*?)^```", markdown, re.M | re.S)
+
+
+class DnsRunbookTests(unittest.TestCase):
+    """The publicpress cutover is applied through CI, not by hand: the runbook
+    steps that create the zone must say so, in terms of the environments ci.yml
+    really has. A pin on the wording of a production-DNS procedure."""
+
+    def setUp(self):
+        ci = workflow_text()
+        self.apply_env = environment_of(job_block(ci, DNS_APPLY))
+        self.plan_env = environment_of(job_block(ci, DNS_PLAN))
+        runbook = PUBLICPRESS_RUNBOOK.read_text(encoding="utf-8")
+        self.step2 = runbook_step(runbook, 2)
+        self.step3 = runbook_step(runbook, 3)
+
+    def test_the_environment_names_are_the_real_ones(self):
+        # Guards the pins below against a rename in ci.yml.
+        self.assertEqual(self.apply_env, "production-dns")
+        self.assertEqual(self.plan_env, "dns-plan")
+
+    def test_steps_2_and_3_hold_no_hand_pulumi_command(self):
+        for number, body in ((2, self.step2), (3, self.step3)):
+            for block in fenced_blocks(body):
+                with self.subTest(step=number):
+                    self.assertNotRegex(block, r"pulumi\s+(up|preview)")
+
+    def test_steps_2_and_3_name_both_environments(self):
+        self.assertIn(f"`{self.plan_env}`", self.step2)
+        self.assertIn(f"`{self.apply_env}`", self.step3)
+
+    def test_step_3_approves_the_apply_environment_alone(self):
+        self.assertIn(f"`{self.apply_env}` alone", self.step3)
+
+    def test_step_2_says_a_non_create_is_a_stop_and_to_reject(self):
+        self.assertIn("STOP", self.step2)
+        self.assertIn("Reject", self.step2)
+        self.assertIn("branchleft.co.uk", self.step2)
+
+
 def filter_patterns(text: str, name: str) -> list[str]:
     match = re.search(rf"^            {name}:\n((?:              - '.*'\n)+)", text, re.M)
     if not match:
