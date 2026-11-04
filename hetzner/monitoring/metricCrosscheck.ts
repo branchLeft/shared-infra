@@ -235,6 +235,7 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   probe_success: 'blackbox_exporter',
   probe_ssl_earliest_cert_expiry: 'blackbox_exporter',
   caddy_rate_limit_declined_requests_total: "Caddy's own rate-limit module",
+  node_cpu_seconds_total: 'node_exporter',
   node_memory_MemAvailable_bytes: 'node_exporter',
   node_memory_MemTotal_bytes: 'node_exporter',
   node_filesystem_avail_bytes: 'node_exporter',

@@ -1997,3 +1997,56 @@ tests:
                 ExpectedDownTargetAnswering covers the mark going stale in the other
                 direction. A target labelled "true" is also caught here at 24 hours,
                 after HostOrServiceDown has paged it at 5 minutes.
+
+  # CPU. Two CPUs on one host, each one idle for 1 second in every 30 (use 96.7%): above the
+  # 90% line for longer than `for: 30m` once the 5m window has filled, so the alert fires. The
+  # same host with the load stopped (idle jumps to 29 seconds in every 30) clears within the
+  # window, and a host that is never busy never pends.
+  - interval: 30s
+    input_series:
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="0", instance="10.20.1.10:9100"}'
+        values: '0+1x80 80+29x80'
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="1", instance="10.20.1.10:9100"}'
+        values: '0+1x80 80+29x80'
+      - series: 'node_cpu_seconds_total{mode="idle", cpu="0", instance="10.20.1.20:9100"}'
+        values: '0+25x160'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HostCpuSaturated
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: HostCpuSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_action: 'true'
+              instance: 10.20.1.10:9100
+            exp_annotations:
+              summary: '10.20.1.10:9100 HOST_CPU_SATURATED_SUMMARY'
+              description: 'HOST_CPU_SATURATED_DESCRIPTION'
+      - eval_time: 47m
+        alertname: HostCpuSaturated
+        exp_alerts: []
+
+  # Steal: a fifth of every second lost to the hypervisor, sustained, fires; a host with no steal
+  # does not.
+  - interval: 30s
+    input_series:
+      - series: 'node_cpu_seconds_total{mode="steal", cpu="0", instance="10.20.1.10:9100"}'
+        values: '0+6x80 480+0x80'
+      - series: 'node_cpu_seconds_total{mode="steal", cpu="0", instance="10.20.1.20:9100"}'
+        values: '0+0x160'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: HostCpuSteal
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_action: 'true'
+              instance: 10.20.1.10:9100
+            exp_annotations:
+              summary: '10.20.1.10:9100 HOST_CPU_STEAL_SUMMARY'
+              description: 'HOST_CPU_STEAL_DESCRIPTION'
+      - eval_time: 47m
+        alertname: HostCpuSteal
+        exp_alerts: []

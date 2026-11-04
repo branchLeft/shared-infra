@@ -827,6 +827,8 @@ describe('the owner_action="true" label', () => {
       .map((rule) => rule.split('\n')[0]);
     expect(labelled).toEqual([
       'HostMemoryPressure',
+      'HostCpuSaturated',
+      'HostCpuSteal',
       'HostDiskSpaceLow',
       'MySQLConnectionsHigh',
       'TLSCertificateExpiringSoon',
