@@ -529,7 +529,7 @@ For a precise list of what landed where:
 ```bash
 pulumi stack export --cwd ~/branchLeft/shared-infra \
   --stack organization/branchleft-shared-infra/production \
-  | python3 -c 'import json,sys; [print(r["urn"]) for r in json.load(sys.stdin)["deployment"]["resources"]]'
+  | jq -r '.deployment.resources[].urn'
 ```
 
 ### Rollback for step 10

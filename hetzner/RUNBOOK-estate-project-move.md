@@ -159,11 +159,27 @@ declaring them merged without an apply path). Read the ids from
 `describe` each id to confirm it names the resource you think it does, and
 never type an id belonging to mx1.
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_SERVER_ID=$(hcloud server list -o json | python3 -c "import json, sys; print([s['id'] for s in json.load(sys.stdin) if s['name'] == 'edge1'][0])")
-EDGE1_IPV4_ID=$(hcloud primary-ip list -o json | python3 -c "import json, sys; print([p['id'] for p in json.load(sys.stdin) if p['name'] == 'edge1-ipv4'][0])")
-EDGE1_IPV6_ID=$(hcloud primary-ip list -o json | python3 -c "import json, sys; print([p['id'] for p in json.load(sys.stdin) if p['name'] == 'edge1-ipv6'][0])")
-EDGE1_FIREWALL_ID=$(hcloud firewall list -o json | python3 -c "import json, sys; print([f['id'] for f in json.load(sys.stdin) if f['name'] == 'edge1'][0])")
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_SERVER_ID=$(hcloud server describe edge1 -o format='{{.ID}}')
+EDGE1_IPV4_ID=$(hcloud primary-ip describe edge1-ipv4 -o format='{{.ID}}')
+EDGE1_IPV6_ID=$(hcloud primary-ip describe edge1-ipv6 -o format='{{.ID}}')
+EDGE1_FIREWALL_ID=$(hcloud firewall describe edge1 -o format='{{.ID}}')
 hcloud server disable-protection "$EDGE1_SERVER_ID" delete rebuild
 hcloud server delete "$EDGE1_SERVER_ID"
 hcloud primary-ip disable-protection "$EDGE1_IPV4_ID" delete
