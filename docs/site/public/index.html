@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>shared-infra</title>
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<header>
+<strong>shared-infra</strong>
+<nav><a href="/">Overview</a> · <a href="/how-it-works/">How it works</a></nav>
+<form id="search" role="search" hidden><label>Search <input type="search" id="q" autocomplete="off"></label></form>
+</header>
+<main>
+<ul id="results"></ul>
+
+<h1>Overview</h1>
+<h2 id="what-this-repository-is">What this repository is</h2>
+<p><code>shared-infra</code> holds the infrastructure that several branchLeft services share. It is code, not a
+console: the machines, networks and their configuration are declared here, checked by CI, and
+applied from a reviewed commit. If you are new, read this page for the map and
+<a href="/how-it-works/">How it works</a> for the moving parts.</p>
+<p>It holds four things:</p>
+<table><thead><tr><th>Part</th><th>Where</th><th>What it does</th></tr></thead><tbody>
+<tr><td>Mail delivery host</td><td><code>mail/</code></td><td>The self-hosted outbound mail host, <code>mx1</code>. Its own Pulumi project, because its two resources are imported rather than created and must never be disturbed by an unrelated change.</td></tr>
+<tr><td>Hetzner estate</td><td><code>hetzner/</code></td><td>The network, the hosts and their firewalls, and the edge VM <code>edge1</code> that runs Caddy and CrowdSec. Two Pulumi projects, one for the network and one for the estate.</td></tr>
+<tr><td>Hostname registry</td><td><code>sites.ts</code>, <code>siteTypes.ts</code></td><td>One list of the hostnames the edge serves and where each is served from. Renderers read it to produce the web server configuration and the monitoring probe targets.</td></tr>
+<tr><td>Host configuration</td><td><code>ansible/</code></td><td>Ansible roles, one per job, plus the harness and checks that test them and the signed pull that applies them to each host.</td></tr>
+</tbody></table>
+<h2 id="the-rules-that-shape-everything">The rules that shape everything</h2>
+<ul>
+<li><strong>Nothing is applied by hand.</strong> CI plans each stack on a merge to <code>main</code>, shows the plan, and
+waits for a human to approve it before it applies. A hand-run apply is only for first-time setup.</li>
+<li><strong>No secrets, ever.</strong> The repository is public. It holds hostnames and addresses of services,
+not key material, credentials, member data or anything that names a customer who has not agreed
+to appear. Operators supply secrets out of band, from root-only files on the host.</li>
+<li><strong>The registry is the one source for hostnames.</strong> A site is added with one entry in <code>sites.ts</code>;
+the web server and monitoring configuration are generated from it, never edited by hand.</li>
+<li><strong>Merge through the queue.</strong> The merge queue keeps the delivery run approvable. A merge that
+bypasses it starts a run that its own merger cannot approve.</li>
+</ul>
+<h2 id="where-to-start-reading">Where to start reading</h2>
+<ol>
+<li><code>README.md</code> at the repository root, for the layout and the operating rules.</li>
+<li><code>sites.ts</code> and its documentation, to see what a site entry looks like and why.</li>
+<li><code>hetzner/README.md</code>, for the network, the hosts, how they are identified and how they deploy.</li>
+<li><code>docs/ansible-handbook.md</code>, for how to write, test and change a role.</li>
+<li>A role that is small enough to read in one sitting, such as <code>ansible/roles/example_config</code>,
+which is the worked example.</li>
+</ol>
+
+
+</main>
+<footer>Built from the repository's own files. This page loads nothing from any other site.</footer>
+<script src="/elasticlunr.min.js" defer></script>
+<script src="/search_index.en.js" defer></script>
+<script src="/search.js" defer></script>
+</body>
+</html>

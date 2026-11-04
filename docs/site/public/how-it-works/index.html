@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How it works · shared-infra</title>
+<link rel="stylesheet" href="/site.css">
+</head>
+<body>
+<header>
+<strong>shared-infra</strong>
+<nav><a href="/">Overview</a> · <a href="/how-it-works/">How it works</a></nav>
+<form id="search" role="search" hidden><label>Search <input type="search" id="q" autocomplete="off"></label></form>
+</header>
+<main>
+<ul id="results"></ul>
+
+<h1>How it works</h1>
+<h2 id="from-a-hostname-to-a-web-server">From a hostname to a web server</h2>
+<p>The edge VM serves every public hostname through Caddy, with CrowdSec watching its access logs.
+Neither is configured by hand. <code>sites.ts</code> lists each site: its hostnames, the private address and
+port it is served from, and a request body ceiling. A renderer in <code>hetzner/edge/</code> reads that list
+and writes the Caddy configuration and the CrowdSec acquisition files; a second renderer in
+<code>hetzner/monitoring/</code> writes the probe targets the monitoring stack checks. Because both read one
+list, a site cannot be served without being monitored, and a hostname cannot be defined in two
+places that then drift apart.</p>
+<p>The generated files are committed next to the code that generates them. A test re-renders them
+from the registry and fails if the committed copy differs, so a hand edit is caught before it
+ships.</p>
+<h2 id="how-an-infrastructure-change-is-applied">How an infrastructure change is applied</h2>
+<p>The Pulumi stacks (the mail host, the network and the estate) are applied by CI, not from a laptop.
+When a merge to <code>main</code> touches a stack's own inputs, a <code>changes</code> job traces that stack's real
+import graph, so an unrelated merge plans and applies nothing. For each affected stack:</p>
+<ol>
+<li>A <strong>plan</strong> job runs <code>pulumi preview</code> and writes the result to the job summary.</li>
+<li>A <strong>guard</strong> reads the plan. A script refuses any plan that deletes a Hetzner resource, and a
+spend gate classifies whether every change is free.</li>
+<li>An <strong>apply</strong> job waits on an environment with an approval rule. A person reads the plan and
+approves it. Plans the spend gate reads as entirely free go to an environment that only the
+reviewer App can answer; any plan the gate cannot read goes to a human.</li>
+<li>Only then does the apply run.</li>
+</ol>
+<p>The guard catches the destructive class mechanically. The reviewer is there for the plan that is
+green and still wrong.</p>
+<h2 id="how-a-change-reaches-a-host">How a change reaches a host</h2>
+<p>Host configuration is Ansible, and it reaches a host by a pull that the host verifies itself.</p>
+<figure>
+<svg class="diagram" viewBox="0 0 670 240" role="img" aria-labelledby="dgm-title">
+<title id="dgm-title">How a change reaches a host</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+<line x1="190" y1="60" x2="248" y2="60" marker-end="url(#arrow)"/>
+<line x1="420" y1="60" x2="478" y2="60" marker-end="url(#arrow)"/>
+<line x1="565" y1="90" x2="565" y2="148" marker-end="url(#arrow)"/>
+<line x1="480" y1="180" x2="422" y2="180" marker-end="url(#arrow)"/>
+<line x1="250" y1="180" x2="192" y2="180" marker-end="url(#arrow)"/>
+<rect x="20" y="30" width="170" height="60" rx="6"/>
+<text x="105" y="56" text-anchor="middle">Pull request</text>
+<text class="note" x="105" y="76" text-anchor="middle">lint, changed roles</text>
+<rect x="250" y="30" width="170" height="60" rx="6"/>
+<text x="335" y="56" text-anchor="middle">Merge queue</text>
+<text class="note" x="335" y="76" text-anchor="middle">lint, every shard</text>
+<rect x="480" y="30" width="170" height="60" rx="6"/>
+<text x="565" y="56" text-anchor="middle">main</text>
+<text class="note" x="565" y="76" text-anchor="middle">signed commit</text>
+<rect x="480" y="150" width="170" height="60" rx="6"/>
+<text x="565" y="176" text-anchor="middle">Delivery run</text>
+<text class="note" x="565" y="196" text-anchor="middle">check mode, each host</text>
+<rect x="250" y="150" width="170" height="60" rx="6"/>
+<text x="335" y="176" text-anchor="middle">Approval</text>
+<text class="note" x="335" y="196" text-anchor="middle">environment gate</text>
+<rect x="20" y="150" width="170" height="60" rx="6"/>
+<text x="105" y="176" text-anchor="middle">Pull trigger</text>
+<text class="note" x="105" y="196" text-anchor="middle">verifies, then applies</text>
+</svg>
+<figcaption>How a change reaches a host. Drawn at build time from <code>data/diagram.json</code>.</figcaption>
+</figure>
+<ul>
+<li>A pull request runs lint and the tests of the roles it changed. The merge queue runs lint and
+every role's tests, so what lands has been tested whole.</li>
+<li>A push to <code>main</code> starts the delivery workflow. It asks every host, in check mode, what the commit
+would change, then pauses on an environment for approval.</li>
+<li>On approval the workflow calls each host's <code>pull-trigger</code>. The trigger does the checking, not the
+workflow. It runs eight steps: validate the request; check the playbook is allowlisted and take a
+single-flight lock; fetch <code>main</code> only, from a read-only remote; refuse a commit that is not an
+ancestor of the fetched tip; refuse a commit older than the last one applied; verify the commit
+signature against the allowlisted signers; check the commit out into a fresh directory; and run
+<code>ansible-playbook</code> for this host only.</li>
+<li>It prints one summary line. A run that reports nothing left to change is the second pass that
+proves the apply converged.</li>
+</ul>
+<p>Each host has one playbook and one signer file. An empty signer list means the host refuses every
+run, which is the safe default for a host not yet enrolled.</p>
+<h2 id="who-may-change-what">Who may change what</h2>
+<p>Some paths are owner-only, because they decide what is trusted: the checks and the harness, the
+signer files, the pull trigger role, the Ansible runtime role, the lint floor and the dependency
+pins. A change there needs the owner to merge it. The role skeleton, the roles themselves and the
+patterns are ordinary reviewed code, tested by a harness that runs a role in a container, applies
+it, runs it again to prove it changes nothing the second time, and verifies the result.</p>
+
+
+</main>
+<footer>Built from the repository's own files. This page loads nothing from any other site.</footer>
+<script src="/elasticlunr.min.js" defer></script>
+<script src="/search_index.en.js" defer></script>
+<script src="/search.js" defer></script>
+</body>
+</html>
