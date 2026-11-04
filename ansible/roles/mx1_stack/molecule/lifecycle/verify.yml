@@ -50,8 +50,8 @@
       - /var/lib/branchleft/mx1.stalwart.applied
       - /var/lib/branchleft/mx1.shim.applied
       - /var/lib/branchleft/mx1.resolver.applied
-    lc_rotated_token: 'ROTATED-{{ scenario_drain_token }}'
-    lc_edited_secret: 'EDITED-{{ scenario_drain_token }}'
+    lc_rotated_token: 'ROTATED-{{ scenario_shim_secret }}'
+    lc_edited_secret: 'EDITED-{{ scenario_shim_secret }}'
   tasks:
     # ----- Start from the baseline, whatever an earlier run of this play left -----
 
@@ -204,16 +204,16 @@
           vars:
             snap_label: base
 
-    # ----- The drain token changes: the shim's env_file changes and nothing Compose can see does -----
+    # ----- The shim secret changes: the shim's env_file changes and nothing Compose can see does -----
 
     - name: Case shim_env_only_change
       when: "'shim_env_only_change' in lc_selected"
       block:
-        - name: Give the credentials file another drain token
+        - name: Give the credentials file another shim secret
           ansible.builtin.replace:
             path: /root/.stalwart-service-credentials
-            regexp: '^shim-drain-token:.*$'
-            replace: 'shim-drain-token:{{ lc_rotated_token }}'
+            regexp: '^blog-shim-bulk-submission:.*$'
+            replace: 'blog-shim-bulk-submission:{{ lc_rotated_token }}'
           no_log: true
 
         - name: Apply the role
@@ -259,11 +259,11 @@
             quiet: true
             fail_msg: The shim container does not hold the environment file the host has.
 
-        - name: Put the drain token back
+        - name: Put the shim secret back
           ansible.builtin.replace:
             path: /root/.stalwart-service-credentials
-            regexp: '^shim-drain-token:.*$'
-            replace: 'shim-drain-token:{{ scenario_drain_token }}'
+            regexp: '^blog-shim-bulk-submission:.*$'
+            replace: 'blog-shim-bulk-submission:{{ scenario_shim_secret }}'
           no_log: true
 
         - name: Apply the role
@@ -867,9 +867,9 @@
   vars:
     lc_log_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
     lc_secrets:
-      - '{{ hostvars[groups["all"][0]].scenario_drain_token }}'
-      - 'ROTATED-{{ hostvars[groups["all"][0]].scenario_drain_token }}'
-      - 'EDITED-{{ hostvars[groups["all"][0]].scenario_drain_token }}'
+      - '{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
+      - 'ROTATED-{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
+      - 'EDITED-{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
   tasks:
     # The control first: a value the converge printed on purpose. A scan that cannot find it would
     # find nothing for a secret either.

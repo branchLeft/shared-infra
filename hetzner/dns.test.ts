@@ -4,17 +4,25 @@ import * as path from 'node:path';
 import * as pulumi from '@pulumi/pulumi';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { rrsetResourceName, ZONE_FILES } from './dnsZone';
+
 /**
  * `dns.ts` under Pulumi's mock runtime: the program as it resolves, which a
  * test of `dnsZone.ts` alone cannot see -- the resource options, and that
- * every rrset in the zone file becomes exactly one resource with its values
+ * every rrset in each zone file becomes exactly one resource with its values
  * intact. The mock answers `hcloud:index/getServers:getServers` with an empty
  * project and `hcloud:index/getFirewalls:getFirewalls` with the dns
  * project's own marker, which is the only project the program accepts --
  * see `dnsZone.ts`'s `assertDnsOnlyProject`.
  */
 
-const zoneFile = JSON.parse(fs.readFileSync(path.join(__dirname, 'dns', 'zone.json'), 'utf8'));
+const zoneFiles = ZONE_FILES.map((zoneFile) => ({
+  ...zoneFile,
+  data: JSON.parse(fs.readFileSync(path.join(__dirname, 'dns', zoneFile.file), 'utf8')) as {
+    zone: string;
+    rrsets: { name: string; type: string; ttl: number; values: string[] }[];
+  },
+}));
 
 interface Registered {
   type: string;
@@ -30,9 +38,22 @@ function output<T>(value: pulumi.Output<T>): Promise<T> {
   return new Promise((resolve) => value.apply(resolve));
 }
 
+const byKey = (a: { name: unknown; type: unknown }, b: { name: unknown; type: unknown }) =>
+  `${a.name}/${a.type}`.localeCompare(`${b.name}/${b.type}`);
+
 describe('dns.ts, as Pulumi resolves it', () => {
   const registered: Registered[] = [];
   let program: typeof import('./dns.js');
+
+  const rrsetsOf = (zone: string) =>
+    registered
+      .filter((r) => r.type === 'hcloud:index/zoneRrset:ZoneRrset' && r.inputs.zone === zone)
+      .map((r) => ({
+        name: r.inputs.name,
+        type: r.inputs.type,
+        ttl: r.inputs.ttl,
+        values: (r.inputs.records as { value: string }[]).map((record) => record.value),
+      }));
 
   beforeAll(async () => {
     pulumi.runtime.setMocks(
@@ -55,49 +76,69 @@ describe('dns.ts, as Pulumi resolves it', () => {
     );
     program = await import('./dns.js');
     await output(program.dnsOnlyProjectVerified);
-    await Promise.all(program.rrsets.map((r) => output(r.urn)));
+    await Promise.all(
+      program.zones.flatMap((z) => [z.zone, ...z.rrsets].map((r) => output(r.urn)))
+    );
   });
 
-  it('creates the zone as a primary zone, protected in both places', () => {
-    const zone = registered.filter((r) => r.type === 'hcloud:index/zone:Zone');
-    expect(zone).toHaveLength(1);
-    expect(zone[0].inputs).toMatchObject({
-      name: 'branchleft.co.uk',
-      mode: 'primary',
-      deleteProtection: true,
-    });
-    expect(resolvedProtect(program.zone)).toBe(true);
+  it('builds one zone per zone file, in order', () => {
+    expect(program.zones.map((z) => z.name)).toEqual(['branchleft.co.uk', 'publicpress.co.uk']);
   });
 
-  it('creates exactly one rrset per zone-file entry, values intact', () => {
-    const rrsets = registered
-      .filter((r) => r.type === 'hcloud:index/zoneRrset:ZoneRrset')
-      .map((r) => ({
-        name: r.inputs.name,
-        type: r.inputs.type,
-        ttl: r.inputs.ttl,
-        values: (r.inputs.records as { value: string }[]).map((record) => record.value),
+  it('creates each zone as a primary zone, protected in both places', () => {
+    const zones = registered.filter((r) => r.type === 'hcloud:index/zone:Zone');
+    expect(zones.map((z) => z.name)).toEqual(['branchleft-co-uk', 'publicpress-co-uk']);
+    for (const zone of zones) {
+      expect(zone.inputs).toMatchObject({ mode: 'primary', deleteProtection: true });
+    }
+    expect(zones.map((z) => z.inputs.name)).toEqual(['branchleft.co.uk', 'publicpress.co.uk']);
+    for (const built of program.zones) expect(resolvedProtect(built.zone)).toBe(true);
+  });
+
+  it('creates exactly one rrset per zone-file entry, values intact, in each zone', () => {
+    for (const { data } of zoneFiles) {
+      const expected = data.rrsets.map((r) => ({
+        name: r.name,
+        type: r.type,
+        ttl: r.ttl,
+        values: r.values,
       }));
-    const expected = zoneFile.rrsets.map((r: Record<string, unknown>) => ({
-      name: r.name,
-      type: r.type,
-      ttl: r.ttl,
-      values: r.values,
-    }));
-    const byKey = (a: { name: unknown; type: unknown }, b: { name: unknown; type: unknown }) =>
-      `${a.name}/${a.type}`.localeCompare(`${b.name}/${b.type}`);
-    expect(rrsets.sort(byKey)).toEqual(expected.sort(byKey));
+      expect(rrsetsOf(data.zone).sort(byKey)).toEqual(expected.sort(byKey));
+    }
   });
 
-  it('points every rrset at the zone', () => {
-    const zoneInputs = registered
-      .filter((r) => r.type === 'hcloud:index/zoneRrset:ZoneRrset')
-      .map((r) => r.inputs.zone);
-    expect(new Set(zoneInputs)).toEqual(new Set(['branchleft.co.uk']));
+  it('points every rrset at its own zone and at no other', () => {
+    const rrsets = registered.filter((r) => r.type === 'hcloud:index/zoneRrset:ZoneRrset');
+    const total = zoneFiles.reduce((sum, { data }) => sum + data.rrsets.length, 0);
+    expect(rrsets).toHaveLength(total);
+    expect(new Set(rrsets.map((r) => r.inputs.zone))).toEqual(
+      new Set(['branchleft.co.uk', 'publicpress.co.uk'])
+    );
   });
 
-  it('leaves rrsets unprotected, so removing one from the zone file can delete it', () => {
-    expect(program.rrsets.length).toBeGreaterThan(0);
-    for (const rrset of program.rrsets) expect(resolvedProtect(rrset)).not.toBe(true);
+  it("keeps branchleft.co.uk's resource names byte for byte, and prefixes publicpress.co.uk's", () => {
+    // Registration order is not file order (the mock resolves asynchronously).
+    const names = (zone: string) =>
+      registered
+        .filter((r) => r.type === 'hcloud:index/zoneRrset:ZoneRrset' && r.inputs.zone === zone)
+        .map((r) => r.name)
+        .sort();
+    const [first, second] = zoneFiles;
+    expect(names('branchleft.co.uk')).toEqual(
+      first.data.rrsets.map((r) => rrsetResourceName(r, undefined)).sort()
+    );
+    expect(names('branchleft.co.uk')).toContain('apex-mx');
+    expect(names('publicpress.co.uk')).toEqual(
+      second.data.rrsets.map((r) => rrsetResourceName(r, 'publicpress-co-uk')).sort()
+    );
+    for (const name of names('publicpress.co.uk')) expect(name).toMatch(/^publicpress-co-uk-/);
+  });
+
+  it('leaves rrsets unprotected, so removing one from a zone file can delete it', () => {
+    expect(program.zones.length).toBeGreaterThan(0);
+    for (const built of program.zones) {
+      expect(built.rrsets.length).toBeGreaterThan(0);
+      for (const rrset of built.rrsets) expect(resolvedProtect(rrset)).not.toBe(true);
+    }
   });
 });

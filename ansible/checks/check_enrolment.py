@@ -43,9 +43,33 @@ TREES = ("playbooks", "trust", "owner_vars")
 TREE_RULES = {"playbooks": "R2", "trust": "R5", "owner_vars": "R10"}
 OWNER_VARS_DIR = "owner_vars"
 # The keys a host's owner_vars file holds, exactly. A host named nowhere here may have no file.
-OWNER_VARS_KEYS = {
-    "edge1": frozenset(("ci_login_keys", "ci_login_manage_keys")),
+CI_LOGIN_VARS = frozenset(("ci_login_keys", "ci_login_manage_keys"))
+# The variables of the ci_jump role that live in the repository. Every host that applies the role
+# carries all of them in its own owner_vars file, with its own address, destinations and keys. The
+# jump account's name is not among them: it is held out of this public repository, and reaches the
+# role only through the host's private inputs file (host_inputs row, key ci_jump_user), so an
+# owner_vars file that holds it is refused as an unknown key.
+JUMP_VARS = frozenset(
+    (
+        "ci_jump_keys",
+        "ci_jump_manage_keys",
+        "ci_jump_own_address",
+        "ci_jump_destinations",
+    )
+)
+# The hosts that apply ci_jump, one entry each. check() requires this to equal the hosts whose
+# row in host_roles.yml lists the role, so a host cannot gain the role without its owner_vars
+# keys, nor the keys without the role.
+JUMP_HOSTS = frozenset(("edge1",))
+JUMP_ROLE = "ci_jump"
+_BASE_OWNER_KEYS = {
+    "edge1": CI_LOGIN_VARS,
     "ops1": frozenset(("pull_trigger_steps",)),
+}
+OWNER_VARS_KEYS = {
+    host: _BASE_OWNER_KEYS.get(host, frozenset())
+    | (JUMP_VARS if host in JUMP_HOSTS else frozenset())
+    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS)
 }
 STEPS_KEY = "pull_trigger_steps"
 # Only the shape of an allow-list entry. Which ids, tags and words are valid is the program's
@@ -54,6 +78,9 @@ STEPS_KEY = "pull_trigger_steps"
 STEP_ENTRY = frozenset(("id", "tag", "word"))
 OWNER_KEY_ENTRY = frozenset(("key", "mode"))
 OWNER_KEY_MODES = frozenset(("apply", "check"))
+# A ci_jump_keys entry is the public key and nothing else: the options of the written line are
+# the role's, and the destinations are one list for every key (the role takes none per key).
+JUMP_KEY_ENTRY = frozenset(("key",))
 README_EXCEPTIONS = frozenset(("playbooks/README.md", "trust/README.md"))
 INCLUDE_VARS = frozenset(
     ("include_vars", "ansible.builtin.include_vars", "ansible.legacy.include_vars")
@@ -684,12 +711,38 @@ def _step_shape_problems(steps: object) -> list[str]:
     return problems
 
 
+def _jump_key_problems(doc: dict[str, object]) -> list[str]:
+    """The shape of the ci_jump values. What a destination or a key may look like is the role's
+    rule alone (library/ci_jump_authorized_keys.py), so only the types are read here."""
+    problems: list[str] = []
+    if "ci_jump_manage_keys" in doc and not isinstance(doc["ci_jump_manage_keys"], bool):
+        problems.append("ci_jump_manage_keys must be a bool")
+    if "ci_jump_own_address" in doc and not isinstance(doc["ci_jump_own_address"], str):
+        problems.append("ci_jump_own_address must be text")
+    destinations = doc.get("ci_jump_destinations", [])
+    if not isinstance(destinations, list) or not all(
+        isinstance(item, str) for item in destinations
+    ):
+        problems.append("ci_jump_destinations must be a list of text entries")
+    keys = doc.get("ci_jump_keys", [])
+    if not isinstance(keys, list):
+        problems.append("ci_jump_keys must be a list of {key} entries")
+        return problems
+    for entry in keys:
+        if not isinstance(entry, dict) or set(entry) != JUMP_KEY_ENTRY:
+            problems.append(f"a ci_jump_keys entry must hold exactly {sorted(JUMP_KEY_ENTRY)}")
+        elif not isinstance(entry["key"], str):
+            problems.append("a ci_jump_keys entry needs a text key")
+    return problems
+
+
 def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     """What is wrong with the values of an owner_vars file, by key. A missing key is reported
     by the caller, which compares the key set."""
     problems: list[str] = []
     if STEPS_KEY in doc:
         problems.extend(_step_shape_problems(doc[STEPS_KEY]))
+    problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")
     keys = doc.get("ci_login_keys", [])
@@ -728,6 +781,21 @@ def _check_owner_vars(directory: Path, enrolled: set[str], findings: list[str]) 
         findings.extend(f"{label}: {problem}" for problem in _owner_key_problems(doc))
 
 
+def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> None:
+    """R10: the hosts that list the ci_jump role are exactly JUMP_HOSTS, the hosts whose
+    owner_vars file may carry the jump account's variables. Each such host has its own jump
+    account, address, destinations and keys, so the rule is the same for every one of them."""
+    applying = {host for host, roles in host_roles.items() if JUMP_ROLE in roles}
+    findings.extend(
+        f"R10 {HOST_ROLES_FILE}: {host} lists {JUMP_ROLE} but is not in JUMP_HOSTS"
+        for host in sorted(applying - JUMP_HOSTS)
+    )
+    findings.extend(
+        f"R10 {HOST_ROLES_FILE}: {host} is in JUMP_HOSTS but does not list {JUMP_ROLE}"
+        for host in sorted(JUMP_HOSTS - applying)
+    )
+
+
 def check(root: Path) -> list[str]:
     """Return one finding per broken rule, or an empty list when the tree passes."""
     findings: list[str] = []
@@ -762,6 +830,7 @@ def check(root: Path) -> list[str]:
         _check_enrolled(stem, plays, host_roles.get(stem, []), stem in owner_stems, findings)
     _check_derivation(includes, findings)
     _check_owner_vars(owner_vars, set(enrolled), findings)
+    _check_jump_hosts(host_roles, findings)
 
     trust_files = _yml_files(trust)
     trust_stems = {path.stem for path in trust_files}

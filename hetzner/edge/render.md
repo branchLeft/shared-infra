@@ -208,6 +208,30 @@ the `*` version segment.
 After the protection chain, before `reverse_proxy`: a client probing for an open setup is
 throttled and seen by CrowdSec rather than answered for free.
 
+## `logDirective`: retention and rotation
+
+Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of
+2026-08-24, inside the 90-day ceiling the website privacy notice states). The directive is
+`roll_keep_for 720h`, which Caddy turns into 30 days.
+
+`roll_keep_for` only prunes files that have already been rolled, so a file must also roll on
+a clock. `roll_at 00:00` rolls every log daily at midnight UTC, even with no writes. Caddy
+v2.11.4 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
+`github.com/DeRuina/timberjack` v1.4.2 on a background timer). `roll_interval` exists in the
+same module but rolls only on the next write, so it would not bound a quiet edge, and it is
+not used.
+
+`roll_keep 31` keeps 31 rolled files. Caddy's default of 10 would cap the daily roll at 10
+days and shorten the retention silently. The worst-case age of an entry is about 31 days (30
+days plus the one day its file spans), not exactly 30. A tighter 30-day bound would need
+`roll_keep_for 696h`; that is a change to the owner's value and is not made here.
+
+`render.test.ts` pins all three directives on every log and bounds the retention at or below
+2160h, so a later value above 90 days fails.
+
+A change to a log output option (retention, roll, or format) takes effect only when the caddy
+container is recreated, not on `caddy reload`. See `hetzner/RUNBOOK-edge.md` "Log retention".
+
 ## `logDirective`: break-glass token redaction and strip
 
 The break-glass sign-in (how support opens a customer's Ghost admin) carries a single-use

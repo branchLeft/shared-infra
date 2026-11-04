@@ -1,0 +1,16 @@
+# Written by the ci_jump role. Change the owner's variables, not this file.
+Match User {{ ci_jump_user }}
+    AuthorizedKeysFile {{ ci_jump_key_file }}
+    AuthenticationMethods publickey
+    AllowTcpForwarding local
+    PermitOpen {% for destination in ci_jump_destinations %}{{ destination }}:{{ ci_jump_port }}{{ ' ' if not loop.last }}{% endfor %}
+
+    GatewayPorts no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    X11Forwarding no
+    PermitTTY no
+    PermitTunnel no
+    PermitUserRC no
+    ForceCommand {{ ci_jump_forced_command }}
+Match all

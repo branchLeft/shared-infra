@@ -1,0 +1,493 @@
+---
+# The refusal cases of the role, one for each guard. Each is one bad input or one bad state on the
+# host the role has already delivered, and the step of the role that reads it must refuse it with
+# its own code. They live in their own scenario so that the default scenario applies the role only
+# a few times (its shard is bound by the time limit): here the role is applied once, by the first
+# play, and the second play runs one internal tasks file of the role alone for each case against a
+# state it made bad and puts right afterwards (tasks/case.yml says how). A plan makes no change, so
+# a check run skips every case.
+#
+# Every group of cases starts with a control: the same step on the host as the first play left it
+# must accept. Without it, a step that refused everything would pass every case.
+#
+# A case has: name; expect, the code the refusal must start with; tasks_from, the step (default
+# _guards.yml); user, own_address, destinations and key_entries, in place of the delivered values;
+# files, to put in place (path, content, optional mode and owner, absent_after for a file that did
+# not exist); edits, to make in a delivered file; setup and restore, commands as argv lists;
+# accepted: true for a control.
+- name: Apply the role once, so the cases have a delivered host to make bad
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with the scenario's values
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/apply_role.yml'
+      when: not ansible_check_mode
+
+- name: Run every case
+  hosts: all
+  gather_facts: false
+  # A plan makes no change and the second converge would repeat every case for nothing.
+  tags: [molecule-idempotence-notest]
+  vars:
+    # Sorts before the test's own drop-in and the role's, so a Match block in it is met first: for
+    # each keyword the first value sshd obtains wins, which is how a block ahead of the role's
+    # outranks it. A block in a drop-in that sorts after the role's would change nothing.
+    case_ahead: /etc/ssh/sshd_config.d/05-case-ahead.conf
+    # Sorts after both, for what applies to everyone.
+    case_after: /etc/ssh/sshd_config.d/99-case-after.conf
+    case_key_dir: /etc/ssh/authorized_keys.d
+    case_key_file: /etc/ssh/authorized_keys.d/branchleft-jump
+    case_dropin: /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+    case_reload: [[systemctl, reload, ssh]]
+    # The options of a delivered key line, spelled out here and not taken from the role.
+    case_options: >-
+      restrict,port-forwarding,permitopen="{{ scenario_listed }}:22",permitopen="{{ scenario_own }}:22",command="/usr/sbin/nologin"
+    case_cases:
+      # --- The delivered inputs and host are accepted.
+      - name: control, the inputs and the host as delivered
+        accepted: true
+
+      # --- Destinations.
+      - name: a wildcard destination
+        destinations: ['*']
+        expect: E-DEST-WILDCARD
+      - name: a wildcard inside an address
+        destinations: ['127.0.0.*']
+        expect: E-DEST-WILDCARD
+      - name: a destination with a port
+        destinations: ['127.0.0.2:22']
+        expect: E-DEST-PORT
+      - name: a destination with a quote
+        destinations: ['127.0.0.2"']
+        expect: E-DEST-QUOTE
+      - name: a destination that closes the quote and opens a second option
+        destinations: ['127.0.0.2",permitopen="127.0.0.3']
+        expect: E-DEST-QUOTE
+      - name: a destination with a comma
+        destinations: ['127.0.0.2,127.0.0.3']
+        expect: E-DEST-COMMA
+      - name: a destination with a space
+        destinations: ['127.0.0.2 127.0.0.3']
+        expect: E-DEST-SPACE
+      - name: a destination in an IPv6 form
+        destinations: ['[::1]']
+        expect: E-DEST-IPV6
+      - name: a destination listed twice
+        destinations: ['127.0.0.2', '127.0.0.2']
+        expect: E-DEST-DUPLICATE
+      - name: an empty destination list
+        destinations: []
+        expect: E-DEST-EMPTY
+
+      # --- The jump host's own address, which the runner reaches through the jump as well.
+      - name: a destination list that lacks the jump host's own address
+        destinations: ['127.0.0.2']
+        expect: E-DEST-OWN
+      - name: no own address named
+        own_address: ''
+        expect: E-OWN-EMPTY
+      - name: an own address that is a host name
+        own_address: edge1
+        expect: E-OWN-SHAPE
+      - name: an own address outside the private ranges, which the list holds
+        own_address: 203.0.113.5
+        destinations: ['{{ scenario_listed }}', '203.0.113.5']
+        expect: E-OWN-PRIVATE
+      - name: control, a private own address that the list holds
+        own_address: '{{ scenario_own }}'
+        accepted: true
+
+      # --- Keys.
+      - name: an empty key list
+        key_entries: []
+        expect: E-KEY-EMPTY
+      - name: a key of an unknown type
+        key_entries: [{ key: 'ssh-dss AAAAB3NzaC1kc3MAAAAEEXAMPLE' }]
+        expect: E-KEY-SHAPE
+      - name: a key with options in front of it
+        key_entries: [{ key: 'command="true" {{ ci_jump_scenario_pub_jump }}' }]
+        expect: E-KEY-SHAPE
+      - name: a key whose body is another type
+        key_entries: [{ key: 'ssh-rsa {{ ci_jump_scenario_pub_jump.split(" ")[1] }}' }]
+        expect: E-KEY-SHAPE
+      - name: the same key twice
+        key_entries:
+          [
+            { key: '{{ ci_jump_scenario_pub_jump }}' },
+            { key: '{{ ci_jump_scenario_pub_jump }} again' },
+          ]
+        expect: E-KEY-DUPLICATE
+
+      # --- The account.
+      - name: no jump account named
+        user: ''
+        expect: E-USER-EMPTY
+      - name: a jump account that is not on the host
+        user: nosuchaccount
+        expect: E-USER-ABSENT
+      - name: a jump account with a login shell
+        setup: [[usermod, -s, /bin/bash, '{{ scenario_jump_user }}']]
+        restore: [[usermod, -s, /usr/sbin/nologin, '{{ scenario_jump_user }}']]
+        expect: E-USER-SHELL
+      - name: root as the jump account
+        user: root
+        expect: E-USER-FORBIDDEN
+      - name: the account the ci_login role owns
+        user: ansible-ci
+        expect: E-USER-FORBIDDEN
+      - name: the account the tunnel_account role owns
+        user: dbtunnel
+        expect: E-USER-FORBIDDEN
+
+      # --- What sshd would do, read before the write. Only what the role's drop-in cannot put
+      # right is refused here. Each case changes the sshd configuration with a drop-in that
+      # sshd -T reads at once; no reload is needed for the read.
+      - name: sshd with all forwarding disabled for everyone
+        files:
+          [{ path: '{{ case_after }}', content: "DisableForwarding yes\n", absent_after: true }]
+        expect: E-SSHD-FORWARDING
+      - name: sshd with a keys command
+        files:
+          - path: '{{ case_after }}'
+            content: "AuthorizedKeysCommand /bin/true\nAuthorizedKeysCommandUser nobody\n"
+            absent_after: true
+        expect: E-SSHD-KEYSCOMMAND
+      - name: sshd that cannot print its settings
+        files: [{ path: '{{ case_after }}', content: "NoSuchKeyword yes\n", absent_after: true }]
+        expect: E-SSHD-UNAVAILABLE
+      - name: control, forwarding off for everyone is put right by the role's own block
+        files:
+          [{ path: '{{ case_after }}', content: "AllowTcpForwarding no\n", absent_after: true }]
+        accepted: true
+      - name: control, a Match block for another user does not refuse
+        files:
+          - path: '{{ case_after }}'
+            content: "Match User {{ scenario_other_user }}\n  AllowTcpForwarding no\nMatch all\n"
+            absent_after: true
+        accepted: true
+
+      # --- What sshd applies to the account, read back after the write. A Match block in a
+      # drop-in that sorts ahead of the role's outranks it, so each case is a configuration the
+      # role's block cannot defeat, and the read-back step alone must see it.
+      - name: control, the delivered host reads back
+        tasks_from: _readback.yml
+        accepted: true
+      - name: control, a Match block for another user ahead of the role's does not refuse
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_other_user }}\n  AllowTcpForwarding yes\nMatch all\n"
+            absent_after: true
+        accepted: true
+      - name: remote forwarding, all forwarding allowed for the account by a block ahead
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  AllowTcpForwarding yes\nMatch all\n"
+            absent_after: true
+        expect: E-SSHD-FORWARDING
+      - name: remote forwarding only, by a block ahead
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  AllowTcpForwarding remote\nMatch all\n"
+            absent_after: true
+        expect: E-SSHD-FORWARDING
+      - name: local forwarding switched off for the account by a block ahead
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  AllowTcpForwarding no\nMatch all\n"
+            absent_after: true
+        expect: E-SSHD-FORWARDING
+      - name: all forwarding disabled for the account by a block ahead
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  DisableForwarding yes\nMatch all\n"
+            absent_after: true
+        expect: E-SSHD-FORWARDING
+      - name: a keys command for the account by a block ahead
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  AuthorizedKeysCommand /bin/true\n  AuthorizedKeysCommandUser nobody\nMatch all\n"
+            absent_after: true
+        expect: E-SSHD-KEYSCOMMAND
+      - name: another key file for the account by a block ahead
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  AuthorizedKeysFile /etc/ssh/keys.d/%u\nMatch all\n"
+            absent_after: true
+        expect: E-SSHD-FILE
+      - name: a wider PermitOpen for the account by a block ahead
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  PermitOpen {{ scenario_listed }}:22 {{ scenario_own }}:22 {{ scenario_unlisted }}:22\nMatch all\n"
+            absent_after: true
+        expect: E-SSHD-PERMITOPEN
+      - name: another setting of the runbook loosened by a block ahead
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  GatewayPorts yes\nMatch all\n"
+            absent_after: true
+        expect: E-SSHD-EFFECTIVE
+
+      # --- The files, read back after the write. They are changed behind the role's back and the
+      # read-back step alone must see it.
+      - name: a destination added to the delivered key lines
+        tasks_from: _readback.yml
+        edits:
+          - path: '{{ case_key_file }}'
+            regexp: 'permitopen="{{ scenario_listed }}:22"'
+            replace: 'permitopen="{{ scenario_listed }}:22",permitopen="{{ scenario_unlisted }}:22"'
+        expect: E-READBACK-MISMATCH
+      - name: a wildcard written into the delivered key lines
+        tasks_from: _readback.yml
+        edits:
+          - path: '{{ case_key_file }}'
+            regexp: 'permitopen="{{ scenario_listed }}:22"'
+            replace: 'permitopen="*:22"'
+        expect: E-READBACK-MISMATCH
+      - name: the options removed from the delivered key lines
+        tasks_from: _readback.yml
+        edits:
+          - path: '{{ case_key_file }}'
+            regexp: '^restrict,port-forwarding,[^ ]* '
+            replace: ''
+        expect: E-READBACK-MISMATCH
+      - name: the forced command of the key lines changed
+        tasks_from: _readback.yml
+        edits:
+          - path: '{{ case_key_file }}'
+            regexp: 'command="/usr/sbin/nologin"'
+            replace: 'command="/bin/sh"'
+        expect: E-READBACK-MISMATCH
+      - name: a key line added behind the role's back
+        tasks_from: _readback.yml
+        files:
+          - path: '{{ case_key_file }}'
+            content: |
+              {{ case_options }} {{ ci_jump_scenario_pub_jump.split(' ')[0:2] | join(' ') }}
+              {{ case_options }} {{ ci_jump_scenario_pub_second.split(' ')[0:2] | join(' ') }}
+              {{ ci_jump_scenario_pub_jump }}
+            mode: '0644'
+        expect: E-READBACK-MISMATCH
+      - name: a note added to the drop-in, which sshd applies the same
+        tasks_from: _readback.yml
+        edits:
+          - path: '{{ case_dropin }}'
+            regexp: '^Match all$'
+            replace: "# EXAMPLE_NOTE\nMatch all"
+        expect: E-READBACK-MISMATCH
+      - name: the key file owned by the account
+        tasks_from: _readback.yml
+        setup: [[chown, '{{ scenario_jump_user }}', '{{ case_key_file }}']]
+        restore: [[chown, 'root:root', '{{ case_key_file }}']]
+        expect: E-READBACK-MISMATCH
+      - name: the key file writable by its group
+        tasks_from: _readback.yml
+        setup: [[chmod, '0664', '{{ case_key_file }}']]
+        restore: [[chmod, '0644', '{{ case_key_file }}']]
+        expect: E-READBACK-MISMATCH
+      - name: the key file replaced by a link to a copy
+        tasks_from: _readback.yml
+        setup:
+          - [mv, '{{ case_key_file }}', '{{ case_key_file }}.real']
+          - [ln, -s, '{{ case_key_file }}.real', '{{ case_key_file }}']
+        restore:
+          - [rm, -f, '{{ case_key_file }}']
+          - [mv, '{{ case_key_file }}.real', '{{ case_key_file }}']
+        expect: E-READBACK-MISMATCH
+      - name: the key directory open to everyone
+        tasks_from: _readback.yml
+        setup: [[chmod, '0777', '{{ case_key_dir }}']]
+        restore: [[chmod, '0755', '{{ case_key_dir }}']]
+        expect: E-READBACK-MISMATCH
+
+      # --- The write step puts the previous files back when its check or read-back fails. These
+      # run last: the files are not kept for the case, so a role that did not put them back leaves
+      # them changed and the verify play of this scenario finds the host not as delivered. The
+      # case writes a list with a third address, so there is something to put back.
+      - name: sshd configuration invalid as a whole, the previous files go back
+        tasks_from: _write.yml
+        destinations: ['{{ scenario_listed }}', '{{ scenario_own }}', '{{ scenario_unlisted }}']
+        files: [{ path: '{{ case_after }}', content: "NoSuchKeyword yes\n", absent_after: true }]
+        restore: '{{ case_reload }}'
+        expect: Check the whole sshd configuration before it is reloaded
+      - name: a read-back that sshd refuses after the write, the previous files go back
+        tasks_from: _write.yml
+        destinations: ['{{ scenario_listed }}', '{{ scenario_own }}', '{{ scenario_unlisted }}']
+        files:
+          - path: '{{ case_ahead }}'
+            content: "Match User {{ scenario_jump_user }}\n  AllowTcpForwarding yes\nMatch all\n"
+            absent_after: true
+        restore: '{{ case_reload }}'
+        expect: Stop if the files or sshd are not what was wanted
+  tasks:
+    - name: Read the public keys the cases use
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - jump
+        - second
+      register: ci_jump_case_pubs
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Make the keys available to the cases
+      ansible.builtin.set_fact:
+        ci_jump_scenario_pub_jump: '{{ ci_jump_case_pubs.results[0].content | b64decode | trim }}'
+        ci_jump_scenario_pub_second: '{{ ci_jump_case_pubs.results[1].content | b64decode | trim }}'
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Run every case
+      ansible.builtin.include_tasks: tasks/case.yml
+      loop: '{{ case_cases }}'
+      loop_control:
+        loop_var: converge_case
+        label: '{{ converge_case.name }}'
+
+# The migration from the hand-made layout, and the reload that a pull which died owes. The host
+# these cases start from is the delivered one, and each puts it into the state the prepare made
+# (the hand-made files, named after the account, and none of the role's own), runs the role's step
+# and reads what it left:
+#
+#   1  the read-back that lets the old files go fails: the old files are never touched
+#   2  the read-back after the old files were removed fails (the reload hook of the prepare puts
+#      one back, once armed): the old files are put back as they were, byte for byte
+#   3  nothing fails: the old files and their directory are gone, the new files are in place, and
+#      sshd was reloaded once for the new files and once for the removal
+#   4  a pull that died after the write and before the reload (the marker left behind): the next
+#      run reloads sshd though the files already read as wanted, once, and the run after it does not
+- name: Run the migration and reload cases
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    migration_reloads: '{{ scenario_record_dir }}/reloads'
+    migration_marker: /run/branchleft-jump-reload-owed
+  tasks:
+    - name: Read the public keys the cases use
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - jump
+        - second
+      register: ci_jump_case_pubs
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Make the keys available to the cases
+      ansible.builtin.set_fact:
+        ci_jump_scenario_pub_jump: '{{ ci_jump_case_pubs.results[0].content | b64decode | trim }}'
+        ci_jump_scenario_pub_second: '{{ ci_jump_case_pubs.results[1].content | b64decode | trim }}'
+      when: not ansible_check_mode
+      no_log: true
+
+    - name: Make the record of reloads, and the arm of the hook, empty
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - '{{ migration_reloads }}'
+        - '{{ scenario_record_dir }}/resurrect-path'
+      when: not ansible_check_mode
+
+    - name: 1, the first read-back fails, so the old files are never touched
+      ansible.builtin.include_tasks: tasks/migration_case.yml
+      vars:
+        migration_expect: E-SSHD-FORWARDING
+        migration_tasks_from: _write.yml
+        migration_block_ahead: true
+        migration_arm: false
+        migration_inode_kept: true
+      when: not ansible_check_mode
+
+    - name: 2, the second read-back fails, so the old files are put back as they were
+      ansible.builtin.include_tasks: tasks/migration_case.yml
+      vars:
+        migration_expect: E-LEGACY-PRESENT
+        migration_tasks_from: _write.yml
+        migration_block_ahead: false
+        migration_arm: true
+        migration_inode_kept: false
+      when: not ansible_check_mode
+
+    - name: 3, nothing fails, so the old files go and the new ones stay
+      ansible.builtin.include_tasks: tasks/migration_case.yml
+      vars:
+        migration_expect: ''
+        migration_tasks_from: main.yml
+        migration_block_ahead: false
+        migration_arm: false
+        migration_inode_kept: false
+      when: not ansible_check_mode
+
+    # Case 4. The host is as case 3 left it. The marker is what a pull leaves when it dies after a
+    # write and before the reload: the files read as wanted, and only the marker says sshd may not
+    # have been reloaded. The run must reload sshd once, take the marker away, and change nothing
+    # else; the run after it must not reload.
+    - name: 4, a marker left behind makes the next run reload sshd, once
+      when: not ansible_check_mode
+      block:
+        - name: Count the reloads so far
+          ansible.builtin.slurp:
+            src: '{{ migration_reloads }}'
+          register: ci_jump_migration_reloads_before
+          no_log: true
+
+        - name: Leave the marker a dead pull leaves
+          ansible.builtin.copy:
+            content: ''
+            dest: '{{ migration_marker }}'
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Apply the role over the delivered host
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/apply_role.yml'
+
+        - name: Count the reloads after the run that found the marker
+          ansible.builtin.slurp:
+            src: '{{ migration_reloads }}'
+          register: ci_jump_migration_reloads_after
+          no_log: true
+
+        - name: Look for the marker
+          ansible.builtin.stat:
+            path: '{{ migration_marker }}'
+          register: ci_jump_migration_marker
+
+        - name: Assert the run reloaded sshd once and took the marker away
+          ansible.builtin.assert:
+            that:
+              - (ci_jump_migration_reloads_after.content | b64decode).splitlines() | length
+                == (ci_jump_migration_reloads_before.content | b64decode).splitlines() | length + 1
+              - not ci_jump_migration_marker.stat.exists
+            quiet: true
+            fail_msg: A marker left by a pull that died did not make the next run reload sshd exactly once.
+
+        - name: Apply the role once more
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/apply_role.yml'
+
+        - name: Count the reloads after the run that found nothing owed
+          ansible.builtin.slurp:
+            src: '{{ migration_reloads }}'
+          register: ci_jump_migration_reloads_last
+          no_log: true
+
+        - name: Assert a finished host is not reloaded
+          ansible.builtin.assert:
+            that:
+              - (ci_jump_migration_reloads_last.content | b64decode).splitlines() | length
+                == (ci_jump_migration_reloads_after.content | b64decode).splitlines() | length
+            quiet: true
+            fail_msg: A run over a host that was finished reloaded sshd.

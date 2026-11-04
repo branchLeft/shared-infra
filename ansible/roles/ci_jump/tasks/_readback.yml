@@ -1,0 +1,31 @@
+---
+# The module builds the files it expects from the inputs for itself, apart from the templates that
+# wrote them, and compares them exactly. It also asks sshd, for the account and from the jump
+# host's own address, what it would apply, and requires local forwarding only, the owner's list as
+# PermitOpen and the rest of the runbook's settings. A write that sshd does not honour, or that
+# lets a key bind a port on the jump host (ssh -R), is a stop and not a success. After the files of
+# the earlier hand-made layout are removed, the same read-back also requires them gone
+# (ci_jump_readback_legacy_gone); its paths are made from the account's name, so the module is
+# given them and prints none.
+- name: Read both files back and ask sshd what it applies to the account
+  ci_jump_authorized_keys:
+    action: verify
+    user: '{{ ci_jump_user }}'
+    own_address: '{{ ci_jump_own_address }}'
+    destinations: '{{ ci_jump_destinations }}'
+    keys: "{{ ci_jump_keys | map(attribute='key') | list }}"
+    owned_accounts: '{{ ci_jump_owned_accounts }}'
+    legacy_files: '{{ ci_jump_legacy_files }}'
+    legacy_gone: '{{ ci_jump_readback_legacy_gone | default(false) | bool }}'
+  register: ci_jump_readback
+  failed_when: false
+  changed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop if the files or sshd are not what was wanted
+  ansible.builtin.assert:
+    that:
+      - ci_jump_readback.msg is not defined
+    fail_msg: "{{ ci_jump_readback.msg | default('the module returned no result') }}"
+    quiet: true

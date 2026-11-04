@@ -177,6 +177,39 @@ jobs:
       - name: Python unit tests
         run: python3 -m unittest discover -s mail/provision -p 'test_*.py' -v
 
+  shim-image-starts:
+    name: Shim image starts (mail/provision)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Renders the shim's environment file from main exactly as 63 does, then
+    # starts the digest shim-compose.yml pins with it and asks the compose
+    # healthcheck (main once rendered an environment the pinned image could
+    # not start with, and nothing noticed). The container runs
+    # with no network and a placeholder credential, on the runner's own docker
+    # daemon, and never touches mx1.
+    #
+    # Deliberately NOT in `mail-plan`'s `needs`. It pulls an image from the
+    # registry, and gating a mail plan on a registry outage would couple an
+    # unrelated path to a network dependency. It gates review, not the plan, and
+    # can be a required pull-request check. The pull retries once.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Start the pinned image with the rendered environment
+        run: python3 mail/provision/check_shim_image_starts.py
+
+      # The control: the environment main rendered before the fix must still stop this image,
+      # and for the missing SMTP_HOST only, never a mount or permission error. A check that
+      # cannot fail is not a check.
+      - name: Control, the stale drain-only environment stops the same image
+        if: ${{ !cancelled() }}
+        run: python3 mail/provision/check_shim_image_starts.py --expect-smtp-host-missing
+
   hetzner-typecheck:
     name: Type check (hetzner)
     runs-on: ubuntu-latest
@@ -824,7 +857,7 @@ jobs:
       # The no-op gate's contract is checked by the shared action, which reads
       # only this workflow file, so this repo keeps no test of its own for it.
       - name: Check the no-op gate contract
-        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@027c58fa32cb56dedd936d8d0708e6576e8cf9dd # v1.0.20
         with:
           workflow: .github/workflows/ci.yml
           pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply
@@ -1167,7 +1200,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@027c58fa32cb56dedd936d8d0708e6576e8cf9dd # v1.0.20
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1474,7 +1507,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@027c58fa32cb56dedd936d8d0708e6576e8cf9dd # v1.0.20
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1519,7 +1552,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@027c58fa32cb56dedd936d8d0708e6576e8cf9dd # v1.0.20
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1680,7 +1713,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@027c58fa32cb56dedd936d8d0708e6576e8cf9dd # v1.0.20
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1889,7 +1922,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@027c58fa32cb56dedd936d8d0708e6576e8cf9dd # v1.0.20
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -1930,7 +1963,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@027c58fa32cb56dedd936d8d0708e6576e8cf9dd # v1.0.20
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -2081,7 +2114,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@027c58fa32cb56dedd936d8d0708e6576e8cf9dd # v1.0.20
         with:
           preview-json: preview.json
           working-directory: hetzner/estate

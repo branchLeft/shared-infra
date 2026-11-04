@@ -61,7 +61,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
 # breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), egress_nat (the
-# NAT gateway, after host_baseline for its Docker and iptables), deploy_tooling and
+# NAT gateway, after host_baseline for its Docker and iptables), ci_jump (directly after ci_login;
+# it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
@@ -80,6 +81,7 @@ APPLIED_ON_MAIN = {
         "host_baseline",
         "egress_nat",
         "ci_login",
+        "ci_jump",
         "deploy_tooling",
         "edge_stack",
         "node_exporter",
@@ -319,6 +321,7 @@ class HostRoleLists(unittest.TestCase):
                 "host_baseline",
                 "egress_nat",
                 "ci_login",
+                "ci_jump",
                 "deploy_tooling",
                 "edge_stack",
                 "node_exporter",
@@ -327,6 +330,7 @@ class HostRoleLists(unittest.TestCase):
                 "monitoring_stack",
             ],
         )
+        self.assertEqual(names.index("ci_jump"), names.index("ci_login") + 1)
         self.assertLess(names.index("ntfy_pager"), names.index("monitoring_stack"))
         self.assertEqual(names[-1], "monitoring_stack")
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):

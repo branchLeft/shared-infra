@@ -32,6 +32,9 @@ WHOLE: Final = "whole"
 RECIPIENTS: Final = "recipients"
 # Typed only: the slots have no live file, so the hand install never held them.
 SLOTS: Final = "slots"
+# Typed only: a value that exists nowhere on the host, such as the CI jump account's name, which is
+# held out of the repository. It is asked for hidden and written like any typed input.
+TYPED: Final = "typed"
 SLOT_ADOPT: Final = "adopt"
 
 type Value = str | list[dict[str, str]] | list[dict[str, str | bool]]
@@ -65,6 +68,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ntfy_pager_watcher_token",
         "ntfy_pager_owner_password_hash",
         "ntfy_pager_machine_password_hash",
+        "ci_jump_user",
     ),
     "ops1": (
         "backup_worker_db_host",
@@ -173,6 +177,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     "website_app1_smtp_user": (_env("website.env", "CONTACT_SMTP_USER"),),
     "website_app1_smtp_password": (_env("website.env", "CONTACT_SMTP_PASSWORD"),),
     "deploy_slot_keys_slots": (Source(SLOTS, ""),),
+    "ci_jump_user": (Source(TYPED, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
@@ -460,7 +465,7 @@ def collect(ctx: Context, host: str) -> Collected:
     pending: list[str] = []
     for key in HOSTS[host]:
         for source in SOURCES[key]:
-            if source.kind == SLOTS:
+            if source.kind in (SLOTS, TYPED):
                 break
             state, value = live.lookup(source)
             if state == "found" and value is not None:

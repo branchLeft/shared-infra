@@ -6,6 +6,10 @@ test's name states the rule it holds; the reasons are in ansible/checks/README.m
 
 from __future__ import annotations
 
+import os
+import re
+import shutil
+import subprocess
 import unittest
 from pathlib import Path
 
@@ -13,6 +17,88 @@ from ruamel.yaml import YAML
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
+
+# The jobs that restore the tool environment and so carry the same install steps.
+TOOL_JOBS = ("quick-lint", "lint", "shard")
+
+# The steps that build or restore the tool environment. The quick gate copies these from the
+# full lint, so a test holds the copy equal to the original and the two cannot drift.
+ENVIRONMENT_STEPS = (
+    "Name the Python the tool environment is built with",
+    "Restore the tool environment",
+    "Create the tool environment",
+    "Install the pinned pip",
+    "Install the pinned tools",
+    "Check the installed set and list the collections",
+)
+
+# The commands the quick gate runs, written once here and compared with the full lint's own.
+YAMLLINT_STEP = "yamllint every YAML file under ansible/"
+SELECT_TESTS_COMMAND = (
+    '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks'
+    ' -p "test_ci_select.py"'
+)
+
+# Every step the full lint ran before the quick gate was added. The full lint keeps all of
+# them and still gates the merge, so removing or renaming one must be a decision in a diff to
+# this list and not a silent loss. A step added to the lint later is not listed here.
+LINT_STEPS_THAT_STILL_RUN = (
+    *ENVIRONMENT_STEPS,
+    "Check the pins and the update route",
+    YAMLLINT_STEP,
+    "ansible-lint at the production profile",
+    "Type-check the harness, the checks and the tools",
+    "Lint the harness, the checks and the tools",
+    "Check the harness, checks and tools formatting",
+    "Test the harness",
+    "Test the checks",
+    "Test the tools",
+    "Check each role's own program in files/",
+    "Check each role's own library modules",
+    "Run every role's unit tests",
+)
+
+# One row per outcome the gate must settle, as (what it shows, the values that differ from a run
+# in which every job succeeded, the exit status the gate script must end with). OK is that run.
+OK = {
+    "DISCOVER": "success",
+    "ANSIBLE": "true",
+    "SHARDS": "true",
+    "QUICK": "success",
+    "LINT": "success",
+    "SHARD": "success",
+}
+GATE_TABLE: tuple[tuple[str, dict[str, str], int], ...] = (
+    ("every job succeeded", {}, 0),
+    ("the quick gate failed", {"QUICK": "failure"}, 1),
+    ("the quick gate was skipped", {"QUICK": "skipped"}, 1),
+    ("the quick gate was cancelled", {"QUICK": "cancelled"}, 1),
+    ("the quick gate passed and the full lint failed", {"LINT": "failure"}, 1),
+    ("the quick gate passed and the full lint was skipped", {"LINT": "skipped"}, 1),
+    ("the quick gate passed and the full lint was cancelled", {"LINT": "cancelled"}, 1),
+    ("the lint failed and the shards were skipped", {"LINT": "failure", "SHARD": "skipped"}, 1),
+    ("a chosen shard failed", {"SHARD": "failure"}, 1),
+    ("a chosen shard was skipped", {"SHARD": "skipped"}, 1),
+    ("discover failed", {"DISCOVER": "failure"}, 1),
+    ("discover did not say whether inputs changed", {"ANSIBLE": ""}, 1),
+    ("discover did not say whether shards are needed", {"SHARDS": ""}, 1),
+    (
+        "no Ansible input changed",
+        {"ANSIBLE": "false", "QUICK": "skipped", "LINT": "skipped", "SHARD": "skipped"},
+        0,
+    ),
+    ("no shard was needed", {"SHARDS": "false", "SHARD": "skipped"}, 0),
+    (
+        "no shard was needed and the full lint failed",
+        {"SHARDS": "false", "SHARD": "skipped", "LINT": "failure"},
+        1,
+    ),
+    (
+        "no shard was needed and the quick gate failed",
+        {"SHARDS": "false", "SHARD": "skipped", "QUICK": "failure"},
+        1,
+    ),
+)
 
 
 def load(path: Path) -> object:
@@ -53,6 +139,35 @@ def script(job: object) -> str:
     return "\n".join(str(get(step, "run") or "") for step in items(get(job, "steps")))
 
 
+def run_gate(gate_script: str, values: dict[str, str]) -> int:
+    """Run the gate's script under bash with the given needs and return its exit status.
+
+    Raises:
+        AssertionError: There is no bash to run it with.
+    """
+    environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), **OK, **values}
+    bash = shutil.which("bash")
+    if bash is None:
+        message = "bash is needed to run the gate's script"
+        raise AssertionError(message)
+    done = subprocess.run(  # noqa: S603 - the workflow's own gate script, run with fixed values
+        [bash, "-c", gate_script],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    return done.returncode
+
+
+def without_the_lint_refusal(gate_script: str) -> str:
+    """Return the gate's script with the block that refuses a lint that did not succeed cut out."""
+    return re.sub(
+        r'if \[ "\$LINT" != "success" \]; then\n.*?\n\s*fi\n', "", gate_script, flags=re.S
+    )
+
+
 def only_job(workflow: object) -> object:
     """Return the one job of a workflow."""
     jobs = get(workflow, "jobs")
@@ -68,11 +183,67 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
     def test_the_jobs_the_rest_of_this_file_reads_exist(self) -> None:
         # A control: an empty read would make every test below pass.
         self.assertLessEqual(
-            {"discover", "lint", "shard", "roles"}, keys(get(self.workflow, "jobs"))
+            {"discover", "quick-lint", "lint", "shard", "roles"}, keys(get(self.workflow, "jobs"))
         )
 
-    def test_the_shards_wait_for_the_lint(self) -> None:
-        self.assertLessEqual({"discover", "lint"}, needs(self.job("shard")))
+    def test_the_shards_wait_for_the_quick_gate_and_not_for_the_full_lint(self) -> None:
+        self.assertEqual({"discover", "quick-lint"}, needs(self.job("shard")))
+
+    def test_the_full_lint_stands_directly_before_the_shards(self) -> None:
+        # test_run_role_unit_tests.py reads the text between the lint job and the shard job, so
+        # nothing may stand between them, and the quick gate stands before the lint.
+        jobs = get(self.workflow, "jobs")
+        order = [str(name) for name in jobs] if isinstance(jobs, dict) else []
+        self.assertEqual(order.index("lint") + 1, order.index("shard"))
+        self.assertLess(order.index("quick-lint"), order.index("lint"))
+
+    def test_the_quick_gate_waits_only_for_discover_and_runs_when_the_lint_does(self) -> None:
+        quick, lint = self.job("quick-lint"), self.job("lint")
+        self.assertEqual({"discover"}, needs(quick))
+        self.assertEqual({"discover"}, needs(lint))
+        self.assertEqual("needs.discover.outputs.ansible == 'true'", str(get(quick, "if")).strip())
+        self.assertEqual(get(lint, "if"), get(quick, "if"))
+        self.assertEqual(get(lint, "runs-on"), get(quick, "runs-on"))
+        self.assertLessEqual(int(str(get(quick, "timeout-minutes"))), 10)
+
+    def test_the_quick_gate_builds_its_environment_the_way_the_lint_does(self) -> None:
+        # The copy is held equal to the original, step for step, so the two cannot drift.
+        for name in ENVIRONMENT_STEPS:
+            quick = [
+                s for s in items(get(self.job("quick-lint"), "steps")) if get(s, "name") == name
+            ]
+            lint = [s for s in items(get(self.job("lint"), "steps")) if get(s, "name") == name]
+            with self.subTest(step=name):
+                self.assertEqual(1, len(quick))
+                self.assertEqual(1, len(lint))
+                self.assertEqual(lint[0], quick[0])
+
+    def test_the_quick_gate_runs_yamllint_and_the_ci_select_tests_unconditionally(self) -> None:
+        quick = items(get(self.job("quick-lint"), "steps"))
+        lint = items(get(self.job("lint"), "steps"))
+        yamllint = [s for s in quick if get(s, "name") == YAMLLINT_STEP]
+        lint_yamllint = [s for s in lint if get(s, "name") == YAMLLINT_STEP]
+        self.assertEqual(1, len(yamllint))
+        self.assertEqual(lint_yamllint, yamllint, "the same command as the full lint's")
+        selection = [s for s in quick if get(s, "run") == SELECT_TESTS_COMMAND]
+        self.assertEqual(1, len(selection))
+        self.assertTrue((ROOT / "ansible" / "checks" / "test_ci_select.py").is_file())
+        for step in (yamllint[0], selection[0]):
+            with self.subTest(step=get(step, "name")):
+                self.assertIsNone(get(step, "if"))
+                self.assertIsNone(get(step, "continue-on-error"))
+        self.assertIsNone(get(self.job("quick-lint"), "continue-on-error"))
+        for step in quick:
+            self.assertNotIn("|| true", str(get(step, "run") or ""))
+
+    def test_the_full_lint_keeps_every_step_it_had_and_none_may_fail_silently(self) -> None:
+        lint = self.job("lint")
+        names = [str(get(step, "name")) for step in items(get(lint, "steps"))]
+        self.assertEqual([], [name for name in LINT_STEPS_THAT_STILL_RUN if name not in names])
+        self.assertEqual(len(names), len(set(names)))
+        self.assertIsNone(get(lint, "continue-on-error"))
+        for step in items(get(lint, "steps")):
+            self.assertIsNone(get(step, "continue-on-error"), get(step, "name"))
 
     def test_the_shards_run_only_when_discover_chose_some(self) -> None:
         condition = str(get(self.job("shard"), "if"))
@@ -90,10 +261,49 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
 
     def test_the_gate_needs_every_job_and_fails_on_a_lint_that_did_not_pass(self) -> None:
         gate = self.job("roles")
-        self.assertEqual({"discover", "lint", "shard"}, needs(gate))
+        self.assertEqual({"discover", "quick-lint", "lint", "shard"}, needs(gate))
         self.assertEqual("always()", str(get(gate, "if")).strip())
+        self.assertIn('[ "$QUICK" != "success" ]', script(gate))
         self.assertIn('[ "$LINT" != "success" ]', script(gate))
         self.assertIn('[ "$SHARD" != "success" ]', script(gate))
+
+    def test_the_gate_reads_each_result_from_the_job_it_names(self) -> None:
+        env = get(self.job("roles"), "steps", 0, "env")
+        self.assertEqual("${{ needs.quick-lint.result }}", get(env, "QUICK"))
+        self.assertEqual("${{ needs.lint.result }}", get(env, "LINT"))
+        self.assertEqual("${{ needs.shard.result }}", get(env, "SHARD"))
+        self.assertEqual("${{ needs.discover.result }}", get(env, "DISCOVER"))
+
+    def test_the_quick_gate_is_refused_after_discover_and_before_the_lint(self) -> None:
+        text = script(self.job("roles"))
+        self.assertLess(
+            text.index('[ "$ANSIBLE" = "false" ]'), text.index('[ "$QUICK" != "success" ]')
+        )
+        self.assertLess(
+            text.index('[ "$QUICK" != "success" ]'), text.index('[ "$LINT" != "success" ]')
+        )
+        self.assertLess(
+            text.index('[ "$LINT" != "success" ]'), text.index('[ "$SHARDS" = "false" ]')
+        )
+
+    def test_the_gate_settles_every_outcome_the_way_the_table_says(self) -> None:
+        # The gate's own script, run under bash. The row that matters most is the full lint failing
+        # after the quick gate passed: only the shards no longer wait for the full lint, and a merge
+        # must still need it.
+        gate_script = str(get(self.job("roles"), "steps", 0, "run"))
+        for label, values, expected in GATE_TABLE:
+            with self.subTest(row=label):
+                self.assertEqual(expected, run_gate(gate_script, values))
+
+    def test_the_gate_table_sees_the_full_lint_refusal_being_removed(self) -> None:
+        # The control of the table above: the same script with the refusal of a lint that did not
+        # succeed cut out lets that run through, so the table can tell the refusal is there.
+        gate_script = str(get(self.job("roles"), "steps", 0, "run"))
+        cut = without_the_lint_refusal(gate_script)
+        self.assertNotEqual(gate_script, cut)
+        self.assertNotIn('[ "$LINT" != "success" ]', cut)
+        self.assertEqual(1, run_gate(gate_script, {"LINT": "failure"}))
+        self.assertEqual(0, run_gate(cut, {"LINT": "failure"}))
 
     def test_a_shard_job_that_did_not_succeed_fails_the_gate_when_shards_were_chosen(self) -> None:
         text = script(self.job("roles"))
@@ -117,10 +327,10 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
         self.assertEqual("*", fields[2])
         self.assertEqual("*", fields[3])
 
-    def test_the_lint_and_every_shard_restore_the_tool_environment_from_a_pinned_cache(
+    def test_every_tool_job_restores_the_tool_environment_from_a_pinned_cache(
         self,
     ) -> None:
-        for name in ("lint", "shard"):
+        for name in TOOL_JOBS:
             steps = items(get(self.job(name), "steps"))
             caches = [step for step in steps if "actions/cache@" in str(get(step, "uses"))]
             with self.subTest(job=name):
@@ -133,7 +343,7 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
                 self.assertIn("ansible-venv", str(get(caches[0], "with", "path")))
 
     def test_the_installs_run_only_when_the_cache_missed(self) -> None:
-        for name in ("lint", "shard"):
+        for name in TOOL_JOBS:
             for step in items(get(self.job(name), "steps")):
                 text = str(get(step, "run") or "")
                 if "python3 -m venv" in text or 'pip" install' in text:
@@ -141,7 +351,7 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
                         self.assertEqual("steps.venv.outputs.cache-hit != 'true'", get(step, "if"))
 
     def test_the_environment_is_checked_whether_it_was_built_or_restored(self) -> None:
-        for name in ("lint", "shard"):
+        for name in TOOL_JOBS:
             checks = [
                 step
                 for step in items(get(self.job(name), "steps"))

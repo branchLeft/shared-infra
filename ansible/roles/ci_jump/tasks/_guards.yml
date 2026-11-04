@@ -1,0 +1,36 @@
+---
+# Every input is judged by the module before a file is touched, inputs first and then the host.
+# No assertion loops: a failed loop prints its item, which here would be a key. The module task
+# hides its result (ANS-16), and the account's name with it; a refusal is a code and an entry
+# number, read out by the assertion after it, so the cause of a stop shows in the log with no
+# value in it. The earlier layout's paths are made from the account's name, so the module is given
+# them and only counts them, and says whether a write is owed (pending). failed_when: false makes the result's failed flag false, so a refusal is read
+# from msg: only a refusal carries one.
+- name: Judge the inputs and the host, and compare the live files with the wanted ones
+  ci_jump_authorized_keys:
+    action: plan
+    user: '{{ ci_jump_user }}'
+    own_address: '{{ ci_jump_own_address }}'
+    destinations: '{{ ci_jump_destinations }}'
+    keys: "{{ ci_jump_keys | map(attribute='key') | list }}"
+    owned_accounts: '{{ ci_jump_owned_accounts }}'
+    legacy_files: '{{ ci_jump_legacy_files }}'
+  register: ci_jump_plan
+  failed_when: false
+  changed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop if the module refused
+  ansible.builtin.assert:
+    that:
+      - ci_jump_plan.msg is not defined
+    fail_msg: "{{ ci_jump_plan.msg | default('the module returned no result') }}"
+    quiet: true
+
+# The lines hold host names, ports, key types and fingerprints, never the account. This is what
+# the owner reads in the check-mode plan before approving an apply: each destination live against
+# wanted, in the key file and in sshd, and each key.
+- name: Show the live files against the wanted ones
+  ansible.builtin.debug:
+    msg: '{{ ci_jump_plan.lines }}'

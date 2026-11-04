@@ -1,0 +1,18 @@
+---
+# The database image pin after a scenario's refusal cases, included by
+# verify_refusals.yml (the `refusals_pins` scenario) and verify_compose_names.yml (the
+# `refusals_compose` scenario). Each case restores the good pin, so this shows the
+# refusals left the pin as it was.
+- name: Read the database image pin again after the refusals
+  ansible.builtin.slurp:
+    src: '{{ db1_stack_image_env_path }}'
+  register: db1_stack_verify_pin_after
+  no_log: true
+
+- name: Assert the database image pin is the good one again after the refusals
+  ansible.builtin.assert:
+    that:
+      - (db1_stack_verify_pin_after.content | b64decode) == ('IMAGE=mysql:8.0.43@sha256:' ~ scenario_image_digest) ~ ('%c' | format(10))
+    fail_msg: The restored database image pin is not the good one.
+    quiet: true
+  no_log: true

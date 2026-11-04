@@ -71,9 +71,13 @@ mail_reconcilers_not_installed:
     - run-all.sh
     - shim-compose.yml
     - render_shim_env.py
+    - shim-env-contracts.json
     - check_dnsbl_blocklist.py
     - docker-compose.yml
     - Caddyfile
+  # Runs only in CI, against the runner's own docker; never placed on a host.
+  ci_only:
+    - check_shim_image_starts.py
   other_roles:
     - 00-harden-ssh.sh
     - 10-harden-updates-fail2ban.sh

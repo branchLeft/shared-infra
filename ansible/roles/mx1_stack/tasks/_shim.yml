@@ -31,12 +31,13 @@
     mode: '0644'
     force: false
 
-- name: Render the shim's environment file from the drain token on the host
+- name: Render the shim's environment file for its pinned image, from the secret on the host
   mx1_stack_envfile:
     action: shim
     path: '{{ mx1_stack_shim_env_file }}'
     credentials_path: '{{ mx1_stack_credentials_file }}'
-    label: '{{ mx1_stack_drain_label }}'
+    image: "{{ mx1_stack_shim_doc.services['mailgun-shim'].image }}"
+    contracts: '{{ mx1_stack_shim_contracts }}'
   register: mx1_stack_shim_env_result
 
 - name: Run the shim's class
