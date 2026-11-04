@@ -1,0 +1,20 @@
+# One small hand-written theme, no theme from the internet, no network. Nothing in the output
+# names a host. No feed, no sitemap, no syntax-highlighting service, search built in.
+base_url = "/"
+title = "shared-infra"
+default_language = "en"
+generate_feeds = false
+generate_sitemap = false
+compile_sass = false
+build_search_index = true
+minify_html = false
+generate_robots_txt = false
+taxonomies = []
+
+[search]
+index_format = "elasticlunr_javascript"
+
+[markdown]
+highlight_code = false
+external_links_target_blank = false
+external_links_no_referrer = true

@@ -1,0 +1,16 @@
+{%- set d = load_data(path="data/diagram.json") -%}
+<figure>
+<svg class="diagram" viewBox="0 0 {{ d.width }} {{ d.height }}" role="img" aria-labelledby="dgm-title">
+<title id="dgm-title">{{ d.title }}</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+{%- for e in d.edges %}
+<line x1="{{ e.x1 }}" y1="{{ e.y1 }}" x2="{{ e.x2 }}" y2="{{ e.y2 }}" marker-end="url(#arrow)"/>
+{%- endfor %}
+{%- for n in d.nodes %}
+<rect x="{{ n.x }}" y="{{ n.y }}" width="{{ n.w }}" height="{{ n.h }}" rx="6"/>
+<text x="{{ n.x + n.w / 2 }}" y="{{ n.y + 26 }}" text-anchor="middle">{{ n.label }}</text>
+<text class="note" x="{{ n.x + n.w / 2 }}" y="{{ n.y + 46 }}" text-anchor="middle">{{ n.note }}</text>
+{%- endfor %}
+</svg>
+<figcaption>{{ d.title }}. Drawn at build time from <code>data/diagram.json</code>.</figcaption>
+</figure>

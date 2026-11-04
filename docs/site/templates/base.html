@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if current_path == "/" %}{{ config.title }}{% else %}{% block title %}{{ config.title }}{% endblock title %} · {{ config.title }}{% endif %}</title>
+<link rel="stylesheet" href="{{ get_url(path='site.css', trailing_slash=false) }}">
+</head>
+<body>
+<header>
+<strong>{{ config.title }}</strong>
+<nav><a href="{{ config.base_url | trim_end_matches(pat='/') }}/">Overview</a> · <a href="{{ get_url(path='how-it-works/', trailing_slash=true) }}">How it works</a></nav>
+<form id="search" role="search" hidden><label>Search <input type="search" id="q" autocomplete="off"></label></form>
+</header>
+<main>
+<ul id="results"></ul>
+{% block content %}{% endblock content %}
+</main>
+<footer>Built from the repository's own files. This page loads nothing from any other site.</footer>
+<script src="{{ get_url(path='elasticlunr.min.js', trailing_slash=false) }}" defer></script>
+<script src="{{ get_url(path='search_index.en.js', trailing_slash=false) }}" defer></script>
+<script src="{{ get_url(path='search.js', trailing_slash=false) }}" defer></script>
+</body>
+</html>
