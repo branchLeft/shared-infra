@@ -36,6 +36,7 @@
       - /var/lib/branchleft/demo-router/0/a
       - /var/lib/branchleft/demo-candidates
       - /var/lib/branchleft/demo-candidates/edge-upstreams.caddy
+      - /var/lib/branchleft/demo-candidates/site-0.caddy
       - /var/lib/branchleft-broker
       - /var/lib/branchleft-broker/drain-flags
       - /var/lib/branchleft-broker/drain-flags/0-a.drain
@@ -87,6 +88,27 @@
         fail_msg: >-
           A plan on a host with no staged release did not say the sudoers grant was NOT verified,
           or a plan on a configured host said it. A skipped comparison must not look like a pass.
+      when: ansible_check_mode
+
+    # The site candidates and the colour check, in a plan. On a fresh host there is no
+    # staged renderer, so slot 0's fixture input is NOT rendered, and the other six
+    # have no input: all seven are named, and the colour units are NOT verified. On a
+    # configured host slot 0 is rendered (a read), so six are named, and the colour
+    # units are asked of systemd, with no notice. Each line is read from the role's
+    # register, so a silent skip cannot pass.
+    - name: Assert a plan names the slots with no site candidate, and says whether the colour units were verified
+      ansible.builtin.assert:
+        that:
+          - demo1_build_site_notices.results | map(attribute='msg') | select('search', 'NOT rendered') | list | length == 6
+          - demo1_build_site_not_rendered | length == (6 if demo1_build_converge_release_before.stat.exists else 7)
+          - >-
+            (demo1_build_site_unstaged_notices.results | default([]) | selectattr('skipped', 'undefined') | list | length)
+            == (0 if demo1_build_converge_release_before.stat.exists else 1)
+          - ('NOT verified' in (demo1_build_units_notice.msg | default(''))) == (not demo1_build_converge_release_before.stat.exists)
+        quiet: true
+        fail_msg: >-
+          A plan did not name the slots with no site candidate as NOT rendered, or did not say whether the colour
+          units were verified as the host's state requires.
       when: ansible_check_mode
 
     - name: Look at the watched paths after a plan

@@ -1,0 +1,110 @@
+---
+# One case of the colour unit check, imported by converge.yml. The role asks systemd
+# whether each colour instance loads, and stops when one does not. The case takes the
+# shared compose template away (the stand-in prepare installed), makes the fourteen
+# drop-in directories the role writes, reloads systemd, and runs the check alone. The
+# check must refuse, and its message must name the cause. The control case keeps the
+# stand-in and must pass. The message is matched on the cause, not on the template's
+# path, which the single-owner check keeps out of this role.
+#
+# The play is tagged so the idempotence step skips it, and it puts the stand-in and
+# the systemd state back in every outcome.
+- name: Refuse colour instances that do not load without the shared compose template
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    converge_stand_in: /etc/systemd/system/branchleft-compose@.service
+    converge_units:
+      - branchleft-compose@demo-0-a
+      - branchleft-compose@demo-0-b
+      - branchleft-compose@demo-1-a
+      - branchleft-compose@demo-1-b
+      - branchleft-compose@demo-2-a
+      - branchleft-compose@demo-2-b
+      - branchleft-compose@demo-3-a
+      - branchleft-compose@demo-3-b
+      - branchleft-compose@demo-4-a
+      - branchleft-compose@demo-4-b
+      - branchleft-compose@demo-5-a
+      - branchleft-compose@demo-5-b
+      - branchleft-compose@demo-6-a
+      - branchleft-compose@demo-6-b
+  tasks:
+    - name: Take the stand-in away as the case says, run the colour check on its own, and put it back
+      when: not ansible_check_mode
+      block:
+        - name: Keep the stand-in as prepare installed it, to put back
+          ansible.builtin.slurp:
+            src: '{{ converge_stand_in }}'
+          register: demo1_build_converge_stand_in
+
+        - name: Make the drop-in directories the role writes for the fourteen colour instances
+          ansible.builtin.file:
+            path: '/etc/systemd/system/{{ item }}.service.d'
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+          loop: '{{ converge_units }}'
+          changed_when: false
+
+        - name: Take the stand-in away, when the case is a refusal
+          ansible.builtin.file:
+            path: '{{ converge_stand_in }}'
+            state: absent
+          when: not (converge_case.accepted | default(false))
+
+        - name: Reload systemd so that it reads the case's units
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Run the colour unit check on its own
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _units_loaded.yml
+
+        - name: Fail if the check accepted instances with no template to load
+          ansible.builtin.fail:
+            msg: The colour unit check accepted instances that load from no template.
+          when: not (converge_case.accepted | default(false))
+
+      rescue:
+        - name: Assert the control case was not refused
+          ansible.builtin.assert:
+            that:
+              - not (converge_case.accepted | default(false))
+            quiet: true
+            fail_msg: 'The colour unit check refused the control case, with the template in place: {{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the refusal names the cause, the shared compose template
+          ansible.builtin.assert:
+            that:
+              # The check asserts once per instance, so the failure is a loop's: its own message
+              # is "One or more items failed", and the cause is in each item's message.
+              - >-
+                'shared compose template unit is not installed' in
+                (ansible_failed_result.results | default([]) | selectattr('msg', 'defined') | map(attribute='msg') | join(' '))
+            quiet: true
+            fail_msg: 'The colour unit check refused for a reason other than the missing template: {{ ansible_failed_result.msg | default("") }}'
+
+      always:
+        - name: Put the stand-in back as prepare installed it
+          ansible.builtin.copy:
+            content: '{{ demo1_build_converge_stand_in.content | b64decode }}'
+            dest: '{{ converge_stand_in }}'
+            owner: root
+            group: root
+            mode: '0644'
+          changed_when: false
+
+        - name: Remove the drop-in directories the case made
+          ansible.builtin.file:
+            path: '/etc/systemd/system/{{ item }}.service.d'
+            state: absent
+          loop: '{{ converge_units }}'
+          changed_when: false
+
+        - name: Reload systemd so that the stand-in is read again
+          ansible.builtin.systemd_service:
+            daemon_reload: true

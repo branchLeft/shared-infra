@@ -43,6 +43,22 @@
       ansible.builtin.include_role:
         name: branchleft.demo1_build
 
+    # The site candidates. The prepare step gives slot 0 an edge input and no other
+    # slot one, so the role must print one NOT rendered line for each of the six others,
+    # and no more. A silent skip would read as a configured host. The lines are read
+    # from the role's register, which holds what each debug task printed.
+    - name: Assert the role named each of the six slots with no edge input as NOT rendered
+      ansible.builtin.assert:
+        that:
+          - demo1_build_site_not_rendered == ['1', '2', '3', '4', '5', '6']
+          - demo1_build_site_notices.results | map(attribute='msg') | select('search', 'NOT rendered') | list | length == 6
+          - demo1_build_site_unstaged_notices.results | default([]) | selectattr('skipped', 'undefined') | list | length == 0
+        quiet: true
+        fail_msg: >-
+          The site candidates are not the six slots with no edge input, or a slot with no input was not named as
+          NOT rendered. A silent skip would pass as a configured host.
+      when: not ansible_check_mode
+
     # The control for the second writer: the sudoers grant belongs to
     # broker_deploy, and the role must leave the file exactly as it found it,
     # whatever it reads from it.

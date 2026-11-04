@@ -7,6 +7,8 @@ free-form string, a shell string or an argument list. A playbook is read as a ro
 A command that only runs the wrapper is not a write and is not found. The README's named
 limits say what these checks cannot see. One role is allowed for now, and only for the policy
 program and its unit: it is retired by its own follow-up after this role has run on the host.
+demo1_build is allowed to read and name the compose template unit, and nothing else of the
+owner's, as ALLOWED_SECOND_OWNER_PROGRAMS says; it is still refused a copy or a link of it.
 """
 
 from __future__ import annotations
@@ -29,6 +31,14 @@ OWNER = "deploy_tooling"
 # A second role is exempt only for the target lists named here, never for the whole role.
 ALLOWED_SECOND_OWNERS: dict[str, frozenset[str]] = {
     "control_plane": frozenset({"deploy_tooling_app_file_targets"}),
+}
+# The compose template unit is in deploy_tooling_common_file_targets with the deploy wrapper,
+# which no second role may name, so demo1_build is exempt by program and not by that group.
+# The exemption is for reads and names of the file only. A byte copy or a link of it in
+# demo1_build is still refused, so the role must read the template from hetzner/provision.
+# Ruled 4 Nov on ws#2364 (comment 6630331961): scoped exemption for demo1, role keeps no copy.
+ALLOWED_SECOND_OWNER_PROGRAMS: dict[str, frozenset[str]] = {
+    "demo1_build": frozenset({"branchleft-compose@.service"}),
 }
 # Only to fill a test tree: the check itself reads the programs from the role's own target lists.
 PROGRAMS = role_vars.program_names(role_vars.load_vars())
@@ -220,6 +230,7 @@ def reference_problems(
     variables: dict[str, object],
     owned: Sequence[role_vars.Target],
     exempt_groups: frozenset[str],
+    exempt_programs: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Return each place code reads a program from its home or names a path this role installs.
 
@@ -227,7 +238,11 @@ def reference_problems(
     it installs is then unknown.
     """
     held = [
-        target for target in owned if target.kind == "file" and target.group not in exempt_groups
+        target
+        for target in owned
+        if target.kind == "file"
+        and target.group not in exempt_groups
+        and target.program not in exempt_programs
     ]
     programs = sorted({target.program for target in held})
     paths = sorted({target.path for target in held})
@@ -265,6 +280,7 @@ def second_owner_problems(
     roles: Path,
     provision: Path,
     allowed: Mapping[str, frozenset[str]] = ALLOWED_SECOND_OWNERS,
+    allowed_programs: Mapping[str, frozenset[str]] = ALLOWED_SECOND_OWNER_PROGRAMS,
 ) -> list[str]:
     """Return each way a role other than the owner, or a playbook, holds or names a program."""
     ansible = roles.parent
@@ -276,6 +292,8 @@ def second_owner_problems(
         if role.name == OWNER:
             continue
         exempt_groups = allowed.get(role.name, frozenset())
+        # Reads and names only: the copy and link checks below still hold for this role.
+        read_exempt = allowed_programs.get(role.name, frozenset())
         exempt_programs = {target.program for target in owned if target.group in exempt_groups}
         digests = {
             hashlib.sha256((provision / target.program).read_bytes()).hexdigest(): target.program
@@ -294,7 +312,12 @@ def second_owner_problems(
                     problems.append(f"{shown} is a copy of {copy}")
         problems.extend(
             reference_problems(
-                _code_files(role), roles, _variables(role, shared), owned, exempt_groups
+                _code_files(role),
+                roles,
+                _variables(role, shared),
+                owned,
+                exempt_groups,
+                exempt_programs=read_exempt,
             )
         )
     problems.extend(

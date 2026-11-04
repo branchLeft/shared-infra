@@ -55,6 +55,9 @@
         - /run/demo-drain-flags-staging
         - /run/demo-broker-state
         - /var/tmp/demo1-link-target
+        - /var/tmp/demo1-site-input-target
+        - /var/lib/branchleft/demo-candidates/site-0.caddy
+        - /etc/systemd/system/branchleft-compose@demo-0-a.service.d
         - /etc/branchleft/demo1-drain-flags-preseeded
         - /etc/branchleft/tenant-uids
       register: demo1_build_verify_absent
@@ -87,3 +90,41 @@
     # The cases ran with GitHub and its registry unreachable (molecule.yml).
     - name: Assert that GitHub and its registry were unreachable
       ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/blocked_outbound.yml'
+
+    # The stand-in template is put back by the colour case, in every outcome.
+    - name: Look at the stand-in template after the cases
+      ansible.builtin.stat:
+        path: /etc/systemd/system/branchleft-compose@.service
+        follow: false
+        get_checksum: false
+      register: demo1_build_verify_stand_in
+
+    - name: Assert the stand-in template is back, root's and mode 0644
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_stand_in.stat.isreg
+          - demo1_build_verify_stand_in.stat.pw_name == 'root'
+          - demo1_build_verify_stand_in.stat.mode == '0644'
+        quiet: true
+        fail_msg: A case left the stand-in template removed or changed.
+
+    # The log scan (ANS-16). Every case of this run wrote its output to the run's Ansible
+    # log, in the scenario's scratch directory (molecule.yml). The site cases print a
+    # control line that proves the scan reads the log; the leak case's hostname is the
+    # canary, and the renderer's message that carries it is hidden, so the canary must
+    # not be in the log. The scan counts only because the control is found.
+    - name: Read the Ansible log of this scenario's run
+      ansible.builtin.set_fact:
+        demo1_build_verify_log: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/ansible.log') }}"
+      no_log: true
+
+    - name: Assert the log holds the scan control and no canary
+      ansible.builtin.assert:
+        that:
+          - "'Scan control line' in demo1_build_verify_log"
+          - "'Canary-Leak-Probe' not in demo1_build_verify_log"
+        quiet: true
+        fail_msg: >-
+          The scenario's log does not hold the scan control, or it holds the canary a refused site input carried
+          (ANS-16). Either the scan read nothing, or a task printed the input.
+      no_log: true

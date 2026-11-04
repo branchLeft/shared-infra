@@ -1,0 +1,177 @@
+---
+# One case of the owner's edge input check, imported by converge.yml. The pinned site
+# renderer reads the input as root, so the role refuses, before the renderer runs, an
+# input that is a link, not root's, or open to group or others. A renderer refusal is
+# reported by slot number, without the renderer's message, which can echo the
+# hostname (ANS-16). The case plants the input the case says, runs the role's site
+# step alone, and reads what it left.
+#
+# converge_case.plant is one of: link (a link to a root file of mode 0600), owner (a
+# file of converge_case.owner, mode 0600), mode (a root file of converge_case.mode),
+# valid (a root file of mode 0600 that the renderer accepts, which the step must
+# stage), or leak (a root file of mode 0600 whose hostname the renderer refuses; the
+# hostname is the canary, and it must not reach the log). converge_case.expect is the
+# text the refusal must name. A refusal must leave no candidate behind.
+#
+# Each case removes what it planted, puts back the fixture input prepare placed, and
+# removes any candidate it staged. The play is tagged so the idempotence step skips
+# it: the valid case stages a candidate, and the play is a control, not a state.
+- name: Refuse or accept an owner's edge input for slot 0
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    converge_input: /etc/branchleft/demo-0.edge.json
+    converge_candidate: /var/lib/branchleft/demo-candidates/site-0.caddy
+    converge_target: /var/tmp/demo1-site-input-target
+  tasks:
+    # The positive control for the log scan in verify.yml: the scan reads the log of
+    # this run, and this line is in it, so a scan that found no canary proves something.
+    - name: Print a marker the log scan reads as proof that it can read this run
+      ansible.builtin.debug:
+        msg: Scan control line
+      when: not ansible_check_mode
+
+    - name: Plant the input the case says and run the role's site step on its own
+      when: not ansible_check_mode
+      block:
+        - name: Keep the fixture input prepare placed, to put back
+          ansible.builtin.slurp:
+            src: '{{ converge_input }}'
+          register: demo1_build_converge_fixture
+          no_log: true
+
+        - name: Make the candidate directory the role declares
+          ansible.builtin.file:
+            path: /var/lib/branchleft/demo-candidates
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+          changed_when: false
+
+        - name: Remove the fixture input, so the case plants its own
+          ansible.builtin.file:
+            path: '{{ converge_input }}'
+            state: absent
+          changed_when: false
+
+        - name: Plant the root file a link will point at
+          ansible.builtin.copy:
+            content: '{}'
+            dest: '{{ converge_target }}'
+            owner: root
+            group: root
+            mode: '0600'
+          changed_when: false
+          when: converge_case.plant == 'link'
+
+        - name: Plant a link where the input is, pointing at the root file of mode 0600
+          ansible.builtin.file:
+            src: '{{ converge_target }}'
+            dest: '{{ converge_input }}'
+            state: link
+          changed_when: false
+          when: converge_case.plant == 'link'
+
+        # The hostname is the case's (converge_case.host). Its content is hidden: the
+        # canary of the leak case must not reach the log.
+        - name: Plant the input the case says
+          ansible.builtin.copy:
+            content: |
+              {
+                "displayHostname": "{{ converge_case.host | default('demo-0.site-fixture.invalid') }}",
+                "admittedHostname": null,
+                "gate": {"kind": "passphrase"},
+                "requestBodyMaxSize": "10MiB",
+                "contentSecurityPolicy": "default-src 'self'",
+                "contentSecurityPolicyMode": "enforcing"
+              }
+            dest: '{{ converge_input }}'
+            owner: '{{ converge_case.owner | default("root") }}'
+            group: root
+            mode: '{{ converge_case.mode | default("0600") }}'
+          when: converge_case.plant in ['owner', 'mode', 'valid', 'leak']
+          no_log: true
+          diff: false
+
+        - name: Run the role's site step on its own
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _site_candidates.yml
+
+        - name: Fail if an input the case must refuse was accepted
+          ansible.builtin.fail:
+            msg: The role accepted an edge input it must refuse.
+          when: converge_case.plant != 'valid'
+
+        - name: Look at the candidate the valid input made
+          ansible.builtin.stat:
+            path: '{{ converge_candidate }}'
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_candidate
+          when: converge_case.plant == 'valid'
+
+        - name: Assert the valid input made root's mode 0600 candidate for slot 0
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_candidate.stat.isreg
+              - demo1_build_converge_candidate.stat.pw_name == 'root'
+              - demo1_build_converge_candidate.stat.mode == '0600'
+            quiet: true
+            fail_msg: The valid edge input did not make root's mode 0600 candidate for slot 0.
+          when: converge_case.plant == 'valid'
+
+      rescue:
+        - name: Assert the control case was not refused
+          ansible.builtin.assert:
+            that:
+              - converge_case.plant != 'valid'
+            quiet: true
+            fail_msg: 'The role refused a valid edge input: {{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.assert:
+            that:
+              - converge_case.expect in (ansible_failed_result | string)
+            quiet: true
+            fail_msg: 'The role failed for a reason other than the one this case is for: {{ ansible_failed_result.msg | default("") }}'
+
+        - name: Look for a candidate the refusal left behind
+          ansible.builtin.stat:
+            path: '{{ converge_candidate }}'
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_refused_candidate
+
+        - name: Assert the refusal staged nothing
+          ansible.builtin.assert:
+            that:
+              - not demo1_build_converge_refused_candidate.stat.exists
+            quiet: true
+            fail_msg: The role staged a candidate for an edge input it refused.
+
+      always:
+        - name: Remove the planted input and target, and any candidate the case staged
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - '{{ converge_input }}'
+            - '{{ converge_target }}'
+            - '{{ converge_candidate }}'
+          changed_when: false
+          when: not ansible_check_mode
+
+        - name: Put back the fixture input prepare placed
+          ansible.builtin.copy:
+            content: '{{ demo1_build_converge_fixture.content | b64decode }}'
+            dest: '{{ converge_input }}'
+            owner: root
+            group: root
+            mode: '0600'
+          changed_when: false
+          no_log: true
+          diff: false
+          when: not ansible_check_mode

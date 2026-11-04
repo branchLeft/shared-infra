@@ -86,48 +86,59 @@ What the role does, in the order of `tasks/main.yml`:
    directory under the state root, which only root can write, and the directory is
    moved to the flag directory's name in one rename (see "Drain flags"), so root
    never writes through a name in the broker's own tree.
-8. **Writes the units** (`_units.yml`): the fourteen colour drop-ins and the
-   health router's template unit, from the pinned renderers' output; one systemd
-   reload when any changed.
-9. **Stages the edge candidate** (`_candidate.yml`): the edge's upstream snippets,
-   rendered by the pinned edge renderer, into a root-only candidate directory.
+8. **Writes the units** (`_units.yml`): the shared compose template unit, copied
+   from `hetzner/provision/` of the checkout (A-7); the fourteen colour drop-ins and
+   the health router's template unit, from the pinned renderers' output; one systemd
+   reload when any changed. Then it asks systemd whether each colour instance
+   loads (`_units_loaded.yml`, read-only). An instance that does not load stops the
+   run, and the message names the cause: the shared compose template unit is not
+   installed, or does not load with the drop-ins (see Phase A-7).
+9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`): the edge's
+   upstream snippets, rendered by the pinned edge renderer, into a root-only
+   candidate directory; and, for each slot the owner has placed an edge input for,
+   that slot's gated site block, rendered by the pinned site renderer from the
+   input into `site-<n>.caddy`. The input's shape is checked first (a regular file,
+   not a link, `root:root`, mode 0600 or narrower), and the renderer's own refusal
+   is reported by slot number, without its message. A slot with no input gets no
+   candidate, and the plan and the apply each say so: "Site candidate for slot <n>
+   NOT rendered". That is a stated skip, not a pass.
 10. **Reads back what root will run** (`_integrity.yml`): each installed program is
     the pinned file, `root:root`, mode `0755`, not a link, and every directory
     above it is root-owned and not writable by anyone else.
 
 ### What each Phase A step becomes
 
-| Runbook step                                              | Becomes                                                                                                    | Where                                 |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| A-1 stage the scripts in a root-only directory            | RUN as a pinned release, kept (not removed)                                                                | `_release.yml`                        |
-| A-2 install sudo and xz-utils                             | NOT ROLE: the role requires `visudo` and refuses without it; xz belongs to the Node step                   | `_sudoers_check.yml`                  |
-| A-3 claim the uids                                        | RUN the pinned `demo_uid_claims.py`, only when a claim is missing                                          | `_accounts.yml`                       |
-| A-4 the two accounts                                      | `demo-router` created here (create or assert, never `usermod`); `broker` is `broker_deploy`'s and asserted | `_accounts.yml`, `_preconditions.yml` |
-| A-5 wrapper, then the sudoers boundary                    | wrapper INSTALL; the boundary is `broker_deploy`'s and is compared, never written                          | `_programs.yml`, `_sudoers_check.yml` |
-| A-6 read the boundary back                                | the assertions of the sudoers check                                                                        | `_sudoers_check.yml`                  |
-| A-7 compose template and drop-ins                         | the fourteen drop-ins are written; the compose template unit is not (named gap)                            | `_units.yml`                          |
-| A-8 health routers                                        | the template unit is written and systemd reloaded; no router is enabled or started                         | `_units.yml`                          |
-| A-9, A-9b drain-flag directory                            | declared with modules, links refused; flags pre-seeded once, under a root-owned marker                     | `_dirs.yml`                           |
-| A-10 the seven slot directories, by the wrapper's `reset` | NOT ROLE: `reset` wipes and recreates a tenancy and is the owner's to run                                  | none                                  |
-| A-11 remove the staging directory                         | retired: the release is the staging and is kept                                                            | none                                  |
-| A-12 evidence                                             | the Molecule `verify.yml` and the harness                                                                  | `molecule/default`                    |
+| Runbook step                                              | Becomes                                                                                                                                                                  | Where                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| A-1 stage the scripts in a root-only directory            | RUN as a pinned release, kept (not removed)                                                                                                                              | `_release.yml`                        |
+| A-2 install sudo and xz-utils                             | NOT ROLE: the role requires `visudo` and refuses without it; xz belongs to the Node step                                                                                 | `_sudoers_check.yml`                  |
+| A-3 claim the uids                                        | RUN the pinned `demo_uid_claims.py`, only when a claim is missing                                                                                                        | `_accounts.yml`                       |
+| A-4 the two accounts                                      | `demo-router` created here (create or assert, never `usermod`); `broker` is `broker_deploy`'s and asserted                                                               | `_accounts.yml`, `_preconditions.yml` |
+| A-5 wrapper, then the sudoers boundary                    | wrapper INSTALL; the boundary is `broker_deploy`'s and is compared, never written                                                                                        | `_programs.yml`, `_sudoers_check.yml` |
+| A-6 read the boundary back                                | the assertions of the sudoers check                                                                                                                                      | `_sudoers_check.yml`                  |
+| A-7 compose template and drop-ins                         | the template unit is copied from `hetzner/provision/` (read, not copied into the role); the fourteen drop-ins are written and the fourteen instances are checked to load | `_units.yml`, `_units_loaded.yml`     |
+| A-8 health routers                                        | the template unit is written and systemd reloaded; no router is enabled or started                                                                                       | `_units.yml`                          |
+| A-9, A-9b drain-flag directory                            | declared with modules, links refused; flags pre-seeded once, under a root-owned marker                                                                                   | `_dirs.yml`                           |
+| A-10 the seven slot directories, by the wrapper's `reset` | NOT ROLE: `reset` wipes and recreates a tenancy and is the owner's to run                                                                                                | none                                  |
+| A-11 remove the staging directory                         | retired: the release is the staging and is kept                                                                                                                          | none                                  |
+| A-12 evidence                                             | the Molecule `verify.yml` and the harness                                                                                                                                | `molecule/default`                    |
 
 ### What each pinned program becomes
 
-| Program                                         | Role                     | Notes                                                                |
-| ----------------------------------------------- | ------------------------ | -------------------------------------------------------------------- |
-| `branchleft_slot.py`                            | INSTALL                  | The wrapper. Installed, never run.                                   |
-| `demo_sidecar.py`                               | INSTALL                  | Run by the colour drop-ins, never by the role.                       |
-| `health_router.py`                              | INSTALL                  | Run by the router unit, never by the role.                           |
-| `render_slot_sudoers.py`                        | RUN, stdout only         | Printed, not written: the comparison.                                |
-| `render_colour_units.py`                        | RUN, stdout only         | The drop-ins' text.                                                  |
-| `render_router_unit.py`                         | RUN, stdout only         | The router unit's text.                                              |
-| `render_demo_edge.py`                           | RUN, stdout only         | The candidate fragment.                                              |
-| `demo_uid_claims.py`                            | RUN, writes the register | Only when a claim is missing; never in check mode.                   |
-| `render_demo_site.py`                           | STAGED                   | Part of the release the owner opens the demo from.                   |
-| `demo_go_live.py`                               | STAGED, NOT ROLE         | The owner's go-live. The role never runs it.                         |
-| `provision_socket_dirs.py`, `drain_flag_dir.py` | NOT FETCHED              | Their jobs are declared with `file` tasks, so a plan shows each one. |
-| `branchleft_demo_egress.sh`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                    |
+| Program                                         | Role                     | Notes                                                                                                                         |
+| ----------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `branchleft_slot.py`                            | INSTALL                  | The wrapper. Installed, never run.                                                                                            |
+| `demo_sidecar.py`                               | INSTALL                  | Run by the colour drop-ins, never by the role.                                                                                |
+| `health_router.py`                              | INSTALL                  | Run by the router unit, never by the role.                                                                                    |
+| `render_slot_sudoers.py`                        | RUN, stdout only         | Printed, not written: the comparison.                                                                                         |
+| `render_colour_units.py`                        | RUN, stdout only         | The drop-ins' text.                                                                                                           |
+| `render_router_unit.py`                         | RUN, stdout only         | The router unit's text.                                                                                                       |
+| `render_demo_edge.py`                           | RUN, stdout only         | The candidate fragment.                                                                                                       |
+| `demo_uid_claims.py`                            | RUN, writes the register | Only when a claim is missing; never in check mode.                                                                            |
+| `render_demo_site.py`                           | RUN, stdout only         | The site block of each slot the owner has an input for, staged as a candidate. Never run with `--gate-env-out`, which writes. |
+| `demo_go_live.py`                               | STAGED, NOT ROLE         | The owner's go-live. The role never runs it.                                                                                  |
+| `provision_socket_dirs.py`, `drain_flag_dir.py` | NOT FETCHED              | Their jobs are declared with `file` tasks, so a plan shows each one.                                                          |
+| `branchleft_demo_egress.sh`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                                                                             |
 
 "RUN, stdout only" means the renderer is run with no output flag: it prints to
 standard output and writes nothing, so running it is a read and is the one
@@ -148,6 +159,13 @@ file reaches the release.
 - It does not enable or start a health router or a colour unit.
 - It does not fetch secrets. Anything secret on the host is a root-only file the
   owner puts there.
+- It does not make the owner's edge input for a slot, and does not decide what it
+  holds. The renderer reads the file, the role checks its shape and stages the
+  output, and no task of the role prints the output (ANS-16).
+- It does not keep a copy of the shared compose template unit. It installs the file
+  `hetzner/provision/branchleft-compose@.service` of the checkout (A-7, Phase A-7
+  below). A byte copy or a link of that file in this role is refused by
+  `test_deploy_tooling_single_owner.py`.
 
 ## Interface
 
@@ -243,11 +261,17 @@ runs them.
 - `/var/lib/branchleft/demo-drain-flags-staging` (`root:root` `0700`): where the flags
   are written before the directory is moved into place. It exists only during the run
   that makes the flag directory, and a run that died in the middle leaves it.
+- `/etc/systemd/system/branchleft-compose@.service` (`root:root` `0644`): the shared
+  compose template unit, the bytes of `hetzner/provision/branchleft-compose@.service`
+  of the checkout. Written before the reload; not enabled or started.
 - `/etc/systemd/system/branchleft-compose@demo-<n>-<colour>.service.d/colour.conf`
   (`root:root` `0644`) for each slot and colour, and
   `branchleft-health-router@.service`; one systemd reload when any changed.
 - `/var/lib/branchleft/demo-candidates/` (`root` `0700`) holding
-  `edge-upstreams.caddy` (`root` `0600`).
+  `edge-upstreams.caddy` (`root` `0600`), and one `site-<n>.caddy` (`root` `0600`)
+  for each slot whose owner-placed input `/etc/branchleft/demo-<n>.edge.json` the
+  renderer read. The role never writes or reads back those inputs' values, and it
+  never writes the live edge.
 
 ### Drain flags
 
@@ -336,21 +360,23 @@ A plan makes no change on the host. Every program the role runs in check mode on
 prints, and every program that writes is skipped there with its reason stated at
 the task. In order:
 
-| Task                                                     | In check mode                                                                                                                                              |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reads (`stat`, `slurp`, `getent`, `find`, `visudo -csf`) | Run.                                                                                                                                                       |
-| Pinned renderers (stdout only)                           | Run with `check_mode: false`, only on a host that has the release; otherwise skipped, because there is no release to run.                                  |
-| Sudoers grant against the generator                      | Compared where the release is staged. On a host with none it is skipped and the plan prints "Sudoers grant NOT verified", with the reason; it never fails. |
-| Directories, links, accounts, files, units               | Modules report what would change.                                                                                                                          |
-| Hash of each vendored program (`_vendored.yml`)          | Run: reads where the role runs and refuses a program that is not its pin.                                                                                  |
-| `copy` of the programs                                   | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `copy` cannot write into a missing directory.  |
-| Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                     |
-| `demo_uid_claims.py`                                     | Never run.                                                                                                                                                 |
-| Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                 |
-| Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                              |
-| Same-filesystem check of the staged move                 | Run where the move would run (no flag directory, no marker): reads and refuses, so a plan on a host whose state root and broker directory are split stops. |
-| Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                     |
-| Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                |
+| Task                                                     | In check mode                                                                                                                                                                                                    |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reads (`stat`, `slurp`, `getent`, `find`, `visudo -csf`) | Run.                                                                                                                                                                                                             |
+| Pinned renderers (stdout only)                           | Run with `check_mode: false`, only on a host that has the release; otherwise skipped, because there is no release to run.                                                                                        |
+| Sudoers grant against the generator                      | Compared where the release is staged. On a host with none it is skipped and the plan prints "Sudoers grant NOT verified", with the reason; it never fails.                                                       |
+| Directories, links, accounts, files, units               | Modules report what would change.                                                                                                                                                                                |
+| Hash of each vendored program (`_vendored.yml`)          | Run: reads where the role runs and refuses a program that is not its pin.                                                                                                                                        |
+| `copy` of the programs                                   | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `copy` cannot write into a missing directory.                                                        |
+| Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                                                                           |
+| Owner's edge inputs and site candidates                  | Each input is read as a stat with no checksum and refused on its shape. The renderer runs where the release is staged; a slot with no input, or with no staged renderer, is named "NOT rendered" in a plan line. |
+| Colour instances load (`_units_loaded.yml`)              | Where the drop-in directories are not on the host, skipped with the line "Colour units NOT verified". Elsewhere systemd is asked, changing nothing, and the check stops a run whose instance does not load.      |
+| `demo_uid_claims.py`                                     | Never run.                                                                                                                                                                                                       |
+| Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                                                                       |
+| Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                                                                                    |
+| Same-filesystem check of the staged move                 | Run where the move would run (no flag directory, no marker): reads and refuses, so a plan on a host whose state root and broker directory are split stops.                                                       |
+| Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                                                                           |
+| Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                                                                      |
 
 The `plan` scenario's `converge.yml` runs the role in check mode and compares a list of
 watched paths before and after: a path that did not exist must still not exist and
@@ -627,6 +653,13 @@ assertion fires in its place or a later one is the only one left:
 | The wrapper installed group-writable                                                                      | default, `converge`                     | the integrity assertion on the installed programs                                                                          |
 | The claim program run in check mode                                                                       | plan, `check-*`                         | "The check run changed"                                                                                                    |
 | A file added to the broker's slots directory                                                              | default, `converge`                     | "The role changed the broker's slots directory"                                                                            |
+| The site input link check removed (`_site_candidates.yml`)                                                | refusals, `converge`                    | "is a link or not a regular file", for the link case; the mode check then refuses the link instead                         |
+| The site input owner check removed                                                                        | refusals, `converge`                    | "is not root:root", for the case of an input owned by broker                                                               |
+| The site input mode check removed                                                                         | refusals, `converge`                    | "must be 0600 or narrower", for the case of an input of mode 0644                                                          |
+| The renderer's output not hidden (`no_log: false` on the render task)                                     | refusals, `verify`                      | "The scenario's log does not hold the scan control, or it holds the canary", for the leak case                             |
+| The candidate written with mode 0644                                                                      | default, `verify`                       | "Slot 0's site candidate is not root's mode 0600"                                                                          |
+| The NOT rendered notice made silent                                                                       | default, `converge`                     | "The site candidates are not the six slots with no edge input, or a slot with no input was not named as NOT rendered"      |
+| The colour instance check (`_units_loaded.yml`) assert removed                                            | refusals, `converge`                    | "The colour unit check accepted instances that load from no template."                                                     |
 | Both seeding tests removed (the pre-seed guard)                                                           | default, `converge`                     | "The role put a cleared drain flag back."                                                                                  |
 
 The harness's own controls (a failing second scenario fails its shard, a role with
@@ -702,8 +735,25 @@ other unit tests of `ansible/harness`.
   until the owner places the file.
 - **No router is enabled or started.** The template unit is installed and systemd is
   reloaded; starting is the owner's step.
-- **The compose template unit is not installed.** The drop-ins extend
-  `branchleft-compose@`; the template they extend is delivered elsewhere.
+- **The compose template unit is written from `hetzner/provision/` (A-7, the owner's
+  ruling B of 4 Nov, ws#2364 comment 6630331961).** The drop-ins extend
+  `branchleft-compose@`, and `deploy_tooling` owns that file on the other hosts. The
+  single-owner test (`ansible/checks/test_deploy_tooling_single_owner.py`) refused a
+  second role that names it, so it now exempts demo1 by program
+  (`ALLOWED_SECOND_OWNER_PROGRAMS`): demo1 may read and name that one file, and a byte
+  copy or a link of it stays refused. That exemption sits in an owner-merged file, so
+  the PR that adds it waits for Rob's merge. The role-path check
+  (`ansible/checks/check_role_paths.py`) does not object and needs no exemption:
+  `deploy_tooling` writes the template through a loop item (`dest: '{{ item.path }}'`),
+  which that check leaves templated and does not compare. demo1 never applies
+  `deploy_tooling`, so the host has one writer of the file. What demo1 holds today is
+  unknown without host access: the first plan shows any difference, and
+  `_units_loaded.yml` stops a run whose colour instance does not load.
+- **The site candidate uses the renderer's default TLS directive.** The role runs
+  the pinned site renderer without `--tls`, so the candidate carries its default,
+  `tls internal` (a local certificate authority). The production directive, the
+  wildcard certificate, is not an input of this role. The owner diffs the candidate
+  against the live edge, and supplies the directive, before any go-live step.
 - **The slot directories `/opt/branchleft/demo-<n>`** are made by the wrapper's
   `reset`, which this role never runs. They do not exist after the role.
 - **The egress interaction is unverified.** The demo host's egress ruleset
