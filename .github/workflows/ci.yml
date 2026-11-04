@@ -29,7 +29,9 @@ name: CI
 #      the API before trusting the gate. The mail apply is in its own
 #      environment, `production-mail`, and the DNS apply is in its own,
 #      `production-dns`, so no approval meant for another stack's apply can
-#      release either (GitHub approves per environment per run).
+#      release either (GitHub approves per environment per run). The mail and
+#      DNS plan jobs each have a main-only environment with no reviewer
+#      (`mail-plan`, `dns-plan`) that holds their credentials.
 #   5. The apply job re-runs preview and the guard immediately before
 #      `pulumi up`: what was approved and what is applied can diverge only
 #      inside one run's window, and never past the guard.
@@ -957,6 +959,9 @@ jobs:
   #     silent unattended apply. `production-mail` and `production-dns` must
   #     each have a required-reviewer rule (the DNS gate accepts nothing else,
   #     so the reviewer App's custom rule can never release a DNS apply);
+  #     `mail-plan` and `dns-plan` must have a main-only branch policy and no
+  #     reviewer, and `dns-plan` and `production-dns` each hold the three DNS
+  #     secrets;
   #     `production` may have a required-reviewer rule or an enabled
   #     custom deployment protection rule of the reviewer App (integration
   #     id 5090756). `production-free`, which only a plan the spend gate reads
@@ -2199,6 +2204,17 @@ jobs:
       github.event_name == 'push' && github.ref == 'refs/heads/main' &&
       needs.changes.outputs.hetzner_dns == 'true'
 
+    # The plan reads the DNS credentials, so it has an environment of its own,
+    # as `mail-plan` does (issue #2195): `dns-plan` carries no reviewer and
+    # deploys from `main` only. The token can repoint the zone for the website,
+    # the edge and mail, so the three DNS secrets live in `dns-plan` and
+    # `production-dns` and not at repository level, where a job on a branch
+    # could read them. A job without one of these environments reads them
+    # empty. This job runs on a push to `main` alone (the `if` above), so a
+    # pull-request or merge-queue run skips it before the environment is asked
+    # and the main-only policy never has to refuse a branch.
+    environment: dns-plan
+
     # See mail-plan: the apply job is skipped only when this is the string
     # 'false'. This stack has no routing output: its apply is always in
     # `production-dns`.
@@ -2215,11 +2231,10 @@ jobs:
       run:
         working-directory: hetzner/dns
 
-    # Repository-level secrets, like the network and estate stacks: the plan
-    # reads them without an approval. The token is the DNS Hetzner project's
-    # alone (id 16139783); dnsZone.ts refuses any other project's. The state
-    # bucket credentials are the Hetzner backend's, shared with the sibling
-    # stacks.
+    # The token is the DNS Hetzner project's alone (id 16139783); dnsZone.ts
+    # refuses any other project's. The state bucket credentials are the Hetzner
+    # backend's, shared with the sibling stacks, and stay at repository level
+    # (they open the state bucket; they cannot write a zone).
     env:
       PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_DNS }}
       PULUMI_SALT_HETZNER_DNS: ${{ secrets.PULUMI_SALT_HETZNER_DNS }}

@@ -60,6 +60,13 @@ gate reads as free runs in `production-free`, which only the reviewer App
 answers, and any plan the gate cannot read stays in `production`) until the plan has been read and approved —
 `scripts/assert-no-hetzner-deletes.py` catches the destruction class
 mechanically, the reviewer catches the plan that is green and still wrong.
+The mail and DNS plan jobs read their credentials from an environment of
+their own, `mail-plan` and `dns-plan`: main-only, no reviewer. The DNS token
+can repoint the zone for the website, the edge and mail, so the three DNS
+secrets (`HCLOUD_TOKEN_DNS`, `PULUMI_PASSPHRASE_HETZNER_DNS`,
+`PULUMI_SALT_HETZNER_DNS`) are set in `dns-plan` and in `production-dns`, not
+at repository level. Both plan jobs start on a push to `main` only, so a pull
+request or merge-queue run skips them and no branch can read those secrets.
 
 ```bash
 pnpm install --frozen-lockfile

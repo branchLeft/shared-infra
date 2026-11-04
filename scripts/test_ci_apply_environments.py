@@ -44,6 +44,12 @@ OWN_ENVIRONMENT_APPLIES = {
 }
 DNS_APPLY = "hetzner-dns-apply"
 DNS_PLAN = "hetzner-dns-plan"
+# The plan jobs that read their credentials from an environment of their own:
+# main-only, no reviewer (issue #2195 for mail; the DNS plan mirrors it).
+PLAN_ENVIRONMENTS = {"mail-plan": "mail-plan", DNS_PLAN: "dns-plan"}
+# The three secrets that can write the DNS zone. They live in `dns-plan` and
+# `production-dns`, so only these two jobs may name them.
+DNS_SECRETS = ("HCLOUD_TOKEN_DNS", "PULUMI_PASSPHRASE_HETZNER_DNS", "PULUMI_SALT_HETZNER_DNS")
 
 # The reviewer App's integration id, as `app.id` on the live rule object.
 REVIEWER_APP_ID = 5090756
@@ -214,10 +220,42 @@ class StructureTests(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(environment_of(job_block(self.text, job)), expected)
 
-    def test_only_the_four_applies_and_mail_plan_declare_an_environment(self):
-        # mail-plan has its own environment since #2195 (no reviewer, main only).
+    def test_only_the_four_applies_and_the_mail_and_dns_plans_declare_an_environment(self):
+        # mail-plan has its own environment since #2195 (no reviewer, main only);
+        # the DNS plan mirrors it with `dns-plan`.
         declared = re.findall(r"^    environment: (.+?)[ \t]*$", self.text, re.M)
-        self.assertEqual(sorted(declared), sorted([*APPLY_JOBS.values(), "mail-plan"]))
+        self.assertEqual(
+            sorted(declared), sorted([*APPLY_JOBS.values(), *PLAN_ENVIRONMENTS.values()])
+        )
+
+    def test_the_plan_jobs_name_their_environments(self):
+        for job, expected in PLAN_ENVIRONMENTS.items():
+            with self.subTest(job=job):
+                self.assertEqual(environment_of(job_block(self.text, job)), expected)
+        for job in ROUTED_PLAN_JOBS:
+            with self.subTest(job=job):
+                self.assertIsNone(environment_of(job_block(self.text, job)))
+
+    def test_dns_plan_is_the_only_job_in_dns_plan(self):
+        self.assertEqual(
+            self.text.count("environment: dns-plan"),
+            1,
+            "dns-plan must belong to the DNS plan alone",
+        )
+        for job in all_jobs(self.text):
+            if job != DNS_PLAN:
+                with self.subTest(job=job):
+                    self.assertNotEqual(environment_of(job_block(self.text, job)), "dns-plan")
+
+    def test_the_dns_secrets_are_read_by_the_dns_plan_and_apply_only(self):
+        for job in all_jobs(self.text):
+            block = job_block(self.text, job)
+            for secret in DNS_SECRETS:
+                with self.subTest(job=job, secret=secret):
+                    if job in (DNS_PLAN, DNS_APPLY):
+                        self.assertIn(f"secrets.{secret}", block)
+                    else:
+                        self.assertNotIn(secret, block)
 
     def test_mail_apply_is_the_only_job_in_production_mail(self):
         self.assertEqual(
@@ -267,9 +305,10 @@ class StructureTests(unittest.TestCase):
                 "needs.changes.outputs.hetzner_dns == 'true'",
             ],
         )
-        # Repository-level secrets, like the network and estate plans: no
-        # environment of its own, so the plan reads them without an approval.
-        self.assertIsNone(environment_of(plan))
+        # The DNS secrets are environment-level, as the mail plan's are: the
+        # plan has the main-only, no-reviewer `dns-plan` environment, so it
+        # reads them without an approval and a branch cannot read them at all.
+        self.assertEqual(environment_of(plan), "dns-plan")
         self.assertIn("      has_changes: ${{ steps.noop.outputs.has_changes }}\n", plan)
         self.assertEqual(
             job_env_value(plan, "HCLOUD_TOKEN"), "${{ secrets.HCLOUD_TOKEN_DNS }}"
@@ -1371,6 +1410,35 @@ def environment_isolation_violations(text: str) -> list[str]:
     return found
 
 
+def plan_environment_violations(text: str) -> list[str]:
+    """The DNS plan reads the zone-writing secrets from `dns-plan` (main only,
+    no reviewer, as `mail-plan`), so: `dns-plan` is the literal environment of
+    the DNS plan alone; the plan starts on a push to main only, which is what
+    keeps the main-only policy from ever meeting a branch; the plan is never in
+    the apply's environment; and no other job names the DNS secrets."""
+    found = []
+    own = environment_of(job_block(text, DNS_PLAN))
+    if own != "dns-plan":
+        found.append(f"{DNS_PLAN}: the environment must be the literal dns-plan, not {own!r}")
+    holders = [j for j in all_jobs(text) if environment_of(job_block(text, j)) == "dns-plan"]
+    if holders != [DNS_PLAN]:
+        found.append(f"dns-plan must be the environment of {DNS_PLAN} alone; held by {holders}")
+    if text.count("environment: dns-plan") != 1:
+        found.append("`environment: dns-plan` must appear exactly once in ci.yml")
+    operands = and_operands(job_if(job_block(text, DNS_PLAN)))
+    for required in ("github.event_name == 'push'", "github.ref == 'refs/heads/main'"):
+        if required not in operands:
+            found.append(f"{DNS_PLAN}: the job must start only when {required}")
+    for job in all_jobs(text):
+        if job in (DNS_PLAN, DNS_APPLY):
+            continue
+        block = job_block(text, job)
+        for secret in DNS_SECRETS:
+            if secret in block:
+                found.append(f"{job}: names the DNS secret {secret}")
+    return found
+
+
 class GateShapeTests(unittest.TestCase):
     """The per-job gate lint, run on the real ci.yml."""
 
@@ -1416,6 +1484,9 @@ class GateShapeTests(unittest.TestCase):
     def test_the_isolation_lint_is_clean_on_the_real_workflow(self):
         self.assertEqual(environment_isolation_violations(self.text), [])
 
+    def test_the_plan_environment_lint_is_clean_on_the_real_workflow(self):
+        self.assertEqual(plan_environment_violations(self.text), [])
+
 
 class DnsApplyIsolationTests(unittest.TestCase):
     """THE SABOTAGE TEST. Each case breaks one part of the mechanism that keeps
@@ -1428,7 +1499,7 @@ class DnsApplyIsolationTests(unittest.TestCase):
 
     @staticmethod
     def problems(text: str) -> list[str]:
-        found = environment_isolation_violations(text)
+        found = environment_isolation_violations(text) + plan_environment_violations(text)
         for job in GATE_ALLOWANCES:
             found += apply_gate_violations(text, job)
         return found
@@ -1474,6 +1545,34 @@ class DnsApplyIsolationTests(unittest.TestCase):
             "(6) the dns gate reads production, not production-dns": self.mutate(
                 text, DNS_APPLY, "environments/production-dns", "environments/production"
             ),
+            # The plan job's environment (the DNS secrets live there).
+            "(7) the dns plan loses its environment": self.mutate(
+                text, DNS_PLAN, "    environment: dns-plan\n", ""
+            ),
+            "(8) the dns plan moves into the apply's production-dns": self.mutate(
+                text, DNS_PLAN, "    environment: dns-plan", "    environment: production-dns"
+            ),
+            "(9) the dns plan may start on a branch": self.mutate(
+                text,
+                DNS_PLAN,
+                "github.event_name == 'push' && github.ref == 'refs/heads/main' &&\n",
+                "github.event_name == 'push' &&\n",
+            ),
+            "(10) dns-plan is also given to the network plan": self.mutate(
+                text,
+                "hetzner-network-plan",
+                "    runs-on: ubuntu-latest\n",
+                "    runs-on: ubuntu-latest\n    environment: dns-plan\n",
+            ),
+            "(11) the network plan reads the DNS token": self.mutate(
+                text,
+                "hetzner-network-plan",
+                "secrets.HCLOUD_TOKEN_ESTATE",
+                "secrets.HCLOUD_TOKEN_DNS",
+            ),
+            "(12) the dns apply moves into dns-plan": self.mutate(
+                text, DNS_APPLY, "    environment: production-dns", "    environment: dns-plan"
+            ),
         }
 
     def test_sabotaged_workflows_are_flagged_and_the_real_one_is_clean(self):
@@ -1493,10 +1592,16 @@ class DnsApplyIsolationTests(unittest.TestCase):
             "(2)": lambda t: apply_gate_violations(t, DNS_APPLY),
             "(3)": lambda t: apply_gate_violations(t, DNS_APPLY),
             "(6)": lambda t: apply_gate_violations(t, DNS_APPLY),
+            "(7)": plan_environment_violations,
+            "(8)": plan_environment_violations,
+            "(9)": plan_environment_violations,
+            "(10)": plan_environment_violations,
+            "(11)": plan_environment_violations,
+            "(12)": plan_environment_violations,
         }
         for name, mutated in self.mutations().items():
             with self.subTest(mutation=name):
-                self.assertTrue(flagged_by[name[:3]](mutated))
+                self.assertTrue(flagged_by[name.split()[0]](mutated))
 
 
 def filter_patterns(text: str, name: str) -> list[str]:
