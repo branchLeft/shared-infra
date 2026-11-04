@@ -77,5 +77,8 @@ provisioner:
         # The port a remote-forward attempt asks the jump host to open on its own loopback.
         scenario_remote_port: 18080
         scenario_other_user: someoneelse
+        # The account behind the jump, on the host a ProxyJump ends at, as the pushed host's own CI
+        # account is. It has a shell and its own key; the jump host holds neither.
+        scenario_target_user: pushtarget
 verifier:
   name: ansible

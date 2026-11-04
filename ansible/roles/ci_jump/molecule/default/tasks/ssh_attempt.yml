@@ -11,6 +11,17 @@
 # the remote command (sent after a double dash), for the no_command case. The marker file is what the hostile command
 # tries to make. Every other target is a live listener of the same sshd, so a refusal is the key
 # line's doing and not an absent listener's.
+#
+# attempt_route: direct (the default) is every connection above, made to the jump host itself.
+# proxyjump runs the client the way the pipeline's action runs it for a host behind the jump: an
+# ssh -F configuration whose one stanza, jump_hop, holds the hop's own key and strict options
+# (IdentitiesOnly, BatchMode, ForwardAgent no, ClearAllForwardings yes), and -o ProxyJump=jump_hop
+# to the target as its own account with its own key, reading standard input into a command. The
+# meaning of attempt_expect is the same, with two differences: through means the target ran the
+# command (cat gave the standard input back, so the bytes crossed the hop), and the target is
+# attempt_target as host:port, the port going to the target and not to the hop. The stanza mirrors
+# .github/actions/ssh-check-hosts/action.yml at github-workflows v1.0.21; it is a copy across
+# repositories, and github-workflows tools/ssh_jump_proof.py is the authority for the client side.
 - name: Clear the marker a hostile command would make
   ansible.builtin.file:
     path: /tmp/EXAMPLE_MARKER
@@ -25,12 +36,81 @@
   changed_when: false
   check_mode: false
 
+# The hop's stanza, with the key under test as its identity. The test server is the only host, so
+# the stanza names it by its loopback address and port, and does not check its host key (the
+# action pins known_hosts; the pin is the action's, not the role's).
+- name: Write the client configuration of the hop
+  ansible.builtin.copy:
+    content: |
+      Host jump_hop
+        HostName 127.0.0.1
+        Port {{ scenario_ssh_port }}
+        User {{ scenario_jump_user }}
+        IdentityFile {{ scenario_key_dir }}/{{ attempt_key }}
+        IdentitiesOnly yes
+        BatchMode yes
+        StrictHostKeyChecking no
+        UserKnownHostsFile /dev/null
+        GlobalKnownHostsFile /dev/null
+        LogLevel ERROR
+        ConnectTimeout 30
+        ServerAliveInterval 30
+        ForwardAgent no
+        ClearAllForwardings yes
+    dest: '{{ scenario_key_dir }}/jump_config'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+  check_mode: false
+  when: (attempt_route | default('direct')) == 'proxyjump'
+
 - name: Connect with the key
   ansible.builtin.command:
-    argv: '{{ attempt_base + attempt_tail }}'
+    argv: >-
+      {{ attempt_proxyjump if (attempt_route | default('direct')) == 'proxyjump'
+      else attempt_base + attempt_tail }}
     stdin: "EXAMPLE\n"
     stdin_add_newline: false
   vars:
+    # The far end of the hop is the target account, which the jump host does not know, reading
+    # the standard input into cat. The -p is the target's port; the hop's is in its stanza.
+    attempt_proxyjump:
+      - timeout
+      - --kill-after=5
+      - '60'
+      - ssh
+      - -T
+      - -F
+      - '{{ scenario_key_dir }}/jump_config'
+      - -o
+      - ProxyJump=jump_hop
+      - -i
+      - '{{ scenario_key_dir }}/target'
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=no
+      - -o
+      - UserKnownHostsFile=/dev/null
+      - -o
+      - GlobalKnownHostsFile=/dev/null
+      - -o
+      - ConnectTimeout=10
+      - -o
+      - ForwardAgent=no
+      - -o
+      - ClearAllForwardings=yes
+      - -o
+      - LogLevel=ERROR
+      - -p
+      - '{{ (attempt_target | default(":")).split(":")[1] }}'
+      - '{{ scenario_target_user }}@{{ (attempt_target | default(":")).split(":")[0] }}'
+      - --
+      - cat
     # timeout turns a client left waiting into a failure (124, or 137 once killed) that the
     # assertion below names.
     attempt_base:
@@ -107,7 +187,21 @@
       The forward to {{ attempt_target }} was not made for {{ attempt_key }}: it ended with
       {{ ci_jump_scenario_attempt.rc }} and said {{ ci_jump_scenario_attempt.stderr }}
     quiet: true
-  when: attempt_expect == 'through'
+  when: attempt_expect == 'through' and (attempt_route | default('direct')) == 'direct'
+
+# Behind a ProxyJump the banner is read by the client itself, so the proof that the forward
+# reached the target is that the target's account ran the command: cat gave back what the client
+# sent on standard input.
+- name: Assert the target behind the hop ran the command and the standard input crossed the hop
+  ansible.builtin.assert:
+    that:
+      - ci_jump_scenario_attempt.rc == 0
+      - ci_jump_scenario_attempt.stdout | trim == 'EXAMPLE'
+    fail_msg: >-
+      The command did not run on {{ attempt_target }} through the hop for {{ attempt_key }}: it
+      ended with {{ ci_jump_scenario_attempt.rc }} and said {{ ci_jump_scenario_attempt.stderr }}
+    quiet: true
+  when: attempt_expect == 'through' and (attempt_route | default('direct')) == 'proxyjump'
 
 - name: Assert the forward was refused by the key line
   ansible.builtin.assert:

@@ -65,7 +65,8 @@
 
     # No module in the pinned collections makes an SSH key pair, so the command is used
     # (ANS-9). The creates argument makes it report truthfully. old stands for the key on the
-    # hand-made line, intruder for a key that is in no file.
+    # hand-made line, intruder for a key that is in no file, target for the account on the pushed
+    # host that the far end of a ProxyJump logs in to (not a jump key: the jump host never holds it).
     - name: Make one throwaway key pair for each key the scenario uses
       ansible.builtin.command:
         argv:
@@ -85,6 +86,7 @@
         - second
         - old
         - intruder
+        - target
       no_log: true
 
     - name: Read the public key of the old line
@@ -92,6 +94,44 @@
         src: '{{ scenario_key_dir }}/old.pub'
       register: ci_jump_scenario_prepare_old
       no_log: true
+
+    # The host behind the jump, as a pushed host such as demo1 is: an account with a shell that
+    # takes a command on standard input, logged in to with its own key. This is the far end of a
+    # ProxyJump; the sshd that serves it is the same test server, listening on the listed
+    # addresses. The jump key is not in this account's file and this key is not in the jump
+    # host's, so each hop is authenticated on its own.
+    - name: Make the account on the target host
+      ansible.builtin.user:
+        name: '{{ scenario_target_user }}'
+        shell: /bin/sh
+        create_home: true
+        password: '*'
+      no_log: true
+
+    - name: Read the public key of the target account
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_dir }}/target.pub'
+      register: ci_jump_scenario_prepare_target
+      no_log: true
+
+    - name: Make the ssh directory of the target account
+      ansible.builtin.file:
+        path: '/home/{{ scenario_target_user }}/.ssh'
+        state: directory
+        owner: '{{ scenario_target_user }}'
+        group: '{{ scenario_target_user }}'
+        mode: '0700'
+      no_log: true
+
+    - name: Let the target key log in to the target account
+      ansible.builtin.copy:
+        content: "{{ ci_jump_scenario_prepare_target.content | b64decode | trim }}\n"
+        dest: '/home/{{ scenario_target_user }}/.ssh/authorized_keys'
+        owner: '{{ scenario_target_user }}'
+        group: '{{ scenario_target_user }}'
+        mode: '0600'
+      no_log: true
+      diff: false
 
     - name: Make the directory of the hand-made key file as the runbook does
       ansible.builtin.file:

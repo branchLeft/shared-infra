@@ -7,6 +7,8 @@
 #      and the jump host's own address on port 22 and nothing else (another live address,
 #      another port, a remote command, a key not in the file), and the jump host refuses to open
 #      a port of its own for the key (ssh -R)
+#   1b the same cases through the pipeline's own client (ssh -F, ProxyJump) to a target account
+#      that has its own key: what the gated run does to a pushed host such as demo1
 #   2  the converged files: owner, modes, the exact lines, the old line gone, no comment, and the
 #      sshd drop-in whose Match block carries the same list; the hand-made layout the prepare
 #      made, whose paths hold the account's name, is gone, and no path under /etc/ssh holds the
@@ -104,6 +106,60 @@
         - '/bin/sh -c "touch /tmp/EXAMPLE_MARKER"'
         - id
         - ''
+
+    # Phase 1b. A host that is pushed its commit, demo1 and each tenant host after it,
+    # is reached by the pipeline's own client: ssh -F with a jump_hop stanza and -o ProxyJump to
+    # the target as its own account, the bundle on standard input. The same sshd and the same key
+    # line answer. The cases are those of phase 1, made through that client: the listed target runs
+    # the command and the bytes cross the hop; an unlisted target, the listed address on another
+    # port and the jump host's own loopback are refused by the key line; a key in no file and the
+    # replaced line's key are turned away at the hop, so the target is never reached.
+    - name: Reach the target behind the hop, as the pipeline's client does, with each key
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_route: proxyjump
+        attempt_key: '{{ item.key }}'
+        attempt_target: '{{ item.target }}:22'
+        attempt_expect: through
+      loop:
+        - { key: jump, target: '{{ scenario_listed }}' }
+        - { key: second, target: '{{ scenario_listed }}' }
+        - { key: jump, target: '{{ scenario_own }}' }
+
+    - name: Reach a live target that is not on the list through the hop
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_route: proxyjump
+        attempt_key: jump
+        attempt_target: '{{ scenario_unlisted }}:22'
+        attempt_expect: refused
+
+    - name: Reach the listed address on another port through the hop
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_route: proxyjump
+        attempt_key: jump
+        attempt_target: '{{ scenario_listed }}:{{ scenario_ssh_port }}'
+        attempt_expect: refused
+
+    - name: Reach the jump host's own loopback through the hop
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_route: proxyjump
+        attempt_key: second
+        attempt_target: '127.0.0.1:22'
+        attempt_expect: refused
+
+    - name: Present a key that is in no file, and the replaced line's key, at the hop
+      ansible.builtin.include_tasks: tasks/ssh_attempt.yml
+      vars:
+        attempt_route: proxyjump
+        attempt_key: '{{ item }}'
+        attempt_target: '{{ scenario_listed }}:22'
+        attempt_expect: denied
+      loop:
+        - intruder
+        - old
 
     # Phase 2.
     - name: Look at the key directory, the key file and the sshd drop-in

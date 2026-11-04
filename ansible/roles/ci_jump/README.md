@@ -233,7 +233,11 @@ cd ansible/roles/ci_jump && PYTHONPATH=library ../../../.venv/bin/python -m unit
   the report, and requires that no path under `/etc/ssh` holds the account's name; it applies the
   role once more in check mode and scans the log of every run (the check run over the host as the
   prepare left it, the converge, the idempotence run and that check run) for any key body and for the
-  account's name, which must be in none of the output.
+  account's name, which must be in none of the output. Phase 1b makes the same forward cases through
+  the pipeline's own client (`ssh -F` with a `jump_hop` stanza and `ProxyJump`) to a second account
+  with its own key that runs `cat`: the listed target gives the standard input back, and the unlisted
+  target, another port, the jump host's own loopback and a wrong or replaced key do not (see "Push
+  hosts" below).
 - `refusals` applies the role once and then runs each guard alone against the bad input or the bad
   state, expecting the guard's own code, with a control beside each group that must be accepted. The
   read-back cases put a `Match` block ahead of the role's, which outranks it, or change a file or its
@@ -317,8 +321,56 @@ inert and a `ci_jump_user` key in its row of `host_inputs_required_by_host` and 
 every jump host (the paths are host-local), and the account, the address, the destinations and the
 keys are that host's own.
 
+## Push hosts: demo1 and the tenant hosts behind a jump
+
+A host in `pull_trigger_bundle_hosts` (`roles/pull_trigger/vars/main.yml`, `demo1` today) never opens
+a connection. The gated run sends it the commit as a git bundle on standard input and asks it to
+check or apply that, and the only way the runner reaches it is through a jump host. The route:
+
+```text
+runner  --ssh -F config -o ProxyJump=jump_hop-->  edge1 (the jump account's key line)  --port 22-->  demo1
+```
+
+- **The destination is demo1's public address.** demo1 sits in its own Hetzner project, shares no
+  network with edge1, serves 80 and 443, and has SSH open to edge1's address alone. So edge1 reaches
+  it on that public IPv4, and the owner's `ci_jump_destinations` in `owner_vars/edge1.yml` names it
+  there, as it names edge-t's public address. This role takes the address as data and does not
+  hold it; adding a further push host later is one more line of that list.
+- **What the route guarantees.** The runner never connects to demo1 directly. demo1's SSH stays
+  closed to everything but edge1. demo1 never initiates a connection: it receives the bundle on
+  standard input and never fetches. The jump key can open a connection to port 22 of the listed
+  addresses and nothing else, whichever client presents it.
+- **A pushed host is a leaf, never a hop.** `ansible/checks/test_ci_jump_hosts.py` holds that no host
+  in `pull_trigger_bundle_hosts` is in `JUMP_HOSTS` and that its playbook does not apply this role.
+  The list is read from the pull_trigger role's vars, its one home.
+- **Nothing in this role changes for it.** The destination list, the key lines and the sshd block
+  are the same for every host behind the jump. The workflow side is shipped in github-workflows
+  (the jump pair, the push list and the push playbook), and the receiver on the host is the
+  pull_trigger role's bundle mode.
+
+What is proven where:
+
+| What                                                                                                                                                                                                                                                                                                                                      | Where                                                                                                                                        |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| The jump key reaches a listed address and a command runs there, with the standard input carried, through the pipeline's own client shape (`ssh -F`, a `jump_hop` stanza, `ProxyJump`); an unlisted address, the listed address on another port and the jump host's own loopback are refused; a wrong or replaced key is denied at the hop | `molecule/default`, phase 1b, over the real sshd                                                                                             |
+| A pushed host is not a hop                                                                                                                                                                                                                                                                                                                | `test_ci_jump_hosts.py`                                                                                                                      |
+| demo1 is reached by a gated check-mode run                                                                                                                                                                                                                                                                                                | not yet: the owner's steps in the issue, then a plan whose log reads `Checking commit ... on 5 host(s)` and shows a demo1 row with a verdict |
+
+Phase 1b's far end is a second account on the same test sshd, with its own key, as a pushed host's CI
+account is; it reads the standard input into `cat`, so the bytes the client sent are the proof that
+the forward reached the target and not an absent listener. The owner's steps for demo1 itself (the
+CI account and its key on the host, the address and public key in `owner_vars/edge1.yml`, the
+repository secrets, the host lists) are in the private runbooks, not here.
+
 ## Named limits
 
+- **Phase 1b copies the client's options, it does not import them.** Its `jump_hop` stanza mirrors
+  `.github/actions/ssh-check-hosts/action.yml` in `branchLeft/github-workflows` at `v1.0.21`
+  (`IdentitiesOnly`, `BatchMode`, `ForwardAgent no`, `ClearAllForwardings yes`, reached with
+  `-F` and `-o ProxyJump=jump_hop`). It cannot be imported across repositories, and
+  `tools/ssh_jump_proof.py` in github-workflows is the authority for the client side. Here only this
+  role's sshd side is proven against those options. The stanza does not check host keys, which the
+  action pins in its own `known_hosts`.
 - **The live state was not read.** The report is the first reading. The plan of the first run shows
   it, and the second step is built from it.
 - **The `sshd -T -C` check uses the jump host's own address as the client address.** The jump key is
