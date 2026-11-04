@@ -7,6 +7,7 @@ its one file. It does not judge a role edit: nothing here gates one (see checks/
 
 from __future__ import annotations
 
+import copy
 import re
 import sys
 from pathlib import Path
@@ -60,7 +61,7 @@ JUMP_VARS = frozenset(
 # The hosts that apply ci_jump, one entry each. check() requires this to equal the hosts whose
 # row in host_roles.yml lists the role, so a host cannot gain the role without its owner_vars
 # keys, nor the keys without the role.
-JUMP_HOSTS = frozenset(("edge1",))
+JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS,
@@ -196,8 +197,10 @@ _AnyTagLoader.add_multi_constructor("", _construct_any_tag)
 # What a parse gave, by loader and file text: the document, or the error message. The text is
 # the key because a rewrite in place keeps the path, the size and perhaps the mtime, and a
 # stale parse here would be a false green in a safety check; the same text parses the same
-# whichever path it was read from, so one parse serves every copy of the tree. A caller must
-# not change a document it is handed: they are shared. None does: _mapping and _plays copy.
+# whichever path it was read from, so one parse serves every copy of the tree. _load hands out a
+# deep copy of the cached parse, so no caller can change what another gets. The cache has no
+# bound: it grows by one entry per distinct file text, which is fine for the test suite and
+# the one-shot command, and an accepted limit for any long-lived process that imports this.
 _PARSED: dict[tuple[type[yaml.SafeLoader], str], tuple[object, str | None]] = {}
 
 
@@ -229,7 +232,9 @@ def _load(
     if error_text is not None:
         findings.append(f"{label}: cannot be read as YAML: {error_text}")
         return None
-    return doc
+    # A copy, so a caller that changes what it was handed cannot change what the next caller
+    # gets from the same cached parse.
+    return copy.deepcopy(doc)
 
 
 def _mapping(value: object) -> dict[str, object]:

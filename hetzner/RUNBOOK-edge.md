@@ -28,8 +28,24 @@ assumes Docker, `branchleft-compose@.service` and
 `/usr/local/sbin/branchleft-deploy` are already installed. Confirm in one
 command:
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_IPV4=$(hcloud server ip edge1)
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active docker &&
   test -x /usr/local/sbin/branchleft-deploy &&
@@ -854,7 +870,7 @@ it loaded and prints the rotation settings it found, with a count for each:
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a
-  docker compose exec -T caddy wget -qO- http://localhost:2019/config/ | grep -o "\"roll_[a-z_]*\":[^,}]*" | sort | uniq -c
+  docker compose exec -T caddy wget -qO- http://127.0.0.1:2019/config/ | grep -o "\"roll_[a-z_]*\":[^,}]*" | sort | uniq -c
   grep -c "output file" caddy/Caddyfile'
 ```
 

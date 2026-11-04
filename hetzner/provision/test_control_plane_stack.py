@@ -123,7 +123,28 @@ def hba_rules() -> list[list[str]]:
     return rules
 
 
-PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login"}
+# The portal's four logins, the ones the applications image's program creates
+# (ghost-platform portal/data/provision/manifest.ts): the tenant portal's, the
+# operator console's, the provisioner's and the migrator's. The provisioner is
+# connected to after provisioning commits, so it needs its rule as much as the other
+# two. The migrator is the login the full provision's step 5 and every migrate-only
+# run connect as, so it needs its rule too; it is not a superuser, and the file
+# admits it to the portal database alone.
+PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login", "portal_provisioner_login", "portal_migrator_login"}
+
+# Every reference to the migrator's credential: the login's name and the names of the
+# password and URL the owner places for it. No compose service may carry any of them.
+MIGRATOR_REFERENCE = re.compile(r"(?i)migrator")
+
+# The one table of who may reach which database: pg_hba.conf must admit exactly
+# these pairs to password authentication and refuse every other. The static test
+# below reads the file against it, and test_control_plane_hba_server.py starts a
+# real server on the file and connects against the same table.
+EXPECTED_DATABASES: dict[str, frozenset[str]] = {
+    "zitadel": frozenset({"zitadel"}),
+    **{login: frozenset({"portal"}) for login in sorted(PORTAL_LOGINS)},
+    "postgres": frozenset({"postgres", "zitadel", "portal"}),
+}
 
 # Each row is one service's YAML fragment, with the sentinel value that must never be echoed.
 MASTER_KEY_ENVIRONMENT_ROWS = (
@@ -384,10 +405,14 @@ class ControlPlaneStackTests(unittest.TestCase):
                 self.assertNotEqual(user, "all")
                 self.assertNotIn(rule[3], {"all", "0.0.0.0/0", "::/0"})
             allowed.setdefault(user, set()).update(databases)
-        self.assertEqual(allowed["zitadel"], {"zitadel"})
-        for login in PORTAL_LOGINS:
-            self.assertEqual(allowed[login], {"portal"})
-        self.assertEqual(set(allowed), {"zitadel", "postgres"} | PORTAL_LOGINS)
+        self.assertEqual({user: frozenset(databases) for user, databases in allowed.items()}, EXPECTED_DATABASES)
+
+    def test_every_accepting_host_rule_admits_only_the_stack_network(self):
+        accepting = [r for r in hba_rules() if r[0] == "host" and r[-1] != "reject"]
+        self.assertTrue(accepting)
+        for rule in accepting:
+            with self.subTest(rule=rule):
+                self.assertEqual(rule[3], "samenet")
 
     def test_the_local_socket_admits_only_the_administrator(self):
         local = [r for r in hba_rules() if r[0] == "local" and r[-1] != "reject"]
@@ -419,6 +444,12 @@ class ControlPlaneStackTests(unittest.TestCase):
             1,
             "the administrator's password variable is read somewhere other than the db service",
         )
+
+    def test_no_compose_service_names_the_migrator_credential(self):
+        for path in (COMPOSE, INIT_OVERLAY):
+            for line in code_lines(path.read_text(encoding="utf-8")):
+                with self.subTest(file=path.name, line=line.strip()):
+                    self.assertNotRegex(line, MIGRATOR_REFERENCE)
 
     def test_the_stack_files_hold_no_file_pulling_key_and_no_unlisted_service_key(self):
         """Checked on parsed YAML: a quoted, flow, anchored or merged key is the same key to Compose."""

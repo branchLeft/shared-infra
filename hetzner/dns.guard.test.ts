@@ -34,14 +34,16 @@ function promiseOf<T>(value: pulumi.Output<T>): Promise<T> {
 
 /**
  * Every rrset takes `zone: zone.name` as an input, so a rejected guard
- * rejects all seventeen of them too -- proving the point, but leaving their
+ * rejects every rrset of every zone too -- proving the point, but leaving their
  * promises unobserved otherwise, which Node reports as an unhandled
  * rejection per rrset. `allSettled` observes each one without caring which
  * way it settled; the actual assertion is `zone.urn` and the empty
  * `registered` list above.
  */
 async function drainRrsets(program: typeof import('./dns.js')): Promise<void> {
-  await Promise.allSettled(program.rrsets.map((rrset) => promiseOf(rrset.urn)));
+  await Promise.allSettled(
+    program.zones.flatMap((built) => built.rrsets.map((rrset) => promiseOf(rrset.urn)))
+  );
 }
 
 /**
@@ -116,9 +118,13 @@ describe('dns.ts, wired to the project-marker guard', () => {
     // The zone's own name is derived from the guard's output (dns.ts), so a
     // rejected guard must make the zone resource itself unregisterable --
     // not just leave a sibling output unread.
-    await expect(promiseOf(program.zone.urn)).rejects.toThrow(
-      /addresses the demo-dns project, not the dns project/
-    );
+    // Every zone goes through the one guard, the second as much as the first.
+    expect(program.zones).toHaveLength(2);
+    for (const built of program.zones) {
+      await expect(promiseOf(built.zone.urn)).rejects.toThrow(
+        /addresses the demo-dns project, not the dns project/
+      );
+    }
     await drainRrsets(program);
     expect(registered.filter((r) => r.type.startsWith('hcloud:index/'))).toEqual([]);
   });
@@ -129,9 +135,12 @@ describe('dns.ts, wired to the project-marker guard', () => {
     await expect(promiseOf(program.dnsOnlyProjectVerified)).rejects.toThrow(
       /cannot see the firewall project-marker-dns/
     );
-    await expect(promiseOf(program.zone.urn)).rejects.toThrow(
-      /cannot see the firewall project-marker-dns/
-    );
+    expect(program.zones).toHaveLength(2);
+    for (const built of program.zones) {
+      await expect(promiseOf(built.zone.urn)).rejects.toThrow(
+        /cannot see the firewall project-marker-dns/
+      );
+    }
     await drainRrsets(program);
     expect(registered.filter((r) => r.type.startsWith('hcloud:index/'))).toEqual([]);
   });
@@ -140,7 +149,8 @@ describe('dns.ts, wired to the project-marker guard', () => {
     const { program, registered } = await loadWithFirewalls([{ name: 'project-marker-dns' }]);
 
     await expect(promiseOf(program.dnsOnlyProjectVerified)).resolves.toBe(true);
-    await expect(promiseOf(program.zone.urn)).resolves.toMatch(/branchleft-co-uk/);
-    expect(registered.some((r) => r.type === 'hcloud:index/zone:Zone')).toBe(true);
+    await expect(promiseOf(program.zones[0].zone.urn)).resolves.toMatch(/branchleft-co-uk/);
+    await expect(promiseOf(program.zones[1].zone.urn)).resolves.toMatch(/publicpress-co-uk/);
+    expect(registered.filter((r) => r.type === 'hcloud:index/zone:Zone')).toHaveLength(2);
   });
 });

@@ -24,7 +24,7 @@ is.
 | `projectGuard.ts`                     | Refuses a stack whose token addresses a different project — see below                          |
 | `RUNBOOK-seven-projects.md`           | Creating the five new projects, their tokens and markers, and proving isolation                |
 | `scripts/probe-project-isolation.py`  | The 7x7 token isolation proof, with a swap-mode control that must report FAIL                  |
-| `dns.ts`, `dnsZone.ts`, `dns/`        | The DNS zone stack, its zone file, `zonecheck.py` and the cutover runbook                      |
+| `dns.ts`, `dnsZone.ts`, `dns/`        | The DNS zone stack, its two zone files, `zonecheck.py` and the cutover runbooks                |
 | `network.ts`                          | The private network, its subnet, and the estate's default route out to the internet            |
 | `egress.ts`                           | Validates the default route's gateway against the constraints the route API enforces           |
 | `estate.ts`, `estate/`                | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
@@ -43,16 +43,16 @@ feature here rather than a limitation.
 `projects.ts` is the table below as data; the guard and the isolation probe
 both read it.
 
-| Project  | Holds                                                                     | Token today                                                                                                         |
-| -------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                |
-| org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                              |
-| tenants  | Built fresh: `edge-t`, `db-t1` (switch off), `app-t1`                     | a Read probe token only, until a stack needs one                                                                    |
-| demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                    |
-| dns      | The branchleft.co.uk DNS zone and no hosts                                | `HCLOUD_TOKEN`, exported by hand per `hetzner/dns/RUNBOOK-dns-cutover.md` — `hetzner/dns/`'s stack, no CI apply yet |
-| backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                    |
-| demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one                                                                    |
-| lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret                                                                         |
+| Project  | Holds                                                                     | Token today                                                                                                                                                                                                                              |
+| -------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                                                                                                                                     |
+| org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                                                                                                                                                   |
+| tenants  | Built fresh: `edge-t`, `db-t1` (switch off), `app-t1`                     | a Read probe token only, until a stack needs one                                                                                                                                                                                         |
+| demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                                                                                                                                         |
+| dns      | The branchleft.co.uk and publicpress.co.uk DNS zones and no hosts         | `HCLOUD_TOKEN`, exported by hand per `hetzner/dns/RUNBOOK-dns-cutover.md` and `RUNBOOK-dns-publicpress-cutover.md` — `hetzner/dns/`'s stack; CI plans and applies it (`HCLOUD_TOKEN_DNS`, plan in `dns-plan`, apply in `production-dns`) |
+| backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                                                                                                                                         |
+| demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one                                                                                                                                                                                         |
+| lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret                                                                                                                                                                                              |
 
 A stolen dns or demo-dns token reaches no data outside that one zone. A
 stolen backup _Cloud API_ token reaches no bucket at all — Object Storage is

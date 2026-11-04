@@ -27,8 +27,11 @@ name: CI
 #      green, non-destructive and still wrong. An environment with no
 #      protection rule pauses nothing and says nothing; verify the rule via
 #      the API before trusting the gate. The mail apply is in its own
-#      environment, `production-mail`, so no approval meant for another
-#      stack's apply can release it.
+#      environment, `production-mail`, and the DNS apply is in its own,
+#      `production-dns`, so no approval meant for another stack's apply can
+#      release either (GitHub approves per environment per run). The mail and
+#      DNS plan jobs each have a main-only environment with no reviewer
+#      (`mail-plan`, `dns-plan`) that holds their credentials.
 #   5. The apply job re-runs preview and the guard immediately before
 #      `pulumi up`: what was approved and what is applied can diverge only
 #      inside one run's window, and never past the guard.
@@ -40,7 +43,8 @@ name: CI
 #      string `production-free` selects the free environment, the apply
 #      re-gates its own preview before `pulumi up`, and the apply refuses an
 #      environment without a rule. The mail apply is never routed: it stays in
-#      `production-mail` (scripts/choose-apply-environment.py,
+#      `production-mail`, and the DNS apply is never routed either: it stays in
+#      `production-dns` (scripts/choose-apply-environment.py,
 #      scripts/test_ci_apply_environments.py).
 #
 # There is deliberately no `pulumi preview` job on pull requests. It is the
@@ -857,10 +861,10 @@ jobs:
       # The no-op gate's contract is checked by the shared action, which reads
       # only this workflow file, so this repo keeps no test of its own for it.
       - name: Check the no-op gate contract
-        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
         with:
           workflow: .github/workflows/ci.yml
-          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply
+          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply hetzner-dns-plan:hetzner-dns-apply
           verdict-step: noop
           summary-step: Write the plan to the job summary
           plan-file: preview-plan.json
@@ -908,16 +912,17 @@ jobs:
   # Deploy pipelines. Each stack gets a plan job and an apply job: the plan job
   # writes the real `pulumi preview` plan for this exact commit to its job
   # summary, and the apply job — gated by its environment's protection rules
-  # (`production`, or `production-mail` for the mail stack alone) — runs only
+  # (`production`, `production-mail` for the mail stack alone, or
+  # `production-dns` for the DNS stack alone) — runs only
   # after the plan has been read and approved. The apply job
   # re-runs preview and the delete guard itself, so the approved window can
   # never smuggle a plan past the gate.
   #
-  # `changes` below decides which of the three pairs even start: a push that
+  # `changes` below decides which of the four pairs even start: a push that
   # touches none of a stack's own inputs skips that stack's plan, and its
   # apply with it — a job that `needs` a skipped dependency inherits the skip
   # by default, so nothing downstream has to repeat the condition. None of
-  # these six jobs are required-status-check contexts (checked against this
+  # these eight jobs are required-status-check contexts (checked against this
   # repo's ruleset before this filter was written), so a skip here can never
   # satisfy a branch-protection gate; it only decides whether an apply gets
   # queued at all.
@@ -951,8 +956,13 @@ jobs:
   #   - The environment rule itself lives in repo settings. Each apply job's
   #     first step verifies via the API that its environment pauses it and
   #     fails the apply if not, so an unconfigured gate is a red run, not a
-  #     silent unattended apply. `production-mail` must have a
-  #     required-reviewer rule; `production` may have that or an enabled
+  #     silent unattended apply. `production-mail` and `production-dns` must
+  #     each have a required-reviewer rule (the DNS gate accepts nothing else,
+  #     so the reviewer App's custom rule can never release a DNS apply);
+  #     `mail-plan` and `dns-plan` must have a main-only branch policy and no
+  #     reviewer, and `dns-plan` and `production-dns` each hold the three DNS
+  #     secrets;
+  #     `production` may have a required-reviewer rule or an enabled
   #     custom deployment protection rule of the reviewer App (integration
   #     id 5090756). `production-free`, which only a plan the spend gate reads
   #     as free reaches, needs that App rule: a plan job routes to it only
@@ -976,6 +986,7 @@ jobs:
       mail: ${{ steps.filter.outputs.mail }}
       hetzner_network: ${{ steps.filter.outputs.hetzner_network }}
       hetzner_estate: ${{ steps.filter.outputs.hetzner_estate }}
+      hetzner_dns: ${{ steps.filter.outputs.hetzner_dns }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1027,6 +1038,24 @@ jobs:
               - 'hetzner/.nvmrc'
               - 'hetzner/tsconfig.json'
               - 'hetzner-host/**'
+              - 'scripts/assert-no-hetzner-deletes.py'
+              - '.github/workflows/ci.yml'
+            # The DNS program imports only dnsZone.ts, which imports
+            # projectGuard.ts and projects.ts; it does not import hetzner-host.
+            # `hetzner/dns/**` is the whole directory on purpose (zone files,
+            # the checker, the runbooks): a docs-only edit there costs one
+            # no-op plan, never an apply. Pinned against the real import graph
+            # by scripts/test_ci_apply_environments.py (DnsFilterTests).
+            hetzner_dns:
+              - 'hetzner/dns/**'
+              - 'hetzner/dns.ts'
+              - 'hetzner/dnsZone.ts'
+              - 'hetzner/projectGuard.ts'
+              - 'hetzner/projects.ts'
+              - 'hetzner/package.json'
+              - 'hetzner/pnpm-lock.yaml'
+              - 'hetzner/.nvmrc'
+              - 'hetzner/tsconfig.json'
               - 'scripts/assert-no-hetzner-deletes.py'
               - '.github/workflows/ci.yml'
 
@@ -1102,6 +1131,7 @@ jobs:
           PLANS_MAIL: ${{ needs.changes.outputs.mail }}
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1110,7 +1140,7 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1200,7 +1230,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1421,6 +1451,7 @@ jobs:
           PLANS_MAIL: ${{ needs.changes.outputs.mail }}
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1429,7 +1460,7 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1507,7 +1538,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1552,7 +1583,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1713,7 +1744,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1835,6 +1866,7 @@ jobs:
           PLANS_MAIL: ${{ needs.changes.outputs.mail }}
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1843,7 +1875,7 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1922,7 +1954,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -1963,7 +1995,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -2114,7 +2146,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@ea6de91ba90ed9a3a988ae8ffa0e9d70dd42f691 # v1.0.19
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -2148,6 +2180,323 @@ jobs:
         run: |
           {
             echo '## Hetzner estate deploy'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '### Plan this run applied'
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-dns-plan:
+    name: Plan (hetzner dns, pulumi preview)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only the jobs that actually gate this stack. The DNS program shares no
+    # StackReference with the network or estate stacks, so it is not serialised
+    # behind them, and the host-package and provisioning checks are left out:
+    # coupling them would block a DNS fix on an unrelated red.
+    needs: [changes, hetzner-typecheck, scripts-tests, pulumi-inventory-audit]
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.hetzner_dns == 'true'
+
+    # The plan reads the DNS credentials, so it has an environment of its own,
+    # as `mail-plan` does (issue #2195): `dns-plan` carries no reviewer and
+    # deploys from `main` only. The token can repoint the zone for the website,
+    # the edge and mail, so the three DNS secrets live in `dns-plan` and
+    # `production-dns` and not at repository level, where a job on a branch
+    # could read them. A job without one of these environments reads them
+    # empty. This job runs on a push to `main` alone (the `if` above), so a
+    # pull-request or merge-queue run skips it before the environment is asked
+    # and the main-only policy never has to refuse a branch.
+    environment: dns-plan
+
+    # See mail-plan: the apply job is skipped only when this is the string
+    # 'false'. This stack has no routing output: its apply is always in
+    # `production-dns`.
+    outputs:
+      has_changes: ${{ steps.noop.outputs.has_changes }}
+
+    # See mail-plan: `actions: write` is only for the cancel step.
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+
+    defaults:
+      run:
+        working-directory: hetzner/dns
+
+    # The token is the DNS Hetzner project's alone (id 16139783); dnsZone.ts
+    # refuses any other project's. The state bucket credentials are the Hetzner
+    # backend's, shared with the sibling stacks, and stay at repository level
+    # (they open the state bucket; they cannot write a zone).
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_DNS }}
+      PULUMI_SALT_HETZNER_DNS: ${{ secrets.PULUMI_SALT_HETZNER_DNS }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_DNS }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      # Older runs of this workflow that are still paused for approval have
+      # applied nothing. Cancel the ones this run supersedes: never a run with
+      # a job in progress or an apply that started, and never a run paused on
+      # a stack this push did not plan (that change would then never apply).
+      # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cancel older runs that are still waiting for approval
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLANS_MAIL: ${{ needs.changes.outputs.mail }}
+          PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
+          PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/actions"
+          older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
+            jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
+              '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
+          for run in ${older}; do
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
+            if [ "${verdict}" = "cancel" ]; then
+              gh api --method POST "${api}/runs/${run}/cancel" --silent
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      # The dns project shares hetzner/'s node_modules by design — its program
+      # file sits in the package root so every project there resolves one
+      # @pulumi/hcloud (see hetzner/dns.ts and dns/Pulumi.yaml's `main`).
+      - name: Install dependencies
+        working-directory: hetzner
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_DNS is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_DNS is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_DNS" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_DNS is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_DNS" >> Pulumi.production.yaml
+
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      # See mail-plan: a second preview saves the update plan, best effort.
+      - name: Save the update plan for the no-change check
+        continue-on-error: true
+        run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
+
+      # The zone is the one protected type: deleting or replacing it takes the
+      # website, the edge and mail down together. A record removal is an
+      # ordinary apply, so the record type is deliberately unprotected.
+      - name: Refuse a plan that destroys the DNS zone
+        run: |
+          python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
+
+          if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      # See mail-plan: fails closed, and writes the summary's first line.
+      - name: Decide whether the plan changes anything
+        id: noop
+        if: always()
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        with:
+          preview-json: preview.json
+          plan-file: preview-plan.json
+          working-directory: hetzner/dns
+
+      - name: Write the plan to the job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner dns plan — read before approving the apply'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-dns-apply:
+    name: Apply (hetzner dns, pulumi up)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [hetzner-dns-plan]
+    # See mail-apply: a no-op plan skips this job before its environment is asked.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.hetzner-dns-plan.outputs.has_changes != 'false'
+
+    # The DNS apply has an environment of its own, as the mail apply does. An
+    # approval releases every job waiting in one environment for the run, so
+    # sharing `production` with the network or estate apply would let an
+    # approval meant for them release a DNS change. `production-dns` carries
+    # the owner's required-reviewer rule, and the gate step below accepts that
+    # rule alone. This literal is the only place the name appears as a job
+    # environment (the pins are in the scripts/ tests for the CI environments).
+    environment: production-dns
+
+    concurrency:
+      group: pulumi-hetzner-dns-deploy
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: hetzner/dns
+
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_DNS }}
+      PULUMI_SALT_HETZNER_DNS: ${{ secrets.PULUMI_SALT_HETZNER_DNS }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_DNS }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      # If the job is running and no required-reviewer rule exists, nothing
+      # paused it — the environment key is silently inert without one. Fail
+      # here, before any credential is touched, rather than apply unattended.
+      # Only a required-reviewer rule counts: the reviewer App's custom rule is
+      # deliberately never read, so it cannot release a DNS apply. Any failure
+      # to read the environment fails the step (the shell runs with -e), and a
+      # non-numeric answer counts as no rule.
+      - name: Refuse to apply through an ungated environment
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-dns" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
+          if [ "${reviewers}" -eq 0 ]; then
+            echo "::error::the production-dns environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        working-directory: hetzner
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_DNS is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_DNS is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_DNS" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_DNS is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_DNS" >> Pulumi.production.yaml
+
+      # Re-planned and re-gated after approval, not carried over from the plan
+      # job: two jobs are two runners, and the guard must see the exact plan
+      # this apply acts on.
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse to apply a plan that destroys the DNS zone
+        run: |
+          python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
+
+          if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Apply
+        run: pulumi up --stack production --yes
+
+      - name: Write outcome to job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner dns deploy'
             echo
             echo "Commit: \`${COMMIT_SHA}\`"
             echo

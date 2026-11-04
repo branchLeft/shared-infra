@@ -168,8 +168,24 @@ prefers IPv6 unless told otherwise, and only `edge1`'s IPv4 address is allowed
 through the endpoint policy — see `METRICS_SCRAPE_SOURCES` for why v6 is not
 listed. Without `-4` this returns `421` on a correctly configured server.
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_IPV4=$(hcloud server ip edge1)
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'S=$(sed -n "s/^STALWART_PROMETHEUS_SECRET=//p" /etc/branchleft/monitoring.env); \
    curl -4 -sS -o /tmp/m.txt -w "%{http_code}\n" -u "prometheus:$S" \
@@ -250,7 +266,7 @@ V1 depends on this, so run it before V1 — before "Verify" has derived
 pointing back at a section that has not run yet. Same prompt-based pattern:
 
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+EDGE1_IPV4=$(hcloud server ip edge1)
 ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'read -rs -p "secret: " S; echo; printf "STALWART_PROMETHEUS_SECRET=%s\n" "$S" >> /etc/branchleft/monitoring.env; unset S; grep -c "^STALWART_PROMETHEUS_SECRET=" /etc/branchleft/monitoring.env'
 ```
