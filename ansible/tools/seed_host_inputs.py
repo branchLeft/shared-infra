@@ -9,6 +9,7 @@ import argparse
 import getpass
 import json
 import os
+import re
 import secrets
 import stat
 import sys
@@ -222,6 +223,17 @@ class Context:
     ask_path: Callable[[str], str]
     out: TextIO
     err: TextIO
+    # Discards input typed ahead but not yet read, so the rest of a paste that was refused
+    # cannot reach the shell. Production flushes the terminal; the default does nothing.
+    flush_input: Callable[[], None] = lambda: None
+
+
+def flush_terminal_input() -> None:
+    """Throws away what was typed or pasted ahead of the prompt, if input is a terminal."""
+    with suppress(ImportError, OSError, ValueError):
+        import termios
+
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
 
 
 def production_context() -> Context:
@@ -233,6 +245,7 @@ def production_context() -> Context:
         root_gid=ROOT_GID,
         ask_secret=getpass.getpass,
         ask_path=input,
+        flush_input=flush_terminal_input,
         out=sys.stdout,
         err=sys.stderr,
     )
@@ -389,6 +402,10 @@ def ask_tenants(ctx: Context, key: str) -> Value | None:
             return None
         if not line.strip():
             return tenants or None
+        if PRIVATE_KEY_MARK in line:
+            ctx.flush_input()
+            print("that line looks like a private key; nothing is written; run again.", file=ctx.err)
+            return None
         tenant = parse_tenant_line(line.strip())
         if tenant is None:
             print("that line is not 'slug recipient'; try again", file=ctx.err)
@@ -396,22 +413,34 @@ def ask_tenants(ctx: Context, key: str) -> Value | None:
             tenants.append(tenant)
 
 
-def parse_slot_line(line: str) -> dict[str, str | bool] | None:
-    """A stack, then the public key, then the literal word adopt if the stack is already run.
+SLOT_KEY_TYPE: Final = "ssh-ed25519"
+SLOT_KEY_BLOB: Final = re.compile(r"[A-Za-z0-9+/]{20,}={0,2}")
+PRIVATE_KEY_MARK: Final = "PRIVATE KEY"
 
-    The key keeps its inner spaces; the role checks its shape and the stack's, on the host.
+
+def parse_slot_line(line: str) -> dict[str, str | bool] | None:
+    """A stack, an ed25519 public key (type, then base64), an optional comment, then the literal
+    word adopt if the stack is already run.
+
+    The comment is dropped, as the role drops it. A comment that is exactly the word adopt cannot
+    be told from the flag and is read as the flag. The role still checks the key and the stack on
+    the host; this refuses a line that cannot be one at the prompt.
     """
     words = line.split()
-    adopt = len(words) > 2 and words[-1] == SLOT_ADOPT
-    key_words = words[1:-1] if adopt else words[1:]
-    if not words or not key_words:
+    if len(words) < 3 or words[1] != SLOT_KEY_TYPE or not SLOT_KEY_BLOB.fullmatch(words[2]):
         return None
-    return {"stack": words[0], "public_key": " ".join(key_words), "adopt_existing": adopt}
+    adopt = len(words) > 3 and words[-1] == SLOT_ADOPT
+    return {
+        "stack": words[0],
+        "public_key": f"{words[1]} {words[2]}",
+        "adopt_existing": adopt,
+    }
 
 
 def ask_slots(ctx: Context, key: str) -> Value | None:
-    """Slot lines until an empty one. A malformed line, or a stack or key given twice, refuses the
-    whole list: nothing is written, and the line is never echoed."""
+    """Slot lines until an empty one. A malformed line, a stack or key given twice, or a pasted
+    private key refuses the whole list: nothing is written, pending input is discarded, and the
+    line is never echoed."""
     slots: list[dict[str, str | bool]] = []
     while True:
         prompt = f"{key}: slot as 'stack public_key [adopt]' ({len(slots)} so far), "
@@ -421,12 +450,13 @@ def ask_slots(ctx: Context, key: str) -> Value | None:
             return None
         if not line.strip():
             return slots or None
-        slot = parse_slot_line(line.strip())
+        slot = None if PRIVATE_KEY_MARK in line else parse_slot_line(line.strip())
         repeats = slot is not None and any(
             kept["stack"] == slot["stack"] or kept["public_key"] == slot["public_key"]
             for kept in slots
         )
         if slot is None or repeats:
+            ctx.flush_input()
             print("that line is not 'stack public_key [adopt]', or repeats one.", file=ctx.err)
             print("nothing is written; run again.", file=ctx.err)
             return None
