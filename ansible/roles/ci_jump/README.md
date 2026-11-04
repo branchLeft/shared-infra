@@ -125,17 +125,17 @@ local account is skipped and cannot make the pull read another file or hang.
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the five variables and
-[`defaults/main.yml`](defaults/main.yml) holds the defaults of the four others (`ci_jump_user` is required and has none). Four are read from the host's
+[`defaults/main.yml`](defaults/main.yml) holds the defaults of the four others (`ci_jump_user` has none and is optional: see below). Four are read from the host's
 file under `ansible/owner_vars/` (`edge1.yml` today). The fifth, `ci_jump_user`, comes from the
 host's private inputs file through `host_inputs` and is in no file of this repository.
 
-| Variable               | Default | Meaning                                                                     |
-| ---------------------- | ------- | --------------------------------------------------------------------------- |
-| `ci_jump_manage_keys`  | `false` | `false`: report only. `true`: guards, write, check, reload, read-back.      |
-| `ci_jump_user`         | none    | Required. The jump account, from `host_inputs`; never committed or printed. |
-| `ci_jump_own_address`  | `''`    | The jump host's own private IPv4 address; it must be a destination.         |
-| `ci_jump_destinations` | `[]`    | Host names or IPv4 addresses, no port. The role adds port 22.               |
-| `ci_jump_keys`         | `[]`    | `{key}` entries: public keys, one per entry. Read only when the flag is on. |
+| Variable               | Default | Meaning                                                                                                              |
+| ---------------------- | ------- | -------------------------------------------------------------------------------------------------------------------- |
+| `ci_jump_manage_keys`  | `false` | `false`: report only. `true`: guards, write, check, reload, read-back.                                               |
+| `ci_jump_user`         | none    | Optional input. The jump account, from `host_inputs`; never committed or printed. Needed only when the flag is true. |
+| `ci_jump_own_address`  | `''`    | The jump host's own private IPv4 address; it must be a destination.                                                  |
+| `ci_jump_destinations` | `[]`    | Host names or IPv4 addresses, no port. The role adds port 22.                                                        |
+| `ci_jump_keys`         | `[]`    | `{key}` entries: public keys, one per entry. Read only when the flag is on.                                          |
 
 The port (22), the fixed options (`restrict,port-forwarding`), the forced command, the paths of the
 key file and the drop-in, the name of the sshd service and the accounts other roles own are constants
@@ -159,9 +159,14 @@ pull-request text and no log. It reaches the role as the host input `ci_jump_use
 it once into the host's root-only file `/etc/branchleft/host-inputs.json`, the `host_inputs` role
 (the first role of the host's playbook) sets it as a fact before this role runs, and this role reads
 the one variable `ci_jump_user` as it reads any other. For edge1 the row of
-`host_inputs_required_by_host` now holds it (a twelfth key), so the first apply after this change
-stops at `host_inputs[missing-key]` before any task runs until the owner has seeded it. On edge1,
-once, as root, hidden prompt, nothing echoed:
+`host_inputs_required_by_host` holds it (a twelfth key) and `host_inputs_optional_by_host` lists
+it, so the file may leave it out until the owner has seeded it. It was required in the first
+version of this role, and edge1's gated plan then failed as exit 30 (`host_inputs[missing-key]`)
+because the tool that seeds it comes only with the commit that adds the role and a failed plan
+never reaches the apply that delivers a commit. Without it the role only
+reports and prints a `WARNING ci_jump` line in the plan; with the flag true and no name it stops at
+`ci_jump[user-missing]` before any task that handles a name. On edge1, once, as root, hidden
+prompt, nothing echoed, after the apply that delivers the tool:
 
 ```text
 python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py --host edge1 --set ci_jump_user
@@ -255,9 +260,9 @@ it.
 1. **The role, inert.** Merged with the flag false. The first gated plan for the host then prints the
    report: which accounts carry forwarding options, their destinations, whether each is in the
    owner's list, and fingerprints. The owner reads it against the runbook's hand-made layout.
-   The change that adds the host input also needs the owner's one-time seed of `ci_jump_user` on
-   the host before its first apply (see "How the account's name reaches the role"); the apply
-   stops at `host_inputs[missing-key]`, before any task, until then.
+   The owner seeds `ci_jump_user` on the host after the apply that delivers the seeding tool (see
+   "How the account's name reaches the role"), and before the flag is turned on. Until then the
+   plan warns and the role stays inert; with the flag true it stops at `ci_jump[user-missing]`.
 2. **The data.** A change to `owner_vars/HOST.yml` alone: the host's own address, the destinations,
    the public keys and the flag true. The account's name is already on the host. With the old
    hand-made layout still there, the first apply migrates it as the migration above says. The owner must read the plan's check-mode lines before approving the apply: for each

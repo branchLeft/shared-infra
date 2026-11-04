@@ -54,6 +54,24 @@ starts with a code, so that a test can tell one from another:
 | `host_inputs[unknown-key]`  | the file holds a key outside the host's row (the key is not shown)     |
 | `host_inputs[missing-key]`  | an input of the row is missing or has no value (its name is given)     |
 
+### Optional inputs
+
+`host_inputs_optional_by_host` (in `vars/main.yml`) names inputs of a host's row that the
+file may leave out. Today that is `ci_jump_user`, on edge1 and edget, and nothing else. An
+absent optional input is not set, which leaves its role's argument unset, and the play goes
+on. One that is in the file must still hold a usable value (an empty string, null or white
+space is `host_inputs[missing-key]`), and a key outside the row is refused as ever.
+
+Why it exists: the tool that writes the file (`seed_host_inputs.py`) reaches a host only
+inside a commit that a gated apply has delivered, and the gated plan runs this loader first.
+An input that was required the moment its role landed stopped the plan of that very commit, so
+the tool could never be delivered and the input never seeded (edge1's plan failed as exit 30,
+`playbook-failed`). An input may be optional only if its role is inert without it and
+refuses by itself when it is switched on without it (`ci_jump`: `ci_jump[user-missing]`). The
+registry test (`checks/test_host_inputs_registry.py`) holds an optional name to be in the host's
+row and declared, and not required, by a role on the host's list; the pins test of `ci_jump`
+holds that role's guard and its warning.
+
 ## Interface
 
 The role has no argument of its own ([`meta/argument_specs.yml`](meta/argument_specs.yml)
@@ -103,8 +121,9 @@ of `monitoring_stack` (seven), `ntfy_pager` (four) or `ci_jump` (one, `ci_jump_u
 jump account's name, which is held out of the repository and every log). The values must equal
 what is live on the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env`
 with others. `ci_jump_user` is not read from a live file: the owner types it once, hidden, with
-`seed_host_inputs.py --host edge1 --set ci_jump_user` (see `ansible/tools/README.md`), and the
-first apply after it was added stops at `host_inputs[missing-key]` until that is done:
+`seed_host_inputs.py --host edge1 --set ci_jump_user` (see `ansible/tools/README.md`). It is an
+optional input (above): until it is seeded the file holds eleven keys, the plan and the apply
+go on, and the `ci_jump` role stays inert and says so. Seeded, the file is:
 
 ```text
 {
@@ -251,7 +270,9 @@ proves the file is in place before the roles that need it run.
 1. A new host, or a new input for a host, is one edit to its row in `vars/main.yml`, one
    line in the literal keys of the "Set each input" task, and the host's entries in
    `checks/host_roles.yml` and its playbook. The registry test fails when they disagree.
-   The name must be a required argument of a role on the host's list with no default.
+   The name must be a required argument of a role on the host's list with no default, unless it
+   is listed in `host_inputs_optional_by_host` (see "Optional inputs"): then the role must declare
+   it, must not require it, and must refuse by itself when its switch is on and it is absent.
 2. Never template a key, never loop the task that sets the inputs, and never add a `when`,
    `ignore_errors` or `failed_when` to any task: a templated key is refused by
    `check_enrolment` R6, set_fact of a whole templated mapping sets nothing and does not

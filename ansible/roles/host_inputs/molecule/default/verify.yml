@@ -26,6 +26,7 @@
       ops1_host: '{{ host_inputs_test_ops1_host }}'
       smtp_password: '{{ host_inputs_test_smtp_password }}'
       slot_key: '{{ host_inputs_test_slot_blob }}'
+      jump_name: '{{ host_inputs_test_jump_name }}'
   tasks:
     # ---- The refusal cases ------------------------------------------------------
     # Run first, so a fact left by an earlier success cannot be mistaken for one
@@ -36,6 +37,7 @@
           - db1_stack_exporter_password is not defined
           - db1_grants_tenants is not defined
           - db1_grants_ops1_host is not defined
+          - ci_jump_user is not defined
         quiet: true
 
     - name: Run each refusal case and require its own refusal
@@ -146,6 +148,62 @@
           - deploy_slot_keys_slots[0].adopt_existing is boolean
           - not deploy_slot_keys_slots[0].adopt_existing
         fail_msg: An app1 input did not reach the play as the file gave it.
+        quiet: true
+
+    # ---- edge1's file, with and without its optional input -----------------------
+    # The jump account's name is the one input the file may leave out (the plan that delivers the
+    # tool that writes it must pass before it exists). First the file as it stands before the
+    # owner seeds it: eleven inputs, no name. The play is not refused, the eleven are set, and
+    # the name is NOT set, which is what lets the role stay inert. Then the file with the name:
+    # it is set, as the owner typed it, like any other input.
+    - name: Write edge1's file as it is before the jump account's name is seeded
+      ansible.builtin.copy:
+        content: '{{ host_inputs_test_edge1_required_doc | to_json }}'
+        dest: '{{ host_inputs_test_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Run the role on edge1's file without the name
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      vars:
+        enrolled_host: edge1
+
+    - name: Assert the eleven inputs were set and the optional one was not
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_smtp_username == host_inputs_test_smtp_user
+          - monitoring_stack_smtp_password == host_inputs_test_smtp_password
+          - ntfy_pager_machine_password_hash == host_inputs_test_password
+          - ci_jump_user is not defined
+        fail_msg: edge1's file without the optional input was not read as eleven inputs and no name.
+        quiet: true
+
+    - name: Write edge1's file with the jump account's name
+      ansible.builtin.copy:
+        content: "{{ host_inputs_test_edge1_required_doc | combine({'ci_jump_user': host_inputs_test_jump_name}) | to_json }}"
+        dest: '{{ host_inputs_test_path }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    - name: Run the role on edge1's file with the name
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs
+      vars:
+        enrolled_host: edge1
+
+    - name: Assert the name reached the play as the owner typed it
+      ansible.builtin.assert:
+        that:
+          - ci_jump_user == host_inputs_test_jump_name
+          - ci_jump_user is string
+        fail_msg: The optional input did not reach the play as the file gave it.
         quiet: true
 
     - name: Put the good file back

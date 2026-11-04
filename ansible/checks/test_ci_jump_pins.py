@@ -354,8 +354,13 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
     if options - {SECRET_VARIABLE} != set(defaults):
         found.append("the argument spec and the defaults name different variables")
     secret = spec["argument_specs"]["main"]["options"].get(SECRET_VARIABLE, {})
-    if secret.get("required") is not True or "default" in secret or SECRET_VARIABLE in defaults:
-        found.append(f"{SECRET_VARIABLE} must be required, with no default (a private input)")
+    if "default" in secret or SECRET_VARIABLE in defaults:
+        found.append(f"{SECRET_VARIABLE} must have no default (a private input)")
+    if secret.get("required") is True:
+        # The file may leave the name out until the owner seeds it (host_inputs_optional_by_host),
+        # so a required argument would stop the plan that delivers the seeding tool.
+        # The role refuses by itself when the flag is on and the name is absent (_guards.yml).
+        found.append(f"{SECRET_VARIABLE} must not be a required argument (it is optional input)")
     if defaults.get("ci_jump_manage_keys") is not False:
         found.append("ci_jump_manage_keys must default to false")
     carrying = {
@@ -382,7 +387,9 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
     # Every host that lists the role has its own owner's file with the variables, and the account's
     # name in the host's private inputs row, so the loader sets it before the role runs.
     host_roles = _variables(root / HOMES[2])
-    rows = _variables(root / HOMES[3]).get("host_inputs_required_by_host")
+    loader_vars = _variables(root / HOMES[3])
+    rows = loader_vars.get("host_inputs_required_by_host")
+    optional = loader_vars.get("host_inputs_optional_by_host")
     for host, roles in host_roles.items():
         if isinstance(roles, list) and "ci_jump" in roles:
             if host not in carrying:
@@ -393,6 +400,12 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
             if not isinstance(row, list) or SECRET_VARIABLE not in row:
                 found.append(
                     f"{host} lists ci_jump but its host_inputs row lacks {SECRET_VARIABLE}"
+                )
+            options_of_host = optional.get(host) if isinstance(optional, dict) else None
+            if not isinstance(options_of_host, list) or SECRET_VARIABLE not in options_of_host:
+                found.append(
+                    f"{host} lists ci_jump but {SECRET_VARIABLE} is not optional in its"
+                    " host_inputs row: the plan that delivers the seeding tool would stop"
                 )
     return found
 
@@ -459,6 +472,45 @@ def _walk(tasks: object) -> list[dict[str, object]]:
     return found
 
 
+def _asks_only_whether_set(task: dict[str, object]) -> bool:
+    """Is this a task that asks whether the account's name is set and handles nothing of it?
+
+    The name may be absent from the host's file (it is the one optional input), so the role asks
+    whether it is set and says so. Such a task is an assert or a debug whose only mention of the
+    name is the exact test ``ci_jump_user is [not] defined`` and the key's name in a literal
+    message. A message that is templated, or any other use of the name, is a handler of it and
+    stays under the no_log rule.
+    """
+    module = next(
+        (key for key in ("ansible.builtin.assert", "ansible.builtin.debug") if key in task), ""
+    )
+    if not module:
+        return False
+    rest = {
+        key: value
+        for key, value in task.items()
+        if key not in ("name", "when", module) and key not in ("tags",)
+    }
+    arguments = task.get(module)
+    if not isinstance(arguments, dict):
+        return False
+    messages = [arguments.get(key) for key in ("msg", "fail_msg")]
+    if any(isinstance(m, str) and ("{{" in m or "{%" in m) for m in messages):
+        return False
+    tests = arguments.get("that", [])
+    tests = tests if isinstance(tests, list) else [tests]
+    if module == "ansible.builtin.assert" and tests != ["ci_jump_user is defined"]:
+        return False
+    if module == "ansible.builtin.debug" and task.get("when") != "ci_jump_user is not defined":
+        return False
+    others = {
+        key: value
+        for key, value in arguments.items()
+        if key not in ("msg", "fail_msg", "that", "quiet")
+    }
+    return "ci_jump_user" not in json.dumps(others) and "ci_jump_user" not in json.dumps(rest)
+
+
 def _task_findings(role: Path) -> list[str]:
     """The order, the guards and the hiding of the role's tasks."""
     found: list[str] = []
@@ -466,6 +518,7 @@ def _task_findings(role: Path) -> list[str]:
     imports = [
         (str(task.get("ansible.builtin.import_tasks")), str(task.get("when", "")))
         for task in main_tasks
+        if "ansible.builtin.import_tasks" in task
     ]
     names = [name for name, _ in imports]
     if names != ["_report.yml", "_guards.yml", "_write.yml"]:
@@ -476,6 +529,24 @@ def _task_findings(role: Path) -> list[str]:
                 found.append(f"tasks/main.yml: {name} is not behind ci_jump_manage_keys")
         if "ci_jump_manage_keys" in imports[0][1]:
             found.append("tasks/main.yml: the report must run whatever the flag is")
+
+    # The name is optional input (host_inputs_optional_by_host), so the role must refuse by itself
+    # when the flag is on and the name is absent, before any task that handles it, and must not
+    # refuse when the flag is off: the notice is a debug behind the name being undefined only.
+    guard_tasks = _tasks(role, "_guards.yml")
+    first = guard_tasks[0] if guard_tasks else {}
+    if not (
+        _args(first, "ansible.builtin.assert").get("that") == ["ci_jump_user is defined"]
+        and "ci_jump[user-missing]" in str(_args(first, "ansible.builtin.assert").get("fail_msg"))
+    ):
+        found.append("tasks/_guards.yml: must open by refusing a flag that is on with no name set")
+    notices = [
+        task
+        for task in main_tasks
+        if "ansible.builtin.debug" in task and task.get("when") == "ci_jump_user is not defined"
+    ]
+    if len(notices) != 1 or "WARNING" not in str(notices[0]):
+        found.append("tasks/main.yml: must warn, and only warn, when the account's name is unset")
 
     def hidden(task: dict[str, object]) -> bool:
         return task.get("no_log") is True and task.get("diff") is False
@@ -490,6 +561,7 @@ def _task_findings(role: Path) -> list[str]:
             task
             for task in _walk(_tasks_all(path))
             if "block" not in task
+            and not _asks_only_whether_set(task)
             and ("ci_jump_user" in json.dumps(task) or "ci_jump_legacy" in json.dumps(task))
         ]
         found.extend(
@@ -963,9 +1035,52 @@ class Sabotage(unittest.TestCase):
     def test_a_default_given_to_the_account_name_is_red(self) -> None:
         self._red_then_green(
             f"{ROLE}/meta/argument_specs.yml",
+            "      ci_jump_user:\n        type: str\n        no_log: true\n",
+            "      ci_jump_user:\n        type: str\n        default: ''\n        no_log: true\n",
+            "must have no default",
+        )
+
+    def test_the_account_name_made_a_required_argument_again_is_red(self) -> None:
+        # The plan that has to deliver the seeding tool stops at the door of the role.
+        self._red_then_green(
+            f"{ROLE}/meta/argument_specs.yml",
+            "      ci_jump_user:\n        type: str\n        no_log: true\n",
+            "      ci_jump_user:\n        type: str\n"
             "        required: true\n        no_log: true\n",
-            "        required: false\n        default: ''\n        no_log: true\n",
-            "must be required, with no default",
+            "must not be a required argument",
+        )
+
+    def test_a_jump_host_whose_name_is_required_by_the_loader_is_red(self) -> None:
+        self._red_then_green(
+            HOMES[3],
+            "  edge1:\n    - ci_jump_user\n  edget:",
+            "  edget:",
+            "ci_jump_user is not optional in its host_inputs row",
+        )
+
+    def test_a_guard_that_no_longer_refuses_a_flag_on_with_no_name_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/_guards.yml",
+            "      - ci_jump_user is defined\n",
+            "      - true\n",
+            "must open by refusing a flag that is on with no name set",
+        )
+
+    def test_a_silent_inert_role_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/main.yml",
+            "  when: ci_jump_user is not defined\n",
+            "  when: false\n",
+            "must warn, and only warn",
+        )
+
+    def test_a_notice_that_prints_the_account_name_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/tasks/main.yml",
+            "      ci_jump_user; until then ci_jump_manage_keys must stay false.\n",
+            "      ci_jump_user; until then ci_jump_manage_keys must stay false.\n"
+            "      {{ ci_jump_user }}\n",
+            "a task that handles the account's name must set no_log: true",
         )
 
     def test_the_account_name_in_the_argument_spec_left_visible_is_red(self) -> None:

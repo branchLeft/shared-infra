@@ -860,7 +860,7 @@ it loaded and prints the rotation settings it found, with a count for each:
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   cd /opt/branchleft/edge && set -a && . /etc/branchleft/edge.image.env && . /etc/branchleft/edge.env && set +a
-  docker compose exec -T caddy wget -qO- http://localhost:2019/config/ | grep -o "\"roll_[a-z_]*\":[^,}]*" | sort | uniq -c
+  docker compose exec -T caddy wget -qO- http://127.0.0.1:2019/config/ | grep -o "\"roll_[a-z_]*\":[^,}]*" | sort | uniq -c
   grep -c "output file" Caddyfile'
 ```
 
