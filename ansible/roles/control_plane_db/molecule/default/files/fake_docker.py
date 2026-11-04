@@ -126,17 +126,27 @@ def run_program(command: list[str], mounts: dict[str, str], env: dict[str, str])
         return 0
     provisioning = command[:2] == ["node", "dist/provision/provisionMain.js"]
     if provisioning:
-        if read_input(mounts, env, "PORTAL_ADMIN_URL_FILE") is None:
-            print("provision failed: PORTAL_ADMIN_URL_FILE: cannot read the file", file=sys.stderr)
-            return 1
-        lines = MIGRATE_LINES if command[2:] == ["--migrate-only"] else PROVISION_LINES
+        migrating = command[2:] == ["--migrate-only"]
+        # As the real program does: --migrate-only connects as the migrator and reads its URL
+        # alone, and the full provision reads the administrator's URL and the four passwords.
+        # The administrator's URL is never read by a migrate, whatever it was given.
+        required = (
+            ("PORTAL_MIGRATOR_URL_FILE",)
+            if migrating
+            else ("PORTAL_ADMIN_URL_FILE", "PORTAL_MIGRATOR_PASSWORD_FILE")
+        )
+        for name in required:
+            if read_input(mounts, env, name) is None:
+                print(f"provision failed: {name}: cannot read the file", file=sys.stderr)
+                return 1
+        lines = MIGRATE_LINES if migrating else PROVISION_LINES
         if behaviour == "fail":
             print("pre-check passed: no difference from the manifest")
             print("provision failed: refused: 1 difference(s) from the manifest", file=sys.stderr)
             return 1
         if behaviour == "leak":
             secret = read_input(mounts, env, "PORTAL_TENANT_PASSWORD_FILE")
-            secret = secret or read_input(mounts, env, "PORTAL_ADMIN_URL_FILE")
+            secret = secret or read_input(mounts, env, "PORTAL_MIGRATOR_URL_FILE")
             print(f"debug: connecting with {secret}")
             print("provision failed: refused: 1 difference(s) from the manifest", file=sys.stderr)
             return 1
@@ -162,7 +172,7 @@ def run_exec(args: list[str]) -> int:
 
     The database is stood in for by the file the stack delivered, so the rules it "holds"
     are that file's content exactly, with no line break added. The stale-hba mode serves
-    that content without the provisioner login's rule, as a container that was started
+    that content without the migrator login's rule, as a container that was started
     before the file was replaced would, and the no-db mode answers as a missing container.
     """
     if mode() == "no-db":
@@ -177,7 +187,7 @@ def run_exec(args: list[str]) -> int:
         print("cat: /etc/postgresql/pg_hba.conf: No such file or directory", file=sys.stderr)
         return 1
     if mode() == "stale-hba":
-        text = "".join(line for line in text.splitlines(keepends=True) if "portal_provisioner_login" not in line)
+        text = "".join(line for line in text.splitlines(keepends=True) if "portal_migrator_login" not in line)
     sys.stdout.write(text)
     return 0
 

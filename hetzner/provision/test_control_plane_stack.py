@@ -123,11 +123,18 @@ def hba_rules() -> list[list[str]]:
     return rules
 
 
-# The portal's three logins, the ones the applications image's program creates
+# The portal's four logins, the ones the applications image's program creates
 # (ghost-platform portal/data/provision/manifest.ts): the tenant portal's, the
-# operator console's and the provisioner's. The provisioner is connected to after
-# provisioning commits, so it needs its rule as much as the other two.
-PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login", "portal_provisioner_login"}
+# operator console's, the provisioner's and the migrator's. The provisioner is
+# connected to after provisioning commits, so it needs its rule as much as the other
+# two. The migrator is the login the full provision's step 5 and every migrate-only
+# run connect as, so it needs its rule too; it is not a superuser, and the file
+# admits it to the portal database alone.
+PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login", "portal_provisioner_login", "portal_migrator_login"}
+
+# Every reference to the migrator's credential: the login's name and the names of the
+# password and URL the owner places for it. No compose service may carry any of them.
+MIGRATOR_REFERENCE = re.compile(r"(?i)migrator")
 
 # The one table of who may reach which database: pg_hba.conf must admit exactly
 # these pairs to password authentication and refuse every other. The static test
@@ -437,6 +444,12 @@ class ControlPlaneStackTests(unittest.TestCase):
             1,
             "the administrator's password variable is read somewhere other than the db service",
         )
+
+    def test_no_compose_service_names_the_migrator_credential(self):
+        for path in (COMPOSE, INIT_OVERLAY):
+            for line in code_lines(path.read_text(encoding="utf-8")):
+                with self.subTest(file=path.name, line=line.strip()):
+                    self.assertNotRegex(line, MIGRATOR_REFERENCE)
 
     def test_the_stack_files_hold_no_file_pulling_key_and_no_unlisted_service_key(self):
         """Checked on parsed YAML: a quoted, flow, anchored or merged key is the same key to Compose."""

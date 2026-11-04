@@ -20,6 +20,8 @@
     - /etc/branchleft/control-plane/provision/tenant-password
     - /etc/branchleft/control-plane/provision/owner-password
     - /etc/branchleft/control-plane/provision/provisioner-password
+    - /etc/branchleft/control-plane/provision/migrator-password
+    - /etc/branchleft/control-plane/provision/migrator-url
 
 - name: Put the directories and the token back as prepare.yml made them
   ansible.builtin.file:

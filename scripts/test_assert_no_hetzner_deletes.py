@@ -44,6 +44,16 @@ _URN_CHILD = (
 )
 
 
+_URN_ZONE = (
+    "urn:pulumi:production::branchleft-hetzner-dns::"
+    "hcloud:index/zone:Zone::branchleft-co-uk"
+)
+_URN_RRSET = (
+    "urn:pulumi:production::branchleft-hetzner-dns::"
+    "hcloud:index/zoneRrset:ZoneRrset::branchleft-co-uk-www-a"
+)
+
+
 def _plan(*steps):
     return {"steps": [{"op": op, "urn": urn} for op, urn in steps]}
 
@@ -100,6 +110,24 @@ class DestructiveStepsTests(unittest.TestCase):
 
     def test_network_route_is_deliberately_unprotected(self):
         self.assertEqual(guard.destructive_steps(_plan(("delete", _URN_ROUTE))), [])
+
+    def test_dns_zone_delete_and_replace_are_found(self):
+        # Losing the zone takes the website, the edge and mail down together.
+        for op in ("delete", "replace", "create-replacement", "delete-replaced"):
+            with self.subTest(op=op):
+                self.assertEqual(
+                    guard.destructive_steps(_plan((op, _URN_ZONE))),
+                    [("branchleft-co-uk", op)],
+                )
+
+    def test_dns_record_delete_is_deliberately_unprotected(self):
+        # Removing a record must stay an ordinary apply.
+        self.assertEqual(
+            guard.destructive_steps(
+                _plan(("delete", _URN_RRSET), ("replace", _URN_RRSET), ("update", _URN_RRSET))
+            ),
+            [],
+        )
 
     def test_missing_steps_raises_instead_of_passing(self):
         # "I found no steps" and "there are no destructive steps" must not
@@ -165,6 +193,24 @@ class VerifyCoverageTests(unittest.TestCase):
 
 
 class CoverageMapTests(unittest.TestCase):
+    def test_the_hetzner_map_expects_the_zone_constructor(self):
+        self.assertIn("hcloud.Zone", guard.COVERAGE_BY_DIR["hetzner"])
+
+    def test_hetzner_without_a_zone_declaration_fails(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = pathlib.Path(root) / "hetzner"
+            directory.mkdir()
+            (directory / "program.ts").write_text(
+                "new hcloud.Network('n', {});\nnew hcloud.NetworkSubnet('s', {});\n"
+                "new Host({});\n// hcloud.Zone lives elsewhere now\n",
+                encoding="utf-8",
+            )
+            buffer = io.StringIO()
+            with contextlib.redirect_stdout(buffer):
+                result = guard.verify_coverage(str(directory))
+        self.assertEqual(result, 1)
+        self.assertIn("hcloud.Zone", buffer.getvalue())
+
     def test_real_program_dirs_satisfy_their_own_map(self):
         # The map's fixture claims are only worth anything if the actual
         # committed programs satisfy them. Run coverage against the real

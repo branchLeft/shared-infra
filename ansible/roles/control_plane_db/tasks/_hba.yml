@@ -1,12 +1,13 @@
 ---
 # Precondition of provision: the database must be running on access rules that admit
-# the three portal logins. The provisioning program connects as the provisioner login
-# after its transaction has committed, so a database whose rules lack that login would
-# create the roles and then refuse the program's own proof of them, with no marker.
+# the four portal logins. The provisioning program connects as the provisioner login
+# and as the migrator login after its transaction has committed, so a database whose
+# rules lack either would create the roles and then refuse the program's own proof of
+# them, with no marker.
 #
 # Two things are read, and neither is a secret (the file holds no password):
 #   1. the pg_hba.conf the control_plane role delivered to the host, which must hold an
-#      accepting rule for each of the three logins; and
+#      accepting rule for each of the four logins; and
 #   2. the pg_hba.conf the running db container actually holds, which must equal the
 #      delivered one byte for byte. The stack mounts the file as a single bind mount, and
 #      a replaced file keeps its old content inside a container that was not recreated,
