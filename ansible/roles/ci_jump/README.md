@@ -278,13 +278,39 @@ owner. In the plan of the jump host itself the action relabels that host's addre
 `the jump host`, so the report cannot carry that one destination over to the owner's list character
 for character: the owner supplies its exact spelling.
 
-## Adding the next jump host
+## The jump hosts: edge1 and edge-t
 
-`edge-t` is enrolled by its own change. To give a host this role, list `ci_jump` in its row of
-`ansible/checks/host_roles.yml`, apply the role in its playbook, add the host to `JUMP_HOSTS` in
-`ansible/checks/check_enrolment.py` and give it an `owner_vars/HOST.yml` that ships the four
-variables inert and a `ci_jump_user` key in its row of `host_inputs_required_by_host`, which the owner seeds. The role itself changes nothing: the constants are the same on every jump host (the
-paths are host-local), and the account, the address, the destinations and the keys are that host's own.
+Two hosts apply this role, `edge1` and `edge-t` (the logical host `edget`), and the pipeline goes
+through them in that order: the runner reaches edge1, then edge-t through edge1's jump account
+(two hops, ws#2899). The role is the same on both. `ansible/checks/test_ci_jump_hosts.py` holds that:
+every host in `JUMP_HOSTS` applies it as a plain role entry, and no part of the role names the host
+or a group of hosts, so the real-sshd proof in `molecule/default` (a destination not on the list is
+refused) is the proof for each. Only the data differs:
+
+| List     | Holds                                                                                                  |
+| -------- | ------------------------------------------------------------------------------------------------------ |
+| edge1's  | the estate hosts, and edge-t's public address; never a tenants private address                         |
+| edge-t's | edge-t's own private address (`TENANTS_HOST_IPS.edgeT`, which the role requires) and the tenants hosts |
+
+The same test reads `TENANTS_HOST_IPS` from `hetzner-host/addressPlan.ts`, its one home, and
+refuses a tenants private address in `owner_vars/edge1.yml` and an own address on edget that is not
+edge-t's.
+
+edge-t is wired and ships inert (`owner_vars/edget.yml`: flag false, nothing listed). What is left
+for it is the owner's, in this order: the edge-t server (ws#2898) and its public address from the
+tenants stack; the jump account on it (the role never makes it); `ci_jump_user` in its private
+inputs file (`seed_host_inputs.py --host edget`); its enrolment in `ANSIBLE_HOSTS` and the two-hop
+route (ws#2899, ws#2975); then one data change to `owner_vars/edget.yml` (own address, destinations,
+keys, flag true). Until it is enrolled the wiring changes nothing live, and once it is, its first
+pull stops at `host_inputs[file-missing]` until the file is seeded.
+
+To give a further host this role, list `ci_jump` in its row of `ansible/checks/host_roles.yml`
+(with `host_inputs` first), apply both roles in its playbook, add the host to `JUMP_HOSTS` in
+`ansible/checks/check_enrolment.py`, give it an `owner_vars/HOST.yml` that ships the four variables
+inert and a `ci_jump_user` key in its row of `host_inputs_required_by_host` and in
+`ansible/tools/seed_host_inputs.py`. The role itself changes nothing: the constants are the same on
+every jump host (the paths are host-local), and the account, the address, the destinations and the
+keys are that host's own.
 
 ## Named limits
 

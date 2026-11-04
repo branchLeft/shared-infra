@@ -70,6 +70,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ntfy_pager_machine_password_hash",
         "ci_jump_user",
     ),
+    "edget": ("ci_jump_user",),
     "ops1": (
         "backup_worker_db_host",
         "backup_worker_db_user",
@@ -182,7 +183,7 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
 MESSAGES: Final[dict[str, str]] = {
-    "unknown-host": "this tool seeds edge1, ops1 or app1 only",
+    "unknown-host": "this tool seeds edge1, edget, ops1 or app1 only",
     "not-root": "must run as root",
     "directory": "a directory above the file is not a real directory owned by root and closed",
     "exists": "the inputs file appeared meanwhile and was not overwritten",
@@ -634,7 +635,7 @@ class QuietParser(argparse.ArgumentParser):
 
 def parse_args(argv: Sequence[str] | None, stream: TextIO) -> argparse.Namespace:
     parser = QuietParser(stream)
-    parser.add_argument("--host", required=True, help="edge1, ops1 or app1")
+    parser.add_argument("--host", required=True, help="edge1, edget, ops1 or app1")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--replace", action="store_true", help="replace an existing file")
     mode.add_argument("--set", dest="set_key", metavar="KEY", help="change one key, asked hidden")
