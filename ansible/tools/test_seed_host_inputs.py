@@ -323,6 +323,7 @@ class Rig:
         self.jump_answer: str | None = value_for(JUMP_KEY)
         self.path_answers = list(path_answers)
         self.prompts: list[str] = []
+        self.flushes = 0
         self.out = io.StringIO()
         self.err = io.StringIO()
         self.uid = os.getuid()
@@ -334,6 +335,7 @@ class Rig:
             root_gid=self.cfg.stat().st_gid,
             ask_secret=self.secret,
             ask_path=self.path,
+            flush_input=self.flush,
             out=self.out,
             err=self.err,
         )
@@ -347,6 +349,9 @@ class Rig:
         if not self.answers:
             raise EOFError
         return self.answers.pop(0)
+
+    def flush(self) -> None:
+        self.flushes += 1
 
     def path(self, prompt: str) -> str:
         self.prompts.append(prompt)
@@ -964,7 +969,7 @@ class SlotTests(unittest.TestCase):
         )
 
     def test_two_slots_are_kept_in_the_order_typed(self) -> None:
-        second_key = "B" * 68
+        second_key = "ssh-ed25519 " + "B" * 68
         rig = Rig(self, answers=[SLOT_LINE, f"tenant-beta {second_key} adopt", ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
@@ -977,25 +982,90 @@ class SlotTests(unittest.TestCase):
         )
 
     def test_set_replaces_the_slots_and_no_other_key(self) -> None:
-        rig = Rig(self, answers=["tenant-gamma " + "G" * 68, ""])
+        rig = Rig(self, answers=["tenant-gamma ssh-ed25519 " + "G" * 68, ""])
         rig.put(tool.DEST_NAME, json.dumps(app1_document()))
         self.assertEqual(0, rig.run("--host", "app1", "--set", SLOTS_KEY))
         expected = {
             **app1_document(),
-            SLOTS_KEY: [{"stack": "tenant-gamma", "public_key": "G" * 68, "adopt_existing": False}],
+            SLOTS_KEY: [
+                {
+                    "stack": "tenant-gamma",
+                    "public_key": "ssh-ed25519 " + "G" * 68,
+                    "adopt_existing": False,
+                }
+            ],
         }
         self.assertEqual(expected, rig.document())
         self.assertEqual(0o600, stat.S_IMODE(rig.dest.stat().st_mode))
 
     def test_a_malformed_line_writes_nothing_and_exits_non_zero(self) -> None:
-        rig = Rig(self, answers=["onlyastack", ""])
+        rig = Rig(self, answers=[SLOT_LINE, "onlyastack", ""])
         rig.seed_app1()
         self.assertEqual(1, rig.run("--host", "app1"))
         self.assertFalse(rig.dest.exists())
         self.assertIn(f"still missing (1): {SLOTS_KEY}", rig.stdout)
 
+    def test_a_malformed_line_after_a_good_one_is_not_skipped(self) -> None:
+        # The good line first: a tool that skipped the bad line and asked again would
+        # reach the empty line holding one slot and write it.
+        rig = Rig(self, answers=[SLOT_LINE, "onlyastack", SLOT_LINE.replace("alpha", "beta"), ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_the_first_step_on_the_four_keys_app1_holds_today_adds_the_slots(self) -> None:
+        four = {key: app1_value(key) for key in APP1_KEYS}
+        rig = Rig(self, answers=[SLOT_LINE, ""])
+        rig.put(tool.DEST_NAME, json.dumps(four))
+        self.assertEqual(0, rig.run("--host", "app1", "--set", SLOTS_KEY))
+        self.assertEqual(
+            {
+                **four,
+                SLOTS_KEY: [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False}],
+            },
+            rig.document(),
+        )
+
+    def test_a_pasted_private_key_is_refused_and_pending_input_is_flushed(self) -> None:
+        rig = Rig(self, answers=["-----BEGIN OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXk", ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertGreaterEqual(rig.flushes, 1)
+        self.assertNotIn("PRIVATE KEY", rig.everything.replace("PRIVATE KEY'", ""))
+
+    def test_a_line_that_is_not_a_stack_a_key_type_and_a_base64_blob_is_refused(self) -> None:
+        for bad in (
+            f"{SLOT_STACK} adopt",
+            f"{SLOT_STACK} ssh-dss " + "A" * 68,
+            f"{SLOT_STACK} ssh-ed25519 not*base64!",
+            f"{SLOT_STACK} {'A' * 68}",
+            f"{SLOT_STACK} ssh-ed25519",
+        ):
+            with self.subTest(line_length=len(bad)):
+                rig = Rig(self, answers=[bad, ""])
+                rig.seed_app1()
+                self.assertEqual(1, rig.run("--host", "app1"))
+                self.assertFalse(rig.dest.exists())
+                self.assertGreaterEqual(rig.flushes, 1)
+
+    def test_a_key_comment_is_dropped_and_adopt_is_the_last_word_after_it(self) -> None:
+        rig = Rig(self, answers=[f"{SLOT_LINE} someone@example adopt", ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(
+            [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": True}],
+            rig.document()[SLOTS_KEY],
+        )
+
+    def test_a_pasted_private_key_at_the_tenants_prompt_is_refused_and_flushed(self) -> None:
+        rig = Rig(self, answers=["-----BEGIN OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXk", ""])
+        rig.put(tool.DEST_NAME, json.dumps(ops1_document()))
+        self.assertEqual(1, rig.run("--host", "ops1", "--set", TENANTS_KEY))
+        self.assertGreaterEqual(rig.flushes, 1)
+
     def test_a_stack_given_twice_writes_nothing_and_exits_non_zero(self) -> None:
-        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} {'B' * 68}", ""])
+        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} ssh-ed25519 {'B' * 68}", ""])
         rig.seed_app1()
         self.assertEqual(1, rig.run("--host", "app1"))
         self.assertFalse(rig.dest.exists())
@@ -1006,6 +1076,19 @@ class SlotTests(unittest.TestCase):
         self.assertEqual(1, rig.run("--host", "app1"))
         self.assertFalse(rig.dest.exists())
 
+    def test_a_refusal_with_no_terminal_gives_the_fixed_message_and_no_traceback(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} ssh-ed25519 not*base64!", ""])
+        rig.seed_app1()
+        rig.ctx.flush_input = tool.flush_terminal_input
+        # /dev/null is a real descriptor that is not a terminal: tcflush raises termios.error there.
+        with open(os.devnull) as null, mock.patch("sys.stdin", null):
+            self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn(
+            "that line is not 'stack public_key [adopt]', or repeats one.", rig.err.getvalue()
+        )
+        self.assertNotIn("Traceback", rig.err.getvalue())
+        self.assertFalse(rig.dest.exists())
+
     def test_an_empty_list_writes_nothing_and_exits_non_zero(self) -> None:
         rig = Rig(self, answers=[""])
         rig.seed_app1()
@@ -1013,7 +1096,7 @@ class SlotTests(unittest.TestCase):
         self.assertFalse(rig.dest.exists())
 
     def test_a_typed_slot_is_never_echoed(self) -> None:
-        rig = Rig(self, answers=["SENTSTACK SENTSLOTKEY adopt", ""])
+        rig = Rig(self, answers=["SENTSTACK ssh-ed25519 SENTSLOTKEY0123456789 adopt", ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
         self.assertNotIn("SENTSTACK", rig.everything)
@@ -1050,7 +1133,7 @@ class LeakTests(unittest.TestCase):
         rig.seed_ops1()
         self.assertEqual(0, rig.run("--host", "ops1"))
         self.assert_clean(rig, "ops1 fill")
-        rig = Rig(self, answers=["SENTSTACK SENTSLOTKEY", ""])
+        rig = Rig(self, answers=["SENTSTACK ssh-ed25519 SENTSLOTKEY0123456789", ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
         self.assert_clean(rig, "app1 fill")

@@ -74,7 +74,9 @@ What it does, in this order:
    until an empty one (`adopt`, the literal word at the end, sets `adopt_existing`; a slot the
    host already runs needs it). A slot line that is malformed, or repeats a stack or a key, is
    refused and the whole list is left missing, so nothing is written and the line is never shown.
-   The role checks each slot's shape on the host, so the tool judges none of it. An empty answer,
+   The tool checks each slot's shape at the prompt: a stack, then the type `ssh-ed25519`, then a
+   base64 key. It drops any comment, and it discards pending terminal input on a refusal. The role
+   checks the key and the stack again on the host. An empty answer,
    or no terminal, leaves the key missing. edge1's `ci_jump_user`, the CI jump account's name, is
    typed in the same way: it exists on no live file, and it is held out of the repository and of
    every log, so the prompt is hidden and the name is never printed (a fill asks for it last; on
