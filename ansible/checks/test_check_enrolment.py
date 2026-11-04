@@ -1481,7 +1481,8 @@ class LoadCache(unittest.TestCase):
     def test_a_caller_that_changes_a_loaded_value_does_not_change_the_next_load(self) -> None:
         self.path.write_text("signers: [aaaa]\nnested: {inner: [1, 2]}\n", encoding="utf-8")
         first = _load(self.path, [], "x")
-        assert isinstance(first, dict)
+        if not isinstance(first, dict):
+            self.fail(f"expected a mapping, got {type(first).__name__}")
         first["signers"].append("zzzz")
         first["nested"]["inner"].clear()
         first["added"] = True
