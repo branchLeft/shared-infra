@@ -35,3 +35,4 @@ ansible/roles/*/files/ghost-platform/
 # produce a diff of only the records that changed, which it cannot if a
 # formatter re-wraps the arrays it writes.
 hetzner/dns/zone.json
+hetzner/dns/publicpress.co.uk.json
