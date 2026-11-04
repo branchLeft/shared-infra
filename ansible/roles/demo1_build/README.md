@@ -662,6 +662,10 @@ assertion fires in its place or a later one is the only one left:
 | The colour instance check (`_units_loaded.yml`) assert removed                                            | refusals, `converge`                    | "The colour unit check accepted instances that load from no template."                                                     |
 | Both seeding tests removed (the pre-seed guard)                                                           | default, `converge`                     | "The role put a cleared drain flag back."                                                                                  |
 
+Two rows above, "The candidate written with mode 0644" and "The NOT rendered notice
+made silent", have not been run, so their red is not yet recorded. Each is a mechanism
+the default scenario would show, and neither is in the PR body's sabotage record.
+
 The harness's own controls (a failing second scenario fails its shard, a role with
 no `molecule/` still gets a shard and fails at the scenario limits, a privileged
 second scenario without a comment is refused, a second privileged platform needs a
@@ -742,7 +746,7 @@ other unit tests of `ansible/harness`.
   second role that names it, so it now exempts demo1 by program
   (`ALLOWED_SECOND_OWNER_PROGRAMS`): demo1 may read and name that one file, and a byte
   copy or a link of it stays refused. That exemption sits in an owner-merged file, so
-  the PR that adds it waits for Rob's merge. The role-path check
+  the PR that adds it waits for the owner's merge. The role-path check
   (`ansible/checks/check_role_paths.py`) does not object and needs no exemption:
   `deploy_tooling` writes the template through a loop item (`dest: '{{ item.path }}'`),
   which that check leaves templated and does not compare. demo1 never applies

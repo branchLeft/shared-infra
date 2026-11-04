@@ -85,7 +85,7 @@ demo1_build_candidate_edge: /var/lib/branchleft/demo-candidates/edge-upstreams.c
 # makes from it. {slot} is the slot number. The input is the owner's to place, as root;
 # the role only reads its shape, and the renderer reads its content. A slot with no input
 # gets no candidate, and the plan and apply say so with the notice below.
-demo1_build_site_edge_input: '/etc/branchleft/demo-{slot}.edge.json'
+demo1_build_site_edge_input: '{{ demo1_build_config_dir }}/demo-{slot}.edge.json'
 demo1_build_site_candidate: '/var/lib/branchleft/demo-candidates/site-{slot}.caddy'
 demo1_build_site_not_rendered_text: 'Site candidate for slot {slot} NOT rendered: no owner-placed edge JSON'
 demo1_build_site_unstaged_text: >-

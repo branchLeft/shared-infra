@@ -369,6 +369,12 @@ class TestSingleOwner(unittest.TestCase):
             {"control_plane": frozenset({"deploy_tooling_app_file_targets"})},
         )
 
+    def test_the_program_allow_list_is_the_compose_template_for_demo1_build_only(self) -> None:
+        self.assertEqual(
+            ALLOWED_SECOND_OWNER_PROGRAMS,
+            {"demo1_build": frozenset({"branchleft-compose@.service"})},
+        )
+
     def test_the_programs_are_the_role_target_lists_own(self) -> None:
         self.assertEqual(
             PROGRAMS,
@@ -932,6 +938,43 @@ class TestSingleOwner(unittest.TestCase):
                 )
             ],
         )
+
+    def test_demo1_build_holding_a_copy_of_the_compose_template_is_found(self) -> None:
+        copy = self.roles / "demo1_build" / "files" / "unit"
+        copy.parent.mkdir(parents=True)
+        copy.write_bytes((self.provision / "branchleft-compose@.service").read_bytes())
+        self.assertEqual(
+            self.found(),
+            ["demo1_build/files/unit is a copy of branchleft-compose@.service"],
+        )
+
+    def test_demo1_build_holding_a_link_to_the_compose_template_is_found(self) -> None:
+        link = self.roles / "demo1_build" / "files" / "unit"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.provision / "branchleft-compose@.service")
+        self.assertEqual(
+            self.found(),
+            ["demo1_build/files/unit is a link to branchleft-compose@.service"],
+        )
+
+    def test_demo1_build_naming_the_wrapper_is_found(self) -> None:
+        self.write_tasks("demo1_build", "- ansible.builtin.copy: {src: branchleft_deploy.py}\n")
+        self.assertEqual(
+            self.found(),
+            [
+                "demo1_build/tasks/main.yml reads branchleft_deploy.py,"
+                " which the deploy_tooling role installs"
+            ],
+        )
+
+    def test_demo1_build_naming_the_compose_template_path_is_not_found(self) -> None:
+        self.write_tasks(
+            "demo1_build",
+            "- ansible.builtin.copy:\n"
+            "    src: '{{ role_path }}/../../../hetzner/provision/branchleft-compose@.service'\n"
+            "    dest: /etc/systemd/system/branchleft-compose@.service\n",
+        )
+        self.assertEqual(self.found(), [])
 
     def test_a_task_file_that_cannot_be_read_is_found_rather_than_skipped(self) -> None:
         self.write_tasks("other_role", "- name: [unclosed\n")
