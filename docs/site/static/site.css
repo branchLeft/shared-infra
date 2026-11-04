@@ -1,0 +1,144 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1c2024;
+  --muted: #5b6672;
+  --accent: #0b5cad;
+  --rule: #d5dbe1;
+  --code-bg: #f3f5f7;
+  --node-fill: #eaf2fb;
+  --node-stroke: #0b5cad;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14181c;
+    --fg: #e4e8ec;
+    --muted: #9aa6b2;
+    --accent: #6cb0f5;
+    --rule: #2c353e;
+    --code-bg: #1d2329;
+    --node-fill: #1a2a3a;
+    --node-stroke: #6cb0f5;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    1rem/1.6 system-ui,
+    -apple-system,
+    'Segoe UI',
+    sans-serif;
+}
+header,
+main,
+footer {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 0 1rem;
+}
+header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: baseline;
+  padding-top: 1rem;
+  border-bottom: 1px solid var(--rule);
+}
+header strong {
+  margin-right: auto;
+}
+a {
+  color: var(--accent);
+}
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+}
+code,
+pre {
+  background: var(--code-bg);
+  font:
+    0.9em ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
+code {
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+pre {
+  padding: 0.8rem;
+  overflow-x: auto;
+  border-radius: 4px;
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th,
+td {
+  border: 1px solid var(--rule);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+  vertical-align: top;
+}
+figure {
+  margin: 1.5rem 0;
+}
+figcaption {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+svg.diagram {
+  width: 100%;
+  height: auto;
+}
+svg.diagram rect {
+  fill: var(--node-fill);
+  stroke: var(--node-stroke);
+  stroke-width: 1.5;
+}
+svg.diagram text {
+  fill: var(--fg);
+  font:
+    15px system-ui,
+    sans-serif;
+}
+svg.diagram text.note {
+  fill: var(--muted);
+  font-size: 12px;
+}
+svg.diagram line {
+  stroke: var(--node-stroke);
+  stroke-width: 1.5;
+}
+svg.diagram marker path {
+  fill: var(--node-stroke);
+}
+#search {
+  margin: 0;
+}
+#search input {
+  font: inherit;
+  padding: 0.2rem 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--rule);
+}
+#results {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+footer {
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding-top: 2rem;
+  padding-bottom: 2rem;
+}

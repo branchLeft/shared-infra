@@ -1,0 +1,16 @@
+{{- $d := .Site.Data.diagram -}}
+<figure>
+<svg class="diagram" viewBox="0 0 {{ $d.width }} {{ $d.height }}" role="img" aria-labelledby="dgm-title">
+<title id="dgm-title">{{ $d.title }}</title>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z"/></marker></defs>
+{{- range $d.edges }}
+<line x1="{{ .x1 }}" y1="{{ .y1 }}" x2="{{ .x2 }}" y2="{{ .y2 }}" marker-end="url(#arrow)"/>
+{{- end }}
+{{- range $d.nodes }}
+<rect x="{{ .x }}" y="{{ .y }}" width="{{ .w }}" height="{{ .h }}" rx="6"/>
+<text x="{{ add .x (div .w 2) }}" y="{{ add .y 26 }}" text-anchor="middle">{{ .label }}</text>
+<text class="note" x="{{ add .x (div .w 2) }}" y="{{ add .y 46 }}" text-anchor="middle">{{ .note }}</text>
+{{- end }}
+</svg>
+<figcaption>{{ $d.title }}. Drawn at build time from <code>data/diagram.json</code>.</figcaption>
+</figure>

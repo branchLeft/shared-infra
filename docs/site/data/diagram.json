@@ -1,0 +1,68 @@
+{
+  "title": "How a change reaches a host",
+  "width": 670,
+  "height": 240,
+  "nodes": [
+    {
+      "id": "pr",
+      "x": 20,
+      "y": 30,
+      "w": 170,
+      "h": 60,
+      "label": "Pull request",
+      "note": "lint, changed roles"
+    },
+    {
+      "id": "queue",
+      "x": 250,
+      "y": 30,
+      "w": 170,
+      "h": 60,
+      "label": "Merge queue",
+      "note": "lint, every shard"
+    },
+    {
+      "id": "main",
+      "x": 480,
+      "y": 30,
+      "w": 170,
+      "h": 60,
+      "label": "main",
+      "note": "signed commit"
+    },
+    {
+      "id": "run",
+      "x": 480,
+      "y": 150,
+      "w": 170,
+      "h": 60,
+      "label": "Delivery run",
+      "note": "check mode, each host"
+    },
+    {
+      "id": "approve",
+      "x": 250,
+      "y": 150,
+      "w": 170,
+      "h": 60,
+      "label": "Approval",
+      "note": "environment gate"
+    },
+    {
+      "id": "host",
+      "x": 20,
+      "y": 150,
+      "w": 170,
+      "h": 60,
+      "label": "Pull trigger",
+      "note": "verifies, then applies"
+    }
+  ],
+  "edges": [
+    { "x1": 190, "y1": 60, "x2": 248, "y2": 60 },
+    { "x1": 420, "y1": 60, "x2": 478, "y2": 60 },
+    { "x1": 565, "y1": 90, "x2": 565, "y2": 148 },
+    { "x1": 480, "y1": 180, "x2": 422, "y2": 180 },
+    { "x1": 250, "y1": 180, "x2": 192, "y2": 180 }
+  ]
+}

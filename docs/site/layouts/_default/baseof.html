@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ if .IsHome }}{{ .Site.Title }}{{ else }}{{ .Title }} · {{ .Site.Title }}{{ end }}</title>
+<link rel="stylesheet" href="{{ "site.css" | relURL }}">
+</head>
+<body>
+<header>
+<strong>{{ .Site.Title }}</strong>
+<nav><a href="{{ "/" | relURL }}">Overview</a> · <a href="{{ "how-it-works/" | relURL }}">How it works</a></nav>
+<form id="search" role="search" hidden><label>Search <input type="search" id="q" autocomplete="off"></label></form>
+</header>
+<main>
+<ul id="results"></ul>
+{{ block "main" . }}{{ end }}
+</main>
+<footer>Built from the repository's own files. This page loads nothing from any other site.</footer>
+<script src="{{ "search.js" | relURL }}" defer></script>
+</body>
+</html>

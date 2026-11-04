@@ -36,3 +36,10 @@ ansible/roles/*/files/ghost-platform/
 # formatter re-wraps the arrays it writes.
 hetzner/dns/zone.json
 hetzner/dns/publicpress.co.uk.json
+
+# The docs site: Go and Tera templates are not Prettier syntax, and the build output and the
+# fetched binary are not committed.
+docs/site/layouts/
+docs/site/templates/
+docs/site/public/
+docs/site/.bin/
