@@ -45,7 +45,10 @@ class InputsAncestors(unittest.TestCase):
 
     def test_the_list_is_every_parent_of_the_inputs_directory_root_first(self) -> None:
         inputs_dir = resolve(self.variables["tunnel_account_inputs_dir"], self.variables)
-        listed = [resolve(item, self.variables) for item in self.variables["tunnel_account_inputs_ancestors"]]
+        listed = [
+            resolve(item, self.variables)
+            for item in self.variables["tunnel_account_inputs_ancestors"]
+        ]
         self.assertEqual(parents(inputs_dir), listed)
 
     def test_a_list_that_stops_short_is_caught(self) -> None:
