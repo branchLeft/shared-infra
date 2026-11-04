@@ -43,7 +43,7 @@ found them. Step 6 is the one complete check.
 | Phase             | What changes                                                                              | Who notices                   | Undo                                          |
 | ----------------- | ----------------------------------------------------------------------------------------- | ----------------------------- | --------------------------------------------- |
 | Steps 1-5, create | A zone exists at Hetzner. Nothing resolves through it: the registry still points at IONOS | Nobody                        | Lift delete protection in the console, delete |
-| Step 8, switch    | The `.uk` registry delegates to Hetzner. Every lookup moves over within 48 hours          | Everyone, if the zones differ | Switch the nameservers back (same 48h tail)   |
+| Step 7, switch    | The `.uk` registry delegates to Hetzner. Every lookup moves over within 48 hours          | Everyone, if the zones differ | Switch the nameservers back (same 48h tail)   |
 
 The `.uk` delegation TTL is 172800 seconds, so for up to two days some resolvers
 ask IONOS and some ask Hetzner. **No record is edited at either provider from the
@@ -177,14 +177,12 @@ rm "$VERBOSE"
 then land that by PR, and apply
 before going on.
 
-### 7. Optional: lower the TTLs first
+Rollback is not instant: switching the nameservers back takes up to the 172800 s
+delegation TTL to propagate. For that long, mail continuity rests on both
+servers holding identical records, which step 5 checks and the rollback check
+re-checks.
 
-At least one hour before step 8, in the same IONOS page, set each record's TTL
-to 300 so a rollback is quick. Then put them back to 3600 after step 9. If you
-do this, step 5's `--check-ttl` would report the lowered TTLs: run it before
-lowering.
-
-### 8. Switch the nameservers (IONOS panel; the only step that changes resolution)
+### 7. Switch the nameservers (IONOS panel; the only step that changes resolution)
 
 In the IONOS panel, open **Domains & SSL → publicpress.co.uk → Nameservers**,
 choose custom nameservers, and enter exactly:
@@ -195,7 +193,7 @@ oxygen.ns.hetzner.com
 helium.ns.hetzner.de
 ```
 
-### 9. Verify the registry and the propagation
+### 8. Verify the registry, the propagation and mail
 
 ```bash
 dig +norec @nsd.nic.uk publicpress.co.uk NS
@@ -210,10 +208,58 @@ dig +short _dmarc.publicpress.co.uk TXT @1.1.1.1
 
 Expected: `46.225.95.167` and the DMARC record.
 
+Mail stays on IONOS's mail servers, so the MX answer has to come through
+Hetzner's delegation unchanged:
+
+```bash
+dig +short MX publicpress.co.uk @1.1.1.1
+```
+
+Expected, and nothing else: `10 mx00.ionos.co.uk.` and `10 mx01.ionos.co.uk.`,
+one per line. Any other answer is a stop.
+
+Then test mail both ways, with an account you own outside publicpress.co.uk and
+a mailbox on publicpress.co.uk. Write down what you observed: the step passes
+only on what you saw.
+
+1. Send a message from the outside account to the publicpress.co.uk mailbox.
+   Observed: arrived, or not.
+2. Send a message from the publicpress.co.uk mailbox to the outside account.
+   Observed: arrived, or not.
+3. In the message that arrived at the outside account, open the full headers
+   (Gmail: **Show original**; other clients: view source) and find the
+   `Authentication-Results:` header. Expected: `spf=pass` and `dkim=pass`, both
+   for publicpress.co.uk. Observed: the spf and dkim results as the header
+   writes them. Do not paste addresses.
+
+A message that does not arrive, or a result other than `spf=pass` and
+`dkim=pass`, is a stop: switch back under Rollback.
+
 ## Rollback
 
-Switch the nameservers back to the four IONOS names in step 5's `--left` list.
-The IONOS copy is untouched, so the same 48-hour tail applies in reverse.
+1. Check the IONOS copy still holds all 10 rrsets, from a network that does not
+   intercept port 53 (as in step 5). Each IONOS server is queried directly and
+   compared against the committed zone file:
+
+   ```bash
+   cd ~/branchLeft/shared-infra
+   python3 hetzner/dns/zonecheck.py compare --zone-file hetzner/dns/publicpress.co.uk.json --left ns1049.ui-dns.de,ns1088.ui-dns.org --right ns1094.ui-dns.biz,ns1098.ui-dns.com --check-ttl --dig-time 5 --dig-tries 5
+   ```
+
+   Expected, and nothing else:
+
+   ```text
+   no differences: 10 rrsets, 143 names, 12 types, 4 servers; both controls caught
+   ```
+
+   Any `DIFF` names a record IONOS no longer serves. Re-enter it in the IONOS
+   panel (**Domains & SSL → publicpress.co.uk → DNS**) from the table at the top
+   of this runbook, with full values in `hetzner/dns/publicpress.co.uk.json`,
+   **before** switching back, then run this check again. `ERROR` (exit 2) is the
+   port 53 problem; `CONTROL FAILED` is a stop.
+
+2. Switch the nameservers back to the four IONOS names in step 5's `--left` list.
+   The IONOS copy then answers, and the same 48-hour tail applies in reverse.
 
 ## After 48 hours
 

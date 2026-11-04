@@ -491,7 +491,7 @@ def _servers(value: str) -> list[str]:
 
 
 def _add_dig_timings(parser: argparse.ArgumentParser) -> None:
-    # Hetzner's servers rate-limit the checker at the defaults (ws#1164 cutover).
+    # Hetzner's servers rate-limit the checker at the defaults, so the cutover runbooks raise these.
     parser.add_argument("--dig-time", type=int, default=DEFAULT_DIG_TIME,
                         help="dig +time, seconds per try (default %(default)s)")
     parser.add_argument("--dig-tries", type=int, default=DEFAULT_DIG_TRIES,

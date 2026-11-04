@@ -698,7 +698,7 @@ class CheckedInPublicPressTest(unittest.TestCase):
                 self.assertIn(f"DIFF {rrset['name']} {rrset['type']}: in the transcript, not declared", out)
 
     def test_dropping_a_mail_record_in_particular_fails(self):
-        # The sabotage the PR records: _dmarc, then the SPF-bearing apex TXT.
+        # The records a mail-breaking copy drops first: _dmarc, the SPF-bearing apex TXT, the MX.
         for name, rtype in (("_dmarc", "TXT"), ("@", "TXT"), ("@", "MX")):
             with self.subTest(record=f"{name} {rtype}"):
                 dropped = dict(self.data)
