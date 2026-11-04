@@ -96,8 +96,6 @@
 # The diff is not shown (ANS-16): the files hold
 # placeholder names, paths and environment variables named like passwords or tokens, which
 # the plan's secret scan would withhold the whole plan of the host over. None holds a secret.
-# prometheus/alerts.yml is here for one apply only: the host still holds the text from before it
-# was reworded, and the diff would show that old line (RETIRED_MATCHES in test_plan_diff_scan.py).
 # The other files go by the next task, which shows its diff.
 - name: Deliver the stack's files whose diff is not shown
   ansible.builtin.copy:
