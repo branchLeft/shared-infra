@@ -42,10 +42,18 @@
         group: root
         mode: '0755'
 
+    - name: Create the subdirectory the control_plane role delivers the access rules into
+      ansible.builtin.file:
+        path: /opt/branchleft/control-plane/postgres
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
     - name: Deliver the stack's access rules as the control_plane role does
       ansible.builtin.copy:
         src: '{{ scenario_hba_source }}'
-        dest: /opt/branchleft/control-plane/pg_hba.conf
+        dest: /opt/branchleft/control-plane/postgres/pg_hba.conf
         owner: root
         group: root
         mode: '0644'

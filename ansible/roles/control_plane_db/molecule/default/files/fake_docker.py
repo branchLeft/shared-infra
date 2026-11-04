@@ -17,7 +17,7 @@ STATE = Path("/var/tmp/fake-docker")  # noqa: S108 - the test container's own sc
 LOG = STATE / "calls.jsonl"
 MODE = STATE / "mode"
 # The file the stack delivered, which the stand-in database "holds" as its access rules.
-DELIVERED_HBA = Path("/opt/branchleft/control-plane/pg_hba.conf")
+DELIVERED_HBA = Path("/opt/branchleft/control-plane/postgres/pg_hba.conf")
 MIGRATE_LINES = [
     "pre-check passed: no difference from the manifest",
     "applied migration 0003_versioned_documents",
@@ -178,13 +178,13 @@ def run_exec(args: list[str]) -> int:
     if mode() == "no-db":
         print(f"Error response from daemon: No such container: {args[0]}", file=sys.stderr)
         return 1
-    if args[1:] != ["cat", "/etc/postgresql/pg_hba.conf"]:
+    if args[1:] != ["cat", "/etc/postgresql-hba/pg_hba.conf"]:
         print(f"fake docker: unknown exec {args}", file=sys.stderr)
         return 2
     try:
         text = DELIVERED_HBA.read_text(encoding="utf-8")
     except OSError:
-        print("cat: /etc/postgresql/pg_hba.conf: No such file or directory", file=sys.stderr)
+        print("cat: /etc/postgresql-hba/pg_hba.conf: No such file or directory", file=sys.stderr)
         return 1
     if mode() == "stale-hba":
         text = "".join(line for line in text.splitlines(keepends=True) if "portal_migrator_login" not in line)

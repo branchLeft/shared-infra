@@ -619,7 +619,7 @@ class RealTreeCase(unittest.TestCase):
         # one, must be resolved to their files, or the files they copy were never read.
         for tail in (
             "edge_stack:hetzner/edge/stack/crowdsec/config.yaml.local",
-            "control_plane:hetzner/control-plane/stack/pg_hba.conf",
+            "control_plane:hetzner/control-plane/stack/postgres/pg_hba.conf",
             "control_plane:hetzner/control-plane/stack/compose.yml",
             "monitoring_stack:hetzner/monitoring/stack/prometheus/alerts.yml",
             "monitoring_stack:hetzner/monitoring/stack/compose.yml",

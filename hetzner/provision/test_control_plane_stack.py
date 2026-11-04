@@ -25,7 +25,7 @@ HETZNER = pathlib.Path(__file__).resolve().parent.parent
 REPOSITORY = HETZNER.parent
 COMPOSE = HETZNER / "control-plane" / "stack" / "compose.yml"
 SITES = REPOSITORY / "sites.ts"
-PG_HBA = HETZNER / "control-plane" / "stack" / "pg_hba.conf"
+PG_HBA = HETZNER / "control-plane" / "stack" / "postgres" / "pg_hba.conf"
 INIT_OVERLAY = HETZNER / "control-plane" / "stack" / "compose.init.yml"
 UNIT = HETZNER / "provision" / "branchleft-compose@.service"
 FIXTURE = HETZNER / "provision" / "fixtures" / "stack-keys-quoted-env-file.yml"
@@ -111,6 +111,28 @@ def published_ports(block: list[str]) -> list[str]:
         elif in_ports:
             in_ports = False
     return ports
+
+
+def hba_wiring() -> tuple[str, str]:
+    """How compose.yml wires the rules into the db container: (host source, container file).
+
+    The container file is the one `-c hba_file=` selects; the host source is the left side
+    of the single read-only mount whose container side is that file's directory. The one
+    home of this wiring: the real-server test reads it from here and restates nothing.
+    """
+    block = "\n".join(service_blocks(compose_text())["db"])
+    selected = re.findall(r"'hba_file=(/[^']+)'", block)
+    if len(selected) != 1:
+        raise AssertionError(f"expected one hba_file argument on the db service, found {len(selected)}")
+    container_directory = selected[0].rsplit("/", 1)[0]
+    mounts = [
+        source
+        for source, target in re.findall(r"^\s+- (\S+):(/\S+?):ro\s*$", block, re.MULTILINE)
+        if target == container_directory
+    ]
+    if len(mounts) != 1:
+        raise AssertionError(f"expected one read-only mount of {container_directory}, found {len(mounts)}")
+    return mounts[0], selected[0]
 
 
 def hba_rules() -> list[list[str]]:
@@ -377,11 +399,19 @@ class ControlPlaneStackTests(unittest.TestCase):
         self.assertIn("127.0.0.1:8300:8080", ports)
         self.assertIn(f"{OPS1_PRIVATE_IP}:8300:8080", ports)
 
-    def test_the_database_mounts_the_hba_file_and_selects_it_at_start(self):
-        block = "\n".join(service_blocks(compose_text())["db"])
-        self.assertIn("      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro", block)
-        self.assertIn("'hba_file=/etc/postgresql/pg_hba.conf'", block)
+    def test_the_database_mounts_the_hba_directory_and_selects_the_file_in_it_at_start(self):
+        # A directory, not the single file: a delivered file replaces the old one by rename,
+        # and a single-file bind mount keeps pointing at the old inode on a Linux engine.
+        source, container_file = hba_wiring()
+        self.assertEqual(source, "./postgres")
+        self.assertEqual(container_file, "/etc/postgresql-hba/pg_hba.conf")
+        directory = COMPOSE.parent / source
+        self.assertTrue(directory.is_dir())
+        self.assertEqual(sorted(path.name for path in directory.iterdir()), ["pg_hba.conf"])
+        self.assertEqual(PG_HBA, directory / "pg_hba.conf")
         self.assertTrue(PG_HBA.is_file())
+        block = "\n".join(service_blocks(compose_text())["db"])
+        self.assertNotRegex(block, r"(?m)^\s+- \S*pg_hba\.conf:")
 
     def test_the_hba_file_ends_in_a_reject_for_host_and_local(self):
         rules = hba_rules()

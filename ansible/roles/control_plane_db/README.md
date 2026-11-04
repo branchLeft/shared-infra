@@ -36,10 +36,12 @@ for each of the four portal logins in it. It then reads the file the running `db
 actually holds, with `docker exec ... cat`, and requires it to equal the delivered file byte
 for byte. The program connects as the provisioner login and as the migration login after its
 transaction commits, so a database without either rule would create the roles and then be
-refused its own proof, leaving no marker. The stack mounts the file as a single bind mount, and a file replaced on the host
-keeps its old content inside a container that was not recreated, so the delivered file alone
-proves nothing about the server. The refusal names the cause and says to recreate the `db`
-container. Neither read involves a secret.
+refused its own proof, leaving no marker. The stack mounts the file's directory
+(`postgres/`) into the container, and the `control_plane` role reloads the server after
+every deploy, so a delivered file is the one in force without a hand step. The comparison
+stays, because it is what makes the delivered file prove something about the server. The
+refusal names the cause and says to ask for the `control_plane` apply, not to recreate the
+`db` container by hand. Neither read involves a secret.
 
 It does not generate or choose a secret, create the sign-in service's token, restart a
 service, write the deploy wrapper's pin, apply itself to a host, or wire itself into a
@@ -196,12 +198,12 @@ the host as root, by standard input, so that no value appears in an argument or 
 shell history. Placeholders are in capitals; the real values come from the owner's
 password manager.
 
-0. After the apply that delivers a changed `pg_hba.conf`, recreate the `db` container of the
-   stack, so the running server holds the delivered rules. This is a brief restart of the
-   control-plane database (the sign-in service, the portal and the console reconnect). The
-   role never does it, because the `control_plane` role never recreates a container on a
-   running stack. `provision` refuses by name until the running file equals the delivered
-   one.
+0. Nothing, for a changed `pg_hba.conf`. The `control_plane` role delivers the file into the
+   `postgres/` directory that the `db` container mounts, and reloads the server after every
+   deploy (`SELECT pg_reload_conf()`, which drops no connection). `provision` still refuses
+   by name until the running file equals the delivered one, and the refusal tells the owner
+   to ask for the `control_plane` apply. The first apply after the directory mount shipped
+   recreates the `db` container once, on the new mount, with its volume kept.
 
 1. Place the administrator URL before `provision` (only `provision` reads it now). It is
    a connection URL for the database administrator,
@@ -335,9 +337,10 @@ one-time host steps exist (see the pull_trigger README, "Step requests").
   first-start initialisation and the full `provision` use it. The sign-in service's own login is
   the vendor's and is out of scope.
 - **`migrate` does not read the running access rules.** Only `provision` runs the access-rule
-  check. A `migrate` against a database not yet recreated on the delivered file is refused by
+  check. A `migrate` against a database not yet reloaded on the delivered file is refused by
   the server (the migration login has no rule in the running file) and shows the program's
-  refusal lines; recreate the `db` container first (step 0).
+  refusal lines; the `control_plane` apply that delivers the file reloads the server, so
+  this happens only before that apply has run (step 0).
 - **The migrator URL is placed for every `migrate`.** No standing file holds the login that
   owns the schema, at the cost of one placement per request. A standing, group-readable file
   written by `provision` would be a small follow-up if that cost is too high.

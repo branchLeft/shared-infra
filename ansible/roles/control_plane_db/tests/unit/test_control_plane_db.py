@@ -434,21 +434,21 @@ class DatabaseRulesTests(unittest.TestCase):
         control_plane = cast(dict[str, object], _load(ROLE.parent / "control_plane" / "vars" / "main.yml"))
         self.assertEqual(
             _vars()["control_plane_db_hba_file"],
-            f"{control_plane['control_plane_project_dir']}/pg_hba.conf",
+            f"{control_plane['control_plane_project_dir']}/postgres/pg_hba.conf",
         )
 
     def test_the_container_and_its_path_are_the_ones_the_compose_file_makes(self) -> None:
         compose = (STACK / "compose.yml").read_text(encoding="utf-8")
         project = re.search(r"^name: (\S+)\s*$", compose, re.MULTILINE)
-        mount = re.search(r"^\s+- \./pg_hba\.conf:(/\S+):ro\s*$", compose, re.MULTILINE)
+        mount = re.search(r"^\s+- \./postgres:(/\S+):ro\s*$", compose, re.MULTILINE)
         if project is None or mount is None:
-            self.fail("the compose file no longer names its project or mounts pg_hba.conf as a single file")
+            self.fail("the compose file no longer names its project or mounts the postgres directory")
         self.assertEqual(_vars()["control_plane_db_hba_container"], f"{project.group(1)}-db-1")
-        self.assertEqual(_vars()["control_plane_db_hba_container_file"], mount.group(1))
+        self.assertEqual(_vars()["control_plane_db_hba_container_file"], f"{mount.group(1)}/pg_hba.conf")
         self.assertEqual(_vars()["control_plane_db_network"], f"{project.group(1)}_default")
 
     def test_the_logins_are_the_ones_the_stacks_file_admits_to_the_portal_database(self) -> None:
-        text = (STACK / "pg_hba.conf").read_text(encoding="utf-8")
+        text = (STACK / "postgres" / "pg_hba.conf").read_text(encoding="utf-8")
         constants = _vars()
         for name in ("tenant", "owner", "provisioner", "migrator"):
             login = str(constants[f"control_plane_db_{name}_login"])

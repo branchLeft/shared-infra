@@ -9,9 +9,11 @@
 #   1. the pg_hba.conf the control_plane role delivered to the host, which must hold an
 #      accepting rule for each of the four logins; and
 #   2. the pg_hba.conf the running db container actually holds, which must equal the
-#      delivered one byte for byte. The stack mounts the file as a single bind mount, and
-#      a replaced file keeps its old content inside a container that was not recreated,
-#      so the delivered file alone proves nothing about the server.
+#      delivered one byte for byte. The stack mounts the file's directory into the
+#      container, so a delivered file is visible there at once, and the control_plane
+#      role reloads the server after every deploy. The comparison is what makes the
+#      delivered file prove something about the container, and a container that cannot
+#      see the file, or a deploy that has not run yet, is refused by name.
 # The importing file runs this before it reads any secret file. A command is skipped in
 # check mode, so the comparison with the running container is not made in one.
 
@@ -73,6 +75,9 @@
     quiet: true
     fail_msg: >-
       REFUSED: the control-plane database ({{ control_plane_db_hba_container }}) is not running, or it
-      holds a pg_hba.conf that differs from {{ control_plane_db_hba_file }}. A single bind-mounted file
-      keeps its old content until the container is recreated: recreate the db container, then ask again.
+      holds a pg_hba.conf that differs from {{ control_plane_db_hba_file }}. The stack mounts the file's
+      directory into the container, so the container sees a delivered file at once: a difference means the
+      apply that delivers the stack has not run on this host yet, or the container still has the old single-file
+      mount from before the directory mount. Ask for the control_plane apply (it recreates the db container once
+      on the new mount and reloads the server); do not restart or recreate the container by hand.
   when: not ansible_check_mode
