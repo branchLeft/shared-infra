@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Starts a real PostgreSQL on the control-plane pg_hba.conf and connects to it.
 
+It also shows that a changed pg_hba.conf, delivered the way the control_plane role
+delivers it, is in effect in the running server once the role's reload script has run.
+
 See test_control_plane_hba_server.md.
 """
 
@@ -63,6 +66,18 @@ REFUSED_FOR_WANT_OF_PRIVILEGE = "permission denied"
 # DDL in its own database: what a migration does.
 OWN_DATABASE_DDL = "create table migrated (id integer); alter table migrated add column note text; drop table migrated"
 
+# The script the control_plane role runs in the db container after every deploy. This
+# test runs the very file the role runs (a unit test pins the role's task to it), so the
+# reload is never reimplemented here.
+RELOAD_SCRIPT = stack.REPOSITORY / "ansible" / "roles" / "control_plane" / "files" / "reload_hba.sh"
+
+# The mount shape the stack had before the rules moved into a directory: the single file
+# at this container path. It exists here only as a control case, to show on a Linux engine
+# that this shape never sees a delivered file, which is why the stack no longer uses it.
+LEGACY_CONTAINER_FILE = "/etc/postgresql/pg_hba.conf"
+DIRECTORY_SHAPE = "directory"
+SINGLE_FILE_SHAPE = "single-file"
+
 START_TIMEOUT_SECONDS = 90
 COMMAND_TIMEOUT_SECONDS = 60
 
@@ -100,6 +115,23 @@ def docker_problem() -> str | None:
     if result.returncode != 0:
         return "the docker engine is not running"
     return None
+
+
+def engine_is_docker_desktop() -> bool:
+    """True when the local engine is Docker Desktop, whose file sharing follows a replaced file.
+
+    A single-file bind mount of a file that is replaced by rename keeps the old inode on a
+    Linux engine, so the container never sees the new file. Docker Desktop's file sharing
+    showed the new file instead, so that control case cannot be reproduced there.
+    """
+    result = subprocess.run(
+        ["docker", "info", "--format", "{{.OperatingSystem}}"],
+        capture_output=True,
+        text=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+        check=False,
+    )
+    return "docker desktop" in result.stdout.lower()
 
 
 def dropping_the_provisioner_rule(text: str) -> str:
@@ -155,12 +187,38 @@ def expected_matrix() -> dict[tuple[str, str], bool]:
 
 
 class Server:
-    """One throwaway PostgreSQL container, started on a given pg_hba.conf."""
+    """One throwaway PostgreSQL container, started on a given pg_hba.conf.
 
-    def __init__(self, run_id: str, label: str, hba_text: str, admin_password: str, directory: pathlib.Path) -> None:
+    The rules are mounted as compose.yml mounts them: a directory holding the one file,
+    with `hba_file` selecting the file inside it (both read from compose.yml through the
+    static test, never restated). The single-file shape is the old one, for a control case.
+    """
+
+    def __init__(
+        self,
+        run_id: str,
+        label: str,
+        hba_text: str,
+        admin_password: str,
+        directory: pathlib.Path,
+        *,
+        shape: str = DIRECTORY_SHAPE,
+    ) -> None:
         self.name = f"cp-hba-{run_id}-{label}"
         self.run_id = run_id
-        self.hba_file = directory / f"{label}-pg_hba.conf"
+        self.shape = shape
+        _source, stack_container_file = stack.hba_wiring()
+        if shape == DIRECTORY_SHAPE:
+            self.container_file = stack_container_file
+            self.hba_directory = directory / label
+            self.hba_directory.mkdir()
+            self.hba_directory.chmod(0o755)
+            self.hba_file = self.hba_directory / "pg_hba.conf"
+            self.mount = f"{self.hba_directory}:{stack_container_file.rsplit('/', 1)[0]}:ro"
+        else:
+            self.container_file = LEGACY_CONTAINER_FILE
+            self.hba_file = directory / f"{label}-pg_hba.conf"
+            self.mount = f"{self.hba_file}:{LEGACY_CONTAINER_FILE}:ro"
         # A bind mount keeps the host's mode, and the server's account is not the owner.
         self.hba_file.write_text(hba_text, encoding="utf-8")
         self.hba_file.chmod(0o644)
@@ -185,11 +243,11 @@ class Server:
                 "--env",
                 "POSTGRES_PASSWORD",
                 "--volume",
-                f"{self.hba_file}:/etc/postgresql/pg_hba.conf:ro",
+                self.mount,
                 image_reference(),
                 "postgres",
                 "-c",
-                "hba_file=/etc/postgresql/pg_hba.conf",
+                f"hba_file={self.container_file}",
             ],
             env={**os.environ, "POSTGRES_PASSWORD": self._admin_password},
             capture_output=True,
@@ -221,6 +279,39 @@ class Server:
             check=False,
         )
         return result.stdout + result.stderr
+
+    def deliver(self, text: str) -> None:
+        """Replace the file on the host the way the control_plane role's `copy` does.
+
+        The new content is written beside the file and renamed over it, so the file gets a
+        new inode, and nothing is written into the old one.
+        """
+        staged = self.hba_file.with_name(f".{self.hba_file.name}.new")
+        staged.write_text(text, encoding="utf-8")
+        staged.chmod(0o644)
+        os.replace(staged, self.hba_file)
+
+    def file_in_container(self) -> str:
+        """The rules file as the container sees it."""
+        result = subprocess.run(
+            ["docker", "exec", self.name, "cat", self.container_file],
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=True,
+        )
+        return result.stdout
+
+    def reload(self) -> subprocess.CompletedProcess[str]:
+        """Run the control_plane role's reload script in the container, as the role does."""
+        return subprocess.run(
+            ["docker", "exec", "--interactive", self.name, "sh", "-s"],
+            input=RELOAD_SCRIPT.read_text(encoding="utf-8"),
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=False,
+        )
 
     def probe(self, login: str, database: str) -> bool:
         """True when the file admitted this login on this database to authentication."""
@@ -458,6 +549,109 @@ class ControlPlaneHbaServerTests(unittest.TestCase):
         _sabotage, flips = SABOTAGES[label]
         self.assertNotIn(label, self.vacuous, f"the sabotage {label} changed nothing, so this control case proves nothing")
         self.assertEqual(differences(self.matrices[label], expected_matrix()), flips)
+
+
+class ControlPlaneHbaDeliveryTests(unittest.TestCase):
+    """A changed pg_hba.conf, delivered the way the role delivers it, is in effect once the reload has run.
+
+    Every server starts on an older copy of the rules (the migrator login's rule deleted).
+    The repository's real file is then delivered by temporary file and rename, as ansible's
+    `copy` does, and the role's own reload script is run in the container. The green case
+    must answer every login and database as the one table says. Each control case differs
+    from the table in exactly the migrator's cell, so none passes by proving nothing.
+    """
+
+    servers: dict[str, Server]
+    before: dict[str, dict[tuple[str, str], bool]]
+    after: dict[str, dict[tuple[str, str], bool]]
+    reloads: dict[str, subprocess.CompletedProcess[str]]
+    seen_in_container: dict[str, str]
+    older: str
+    real: str
+    single_file_skip: str | None
+    _directory: tempfile.TemporaryDirectory[str]
+
+    # The cell that differs between the older rules and the real file.
+    MIGRATOR_CELL = {(MIGRATOR, "portal"): False}
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        problem = docker_problem()
+        if problem is not None:
+            if os.environ.get("CI"):
+                raise AssertionError(f"CI must run the real-server proof, and {problem}")
+            raise unittest.SkipTest(f"the real-server proof needs a local docker engine: {problem}")
+        cls._directory = tempfile.TemporaryDirectory(prefix="cp-hba-delivery-")
+        cls.addClassCleanup(cls._directory.cleanup)
+        run_id = uuid.uuid4().hex[:12]
+        admin_password = secrets.token_urlsafe(32)
+        cls.real = stack.PG_HBA.read_text(encoding="utf-8")
+        cls.older = dropping_the_migrator_rule(cls.real)
+        if cls.older == cls.real:
+            raise AssertionError("the older rules equal the real file, so a delivery changes nothing and proves nothing")
+        broken = cls.real + "host portal portal_migrator_login samenet not-an-authentication-method\n"
+        directory = pathlib.Path(cls._directory.name)
+        cls.servers = {
+            "green": Server(run_id, "delivery-green", cls.older, admin_password, directory),
+            "no_reload": Server(run_id, "delivery-noreload", cls.older, admin_password, directory),
+            "broken": Server(run_id, "delivery-broken", cls.older, admin_password, directory),
+        }
+        cls.single_file_skip = None
+        if engine_is_docker_desktop():
+            cls.single_file_skip = (
+                "Docker Desktop's file sharing follows a file replaced by rename, so the stale "
+                "single-file mount only reproduces on a Linux engine (CI)"
+            )
+        else:
+            cls.servers["single_file"] = Server(
+                run_id, "delivery-single", cls.older, admin_password, directory, shape=SINGLE_FILE_SHAPE
+            )
+        for server in cls.servers.values():
+            cls.addClassCleanup(server.remove)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(cls.servers)) as pool:
+            list(pool.map(lambda server: server.start(), cls.servers.values()))
+        cls.before = {label: server.matrix() for label, server in cls.servers.items()}
+        cls.servers["green"].deliver(cls.real)
+        cls.servers["no_reload"].deliver(cls.real)
+        cls.servers["broken"].deliver(broken)
+        if "single_file" in cls.servers:
+            cls.servers["single_file"].deliver(cls.real)
+        cls.seen_in_container = {label: server.file_in_container() for label, server in cls.servers.items()}
+        cls.reloads = {
+            label: cls.servers[label].reload() for label in ("green", "broken", "single_file") if label in cls.servers
+        }
+        cls.after = {label: server.matrix() for label, server in cls.servers.items()}
+
+    def test_a_server_on_the_older_rules_refuses_the_migrator_login(self) -> None:
+        for label in self.servers:
+            with self.subTest(server=label):
+                self.assertEqual(differences(self.before[label], expected_matrix()), self.MIGRATOR_CELL)
+
+    def test_a_delivered_file_is_visible_in_the_container_through_the_directory_mount(self) -> None:
+        self.assertEqual(self.seen_in_container["green"], self.real)
+        self.assertEqual(self.seen_in_container["no_reload"], self.real)
+
+    def test_a_delivered_file_is_in_effect_after_the_reload(self) -> None:
+        result = self.reloads["green"]
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(differences(self.after["green"], expected_matrix()), {})
+
+    def test_a_delivered_file_is_not_in_effect_without_the_reload(self) -> None:
+        self.assertEqual(differences(self.after["no_reload"], expected_matrix()), self.MIGRATOR_CELL)
+
+    def test_the_old_single_file_mount_never_sees_the_delivered_file(self) -> None:
+        if self.single_file_skip is not None:
+            self.skipTest(self.single_file_skip)
+        self.assertEqual(self.seen_in_container["single_file"], self.older)
+        # The reload succeeds and loads the file the container holds: the old one.
+        self.assertEqual(self.reloads["single_file"].returncode, 0, self.reloads["single_file"].stderr)
+        self.assertEqual(differences(self.after["single_file"], expected_matrix()), self.MIGRATOR_CELL)
+
+    def test_a_file_that_does_not_parse_fails_the_reload_and_the_old_rules_stay_in_force(self) -> None:
+        result = self.reloads["broken"]
+        self.assertNotEqual(result.returncode, 0, "the reload reported success on a file that does not parse")
+        self.assertIn("does not parse", result.stderr)
+        self.assertEqual(differences(self.after["broken"], expected_matrix()), self.MIGRATOR_CELL)
 
 
 if __name__ == "__main__":

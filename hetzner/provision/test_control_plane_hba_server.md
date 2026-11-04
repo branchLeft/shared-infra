@@ -13,7 +13,10 @@ as after its transaction commits, had no rule and was refused.
 ## What it does
 
 It reads the PostgreSQL image from `compose.yml` (the single home of the pin) and
-starts one container on the repository's own `pg_hba.conf`, mounted read-only. It
+starts one container on the repository's own `pg_hba.conf`, mounted read-only the way
+`compose.yml` mounts it: a directory holding the one file, with `hba_file` selecting the
+file inside it (both read through `test_control_plane_stack.hba_wiring()`, never
+restated here). It
 then connects from inside the container as every login the stack knows (and a
 stranger) to every database it probes, each with a password that is wrong on
 purpose. The file is matched before the password, so the server's answer says which
@@ -29,6 +32,35 @@ provisioner rule deleted, the migrator rule deleted, the migrator let into the
 `postgres` database, the sign-in service's login let into the portal database, and
 the owner login let into the sign-in service's database. A copy that the sabotage
 left unchanged fails the setup, so a control case cannot pass by proving nothing.
+
+## A delivered file is in effect once the reload has run
+
+The static test cannot see whether a changed `pg_hba.conf` ever reaches the running
+server. `ControlPlaneHbaDeliveryTests` starts servers on an older copy of the rules (the
+migrator login's rule deleted), then delivers the repository's real file the way the
+`control_plane` role's `copy` does: written beside the file and renamed over it, which
+gives it a new inode. It then runs the role's own `reload_hba.sh` in the container with
+`docker exec -i ... sh -s`. The script is read from the role's `files/`, so the test never
+reimplements the reload, and a unit test in the role pins the role's task to the same file.
+
+- **Green.** Delivery, then the reload: the script exits 0 and the answer for every login
+  and database equals `EXPECTED_DATABASES`.
+- **No reload.** Delivery only: the file is visible in the container (the directory mount),
+  and the server still refuses the migrator. This differs from the table in exactly the
+  migrator's cell, on any engine.
+- **The old single-file mount.** The shape the stack had before: the single file at a fixed
+  container path. After a delivery by rename and a reload the container still holds the old
+  file and the migrator is still refused. A single-file bind mount keeps the old inode on a
+  Linux engine, which is why the stack no longer uses it. Docker Desktop's file sharing
+  follows a replaced file, so this case is skipped there with the reason stated and runs on
+  Linux (CI).
+- **A file that does not parse.** A line with an unknown authentication method is
+  delivered: the script exits non-zero, saying the file does not parse, and the server keeps
+  the old rules. Deleting the script's parse check turns this red.
+
+Deleting the reload from the script (so it sends none) turns the green case red. Deleting
+the role's reload task, or reverting the compose file to the single-file mount, turns the
+role's unit test and the static test red.
 
 ## The migrator is not a superuser
 

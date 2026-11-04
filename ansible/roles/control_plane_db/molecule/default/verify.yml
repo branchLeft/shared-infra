@@ -1091,7 +1091,7 @@
           ansible.builtin.assert:
             that:
               - control_plane_db_ask_result.rc == 0
-              - control_plane_db_verify_calls[0].argv == ['exec', 'control-plane-db-1', 'cat', '/etc/postgresql/pg_hba.conf']
+              - control_plane_db_verify_calls[0].argv == ['exec', 'control-plane-db-1', 'cat', '/etc/postgresql-hba/pg_hba.conf']
               - control_plane_db_verify_calls | selectattr('argv', 'contains', 'dist/provision/provisionMain.js') | list | length == 1
             quiet: true
             fail_msg: provision did not read the running database's access rules before it acted.
@@ -1165,7 +1165,7 @@
 
         - name: Deliver and run rules that lack the provisioner login's, so the two agree
           ansible.builtin.lineinfile:
-            path: /opt/branchleft/control-plane/pg_hba.conf
+            path: /opt/branchleft/control-plane/postgres/pg_hba.conf
             regexp: '^host\s+portal\s+portal_provisioner_login\s'
             state: absent
 
@@ -1186,7 +1186,7 @@
 
         - name: Deliver and run rules that lack the migrator login's, so the two agree
           ansible.builtin.lineinfile:
-            path: /opt/branchleft/control-plane/pg_hba.conf
+            path: /opt/branchleft/control-plane/postgres/pg_hba.conf
             regexp: '^host\s+portal\s+portal_migrator_login\s'
             state: absent
 
@@ -1207,7 +1207,7 @@
 
         - name: Remove the delivered file
           ansible.builtin.file:
-            path: /opt/branchleft/control-plane/pg_hba.conf
+            path: /opt/branchleft/control-plane/postgres/pg_hba.conf
             state: absent
 
         - name: Place the five inputs for the absent-file case

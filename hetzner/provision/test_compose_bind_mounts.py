@@ -46,7 +46,6 @@ DEPLOY_TIME_SOURCES = {
 # exact path, so this check bites on any NEW one; each is separate work to retire
 # or to prove safe, and the test below fails a stale entry.
 SINGLE_FILE_MOUNTS = {
-    "control-plane": {"./pg_hba.conf"},
     "edge": {"./crowdsec/config.yaml.local"},
     "monitoring": {
         "./alertmanager/email.gotmpl",

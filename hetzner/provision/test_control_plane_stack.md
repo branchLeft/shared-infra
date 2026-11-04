@@ -29,6 +29,11 @@ The memory constants are the owner's measurement of the host, not a vendor
 sizing figure. Raising a limit past the margin is a host-size decision, which is
 the owner's.
 
+The database mounts the directory `postgres/` (holding `pg_hba.conf` and nothing else) into the
+container and selects the file inside it with `hba_file`, not the single file: a delivered file
+replaces the old one by rename, which a single-file bind mount does not follow. The test reads
+that wiring through `hba_wiring()`, which the real-server test uses too.
+
 `pg_hba.conf` is read against one table, `EXPECTED_DATABASES`: the sign-in
 service's login on its own database, the portal's three logins (tenant, owner and
 provisioner) on the portal database, and the administrator on the three databases,

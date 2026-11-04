@@ -20,7 +20,7 @@
     verify_stack_files:
       - compose.yml
       - compose.init.yml
-      - pg_hba.conf
+      - postgres/pg_hba.conf
   tasks:
     # rstrip=False: the lookup strips trailing whitespace by default, and slurp on
     # the instance keeps the final newline, so the byte comparison needs it kept.
@@ -34,8 +34,8 @@
           value: '{{ verify_stack_source }}/compose.yml'
         - key: compose.init.yml
           value: '{{ verify_stack_source }}/compose.init.yml'
-        - key: pg_hba.conf
-          value: '{{ verify_stack_source }}/pg_hba.conf'
+        - key: postgres/pg_hba.conf
+          value: '{{ verify_stack_source }}/postgres/pg_hba.conf'
         - key: branchleft_docker_user_policy.sh
           value: '{{ verify_provision_source }}/branchleft_docker_user_policy.sh'
         - key: branchleft-docker-user-policy.service
@@ -68,7 +68,7 @@
     - name: Read the mode and owner of the project directory and each stack file
       ansible.builtin.stat:
         path: '{{ verify_project_dir }}/{{ item }}'
-      loop: '{{ ["."] + verify_stack_files }}'
+      loop: '{{ [".", "postgres"] + verify_stack_files }}'
       register: control_plane_verify_stats
       loop_control:
         label: '{{ item }}'
@@ -79,7 +79,7 @@
           - item.stat.exists
           - item.stat.pw_name == 'root'
           - item.stat.gr_name == 'root'
-          - item.stat.mode == ('0755' if item.item == '.' else '0644')
+          - item.stat.mode == ('0755' if item.item in ['.', 'postgres'] else '0644')
         quiet: true
         fail_msg: '{{ item.item }} is not root:root with the mode the role sets.'
       loop: '{{ control_plane_verify_stats.results }}'

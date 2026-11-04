@@ -77,14 +77,15 @@ control_plane_db_url_tail: '@{{ control_plane_db_database_host }}:5432/{{ contro
 control_plane_db_network: control-plane_default
 
 # The access rules the running database was started on. The control_plane role
-# delivers the file into the stack directory; the stack's compose file mounts it into
-# the db container at the container path, as a single file. A single bind-mounted
-# file keeps the content it had when the container was created, so the rules the
-# server runs on are the container's copy, which is read here and not assumed. A unit
-# test pins the three constants below to the control_plane role and to the compose file.
-control_plane_db_hba_file: /opt/branchleft/control-plane/pg_hba.conf
+# delivers the file into the `postgres` subdirectory of the stack directory; the stack's
+# compose file mounts that directory into the db container, so the container sees a
+# delivered file at once, and the control_plane role reloads the server after every
+# deploy. The rules the server runs on are the container's copy, which is read here and
+# not assumed: it must equal the delivered one, byte for byte. A unit test pins the three
+# constants below to the control_plane role and to the compose file.
+control_plane_db_hba_file: /opt/branchleft/control-plane/postgres/pg_hba.conf
 control_plane_db_hba_container: control-plane-db-1
-control_plane_db_hba_container_file: /etc/postgresql/pg_hba.conf
+control_plane_db_hba_container_file: /etc/postgresql-hba/pg_hba.conf
 
 # The logins the file must admit to the portal database, and the shape of a rule that
 # does: host, a database list holding portal, the login, any address, scram. A rule is

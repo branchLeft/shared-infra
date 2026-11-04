@@ -245,6 +245,15 @@
     group: root
     mode: '0755'
 
+- name: Create the subdirectories of the stack
+  ansible.builtin.file:
+    path: '{{ control_plane_project_dir }}/{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ control_plane_stack_dirs }}'
+
 # Copied with explicit modes, not rsync. The runbook's rsync used --delete, so a
 # file removed from the repository was removed from the host; this does not
 # delete, and a file dropped from the list stays on the host until removed by hand.
@@ -402,6 +411,40 @@
       - control_plane_stack_unit_state.status.ActiveState == 'active'
     quiet: true
     fail_msg: 'The stack unit is {{ control_plane_stack_unit_state.status.ActiveState }}, not active, after the deploy wrapper ran.'
+  when: control_plane_start_units | ansible.builtin.bool
+
+# The database reads pg_hba.conf only when told to. The file reaches the container through
+# a directory mount, so a delivered file is visible at once, but the server still holds the
+# rules it read last. This reload makes the delivered file the rules in force, on EVERY
+# apply and not only when the file changed: a run that was interrupted after the copy would
+# otherwise leave the file delivered and never loaded, and the next run would see no change
+# to act on. A reload drops no connection and restarts nothing, and no volume is touched.
+# The script (the one home of this logic, also run by the real-server test) takes the
+# administrator's password from the container's own environment, so this role holds no
+# secret and no value is in an argument. It fails the apply, with the old rules still in
+# force, when the delivered file does not parse. The task reports no change so that a second
+# apply of one commit reports zero. It is skipped in check mode like every command, and
+# with the units switched off, as the database is then not necessarily running.
+- name: Reload the database so the delivered access rules are the ones in force
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - --interactive
+      - '{{ control_plane_db_container }}'
+      - sh
+      - -s
+    stdin: "{{ lookup('ansible.builtin.file', 'reload_hba.sh') }}"
+  changed_when: false
+  when: control_plane_start_units | ansible.builtin.bool
+
+# After the wrapper, never before: until the stack has been brought up on the new mount, a
+# restart of the old container (a rollback, an interrupted run) still needs this file.
+# Left behind it would be a file that looks live and governs nothing.
+- name: Remove the access rules file from its old place
+  ansible.builtin.file:
+    path: '{{ control_plane_legacy_hba_file }}'
+    state: absent
   when: control_plane_start_units | ansible.builtin.bool
 
 # The reconciler and its unit are stay-as-code programs: the role installs them
