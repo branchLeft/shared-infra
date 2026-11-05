@@ -62,4 +62,4 @@ demo1_build_dns_token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcar
 # its digest, <name>@sha256:<64 hex digits> and nothing else, so a re-pointed tag cannot
 # change what judges; the role finds it by that digest and wants the digest in its RepoDigests.
 # Empty, the production candidate is not staged, and the plan and apply say so.
-demo1_build_caddy_image: ''
+demo1_build_caddy_image: 'ghcr.io/branchleft/demo-edge@sha256:9dd44edaf5ac542bd4ac1c55d0f761a40b5d5531e31c9b78f5f5477ac325324d'
