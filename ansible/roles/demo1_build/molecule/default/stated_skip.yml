@@ -1,15 +1,10 @@
 ---
 # One stated-skip case of the production candidate, imported by converge.yml with
-# converge_case.base (the wildcard base the role is given), converge_case.token_file (the
-# path of the DNS token file) and converge_case.expect (the words of the notice that must be
-# printed). The role's site step is run on its own, with the two edge inputs prepare placed,
-# so the only reason it can have to stage nothing is the one the case sets. The run must
-# complete, and print a notice that starts with the same words in every case, and must leave
-# the staged Caddyfile exactly as it found it: absent if it was absent. A silent skip would
-# read as a configured host, and a failure would stop a plan that has nothing to approve.
+# converge_case.base, converge_case.token_file and converge_case.expect (the words the
+# notice must contain). The play asserts that the notice starts with "Production
+# candidate NOT staged: " and that the staged Caddyfile is left as it was found.
 #
-# The case runs before the role is applied, where nothing is staged. It is tagged so the
-# idempotence step skips it, and a plan makes no change, so a check run skips it.
+# Tagged so the idempotence step skips it, and skipped in check mode.
 - name: Skip the production candidate with a stated reason
   hosts: all
   gather_facts: false

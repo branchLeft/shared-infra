@@ -190,17 +190,10 @@ demo1_build_required_programs:
 # the split below also refuses a comment ending in a backslash.
 demo1_build_grant_header_pattern: '^#( .*)?$'
 
-# The installed grant and the pinned generator's output, each cut into a header
-# and a body, as {installed: [...], generated: [...]} (generated only once the
-# release is staged). The header is the leading run of blank lines and comments;
-# it is the one part not compared, because broker_deploy's template and the
-# generator word it differently. The body is everything from the first line that
-# is not header, and _sudoers_check.yml compares it as an ordered list: no comment
-# is exempt after the first rule, and nothing is sorted. A comment ending in a
-# backslash is not header, as sudoers joins such a line to the next. Trailing
-# newlines are dropped before the split, as blank lines at the end are inert.
-# Both texts go through this one template. It reads the registered results of
-# _sudoers_check.yml, so it is a variable and not a copy in a task.
+# The installed grant and the pinned generator's output, each cut into a header and
+# a body, as {installed: [...], generated: [...]}. The header (leading blank lines and
+# comments) is not compared; the body, from the first other line, is compared in order
+# by _sudoers_check.yml. Both texts go through this one template.
 demo1_build_grant_bodies: |-
   {%- set texts = {'installed': demo1_build_sudoers_raw.content | b64decode} -%}
   {%- if demo1_build_release_ready | bool -%}

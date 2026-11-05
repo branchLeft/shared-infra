@@ -1,15 +1,8 @@
 ---
-# Internal to the role. Renders the demo edge's upstream fragment, and the one
-# wildcard Caddyfile of every occupied slot (_site_candidates.yml), into candidate
-# files for the owner, and nowhere else. The role never writes the file the edge reads, never
-# runs the go-live step, and never runs a slot reset: opening the demo to visitors
-# is the owner's decision, made by the pinned go-live program, which refuses while
-# a test stand-in is loaded.
-#
-# The candidate directory is under the root-owned state root, root's alone, so a
-# root writer cannot be led through a link planted by anyone else. Nothing reads
-# the candidate automatically: it is evidence the owner diffs against the live
-# edge before running the go-live step.
+# Internal to the role. Renders the demo edge's upstream fragment, and the wildcard
+# Caddyfile of every occupied slot (_site_candidates.yml), into candidate files for
+# the owner, and nowhere else. The role never writes the file the edge reads, never
+# runs the go-live step or a slot reset, and the candidate directory is root's alone.
 
 - name: Create the directory of candidates, closed to everyone but root
   ansible.builtin.file:

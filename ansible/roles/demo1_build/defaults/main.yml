@@ -2,20 +2,11 @@
 # Nothing here is private. The role has no secret input and no required input:
 # every value below has a default, and the pinned programs are public.
 
-# The one home of the demo host's programs is branchLeft/ghost-platform, at
-# demo-host/provision/. This role carries a copy of each program under
-# files/ghost-platform, at the same paths, and the host takes them from the signed
-# commit CI pushes to it; the host never fetches them from anywhere. Each file is
-# held to the sha256 below, on the machine that runs the role, before the role
-# writes anything to the host. The commit below names the ghost-platform commit
-# the copies were taken from: it is the name of the release directory and the
-# record of where the bytes came from. A bump moves the new files into
-# files/ghost-platform and changes this commit and every checksum in one change
-# (README, "Vendored files"): a copy that does not match its pin stops the role
-# before it writes. The commit must be at or after the ghost-platform commit that
-# moved the drain flags to /var/lib/branchleft-broker/drain-flags
-# (0a23634b652a37260d77e656ded3c37ff24d62ec); the role also refuses an installed
-# sidecar that does not name that directory.
+# The copies under files/ghost-platform are of the ghost-platform commit below, at
+# the same paths. Each is held to its sha256 in demo1_build_release_files, and a copy
+# that does not match stops the role before it writes. The commit must be at or after
+# 0a23634b652a37260d77e656ded3c37ff24d62ec, the commit that moved the drain flags to
+# /var/lib/branchleft-broker/drain-flags.
 demo1_build_source_sha: 595bcce0ee2bb1c7f8de565cf008060ea43122cf
 
 # Every program the role carries, one path and one sha256 each, relative to the

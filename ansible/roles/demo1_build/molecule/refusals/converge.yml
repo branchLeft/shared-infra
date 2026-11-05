@@ -1,20 +1,11 @@
 ---
-# The refusal cases of the role. Each is one edit of the grant that
-# broker_deploy installed, or one bad input, and the role's grant check must
-# refuse it with its own message. They live in their own scenario so that the
-# default scenario applies the role only a few times (its shard is bound by the
-# time limit); here the role is not applied. The first play stages the pinned
-# programs, which holds the generator the grant is compared with, with the role's
-# own release tasks and its own vendored copies. Every other play runs
-# tasks/_sudoers_check.yml alone against an edited grant, or, for the link cases,
-# tasks/_dirs.yml alone against a link planted in place of a directory. That is all
-# these cases can see: with no install in this scenario, whether a refusal comes
-# before the install is proved in the default scenario, which runs the whole role.
+# The refusal cases of the role. Each is one edit of the grant that broker_deploy
+# installed, or one bad input, and the role must refuse it with its own message.
+# The role is not applied here: the first play stages the pinned programs, and each
+# other play runs one task file alone (_sudoers_check.yml, or _dirs.yml via refused_link.yml).
 #
-# The grant on the host is rendered by broker_deploy's own template (prepare.yml,
-# the default scenario's), and the generator is the real pinned one, so the
-# header of the first differs from the header of the second, as it does on a real
-# host. A plan makes no change, so a check run skips every play.
+# The grant on the host is rendered by broker_deploy's template (prepare.yml), and the
+# generator is the real pinned one, so the two headers differ, as on a real host.
 - name: Stage the pinned programs and read the grant as prepared
   hosts: all
   gather_facts: false

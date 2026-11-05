@@ -1,18 +1,11 @@
 ---
-# One case of the candidate refusal, imported by converge.yml. The role refuses a
-# rendered Caddyfile that holds an interim certificate or any site but the one wildcard
-# site, whatever produced it (tasks/_candidate_refusal.yml). The case runs that step alone
-# on a stand-in text, because the pinned renderer cannot be made to print one: the text is
-# the shape the renderer prints for two slots, with one thing changed.
+# One case of the candidate refusal, imported by converge.yml. The refusal step runs
+# alone on a stand-in text shaped like the renderer's output for two slots, because the
+# pinned renderer cannot be made to print a refused one (tasks/_candidate_refusal.yml).
 #
-# converge_case.tls replaces the wildcard site's tls block, and converge_case.append is
-# added after the text. converge_case.expect is the text the refusal must name; with
-# converge_case.accepted: true the text is the unchanged one and must pass, which shows
-# the other cases are refused for their change and not because the step refuses
-# everything. No failure may carry a hostname of the text: the failure is read whole.
-#
-# The step writes nothing, so there is nothing to put back. A plan makes no change, so a
-# check run skips it.
+# converge_case.tls replaces the wildcard site's tls block, converge_case.append is added
+# after the text, and converge_case.expect is the text the refusal must name. With
+# converge_case.accepted: true the unchanged text must pass, as the control.
 - name: Refuse or accept a rendered candidate
   hosts: all
   gather_facts: false

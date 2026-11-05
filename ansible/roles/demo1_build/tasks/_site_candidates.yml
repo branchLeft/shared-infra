@@ -1,20 +1,13 @@
 ---
 # Internal to the role, included once from _candidate.yml. The pinned site renderer
-# turns the edge inputs the owner has placed, one for each occupied slot, into one
-# Caddyfile: a single wildcard site with a host matcher per slot. The role stages it
-# as a root-only candidate for the owner to diff against the live edge.
+# turns the owner's edge inputs, one per occupied slot, into one wildcard Caddyfile,
+# staged as a root-only candidate. The inputs sit at fixed paths only root can write
+# (vars/main.yml); the role never makes them and never reads a value from them.
 #
-# The inputs are the owner's, at fixed paths that only root can write (vars/main.yml).
-# The role never makes them and never reads a value from them: the renderer reads each
-# file itself. Every task that handles the renderer's output is hidden (no_log and
-# diff: false, ANS-16), and no failure message carries that output, because the
-# output can echo a hostname.
+# Every task that handles the renderer's output is hidden (no_log, diff: false, ANS-16),
+# and no failure message carries that output, as it can echo a hostname.
 #
-# A candidate that is not staged is a stated skip (ANS-10), not a pass: the plan and
-# the apply each print a line that says so, and demo1_build_site_not_rendered names
-# the slots with no input. The renderer is run with no output flag, so it writes
-# nothing. The role never passes it --gate-env-out (that writes), never writes the
-# live edge, and never runs the go-live step.
+# A candidate that is not staged is a stated skip (ANS-10), not a pass: a printed line says so.
 
 - name: Look at the candidate directory _candidate.yml declared
   ansible.builtin.stat:

@@ -1,25 +1,13 @@
 ---
-# One case of the owner's edge input check, imported by converge.yml. The pinned site
-# renderer reads the input as root, so the role refuses, before the renderer runs, an
-# input that is a link, not root's, or open to group or others. A renderer refusal is
-# reported by slot number, without the renderer's message, which can echo the
-# hostname (ANS-16). The case plants the input the case says, runs the role's site
-# step alone, and reads what it left.
+# One case of the owner's edge input check, imported by converge.yml. The role refuses,
+# before the pinned renderer runs, an input that is a link, not root's, or open to group
+# or others. A renderer refusal is reported by slot number, never with its message, which
+# can echo a hostname (ANS-16). The play runs the site step alone on the planted input.
 #
-# converge_case.plant is one of: link (a link to a root file of mode 0600), owner (a
-# file of converge_case.owner, mode 0600), mode (a root file of converge_case.mode),
-# valid (a root file of mode 0600 that the renderer accepts, which the step must
-# stage), or leak (a root file of mode 0600 whose hostname the renderer refuses; the
-# hostname is the canary, and it must not reach the log). converge_case.expect is the
-# text the refusal must name. A refusal must leave no candidate behind.
+# converge_case.plant is one of: link, owner, mode, valid or leak. converge_case.expect is
+# the text the refusal must name. The valid case must stage a root-only candidate.
 #
-# The step runs with the wildcard base set and the DNS token file and the input of slot
-# 1 that prepare placed left as they are, so the valid case renders two slots and no
-# case is refused for a token or a second input.
-#
-# Each case removes what it planted, puts back the fixture input prepare placed, and
-# removes any candidate it staged. The play is tagged so the idempotence step skips
-# it: the valid case stages a candidate, and the play is a control, not a state.
+# Each case puts back the fixture input prepare placed and removes any candidate it staged.
 - name: Refuse or accept an owner's edge input for slot 0
   hosts: all
   gather_facts: false

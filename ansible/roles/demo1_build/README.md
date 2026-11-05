@@ -932,3 +932,147 @@ therefore not reachable from this role.
    `changed_when`, `creates` or `removes`. Never weaken the idempotence step.
 6. Run the test command above before opening a pull request, then break the control
    you touched and see the step fail.
+
+## Design notes for the task and scenario files
+
+These notes hold the reasoning that was once in the comments of the task, variable
+and scenario files. Each section names the file it belongs to. The code beneath each
+comment is the source of truth.
+
+### defaults/main.yml
+
+- The copies under `files/ghost-platform` are of the ghost-platform commit in
+  `demo1_build_source_sha`. The same commit names the release directory: the
+  role stages the release under the releases directory, in a directory named by
+  that commit (`demo1_build_release_dir` in `vars/main.yml`).
+- The demo host takes the programs from the signed commit CI pushes to it. The host
+  never fetches them from anywhere. Each file is held to its sha256 on the machine
+  that runs the role, before the role writes anything to the host.
+- A bump changes the files, the commit and every checksum in one change. See
+  "Vendored files" and "The pin" above.
+- The role also refuses an installed sidecar that does not name the drain-flag
+  directory (`tasks/_programs.yml`).
+- Nothing in this file is private. The role has no secret input and no required
+  input: every value has a default, and the pinned programs are public.
+
+### vars/main.yml
+
+- The generator's output exists only once the release is staged
+  (`demo1_build_release_ready`). Until then only the installed grant is cut.
+- The header is the leading run of blank lines and comments. It is not compared,
+  because broker_deploy's template and the generator word it differently.
+- The body is everything from the first line that is not header. It is compared as
+  an ordered list: no comment is exempt after the first rule, and nothing is sorted.
+- A comment ending in a backslash is not header, because sudoers joins such a line
+  to the next. Trailing newlines are dropped before the split, since blank lines at
+  the end are inert.
+
+### tasks/_candidate.yml
+
+- The role never runs the go-live program and never runs a slot reset. Opening the
+  demo to visitors is the owner's decision. The pinned go-live program makes it, and
+  it refuses while a test stand-in is loaded.
+- The candidate directory is under the root-owned state root and is root's alone, so
+  a root writer cannot be led through a link that someone else planted.
+- Nothing reads the candidates automatically. They are evidence the owner diffs
+  against the live edge before running the go-live program.
+
+### tasks/_site_candidates.yml
+
+- Each edge input is checked in its own assert, in this order: not a link and a
+  regular file, owned by root:root, and mode 0000, 0200, 0400 or 0600. Each failure
+  names the input path and never a value.
+- The renderer is run with no output flag, so it only reads and writes nothing.
+  `failed_when` is off, and its output is hidden, so a refusal is handled by the
+  role. A renderer refusal is reported by the occupied slot numbers, never with the
+  renderer's message, which can echo a hostname.
+- A printed notice says why the production candidate is not staged. The checks run
+  in order: the wildcard base is unset, the DNS token is not placed, no release is
+  staged, and no slot has an input. The first that applies is the one named.
+- Each slot with no edge input gets a printed line. The list of slots that were not
+  rendered is sorted, because `difference()` returns them in no fixed order.
+- The role never passes the renderer `--gate-env-out`, because that flag writes. It
+  never writes the live edge and never runs the go-live program.
+- The candidate is staged root-owned, mode 0600, in the candidate directory, and only
+  when that directory exists. In check mode it does not exist yet.
+- The registered render holds the Caddyfile, so it is emptied at the end of the play.
+
+### tasks/_candidate_refusal.yml
+
+- There is no interim-certificate mode. The one certificate is the wildcard that Caddy
+  obtains by DNS-01. A candidate with a `tls internal` directive, a `local_certs`
+  option or a `skip_install_trust` option is refused.
+- The candidate must hold exactly one `tls` directive, and that directive must be a
+  block holding only the role's DNS directive line. It must hold exactly one site: the
+  wildcard site of the base.
+- The checks are separate asserts, so a scenario can name the one that fired. No
+  message names a hostname, and none carries the candidate text.
+
+### molecule/default/stated_skip.yml
+
+- The play is imported twice by `converge.yml`: once with an empty wildcard base and
+  once with the token file not placed.
+- It runs the site step alone, with the two edge inputs that `prepare.yml` placed. So
+  the only reason to stage nothing is the one the case sets.
+- It asserts the notice starts with `Production candidate NOT staged: `, and that the
+  staged Caddyfile is left as it was found: absent if it was absent, and with the same
+  modification time. A silent skip would read as a configured host. A failure would
+  stop a plan that has nothing to approve.
+- It runs before the role is applied, where nothing is staged.
+
+### molecule/default/converge.yml, the wrapper path control
+
+- A role that only fails does not prove the order. It can fail after the install and
+  leave the wrapper live under a refused grant. That is why the control runs the whole
+  role, and the probe path is one that does not exist.
+- The other refusal cases are in the refusals scenario, so the default scenario applies
+  the role only a few times. Its shard is bound by the time limit.
+
+### molecule/refusals/converge.yml
+
+- The refusals scenario does not apply the role. The first play stages the pinned
+  programs with the role's own release tasks (`_release.yml`), which holds the
+  generator. Every other play runs one task file alone against an edited grant or a
+  planted link.
+- Links are checked by `refused_link.yml`, which runs `_dirs.yml`.
+- This scenario cannot see an install, so whether a refusal comes before the install
+  is proved in the default scenario.
+
+### molecule/refusals/refused_candidate.yml
+
+- The pinned renderer cannot be made to print a refused candidate. So the stand-in
+  text has the shape the renderer prints for two slots, with one change.
+- `converge_case.tls` replaces the wildcard site's tls block. `converge_case.append`
+  is added after the text.
+- The control case, `converge_case.accepted: true`, runs the unchanged text and must
+  pass. That shows the other cases are refused for their change, and not because the
+  step refuses everything.
+- No failure may carry the stand-in hostname. The failure text is read whole.
+- The step writes nothing.
+
+### molecule/refusals/refused_token.yml
+
+- `converge_case.plant` is one of: `link` (a link to a root file of mode 0600),
+  `directory`, `owner` (a file owned by `converge_case.owner`, mode 0600), `mode` (a
+  root file of `converge_case.mode`), or `empty` (an empty root file of mode 0600).
+- `converge_case.expect` is the text the refusal must name. The play also asserts the
+  token path is in the message, so no other check may be the one that fires.
+- A refusal leaves no Caddyfile behind, and the stand-in token value must not appear
+  in the failure.
+- The `always` block removes the planted file and target, then puts back the token
+  file that `prepare.yml` placed.
+
+### molecule/refusals/refused_site_input.yml
+
+- `converge_case.plant` is one of: `link`, `owner`, `mode`, `valid` or `leak`.
+  `valid` is a root file of mode 0600 that the renderer accepts, and the step must stage
+  a root-only, mode 0600 Caddyfile from it. `leak` is a root file whose hostname the
+  renderer refuses. That hostname is the canary: it must not reach the log.
+- The step runs with the wildcard base set, and with the token file and the slot 1
+  input that `prepare.yml` placed left as they are. So the valid case renders two
+  slots, and no other case is refused for a token or a second input.
+- The "Scan control line" debug task is the positive control for the log scan in
+  `verify.yml`. The scan reads this run's log, and this line proves that the scan can
+  read it, so a scan that finds no canary means something.
+- The play is tagged for the idempotence step to skip, because the valid case stages a
+  candidate. It is a control, not a state.
