@@ -13,7 +13,7 @@ LAYOUT_INTRO_TEXT
 | `ansible/patterns/`        | One directory per pattern, run by the harness like a role.           |
 | `ansible/harness/`         | Test harness and its unit tests.                                     |
 | `ansible/checks/`          | Pin, enrolment, delivery, role and path checks, with tests.          |
-| `ansible/tools/`           | Record a new host's first boot is built from, and its tests.         |
+| `ansible/tools/`           | First-boot record, inputs writer, demo1 bootstrap guards, tests.     |
 | `ansible/inventories/`     | Inventory and group variables. `production` holds `edge1` and `db1`. |
 | `ansible/playbooks/`       | One playbook per host. Shared pull values in `playbooks/includes/`.  |
 | `ansible/trust/`           | One signer file per host, loaded only by its playbook.               |
