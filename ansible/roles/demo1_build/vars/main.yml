@@ -94,11 +94,13 @@ demo1_build_site_unstaged_text: >-
 # The production candidate: the one Caddyfile the pinned site renderer prints for every
 # occupied slot, under the single wildcard site. What the renderer prints is what is staged.
 demo1_build_candidate_caddyfile: /var/lib/branchleft/demo-candidates/Caddyfile
+# The names an earlier version of this role gave its per-slot candidates, removed on
+# every run (_candidate.yml).
+demo1_build_superseded_candidate_pattern: '^site-[0-9]+\.caddy$'
 
 # The one TLS source the role gives the renderer: Caddy's DNS-01 module reads the token
 # from this file when it runs. The role passes the path and never the token.
 demo1_build_dns_directive: "{{ 'dns hetzner {file.' ~ demo1_build_dns_token_file ~ '}' }}"
-demo1_build_wildcard_site_line: "{{ '*.' ~ demo1_build_wildcard_base ~ ' {' }}"
 
 # The renderer's flags for the occupied slots: one --site SLOT=EDGE_JSON each.
 demo1_build_site_render_flags: |-
@@ -120,22 +122,27 @@ demo1_build_candidate_unstaged_text: >-
 # The modes a DNS token file may have: no group or other bit and no execute bit.
 demo1_build_dns_token_modes: ['0000', '0200', '0400', '0600']
 
-# What the rendered text is refused for (_candidate_refusal.yml). Each pattern is held
-# apart so a case can show its own refusal.
-demo1_build_tls_internal_pattern: '(?i)tls\s+internal'
-demo1_build_local_certs_pattern: '(?i)local_certs'
-demo1_build_skip_install_trust_pattern: '(?i)skip_install_trust'
-demo1_build_tls_line_pattern: '(?mi)^[ \t]*tls(?:[ \t]|$)'
-demo1_build_tls_block_pattern: >-
-  (?m)^[ \t]*tls[ \t]*\{[ \t]*\n[ \t]*{{ demo1_build_dns_directive | regex_escape }}[ \t]*\n[ \t]*\}[ \t]*$
-# A line in column 0 that is not a comment or a closing brace opens a top-level block or
-# is a stray site address. The global options block and a snippet are the two that are
-# not a site; every other one must be the wildcard site and nothing else.
-demo1_build_top_level_line_pattern: '(?m)^[^\s#}].*$'
-demo1_build_snippet_line_pattern: '^\(.+\) \{$'
-demo1_build_candidate_site_lines: >-
-  {{ demo1_build_candidate_text | regex_findall(demo1_build_top_level_line_pattern)
-  | reject('equalto', '{') | reject('match', demo1_build_snippet_line_pattern) | list }}
+# How the rendered text is judged (_candidate_refusal.yml). The role does not read the
+# Caddyfile for its sites or its certificate modes. It has the Caddy image adapt the text
+# and judges the JSON that Caddy would run, with files/judge_caddy_config.py, so no
+# spelling of the Caddyfile can get past it. The image is loaded on the host by the owner
+# and is never pulled (--pull never). The container has no network and no writable
+# filesystem, and it reads the candidate on its standard input. NET_BIND_SERVICE is kept
+# because the Caddy binary carries that file capability and will not start without it.
+demo1_build_docker: /usr/bin/docker
+demo1_build_judge_script: judge_caddy_config.py
+demo1_build_judge_env: DEMO1_BUILD_ADAPTED_CONFIG
+demo1_build_caddy_adapt_argv: >-
+  {{ [demo1_build_docker, 'run', '--rm', '-i', '--pull', 'never', '--network', 'none', '--read-only',
+  '--cap-drop', 'ALL', '--cap-add', 'NET_BIND_SERVICE', '--security-opt', 'no-new-privileges',
+  '--memory', '512m', '--pids-limit', '128', demo1_build_caddy_image,
+  'caddy', 'adapt', '--adapter', 'caddyfile', '--config', '-'] }}
+demo1_build_caddy_image_list_argv: "{{ [demo1_build_docker, 'images', '--quiet', demo1_build_caddy_image] }}"
+demo1_build_caddy_unset_text: 'Production candidate NOT staged: no Caddy image (demo1_build_caddy_image) is set to judge the candidate with'
+demo1_build_caddy_missing_text: 'Production candidate NOT staged: the Caddy image (demo1_build_caddy_image) is not loaded on this host'
+# A Caddy image is named by its content: a digest of a registry name, or the image ID that
+# docker load reports for an image delivered as a file.
+demo1_build_caddy_image_pattern: '^(sha256:[0-9a-f]{64}|[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64})\Z'
 
 # The programs placed outside the release directory. The wrapper is the only
 # one the sudoers grant names, and the only one run directly as a program.

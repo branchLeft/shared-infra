@@ -93,6 +93,23 @@
 - name: Look at the DNS token file the wildcard certificate is issued with
   ansible.builtin.include_tasks: _dns_token.yml
 
+# Whether the Caddy image that judges the candidate is loaded here. A read: it lists
+# the image and never pulls one. A host with no docker answers no.
+- name: Look for the Caddy image that judges the candidate
+  ansible.builtin.command:
+    argv: '{{ demo1_build_caddy_image_list_argv }}'
+  register: demo1_build_caddy_image_listed
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  when: demo1_build_caddy_image != ''
+
+- name: Note whether the Caddy image is loaded
+  ansible.builtin.set_fact:
+    demo1_build_caddy_image_loaded: >-
+      {{ demo1_build_caddy_image != '' and demo1_build_caddy_image_listed.rc == 0
+      and (demo1_build_caddy_image_listed.stdout | trim | length) > 0 }}
+
 # The notice of a candidate that is not staged on this run, and why. It is registered so
 # the scenarios can read that it was printed: a silent skip would read as a configured
 # host. The checks run in this order, and the first that applies is the one named.
@@ -101,8 +118,10 @@
     demo1_build_candidate_skip_text: >-
       {{ demo1_build_wildcard_unset_text if demo1_build_wildcard_base == ''
       else (demo1_build_token_missing_text if not (demo1_build_dns_token_placed | bool)
+      else (demo1_build_caddy_unset_text if demo1_build_caddy_image == ''
+      else (demo1_build_caddy_missing_text if not (demo1_build_caddy_image_loaded | bool)
       else (demo1_build_candidate_unstaged_text if not (demo1_build_release_ready | default(false) | bool)
-      else (demo1_build_no_occupied_text if demo1_build_site_occupied | length == 0 else ''))) }}
+      else (demo1_build_no_occupied_text if demo1_build_site_occupied | length == 0 else ''))))) }}
 
 - name: Say why the production candidate is not staged
   ansible.builtin.debug:
@@ -146,7 +165,7 @@
           can echo a hostname (ANS-16). Check the base and each input against render-core's
           EdgeSiteBlock.
 
-    - name: Refuse a rendered candidate that holds an interim certificate or any site but the wildcard
+    - name: Refuse a rendered candidate whose config Caddy would run with an interim certificate or any site but the wildcard
       ansible.builtin.include_tasks: _candidate_refusal.yml
       vars:
         demo1_build_candidate_text: '{{ demo1_build_wildcard_render.stdout }}'

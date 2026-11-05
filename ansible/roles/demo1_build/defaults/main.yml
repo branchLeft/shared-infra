@@ -55,3 +55,10 @@ demo1_build_wildcard_base: ''
 # DNS project. The role never reads it: it only looks at the file's owner and mode, and
 # gives Caddy the path. A file directly in /etc/branchleft/secrets.
 demo1_build_dns_token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+
+# The Caddy image that judges the production candidate: the demo edge's image, with the
+# Hetzner DNS module, loaded on the host by the owner (the role never pulls). The role has
+# Caddy adapt the rendered Caddyfile in it and judges the config Caddy would run. Named by
+# its content, an image ID or a digest, so a re-pointed tag cannot change what judges.
+# Empty, the production candidate is not staged, and the plan and apply say so.
+demo1_build_caddy_image: ''

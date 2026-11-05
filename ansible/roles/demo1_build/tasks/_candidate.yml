@@ -12,6 +12,27 @@
     group: root
     mode: '0700'
 
+# The per-slot candidates an earlier version of this role staged (site-<n>.caddy, each
+# carrying tls internal) are superseded by the one wildcard Caddyfile below. The go-live
+# step installs whatever file it is given, so one left here would be a way to go live
+# with an interim certificate. They are removed, not just left unused.
+- name: Find the superseded per-slot candidates
+  ansible.builtin.find:
+    paths: '{{ demo1_build_candidate_dir }}'
+    patterns: '{{ demo1_build_superseded_candidate_pattern }}'
+    use_regex: true
+    file_type: any
+    follow: false
+  register: demo1_build_superseded_candidates
+
+- name: Remove the superseded per-slot candidates
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: absent
+  loop: '{{ demo1_build_superseded_candidates.files }}'
+  loop_control:
+    label: '{{ item.path | basename }}'
+
 - name: Render the edge upstream fragment with the pinned renderer, printing it and writing nothing
   ansible.builtin.command:
     argv: "{{ [demo1_build_python] + demo1_build_python_flags + [demo1_build_provision_dir ~ '/render_demo_edge.py'] }}"

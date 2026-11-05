@@ -113,3 +113,17 @@ argument_specs:
           by root:root, a file with a group or other bit or an execute bit, and
           an empty file are each refused.
         default: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+      demo1_build_caddy_image:
+        type: str
+        description: >-
+          The Caddy image that judges the production candidate, named by its
+          content: an image ID (sha256: and 64 hex digits) or a registry name
+          with @sha256: and 64 hex digits. It is the demo edge's image, Caddy
+          with the Hetzner DNS module, loaded on the host by the owner; the role
+          never pulls it. The role has Caddy adapt the rendered Caddyfile in it,
+          with no network and no writable filesystem, and judges the config
+          Caddy would run: one wildcard server on port 443, one ACME issuer with
+          the DNS-01 provider and the token file, and nothing else. Empty, or an
+          image that is not loaded, the production candidate is not staged, and
+          the plan and apply say so.
+        default: ''
