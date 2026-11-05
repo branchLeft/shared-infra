@@ -44,7 +44,7 @@
 
         - name: Plant the root file a link will point at
           ansible.builtin.copy:
-            content: "{{ converge_token_value }}"
+            content: '{{ converge_token_value }}'
             dest: '{{ converge_target }}'
             owner: root
             group: root

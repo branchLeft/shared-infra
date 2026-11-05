@@ -136,20 +136,20 @@ What the role does, in the order of `tasks/main.yml`:
 
 ### What each pinned program becomes
 
-| Program                                         | Role                     | Notes                                                                                                                         |
-| ----------------------------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
-| `branchleft_slot.py`                            | INSTALL                  | The wrapper. Installed, never run.                                                                                            |
-| `demo_sidecar.py`                               | INSTALL                  | Run by the colour drop-ins, never by the role.                                                                                |
-| `health_router.py`                              | INSTALL                  | Run by the router unit, never by the role.                                                                                    |
-| `render_slot_sudoers.py`                        | RUN, stdout only         | Printed, not written: the comparison.                                                                                         |
-| `render_colour_units.py`                        | RUN, stdout only         | The drop-ins' text.                                                                                                           |
-| `render_router_unit.py`                         | RUN, stdout only         | The router unit's text.                                                                                                       |
-| `render_demo_edge.py`                           | RUN, stdout only         | The candidate fragment.                                                                                                       |
-| `demo_uid_claims.py`                            | RUN, writes the register | Only when a claim is missing; never in check mode.                                                                            |
-| `render_demo_site.py`                           | RUN, stdout only         | One call for every slot with an input, staged as the one Caddyfile. Never run with `--gate-env-out`, which writes.            |
-| `demo_go_live.py`                               | STAGED, NOT ROLE         | The owner's go-live. The role never runs it.                                                                                  |
-| `provision_socket_dirs.py`, `drain_flag_dir.py` | NOT FETCHED              | Their jobs are declared with `file` tasks, so a plan shows each one.                                                          |
-| `branchleft_demo_egress.sh`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                                                                             |
+| Program                                         | Role                     | Notes                                                                                                              |
+| ----------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `branchleft_slot.py`                            | INSTALL                  | The wrapper. Installed, never run.                                                                                 |
+| `demo_sidecar.py`                               | INSTALL                  | Run by the colour drop-ins, never by the role.                                                                     |
+| `health_router.py`                              | INSTALL                  | Run by the router unit, never by the role.                                                                         |
+| `render_slot_sudoers.py`                        | RUN, stdout only         | Printed, not written: the comparison.                                                                              |
+| `render_colour_units.py`                        | RUN, stdout only         | The drop-ins' text.                                                                                                |
+| `render_router_unit.py`                         | RUN, stdout only         | The router unit's text.                                                                                            |
+| `render_demo_edge.py`                           | RUN, stdout only         | The candidate fragment.                                                                                            |
+| `demo_uid_claims.py`                            | RUN, writes the register | Only when a claim is missing; never in check mode.                                                                 |
+| `render_demo_site.py`                           | RUN, stdout only         | One call for every slot with an input, staged as the one Caddyfile. Never run with `--gate-env-out`, which writes. |
+| `demo_go_live.py`                               | STAGED, NOT ROLE         | The owner's go-live. The role never runs it.                                                                       |
+| `provision_socket_dirs.py`, `drain_flag_dir.py` | NOT FETCHED              | Their jobs are declared with `file` tasks, so a plan shows each one.                                               |
+| `branchleft_demo_egress.sh`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                                                                  |
 
 "RUN, stdout only" means the renderer is run with no output flag: it prints to
 standard output and writes nothing, so running it is a read and is the one
@@ -231,12 +231,12 @@ renderer is staged and at least one slot has an edge input. When one of those is
 missing the run completes with a stated skip, never a failure, and prints the first
 that applies, in this order, each starting "Production candidate NOT staged:":
 
-| Reason                                              | Words that follow                                                   |
-| --------------------------------------------------- | ------------------------------------------------------------------- |
-| The wildcard base is empty                          | the wildcard base (demo1_build_wildcard_base) is not set            |
-| No token file at the token path                     | no DNS token file is placed at the path                             |
-| No renderer staged (a check run on a fresh host)    | the pinned site renderer is not staged on this host                 |
-| No slot has an owner-placed edge input              | no slot has an owner-placed edge JSON                               |
+| Reason                                           | Words that follow                                        |
+| ------------------------------------------------ | -------------------------------------------------------- |
+| The wildcard base is empty                       | the wildcard base (demo1_build_wildcard_base) is not set |
+| No token file at the token path                  | no DNS token file is placed at the path                  |
+| No renderer staged (a check run on a fresh host) | the pinned site renderer is not staged on this host      |
+| No slot has an owner-placed edge input           | no slot has an owner-placed edge JSON                    |
 
 A token file that is there and is not right is refused, each in its own check, and
 the message names the path and never a value: it is a link, it is not a regular file,
