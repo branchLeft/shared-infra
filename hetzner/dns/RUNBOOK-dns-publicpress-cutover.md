@@ -59,76 +59,67 @@ GitHub runner.
 
 ### 1. Credentials
 
-```bash
-cd ~/branchLeft/shared-infra/hetzner
-nvm use
-pnpm install --frozen-lockfile
-export AWS_REGION=hel1
-export AWS_RESPONSE_CHECKSUM_VALIDATION=when_required
-```
+Nothing to export. The DNS credentials (the dns project token, the stack
+passphrase and salt, the Object Storage keys) are held by CI in the `dns-plan`
+and `production-dns` environments, and the plan and the apply run there. Do
+**not** run `pulumi stack init` or a hand apply: the `production` stack exists,
+a second `init` mints a new salt and orphans its secrets, and a hand apply
+bypasses the review below.
 
-```bash
-read -rs "AWS_ACCESS_KEY_ID?Object Storage access key: "; echo; export AWS_ACCESS_KEY_ID
-```
+### 2. Merge, then read the plan
 
-```bash
-read -rs "AWS_SECRET_ACCESS_KEY?Object Storage secret: "; echo; export AWS_SECRET_ACCESS_KEY
-```
+Merge the pull request that carries this runbook. The merge to `main` touches
+`hetzner/dns/`, which starts the CI `dns-plan` run on the merge commit. Open
+that run, wait for **Plan (hetzner dns, pulumi preview)** to go green, and read
+its summary, **Hetzner dns plan - read before approving the apply**. The
+**Apply (hetzner dns, pulumi up)** job then waits in `production-dns`.
 
-```bash
-read -rs "HCLOUD_TOKEN?dns project (16139783) Read & Write token: "; echo; export HCLOUD_TOKEN
-```
-
-```bash
-umask 077
-install -m 600 /dev/null ~/.pulumi-passphrase-tmp
-read -rs "PASSPHRASE?Stack passphrase (read back from ProtonPass): "; echo; printf '%s' "$PASSPHRASE" > ~/.pulumi-passphrase-tmp; unset PASSPHRASE
-export PULUMI_CONFIG_PASSPHRASE_FILE=~/.pulumi-passphrase-tmp
-```
-
-Expected: the reads print nothing. **Do not run `pulumi stack init`**: the
-`production` stack exists, and a second `init` mints a new salt and orphans its
-secrets.
-
-### 2. Preview
-
-```bash
-cd ~/branchLeft/shared-infra/hetzner/dns
-pulumi preview --diff
-```
-
-Expected: 11 resources to create — `hcloud:index/zone:Zone`
+Expected: 11 resources to create and nothing else: `hcloud:index/zone:Zone`
 `publicpress-co-uk` and 10 `hcloud:index/zoneRrset:ZoneRrset`, each named
 `publicpress-co-uk-` followed by the owner and type (`publicpress-co-uk-apex-a`,
 `publicpress-co-uk-apex-mx`, `publicpress-co-uk-apex-txt`,
 `publicpress-co-uk-_dmarc-txt`, `publicpress-co-uk-_domainconnect-cname`,
 `publicpress-co-uk-autodiscover-cname`, `publicpress-co-uk-id-a`,
 `publicpress-co-uk-portal-a`, `publicpress-co-uk-s1-ionos._domainkey-cname`,
-`publicpress-co-uk-s2-ionos._domainkey-cname`). **Any update, replace or delete
-of a `branchleft-co-uk` resource is a stop**: it means a URN moved.
+`publicpress-co-uk-s2-ionos._domainkey-cname`). In the JSON, `changeSummary`
+must show `create` 11, with only `same` besides it (the existing
+branchleft.co.uk resources).
 
-The stack outputs change as well, and the preview shows it: `zone` and `rrsets`
+**Any `update`, `delete` or `replace`, or any `create` that is not a
+`publicpress-co-uk` resource, is a STOP.** An update or delete on a
+`branchleft-co-uk` resource means a URN moved. Do not approve: choose Reject in
+the review dialog. The apply job's delete guard covers the zone itself only, so
+this read is the control for a record change.
+
+The stack outputs change as well, and the plan shows it: `zone` and `rrsets`
 are removed, and `zones` and `authoritativeNameserversByZone` are added.
 `authoritativeNameservers` keeps its value. Removing an output changes no
 resource, so it is not a stop.
 
-### 3. Apply
+### 3. Approve the apply
+
+Open the waiting run, click **Review deployments**, tick `production-dns` alone,
+and choose **Approve and deploy**. Never tick a second environment in the same
+approval: an approval releases every job waiting in the environments ticked.
+
+The apply re-plans after approval, and its delete guard covers the zone only, so
+the step 2 read is what protects the branchleft.co.uk records. A later push to
+`main` that touches the dns inputs cancels a run still waiting here and queues a
+new one: approve the newest run, and merge nothing under the dns inputs between
+step 2 and this approval.
+
+Creating the zone and its records changes no resolution: the registry still
+points at IONOS until step 8. Expected in the apply job log: `Resources: 11
+created`. Then, from a network that does not intercept port 53 (see above),
+read the nameservers Hetzner assigned (read only):
 
 ```bash
-cd ~/branchLeft/shared-infra/hetzner/dns
-pulumi up
+dig +short NS publicpress.co.uk @hydrogen.ns.hetzner.com
 ```
 
-Confirm only if the plan matches step 2 exactly. Expected: `Resources: 11
-created`.
-
-```bash
-pulumi stack output authoritativeNameserversByZone
-```
-
-Expected: `publicpress.co.uk` lists `hydrogen.ns.hetzner.com`,
-`oxygen.ns.hetzner.com` and `helium.ns.hetzner.de` (order may differ). If the
-names differ, use the printed names everywhere below.
+Expected: `hydrogen.ns.hetzner.com.`, `oxygen.ns.hetzner.com.` and
+`helium.ns.hetzner.de.` (order may differ). If the names differ, use the
+printed names everywhere below.
 
 ### 4. Confirm Hetzner serves the zone before it is delegated
 
@@ -174,8 +165,8 @@ python3 hetzner/dns/zonecheck.py strip-transcript < "$VERBOSE" > hetzner/dns/cap
 rm "$VERBOSE"
 ```
 
-then land that by PR, and apply
-before going on.
+then land that by PR. The merge queues a new `production-dns` apply: read its
+plan and approve it the same way as steps 2 and 3, before going on.
 
 Rollback is not instant: switching the nameservers back takes up to the 172800 s
 delegation TTL to propagate. For that long, mail continuity rests on both
