@@ -43,7 +43,7 @@ def bare(line: str) -> str:
     return " ".join(line.split(" ")[:2])
 
 
-def good_lines(source: str | None = SOURCE) -> tuple[str, str]:
+def good_lines(source: str = SOURCE) -> tuple[str, str]:
     return (
         f"{tool.options_for('check', source)} {bare(CHECK_PUB)}",
         f"{tool.options_for('apply', source)} {bare(APPLY_PUB)}",
@@ -62,6 +62,7 @@ class Case:
 def deviations() -> dict[str, Case]:
     check, apply = good_lines()
     from_clause = f',from="{SOURCE}"'
+    wide_clause = ',from="*"'
     shared_file = f'restrict,command="x" {SHARED_PUB}\nrestrict,command="y" {CHECK_PUB}\n'
     both = f"{check}\n{apply}\n"
     return {
@@ -76,7 +77,16 @@ def deviations() -> dict[str, Case]:
             f"{check.replace('--mode check', '--mode apply')}\n{apply}\n", "command_mismatch"
         ),
         "source address dropped": Case(
-            f"{check.replace(from_clause, '')}\n{apply}\n", "from_mismatch"
+            f"{check.replace(from_clause, '')}\n{apply}\n", "from_missing"
+        ),
+        "source address dropped from the apply line": Case(
+            f"{check}\n{apply.replace(from_clause, '')}\n", "from_missing"
+        ),
+        "source address given twice": Case(
+            f"{check.replace(from_clause, from_clause * 2)}\n{apply}\n", "several_from"
+        ),
+        "a second, wider source address": Case(
+            f"{check}\n{apply.replace(from_clause, from_clause + wide_clause)}\n", "several_from"
         ),
         "source address changed": Case(
             f"{check.replace(SOURCE, OTHER_SOURCE)}\n{apply}\n", "from_mismatch"
@@ -103,11 +113,11 @@ def deviations() -> dict[str, Case]:
     }
 
 
-Verify = Callable[[Path, Path, Path, str | None, Path | None], str]
+Verify = Callable[[Path, Path, Path, str, Path | None], str]
 
 
 def accept_everything(
-    readback: Path, check_pub: Path, apply_pub: Path, source: str | None, not_keys: Path | None
+    readback: Path, check_pub: Path, apply_pub: Path, source: str, not_keys: Path | None
 ) -> str:
     """A stand-in for the guard with the mechanism removed."""
     return ""
@@ -136,7 +146,7 @@ class Files:
 
 
 class Build(unittest.TestCase):
-    def build(self, mode: str, pub: str, source: str | None = SOURCE) -> tuple[str, str]:
+    def build(self, mode: str, pub: str, source: str = SOURCE) -> tuple[str, str]:
         with tempfile.TemporaryDirectory() as folder:
             return tool.build_line(mode, Files(folder).write("k.pub", f"{pub}\n"), source)
 
@@ -150,8 +160,8 @@ class Build(unittest.TestCase):
             ),
         )
         self.assertEqual(
-            self.build("apply", APPLY_PUB, None)[0],
-            'restrict,command="sudo /usr/local/sbin/pull-trigger --mode apply" '
+            self.build("apply", APPLY_PUB)[0],
+            f'restrict,from="{SOURCE}",command="sudo /usr/local/sbin/pull-trigger --mode apply" '
             f"ssh-ed25519 {body_of(APPLY_PUB)}",
         )
 
@@ -213,7 +223,7 @@ class Verifier(unittest.TestCase):
             args = (readback, check_pub, apply_pub)
             self.assertEqual(tool.verify_lines(*args, SOURCE, edge1), "")
             self.assertEqual(tool.verify_lines(*args, OTHER_SOURCE, edge1), "from_mismatch")
-            self.assertEqual(tool.verify_lines(*args, None, edge1), "from_mismatch")
+            self.assertEqual(tool.verify_lines(*args, "", edge1), "bad_from")
 
     def test_files_that_cannot_be_read_are_refused(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -266,6 +276,24 @@ class CommandLine(unittest.TestCase):
                 (swapped.returncode, swapped.stdout),
                 (1, "keylines=REFUSED reason=order_swapped\n"),
             )
+
+    def test_from_is_required_in_build_and_in_verify(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            files = Files(folder)
+            check_pub = files.write("check.pub", f"{CHECK_PUB}\n")
+            apply_pub = files.write("apply.pub", f"{APPLY_PUB}\n")
+            readback = files.write("rb", "\n".join(good_lines()) + "\n")
+            build = self.run_tool("build", "--mode", "check", "--pub", str(check_pub))
+            verify = self.run_tool(
+                "verify",
+                *("--file", str(readback), "--check-pub", str(check_pub)),
+                *("--apply-pub", str(apply_pub)),
+            )
+            for name, done in (("build", build), ("verify", verify)):
+                with self.subTest(name):
+                    self.assertEqual(
+                        (done.returncode, done.stdout, done.stderr), (2, "", "usage error\n")
+                    )
 
     def test_a_refused_build_writes_nothing_to_stdout(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -334,7 +362,7 @@ class Authorities(unittest.TestCase):
             .replace("{{ entry.mode }}", "check")
             .replace("{{ entry.key }}", bare(CHECK_PUB))
         )
-        self.assertEqual(rendered, good_lines(None)[0])
+        self.assertEqual(rendered, good_lines()[0].replace(f',from="{SOURCE}"', ""))
 
     def test_each_command_is_one_the_sudoers_grants(self) -> None:
         sudoers = self.role_vars("ci_login")["ci_login_sudoers_lines"]

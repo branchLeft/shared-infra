@@ -172,8 +172,8 @@ BOOTSTRAP_GUARD_PATHS = [
     "ansible/tools/test_ci_key_line.py",
     "ansible/tools/spool_image_gate.py",
     "ansible/tools/test_spool_image_gate.py",
-    "ansible/tools/fixtures/docker-inspect-loaded-by-digest.out",
-    "ansible/tools/fixtures/docker-inspect-absent.out",
+    "ansible/tools/fixtures/docker-inspect-loaded-by-digest.json",
+    "ansible/tools/fixtures/docker-inspect-absent.json",
 ]
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything

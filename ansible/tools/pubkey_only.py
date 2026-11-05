@@ -32,6 +32,9 @@ KEY_SHAPES: Final[tuple[str, ...]] = (
 # \Z, not $, so a trailing line break does not pass.
 KEY_PATTERN: Final = re.compile("(" + "|".join(KEY_SHAPES) + r")( [ -~]*)?\Z")
 KEY_TYPES: Final = frozenset(shape.split(" ", 1)[0].replace("\\", "") for shape in KEY_SHAPES)
+# A word after the key that is a key type, or the start of a base64 key blob (every blob begins
+# with the length of its type name), is a second key, not a comment.
+BLOB_START: Final = re.compile(r"AAAA[A-Za-z0-9+/]{16,}")
 # Armour of a private key, and the magic of its unarmoured form.
 PRIVATE_MARKERS: Final[tuple[bytes, ...]] = (b"-----BEGIN", b"PRIVATE KEY", b"openssh-key-v1")
 USAGE_ERROR: Final = "usage error"
@@ -97,6 +100,8 @@ def check_text(data: bytes, want_type: str | None = None) -> KeyCheck:
             return refused("options_in_front")
         return refused("bad_shape")
     key_type, body = line.split(" ")[:2]
+    if any(word in KEY_TYPES or BLOB_START.match(word) for word in line.split(" ")[2:]):
+        return refused("several_keys")
     try:
         blob = base64.b64decode(body, validate=True)
     except binascii.Error:

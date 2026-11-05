@@ -1,7 +1,8 @@
 """Stop a bootstrap that would start the mail spool with no image on the host.
 
-`ref` prints the digest-pinned image the vendored Compose file names; `check` reads the output
-of `docker image inspect REF` on stdin and prints `gate=pass` or `gate=STOP reason=CODE`. It
+`ref` prints the digest-pinned image the host would run: the one in the host's pin file when
+that file exists, else the one the vendored Compose file names. `check` reads the output of
+`docker image inspect REF` on stdin and prints `gate=pass` or `gate=STOP reason=CODE`. It
 reads and prints nothing else. Standard library only. See ansible/tools/README.md."""
 
 from __future__ import annotations
@@ -17,7 +18,12 @@ from typing import Final
 SERVICE: Final = "mail-spool"
 # Held equal to the demo1_egress_spool role's demo1_egress_spool_image_pattern by a test.
 IMAGE_PATTERN: Final = re.compile(r"[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}\Z")
+# The host's pin file, which the role prefers to the Compose file once it exists: exactly one
+# line. Held equal to the role's demo1_egress_spool_image_env_pattern by a test.
+PIN_PATTERN: Final = re.compile("IMAGE=" + IMAGE_PATTERN.pattern)
+OLD_PIN_PREFIX: Final = "MAIL_SPOOL_IMAGE="
 MAX_BYTES: Final = 1 << 20
+MAX_PIN_BYTES: Final = 4096
 SERVICES_LINE: Final = re.compile(r"services:\s*$")
 SERVICE_LINE: Final = re.compile(rf"  {re.escape(SERVICE)}:\s*$")
 OTHER_SERVICE_LINE: Final = re.compile(r"  \S")
@@ -54,6 +60,34 @@ def compose_ref(text: str) -> tuple[str, str]:
     return images[0], ""
 
 
+def pin_ref(text: str) -> tuple[str, str]:
+    """The image the pin file names and an empty reason, or an empty image and the reason.
+
+    The file is exactly one `IMAGE=<name>@sha256:<64 hex>` line, with or without its final line
+    break. The older `MAIL_SPOOL_IMAGE=` form is refused, as is anything else."""
+    line = text[:-1] if text.endswith("\n") else text
+    if line.startswith(OLD_PIN_PREFIX):
+        return "", "pin_old_form"
+    if not PIN_PATTERN.match(line):
+        return "", "pin_malformed"
+    return line.removeprefix("IMAGE="), ""
+
+
+def pin_from_file(path: Path) -> tuple[str, str]:
+    """The image the pin file at `path` names, or the reason it cannot be used."""
+    try:
+        with path.open("rb") as handle:
+            data = handle.read(MAX_PIN_BYTES + 1)
+    except OSError:
+        return "", "pin_unreadable"
+    if len(data) > MAX_PIN_BYTES:
+        return "", "pin_malformed"
+    try:
+        return pin_ref(data.decode("ascii"))
+    except UnicodeDecodeError:
+        return "", "pin_malformed"
+
+
 def digest_of(ref: str) -> str:
     return ref.rsplit("@", 1)[-1]
 
@@ -74,14 +108,16 @@ def judge(ref: str, stdin_text: str) -> str:
         return "image_absent"
     if len(images) > 1:
         return "several_images"
-    listed = images[0].get("RepoDigests", False)
-    if listed is None:
-        listed = []
-    if not isinstance(listed, list) or not all(isinstance(entry, str) for entry in listed):
+    listed = images[0].get("RepoDigests")
+    if listed is not None and (
+        not isinstance(listed, list) or not all(isinstance(entry, str) for entry in listed)
+    ):
         return "unreadable"
-    # An image loaded from a file on a store that records no digest lists none. The daemon
-    # still found it by the digest-form reference, which is what the role itself tests.
-    if listed and digest_of(ref) not in {digest_of(entry) for entry in listed}:
+    # An image that lists no digest cannot be shown to be the pinned one, so it stops: the
+    # daemon finding it by name proves only that some image has that name.
+    if not listed:
+        return "no_repo_digest"
+    if digest_of(ref) not in {digest_of(entry) for entry in listed}:
         return "digest_mismatch"
     return ""
 
@@ -91,9 +127,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     ref = commands.add_parser("ref")
     ref.add_argument("--compose", required=True, type=Path)
+    # One of the two is required, so the host's pin file is never skipped by leaving it out.
+    # `--no-pin` is only for a host on which the pin file was checked to be absent.
+    pin = ref.add_mutually_exclusive_group(required=True)
+    pin.add_argument("--pin-file", type=Path)
+    pin.add_argument("--no-pin", action="store_true")
     check = commands.add_parser("check")
     check.add_argument("--ref", required=True)
     args = parser.parse_args(argv)
+    if args.command == "ref" and args.pin_file is not None:
+        image, reason = pin_from_file(args.pin_file)
+        if reason:
+            print(f"ref=REFUSED reason={reason}", file=sys.stderr)
+            return 1
+        print(image)
+        return 0
     if args.command == "ref":
         try:
             with args.compose.open("rb") as handle:

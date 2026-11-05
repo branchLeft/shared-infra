@@ -65,6 +65,7 @@ def accept_everything(data: bytes, want_type: str | None) -> tool.KeyCheck:
 
 GOOD = ed25519_line(1)
 OTHER = ed25519_line(2)
+BARE = " ".join(GOOD.split(" ")[:2])
 # Each bad input, the type asked for, and the reason code it must be refused with.
 BAD: dict[str, tuple[bytes, str | None, str]] = {
     "private key block": (PRIVATE_BLOCK.encode(), None, "private_key"),
@@ -72,6 +73,14 @@ BAD: dict[str, tuple[bytes, str | None, str]] = {
     "two lines": (f"{GOOD}\n{OTHER}\n".encode(), None, "several_lines"),
     "option in front": (f'command="id" {GOOD}\n'.encode(), None, "options_in_front"),
     "restrict in front": (f"restrict {GOOD}\n".encode(), None, "options_in_front"),
+    "a second key after the first": (f"{GOOD} {OTHER}\n".encode(), None, "several_keys"),
+    "a second key with no line break": (f"{GOOD} {OTHER}".encode(), None, "several_keys"),
+    "a second key body with no type": (
+        f"{GOOD} {OTHER.split(' ')[1]}\n".encode(),
+        None,
+        "several_keys",
+    ),
+    "the same key twice": (f"{BARE} {GOOD}\n".encode(), None, "several_keys"),
     "truncated body": (GOOD[:-20].encode(), None, "bad_shape"),
     "empty file": (b"", None, "empty"),
     "only a line break": (b"\n", None, "empty"),

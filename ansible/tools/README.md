@@ -140,21 +140,24 @@ step. The tools, their tests and the captured output in `fixtures/` are the owne
 Exit 0 and `pubkey=ok type=T fingerprint=SHA256:...`, or exit 1 and `pubkey=REFUSED reason=CODE`.
 The reasons are `unreadable`, `too_large` (over 2 KiB), `private_key` (armour, or the binary
 magic, of a private key anywhere in the file), `not_text`, `empty`, `several_lines`,
-`options_in_front` (anything before the key type), `bad_shape` (not a key type the `ci_login`
+`options_in_front` (anything before the key type), `several_keys` (a second key type or key body
+after the first key; the rest of the line is a comment and nothing else), `bad_shape` (not a key type the `ci_login`
 role accepts, a body of the wrong length, or a body that does not name its own type) and
 `wrong_type` (with `--type`). The key shapes are the `ci_login` role's `ci_login_key_shapes`, held
 equal by a test.
 
 ### ci_key_line.py: the two forced-command lines of a CI account
 
-    ci_key_line.py build --mode check|apply --pub FILE [--from IPV4]
-    ci_key_line.py verify --file READBACK --check-pub FILE --apply-pub FILE [--from IPV4] [--not-keys FILE]
+    ci_key_line.py build --mode check|apply --pub FILE --from IPV4
+    ci_key_line.py verify --file READBACK --check-pub FILE --apply-pub FILE --from IPV4 [--not-keys FILE]
 
 `build` runs the public-key check (an `ssh-ed25519` key is required) and prints exactly
-`restrict[,from="IPV4"],command="sudo /usr/local/sbin/pull-trigger --mode MODE" ssh-ed25519 BODY`
+`restrict,from="IPV4",command="sudo /usr/local/sbin/pull-trigger --mode MODE" ssh-ed25519 BODY`
 on stdout, with the key's comment dropped. A refusal writes `keyline=REFUSED reason=CODE` to stderr
 and nothing to stdout, so a redirect into a key file never receives it. The address is a dotted
-quad in plain form (`bad_from` otherwise); a mode other than the two is `bad_mode`.
+quad in plain form (`bad_from` otherwise); a mode other than the two is `bad_mode`. `--from` is
+required by both subcommands: leaving it out is a `usage error`, so a line with no source address
+cannot be built or accepted.
 
 `verify` rebuilds both lines and requires the read-back to equal them byte for byte: check then
 apply, two lines, a final line break, nothing else. It prints `keylines=ok` or exit 1 and
@@ -162,25 +165,34 @@ apply, two lines, a final line break, nothing else. It prints `keylines=ok` or e
 reasons above), `same_key_both_modes`, `key_in_not_keys` (a key body present in the `--not-keys`
 file, which is how a stop-gap key shared with another host is refused as this host's own),
 `not_keys_unreadable`, `readback_unreadable` (including over 4 KiB), `bad_from`, `line_count`,
-`order_swapped`, `restrict_missing`, `command_mismatch`, `from_mismatch`, `options_differ`,
+`order_swapped`, `restrict_missing`, `command_mismatch`, `from_missing` (a read-back line with no
+`from=`), `several_from` (more than one), `from_mismatch`, `options_differ`,
 `key_mismatch` and `not_identical`. The program path, the option and the two modes are the
 `ci_login` role's, held equal to it, to the `pull_trigger` role and to the role's sudoers grant by
 tests.
 
 ### spool_image_gate.py: the mail spool's image is on the host
 
-    spool_image_gate.py ref --compose FILE
+    spool_image_gate.py ref --compose FILE (--pin-file FILE | --no-pin)
     spool_image_gate.py check --ref REF   (the output of `docker image inspect REF` on stdin)
 
-`ref` prints the digest-pinned image of the `mail-spool` service in the vendored Compose file
-(`ref=REFUSED reason=CODE` on stderr: `compose_unreadable`, `compose_too_large`, `no_image`,
-`several_images`, `ref_not_digest_pinned`). `check` prints `gate=pass`, or exit 1 and
-`gate=STOP reason=CODE`: `ref_not_digest_pinned`, `no_output`, `unreadable`, `image_absent` (the
-empty list `docker` prints with exit 1), `several_images`, `digest_mismatch`. It passes when
-exactly one image came back and either its `RepoDigests` hold the pinned digest (under any
-name), or it lists none, which is what a store that records no digest for an image loaded from a
-file reports; in that case the daemon having found the image by the digest-form reference is the
-proof, and it is what the role's own `docker image inspect` tests. The pattern and the service are
-the `demo1_egress_spool` role's, held equal by a test. The two fixtures are real `docker image
-inspect` output (Docker 29, containerd image store) for an image loaded from a file and queried by
-its digest-form reference, and for an absent one.
+`ref` prints the digest-pinned image the host would run. Where the host has its pin file
+`/etc/branchleft/mail-spool.image.env`, the runbook reads it over ssh into a file and passes
+`--pin-file`: the file must be exactly one `IMAGE=<name>@sha256:<64 hex digits>` line (the role's
+own pattern), and the printed image is that one, not the Compose file's. Anything else is refused
+on stderr as `ref=REFUSED reason=CODE`: `pin_old_form` (the older `MAIL_SPOOL_IMAGE=` form),
+`pin_malformed` (any other text, a second line, carriage returns, quotes, over 4 KiB) or
+`pin_unreadable`. Only where the pin file was checked to be absent on the host does the runbook
+pass `--no-pin`, and then the image is the `mail-spool` service's in the vendored Compose file
+(`compose_unreadable`, `compose_too_large`, `no_image`, `several_images`, `ref_not_digest_pinned`).
+Naming neither flag, or both, is a `usage error`, so the pin file cannot be skipped by leaving it
+out.
+
+`check` prints `gate=pass`, or exit 1 and `gate=STOP reason=CODE`: `ref_not_digest_pinned`,
+`no_output`, `unreadable`, `image_absent` (the empty list `docker` prints with exit 1),
+`several_images`, `no_repo_digest` (the image lists no `RepoDigests`, empty, null or missing: the
+daemon finding it by name does not show it is the pinned one), `digest_mismatch`. It passes only
+when exactly one image came back and its `RepoDigests` hold the pinned digest (under any name).
+The pattern and the service are the `demo1_egress_spool` role's, held equal by a test. The two
+fixtures are real `docker image inspect` output (Docker 29, containerd image store) for a loaded
+image queried by its digest-form reference, and for an absent one.

@@ -36,12 +36,11 @@ def valid_ipv4(text: str) -> bool:
         return False
 
 
-def options_for(mode: str, from_address: str | None) -> str:
-    source = f',from="{from_address}"' if from_address is not None else ""
-    return f'{OPTIONS}{source},command="sudo {PROGRAM} --mode {mode}"'
+def options_for(mode: str, from_address: str) -> str:
+    return f'{OPTIONS},from="{from_address}",command="sudo {PROGRAM} --mode {mode}"'
 
 
-def line_for(mode: str, key: pubkey_only.KeyCheck, from_address: str | None) -> str:
+def line_for(mode: str, key: pubkey_only.KeyCheck, from_address: str) -> str:
     """One authorized_keys line; the key's comment is dropped."""
     return f"{options_for(mode, from_address)} {key.key_type} {key.body}"
 
@@ -71,7 +70,12 @@ def why_lines_differ(got: str, want: str) -> str:
         return "restrict_missing"
     if clause(COMMAND_CLAUSE, got_words[0]) != clause(COMMAND_CLAUSE, want_words[0]):
         return "command_mismatch"
-    if clause(FROM_CLAUSE, got_words[0]) != clause(FROM_CLAUSE, want_words[0]):
+    sources = FROM_CLAUSE.findall(got_words[0])
+    if not sources:
+        return "from_missing"
+    if len(sources) > 1:
+        return "several_from"
+    if sources != FROM_CLAUSE.findall(want_words[0]):
         return "from_mismatch"
     if got_words[0] != want_words[0]:
         return "options_differ"
@@ -80,11 +84,11 @@ def why_lines_differ(got: str, want: str) -> str:
     return "not_identical"
 
 
-def build_line(mode: str, pub: Path, from_address: str | None) -> tuple[str, str]:
+def build_line(mode: str, pub: Path, from_address: str) -> tuple[str, str]:
     """The line and an empty reason, or an empty line and the reason it was refused."""
     if mode not in MODES:
         return "", "bad_mode"
-    if from_address is not None and not valid_ipv4(from_address):
+    if not valid_ipv4(from_address):
         return "", "bad_from"
     key = pubkey_only.check_file(pub, KEY_TYPE)
     if not key.ok:
@@ -96,11 +100,11 @@ def verify_lines(
     readback: Path,
     check_pub: Path,
     apply_pub: Path,
-    from_address: str | None,
+    from_address: str,
     not_keys: Path | None,
 ) -> str:
     """An empty string when the read-back is exactly the two lines, else a reason code."""
-    if from_address is not None and not valid_ipv4(from_address):
+    if not valid_ipv4(from_address):
         return "bad_from"
     keys: dict[str, pubkey_only.KeyCheck] = {}
     for mode, pub in (("check", check_pub), ("apply", apply_pub)):
@@ -141,12 +145,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     build = commands.add_parser("build")
     build.add_argument("--mode", required=True)
     build.add_argument("--pub", required=True, type=Path)
-    build.add_argument("--from", dest="from_address", default=None)
+    build.add_argument("--from", dest="from_address", required=True)
     verify = commands.add_parser("verify")
     verify.add_argument("--file", required=True, type=Path)
     verify.add_argument("--check-pub", required=True, type=Path)
     verify.add_argument("--apply-pub", required=True, type=Path)
-    verify.add_argument("--from", dest="from_address", default=None)
+    verify.add_argument("--from", dest="from_address", required=True)
     verify.add_argument("--not-keys", type=Path, default=None)
     args = parser.parse_args(argv)
     if args.command == "build":
