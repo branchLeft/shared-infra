@@ -47,17 +47,34 @@ REFUSALS = {
     "routes": "The one server does not hold exactly one route, the wildcard site.",
     "route-keys": "The route holds a key beyond its match, handle and terminal.",
     "route-match": "The route does not match exactly the wildcard host.",
+    "handler-file-server": "The config holds a file_server handler, which serves files from disk.",
+    "handler-templates": "The config holds a templates handler, which can include any file.",
+    "handler-root": "The config sets a root, the directory a file handler would read from.",
     "placeholder": "The config holds a file or environment placeholder beyond the token reference.",
     "text-env-var": "The candidate holds a {$ environment substitution.",
     "text-env-placeholder": "The candidate holds an {env. placeholder.",
     "text-file-placeholder": "The candidate holds a {file. placeholder beyond the token reference.",
     "text-import": "The candidate imports something that is not a snippet defined in the text.",
+    "text-file-server": "The candidate names the file_server directive.",
+    "text-templates": "The candidate names the templates directive.",
+    "text-root": "The candidate names the root directive.",
 }
 
 PLACEHOLDER = re.compile(r"\{(?:file|env)\.")
 IMPORT_WORD = re.compile(r"\bimport\b")
 # An import of a snippet defined in the text: one bare name and nothing else on the line.
 IMPORT_LINE = re.compile(r"import[ \t]+([A-Za-z0-9_-]+)[ \t]*(?:\r?\n|\Z)")
+# The directives that read a file off the edge's disk, as a whole word. A name run into a
+# word, a dot or a hyphen is something else (the host name root.example), so neither side may
+# be one; a quote, a space or a brace on either side is the directive.
+FILE_READERS = (
+    ("file_server", "text-file-server", "handler-file-server"),
+    ("templates", "text-templates", "handler-templates"),
+    ("root", "text-root", "handler-root"),
+)
+FILE_READER_WORD = {
+    word: re.compile(rf"(?<![\w.-]){word}(?![\w.-])") for word, _, _ in FILE_READERS
+}
 
 
 def internal_issuer_anywhere(node: object) -> bool:
@@ -81,12 +98,39 @@ def placeholders_in(node: object) -> int:
     return 0
 
 
+def file_readers_in(node: object) -> set[str]:
+    """Return the handler words of the file readers found anywhere in the config.
+
+    A dict is a file reader when its handler is file_server or templates, or when it holds a
+    root key (the root directive and `vars root` both adapt to one). The walk covers every
+    key and list, so a handler inside a subroute at any depth is found.
+    """
+    found: set[str] = set()
+    if isinstance(node, dict):
+        for word, _, _ in FILE_READERS[:2]:
+            if node.get("handler") == word:
+                found.add(word)
+        if "root" in node:
+            found.add("root")
+        for value in node.values():
+            found |= file_readers_in(value)
+    elif isinstance(node, list):
+        for value in node:
+            found |= file_readers_in(value)
+    return found
+
+
 def judge_text(text: str, token_file: str) -> str | None:
     """Return the code of the first refusal of the raw candidate, or None."""
     if "{$" in text:
         return "text-env-var"
     if "{env." in text:
         return "text-env-placeholder"
+    # A directive that serves files, or sets where they are read from, can reach the DNS
+    # token wherever it sits on the disk. The legitimate candidate serves none.
+    for word, text_code, _ in FILE_READERS:
+        if FILE_READER_WORD[word].search(text):
+            return text_code
     # The one token reference is the DNS directive's. A second {file. in a handler would
     # have Caddy serve the token's contents. A text with no reference at all is left to the
     # config check, which refuses an issuer that does not name the token file.
@@ -167,6 +211,12 @@ def judge(config: object, base: str, token_file: str) -> str | None:
         return "route-keys"
     if route["match"] != [{"host": [wildcard]}] or route["terminal"] is not True:
         return "route-match"
+    # No handler may read a file off the edge's disk, whatever its root (a directory above the
+    # token, a relative one, a placeholder or a link all reach it), so none is judged by path.
+    readers = file_readers_in(config)
+    for word, _, code in FILE_READERS:
+        if word in readers:
+            return code
     # The token reference sits once in the config, in the issuer checked above. Any other
     # placeholder is a handler that would read a file or the environment at run time, and
     # a file placeholder in a response would serve the token.
