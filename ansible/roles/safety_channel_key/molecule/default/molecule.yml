@@ -1,0 +1,59 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production hosts, trusted by
+    # digest. The digest is the pin; the tag is informational and may since have moved on. It
+    # has Python and the account tools in it. The role needs no systemd, so this sets none of
+    # the settings that run systemd: no cgroup mount, no cgroup namespace mode and no tmpfs.
+    # No privileged mode and no added capabilities.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image's own command starts systemd as the first process, which needs a cgroup mount
+    # and namespace mode this scenario does not grant. A plain sleep keeps the container alive.
+    command: sleep infinity
+    # The image declares /sys/fs/cgroup as a volume and this scenario does not bind-mount it, so
+    # Docker makes an anonymous volume for every container. Destroy removes it.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the controller, and
+    # verify reads it. Verbosity 3 prints each task's result with the arguments it was given, so
+    # a task that handles the key and lacks no_log shows it in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '3'
+  inventory:
+    # The values the scenario runs with, read by the prepare, converge and verify plays.
+    # Placeholders only. The key itself is made by the role inside the container, for this run
+    # only: the controller never has it, and verify reads it back through a hidden task to look
+    # for it in the log.
+    group_vars:
+      all:
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        scenario_ephemeral_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+        # Where the role puts the key. The role's own constant, spelled out here so that a
+        # change of the constant fails the scenario instead of following it.
+        scenario_directory: /etc/branchleft/content-safety
+        scenario_key: /etc/branchleft/content-safety/channel-signing.key
+        scenario_pub: /etc/branchleft/content-safety/channel-signing.pub
+        # The account the key is adopted to, and back. Prepare creates both. They are not
+        # root, so the test shows the owner inputs produce the owner.
+        scenario_other_owner: example_user
+        scenario_other_group: example_group
+        # The text the log scan must find, to show that the scan can find a key-shaped text at
+        # all. A made-up 44-character text, never a key.
+        scenario_scan_control: EXAMPLEscanCONTROLtextNOTakey0123456789ab=
+verifier:
+  name: ansible

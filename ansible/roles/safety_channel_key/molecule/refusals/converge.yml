@@ -1,0 +1,10 @@
+---
+# The role is applied once, so the cases have a delivered host to make bad. verify.yml then puts
+# the host in one bad state at a time and requires the role to stop with its own message.
+- name: Apply the role once
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.safety_channel_key

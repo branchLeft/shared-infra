@@ -1,0 +1,89 @@
+---
+# One case, included by verify.yml with safety_channel_key_refusals_case set. It puts the host in one bad state, runs
+# the role, and requires the exact message (or acceptance, for a control), the key untouched and
+# no part of the key in the message. The host is put back in every outcome.
+- name: Reset what an earlier case left behind
+  ansible.builtin.set_fact:
+    safety_channel_key_refusals_outcome: ''
+
+- name: Make the bad state, run the role against it and judge what happened
+  block:
+    - name: Put the files the case needs in place
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ item.path }}'
+        owner: root
+        group: root
+        mode: '{{ item.mode }}'
+      loop: '{{ safety_channel_key_refusals_case.files | default([]) }}'
+      loop_control:
+        label: '{{ item.path }}'
+      no_log: true
+
+    - name: Run the commands that make the bad state
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop: '{{ safety_channel_key_refusals_case.commands | default([]) }}'
+      loop_control:
+        label: '{{ item | join(" ") }}'
+      changed_when: true
+
+    - name: Apply the role and note whether it accepted
+      block:
+        - name: Apply the role
+          ansible.builtin.include_role:
+            name: branchleft.safety_channel_key
+          vars:
+            safety_channel_key_owner: "{{ safety_channel_key_refusals_case.owner | default('root') }}"
+
+        - name: Note that the role accepted
+          ansible.builtin.set_fact:
+            safety_channel_key_refusals_outcome: accepted
+      rescue:
+        - name: Note the message the role stopped with
+          ansible.builtin.set_fact:
+            safety_channel_key_refusals_outcome: "{{ ansible_failed_result.msg | default('no message') }}"
+
+    - name: Read the key as the case left it
+      ansible.builtin.slurp:
+        src: '{{ scenario_key }}'
+      register: safety_channel_key_refusals_after
+      no_log: true
+
+    - name: Require the message to be the expected one, and to hold no part of the key
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_refusals_outcome == (safety_channel_key_refusals_case.expect | default('accepted'))
+          - safety_channel_key_refusals_original_text not in safety_channel_key_refusals_outcome
+        fail_msg: 'Case "{{ safety_channel_key_refusals_case.name }}" gave "{{ safety_channel_key_refusals_outcome }}".'
+        quiet: true
+      no_log: true
+
+    - name: Require the key to be as the case left it, so the role did not change it
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_refusals_after.content == safety_channel_key_refusals_expected_content
+        fail_msg: 'Case "{{ safety_channel_key_refusals_case.name }}" changed the key.'
+        quiet: true
+      no_log: true
+      vars:
+        safety_channel_key_refusals_expected_content: >-
+          {{ (safety_channel_key_refusals_case.files[0].content | b64encode) if safety_channel_key_refusals_case.files is defined
+          else safety_channel_key_refusals_original_content }}
+  always:
+    - name: Put the host back
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop: '{{ safety_channel_key_refusals_case.restore | default([]) }}'
+      loop_control:
+        label: '{{ item | join(" ") }}'
+      changed_when: true
+
+    - name: Put the key back as delivered
+      ansible.builtin.copy:
+        content: '{{ safety_channel_key_refusals_original_text }}'
+        dest: '{{ scenario_key }}'
+        owner: root
+        group: root
+        mode: '0400'
+      no_log: true

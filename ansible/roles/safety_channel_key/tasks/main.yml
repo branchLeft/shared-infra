@@ -1,0 +1,40 @@
+---
+# One module does the whole job, because the seed must be made and read inside one process
+# and never pass through a task variable: a fact, a register or a file module would carry
+# it, and a lookup or a slurp would put it on the controller (which, under a pull, is the
+# host itself, but is still a log and a fact). So there is no lookup, query, pipe, slurp or
+# stat of the key here, and the test holds that.
+#
+# The module supports check mode (ANS-10) and reports "would create" on a fresh host, so the
+# plan the approver reads says what the apply will do. It returns the public half, which is
+# not a secret, and never the seed. The task is hidden anyway (ANS-16): its arguments are
+# only paths and names, but a future change to the module must not be able to show a value.
+
+- name: Make the channel signing key if it is absent
+  safety_channel_key:
+    directory: '{{ safety_channel_key_directory }}'
+    owner: '{{ safety_channel_key_owner }}'
+    group: '{{ safety_channel_key_group }}'
+  register: safety_channel_key_result
+  failed_when: false
+  no_log: true
+  diff: false
+
+# The module's own message is a fixed code and a path, never a value, so it is safe to show
+# although the task above is hidden. failed_when: false makes the result's failed flag false,
+# so a refusal is read from the message: only a failure carries one.
+- name: Stop if the module refused
+  ansible.builtin.assert:
+    that:
+      - safety_channel_key_result.msg is not defined
+    fail_msg: >-
+      {{ safety_channel_key_result.msg | default('the key module returned no result') }}
+    quiet: true
+
+# The one recorded output of the apply: the public half, for the host end of the verifier to
+# pin. It is not a secret. On a fresh host the plan cannot know it yet, so it says so.
+- name: Record the public half of the channel signing key
+  ansible.builtin.debug:
+    msg: >-
+      Channel signing public half (base64):
+      {{ safety_channel_key_result.public_key | default('not yet made', true) }}
