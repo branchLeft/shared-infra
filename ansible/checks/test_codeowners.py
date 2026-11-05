@@ -162,6 +162,20 @@ SEEDING_TOOL_PATHS = [
     "ansible/tools/test_seed_host_inputs.py",
 ]
 
+# The three guards the demo1 root bootstrap runbook calls, their tests and the captured docker
+# output the image gate reads. A weaker guard or a fixture edited to suit it would let the runbook
+# go on, so these are the owner's alone.
+BOOTSTRAP_GUARD_PATHS = [
+    "ansible/tools/pubkey_only.py",
+    "ansible/tools/test_pubkey_only.py",
+    "ansible/tools/ci_key_line.py",
+    "ansible/tools/test_ci_key_line.py",
+    "ansible/tools/spool_image_gate.py",
+    "ansible/tools/test_spool_image_gate.py",
+    "ansible/tools/fixtures/docker-inspect-loaded-by-digest.out",
+    "ansible/tools/fixtures/docker-inspect-absent.out",
+]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -240,6 +254,9 @@ class CodeownersTests(unittest.TestCase):
     def test_the_seeding_tool_is_owned_by_the_owner(self) -> None:
         self.assert_owned(SEEDING_TOOL_PATHS)
 
+    def test_the_bootstrap_guards_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(BOOTSTRAP_GUARD_PATHS)
+
     def test_the_standards_template_paths_are_owned_by_the_owner(self) -> None:
         self.assert_owned(
             [
@@ -266,7 +283,13 @@ class CodeownersTests(unittest.TestCase):
             "hetzner/scripts/anything.sh",
             "ansible/harness/anything.py",
         }
-        owned = PULL_ROLE_PATHS + HOST_INPUTS_PATHS + CI_LOGIN_PATHS + SEEDING_TOOL_PATHS
+        owned = (
+            PULL_ROLE_PATHS
+            + HOST_INPUTS_PATHS
+            + CI_LOGIN_PATHS
+            + SEEDING_TOOL_PATHS
+            + BOOTSTRAP_GUARD_PATHS
+        )
         for path in ESTATE_PATHS + GATE_PATHS + owned + UNOWNED_PATHS:
             if path in stands_for_more:
                 continue

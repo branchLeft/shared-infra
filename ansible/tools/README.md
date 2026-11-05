@@ -1,8 +1,8 @@
 # ansible/tools
 
-This folder holds `pull_bootstrap.py` and `seed_host_inputs.py`. Their narrative lived in the
-module docstrings until the CMT-3 gate required it cut below 11 lines; the constraints they
-stated are kept here in full.
+This folder holds `pull_bootstrap.py`, `seed_host_inputs.py` and the three demo1 bootstrap guards,
+described in the last section. The narrative of the first two lived in the module docstrings until
+the CMT-3 gate required it cut below 11 lines; the constraints they stated are kept here in full.
 
 ## pull_bootstrap.py: the bootstrap record
 
@@ -118,3 +118,69 @@ Usage, on the host as root:
 It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` once a commit that
 holds it has been applied on the host; before that the file is copied there by hand from the
 branch.
+
+## The three guards of the demo1 root bootstrap
+
+`pubkey_only.py`, `ci_key_line.py` and `spool_image_gate.py` are small, standard-library-only
+programs that the demo1 bootstrap runbook calls before it changes anything on the host, so that a
+mistake stops there and not on a production machine. Each prints a verdict and a reason code, never
+a key, a line read back, an address or any other text it was given; an argument it does not know is
+refused as `usage error` without being shown. Each is run as the runbook prints it, with the
+interpreter of the pinned worktree's virtual environment in isolated mode:
+`python -I ansible/tools/<tool>.py ...`. Each has its own test file, and each test file holds a
+corpus of bad inputs that must be refused with their own reason code, runs the same corpus against
+a stand-in that accepts everything to show each case would go red without the guard, runs the exact
+command line, and plants sentinels to prove nothing leaks. CI runs them in the `Test the tools`
+step. The tools, their tests and the captured output in `fixtures/` are the owner's in CODEOWNERS.
+
+### pubkey_only.py: a file that is one public key and nothing else
+
+    pubkey_only.py check FILE [--type ssh-ed25519]
+
+Exit 0 and `pubkey=ok type=T fingerprint=SHA256:...`, or exit 1 and `pubkey=REFUSED reason=CODE`.
+The reasons are `unreadable`, `too_large` (over 2 KiB), `private_key` (armour, or the binary
+magic, of a private key anywhere in the file), `not_text`, `empty`, `several_lines`,
+`options_in_front` (anything before the key type), `bad_shape` (not a key type the `ci_login`
+role accepts, a body of the wrong length, or a body that does not name its own type) and
+`wrong_type` (with `--type`). The key shapes are the `ci_login` role's `ci_login_key_shapes`, held
+equal by a test.
+
+### ci_key_line.py: the two forced-command lines of a CI account
+
+    ci_key_line.py build --mode check|apply --pub FILE [--from IPV4]
+    ci_key_line.py verify --file READBACK --check-pub FILE --apply-pub FILE [--from IPV4] [--not-keys FILE]
+
+`build` runs the public-key check (an `ssh-ed25519` key is required) and prints exactly
+`restrict[,from="IPV4"],command="sudo /usr/local/sbin/pull-trigger --mode MODE" ssh-ed25519 BODY`
+on stdout, with the key's comment dropped. A refusal writes `keyline=REFUSED reason=CODE` to stderr
+and nothing to stdout, so a redirect into a key file never receives it. The address is a dotted
+quad in plain form (`bad_from` otherwise); a mode other than the two is `bad_mode`.
+
+`verify` rebuilds both lines and requires the read-back to equal them byte for byte: check then
+apply, two lines, a final line break, nothing else. It prints `keylines=ok` or exit 1 and
+`keylines=REFUSED reason=CODE`. The reasons are `check_pub_*` and `apply_pub_*` (the public-key
+reasons above), `same_key_both_modes`, `key_in_not_keys` (a key body present in the `--not-keys`
+file, which is how a stop-gap key shared with another host is refused as this host's own),
+`not_keys_unreadable`, `readback_unreadable` (including over 4 KiB), `bad_from`, `line_count`,
+`order_swapped`, `restrict_missing`, `command_mismatch`, `from_mismatch`, `options_differ`,
+`key_mismatch` and `not_identical`. The program path, the option and the two modes are the
+`ci_login` role's, held equal to it, to the `pull_trigger` role and to the role's sudoers grant by
+tests.
+
+### spool_image_gate.py: the mail spool's image is on the host
+
+    spool_image_gate.py ref --compose FILE
+    spool_image_gate.py check --ref REF   (the output of `docker image inspect REF` on stdin)
+
+`ref` prints the digest-pinned image of the `mail-spool` service in the vendored Compose file
+(`ref=REFUSED reason=CODE` on stderr: `compose_unreadable`, `compose_too_large`, `no_image`,
+`several_images`, `ref_not_digest_pinned`). `check` prints `gate=pass`, or exit 1 and
+`gate=STOP reason=CODE`: `ref_not_digest_pinned`, `no_output`, `unreadable`, `image_absent` (the
+empty list `docker` prints with exit 1), `several_images`, `digest_mismatch`. It passes when
+exactly one image came back and either its `RepoDigests` hold the pinned digest (under any
+name), or it lists none, which is what a store that records no digest for an image loaded from a
+file reports; in that case the daemon having found the image by the digest-form reference is the
+proof, and it is what the role's own `docker image inspect` tests. The pattern and the service are
+the `demo1_egress_spool` role's, held equal by a test. The two fixtures are real `docker image
+inspect` output (Docker 29, containerd image store) for an image loaded from a file and queried by
+its digest-form reference, and for an absent one.
