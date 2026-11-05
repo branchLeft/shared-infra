@@ -288,8 +288,12 @@ text is staged:
    other name as a file). It is also refused if it names `file_server`, `templates` or
    `root` as a whole word (not one run into a host name such as `root.example`, so
    neither side may be a letter, digit, underscore, dot or hyphen): a file handler, or the
-   directory it reads from, can serve the DNS token wherever it sits. The renderer emits
-   none of these.
+   directory it reads from, can serve the DNS token wherever it sits. It is also refused if
+   it names `expression` as a whole word or holds a `ph(` call (a space may follow `ph`): a
+   CEL expression matcher reads a placeholder by a name it builds at run time
+   (`ph(req, "fi" + "le.<path>")`), which no `{file.` count in the text or the JSON sees,
+   and its yes or no answer leaks the file a byte at a time. The renderer emits none of
+   these.
 2. `docker run --rm -i --pull never --network none --read-only --cap-drop ALL
 --cap-add NET_BIND_SERVICE ... <demo1_build_caddy_image> caddy adapt --adapter
 caddyfile --config -`, the candidate on standard input. Nothing is pulled, started
@@ -307,7 +311,8 @@ caddyfile --config -`, the candidate on standard input. Nothing is pulled, start
    `root` key anywhere in it, at any depth (a `root` directive and `vars root` adapt to
    one). These are refused outright, not by path: a root of `/` or `/etc` above the token,
    a relative root, a placeholder root and a link all reach it, and the demo edge serves no
-   file. Adapting does not resolve a placeholder, so a
+   file; and no `expression` key anywhere in it, at any depth, for the same reason as the
+   text's `expression` and `ph(`. Adapting does not resolve a placeholder, so a
    handler that answers with the token file keeps its placeholder in the JSON. It prints
    one line, `OK` or `REFUSED <code>: <reason>`, that holds no hostname.
 
@@ -326,14 +331,17 @@ indentation spellings, the closing-brace spelling, a plain-HTTP site, `tls inter
 the site, `cert_issuer internal`, `local_certs`, `skip_install_trust`, `auto_https`
 options, a custom ACME CA, certificate files, a token from the environment, a handler that
 answers with the token file or an environment value, and a `file_server`, `templates` or
-`root` handler with a root at the token's directory, above it or relative), adapts each with the role's own
+`root` handler with a root at the token's directory, above it or relative, and an
+expression matcher that reads the token or an environment value by a built name), adapts each with the role's own
 argument list and judges it. Each result must equal the JSON recorded in
 `tests/unit/fixtures/`. For the refusals of the raw text it adapts each with real Caddy and
 shows the hole: with the environment value or the files the edge would have, the same
 text adds a second server, while adapted alone it gives one server the judge accepts. For
 the file handlers it serves each one from real Caddy beside a fake token (a random string,
 never a secret) in a throwaway container with no network, and fetches the token back with
-the container's own `wget`; a handler that serves no file gets nothing back. The
+the container's own `wget`; a handler that serves no file gets nothing back. It serves the
+expression matcher the same way and shows a right guess of the token's start answering
+`match` and a wrong one `nomatch`. The
 Molecule scenarios replay those recorded files through a stand-in for docker, so the
 refusals' messages and the nothing-staged check are tested in the container and the
 recorded files are tied to real Caddy by that unit test.
@@ -848,10 +856,12 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   and the refusals of the raw text, `refused_env_substitution`,
   `refused_env_placeholder`, `refused_second_file_placeholder`, `refused_import_of_a_path`
   and `refused_import_of_an_undefined_name`, which are refused before Caddy is asked,
-  with `refused_text_file_server`, `refused_text_templates` and `refused_text_root`,
+  with `refused_text_file_server`, `refused_text_templates`, `refused_text_root` and
+  `refused_text_expression`,
   and `refused_handler_serves_the_token`, which is the JSON of a handler that answers
   with the token file, with `refused_handler_file_server`, `refused_handler_templates`
-  and `refused_handler_root`, the JSON of a handler that reads a file. The control is
+  `refused_handler_root` and `refused_handler_expression`, the JSON of a handler that reads
+  a file or builds the name of one. The control is
   the text unchanged, accepted;
 - the refusal of the Caddy image the host holds (`refused_image.yml`), with docker a
   stand-in that lists what the case says: `refused_image_no_digests` (what a loaded image

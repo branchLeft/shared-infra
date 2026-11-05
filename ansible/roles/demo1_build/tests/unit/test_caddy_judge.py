@@ -114,6 +114,30 @@ TEMPLATES_INCLUDE = (
     f'\t\theader Content-Type text/plain\n\t\ttemplates\n\t\trespond `{{{{include "{TOKEN}"}}}}`\n'
 )
 
+# A CEL expression matcher reads a placeholder whose name it builds at run time, so neither a
+# literal {file. nor {env. in the text, nor the one placeholder the JSON may hold, shows it:
+# "fi" + "le.<path>" is two strings in the config. startsWith answers yes or no, which leaks the
+# file a byte at a time. The danger test serves it from real Caddy against a fake token.
+def expression_file_oracle(prefix: str) -> str:
+    return (
+        f'\t\t@leak expression ph(req, "fi" + "le.{TOKEN}").startsWith("{prefix}")\n'
+        '\t\trespond @leak "match"\n\t\trespond "nomatch"\n'
+    )
+
+
+EXPRESSION_FILE_ORACLE = expression_file_oracle("A")
+EXPRESSION_ENV_ORACLE = (
+    '\t\t@leak expression ph(req, "en" + "v.R2_SECRET").startsWith("A")\n\t\trespond @leak "1"\n'
+)
+# Not a reader, only an expression: refused for being the one matcher that can compute a name.
+EXPRESSION_PLAIN = "\t\t@m expression {path} == '/x'\n\t\trespond @m \"x\"\n"
+EXPRESSION_BLOCK = '\t\t@m {\n\t\t\texpression {path} == "/x"\n\t\t}\n\t\trespond @m "x"\n'
+EXPRESSION_IN_ROUTE = (
+    "\t\troute {\n"
+    f'\t\t\t@leak expression ph(req, "fi" + "le.{TOKEN}").startsWith("A")\n'
+    '\t\t\trespond @leak "match"\n\t\t}\n'
+)
+
 # Each case is a way to change the renderer's own output, with the code the judge must
 # refuse it for. None is the control: the unchanged output is accepted.
 CASES: dict[str, tuple[Callable[[str], str], str | None]] = {
@@ -205,6 +229,12 @@ CASES: dict[str, tuple[Callable[[str], str], str | None]] = {
         "handler-templates",
     ),
     "handler_root_alone": (last_handle('\t\troot * /etc\n\t\trespond "x"\n'), "handler-root"),
+    # A CEL expression matcher: the placeholder it reads is built at run time, so the JSON holds
+    # the token's path once (the issuer's) and no second placeholder. Only the matcher shows it.
+    "handler_expression_file_oracle": (last_handle(EXPRESSION_FILE_ORACLE), "matcher-expression"),
+    "handler_expression_env_oracle": (last_handle(EXPRESSION_ENV_ORACLE), "matcher-expression"),
+    "handler_expression_plain": (last_handle(EXPRESSION_PLAIN), "matcher-expression"),
+    "handler_expression_in_route": (last_handle(EXPRESSION_IN_ROUTE), "matcher-expression"),
 }
 
 # Changes to the raw candidate that are refused before Caddy adapts it, with the code. Adapting
@@ -272,6 +302,24 @@ TEXT_CASES: dict[str, tuple[Callable[[str], str], str]] = {
         lambda good: good + "\n(extra) {\n\troot * /etc\n}\n",
         "text-root",
     ),
+    # The expression matcher, and the CEL function that reads a placeholder by a built name.
+    "expression_file_oracle": (last_handle(EXPRESSION_FILE_ORACLE), "text-expression"),
+    "expression_env_oracle": (last_handle(EXPRESSION_ENV_ORACLE), "text-expression"),
+    "expression_plain": (last_handle(EXPRESSION_PLAIN), "text-expression"),
+    "expression_block": (last_handle(EXPRESSION_BLOCK), "text-expression"),
+    "expression_in_route": (last_handle(EXPRESSION_IN_ROUTE), "text-expression"),
+    "expression_quoted": (
+        last_handle('\t\t@m "expression" {path} == "/x"\n\t\trespond @m "x"\n'),
+        "text-expression",
+    ),
+    "ph_call_in_a_backtick_matcher": (
+        last_handle('\t\t@m `ph(req, "fi" + "le.' + TOKEN + '") == "x"`\n\t\trespond @m "x"\n'),
+        "text-expression",
+    ),
+    "ph_call_spaced": (
+        last_handle('\t\t@m `ph  (req, "x") == "x"`\n\t\trespond @m "x"\n'),
+        "text-expression",
+    ),
 }
 
 # Spellings that hold the words as part of a host name, and are not the directives: they must
@@ -280,7 +328,8 @@ TEXT_ACCEPTED: dict[str, Callable[[str], str]] = {
     "host_labels_are_not_directives": lambda good: good.replace(
         "\thandle {\n\t\tabort",
         "\t@r host root.site-fixture.invalid templates.site-fixture.invalid"
-        " file_server.site-fixture.invalid root-a.site-fixture.invalid\n\thandle {\n\t\tabort",
+        " file_server.site-fixture.invalid root-a.site-fixture.invalid"
+        " expression.site-fixture.invalid\n\thandle {\n\t\tabort",
         1,
     ),
     "placeholder_path_is_not_a_directive": last_handle('\t\trespond "{http.vars.root}"\n'),
@@ -512,6 +561,28 @@ class FixtureTests(unittest.TestCase):
         route["handle"] += [{"handler": "vars", "root": "/etc"}, {"handler": "templates"}]
         route["handle"].append({"handler": "file_server"})
         self.assertEqual(judge_caddy_config.judge(good, BASE, TOKEN), "handler-file-server")
+
+    def test_an_expression_matcher_is_found_at_any_depth_in_the_config(self) -> None:
+        for where, matcher in (
+            ("in_a_match_set", {"match": [{"expression": {"expr": "true"}}]}),
+            ("as_a_bare_string", {"match": [{"expression": "true"}]}),
+            ("under_not", {"match": [{"not": [{"expression": "true"}]}]}),
+            ("a_key_beside_other_keys", {"handler": "static_response", "expression": "x"}),
+        ):
+            with self.subTest(where=where):
+                good = json.loads(fixture_path("good").read_text())
+                route = good["apps"]["http"]["servers"]["srv0"]["routes"][0]
+                route["handle"][0]["routes"].append(
+                    {"handle": [{"handler": "subroute", "routes": [matcher]}]}
+                )
+                self.assertEqual(judge_caddy_config.judge(good, BASE, TOKEN), "matcher-expression")
+
+    def test_the_word_expression_as_a_value_is_not_the_matcher(self) -> None:
+        # Only the key is the matcher. A header value that says the word is a string.
+        good = json.loads(fixture_path("good").read_text())
+        route = good["apps"]["http"]["servers"]["srv0"]["routes"][0]
+        route["handle"][0]["routes"][0]["handle"][0]["x"] = "expression"
+        self.assertNotEqual(judge_caddy_config.judge(good, BASE, TOKEN), "matcher-expression")
 
     def test_the_unchanged_text_is_accepted_through_the_program(self) -> None:
         done = subprocess.run(
@@ -874,6 +945,35 @@ class RealCaddyTests(unittest.TestCase):
         )
         # Caddy answered (the server was up), and what it said is not the file.
         self.assertEqual(served, "x")
+
+    def test_an_expression_matcher_adapts_with_the_token_path_once_and_is_refused_for_the_matcher(
+        self,
+    ) -> None:
+        # The path is built at run time from two strings, so the JSON holds one {file.: the
+        # issuer's. The placeholder count and the literal text check both pass it; the
+        # matcher is the only thing that shows it.
+        for name in ("file_oracle", "env_oracle", "plain", "in_route"):
+            with self.subTest(case=name):
+                text = CASES["handler_expression_" + name][0](self.good)
+                done = self.adapt(text)
+                self.assertEqual(done.returncode, 0, done.stderr[:300])
+                self.assertEqual(done.stdout.count("{file."), 1)
+                self.assertEqual(done.stdout.count("{env."), 0)
+                self.assertIn('"expression"', done.stdout)
+                self.assertEqual(
+                    judge_caddy_config.judge(json.loads(done.stdout), BASE, TOKEN),
+                    "matcher-expression",
+                )
+
+    def test_an_expression_matcher_leaks_the_token_a_prefix_at_a_time_from_real_caddy(self) -> None:
+        # The danger is real: a plain fetch tells a right guess of the token's start from a
+        # wrong one, on a Caddy that serves no file and holds no {file. but the issuer's. The
+        # judge before this change printed OK for this text, in both layers.
+        fake = "A-FAKE-TOKEN-" + uuid.uuid4().hex
+        right = self.serve_and_fetch(expression_file_oracle("A-FAKE"), "/", "/", fake)
+        wrong = self.serve_and_fetch(expression_file_oracle("Z-FAKE"), "/", "/", fake)
+        self.assertEqual((right, wrong), ("match", "nomatch"))
+        self.assertNotIn(fake, right + wrong)
 
     def test_the_program_accepts_the_real_good_config_and_refuses_the_real_bypasses(self) -> None:
         for name, (change, expected) in CASES.items():

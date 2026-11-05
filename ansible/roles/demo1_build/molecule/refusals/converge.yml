@@ -741,6 +741,23 @@
       adapted: handler_root_alone
       expect: 'REFUSED handler-root'
 
+# A CEL expression matcher builds the name of the placeholder it reads at run time, so the
+# config holds no second {file. and the placeholder count sees nothing. The matcher itself is
+# refused, in the text and in the adapted config.
+- name: Case refused_text_expression, refuse an expression matcher in the text
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8086 {\n\t@leak expression ph(req, \"fi\" + \"le./etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard\").startsWith(\"A\")\n\trespond @leak \"1\"\n}\n"
+      expect: 'REFUSED text-expression'
+
+- name: Case refused_handler_expression, refuse an adapted config whose matcher is an expression
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_expression_file_oracle
+      expect: 'REFUSED matcher-expression'
+
 # Caddy itself cannot adapt the text: the role does not judge a text Caddy rejects, and says
 # so without Caddy's message, which can echo a hostname.
 - name: Case refused_unadaptable_candidate, refuse a candidate Caddy cannot adapt
