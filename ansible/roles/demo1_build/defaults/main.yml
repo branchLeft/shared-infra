@@ -58,7 +58,8 @@ demo1_build_dns_token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcar
 
 # The Caddy image that judges the production candidate: the demo edge's image, with the
 # Hetzner DNS module, loaded on the host by the owner (the role never pulls). The role has
-# Caddy adapt the rendered Caddyfile in it and judges the config Caddy would run. Named by
-# its content, an image ID or a digest, so a re-pointed tag cannot change what judges.
+# Caddy adapt the rendered Caddyfile in it and judges the config Caddy would run. Pinned by
+# its digest, <name>@sha256:<64 hex digits> and nothing else, so a re-pointed tag cannot
+# change what judges; the role finds it by that digest and wants the digest in its RepoDigests.
 # Empty, the production candidate is not staged, and the plan and apply say so.
 demo1_build_caddy_image: ''

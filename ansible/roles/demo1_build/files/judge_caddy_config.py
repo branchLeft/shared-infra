@@ -5,12 +5,22 @@ adapt the candidate (`caddy adapt --adapter caddyfile`), and this program judges
 JSON that comes back, so whitespace, a brace on a line of its own, or any other
 spelling of the same Caddyfile cannot change the verdict.
 
+Two things the adapted JSON cannot show are judged on the raw candidate, before it is
+adapted. Caddy adapts with the environment and the filesystem of the judging container,
+which hold nothing; the edge runs with its own. A `{$NAME}` is replaced by the
+environment's value as the text is read, so it can bring in a whole site that the
+judging container never sees, and an `import` of a path brings in the files that match
+it, which in the judging container are none. Neither is spelled differently by being
+indented or broken across lines: both are fixed syntax of Caddy's lexer. The renderer
+emits neither, so the candidate may hold no `{$`, no `{env.`, no `{file.` but the DNS
+token reference, once, and no `import` but a snippet defined in the text.
+
 The config is read from the environment variable named by --env, because the command
 that runs this program is a script task and a script task has no standard input. The
 program prints one line and nothing else: OK, or REFUSED and a code. No line carries a
 hostname or any part of the config, as the config holds the slots' hostnames.
 
-Usage: judge_caddy_config.py --env NAME --base BASE --token-file PATH
+Usage: judge_caddy_config.py --env NAME --base BASE --token-file PATH [--what config|candidate]
 Exit status: 0 accepted, 1 refused.
 """
 
@@ -19,6 +29,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 
 REFUSALS = {
@@ -41,7 +52,17 @@ REFUSALS = {
     "routes": "The one server does not hold exactly one route, the wildcard site.",
     "route-keys": "The route holds a key beyond its match, handle and terminal.",
     "route-match": "The route does not match exactly the wildcard host.",
+    "placeholder": "The config holds a file or environment placeholder beyond the token reference.",
+    "text-env-var": "The candidate holds a {$ environment substitution.",
+    "text-env-placeholder": "The candidate holds an {env. placeholder.",
+    "text-file-placeholder": "The candidate holds a {file. placeholder beyond the token reference.",
+    "text-import": "The candidate imports something that is not a snippet defined in the text.",
 }
+
+PLACEHOLDER = re.compile(r"\{(?:file|env)\.")
+IMPORT_WORD = re.compile(r"\bimport\b")
+# An import of a snippet defined in the text: one bare name and nothing else on the line.
+IMPORT_LINE = re.compile(r"import[ \t]+([A-Za-z0-9_-]+)[ \t]*(?:\r?\n|\Z)")
 
 
 def internal_issuer_anywhere(node: object) -> bool:
@@ -52,6 +73,39 @@ def internal_issuer_anywhere(node: object) -> bool:
     if isinstance(node, list):
         return any(internal_issuer_anywhere(v) for v in node)
     return False
+
+
+def placeholders_in(node: object) -> int:
+    """Count the file and environment placeholders in every string, key or value."""
+    if isinstance(node, str):
+        return len(PLACEHOLDER.findall(node))
+    if isinstance(node, dict):
+        return sum(placeholders_in(k) + placeholders_in(v) for k, v in node.items())
+    if isinstance(node, list):
+        return sum(placeholders_in(v) for v in node)
+    return 0
+
+
+def judge_text(text: str, token_file: str) -> str | None:
+    """Return the code of the first refusal of the raw candidate, or None."""
+    if "{$" in text:
+        return "text-env-var"
+    if "{env." in text:
+        return "text-env-placeholder"
+    # The one token reference is the DNS directive's. A second {file. in a handler would
+    # have Caddy serve the token's contents. A text with no reference at all is left to the
+    # config check, which refuses an issuer that does not name the token file.
+    placeholders = text.count("{file.")
+    if placeholders > 1 or placeholders != text.count("{file." + token_file + "}"):
+        return "text-file-placeholder"
+    for found in IMPORT_WORD.finditer(text):
+        line = IMPORT_LINE.match(text, found.start())
+        if line is None:
+            return "text-import"
+        defined = rf"^[ \t]*\({re.escape(line.group(1))}\)[ \t]*\{{"
+        if re.search(defined, text, re.MULTILINE) is None:
+            return "text-import"
+    return None
 
 
 def judge(config: object, base: str, token_file: str) -> str | None:
@@ -118,6 +172,11 @@ def judge(config: object, base: str, token_file: str) -> str | None:
         return "route-keys"
     if route["match"] != [{"host": [wildcard]}] or route["terminal"] is not True:
         return "route-match"
+    # The token reference sits once in the config, in the issuer checked above. Any other
+    # placeholder is a handler that would read a file or the environment at run time, and
+    # a file placeholder in a response would serve the token.
+    if placeholders_in(config) != 1:
+        return "placeholder"
     return None
 
 
@@ -126,12 +185,16 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--env", required=True)
     parser.add_argument("--base", required=True)
     parser.add_argument("--token-file", required=True)
+    parser.add_argument("--what", choices=["config", "candidate"], default="config")
     args = parser.parse_args(argv)
-    try:
-        config = json.loads(os.environ.get(args.env, ""))
-    except ValueError:
-        config = None
-    code = judge(config, args.base, args.token_file)
+    if args.what == "candidate":
+        code = judge_text(os.environ.get(args.env, ""), args.token_file)
+    else:
+        try:
+            config = json.loads(os.environ.get(args.env, ""))
+        except ValueError:
+            config = None
+        code = judge(config, args.base, args.token_file)
     if code is None:
         print("OK")
         return 0

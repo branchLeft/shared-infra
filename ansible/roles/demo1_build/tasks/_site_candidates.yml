@@ -93,22 +93,45 @@
 - name: Look at the DNS token file the wildcard certificate is issued with
   ansible.builtin.include_tasks: _dns_token.yml
 
-# Whether the Caddy image that judges the candidate is loaded here. A read: it lists
-# the image and never pulls one. A host with no docker answers no.
+# Whether the Caddy image that judges the candidate is on this host, and is the pinned one.
+# Reads only: `docker image inspect` lists the image by the digest in its reference and
+# never pulls. A host with no docker, or without the image under that reference, answers
+# no, which is a stated skip. An image that is there and is not the pinned one is refused
+# below, because a different image under the same name would judge the candidate.
 - name: Look for the Caddy image that judges the candidate
   ansible.builtin.command:
-    argv: '{{ demo1_build_caddy_image_list_argv }}'
-  register: demo1_build_caddy_image_listed
+    argv: '{{ demo1_build_caddy_image_inspect_argv }}'
+  register: demo1_build_caddy_image_inspect
   changed_when: false
   check_mode: false
   failed_when: false
   when: demo1_build_caddy_image != ''
 
-- name: Note whether the Caddy image is loaded
+# Reset first (a register or fact set earlier in a run outlives its task), so a case or a
+# second pass never reads the last one's answer.
+- name: Forget what an earlier pass read of the image
   ansible.builtin.set_fact:
-    demo1_build_caddy_image_loaded: >-
-      {{ demo1_build_caddy_image != '' and demo1_build_caddy_image_listed.rc == 0
-      and (demo1_build_caddy_image_listed.stdout | trim | length) > 0 }}
+    demo1_build_caddy_image_listed: []
+    demo1_build_caddy_image_unreadable: false
+
+# docker prints a JSON list, one object per image, with the digests it knows the image by
+# in RepoDigests. Output that is not JSON is not guessed at: it counts as unreadable and
+# the digest check refuses it.
+- name: Read what docker lists for the image
+  when: demo1_build_caddy_image != '' and demo1_build_caddy_image_inspect.rc | default(1) == 0
+  block:
+    - name: Parse the listing
+      ansible.builtin.set_fact:
+        demo1_build_caddy_image_listed: '{{ demo1_build_caddy_image_inspect.stdout | from_json }}'
+  rescue:
+    - name: Note that the listing was not JSON
+      ansible.builtin.set_fact:
+        demo1_build_caddy_image_unreadable: true
+
+- name: Note whether the Caddy image is on the host and is the pinned one
+  ansible.builtin.set_fact:
+    demo1_build_caddy_image_loaded: "{{ demo1_build_caddy_image != '' and demo1_build_caddy_image_inspect.rc | default(1) == 0 }}"
+    demo1_build_caddy_image_verified: '{{ demo1_build_caddy_image_verified_template }}'
 
 # The notice of a candidate that is not staged on this run, and why. It is registered so
 # the scenarios can read that it was printed: a silent skip would read as a configured
@@ -135,6 +158,23 @@
 - name: Render, check and stage the production candidate
   when: demo1_build_candidate_skip_text == ''
   block:
+    # A name can be loaded with the wrong content. docker finds an image by the digest in the
+    # reference, but this reads the answer rather than trusting the exit code alone.
+    - name: Refuse to judge the candidate with an image that is not the pinned one
+      ansible.builtin.assert:
+        that:
+          - demo1_build_caddy_image_verified | bool
+        quiet: true
+        fail_msg: >-
+          The host holds something under {{ demo1_build_caddy_image }} that is not the pinned image.
+          docker must list exactly one image for that reference, and its RepoDigests must hold the
+          pinned digest {{ demo1_build_caddy_image.split('@') | last }}. RepoDigests is empty on an image
+          that was loaded into a Docker on the classic image store.
+          {{ 'The listing was not JSON.' if demo1_build_caddy_image_unreadable
+          else 'It listed ' ~ (demo1_build_caddy_image_listed | length) ~ ' image(s).' }}
+          The candidate was not judged. Load the image again from the pinned digest (README,
+          "How the Caddy image gets onto the host").
+
     - name: Render the one wildcard Caddyfile of every occupied slot with the pinned renderer, printing it and writing nothing
       ansible.builtin.command:
         argv: >-

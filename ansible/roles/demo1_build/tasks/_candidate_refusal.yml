@@ -9,6 +9,48 @@
 # JSON it prints, which is what Caddy would run, is judged by files/judge_caddy_config.py
 # (README, Design notes). Every task that holds the text or the JSON is hidden, and no
 # message carries either: both hold the slots' hostnames.
+#
+# Two things the JSON cannot show are judged on the text first. Caddy adapts with the
+# environment and the filesystem of the judging container, both empty, and the edge runs
+# with its own: a {$NAME} is replaced by the environment's value as the text is read, and
+# an import of a path brings in the files that match it, so either can add a site that the
+# judging container never sees. The text may hold neither, no {env. placeholder, and no
+# {file. placeholder but the one DNS token reference (a second would serve the token).
+# These are the lexer's fixed syntax, not spellings, so a test of the text is sound here.
+- name: Judge the candidate text for what its adapted config cannot show
+  ansible.builtin.script:
+    cmd: >-
+      {{ demo1_build_judge_script }} --env {{ demo1_build_judge_text_env }} --what candidate
+      --base {{ demo1_build_wildcard_base }} --token-file {{ demo1_build_dns_token_file }}
+    executable: /usr/bin/python3 -I
+  environment: '{{ {demo1_build_judge_text_env: demo1_build_candidate_text} }}'
+  register: demo1_build_text_judged
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  no_log: true
+  diff: false
+
+- name: Note the text verdict, a fixed line that holds no hostname
+  ansible.builtin.set_fact:
+    demo1_build_text_judged_ok: "{{ demo1_build_text_judged.rc == 0 and (demo1_build_text_judged.stdout | trim) == 'OK' }}"
+    demo1_build_text_judged_line: "{{ demo1_build_text_judged.stdout | default('') | trim }}"
+  no_log: true
+
+- name: Empty the registered text verdict
+  ansible.builtin.set_fact:
+    demo1_build_text_judged: {}
+  no_log: true
+
+- name: Refuse a candidate text that reads the environment, a file or another path
+  ansible.builtin.assert:
+    that:
+      - demo1_build_text_judged_ok | bool
+    quiet: true
+    fail_msg: >-
+      The candidate text is refused. {{ demo1_build_text_judged_line }}
+      It could add a site or serve a file when the edge runs, which the config adapted here cannot show.
+
 - name: Have Caddy adapt the candidate, printing the config it would run and writing nothing
   ansible.builtin.command:
     argv: '{{ demo1_build_caddy_adapt_argv }}'

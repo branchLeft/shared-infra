@@ -61,12 +61,12 @@
       The DNS token file path must be a file directly in /etc/branchleft/secrets, named with letters,
       digits, dot, underscore and hyphen.
 
-- name: Refuse a Caddy image that is not named by its content
+- name: Refuse a Caddy image that is not a name pinned by its digest
   ansible.builtin.assert:
     that:
       - demo1_build_caddy_image is string
       - demo1_build_caddy_image == '' or demo1_build_caddy_image is match(demo1_build_caddy_image_pattern)
     quiet: true
     fail_msg: >-
-      The Caddy image must be empty or named by its content: an image ID (sha256: and 64 hex digits)
-      or a registry name with @sha256: and 64 hex digits. A tag alone can be re-pointed.
+      The Caddy image must be empty or a name pinned by its digest: <name>@sha256: and 64 hex digits,
+      with no tag. A tag alone can be re-pointed, and an image ID is not found by a digest lookup.

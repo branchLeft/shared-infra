@@ -138,35 +138,40 @@
 
     # A stand-in for Docker and for the Caddy image, because the test container has no
     # Docker engine and no Caddy. The role asks docker two things: whether the Caddy image
-    # is loaded (`docker images --quiet IMAGE`), and for the config Caddy would run
-    # (`docker run ... caddy adapt`, the candidate on standard input). The stand-in answers
-    # the first for the one image ID the scenarios set, and answers the second with the file
+    # is on the host (`docker image inspect IMAGE`, which lists it with its RepoDigests), and
+    # for the config Caddy would run (`docker run ... caddy adapt`, the candidate on standard
+    # input). The script is files/standin-docker.sh, which says what it answers. It answers
+    # the first for the one image reference in its state directory, and the second with the file
     # /etc/stand-in-caddy-adapt.json whatever it is given. It adapts nothing, so what ties
     # these answers to real Caddy is tests/unit/test_caddy_judge.py: it adapts every case with
-    # real Caddy and requires the result to equal the recorded file this scenario replays. A
-    # case that wants another answer replaces that file; with no file, the stand-in fails as
-    # Caddy does on a Caddyfile it cannot adapt.
-    - name: Install a stand-in for docker that answers from recorded real-Caddy output
+    # real Caddy and requires the result to equal the recorded file this scenario replays, and
+    # it runs this script beside a real Docker, on both image stores, and requires the same
+    # answers to the calls the role makes. A case that wants another answer replaces that file
+    # or writes the state files; with no adapt file, the stand-in fails as Caddy does on a
+    # Caddyfile it cannot adapt.
+    - name: Install a stand-in for docker that answers from recorded real output
       ansible.builtin.copy:
-        content: |
-          #!/bin/sh
-          case "$1" in
-            images)
-              [ "$3" = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ] && echo 0123456789ab
-              exit 0
-              ;;
-            run)
-              cat > /dev/null
-              [ -f /etc/stand-in-caddy-adapt.json ] || { echo "stand-in caddy: cannot adapt" >&2; exit 1; }
-              cat /etc/stand-in-caddy-adapt.json
-              exit 0
-              ;;
-          esac
-          exit 1
+        src: '{{ playbook_dir }}/../default/files/standin-docker.sh'
         dest: /usr/bin/docker
         owner: root
         group: root
         mode: '0755'
+
+    - name: Make the stand-in docker's state directory
+      ansible.builtin.file:
+        path: /var/lib/standin-docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the demo edge's image on the stand-in host, under its digest
+      ansible.builtin.copy:
+        content: "demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        dest: /var/lib/standin-docker/images
+        owner: root
+        group: root
+        mode: '0644'
 
     - name: Record what real Caddy printed for the unchanged renderer output, as the stand-in's answer
       ansible.builtin.copy:

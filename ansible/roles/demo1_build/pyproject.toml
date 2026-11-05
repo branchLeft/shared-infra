@@ -24,3 +24,8 @@ ignore_missing_imports = true
 extend = "../../pyproject.toml"
 target-version = "py313"
 extend-exclude = ["files/ghost-platform"]
+
+[tool.ruff.lint.per-file-ignores]
+# Every subprocess call in this test runs a fixed argument list built from the test's own
+# paths and the role's own argument list, with no shell.
+"tests/unit/test_caddy_judge.py" = ["S603"]

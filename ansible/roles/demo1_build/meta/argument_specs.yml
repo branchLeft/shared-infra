@@ -116,12 +116,14 @@ argument_specs:
       demo1_build_caddy_image:
         type: str
         description: >-
-          The Caddy image that judges the production candidate, named by its
-          content: an image ID (sha256: and 64 hex digits) or a registry name
-          with @sha256: and 64 hex digits. It is the demo edge's image, Caddy
-          with the Hetzner DNS module, loaded on the host by the owner; the role
-          never pulls it. The role has Caddy adapt the rendered Caddyfile in it,
-          with no network and no writable filesystem, and judges the config
+          The Caddy image that judges the production candidate, pinned by its
+          digest: <name>@sha256: and 64 hex digits, with no tag and no image ID.
+          It is the demo edge's image, Caddy with the Hetzner DNS module, loaded on
+          the host by the owner with docker save and docker load; the role never
+          pulls it. The role finds it with docker image inspect and wants exactly
+          one image whose RepoDigests hold the pinned digest; an image that lists
+          anything else is refused. The role has Caddy adapt the rendered Caddyfile
+          in it, with no network and no writable filesystem, and judges the config
           Caddy would run: one wildcard server on port 443, one ACME issuer with
           the DNS-01 provider and the token file, and nothing else. Empty, or an
           image that is not loaded, the production candidate is not staged, and

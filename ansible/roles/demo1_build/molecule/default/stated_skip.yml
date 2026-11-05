@@ -9,6 +9,8 @@
   hosts: all
   gather_facts: false
   tags: [molecule-idempotence-notest]
+  vars:
+    converge_default_image: 'demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
   tasks:
     - name: Prove the production candidate is a stated skip and nothing is staged
       when: not ansible_check_mode
@@ -27,7 +29,7 @@
           vars:
             demo1_build_wildcard_base: '{{ converge_case.base }}'
             demo1_build_dns_token_file: '{{ converge_case.token_file }}'
-            demo1_build_caddy_image: "{{ converge_case.caddy_image | default('sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef') }}"
+            demo1_build_caddy_image: '{{ converge_case.caddy_image | default(converge_default_image) }}'
 
         - name: Assert the step printed the notice this case is for
           ansible.builtin.assert:

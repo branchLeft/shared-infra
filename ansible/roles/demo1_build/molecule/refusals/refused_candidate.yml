@@ -74,7 +74,7 @@
             tasks_from: _candidate_refusal.yml
           vars:
             demo1_build_wildcard_base: site-fixture.invalid
-            demo1_build_caddy_image: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+            demo1_build_caddy_image: 'demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
             demo1_build_candidate_text: '{{ converge_text }}'
 
         - name: Fail if a candidate the case must refuse was accepted

@@ -215,11 +215,14 @@ no secret: the one file that holds a secret is named by a path input and never r
   in `/etc/branchleft/secrets`, named with letters, digits, dot, underscore and
   hyphen. The role passes the path to the renderer as `dns hetzner {file.<path>}`.
 - `demo1_build_caddy_image`: the Caddy image that judges the candidate, empty by
-  default. Named by its content: an image ID (`sha256:` and 64 hex digits) or a registry
-  name with `@sha256:` and 64 hex digits. It is the demo edge's image (Caddy with the
-  Hetzner DNS module), loaded on the host by the owner; the role never pulls. Empty, or
-  an image that is not loaded (`docker images --quiet` lists nothing), the production
-  candidate is not staged and the plan and apply say so.
+  default. Pinned by its digest: `<name>@sha256:` and 64 hex digits, with no tag and no
+  image ID (the role refuses anything else). It is the demo edge's image (Caddy with the
+  Hetzner DNS module), carried onto the host by the owner ("How the Caddy image gets onto
+  the host"); the role never pulls. The role finds it with `docker image inspect` and
+  wants exactly one image whose `RepoDigests` hold the pinned digest. Empty, or an
+  image that docker does not find, the production candidate is not staged and the plan
+  and apply say so. An image that docker finds and that lists anything else (no digests,
+  another digest, two images, output that is not JSON) is refused.
 
 `vars/main.yml` holds the constants (paths, accounts, uids, patterns). A caller
 cannot override them.
@@ -240,14 +243,19 @@ edge input. When one of those is missing the run completes with a stated skip, n
 failure, and prints the first that applies, in this order, each starting "Production
 candidate NOT staged:":
 
-| Reason                                           | Words that follow                                                           |
-| ------------------------------------------------ | --------------------------------------------------------------------------- |
-| The wildcard base is empty                       | the wildcard base (demo1_build_wildcard_base) is not set                    |
-| No token file at the token path                  | no DNS token file is placed at the path                                     |
-| No Caddy image is set                            | no Caddy image (demo1_build_caddy_image) is set to judge the candidate with |
-| The Caddy image is not loaded on the host        | the Caddy image (demo1_build_caddy_image) is not loaded on this host        |
-| No renderer staged (a check run on a fresh host) | the pinned site renderer is not staged on this host                         |
-| No slot has an owner-placed edge input           | no slot has an owner-placed edge JSON                                       |
+| Reason                                           | Words that follow                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| The wildcard base is empty                       | the wildcard base (demo1_build_wildcard_base) is not set                              |
+| No token file at the token path                  | no DNS token file is placed at the path                                               |
+| No Caddy image is set                            | no Caddy image (demo1_build_caddy_image) is set to judge the candidate with           |
+| The Caddy image is not on the host, by digest    | the Caddy image (demo1_build_caddy_image) is not loaded on this host under its digest |
+| No renderer staged (a check run on a fresh host) | the pinned site renderer is not staged on this host                                   |
+| No slot has an owner-placed edge input           | no slot has an owner-placed edge JSON                                                 |
+
+A Caddy image that docker finds and that is not the pinned one is a refusal, not a skip: it
+names the pinned digest and what docker listed, before the renderer runs. A host that has
+the image on the classic image store lands here or in the skip above, never in a pass
+("How the Caddy image gets onto the host").
 
 A token file that is there and is not right is refused, each in its own check, and
 the message names the path and never a value: it is a link, it is not a regular file,
@@ -266,26 +274,41 @@ site, or an `internal` issuer in the global block all get past it, and Caddy ser
 each. So the role asks Caddy. `_candidate_refusal.yml` runs, as root and before the
 text is staged:
 
-1. `docker run --rm -i --pull never --network none --read-only --cap-drop ALL
+1. `files/judge_caddy_config.py --what candidate` on the text, before Caddy sees it. Caddy
+   adapts with the environment and the filesystem of the judging container, which hold
+   nothing, and the edge runs with its own, so the JSON cannot show two things: a
+   `{$NAME}`, which Caddy replaces with the environment's value as it reads the text and
+   which can bring in a whole extra site, and an `import` of a path, which brings in
+   whatever files match it (none, in the judging container). Both are fixed syntax of
+   Caddy's lexer, so a test of the text is sound here and not a test of one spelling. The
+   text is refused if it holds `{$`, an `{env.` placeholder, a `{file.` placeholder other
+   than the DNS token reference, which may occur once (a handler with a second one serves
+   the token), or an
+   `import` that is not `import <name>` of a snippet the text defines (Caddy reads any
+   other name as a file). The renderer emits none of these.
+2. `docker run --rm -i --pull never --network none --read-only --cap-drop ALL
 --cap-add NET_BIND_SERVICE ... <demo1_build_caddy_image> caddy adapt --adapter
 caddyfile --config -`, the candidate on standard input. Nothing is pulled, started
    as a server or written. Caddy refusing the text is a refusal.
-2. `files/judge_caddy_config.py` on the JSON Caddy printed, which is what Caddy would
+3. `files/judge_caddy_config.py` on the JSON Caddy printed, which is what Caddy would
    run. It accepts only: the admin endpoint off; the `http` and `tls` apps and no
    other (`pki` is where `skip_install_trust` shows); one server, listening on `:443`
    alone (a plain-HTTP site is a server on `:80`), with one route whose host matcher
    is `*.<base>` and no other key (`auto_https` options show as keys); one TLS
    automation policy, for the subject `*.<base>` alone, with one issuer that is ACME
    with exactly the DNS-01 provider `hetzner` and the token file reference
-   `{file.<token path>}`; and no `internal` issuer anywhere in the JSON. It prints one
-   line, `OK` or `REFUSED <code>: <reason>`, that holds no hostname.
+   `{file.<token path>}`; no `internal` issuer anywhere in the JSON; and no other
+   `{file.` or `{env.` placeholder anywhere in it, in a key or a value (the reference
+   in the issuer is the only one). Adapting does not resolve a placeholder, so a
+   handler that answers with the token file keeps its placeholder in the JSON. It prints
+   one line, `OK` or `REFUSED <code>: <reason>`, that holds no hostname.
 
 The judge takes the JSON in its environment, because a script task has no standard
 input. Both steps are hidden (`no_log`, ANS-16), and the registered results are emptied.
 
 The Caddy image is a role input because demo1 runs no Caddy of its own and the owner
 loads the demo edge's image onto it (an image that must not be pulled from a registry).
-Until it is set and loaded the candidate is not staged. This is the point of the
+Until it is set and found on the host the candidate is not staged. This is the point of the
 check: a judge that cannot ask Caddy would have to read the text.
 
 `tests/unit/test_caddy_judge.py` is the proof. It builds the demo edge's Caddy (2.11.4
@@ -293,13 +316,88 @@ with the Hetzner DNS module, the pins of ghost-platform's `services/demo-edge`),
 the candidate with the real vendored renderer, applies each bypass to it (the three
 indentation spellings, the closing-brace spelling, a plain-HTTP site, `tls internal` in
 the site, `cert_issuer internal`, `local_certs`, `skip_install_trust`, `auto_https`
-options, a custom ACME CA, certificate files, a token from the environment), adapts each
-with the role's own argument list and judges it. Each result must equal the JSON recorded
-in `tests/unit/fixtures/`. The Molecule scenarios replay those recorded files through a
-stand-in for docker, so the refusals' messages and the nothing-staged check are tested
-in the container and the recorded files are tied to real Caddy by that unit test.
+options, a custom ACME CA, certificate files, a token from the environment, a handler that
+answers with the token file or an environment value), adapts each with the role's own
+argument list and judges it. Each result must equal the JSON recorded in
+`tests/unit/fixtures/`. For the refusals of the raw text it adapts each with real Caddy and
+shows the hole: with the environment value or the files the edge would have, the same
+text adds a second server, while adapted alone it gives one server the judge accepts. The
+Molecule scenarios replay those recorded files through a stand-in for docker, so the
+refusals' messages and the nothing-staged check are tested in the container and the
+recorded files are tied to real Caddy by that unit test.
+
+The same test file proves the image check against a real Docker on both image stores. It
+starts two throwaway Docker-in-Docker daemons with no network (pinned by digest), one on
+the classic image store and one on the containerd image store, makes an image in the
+second, carries it with `docker save` and `docker load` as the owner does, and runs the
+role's own `docker image inspect` argument list and its own RepoDigests test (both rendered
+from `vars/main.yml`) in each. It also runs the Molecule stand-in for docker
+(`molecule/default/files/standin-docker.sh`) beside the real one and requires the same
+answers to the calls the role makes, so the stand-in can no longer pass where a host would
+not. A runner with no Docker fails these tests.
 `DEMO1_BUILD_RECORD=1` rewrites the fixtures after a Caddy or renderer change (run
 Prettier on them afterwards; the test compares the JSON, not the text).
+
+### How the Caddy image gets onto the host
+
+**The route: a one-off carry by the owner, then a check by digest.** The host has no route
+to a registry and its egress allowlist holds the package mirrors only, so it never pulls
+the image. The owner pulls the pinned image on a workstation, anonymously (the package is
+public, so there is no login), checks the digest there, tags it with the name of the pin,
+and streams `docker save` into `docker load` on demo1 over the edge1 jump that every other
+bootstrap step uses. The host opens no connection and its allowlist is not touched. This is
+the route the spool role's image takes (`demo1_egress_spool`), and the commands are in the
+demo1 bootstrap runbook as owner steps, and only there: this README does not copy them, so
+there is one home for them. The owner steps are:
+
+1. Pull the pinned image by its digest on the workstation, for `linux/amd64` (a workstation
+   may be arm64; demo1 is amd64).
+2. Read the digest of what arrived and compare it with the digest in
+   `demo1_build_caddy_image`. They must be equal, or the carry stops.
+3. Tag the image with the name part of the pin.
+4. `docker save` the tag, with no platform flag, into `docker load` on demo1.
+5. On demo1, `docker image inspect <name>@sha256:<digest>` must list one image whose
+   `RepoDigests` hold the digest. This is the check the role makes before it uses the image.
+
+**What the trust rests on.** The digest in `demo1_build_caddy_image`, which is in the signed
+commit. The workstation is only a carrier. The check on demo1 is made again from what is on
+demo1, and the role makes it a last time before it judges anything: it asks docker for the
+image by the pinned reference, wants exactly one image back, and wants the pinned digest in
+its `RepoDigests`.
+
+**Observed with a real Docker (29.8.2 on the workstation, 27.5 in the throwaway daemons),
+each store.** They fix the steps, so they are named here:
+
+- On the containerd image store, a save by tag then a load keeps the digest. The loaded image
+  is found by `name@sha256:<digest>` and lists that reference in `RepoDigests`.
+- On the classic image store, the same carry gives an image with a different ID, found by its
+  tag with an empty `RepoDigests`, and `docker image inspect name@sha256:<digest>` exits 1,
+  "No such image". The role sees an image that is not there and states a skip. The owner reads
+  the store on both ends first (`docker info`, "Storage Driver" or "driver-type"), and the
+  carry is for the containerd image store.
+- `docker images --quiet <reference>` prints nothing for a digest reference on either store,
+  whether the image is loaded or not, because its argument is a repository filter. The role
+  does not use it, and a test holds that it would have found nothing.
+- A wrong digest under the right name is not found: `docker image inspect` exits 1.
+
+The traps of the spool image's carry apply unchanged, because the steps are the same: a
+save by a digest reference carries no name, `docker save --platform` changes the digest, and
+a tar with a changed layer loads with exit 0 and fails only when a container is created from
+it. The image is not run by the role beyond `caddy adapt`, which fails on such an image.
+
+**Limits, named:**
+
+- **The demo edge's image is not published yet.** Nothing pushes it to a registry, so
+  there is no digest to pin and nothing for the owner to pull. Until the image exists at a
+  digest, `demo1_build_caddy_image` stays empty and the candidate is a stated skip. Where
+  and how it is built, and for `linux/amd64` from an arm64 workstation, are decided with
+  that publication, not here.
+- **The carry is a bootstrap route.** A new digest needs the same steps again.
+- **It fails closed on a classic image store**, as above: the role finds no image and stages
+  nothing.
+- **The role proves identity, not completeness.** A half-loaded image is found by
+  `docker image inspect`; `caddy adapt` is what fails on it, and the role then refuses the
+  candidate as one Caddy could not adapt.
 
 ### The pin
 
@@ -734,8 +832,17 @@ prepared grant back in every outcome. Each expects the refusal named in its case
   `refused_global_local_certs`, `refused_global_skip_install_trust`,
   `refused_global_auto_https_off`, `refused_indented_http_site`,
   `refused_indented_slot_site`, `refused_closing_brace_site`, `refused_http_only_site`
-  and `refused_unadaptable_candidate`, each failing with its own code and no hostname.
-  The control is the text unchanged, accepted.
+  and `refused_unadaptable_candidate`, each failing with its own code and no hostname,
+  and the refusals of the raw text, `refused_env_substitution`,
+  `refused_env_placeholder`, `refused_second_file_placeholder`, `refused_import_of_a_path`
+  and `refused_import_of_an_undefined_name`, which are refused before Caddy is asked,
+  and `refused_handler_serves_the_token`, which is the JSON of a handler that answers
+  with the token file. The control is the text unchanged, accepted;
+- the refusal of the Caddy image the host holds (`refused_image.yml`), with docker a
+  stand-in that lists what the case says: `refused_image_no_digests` (what a loaded image
+  lists on the classic store), `refused_image_other_digest`, `refused_image_two_images`
+  and `refused_image_not_json`, each failing before the renderer runs and staging
+  nothing. The control lists the pinned digest and stages the root-only candidate.
 
 What `refusals` cannot see is an install, since it never applies the role. It
 also cannot stage a stand-in for the generator: the real one is staged through
@@ -904,8 +1011,10 @@ other unit tests of `ansible/harness`.
   the new file unread by systemd. The next run finds nothing changed and does not
   reload, so the file is read at the next reload from any source (another role, a
   boot). Every file is written atomically, so none is ever half-written.
-- Python unit tests, if any are added under `roles/*/tests`, are not run by CI.
-  The Molecule scenario carries the controls.
+- The Python unit tests in `tests/unit` run in the Ansible workflow's lint job
+  (`ansible/checks/run_role_unit_tests.sh`), and need Docker (real Caddy, and the
+  throwaway daemons of the image check). The Molecule scenarios carry the controls that
+  need the role applied.
 - CI runs both scenarios: the Ansible workflow runs one job per scenario of every
   directory under `ansible/roles/` (`ansible/harness/list_shards.py` lists them),
   and this role's shards are `demo1_build` and `demo1_build (refusals)`.
