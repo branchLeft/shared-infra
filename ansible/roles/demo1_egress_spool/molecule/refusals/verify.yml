@@ -139,11 +139,19 @@
       loop:
         - /var/lib/standin-docker/port.txt
         - /etc/standin-drain-stub.env
+        - /var/lib/standin-docker/image-count
       register: demo1_egress_spool_verify_standin
+
+    - name: Look for a digest list a case left behind for the stand-in docker
+      ansible.builtin.stat:
+        path: /var/lib/standin-docker/image-digests
+      register: demo1_egress_spool_verify_digests
 
     - name: Assert the stand-ins are back to the healthy spool
       ansible.builtin.assert:
         that:
+          - (demo1_egress_spool_verify_standin.results[2].content | b64decode) == "count=1\n"
+          - not demo1_egress_spool_verify_digests.stat.exists
           - (demo1_egress_spool_verify_standin.results[0].content | b64decode) == "8081/tcp -> 127.0.0.1:8095\n"
           - (demo1_egress_spool_verify_standin.results[1].content | b64decode) == "STUB_BIND=127.0.0.1\nSTUB_OPEN=0\n"
         quiet: true
