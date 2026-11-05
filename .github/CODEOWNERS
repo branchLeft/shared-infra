@@ -86,6 +86,8 @@
 /ansible/roles/control_plane_db/         @branchLeft/branchleft-admin
 # mail_reconcilers creates the mail host's submission credentials and installs its programs from mail/, which is the owner's, so the whole role is the owner's to review.
 /ansible/roles/mail_reconcilers/         @branchLeft/branchleft-admin
+# safety_channel_key generates the content-safety channel's signing key on ops1 as root and publishes its public half, so the whole role is the owner's to review.
+/ansible/roles/safety_channel_key/       @branchLeft/branchleft-admin
 # Each host's trusted signer list is the trust anchor of the pull. An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root. The reusable gated apply exists in branchLeft/github-workflows, but nothing here calls it, so no gate on a role edit is wired.
 /ansible/trust/                          @branchLeft/branchleft-admin
 
