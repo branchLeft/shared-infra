@@ -214,9 +214,13 @@ no secret: the one file that holds a secret is named by a path input and never r
   `/etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard`. It must be a file directly
   in `/etc/branchleft/secrets`, named with letters, digits, dot, underscore and
   hyphen. The role passes the path to the renderer as `dns hetzner {file.<path>}`.
-- `demo1_build_caddy_image`: the Caddy image that judges the candidate, empty by
-  default. Pinned by its digest: `<name>@sha256:` and 64 hex digits, with no tag and no
-  image ID (the role refuses anything else). It is the demo edge's image (Caddy with the
+- `demo1_build_caddy_image`: the Caddy image that judges the candidate, by default the
+  demo edge's published image at its digest. Pinned by its digest: `<name>@sha256:` and 64
+  hex digits, with no tag and no image ID (the role refuses anything else). The default's
+  name, `demo-edge`, is only the host's own label: the owner tags the carried image with it,
+  and the role names no registry, because demo1 reaches none (a test holds the tasks,
+  defaults and vars of every role demo1 applies free of `ghcr.io`). The digest is the
+  published image's. It is the demo edge's image (Caddy with the
   Hetzner DNS module), carried onto the host by the owner ("How the Caddy image gets onto
   the host"); the role never pulls. The role finds it with `docker image inspect` and
   wants exactly one image whose `RepoDigests` hold the pinned digest. Empty, or an
@@ -370,11 +374,13 @@ the route the spool role's image takes (`demo1_egress_spool`), and the commands 
 demo1 bootstrap runbook as owner steps, and only there: this README does not copy them, so
 there is one home for them. The owner steps are:
 
-1. Pull the pinned image by its digest on the workstation, for `linux/amd64` (a workstation
-   may be arm64; demo1 is amd64).
+1. Pull the published image by the pinned digest on the workstation, from the registry that
+   holds it (the demo bootstrap runbook names it; the role does not), for `linux/amd64` (a
+   workstation may be arm64; demo1 is amd64).
 2. Read the digest of what arrived and compare it with the digest in
    `demo1_build_caddy_image`. They must be equal, or the carry stops.
-3. Tag the image with the name part of the pin.
+3. Tag the image with the name part of the pin (`demo-edge`), whatever registry name it was
+   pulled under.
 4. `docker save` the tag, with no platform flag, into `docker load` on demo1.
 5. On demo1, `docker image inspect <name>@sha256:<digest>` must list one image whose
    `RepoDigests` hold the digest. This is the check the role makes before it uses the image.
@@ -407,11 +413,9 @@ it. The image is not run by the role beyond `caddy adapt`, which fails on such a
 
 **Limits, named:**
 
-- **The demo edge's image is not published yet.** Nothing pushes it to a registry, so
-  there is no digest to pin and nothing for the owner to pull. Until the image exists at a
-  digest, `demo1_build_caddy_image` stays empty and the candidate is a stated skip. Where
-  and how it is built, and for `linux/amd64` from an arm64 workstation, are decided with
-  that publication, not here.
+- **The pin is the digest of one published image.** A new build of the demo edge is a new
+  digest in `demo1_build_caddy_image` and the same carry again; until then the host holds
+  the old image and judges with it. A host the image was not carried to states a skip.
 - **The carry is a bootstrap route.** A new digest needs the same steps again.
 - **It fails closed on a classic image store**, as above: the role finds no image and stages
   nothing.
