@@ -54,3 +54,13 @@ demo1_build_slot_names: "{{ broker_deploy_slot_names | default(['0', '1', '2', '
 # The slot wrapper's install path, which the sudoers grant names. Follows
 # broker_deploy_wrapper_path when the host's variables set it.
 demo1_build_wrapper_path: "{{ broker_deploy_wrapper_path | default('/usr/local/sbin/branchleft-slot') }}"
+
+# The base domain of the demo's one wildcard site (*.<base>): every demo hostname is one
+# label below it. Empty turns the production candidate off, and the plan and apply say
+# so. Lower-case, at least two labels, no wildcard character.
+demo1_build_wildcard_base: ''
+
+# The root-only file the owner places once, holding the DNS-01 token of the demo's own
+# DNS project. The role never reads it: it only looks at the file's owner and mode, and
+# gives Caddy the path. A file directly in /etc/branchleft/secrets.
+demo1_build_dns_token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard

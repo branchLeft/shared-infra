@@ -81,16 +81,57 @@ demo1_build_compose_template_dest: /etc/systemd/system/branchleft-compose@.servi
 demo1_build_candidate_dir: /var/lib/branchleft/demo-candidates
 demo1_build_candidate_edge: /var/lib/branchleft/demo-candidates/edge-upstreams.caddy
 
-# The owner's edge input for each slot, and the site candidate the pinned site renderer
-# makes from it. {slot} is the slot number. The input is the owner's to place, as root;
-# the role only reads its shape, and the renderer reads its content. A slot with no input
-# gets no candidate, and the plan and apply say so with the notice below.
+# The owner's edge input for each slot. {slot} is the slot number. The input is the
+# owner's to place, as root; the role only reads its shape, and the renderer reads its
+# content. A slot with no input is not in the production candidate, and the plan and
+# apply say so with the notice below.
 demo1_build_site_edge_input: '{{ demo1_build_config_dir }}/demo-{slot}.edge.json'
-demo1_build_site_candidate: '/var/lib/branchleft/demo-candidates/site-{slot}.caddy'
 demo1_build_site_not_rendered_text: 'Site candidate for slot {slot} NOT rendered: no owner-placed edge JSON'
 demo1_build_site_unstaged_text: >-
   Site candidate for slot {slot} NOT rendered: the pinned site renderer is not staged on this host
   (check mode, first plan)
+
+# The production candidate: the one Caddyfile the pinned site renderer prints for every
+# occupied slot, under the single wildcard site. What the renderer prints is what is staged.
+demo1_build_candidate_caddyfile: /var/lib/branchleft/demo-candidates/Caddyfile
+
+# The one TLS source the role gives the renderer: Caddy's DNS-01 module reads the token
+# from this file when it runs. The role passes the path and never the token.
+demo1_build_dns_directive: "{{ 'dns hetzner {file.' ~ demo1_build_dns_token_file ~ '}' }}"
+demo1_build_wildcard_site_line: "{{ '*.' ~ demo1_build_wildcard_base ~ ' {' }}"
+
+# The renderer's flags for the occupied slots: one --site SLOT=EDGE_JSON each.
+demo1_build_site_render_flags: |-
+  {%- set out = [] -%}
+  {%- for slot in demo1_build_site_occupied -%}
+  {%- set _ = out.extend(['--site', slot ~ '=' ~ (demo1_build_site_edge_input | replace('{slot}', slot))]) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# The stated skips of the production candidate. Each starts with the same words, so a
+# plan and an apply say plainly that nothing was staged and why.
+demo1_build_wildcard_unset_text: 'Production candidate NOT staged: the wildcard base (demo1_build_wildcard_base) is not set'
+demo1_build_no_occupied_text: 'Production candidate NOT staged: no slot has an owner-placed edge JSON'
+demo1_build_candidate_unstaged_text: >-
+  Production candidate NOT staged: the pinned site renderer is not staged on this host
+  (check mode, first plan)
+
+# What the rendered text is refused for (_candidate_refusal.yml). Each pattern is held
+# apart so a case can show its own refusal. The renderer prints nothing of these.
+demo1_build_tls_internal_pattern: '(?i)tls\s+internal'
+demo1_build_local_certs_pattern: '(?i)local_certs'
+demo1_build_skip_install_trust_pattern: '(?i)skip_install_trust'
+demo1_build_tls_line_pattern: '(?mi)^[ \t]*tls(?:[ \t]|$)'
+demo1_build_tls_block_pattern: >-
+  (?m)^[ \t]*tls[ \t]*\{[ \t]*\n[ \t]*{{ demo1_build_dns_directive | regex_escape }}[ \t]*\n[ \t]*\}[ \t]*$
+# A line in column 0 that is not a comment or a closing brace opens a top-level block or
+# is a stray site address. The global options block and a snippet are the two that are
+# not a site; every other one must be the wildcard site and nothing else.
+demo1_build_top_level_line_pattern: '(?m)^[^\s#}].*$'
+demo1_build_snippet_line_pattern: '^\(.+\) \{$'
+demo1_build_candidate_site_lines: >-
+  {{ demo1_build_candidate_text | regex_findall(demo1_build_top_level_line_pattern)
+  | reject('equalto', '{') | reject('match', demo1_build_snippet_line_pattern) | list }}
 
 # The programs placed outside the release directory. The wrapper is the only
 # one the sudoers grant names, and the only one run directly as a program.

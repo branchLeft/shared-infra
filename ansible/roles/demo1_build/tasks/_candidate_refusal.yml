@@ -1,0 +1,53 @@
+---
+# Internal to the role, included from _site_candidates.yml with the renderer's text in
+# demo1_build_candidate_text, before the text is staged anywhere. The demo's one
+# certificate is the wildcard Caddy obtains by DNS-01; there is no interim certificate
+# mode, so a text that holds a local CA, a self-signed issuer or a second site is
+# refused, whatever produced it.
+#
+# Each check is its own assert, in this order, so a case can name the one that fired.
+# No message names a hostname and none carries the text: the text can echo one, so an
+# assert here never interpolates it.
+- name: Refuse a candidate that asks for the internal certificate authority
+  ansible.builtin.assert:
+    that:
+      - demo1_build_candidate_text is not search(demo1_build_tls_internal_pattern)
+    quiet: true
+    fail_msg: The candidate holds a tls internal directive. There is no interim certificate mode.
+
+- name: Refuse a candidate that asks for local certificates
+  ansible.builtin.assert:
+    that:
+      - demo1_build_candidate_text is not search(demo1_build_local_certs_pattern)
+    quiet: true
+    fail_msg: The candidate holds a local_certs option. There is no interim certificate mode.
+
+- name: Refuse a candidate that skips the trust install of a local authority
+  ansible.builtin.assert:
+    that:
+      - demo1_build_candidate_text is not search(demo1_build_skip_install_trust_pattern)
+    quiet: true
+    fail_msg: The candidate holds a skip_install_trust option. There is no interim certificate mode.
+
+- name: Refuse a candidate that does not hold exactly one tls directive
+  ansible.builtin.assert:
+    that:
+      - demo1_build_candidate_text | regex_findall(demo1_build_tls_line_pattern) | length == 1
+    quiet: true
+    fail_msg: The candidate must hold exactly one tls directive, the wildcard site's.
+
+- name: Refuse a candidate whose one tls directive is not the DNS-01 block with the role's directive
+  ansible.builtin.assert:
+    that:
+      - demo1_build_candidate_text | regex_findall(demo1_build_tls_block_pattern) | length == 1
+    quiet: true
+    fail_msg: >-
+      The candidate's tls directive must be a block that holds the role's DNS directive line
+      and nothing else.
+
+- name: Refuse a candidate that holds any site but the one wildcard site
+  ansible.builtin.assert:
+    that:
+      - demo1_build_candidate_site_lines == [demo1_build_wildcard_site_line]
+    quiet: true
+    fail_msg: The candidate must hold exactly one site, the wildcard site of the base, and no other.

@@ -1,7 +1,7 @@
 ---
-# Internal to the role. Renders the demo edge's upstream fragment, and each
-# occupied slot's site block (_site_candidates.yml), into candidate files for the
-# owner, and nowhere else. The role never writes the file the edge reads, never
+# Internal to the role. Renders the demo edge's upstream fragment, and the one
+# wildcard Caddyfile of every occupied slot (_site_candidates.yml), into candidate
+# files for the owner, and nowhere else. The role never writes the file the edge reads, never
 # runs the go-live step, and never runs a slot reset: opening the demo to visitors
 # is the owner's decision, made by the pinned go-live program, which refuses while
 # a test stand-in is loaded.
@@ -54,8 +54,8 @@
     - demo1_build_release_ready | bool
     - demo1_build_candidate_dir_stat.stat.exists
 
-# The owner's site candidates. Each is the pinned site renderer's output for an
-# edge input the owner placed for that slot; a slot without one is named as not
-# rendered. See _site_candidates.yml.
-- name: Stage the site candidate of each slot the owner has an edge input for
+# The production candidate. It is the pinned site renderer's output for the edge
+# inputs the owner placed; a slot without one is named as not rendered. See
+# _site_candidates.yml.
+- name: Stage the production candidate of every slot the owner has an edge input for
   ansible.builtin.include_tasks: _site_candidates.yml

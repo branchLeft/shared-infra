@@ -1,20 +1,20 @@
 ---
-# Internal to the role, included once from _candidate.yml. For each slot the owner
-# has placed an edge input for, the pinned site renderer turns that input into the
-# slot's gated site block, and the role stages the block as a root-only candidate
-# for the owner to diff against the live edge.
+# Internal to the role, included once from _candidate.yml. The pinned site renderer
+# turns the edge inputs the owner has placed, one for each occupied slot, into one
+# Caddyfile: a single wildcard site with a host matcher per slot. The role stages it
+# as a root-only candidate for the owner to diff against the live edge.
 #
-# The input is the owner's, at a fixed path that only root can write (vars/main.yml).
-# The role never makes it and never reads a value from it: the renderer reads the
+# The inputs are the owner's, at fixed paths that only root can write (vars/main.yml).
+# The role never makes them and never reads a value from them: the renderer reads each
 # file itself. Every task that handles the renderer's output is hidden (no_log and
 # diff: false, ANS-16), and no failure message carries that output, because the
-# output can echo the hostname.
+# output can echo a hostname.
 #
-# A slot with no input gets no candidate. That is a stated skip (ANS-10), not a
-# pass: the plan and the apply each print a line that says so, and
-# demo1_build_site_not_rendered names the slots. The renderer is run with no output
-# flag, so it writes nothing. The role never passes it --gate-env-out (that writes),
-# never writes the live edge, and never runs the go-live step.
+# A candidate that is not staged is a stated skip (ANS-10), not a pass: the plan and
+# the apply each print a line that says so, and demo1_build_site_not_rendered names
+# the slots with no input. The renderer is run with no output flag, so it writes
+# nothing. The role never passes it --gate-env-out (that writes), never writes the
+# live edge, and never runs the go-live step.
 
 - name: Look at the candidate directory _candidate.yml declared
   ansible.builtin.stat:
@@ -97,85 +97,86 @@
   register: demo1_build_site_unstaged_notices
   when: not (demo1_build_release_ready | default(false) | bool)
 
-# The renderer prints the whole Caddyfile for one slot, hostname included, so it is
-# run with no output flag (a read) and its output is hidden. failed_when is off: a
-# refusal is handled below by slot number, so its message, which can echo the
-# hostname, is never printed.
-- name: Render, check and stage the site candidate of each occupied slot
+# The notice of a candidate that is not staged on this run, and why. It is registered so
+# the scenarios can read that it was printed: a silent skip would read as a configured
+# host. The checks run in this order, and the first that applies is the one named.
+- name: Work out why the production candidate is not staged, if it is not
+  ansible.builtin.set_fact:
+    demo1_build_candidate_skip_text: >-
+      {{ demo1_build_wildcard_unset_text if demo1_build_wildcard_base == ''
+      else (demo1_build_candidate_unstaged_text if not (demo1_build_release_ready | default(false) | bool)
+      else (demo1_build_no_occupied_text if demo1_build_site_occupied | length == 0 else '')) }}
+
+- name: Say why the production candidate is not staged
+  ansible.builtin.debug:
+    msg: '{{ demo1_build_candidate_skip_text }}'
+  register: demo1_build_candidate_notice
+  when: demo1_build_candidate_skip_text != ''
+
+# The renderer prints the whole Caddyfile, hostnames included, so it is run with no
+# output flag (a read) and its output is hidden. failed_when is off: a refusal is
+# handled below, so its message, which can echo a hostname, is never printed.
+- name: Render, check and stage the production candidate
+  when: demo1_build_candidate_skip_text == ''
   block:
-    - name: Render the site block of each occupied slot with the pinned renderer, printing it and writing nothing
+    - name: Render the one wildcard Caddyfile of every occupied slot with the pinned renderer, printing it and writing nothing
       ansible.builtin.command:
         argv: >-
           {{ [demo1_build_python] + demo1_build_python_flags
-          + [demo1_build_provision_dir ~ '/render_demo_site.py', '--slot', item,
-          '--edge-json', demo1_build_site_edge_input | replace('{slot}', item)] }}
-      register: demo1_build_site_renders
-      loop: '{{ demo1_build_site_occupied }}'
-      loop_control:
-        label: '{{ item }}'
+          + [demo1_build_provision_dir ~ '/render_demo_site.py', '--base', demo1_build_wildcard_base]
+          + demo1_build_site_render_flags
+          + ['--dns-directive', demo1_build_dns_directive] }}
+      register: demo1_build_wildcard_render
       changed_when: false
       check_mode: false
       failed_when: false
       no_log: true
       diff: false
-      when: demo1_build_release_ready | default(false) | bool
 
-    # The list holds slot numbers only. A slot is named when its renderer exited with
-    # an error or printed nothing.
-    - name: Note the slots whose renderer refused its input, by slot number only
+    - name: Note whether the renderer refused its inputs, without its message
       ansible.builtin.set_fact:
-        demo1_build_site_refused: |-
-          {%- set ns = namespace(out=[]) -%}
-          {%- for r in demo1_build_site_renders.results | default([]) -%}
-          {%- if not (r.skipped | default(false)) -%}
-          {%- if (r.rc | default(1)) != 0 or (r.stdout | default('') | length) == 0 -%}
-          {%- set _ = ns.out.append(r.item) -%}
-          {%- endif -%}
-          {%- endif -%}
-          {%- endfor -%}
-          {{ ns.out }}
+        demo1_build_wildcard_refused: '{{ demo1_build_wildcard_render.rc != 0 or (demo1_build_wildcard_render.stdout | length) == 0 }}'
       no_log: true
-      when: demo1_build_release_ready | default(false) | bool
 
-    - name: Refuse when the renderer refused the input of a slot, without its message
+    - name: Refuse when the renderer refused its inputs, without its message
       ansible.builtin.assert:
         that:
-          - demo1_build_site_refused | length == 0
+          - not (demo1_build_wildcard_refused | bool)
         quiet: true
         fail_msg: >-
-          The pinned site renderer refused the edge input of slot(s) {{ demo1_build_site_refused | join(', ') }}.
-          Its message is withheld, because it can echo the hostname (ANS-16). Check each input against
-          render-core's EdgeSiteBlock.
-      when: demo1_build_release_ready | default(false) | bool
+          The pinned site renderer refused the wildcard base or the edge input of the occupied
+          slot(s) {{ demo1_build_site_occupied | join(', ') }}. Its message is withheld, because it
+          can echo a hostname (ANS-16). Check the base and each input against render-core's
+          EdgeSiteBlock.
+
+    - name: Refuse a rendered candidate that holds an interim certificate or any site but the wildcard
+      ansible.builtin.include_tasks: _candidate_refusal.yml
+      vars:
+        demo1_build_candidate_text: '{{ demo1_build_wildcard_render.stdout }}'
 
     # Root's and mode 0600, in the closed candidate directory. Skipped in check mode
     # where that directory is not there yet, as the edge fragment's copy is.
-    - name: Stage the site candidate of each occupied slot, root's and mode 0600
+    - name: Stage the production candidate, root's and mode 0600
       ansible.builtin.copy:
-        content: "{{ item.stdout }}\n"
-        dest: "{{ demo1_build_site_candidate | replace('{slot}', item.item) }}"
+        content: "{{ demo1_build_wildcard_render.stdout }}\n"
+        dest: '{{ demo1_build_candidate_caddyfile }}'
         owner: root
         group: root
         mode: '0600'
-      loop: '{{ demo1_build_site_renders.results | default([]) }}'
-      loop_control:
-        label: '{{ item.item }}'
-      when:
-        - not (item.skipped | default(false))
-        - demo1_build_site_dir_stat.stat.exists
+      when: demo1_build_site_dir_stat.stat.exists
       no_log: true
       diff: false
   always:
     # no_log keeps a result out of the log, but the registered variable keeps the
-    # site blocks until the play ends. Empty it here (ANS-16).
-    - name: Empty the registered renders, which hold the site blocks
+    # Caddyfile until the play ends. Empty it here (ANS-16).
+    - name: Empty the registered render, which holds the Caddyfile
       ansible.builtin.set_fact:
-        demo1_build_site_renders: {}
+        demo1_build_wildcard_render: {}
       no_log: true
 
 # What a plan or an apply reports as not rendered on this run: every slot that has no
-# candidate, whether for want of an input or of a staged renderer. A configured host
-# with the input for slot 0 gives the six others.
+# input, or every slot where no renderer is staged. A configured host with the input
+# for slot 0 gives the six others.
 - name: Record the slots that have no site candidate on this run
   ansible.builtin.set_fact:
     # difference() returns the slots in no fixed order, so the list is sorted for the
