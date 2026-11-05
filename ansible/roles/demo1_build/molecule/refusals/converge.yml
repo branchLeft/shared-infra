@@ -695,6 +695,52 @@
       adapted: handler_respond_token
       expect: 'REFUSED placeholder'
 
+# A handler that reads a file off the edge's disk can serve the DNS token wherever it sits, so
+# file_server, templates and any root are refused outright, in the raw text and in the adapted
+# config, whatever the root (a directory above the token, a relative one, a link). The adapted
+# cases replay what real Caddy printed for the same handler, the text cases are refused first.
+- name: Case refused_text_file_server, refuse a file_server directive in the text
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8083 {\n\troot * /etc/branchleft/secrets\n\tfile_server browse\n}\n"
+      expect: 'REFUSED text-file-server'
+
+- name: Case refused_text_templates, refuse a templates directive in the text
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8084 {\n\ttemplates\n\trespond \"x\"\n}\n"
+      expect: 'REFUSED text-templates'
+
+- name: Case refused_text_root, refuse a root directive in the text
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8085 {\n\troot * /etc\n\trespond \"x\"\n}\n"
+      expect: 'REFUSED text-root'
+
+- name: Case refused_handler_file_server, refuse an adapted config whose handler serves files from the token's directory
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_file_server_secrets_dir
+      expect: 'REFUSED handler-file-server'
+
+- name: Case refused_handler_templates, refuse an adapted config whose handler can include a file
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_templates_include
+      expect: 'REFUSED handler-templates'
+
+- name: Case refused_handler_root, refuse an adapted config that sets a root
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_root_alone
+      expect: 'REFUSED handler-root'
+
 # Caddy itself cannot adapt the text: the role does not judge a text Caddy rejects, and says
 # so without Caddy's message, which can echo a hostname.
 - name: Case refused_unadaptable_candidate, refuse a candidate Caddy cannot adapt
