@@ -514,27 +514,106 @@
       plant: empty
       expect: 'is empty.'
 
-# The candidate the renderer prints is refused when it holds an interim certificate or a
-# site beside the wildcard one, whatever produced it. The control is the text unchanged.
+# The candidate the renderer prints is refused when Caddy would run it with an interim
+# certificate, or with a site beside the wildcard one, or served over plain HTTP, whatever
+# produced it and however it is spelled. The role asks Caddy; the answers replayed here are
+# the ones real Caddy printed (refused_candidate.yml). The control is the text unchanged.
 - name: Accept a rendered candidate that is one wildcard site with the DNS-01 tls block
   ansible.builtin.import_playbook: refused_candidate.yml
   vars:
     converge_case:
       accepted: true
 
-- name: Case refused_tls_internal, refuse a candidate that asks for the internal certificate authority
+- name: Case refused_tls_internal, refuse a candidate whose wildcard site asks for the internal certificate authority
   ansible.builtin.import_playbook: refused_candidate.yml
   vars:
     converge_case:
       tls: tls internal
-      expect: 'The candidate holds a tls internal directive.'
+      adapted: site_tls_internal
+      expect: 'REFUSED internal-issuer'
 
-- name: Case refused_stray_site, refuse a candidate that holds a second site
+- name: Case refused_tls_internal_indented, refuse the same directive when it is indented and spaced out
   ansible.builtin.import_playbook: refused_candidate.yml
   vars:
     converge_case:
-      append: "\nhttps://demo-2.site-fixture.invalid {\n    abort\n}\n"
-      expect: 'The candidate must hold exactly one site'
+      tls: '      tls    internal'
+      adapted: site_tls_internal_indented
+      expect: 'REFUSED internal-issuer'
+
+- name: Case refused_global_cert_issuer_internal, refuse an internal issuer set in the global block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      global_option: cert_issuer internal
+      adapted: global_cert_issuer_internal
+      expect: 'REFUSED internal-issuer'
+
+- name: Case refused_global_local_certs, refuse local_certs in the global block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      global_option: local_certs
+      adapted: global_local_certs
+      expect: 'REFUSED internal-issuer'
+
+- name: Case refused_global_skip_install_trust, refuse skip_install_trust in the global block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      global_option: skip_install_trust
+      adapted: global_skip_install_trust
+      expect: 'REFUSED apps'
+
+- name: Case refused_global_auto_https_off, refuse auto_https off in the global block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      global_option: auto_https off
+      adapted: global_auto_https_off
+      expect: 'REFUSED server-keys'
+
+# The three spellings of a second site that a test of the text's column-0 lines missed, and
+# the plain one it caught. Each is refused because Caddy would serve it.
+- name: Case refused_indented_http_site, refuse an indented plain-HTTP site
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n\thttp://demo-0.site-fixture.invalid {\n\trespond \"x\"\n}\n"
+      adapted: indented_http_site
+      expect: 'REFUSED servers'
+
+- name: Case refused_indented_slot_site, refuse an indented second site that would get a certificate of its own
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n  demo-0.site-fixture.invalid {\n\treverse_proxy 127.0.0.1:9300\n}\n"
+      adapted: indented_slot_site
+      expect: 'REFUSED policies'
+
+- name: Case refused_closing_brace_site, refuse a site opened on the closing brace of the wildcard site
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "http://demo-1.site-fixture.invalid {\n\trespond \"x\"\n}\n"
+      adapted: closing_brace_site
+      expect: 'REFUSED servers'
+
+- name: Case refused_http_only_site, refuse a plain-HTTP site at the start of a line
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\nhttp://demo-0.site-fixture.invalid {\n\trespond \"x\"\n}\n"
+      adapted: http_only_site
+      expect: 'REFUSED servers'
+
+# Caddy itself cannot adapt the text: the role does not judge a text Caddy rejects, and says
+# so without Caddy's message, which can echo a hostname.
+- name: Case refused_unadaptable_candidate, refuse a candidate Caddy cannot adapt
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      no_answer: true
+      expect: 'The Caddy image could not adapt the candidate'
 
 # The colour units. The role refuses to go on when a colour instance does not load,
 # and the message names the missing template, not its path. The control keeps the

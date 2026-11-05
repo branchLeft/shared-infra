@@ -135,3 +135,65 @@
         mode: '0600'
       no_log: true
       diff: false
+
+    # A stand-in for Docker and for the Caddy image, because the test container has no
+    # Docker engine and no Caddy. The role asks docker two things: whether the Caddy image
+    # is loaded (`docker images --quiet IMAGE`), and for the config Caddy would run
+    # (`docker run ... caddy adapt`, the candidate on standard input). The stand-in answers
+    # the first for the one image ID the scenarios set, and answers the second with the file
+    # /etc/stand-in-caddy-adapt.json whatever it is given. It adapts nothing, so what ties
+    # these answers to real Caddy is tests/unit/test_caddy_judge.py: it adapts every case with
+    # real Caddy and requires the result to equal the recorded file this scenario replays. A
+    # case that wants another answer replaces that file; with no file, the stand-in fails as
+    # Caddy does on a Caddyfile it cannot adapt.
+    - name: Install a stand-in for docker that answers from recorded real-Caddy output
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          case "$1" in
+            images)
+              [ "$3" = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" ] && echo 0123456789ab
+              exit 0
+              ;;
+            run)
+              cat > /dev/null
+              [ -f /etc/stand-in-caddy-adapt.json ] || { echo "stand-in caddy: cannot adapt" >&2; exit 1; }
+              cat /etc/stand-in-caddy-adapt.json
+              exit 0
+              ;;
+          esac
+          exit 1
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Record what real Caddy printed for the unchanged renderer output, as the stand-in's answer
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../../tests/unit/fixtures/adapted-good.json'
+        dest: /etc/stand-in-caddy-adapt.json
+        owner: root
+        group: root
+        mode: '0600'
+
+    # What an earlier version of this role staged: one candidate per slot, each carrying the
+    # interim certificate. The role must remove them (verify.yml lists the directory), because
+    # the go-live step installs whatever file it is pointed at.
+    - name: Make the candidate directory, root's and closed to everyone else
+      ansible.builtin.file:
+        path: /var/lib/branchleft/demo-candidates
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Leave the per-slot candidates an earlier version of the role staged, carrying tls internal
+      ansible.builtin.copy:
+        content: "https://demo-{{ item }}.site-fixture.invalid {\n    tls internal\n}\n"
+        dest: '/var/lib/branchleft/demo-candidates/site-{{ item }}.caddy'
+        owner: root
+        group: root
+        mode: '0600'
+      loop: ['0', '3']
+      no_log: true
+      diff: false

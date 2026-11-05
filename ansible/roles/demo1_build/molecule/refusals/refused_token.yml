@@ -13,6 +13,7 @@
   tags: [molecule-idempotence-notest]
   vars:
     demo1_build_wildcard_base: site-fixture.invalid
+    demo1_build_caddy_image: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
     converge_token: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
     converge_candidate: /var/lib/branchleft/demo-candidates/Caddyfile
     converge_target: /var/tmp/demo1-token-target

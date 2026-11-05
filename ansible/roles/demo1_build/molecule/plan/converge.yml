@@ -9,6 +9,7 @@
   gather_facts: false
   vars:
     demo1_build_wildcard_base: site-fixture.invalid
+    demo1_build_caddy_image: 'sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
     # Everything a plan must leave exactly as it found it. Each is read before
     # and after the role runs in check mode; a path that did not exist must still
     # not exist, and one that did must have the same modification time (a
