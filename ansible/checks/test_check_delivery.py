@@ -220,7 +220,7 @@ class CallerTests(unittest.TestCase):
                 job_of(document)["uses"] = workflow + ref
 
             self.assert_names(self.weakened(set_uses), "exact tag")
-        for ref in ("@v1.0.19", "@v2.3.4"):
+        for ref in ("@v1.0.23", "@v2.3.4"):
 
             def set_good(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
@@ -231,7 +231,7 @@ class CallerTests(unittest.TestCase):
         # The call passes the push list and playbook, and a release that does not declare them
         # fails it.
         workflow = "branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml"
-        for ref in ("@v1.0.15", "@v1.0.17", "@v1.0.18", "@v1.0.0", "@v0.9.99"):
+        for ref in ("@v1.0.15", "@v1.0.18", "@v1.0.19", "@v1.0.22", "@v1.0.0", "@v0.9.99"):
 
             def set_old(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
@@ -269,6 +269,28 @@ class CallerTests(unittest.TestCase):
                 section(job_of(document), "secrets")["ssh_apply_key"] = value
 
             self.assert_names(self.weakened(set_key), "secrets.ssh_apply_key must be")
+
+    def test_a_caller_without_a_host_key_map_is_named(self) -> None:
+        for name in ("ssh_host_check_keys", "ssh_host_apply_keys"):
+
+            def drop_secret(document: dict[str, object], name: str = name) -> None:
+                del section(job_of(document), "secrets")[name]
+
+            self.assert_names(self.weakened(drop_secret), f"secrets.{name} must be")
+
+    def test_a_wrong_host_key_map_expression_is_named(self) -> None:
+        # The apply map comes from the environment's own secret, never the shared apply key or
+        # the check map, and a literal is no secret.
+        wrong = ("", "literal-value", "${{ secrets.SSH_APPLY_KEY }}", "${{ secrets.ANSIBLE_CHECK_KEY }}")
+        for name in ("ssh_host_check_keys", "ssh_host_apply_keys"):
+            for value in wrong:
+
+                def set_secret(
+                    document: dict[str, object], name: str = name, value: str = value
+                ) -> None:
+                    section(job_of(document), "secrets")[name] = value
+
+                self.assert_names(self.weakened(set_secret), f"secrets.{name} must be")
 
     def test_a_caller_without_a_jump_secret_is_named(self) -> None:
         for name in ("ssh_jump_host", "ssh_jump_key"):
@@ -725,7 +747,10 @@ MAIN_ONLY: dict[str, object] = {
     "branch_policies": [{"id": 1, "name": "main", "type": "branch"}],
 }
 NOT_FOUND: dict[str, object] = {"message": "Not Found", "status": "404"}
-WITH_KEY: dict[str, object] = {"total_count": 1, "secrets": [{"name": "SSH_APPLY_KEY"}]}
+WITH_KEY: dict[str, object] = {
+    "total_count": 2,
+    "secrets": [{"name": "SSH_APPLY_KEY"}, {"name": "SSH_HOST_APPLY_KEYS"}],
+}
 
 
 class ChosenEnvironmentTests(unittest.TestCase):
@@ -976,9 +1001,24 @@ class EnvironmentTests(unittest.TestCase):
         ):
             self.assert_names(self.judge(environment(), MAIN_ONLY, secrets), "holds no secret")
 
-    def test_the_apply_key_is_found_whatever_its_case(self) -> None:
-        for name in ("ssh_apply_key", "SSH_APPLY_KEY", "Ssh_Apply_Key"):
-            secrets = {"secrets": [{"name": name}]}
+    def test_a_missing_host_apply_keys_secret_is_reported(self) -> None:
+        # The apply key alone is not enough: the per-host map must be held by the environment too,
+        # so that no repository secret of that name is what the apply job reads.
+        for secrets in (
+            {"secrets": [{"name": "SSH_APPLY_KEY"}]},
+            {"secrets": [{"name": "SSH_APPLY_KEY"}, {"name": "ANSIBLE_HOST_CHECK_KEYS"}]},
+        ):
+            findings = self.judge(environment(), MAIN_ONLY, secrets)
+            self.assert_names(findings, "holds no secret ssh_host_apply_keys")
+            self.assertFalse(any("holds no secret ssh_apply_key" in f for f in findings), findings)
+
+    def test_the_apply_keys_are_found_whatever_their_case(self) -> None:
+        for apply_key, host_keys in (
+            ("ssh_apply_key", "ssh_host_apply_keys"),
+            ("SSH_APPLY_KEY", "SSH_HOST_APPLY_KEYS"),
+            ("Ssh_Apply_Key", "Ssh_Host_Apply_Keys"),
+        ):
+            secrets = {"secrets": [{"name": apply_key}, {"name": host_keys}]}
             self.assertEqual([], self.judge(environment(), MAIN_ONLY, secrets))
 
     def test_unlisted_secrets_are_not_judged(self) -> None:

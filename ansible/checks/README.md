@@ -417,8 +417,15 @@ itself and refuses the delivery if they disagree, so a skip needs both to agree.
 `ANSIBLE_PUSH_HOSTS` repository secret, passed as `ssh_push_hosts` (the owner creates it; an unset
 secret is empty, and empty means every host is pulled). The `push-playbook` input is the one path
 `PUSH_PLAYBOOK`, defined once in `check_delivery.py` and imported by `test_drift_caller.py`. The
-release floor `MIN_RELEASE` is `v1.0.19`, the first release of `branchLeft/github-workflows` that
-declares both: a call that passes a key the called workflow does not declare fails on GitHub. A
+release floor `MIN_RELEASE` is `v1.0.23`, the first release of `branchLeft/github-workflows` that
+declares the per-host key maps (`ssh_host_check_keys` and, for the delivery, `ssh_host_apply_keys`)
+as well as the push list: a call that passes a key the called workflow does not declare fails on
+GitHub. The delivery names `ssh_host_check_keys` (the repository secret `ANSIBLE_HOST_CHECK_KEYS`,
+passed by the drift caller too) and `ssh_host_apply_keys` (the `SSH_HOST_APPLY_KEYS` secret of the
+`ansible-hosts` environment). Both are optional in the workflow: an unset secret is empty, and a
+host with no entry keeps the shared key. The `environment` command reports `ssh_host_apply_keys`
+missing from the environment's secrets, because a repository secret of that name would be readable
+by every workflow on main without the approval. A
 `push-dry-run-stub` is not an allowed input.
 
 After a lock-file merge (for example Dependabot), dispatch the Ansible workflow, because the

@@ -17,7 +17,8 @@ name: Ansible delivery
 #   - Prevent self-review: ticked, so the person who merged a change cannot approve its deploy;
 #   - Allow administrators to bypass configured protection rules: ticked, so the owner is never blocked from an administrator bypass to take an apply (owner ruling, 1 Nov 2026);
 #   - deployment branches: main only;
-#   - environment secret: ssh_apply_key.
+#   - environment secrets: ssh_apply_key and ssh_host_apply_keys (the per-host apply keys, one JSON
+#     object; optional for the workflow, and check_delivery.py reports it missing).
 # ansible/checks/check_delivery.py fails on every line of this file that would weaken
 # that. Its `environment` command reads the environment's protection when given the
 # answers of three read-only GitHub calls (the environment, its deployment branch
@@ -27,8 +28,10 @@ name: Ansible delivery
 # where the three files are the output of `gh api` on repos/<owner>/<repo>/environments/
 # ansible-hosts, on its /deployment-branch-policies and on its /secrets.
 #
-# The apply key is an environment secret, named here like the others: only the job in the
-# environment reads it, after approval. The six repository secrets (the jump pair: both or neither;
+# The apply key and the per-host apply keys are environment secrets, named here like the others:
+# only the job in the environment reads them, after approval. The per-host check keys,
+# ANSIBLE_HOST_CHECK_KEYS, are a repository secret that the drift caller passes too. The six
+# repository secrets (the jump pair: both or neither;
 # the push list: optional, and empty means every host is pulled) are named one by one; `secrets: inherit` passes all.
 # The push list, ANSIBLE_PUSH_HOSTS, is one user@host per line, a subset of ANSIBLE_HOSTS: the
 # hosts that never open a connection, reached through the jump host with push-playbook. The
@@ -74,7 +77,7 @@ jobs:
 
   delivery:
     needs: [queue-proof]
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.22
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.23
     with:
       environment: ansible-hosts
       push-playbook: ansible/playbooks/demo1.yml
@@ -91,6 +94,8 @@ jobs:
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
       ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
       ssh_apply_key: ${{ secrets.SSH_APPLY_KEY }}
+      ssh_host_check_keys: ${{ secrets.ANSIBLE_HOST_CHECK_KEYS }}
+      ssh_host_apply_keys: ${{ secrets.SSH_HOST_APPLY_KEYS }}
       ssh_push_hosts: ${{ secrets.ANSIBLE_PUSH_HOSTS }}
       ssh_jump_host: ${{ secrets.SSH_JUMP_HOST }}
       ssh_jump_key: ${{ secrets.SSH_JUMP_KEY }}
