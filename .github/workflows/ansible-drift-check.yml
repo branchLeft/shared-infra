@@ -6,7 +6,7 @@ name: Ansible drift check
 # and opens or comments on one issue. It applies nothing: this caller passes no apply key and
 # names no environment.
 #
-# The tag is an exact vMAJOR.MINOR.PATCH (CI-5, checked by test_drift_caller.py). The six
+# The tag is an exact vMAJOR.MINOR.PATCH (CI-5, checked by test_drift_caller.py). The seven
 # secrets are repository secrets, named one by one: `secrets: inherit` would pass all. The
 # push list, ANSIBLE_PUSH_HOSTS, is optional: empty means every host is pulled.
 # The job grants actions: read to the drift job and issues: write to the alert job, and
