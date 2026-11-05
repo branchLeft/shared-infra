@@ -93,15 +93,26 @@ What the role does, in the order of `tasks/main.yml`:
    loads (`_units_loaded.yml`, read-only). An instance that does not load stops the
    run, and the message names the cause: the shared compose template unit is not
    installed, or does not load with the drop-ins (see Phase A-7).
-9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`): the edge's
-   upstream snippets, rendered by the pinned edge renderer, into a root-only
-   candidate directory; and, for each slot the owner has placed an edge input for,
-   that slot's gated site block, rendered by the pinned site renderer from the
-   input into `site-<n>.caddy`. The input's shape is checked first (a regular file,
-   not a link, `root:root`, mode 0600 or narrower), and the renderer's own refusal
-   is reported by slot number, without its message. A slot with no input gets no
-   candidate, and the plan and the apply each say so: "Site candidate for slot <n>
-   NOT rendered". That is a stated skip, not a pass.
+9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`,
+   `_dns_token.yml`, `_candidate_refusal.yml`): two files in a root-only candidate
+   directory, for the owner to diff against the live edge before going live.
+   `edge-upstreams.caddy` is the edge's upstream snippets, rendered by the pinned edge
+   renderer. `Caddyfile` is the one combined candidate: the pinned site renderer is
+   called once, with every slot that has an owner-placed edge input, and prints the
+   upstream snippets once and one `*.<base>` site, with a host matcher for each slot
+   and a final `handle { abort }`. The site's one certificate is the wildcard that
+   Caddy obtains by DNS-01, through a `tls { dns hetzner {file.<token path>} }` block
+   that the role passes to the renderer; there is no interim certificate mode. The
+   role checks each input's shape first (a regular file, not a link, `root:root`, mode
+   0600 or narrower), looks at the token file (below), and reports the renderer's own
+   refusal by slot number, without its message. Before it stages the text it refuses
+   any that holds `tls internal`, `local_certs`, `skip_install_trust`, a second `tls`
+   directive, a `tls` block that is not the role's DNS line alone, or any site but the
+   wildcard one. A slot with no input is named "Site candidate for slot <n> NOT
+   rendered", and a candidate that is not staged at all says "Production candidate NOT
+   staged" and why. Both are stated skips, not a pass. The renderer lives in
+   ghost-platform: this role carries its sha256-pinned copy and holds the text it
+   prints to the checks above, and never edits or rewrites that text.
 10. **Reads back what root will run** (`_integrity.yml`): each installed program is
     the pinned file, `root:root`, mode `0755`, not a link, and every directory
     above it is root-owned and not writable by anyone else.
@@ -135,7 +146,7 @@ What the role does, in the order of `tasks/main.yml`:
 | `render_router_unit.py`                         | RUN, stdout only         | The router unit's text.                                                                                                       |
 | `render_demo_edge.py`                           | RUN, stdout only         | The candidate fragment.                                                                                                       |
 | `demo_uid_claims.py`                            | RUN, writes the register | Only when a claim is missing; never in check mode.                                                                            |
-| `render_demo_site.py`                           | RUN, stdout only         | The site block of each slot the owner has an input for, staged as a candidate. Never run with `--gate-env-out`, which writes. |
+| `render_demo_site.py`                           | RUN, stdout only         | One call for every slot with an input, staged as the one Caddyfile. Never run with `--gate-env-out`, which writes.            |
 | `demo_go_live.py`                               | STAGED, NOT ROLE         | The owner's go-live. The role never runs it.                                                                                  |
 | `provision_socket_dirs.py`, `drain_flag_dir.py` | NOT FETCHED              | Their jobs are declared with `file` tasks, so a plan shows each one.                                                          |
 | `branchleft_demo_egress.sh`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                                                                             |
@@ -159,9 +170,16 @@ file reaches the release.
 - It does not enable or start a health router or a colour unit.
 - It does not fetch secrets. Anything secret on the host is a root-only file the
   owner puts there.
+- It does not read the DNS token. The token is the owner's, placed once as a root-only
+  file in `/etc/branchleft/secrets/`; the role only looks at the file's type, owner,
+  mode and size, never opens it, takes no checksum of it and never copies it, and
+  gives Caddy the path. Caddy reads the file when it runs.
 - It does not make the owner's edge input for a slot, and does not decide what it
   holds. The renderer reads the file, the role checks its shape and stages the
   output, and no task of the role prints the output (ANS-16).
+- It does not hold or change renderer logic. The renderer lives in ghost-platform and
+  the role carries sha256-pinned copies of it; it never edits a vendored file and
+  never rewrites the text the renderer prints.
 - It does not keep a copy of the shared compose template unit. It installs the file
   `hetzner/provision/branchleft-compose@.service` of the checkout (A-7, Phase A-7
   below). A byte copy or a link of that file in this role is refused by
@@ -171,7 +189,7 @@ file reaches the release.
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares every variable and
 [`defaults/main.yml`](defaults/main.yml) holds them. There is no required input and
-no secret.
+no secret: the one file that holds a secret is named by a path input and never read.
 
 - `demo1_build_source_sha`: the ghost-platform commit the vendored programs were
   taken from. It names the release directory.
@@ -184,9 +202,52 @@ no secret.
   installed grant differ from the generator's, and every rule must name this path
   anyway. The input exists so the role states the path it installs at; it is not a
   place to choose another one.
+- `demo1_build_wildcard_base`: the base domain of the demo's one wildcard site
+  (`*.<base>`), empty by default. Every demo hostname is exactly one label below it.
+  The role refuses anything that is not a lower-case domain of at least two labels
+  (letters, digits and inner hyphens, no wildcard character, no leading or trailing
+  dot). Empty, the production candidate is not staged and the plan and apply say so.
+- `demo1_build_dns_token_file`: the path of the root-only file that holds the DNS-01
+  token of the demo's own DNS project, by default
+  `/etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard`. It must be a file directly
+  in `/etc/branchleft/secrets`, named with letters, digits, dot, underscore and
+  hyphen. The role passes the path to the renderer as `dns hetzner {file.<path>}`.
 
 `vars/main.yml` holds the constants (paths, accounts, uids, patterns). A caller
 cannot override them.
+
+### The wildcard candidate and the DNS token
+
+The owner places the DNS token once, as `root:root` mode `0600`, in a root-only
+`/etc/branchleft/secrets/` (the role neither creates nor checks the directory: a
+token the owner has not placed reads as missing). The role looks at it with `stat`
+and nothing else: `get_checksum`, `get_mime` and `get_attributes` are off because
+each opens the file, and `follow` is off so a link is seen as a link. Nothing in the
+candidate, the plan or the log holds the token's value, only its path, and only
+inside the `dns hetzner {file.<path>}` reference.
+
+A run stages `Caddyfile` only when the base is set, the token file is placed, the
+renderer is staged and at least one slot has an edge input. When one of those is
+missing the run completes with a stated skip, never a failure, and prints the first
+that applies, in this order, each starting "Production candidate NOT staged:":
+
+| Reason                                              | Words that follow                                                   |
+| --------------------------------------------------- | ------------------------------------------------------------------- |
+| The wildcard base is empty                          | the wildcard base (demo1_build_wildcard_base) is not set            |
+| No token file at the token path                     | no DNS token file is placed at the path                             |
+| No renderer staged (a check run on a fresh host)    | the pinned site renderer is not staged on this host                 |
+| No slot has an owner-placed edge input              | no slot has an owner-placed edge JSON                               |
+
+A token file that is there and is not right is refused, each in its own check, and
+the message names the path and never a value: it is a link, it is not a regular file,
+it is not `root:root`, it has a group or other bit or an execute bit (it must be
+`0600` or narrower), or it is empty. A renderer that refuses the base or an input is
+reported as "The pinned site renderer refused the wildcard base or the edge input of
+the occupied slot(s) <numbers>", with its own message withheld because it can echo a
+hostname. The refusals of the staged text (`tls internal`, `local_certs`,
+`skip_install_trust`, a second `tls` directive, a `tls` block that is more than the
+role's DNS line, a site other than `*.<base>`) are one check each, run on the text
+before it is staged, and none of them names a hostname.
 
 ### The pin
 
@@ -268,10 +329,12 @@ runs them.
   (`root:root` `0644`) for each slot and colour, and
   `branchleft-health-router@.service`; one systemd reload when any changed.
 - `/var/lib/branchleft/demo-candidates/` (`root` `0700`) holding
-  `edge-upstreams.caddy` (`root` `0600`), and one `site-<n>.caddy` (`root` `0600`)
-  for each slot whose owner-placed input `/etc/branchleft/demo-<n>.edge.json` the
-  renderer read. The role never writes or reads back those inputs' values, and it
-  never writes the live edge.
+  `edge-upstreams.caddy` (`root` `0600`), and, when the wildcard base is set and the
+  DNS token file is placed, one `Caddyfile` (`root` `0600`): the pinned renderer's
+  output for every slot whose owner-placed input `/etc/branchleft/demo-<n>.edge.json`
+  it read, one `*.<base>` site. There is no per-slot file. The role never writes or
+  reads back those inputs' values, never reads the DNS token, and never writes the
+  live edge.
 
 ### Drain flags
 
@@ -369,7 +432,7 @@ the task. In order:
 | Hash of each vendored program (`_vendored.yml`)          | Run: reads where the role runs and refuses a program that is not its pin.                                                                                                                                        |
 | `copy` of the programs                                   | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `copy` cannot write into a missing directory.                                                        |
 | Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                                                                           |
-| Owner's edge inputs and site candidates                  | Each input is read as a stat with no checksum and refused on its shape. The renderer runs where the release is staged; a slot with no input, or with no staged renderer, is named "NOT rendered" in a plan line. |
+| Edge inputs, DNS token and site candidates               | Inputs and the token file are read as a stat, no checksum, and refused on their shape. Without a renderer, base or token the run says "Production candidate NOT staged"; a slot with no input is "NOT rendered". |
 | Colour instances load (`_units_loaded.yml`)              | Where the drop-in directories are not on the host, skipped with the line "Colour units NOT verified". Elsewhere systemd is asked, changing nothing, and the check stops a run whose instance does not load.      |
 | `demo_uid_claims.py`                                     | Never run.                                                                                                                                                                                                       |
 | Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                                                                       |
@@ -483,6 +546,11 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
 - `prepare.yml` renders `broker_deploy`'s own sudoers template and `broker.env`
   template with its own defaults and installs them. The role is therefore tested
   against the real component's output, and not against a fixture written to match.
+  It also places what the owner places: the edge inputs of slots 0 and 1, with
+  hostnames under the reserved `site-fixture.invalid` (one label below the wildcard
+  base the converges set), and a DNS token file in `/etc/branchleft/secrets/`,
+  `root:root` `0600`, holding a stand-in value that is not a credential. Both are
+  placed with `no_log`.
 - The pinned programs are the real ones, run: the renderers, the claim program and
   the checks of the sidecar's text. The scenario uses the role's own
   `files/ghost-platform/`, the same files a real apply copies, with no second copy;
@@ -506,7 +574,12 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
 
 - A check run changes nothing on the host (above), and says whether the sudoers
   grant was verified. Both hold on a fresh host and on a configured one, because
-  the scenario runs the converge in check mode before the apply and after it.
+  the scenario runs the converge in check mode before the apply and after it. The
+  watched paths include the staged `Caddyfile` and the token file.
+- A plan names the five slots with no edge input as "NOT rendered" on either host, and
+  names all seven on a fresh host, where no renderer is staged. On a fresh host it also
+  says "Production candidate NOT staged: the pinned site renderer is not staged"; on a
+  configured one it says nothing, because the candidate is staged.
 
 ### What `default/converge.yml` proves
 
@@ -520,6 +593,14 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
   This is the one refusal that needs the whole role, so it stays here. A second
   case, a dotted spelling of a system binary, is refused by the input check before
   anything runs.
+- `base_unset_is_a_stated_skip` and `token_missing_is_a_stated_skip` run first, on a
+  host where nothing is staged (`stated_skip.yml`, tagged so the idempotence step
+  skips it): the role's site step completes, prints "Production candidate NOT staged:"
+  with the reason, and the staged `Caddyfile` is exactly as it was, absent.
+- After the apply, the five slots with no edge input are named "NOT rendered" and no
+  "NOT staged" notice was printed. `secrets_never_logged` starts here: the stat result
+  the role keeps of the token file holds no checksum, mime type, charset or content,
+  so the role never opened it. Its other half is in `verify.yml`.
 
 ### What `refusals/converge.yml` proves
 
@@ -578,7 +659,24 @@ prepared grant back in every outcome. Each expects the refusal named in its case
 - a pinned checksum with one digit changed, which stops the role at the vendored
   check, naming the program and before anything is written: the control is the
   same check with the real pins, and the whole-role case uses a source commit the
-  host has no release directory for and asserts that none was made.
+  host has no release directory for and asserts that none was made;
+- the owner's edge input as a link, not root's and open to others, each refused with
+  its own message, and a valid pair of inputs accepted and staged as `Caddyfile`
+  (`refused_site_input.yml`); and a hostname the renderer refuses, whose message is
+  withheld and whose hostname, a canary, must not reach the log;
+- the DNS token file, with the valid one prepare placed put back after every case
+  (`refused_token.yml`): `refused_token_link`, `refused_token_directory`,
+  `refused_token_not_root`, `refused_token_mode_0644` and `refused_token_empty`, each
+  expecting the role's own message, which names the path and no value, and each
+  asserting that no `Caddyfile` was left. A link is refused for being a link; take
+  that check away and the next one still refuses it, but with another message, so the
+  case still goes red;
+- the refusal of the staged text (`refused_candidate.yml`), run on a stand-in with
+  the renderer's shape and one change, because the renderer cannot be made to print an
+  interim certificate: `refused_tls_internal` (the tls block replaced by
+  `tls internal`) and `refused_stray_site` (an `https://` site after the wildcard one), each
+  failing with its own message and no hostname. The control is the text unchanged,
+  accepted.
 
 What `refusals` cannot see is an install, since it never applies the role. It
 also cannot stage a stand-in for the generator: the real one is staged through
@@ -594,9 +692,20 @@ pinned checksum, which is the pin. It checks the release (files, owners, modes, 
 bytecode, `current`), the three installed programs, the register and its eight
 claims, the router's account, the socket tree, the state and flag directories and
 the thirteen flags that remain, the fourteen drop-ins and the router unit, systemd
-loading the router unit without enabling it, the candidate directory and file, and
-the absences: no `Caddyfile` anywhere, no slot directory a `reset` would make, no
-wrapper lock directory.
+loading the router unit without enabling it, the candidate directory and its
+fragment, and the absences: no `Caddyfile` anywhere but the staged candidate, no slot
+directory a `reset` would make, no wrapper lock directory.
+
+`candidate_staged_root_0600_when_token_present` reads the staged candidate back: the
+directory holds the `Caddyfile` and the fragment and no per-slot file; the
+`Caddyfile` is `root:root` `0600`; its one top-level site is `*.site-fixture.invalid`;
+both hostnames occur once each, in an `@slotN host` matcher and nowhere else; there
+is no `https://`; exactly one `tls` line and no `internal` or `local_certs`; and the
+token path occurs once, inside the `dns hetzner {file.<path>}` reference.
+`secrets_never_logged` then scans the staged files and the run's Ansible log for the
+stand-in token value and finds nothing. The scan counts only because its control is
+found in the same log: the "Production candidate NOT staged" notice the stated skips
+printed.
 
 ### What breaks which step
 
@@ -647,7 +756,7 @@ assertion fires in its place or a later one is the only one left:
 | The old `get_url` task put back                                                                           | CI, `test_demo1_no_github_fetch.py`     | the file and line of the `get_url` and of the `raw.githubusercontent.com` URL                                              |
 | The socket directory mode changed                                                                         | default, `verify`                       | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                      |
 | The drain-flag directory's owner changed to root                                                          | default, `verify`                       | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."           |
-| The candidate written as a `Caddyfile`                                                                    | default, `verify`                       | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                     |
+| A Caddyfile written anywhere but the staged candidate                                                     | default, `verify`                       | "A Caddyfile other than the staged candidate exists"                                                                       |
 | The real wrapper's `reset` run by a task                                                                  | default, `verify`                       | the same assertion (the real wrapper leaves its lock directory)                                                            |
 | The register directory made `0755` on the host                                                            | default, `converge`                     | "is not a directory owned by root with mode 0700."                                                                         |
 | The wrapper installed group-writable                                                                      | default, `converge`                     | the integrity assertion on the installed programs                                                                          |
@@ -657,14 +766,24 @@ assertion fires in its place or a later one is the only one left:
 | The site input owner check removed                                                                        | refusals, `converge`                    | "is not root:root", for the case of an input owned by broker                                                               |
 | The site input mode check removed                                                                         | refusals, `converge`                    | "must be 0600 or narrower", for the case of an input of mode 0644                                                          |
 | The renderer's output not hidden (`no_log: false` on the render task)                                     | refusals, `verify`                      | "The scenario's log does not hold the scan control, or it holds the canary", for the leak case                             |
-| The candidate written with mode 0644                                                                      | default, `verify`                       | "Slot 0's site candidate is not root's mode 0600"                                                                          |
-| The NOT rendered notice made silent                                                                       | default, `converge`                     | "The site candidates are not the six slots with no edge input, or a slot with no input was not named as NOT rendered"      |
+| The staged Caddyfile written with mode 0644                                                               | default, `verify`                       | "The staged Caddyfile is not a regular file of root:root mode 0600."                                                       |
+| The NOT rendered notice made silent                                                                       | default, `converge`                     | "The site candidates are not the five slots with no edge input, a slot with no input was not named as NOT rendered"        |
+| The token link check removed (`_dns_token.yml`)                                                           | refusals, `converge`                    | "is a link.", for `refused_token_link`; the next check then refuses it with another message                                |
+| The token regular-file check removed                                                                      | refusals, `converge`                    | "is not a regular file.", for `refused_token_directory`; the mode check then refuses it instead                            |
+| The token owner check removed                                                                             | refusals, `converge`                    | "is not root:root.", for `refused_token_not_root`                                                                          |
+| The token mode check removed                                                                              | refusals, `converge`                    | "is mode 0644.", for `refused_token_mode_0644`                                                                             |
+| The token empty check removed                                                                             | refusals, `converge`                    | "is empty.", for `refused_token_empty`                                                                                     |
+| The `tls internal` refusal removed (`_candidate_refusal.yml`)                                             | refusals, `converge`                    | "The candidate holds a tls internal directive.", for `refused_tls_internal`                                                |
+| The one-site refusal removed                                                                              | refusals, `converge`                    | "The candidate must hold exactly one site", for `refused_stray_site`                                                       |
+| The notice of a skipped candidate changed or removed                                                      | default, `converge`                     | "The step did not say that the production candidate was not staged for the reason this case sets"                          |
+| The token stat given `get_mime` or `get_checksum`                                                         | default, `converge`                     | "The role's stat of the DNS token file read it"                                                                            |
+| The token value let into the log or a staged file                                                         | default, `verify`                       | "the stand-in token value is in the log or in a staged candidate (ANS-16)"                                                 |
 | The colour instance check (`_units_loaded.yml`) assert removed                                            | refusals, `converge`                    | "The colour unit check accepted instances that load from no template."                                                     |
 | Both seeding tests removed (the pre-seed guard)                                                           | default, `converge`                     | "The role put a cleared drain flag back."                                                                                  |
 
-Two rows above, "The candidate written with mode 0644" and "The NOT rendered notice
-made silent", have not been run, so their red is not yet recorded. Each is a mechanism
-the default scenario would show, and neither is in the PR body's sabotage record.
+The row "The NOT rendered notice made silent" has not been run, so its red is not yet
+recorded. It is a mechanism the default scenario would show, and it is not in the PR
+body's sabotage record.
 
 The harness's own controls (a failing second scenario fails its shard, a role with
 no `molecule/` still gets a shard and fails at the scenario limits, a privileged
@@ -753,11 +872,17 @@ other unit tests of `ansible/harness`.
   `deploy_tooling`, so the host has one writer of the file. What demo1 holds today is
   unknown without host access: the first plan shows any difference, and
   `_units_loaded.yml` stops a run whose colour instance does not load.
-- **The site candidate uses the renderer's default TLS directive.** The role runs
-  the pinned site renderer without `--tls`, so the candidate carries its default,
-  `tls internal` (a local certificate authority). The production directive, the
-  wildcard certificate, is not an input of this role. The owner diffs the candidate
-  against the live edge, and supplies the directive, before any go-live step.
+- **The candidate has no interim certificate and the role refuses one.** The role
+  passes the renderer `--dns-directive` with a `dns hetzner {file.<token path>}`
+  line and never `--tls`, so the one site's certificate is the wildcard Caddy obtains
+  by DNS-01. A candidate that holds `tls internal`, `local_certs`, `skip_install_trust`,
+  a second `tls` directive or a second site is refused before it is staged, whatever
+  produced it. The role does not look at the other global options that can change
+  certificate behaviour (an `auto_https` setting, an issuer in the global block), nor
+  at a `tls` line inside an upstream transport, which would fail closed. The owner
+  still diffs the candidate against the live edge, and places the token, before any
+  go-live step. The role does not create or check `/etc/branchleft/secrets`: if the
+  owner has not made it, the token reads as missing and the candidate is not staged.
 - **The slot directories `/opt/branchleft/demo-<n>`** are made by the wrapper's
   `reset`, which this role never runs. They do not exist after the role.
 - **The egress interaction is unverified.** The demo host's egress ruleset
