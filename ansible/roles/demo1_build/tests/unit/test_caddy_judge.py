@@ -50,6 +50,7 @@ FIXTURES = Path(__file__).resolve().parent / "fixtures"
 RENDERER = FILES / "ghost-platform" / "demo-host" / "provision" / "render_demo_site.py"
 JUDGE = FILES / "judge_caddy_config.py"
 VARS = ROLE / "vars" / "main.yml"
+DEFAULTS = ROLE / "defaults" / "main.yml"
 
 sys.path.insert(0, str(FILES))
 import judge_caddy_config  # noqa: E402
@@ -652,6 +653,15 @@ class FixtureTests(unittest.TestCase):
             "name:tag",
         ):
             self.assertFalse(re.match(pattern, image), image)
+
+    def test_the_shipped_pin_is_a_digest_under_a_name_that_holds_no_registry(self) -> None:
+        # demo1 reaches no registry, so the name it looks the image up by is a local label.
+        pattern = yaml.safe_load(VARS.read_text())["demo1_build_caddy_image_pattern"]
+        image = yaml.safe_load(DEFAULTS.read_text())["demo1_build_caddy_image"]
+        self.assertTrue(re.match(pattern, image), image)
+        name = image.split("@", 1)[0]
+        self.assertNotIn("/", name, image)
+        self.assertNotIn(".", name, image)
 
     def test_only_one_image_whose_repo_digests_hold_the_pinned_digest_is_verified(self) -> None:
         digest = "sha256:" + "0123456789abcdef" * 4

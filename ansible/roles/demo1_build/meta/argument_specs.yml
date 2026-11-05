@@ -128,4 +128,4 @@ argument_specs:
           the DNS-01 provider and the token file, and nothing else. Empty, or an
           image that is not loaded, the production candidate is not staged, and
           the plan and apply say so.
-        default: ''
+        default: 'demo-edge@sha256:9dd44edaf5ac542bd4ac1c55d0f761a40b5d5531e31c9b78f5f5477ac325324d'
