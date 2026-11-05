@@ -8,6 +8,7 @@
   hosts: all
   gather_facts: false
   vars:
+    demo1_build_wildcard_base: site-fixture.invalid
     # Everything a plan must leave exactly as it found it. Each is read before
     # and after the role runs in check mode; a path that did not exist must still
     # not exist, and one that did must have the same modification time (a
@@ -21,6 +22,7 @@
       - /etc/branchleft/tenant-uids/demo-0
       - /etc/branchleft/tenant-uids/demo-router
       - /etc/branchleft/demo1-drain-flags-preseeded
+      - /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
       - /opt/branchleft
       - /opt/branchleft/demo-host
       - /opt/branchleft/demo-host/current
@@ -36,7 +38,7 @@
       - /var/lib/branchleft/demo-router/0/a
       - /var/lib/branchleft/demo-candidates
       - /var/lib/branchleft/demo-candidates/edge-upstreams.caddy
-      - /var/lib/branchleft/demo-candidates/site-0.caddy
+      - /var/lib/branchleft/demo-candidates/Caddyfile
       - /var/lib/branchleft-broker
       - /var/lib/branchleft-broker/drain-flags
       - /var/lib/branchleft-broker/drain-flags/0-a.drain
@@ -91,24 +93,31 @@
       when: ansible_check_mode
 
     # The site candidates and the colour check, in a plan. On a fresh host there is no
-    # staged renderer, so slot 0's fixture input is NOT rendered, and the other six
-    # have no input: all seven are named, and the colour units are NOT verified. On a
-    # configured host slot 0 is rendered (a read), so six are named, and the colour
-    # units are asked of systemd, with no notice. Each line is read from the role's
-    # register, so a silent skip cannot pass.
+    # staged renderer, so the fixture inputs of slots 0 and 1 are NOT rendered, and the
+    # five others have no input: all seven are named, the production candidate is said
+    # to be NOT staged because the renderer is not staged, and the colour units are NOT
+    # verified. On a configured host slots 0 and 1 are rendered (a read), so five are
+    # named, the production candidate is staged and needs no notice, and the colour units
+    # are asked of systemd, with no notice. Each line is read from the role's register, so
+    # a silent skip cannot pass.
     - name: Assert a plan names the slots with no site candidate, and says whether the colour units were verified
       ansible.builtin.assert:
         that:
-          - demo1_build_site_notices.results | map(attribute='msg') | select('search', 'NOT rendered') | list | length == 6
-          - demo1_build_site_not_rendered | length == (6 if demo1_build_converge_release_before.stat.exists else 7)
+          - demo1_build_site_notices.results | map(attribute='msg') | select('search', 'NOT rendered') | list | length == 5
+          - demo1_build_site_not_rendered | length == (5 if demo1_build_converge_release_before.stat.exists else 7)
           - >-
             (demo1_build_site_unstaged_notices.results | default([]) | selectattr('skipped', 'undefined') | list | length)
-            == (0 if demo1_build_converge_release_before.stat.exists else 1)
+            == (0 if demo1_build_converge_release_before.stat.exists else 2)
+          - >-
+            (demo1_build_candidate_notice.skipped | default(false)) == demo1_build_converge_release_before.stat.exists
+          - >-
+            demo1_build_converge_release_before.stat.exists
+            or ('Production candidate NOT staged: the pinned site renderer is not staged' in (demo1_build_candidate_notice.msg | default('')))
           - ('NOT verified' in (demo1_build_units_notice.msg | default(''))) == (not demo1_build_converge_release_before.stat.exists)
         quiet: true
         fail_msg: >-
-          A plan did not name the slots with no site candidate as NOT rendered, or did not say whether the colour
-          units were verified as the host's state requires.
+          A plan did not name the slots with no site candidate as NOT rendered, did not say whether the production
+          candidate was staged, or did not say whether the colour units were verified as the host's state requires.
       when: ansible_check_mode
 
     - name: Look at the watched paths after a plan

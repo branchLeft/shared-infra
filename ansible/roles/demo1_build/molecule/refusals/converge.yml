@@ -479,7 +479,71 @@
     converge_case:
       plant: leak
       host: Canary-Leak-Probe.invalid
-      expect: 'refused the edge input of slot(s) 0'
+      expect: 'refused the wildcard base or the edge input of the occupied slot(s) 0, 1'
+
+# The DNS token file Caddy reads as root. The role only looks at it, and refuses a file
+# that is a link, a directory, not root's, open to others or empty, each with its own
+# message naming the path and never a value. The control is the valid token that prepare
+# placed: the valid edge input case above stages a candidate only with it in place, and
+# each case here puts it back.
+- name: Case refused_token_link, refuse a DNS token file that is a link
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: link
+      expect: 'is a link.'
+
+- name: Case refused_token_directory, refuse a DNS token file that is a directory
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: directory
+      expect: 'is not a regular file.'
+
+- name: Case refused_token_not_root, refuse a DNS token file that is not root's
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: owner
+      owner: broker
+      expect: 'is not root:root.'
+
+- name: Case refused_token_mode_0644, refuse a DNS token file open to group and others
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: mode
+      mode: '0644'
+      expect: 'is mode 0644.'
+
+- name: Case refused_token_empty, refuse a DNS token file that is empty
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: empty
+      expect: 'is empty.'
+
+# The candidate the renderer prints is refused when it holds an interim certificate or a
+# site beside the wildcard one, whatever produced it. The control is the text unchanged.
+- name: Accept a rendered candidate that is one wildcard site with the DNS-01 tls block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      accepted: true
+
+- name: Case refused_tls_internal, refuse a candidate that asks for the internal certificate authority
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      tls: tls internal
+      expect: 'The candidate holds a tls internal directive.'
+
+- name: Case refused_stray_site, refuse a candidate that holds a second site
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\nhttps://demo-2.site-fixture.invalid {\n    abort\n}\n"
+      expect: 'The candidate must hold exactly one site'
 
 # The colour units. The role refuses to go on when a colour instance does not load,
 # and the message names the missing template, not its path. The control keeps the

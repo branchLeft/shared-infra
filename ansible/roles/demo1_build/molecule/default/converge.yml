@@ -1,8 +1,28 @@
 ---
+# The stated skips of the production candidate. They run first, on a host where nothing is
+# staged yet, so that "nothing staged" is a fact about the skip and not about an earlier
+# apply. The token file the second case names is not placed; the first case's is.
+- name: Case base_unset_is_a_stated_skip, an empty wildcard base stages nothing and says why
+  ansible.builtin.import_playbook: stated_skip.yml
+  vars:
+    converge_case:
+      base: ''
+      token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+      expect: 'the wildcard base (demo1_build_wildcard_base) is not set'
+
+- name: Case token_missing_is_a_stated_skip, a token file that is not placed stages nothing and says why
+  ansible.builtin.import_playbook: stated_skip.yml
+  vars:
+    converge_case:
+      base: site-fixture.invalid
+      token_file: /etc/branchleft/secrets/demo-dns-not-placed
+      expect: 'no DNS token file is placed at /etc/branchleft/secrets/demo-dns-not-placed'
+
 - name: Converge
   hosts: all
   gather_facts: false
   vars:
+    demo1_build_wildcard_base: site-fixture.invalid
     converge_sudoers_path: /etc/sudoers.d/branchleft-slot
     converge_slots_dir: /var/lib/branchleft/broker-slots
     converge_flag: /var/lib/branchleft-broker/drain-flags/0-a.drain
@@ -43,20 +63,39 @@
       ansible.builtin.include_role:
         name: branchleft.demo1_build
 
-    # The site candidates. The prepare step gives slot 0 an edge input and no other
-    # slot one, so the role must print one NOT rendered line for each of the six others,
-    # and no more. A silent skip would read as a configured host. The lines are read
-    # from the role's register, which holds what each debug task printed.
-    - name: Assert the role named each of the six slots with no edge input as NOT rendered
+    # The site candidates. The prepare step gives slots 0 and 1 an edge input and no other
+    # slot one, so the role must print one NOT rendered line for each of the five others,
+    # and no more, and no notice that the production candidate was not staged (the base is
+    # set, the token file is placed and the renderer is staged). A silent skip would read
+    # as a configured host. The lines are read from the role's register, which holds what
+    # each debug task printed.
+    - name: Assert the role named each of the five slots with no edge input as NOT rendered
       ansible.builtin.assert:
         that:
-          - demo1_build_site_not_rendered == ['1', '2', '3', '4', '5', '6']
-          - demo1_build_site_notices.results | map(attribute='msg') | select('search', 'NOT rendered') | list | length == 6
+          - demo1_build_site_not_rendered == ['2', '3', '4', '5', '6']
+          - demo1_build_site_notices.results | map(attribute='msg') | select('search', 'NOT rendered') | list | length == 5
           - demo1_build_site_unstaged_notices.results | default([]) | selectattr('skipped', 'undefined') | list | length == 0
+          - demo1_build_candidate_notice.skipped | default(false)
         quiet: true
         fail_msg: >-
-          The site candidates are not the six slots with no edge input, or a slot with no input was not named as
-          NOT rendered. A silent skip would pass as a configured host.
+          The site candidates are not the five slots with no edge input, a slot with no input was not named as
+          NOT rendered, or the production candidate was reported as not staged. A silent skip would pass as a
+          configured host.
+      when: not ansible_check_mode
+
+    # The role looks at the DNS token file and never opens it: the stat result that stays in
+    # the run's facts holds no checksum, no mime type and no content, each of which opens the
+    # file. The value itself is the stand-in prepare placed; verify scans the log and the
+    # staged candidate for it.
+    - name: Case secrets_never_logged, the role's look at the token file did not open it
+      ansible.builtin.assert:
+        that:
+          - demo1_build_dns_token_stat.stat.exists
+          - demo1_build_dns_token_stat.stat | dict2items | map(attribute='key') | intersect(['checksum', 'mimetype', 'charset', 'content']) | length == 0
+        quiet: true
+        fail_msg: >-
+          The role's stat of the DNS token file read it (a checksum, a mime type or its content). The role must
+          only look at the file.
       when: not ansible_check_mode
 
     # The control for the second writer: the sudoers grant belongs to

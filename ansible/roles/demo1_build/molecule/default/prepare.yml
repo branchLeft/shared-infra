@@ -87,23 +87,49 @@
         group: root
         mode: '0644'
 
-    # The owner's edge input for slot 0, as the owner places it at go-live: root's, mode
-    # 0600, read only by the pinned site renderer. The hostname is a made-up name under
-    # the reserved .invalid top-level domain. It is hidden from the log (no_log), as the
-    # real input would be. Only slot 0 has one, so the other six slots must read NOT
-    # rendered.
-    - name: Place the owner's edge input for slot 0, root's and mode 0600
+    # The owner's edge inputs for slots 0 and 1, as the owner places them at go-live: root's,
+    # mode 0600, read only by the pinned site renderer. Each hostname is a made-up name under
+    # the reserved .invalid top-level domain, exactly one label below the wildcard base the
+    # converge sets (site-fixture.invalid). They are hidden from the log (no_log), as the real
+    # inputs would be. Two slots are occupied, so the one-call render is proved to hold both;
+    # the other five slots must read NOT rendered.
+    - name: Place the owner's edge input for each of two slots, root's and mode 0600
       ansible.builtin.copy:
         content: |
           {
-            "displayHostname": "demo-0.site-fixture.invalid",
+            "displayHostname": "demo-{{ item }}.site-fixture.invalid",
             "admittedHostname": null,
             "gate": {"kind": "passphrase"},
             "requestBodyMaxSize": "10MiB",
             "contentSecurityPolicy": "default-src 'self'",
             "contentSecurityPolicyMode": "enforcing"
           }
-        dest: /etc/branchleft/demo-0.edge.json
+        dest: '/etc/branchleft/demo-{{ item }}.edge.json'
+        owner: root
+        group: root
+        mode: '0600'
+      loop: ['0', '1']
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+      diff: false
+
+    # The owner's DNS token, as the owner places it once: a file in the root-only secrets
+    # directory, root's and mode 0600. The value is a stand-in that is not a credential,
+    # and it is the canary the scenarios scan for: the role only looks at the file, so the
+    # value must be in no log and no candidate. It is hidden here for the same reason.
+    - name: Make the secrets directory, root's and closed to everyone else
+      ansible.builtin.file:
+        path: /etc/branchleft/secrets
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Place the owner's DNS token file, root's and mode 0600, holding a stand-in value
+      ansible.builtin.copy:
+        content: "STAND-IN-DNS-TOKEN-NOT-A-CREDENTIAL\n"
+        dest: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
         owner: root
         group: root
         mode: '0600'

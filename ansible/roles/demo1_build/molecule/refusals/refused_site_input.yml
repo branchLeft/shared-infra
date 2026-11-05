@@ -13,6 +13,10 @@
 # hostname is the canary, and it must not reach the log). converge_case.expect is the
 # text the refusal must name. A refusal must leave no candidate behind.
 #
+# The step runs with the wildcard base set and the DNS token file and the input of slot
+# 1 that prepare placed left as they are, so the valid case renders two slots and no
+# case is refused for a token or a second input.
+#
 # Each case removes what it planted, puts back the fixture input prepare placed, and
 # removes any candidate it staged. The play is tagged so the idempotence step skips
 # it: the valid case stages a candidate, and the play is a control, not a state.
@@ -21,8 +25,9 @@
   gather_facts: false
   tags: [molecule-idempotence-notest]
   vars:
+    demo1_build_wildcard_base: site-fixture.invalid
     converge_input: /etc/branchleft/demo-0.edge.json
-    converge_candidate: /var/lib/branchleft/demo-candidates/site-0.caddy
+    converge_candidate: /var/lib/branchleft/demo-candidates/Caddyfile
     converge_target: /var/tmp/demo1-site-input-target
   tasks:
     # The positive control for the log scan in verify.yml: the scan reads the log of
@@ -105,7 +110,7 @@
             msg: The role accepted an edge input it must refuse.
           when: converge_case.plant != 'valid'
 
-        - name: Look at the candidate the valid input made
+        - name: Look at the Caddyfile the valid input made
           ansible.builtin.stat:
             path: '{{ converge_candidate }}'
             follow: false
@@ -113,14 +118,14 @@
           register: demo1_build_converge_candidate
           when: converge_case.plant == 'valid'
 
-        - name: Assert the valid input made root's mode 0600 candidate for slot 0
+        - name: Assert the valid input made the root-only mode 0600 Caddyfile
           ansible.builtin.assert:
             that:
               - demo1_build_converge_candidate.stat.isreg
               - demo1_build_converge_candidate.stat.pw_name == 'root'
               - demo1_build_converge_candidate.stat.mode == '0600'
             quiet: true
-            fail_msg: The valid edge input did not make root's mode 0600 candidate for slot 0.
+            fail_msg: The valid edge input did not make the root-only mode 0600 Caddyfile.
           when: converge_case.plant == 'valid'
 
       rescue:
