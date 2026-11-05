@@ -30,9 +30,9 @@ name: Ansible delivery
 #
 # The apply key and the per-host apply keys are environment secrets, named here like the others:
 # only the job in the environment reads them, after approval. The per-host check keys,
-# ANSIBLE_HOST_CHECK_KEYS, are a repository secret that the drift caller passes too. The six
-# repository secrets (the jump pair: both or neither;
-# the push list: optional, and empty means every host is pulled) are named one by one; `secrets: inherit` passes all.
+# ANSIBLE_HOST_CHECK_KEYS, are a repository secret that the drift caller passes too. The seven
+# repository secrets (the jump pair: both or neither; the push list: optional, and empty means
+# every host is pulled) are named one by one; `secrets: inherit` passes all.
 # The push list, ANSIBLE_PUSH_HOSTS, is one user@host per line, a subset of ANSIBLE_HOSTS: the
 # hosts that never open a connection, reached through the jump host with push-playbook. The
 # owner creates it; its value is never written in this repository.

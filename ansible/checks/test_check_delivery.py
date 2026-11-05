@@ -281,7 +281,12 @@ class CallerTests(unittest.TestCase):
     def test_a_wrong_host_key_map_expression_is_named(self) -> None:
         # The apply map comes from the environment's own secret, never the shared apply key or
         # the check map, and a literal is no secret.
-        wrong = ("", "literal-value", "${{ secrets.SSH_APPLY_KEY }}", "${{ secrets.ANSIBLE_CHECK_KEY }}")
+        wrong = (
+            "",
+            "literal-value",
+            "${{ secrets.SSH_APPLY_KEY }}",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+        )
         for name in ("ssh_host_check_keys", "ssh_host_apply_keys"):
             for value in wrong:
 

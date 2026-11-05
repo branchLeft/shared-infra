@@ -234,7 +234,10 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
 
 
 def secret_findings(secrets: object) -> list[str]:
-    """Check the call names its nine secrets one by one: keys, per-host key maps, push list, jump pair."""
+    """Check the call names its nine secrets one by one.
+
+    The nine are the keys, the per-host key maps, the push list and the jump pair.
+    """
     if secrets == "inherit":
         return [
             "secrets: inherit passes every secret of the repository to the call: name the nine "
@@ -569,8 +572,9 @@ def main(argv: Sequence[str]) -> int:
                 findings.append(problem)
         if args.secrets is None:
             notes.append(
-            f"the secrets were not listed, so {APPLY_KEY} and {HOST_APPLY_KEYS} were not checked"
-        )
+                f"the secrets were not listed, so {APPLY_KEY} and {HOST_APPLY_KEYS} were "
+                "not checked"
+            )
         findings.extend(environment_findings(args.name, answers[0], answers[1], answers[2]))
     for finding in findings:
         print(f"FAIL {finding}")
