@@ -1,0 +1,110 @@
+---
+# One case of the candidate refusal, imported by converge.yml. The refusal step runs alone
+# on a stand-in text shaped like the renderer's output for two slots, because the pinned
+# renderer cannot be made to print a refused one (tasks/_candidate_refusal.yml).
+#
+# The role asks Caddy about the text, and this container has no Caddy: docker is a stand-in
+# that answers with the JSON that real Caddy printed for the same change (README, "How the
+# candidate is judged"). The text shows the spelling; the stand-in ignores it.
+#
+# converge_case.adapted names the recorded answer (adapted-<name>.json, default good), tls
+# replaces the site's tls block, global_option is added to the global block, append is
+# added after the text, expect is what the refusal must name, accepted: true is the
+# control, and no_answer: true is a Caddy that cannot adapt the text.
+- name: Refuse or accept a rendered candidate
+  hosts: all
+  gather_facts: false
+  vars:
+    converge_default_tls: "tls {\n        dns hetzner {file./etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard}\n    }"
+    converge_tls: '{{ converge_case.tls | default(converge_default_tls) }}'
+    converge_global: "{{ converge_case.global_option | default('') }}"
+    converge_text: '{{ converge_good_text }}{{ converge_case.append | default("") }}'
+    converge_fixtures: '{{ playbook_dir }}/../../tests/unit/fixtures'
+    converge_answer: /etc/stand-in-caddy-adapt.json
+    converge_good_text: |
+      {
+          admin off
+          {{ converge_global }}
+      }
+
+      (slot0-upstream) {
+          reverse_proxy 127.0.0.1:9300
+      }
+
+      *.site-fixture.invalid {
+          {{ converge_tls }}
+          @slot0 host demo-0.site-fixture.invalid
+          handle @slot0 {
+              import slot0-upstream
+          }
+
+          @slot1 host demo-1.site-fixture.invalid
+          handle @slot1 {
+              import slot0-upstream
+          }
+
+          handle {
+              abort
+          }
+      }
+  tasks:
+    - name: Run the role's candidate refusal on the stand-in text
+      when: not ansible_check_mode
+      block:
+        - name: Give the stand-in docker the answer real Caddy printed for this case
+          ansible.builtin.copy:
+            src: '{{ converge_fixtures }}/adapted-{{ converge_case.adapted | default("good") }}.json'
+            dest: '{{ converge_answer }}'
+            owner: root
+            group: root
+            mode: '0600'
+          changed_when: false
+          when: not (converge_case.no_answer | default(false))
+
+        - name: Take the stand-in docker's answer away, as a Caddy that cannot adapt the text
+          ansible.builtin.file:
+            path: '{{ converge_answer }}'
+            state: absent
+          changed_when: false
+          when: converge_case.no_answer | default(false)
+
+        - name: Run the refusal step on its own
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _candidate_refusal.yml
+          vars:
+            demo1_build_wildcard_base: site-fixture.invalid
+            demo1_build_caddy_image: 'demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+            demo1_build_candidate_text: '{{ converge_text }}'
+
+        - name: Fail if a candidate the case must refuse was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a candidate it must refuse.
+          when: not (converge_case.accepted | default(false))
+
+      rescue:
+        - name: Assert the control case was not refused
+          ansible.builtin.assert:
+            that:
+              - not (converge_case.accepted | default(false))
+            quiet: true
+            fail_msg: 'The role refused the unchanged candidate: {{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the refusal was the one this case is for and names no hostname
+          ansible.builtin.assert:
+            that:
+              - converge_case.expect in (ansible_failed_result.msg | default(''))
+              - "'site-fixture' not in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: 'The role failed for a reason other than the one this case is for, or named a hostname: {{ ansible_failed_result.msg | default("") }}'
+
+      always:
+        - name: Put the stand-in docker's answer back to the unchanged renderer output
+          ansible.builtin.copy:
+            src: '{{ converge_fixtures }}/adapted-good.json'
+            dest: '{{ converge_answer }}'
+            owner: root
+            group: root
+            mode: '0600'
+          changed_when: false
+          when: not ansible_check_mode

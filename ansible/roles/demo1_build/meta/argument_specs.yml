@@ -12,8 +12,11 @@ argument_specs:
       health router's template unit from the pinned renderers' output. It
       checks, read-only, that the broker account, the state directories and the
       sudoers grant that broker_deploy installs are what the pinned generator
-      renders. It never writes the sudoers file, never runs a slot reset, never
-      runs the go-live step, never writes the live edge, and starts nothing.
+      renders. It stages two candidates for the owner, never the live edge: the
+      edge's upstream fragment and, once the wildcard base is set and the owner
+      has placed the DNS token file, one Caddyfile for every slot that has an
+      edge input. It never reads the DNS token. It never writes the sudoers file,
+      never runs a slot reset, never runs the go-live step, and starts nothing.
     author: branchLeft
     options:
       demo1_build_source_sha:
@@ -24,7 +27,7 @@ argument_specs:
           together with the files under files/ghost-platform and every checksum
           in demo1_build_release_files. It must be at or after the commit that
           moved the drain flags to /var/lib/branchleft-broker/drain-flags.
-        default: 5e52f78427cab104438057164e4baa16b329875c
+        default: 595bcce0ee2bb1c7f8de565cf008060ea43122cf
       demo1_build_release_files:
         type: list
         elements: dict
@@ -45,21 +48,21 @@ argument_specs:
             description: The 64-character lower-case sha256 of the file under files/ghost-platform, which is the file at the pinned commit.
         default:
           - path: demo-host/provision/branchleft_slot.py
-            sha256: 2e2279f0067d91296e1b309f6cbe71a3d276d7ccdbbd58aa4f99f81ce85ba80b
+            sha256: 338ed8ad8a4e74ea2be7cebbbb05a4766a66367fab5b8ec8e9df4fc30fc2c39f
           - path: demo-host/provision/demo_go_live.py
-            sha256: 21da8cc0b1e8fb69cd3f116187fee42cf1fbea8fd3c1466c5fb25ebc3a38bed5
+            sha256: deab5c8c780de0c23ad8ce4459ef33ae5ee5f6e577fe5b7311a77d045b332677
           - path: demo-host/provision/demo_sidecar.py
             sha256: f3d0373bd80d4ef7f58b60d3c555825b39283f272eb71d26dcb91610cfa7ae66
           - path: demo-host/provision/demo_uid_claims.py
             sha256: 2d2536eb516ed5fab1e743cd1fa974ac6339c9334b529db7d94c47cc19152230
           - path: demo-host/provision/health_router.py
-            sha256: 5eac21b7ab44ad0b1a308f0ac8b7da0d1d2db9dfb2cd1e4dcd034d5223036a15
+            sha256: 4fd5c91017ad67ae4ae99317583b4346e9c0a738e7aa207245c6f5ee8fbe04d0
           - path: demo-host/provision/render_colour_units.py
             sha256: 64e33649290e3501f291e31921c7ff94e4b4de511b06bea7bf9b7c11335d2a81
           - path: demo-host/provision/render_demo_edge.py
-            sha256: 7391e93adda924e863f33610490581da050e73153882cc471945d5b38a848ad8
+            sha256: 8b42f5de63114d201844539c449b1466d0b504422724821351a2e6c712d619b0
           - path: demo-host/provision/render_demo_site.py
-            sha256: a34c5dec7d174fed868fc5fc73b2ef61773cf5dc4aa708fd57295486e9460cba
+            sha256: 2f2841c8b612af87bc9f92c38acd7f932a2284d831f9bddbc1fff87f8c9d010f
           - path: demo-host/provision/render_router_unit.py
             sha256: 3a0f71cc61e45e416f983ef86c02f1b419565a6c34511d1a60f35092454dab3a
           - path: demo-host/provision/render_slot_sudoers.py
@@ -87,3 +90,42 @@ argument_specs:
           has exactly one value that can pass on an apply; any other value is
           refused by the comparison or by the path check, whichever comes first.
         default: /usr/local/sbin/branchleft-slot
+      demo1_build_wildcard_base:
+        type: str
+        description: >-
+          The base domain of the demo's one wildcard site, which Caddy
+          obtains the certificate of by DNS-01. Every demo hostname is one label
+          below it. Lower-case, at least two labels of letters, digits and inner
+          hyphens, with no wildcard character and no leading or trailing dot; the
+          role refuses anything else. Empty, the production candidate is not
+          staged, and the plan and apply say so.
+        default: ''
+      demo1_build_dns_token_file:
+        type: str
+        description: >-
+          Path of the root-only file the owner places once, holding the DNS-01
+          token of the demo's own DNS project and nothing else. A file directly
+          in /etc/branchleft/secrets, named with letters, digits, dot, underscore
+          and hyphen. The role never reads it, never takes a checksum of it and
+          never copies it: it looks at the file's type, owner, mode and size, and
+          the candidate names the path for Caddy. A file that is not placed yet
+          is a stated skip, not a failure. A link, a directory, a file not owned
+          by root:root, a file with a group or other bit or an execute bit, and
+          an empty file are each refused.
+        default: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+      demo1_build_caddy_image:
+        type: str
+        description: >-
+          The Caddy image that judges the production candidate, pinned by its
+          digest: <name>@sha256: and 64 hex digits, with no tag and no image ID.
+          It is the demo edge's image, Caddy with the Hetzner DNS module, loaded on
+          the host by the owner with docker save and docker load; the role never
+          pulls it. The role finds it with docker image inspect and wants exactly
+          one image whose RepoDigests hold the pinned digest; an image that lists
+          anything else is refused. The role has Caddy adapt the rendered Caddyfile
+          in it, with no network and no writable filesystem, and judges the config
+          Caddy would run: one wildcard server on port 443, one ACME issuer with
+          the DNS-01 provider and the token file, and nothing else. Empty, or an
+          image that is not loaded, the production candidate is not staged, and
+          the plan and apply say so.
+        default: ''

@@ -40,3 +40,33 @@
     fail_msg: >-
       The wrapper path must be an absolute path of letters, digits, dot, underscore, hyphen and slash,
       with no dot segment, no doubled slash and no trailing slash.
+
+- name: Refuse a wildcard base that is not a plain lower-case domain of two or more labels
+  ansible.builtin.assert:
+    that:
+      - demo1_build_wildcard_base is string
+      - demo1_build_wildcard_base == '' or demo1_build_wildcard_base is match(demo1_build_wildcard_base_pattern)
+    quiet: true
+    fail_msg: >-
+      The wildcard base must be empty or a lower-case domain of at least two labels, each of letters,
+      digits and inner hyphens, with no wildcard character and no leading or trailing dot.
+
+- name: Refuse a DNS token file path that is not a file in the secrets directory
+  ansible.builtin.assert:
+    that:
+      - demo1_build_dns_token_file is string
+      - demo1_build_dns_token_file is match(demo1_build_dns_token_path_pattern)
+    quiet: true
+    fail_msg: >-
+      The DNS token file path must be a file directly in /etc/branchleft/secrets, named with letters,
+      digits, dot, underscore and hyphen.
+
+- name: Refuse a Caddy image that is not a name pinned by its digest
+  ansible.builtin.assert:
+    that:
+      - demo1_build_caddy_image is string
+      - demo1_build_caddy_image == '' or demo1_build_caddy_image is match(demo1_build_caddy_image_pattern)
+    quiet: true
+    fail_msg: >-
+      The Caddy image must be empty or a name pinned by its digest: <name>@sha256: and 64 hex digits,
+      with no tag. A tag alone can be re-pointed, and an image ID is not found by a digest lookup.

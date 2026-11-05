@@ -56,7 +56,8 @@
         - /run/demo-broker-state
         - /var/tmp/demo1-link-target
         - /var/tmp/demo1-site-input-target
-        - /var/lib/branchleft/demo-candidates/site-0.caddy
+        - /var/tmp/demo1-token-target
+        - /var/lib/branchleft/demo-candidates/Caddyfile
         - /etc/systemd/system/branchleft-compose@demo-0-a.service.d
         - /etc/branchleft/demo1-drain-flags-preseeded
         - /etc/branchleft/tenant-uids
@@ -74,7 +75,7 @@
 
     - name: Look at the staged release
       ansible.builtin.stat:
-        path: /opt/branchleft/demo-host/releases/5e52f78427cab104438057164e4baa16b329875c/demo-host/provision/render_slot_sudoers.py
+        path: /opt/branchleft/demo-host/releases/595bcce0ee2bb1c7f8de565cf008060ea43122cf/demo-host/provision/render_slot_sudoers.py
         follow: false
         checksum_algorithm: sha256
       register: demo1_build_verify_generator
@@ -108,6 +109,26 @@
         quiet: true
         fail_msg: A case left the stand-in template removed or changed.
 
+    # The token cases put back the token file prepare placed, in every outcome.
+    - name: Look at the DNS token file after the cases
+      ansible.builtin.stat:
+        path: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+        follow: false
+        get_checksum: false
+        get_mime: false
+      register: demo1_build_verify_token
+
+    - name: Assert the DNS token file is back, a regular file of root:root mode 0600 with something in it
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_token.stat.isreg
+          - demo1_build_verify_token.stat.pw_name == 'root'
+          - demo1_build_verify_token.stat.gr_name == 'root'
+          - demo1_build_verify_token.stat.mode == '0600'
+          - demo1_build_verify_token.stat.size > 0
+        quiet: true
+        fail_msg: A token case left the DNS token file removed, changed or empty.
+
     # The log scan (ANS-16). Every case of this run wrote its output to the run's Ansible
     # log, in the scenario's scratch directory (molecule.yml). The site cases print a
     # control line that proves the scan reads the log; the leak case's hostname is the
@@ -123,6 +144,7 @@
         that:
           - "'Scan control line' in demo1_build_verify_log"
           - "'Canary-Leak-Probe' not in demo1_build_verify_log"
+          - "'STAND-IN-DNS-TOKEN' not in demo1_build_verify_log"
         quiet: true
         fail_msg: >-
           The scenario's log does not hold the scan control, or it holds the canary a refused site input carried
