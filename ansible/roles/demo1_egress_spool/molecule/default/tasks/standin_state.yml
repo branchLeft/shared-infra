@@ -32,6 +32,39 @@
       {{ lookup('ansible.builtin.file', standin_golden_compose) | regex_findall("image: '([^']+)'") | first }}
     standin_images: '{{ (standin_override | default({})).images | default([standin_golden_image, standin_bumped_pin]) }}'
 
+# What `docker image inspect` lists for an image that is on the host. With neither key the
+# stand-in lists one image whose RepoDigests is the asked reference. A case that wants a
+# wrong or missing digest, or two images, sets the key, and the files go away again when a
+# later call sets neither (the reset at the end of a case passes an empty override).
+- name: Write the digests the stand-in docker lists for an image
+  ansible.builtin.copy:
+    content: |
+      # stand-in docker RepoDigests, one per line
+      {% for digest in standin_override.image_digests %}
+      {{ digest }}
+      {% endfor %}
+    dest: /var/lib/standin-docker/image-digests
+    owner: root
+    group: root
+    mode: '0644'
+  when: standin_override is defined and standin_override.image_digests is defined
+
+- name: Take back the digests where the override names none
+  ansible.builtin.file:
+    path: /var/lib/standin-docker/image-digests
+    state: absent
+  when: standin_override is not defined or standin_override.image_digests is not defined
+
+- name: Write how many images the stand-in docker lists
+  ansible.builtin.copy:
+    # A bare number would be read back by Ansible as an integer and lose its newline, so the
+    # file holds a key and the stand-in docker takes the value after it.
+    content: "count={{ (standin_override | default({})).image_count | default(1) }}\n"
+    dest: /var/lib/standin-docker/image-count
+    owner: root
+    group: root
+    mode: '0644'
+
 - name: Write what the stand-in docker inspect reports
   ansible.builtin.copy:
     content: |

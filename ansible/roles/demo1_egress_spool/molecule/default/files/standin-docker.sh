@@ -37,7 +37,30 @@ case $1 in
           echo "Error: No such image: $3" >&2
           exit 1
         fi
-        echo '[]'
+        # Real docker prints a JSON list, one object per image, with the digests it
+        # knows the image by in RepoDigests. By default the stand-in lists one image whose
+        # RepoDigests is the asked reference when that is a name@digest, as an image
+        # loaded under that name lists. tasks/standin_state.yml can replace the digests
+        # (image-digests, one per line, none for an empty list) or the number of images
+        # (image-count). The stand-in proves the role's reading, not Docker's.
+        digests=""
+        if [ -f "$state/image-digests" ]; then
+          while IFS= read -r line; do
+            case $line in '#'* | '') continue ;; esac
+            digests="$digests${digests:+,}\"$line\""
+          done < "$state/image-digests"
+        else
+          case $3 in *@sha256:*) digests="\"$3\"" ;; esac
+        fi
+        count=$(sed -n 's/^count=//p' "$state/image-count" 2>/dev/null)
+        count=${count:-1}
+        out=""
+        n=0
+        while [ "$n" -lt "$count" ]; do
+          out="$out${out:+,}{\"Id\": \"sha256:0000000000000000000000000000000000000000000000000000000000000000\", \"RepoDigests\": [$digests]}"
+          n=$((n + 1))
+        done
+        echo "[$out]"
         ;;
       *) exit 1 ;;
     esac
