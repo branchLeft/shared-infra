@@ -748,7 +748,9 @@
   ansible.builtin.import_playbook: refused_candidate.yml
   vars:
     converge_case:
-      append: "\n:8086 {\n\t@leak expression ph(req, \"fi\" + \"le./etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard\").startsWith(\"A\")\n\trespond @leak \"1\"\n}\n"
+      append: "\n:8086 {\n\t@leak expression ph(req, \"fi\" + \
+        \"le./etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard\").startsWith(\"A\")\n\
+        \trespond @leak \"1\"\n}\n"
       expect: 'REFUSED text-expression'
 
 - name: Case refused_handler_expression, refuse an adapted config whose matcher is an expression
