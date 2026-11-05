@@ -75,7 +75,7 @@
 
     - name: Look at the staged release
       ansible.builtin.stat:
-        path: /opt/branchleft/demo-host/releases/5e52f78427cab104438057164e4baa16b329875c/demo-host/provision/render_slot_sudoers.py
+        path: /opt/branchleft/demo-host/releases/595bcce0ee2bb1c7f8de565cf008060ea43122cf/demo-host/provision/render_slot_sudoers.py
         follow: false
         checksum_algorithm: sha256
       register: demo1_build_verify_generator

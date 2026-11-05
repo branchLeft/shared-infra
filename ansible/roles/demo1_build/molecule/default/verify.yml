@@ -12,7 +12,7 @@
   vars:
     verify_slots: ['0', '1', '2', '3', '4', '5', '6']
     verify_colours: [a, b]
-    verify_release: /opt/branchleft/demo-host/releases/5e52f78427cab104438057164e4baa16b329875c
+    verify_release: /opt/branchleft/demo-host/releases/595bcce0ee2bb1c7f8de565cf008060ea43122cf
     verify_wrapper: /usr/local/sbin/branchleft-slot
     verify_sidecar: /usr/local/lib/branchleft/demo_sidecar.py
     verify_router: /usr/local/lib/branchleft/health_router.py

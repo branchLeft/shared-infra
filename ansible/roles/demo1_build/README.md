@@ -251,7 +251,7 @@ before it is staged, and none of them names a hostname.
 
 ### The pin
 
-The commit is `5e52f78427cab104438057164e4baa16b329875c`, which is at or after
+The commit is `595bcce0ee2bb1c7f8de565cf008060ea43122cf`, which is at or after
 `0a23634b652a37260d77e656ded3c37ff24d62ec`, the ghost-platform commit that moved the
 drain flags out of the slot directory to
 `/var/lib/branchleft-broker/drain-flags`. A pin older than that commit puts flags
