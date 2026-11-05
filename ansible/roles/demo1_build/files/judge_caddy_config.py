@@ -5,15 +5,10 @@ adapt the candidate (`caddy adapt --adapter caddyfile`), and this program judges
 JSON that comes back, so whitespace, a brace on a line of its own, or any other
 spelling of the same Caddyfile cannot change the verdict.
 
-Two things the adapted JSON cannot show are judged on the raw candidate, before it is
-adapted. Caddy adapts with the environment and the filesystem of the judging container,
-which hold nothing; the edge runs with its own. A `{$NAME}` is replaced by the
-environment's value as the text is read, so it can bring in a whole site that the
-judging container never sees, and an `import` of a path brings in the files that match
-it, which in the judging container are none. Neither is spelled differently by being
-indented or broken across lines: both are fixed syntax of Caddy's lexer. The renderer
-emits neither, so the candidate may hold no `{$`, no `{env.`, no `{file.` but the DNS
-token reference, once, and no `import` but a snippet defined in the text.
+Two things the adapted JSON cannot show are judged on the raw candidate, before Caddy
+adapts it: a `{$NAME}` and an `import` of a path. Caddy adapts with the empty environment
+and filesystem of the judging container, and the edge runs with its own. Both are fixed
+syntax of Caddy's lexer, not spellings (README, "How the candidate is judged").
 
 The config is read from the environment variable named by --env, because the command
 that runs this program is a script task and a script task has no standard input. The

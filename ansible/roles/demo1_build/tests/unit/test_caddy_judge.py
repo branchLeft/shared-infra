@@ -1,11 +1,9 @@
 """Tests of the judge of the demo edge's candidate, against real Caddy.
 
-The role does not read the candidate Caddyfile. It has Caddy adapt it and judges the JSON
-Caddy prints (files/judge_caddy_config.py). Caddy ignores indentation and line breaks, so
-the cases here are the spellings a text check would miss: an indented second site, a site
-opened on the closing brace of the wildcard site, a plain-HTTP site, an internal issuer in
-the global block or in the site, and the global options that change how certificates are
-made.
+The role has Caddy adapt the candidate and judges the JSON Caddy prints
+(files/judge_caddy_config.py). The cases here are the spellings a text check would miss:
+an indented second site, a site opened on the closing brace, a plain-HTTP site, an
+internal issuer, and the global options that change how certificates are made.
 
 Two layers. FixtureTests judge adapted JSON that was recorded from real Caddy, with no
 Docker. RealCaddyTests build the demo edge's Caddy (2.11.4 with the Hetzner DNS module, the
@@ -17,9 +15,8 @@ recorded files through a stand-in for Docker, so these tests are what ties them 
 Caddy.
 
 A third layer runs the role's image check (docker image inspect and the RepoDigests test)
-against a real Docker on each image store, the classic one and the containerd one, in
-throwaway Docker-in-Docker daemons with no network, and runs the molecule stand-in for docker
-beside them, so the stand-in cannot pass where a real Docker would not.
+against a real Docker on the classic and the containerd image store, in throwaway
+Docker-in-Docker daemons with no network, beside the molecule stand-in for docker.
 
 Set DEMO1_BUILD_RECORD=1 to rewrite the fixtures from real Caddy instead of comparing.
 Set DEMO1_BUILD_TEST_CADDY_IMAGE to an image ID to skip the build.
