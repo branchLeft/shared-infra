@@ -111,13 +111,17 @@ demo1_build_site_render_flags: |-
 # The stated skips of the production candidate. Each starts with the same words, so a
 # plan and an apply say plainly that nothing was staged and why.
 demo1_build_wildcard_unset_text: 'Production candidate NOT staged: the wildcard base (demo1_build_wildcard_base) is not set'
+demo1_build_token_missing_text: "{{ 'Production candidate NOT staged: no DNS token file is placed at ' ~ demo1_build_dns_token_file }}"
 demo1_build_no_occupied_text: 'Production candidate NOT staged: no slot has an owner-placed edge JSON'
 demo1_build_candidate_unstaged_text: >-
   Production candidate NOT staged: the pinned site renderer is not staged on this host
   (check mode, first plan)
 
+# The modes a DNS token file may have: no group or other bit and no execute bit.
+demo1_build_dns_token_modes: ['0000', '0200', '0400', '0600']
+
 # What the rendered text is refused for (_candidate_refusal.yml). Each pattern is held
-# apart so a case can show its own refusal. The renderer prints nothing of these.
+# apart so a case can show its own refusal.
 demo1_build_tls_internal_pattern: '(?i)tls\s+internal'
 demo1_build_local_certs_pattern: '(?i)local_certs'
 demo1_build_skip_install_trust_pattern: '(?i)skip_install_trust'
@@ -159,6 +163,9 @@ demo1_build_slot_pattern: '^[0-9]+\Z'
 demo1_build_path_pattern: '^/[A-Za-z0-9._/-]+\Z'
 demo1_build_release_path_pattern: '^demo-host/provision/[a-z_]+\.py\Z'
 demo1_build_instance_pattern: '^branchleft-compose@demo-[0-9]+-[a-z]\Z'
+# Lower-case labels of letters, digits and inner hyphens, at least two, no wildcard.
+demo1_build_wildcard_base_pattern: '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
+demo1_build_dns_token_path_pattern: '^/etc/branchleft/secrets/[A-Za-z0-9][A-Za-z0-9._-]*\Z'
 
 # The slot table as strings, whatever type the host's variables gave. The
 # pinned generator's grant is compared with the installed one line for line, so

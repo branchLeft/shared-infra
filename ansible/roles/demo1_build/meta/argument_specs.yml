@@ -12,8 +12,11 @@ argument_specs:
       health router's template unit from the pinned renderers' output. It
       checks, read-only, that the broker account, the state directories and the
       sudoers grant that broker_deploy installs are what the pinned generator
-      renders. It never writes the sudoers file, never runs a slot reset, never
-      runs the go-live step, never writes the live edge, and starts nothing.
+      renders. It stages two candidates for the owner, never the live edge: the
+      edge's upstream fragment and, once the wildcard base is set and the owner
+      has placed the DNS token file, one Caddyfile for every slot that has an
+      edge input. It never reads the DNS token. It never writes the sudoers file,
+      never runs a slot reset, never runs the go-live step, and starts nothing.
     author: branchLeft
     options:
       demo1_build_source_sha:
@@ -87,3 +90,26 @@ argument_specs:
           has exactly one value that can pass on an apply; any other value is
           refused by the comparison or by the path check, whichever comes first.
         default: /usr/local/sbin/branchleft-slot
+      demo1_build_wildcard_base:
+        type: str
+        description: >-
+          The base domain of the demo's one wildcard site, which Caddy
+          obtains the certificate of by DNS-01. Every demo hostname is one label
+          below it. Lower-case, at least two labels of letters, digits and inner
+          hyphens, with no wildcard character and no leading or trailing dot; the
+          role refuses anything else. Empty, the production candidate is not
+          staged, and the plan and apply say so.
+        default: ''
+      demo1_build_dns_token_file:
+        type: str
+        description: >-
+          Path of the root-only file the owner places once, holding the DNS-01
+          token of the demo's own DNS project and nothing else. A file directly
+          in /etc/branchleft/secrets, named with letters, digits, dot, underscore
+          and hyphen. The role never reads it, never takes a checksum of it and
+          never copies it: it looks at the file's type, owner, mode and size, and
+          the candidate names the path for Caddy. A file that is not placed yet
+          is a stated skip, not a failure. A link, a directory, a file not owned
+          by root:root, a file with a group or other bit or an execute bit, and
+          an empty file are each refused.
+        default: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
