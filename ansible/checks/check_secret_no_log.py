@@ -303,6 +303,88 @@ def _loops(root: Path, role_dir: Path) -> list[_Loop]:
     return out
 
 
+class _Bind(NamedTuple):
+    """A name bound by a task's `vars:` (or an include's `apply: vars:`): its parsed value, the
+    name the value is when it is that name alone, and, when the task includes other tasks, the
+    file it names (None when it names no file or a role) with the file that holds the task."""
+
+    key: str
+    trees: list[nodes.Template]
+    bare: str | None
+    rel: str
+    name: str
+    includes: bool
+    target: str | None
+    holder: Path
+
+
+def _include_target(args: object) -> str | None:
+    """The file an include_tasks or import_tasks names: its free-form text, or its file key."""
+    if isinstance(args, str):
+        return args.strip()
+    named = _dict(args).get("file", _dict(args).get("_raw_params"))
+    return named.strip() if isinstance(named, str) else None
+
+
+def _binds_in(items: list[object], path: Path, rel: str, out: list[_Bind]) -> None:
+    for task in items:
+        if not isinstance(task, dict):
+            continue
+        kinds = [k for k in INCLUDE_NAMES if k in task]
+        args = task[kinds[0]] if kinds else None
+        file_include = bool(kinds) and kinds[0].rsplit(".", 1)[-1].endswith("_tasks")
+        scopes = [task.get("vars"), _dict(_dict(args).get("apply")).get("vars")]
+        for scope in scopes:
+            for key, value in _dict(scope).items():
+                if not isinstance(key, str):
+                    continue
+                trees = [
+                    t for t in (_parse(s, rel, "a vars value", []) for s in _strings(value)) if t
+                ]
+                bare = _bare_name(trees[0]) if isinstance(value, str) and len(trees) == 1 else None
+                target = _include_target(args) if file_include else None
+                out.append(
+                    _Bind(
+                        key,
+                        trees,
+                        bare,
+                        rel,
+                        str(task.get("name", "(unnamed)")),
+                        bool(kinds),
+                        target,
+                        path,
+                    )
+                )
+        for key in CONTAINER_KEYS & task.keys():
+            inner = task[key]
+            if isinstance(inner, list):
+                _binds_in(inner, path, rel, out)
+
+
+def _task_paths(role_dir: Path) -> list[Path]:
+    return _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers")
+
+
+def _binds(root: Path, role_dir: Path) -> list[_Bind]:
+    out: list[_Bind] = []
+    for path in _task_paths(role_dir):
+        doc, problem = load_yaml(path)
+        if problem is None and isinstance(doc, list):
+            _binds_in(doc, path, _rel(root, path), out)
+    return out
+
+
+def _followed(bind: _Bind, role_dir: Path) -> bool:
+    """Whether the file an include names is one of the task files the check reads: a literal
+    path, looked for beside the including file and then in the role's tasks directory, as
+    Ansible does. A templated name, a missing file and a role are not followed."""
+    if bind.target is None or "{{" in bind.target or "{%" in bind.target:
+        return False
+    known = {p.resolve() for p in _task_paths(role_dir)}
+    candidates = (bind.holder.parent / bind.target, role_dir / "tasks" / bind.target)
+    return any(c.resolve() in known for c in candidates)
+
+
 def _taint(
     root: Path,
     role_dir: Path,
@@ -316,7 +398,10 @@ def _taint(
     names a tainted variable, to a fixed point, and a variable reached through two secrets names
     both. It follows a loop over a tainted variable into the loop variable the loop names, role
     wide, because an included task file reads that variable: a loop over the attribute seed
-    alone gives a loop variable with the same secret attributes."""
+    alone gives a loop variable with the same secret attributes. A name bound by a task's
+    `vars:` (an include's too) is followed the same way, role wide, because the included file
+    reads it and no_log on an include does not reach the tasks it includes. An include that
+    passes such a name into a file the check cannot read is a finding."""
     partial: Partial = dict(partial_seeds)
     origin: dict[str, set[str]] = {seed: {seed} for seed in seeds}
     for name, attrs in partial.items():
@@ -340,6 +425,7 @@ def _taint(
                     if tree is not None:
                         defs.setdefault(key, []).append(tree)
     loops = _loops(root, role_dir)
+    binds = _binds(root, role_dir)
     changed = True
     while changed:
         changed = False
@@ -370,6 +456,38 @@ def _taint(
                     partial.pop(loop.var, None)
                     origin[loop.var] = origin.get(loop.var, set()) | reached
                     changed = True
+        for bind in binds:
+            if bind.key in pinned:
+                continue
+            hits = set()
+            for tree in bind.trees:
+                hits |= _loaded(tree, partial) & origin.keys()
+            if bind.bare is not None and bind.bare in partial:
+                taken = partial[bind.bare]
+                held = partial.get(bind.key)
+                if bind.key in origin and held is None:
+                    continue
+                merged = taken
+                if held is not None:
+                    secret = held.secret | taken.secret
+                    merged = Attrs(secret, (held.safe & taken.safe) - secret)
+                if merged != held:
+                    partial[bind.key] = merged
+                    origin[bind.key] = origin.get(bind.key, set()) | origin[bind.bare]
+                    changed = True
+            elif hits:
+                reached = set().union(*(origin[hit] for hit in hits))
+                if bind.key in partial or not reached <= origin.get(bind.key, set()):
+                    partial.pop(bind.key, None)
+                    origin[bind.key] = origin.get(bind.key, set()) | reached
+                    changed = True
+    role_binds = [b for b in binds if b.includes and b.key in origin]
+    for bind in role_binds:
+        if not _followed(bind, role_dir):
+            findings.append(
+                f"R1 {bind.rel}: task '{bind.name}' passes {bind.key}, which holds a secret, "
+                "into an include that cannot be followed: name a task file of the role"
+            )
     for loop in loops:
         if loop.var is None and loop.includes:
             if any(_loaded(tree, partial) & origin.keys() for tree in loop.trees):

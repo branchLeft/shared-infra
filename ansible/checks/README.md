@@ -544,7 +544,12 @@ filters. An attribute the spec does not declare is not cleared. A task that loop
 over the option, and names a `loop_control.loop_var`, makes that loop variable a seed for the
 same attributes in every task file of the role, because an `include_tasks` file reads it. A loop
 over a secret that includes tasks and keeps the default `item` is a finding: the included tasks
-cannot be followed through `item`. Names set under a task's `vars:` are not reads.
+cannot be followed through `item`. Names set under a task's `vars:` are not reads, but they
+carry what they are set to: a name bound under `vars:` (an include's, a block's, an include's
+`apply: vars:`) to a value that reads a secret is a secret in every task file of the role, because
+the included file reads it and `no_log` on an include does not reach the tasks it includes. A bare
+partial name keeps its attributes. An include that passes such a name into a file the check
+cannot read (a templated name, a file that is not a task file of the role, a role) is a finding.
 
 How references are read: by Jinja's parser alone (`Environment.parse`, then the names the
 parse tree loads). The check does not compile the template, because Ansible's filters
@@ -574,7 +579,7 @@ What it does not see:
 - R3 checks the table's rows, not what the consuming role does with a value.
 
 Sabotage, each one a copy of the real files with one control broken, and the baseline copy
-clean (`test_check_secret_no_log.py`, 32 tests, green under the pinned ansible-core venv):
+clean (`test_check_secret_no_log.py`, 39 tests, green under the pinned ansible-core venv):
 
 | Sabotage in the copy                                                  | Finding that goes red                                                                     |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -591,6 +596,8 @@ clean (`test_check_secret_no_log.py`, 32 tests, green under the pinned ansible-c
 | `no_log: true` removed from the other four sub-option roles' writes   | R1: must set `no_log: true`, each named by its task                                       |
 | A loop over a secret with an include and the default `item`           | R1: must name a loop_var                                                                  |
 | The tenant secrets write read as `.get(...)`, `.items()`, `.values()` | R1: must set `no_log: true` (a call on the item is a read of the item)                    |
+| A secret bound under an include's `vars:`, written with no `no_log`   | R1: the included file's task names the bound name (secret through ...)                    |
+| A secret bound on an include of a file the check cannot read          | R1: passes the name into an include that cannot be followed                               |
 | A row name that is no option (`monitoring_stack_smtp_passwd`)         | R2: resolves to 0 options, not one                                                        |
 | The loader's rows file made unreadable                                | R2                                                                                        |
 | A secret option with its row removed from the README                  | R3: no row for the no_log option                                                          |

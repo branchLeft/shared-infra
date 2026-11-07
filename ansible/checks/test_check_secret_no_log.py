@@ -471,6 +471,138 @@ class SecretNoLogTest(unittest.TestCase):
                 root = self._secrets_write(expression, no_log=False)
                 self.assertEqual(self._findings(root), [])
 
+    # A name an include binds in its `vars:` is read by the included file, and no_log on the
+    # include does not reach that file, so the name carries the taint of its value.
+
+    def _tenant_alias(self, value: str, no_log: bool) -> Path:
+        """A copy of the tree where the include of the tenants binds `tenant_compose_alias` to
+        `value` and the secrets-file write in _stack.yml writes that name, with or without its
+        no_log and diff: false."""
+        root = self._mutate(
+            TENANT_MAIN,
+            "    tenant_compose_is_spool: false\n",
+            "    tenant_compose_is_spool: false\n    tenant_compose_alias: '{{ " + value + " }}'\n",
+        )
+        path = root / TENANT_STACK
+        text = path.read_text(encoding="utf-8")
+        old = SECRETS_WRITE + "  diff: false\n"
+        self.assertEqual(text.count(old), 1, "sabotage anchor not unique")
+        new = old.replace("tenant_compose_stack.secrets_env_text", "tenant_compose_alias")
+        if not no_log:
+            new = new.replace("  no_log: true\n  diff: false\n", "")
+        path.write_text(text.replace(old, new), encoding="utf-8")
+        return root
+
+    def test_h4_include_var_alias_of_a_secret_attribute_needs_no_log(self) -> None:
+        # Reviewer sabotage 4: the exact shape that passed before the include vars were followed.
+        value = "tenant_compose_stack.secrets_env_text"
+        self.assertEqual(
+            self._findings(self._tenant_alias(value, no_log=True)),
+            [],
+            "the same write with no_log and diff: false must be green, or the red proves nothing",
+        )
+        self._assert_red(
+            self._findings(self._tenant_alias(value, no_log=False)),
+            "R1 " + TENANT_STACK,
+            "Deliver the secrets file",
+            "tenant_compose_alias (secret through tenant_compose_stacks.secrets_env_text)",
+            "must set no_log: true",
+            "must set diff: false (ANS-16)",
+        )
+
+    def test_h4_include_var_alias_of_the_whole_item_keeps_its_secret_attributes(self) -> None:
+        # A bare partial name is bound as the same partial, so its secret attribute still counts.
+        self.assertEqual(
+            self._findings(self._tenant_alias("tenant_compose_stack", no_log=True)), []
+        )
+        self._assert_red(
+            self._findings(self._tenant_alias("tenant_compose_stack", no_log=False)),
+            "Deliver the secrets file",
+            "must set no_log: true",
+        )
+
+    def test_h4_include_var_bound_from_a_non_secret_attribute_stays_clean(self) -> None:
+        root = self._tenant_alias("tenant_compose_stack.slug", no_log=False)
+        self.assertEqual(self._findings(root), [])
+
+    def test_h4_an_alias_of_an_alias_is_followed(self) -> None:
+        root = self._mutate(
+            TENANT_MAIN,
+            "    tenant_compose_is_spool: false\n",
+            "    tenant_compose_is_spool: false\n"
+            "    tenant_compose_first: '{{ tenant_compose_stack.secrets_env_text }}'\n"
+            "    tenant_compose_second: '{{ tenant_compose_first | trim }}'\n",
+        )
+        path = root / TENANT_STACK
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + "\n- name: Appended task\n  ansible.builtin.debug:\n"
+            + "    msg: '{{ tenant_compose_second }}'\n",
+            encoding="utf-8",
+        )
+        self._assert_red(self._findings(root), "Appended task", "tenant_compose_second")
+
+    def _ntfy_include(self, include: str, probe: str) -> Path:
+        """A copy of the tree where the pager role includes a new file, binding the pager token
+        under the name probe_token. `include` is the include task's key line and `probe` the
+        tail of the write task in the included file."""
+        self.count += 1
+        root = _copy_tree(Path(self._scratch.name) / f"tree{self.count}")
+        main = root / NTFY
+        main.write_text(
+            main.read_text(encoding="utf-8")
+            + "\n- name: Probe through an include\n"
+            + include
+            + "  vars:\n    probe_token: '{{ ntfy_pager_pager_token }}'\n  no_log: true\n",
+            encoding="utf-8",
+        )
+        (main.parent / "_probe.yml").write_text(
+            "---\n- name: Write the probe\n  ansible.builtin.copy:\n"
+            "    content: '{{ probe_token }}'\n    dest: /tmp/probe\n" + probe,
+            encoding="utf-8",
+        )
+        return root
+
+    def test_h4_a_whole_secret_bound_on_an_include_needs_no_log_in_the_included_file(self) -> None:
+        include = "  ansible.builtin.include_tasks: _probe.yml\n"
+        self.assertEqual(
+            self._findings(self._ntfy_include(include, "  no_log: true\n  diff: false\n")), []
+        )
+        self._assert_red(
+            self._findings(self._ntfy_include(include, "")),
+            "R1 ansible/roles/ntfy_pager/tasks/_probe.yml",
+            "Write the probe",
+            "probe_token (secret through ntfy_pager_pager_token)",
+            "must set no_log: true",
+        )
+
+    def test_h4_import_tasks_and_a_dictionary_form_are_followed_too(self) -> None:
+        for include in (
+            "  ansible.builtin.import_tasks: _probe.yml\n",
+            "  ansible.builtin.include_tasks:\n    file: _probe.yml\n",
+        ):
+            with self.subTest(include=include):
+                self._assert_red(
+                    self._findings(self._ntfy_include(include, "")),
+                    "R1 ansible/roles/ntfy_pager/tasks/_probe.yml",
+                    "must set no_log: true",
+                )
+
+    def test_h4_a_secret_passed_to_a_file_that_cannot_be_followed_is_red(self) -> None:
+        for include in (
+            "  ansible.builtin.include_tasks: '{{ ntfy_pager_probe_file }}'\n",
+            "  ansible.builtin.include_tasks: missing_file.yml\n",
+            "  ansible.builtin.include_role:\n    name: ntfy_pager\n",
+        ):
+            with self.subTest(include=include):
+                self._assert_red(
+                    self._findings(self._ntfy_include(include, "  no_log: true\n  diff: false\n")),
+                    "R1 " + NTFY,
+                    "Probe through an include",
+                    "probe_token",
+                    "cannot be followed",
+                )
+
     def _append_task(self, relative: str, argument_line: str) -> Path:
         """A copy of the tree with a debug task, without no_log, added to the end of a task file."""
         self.count += 1
