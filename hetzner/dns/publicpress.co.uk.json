@@ -68,6 +68,14 @@
       ]
     },
     {
+      "name": "bl._domainkey",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxhILakyM7YDapZ0m2C/X8rwQzyXiZqAK2P7wAecrq3DIb018rk4Ts6RlFrMh5NHgGGAY6nKC+H7uRidtzU7Q3Qso1FnfdQWoV0SWPw8TbKh0OsdzsS67Qa9uzGFzWH9qzr7FvuPzfykWZR062/CAWDGcsrzQ0LbgVp5hNnymlSp3hsJjAdo6lSg\" \"KKOwaDw7Zl76C9POHlJjyabVcdOVAJF6uSaDwxiJ/6GX/pGPBRUErkWKnI35lNk3k2BpfraI88WeP3wPphdxUqqmUPoidKNk5Kc1++f4EtKpWmWcAgmLhXvlJIKx7vCiKOH15+th0K5O4/QnNz/Qk64mU17OksQIDAQAB\""
+      ]
+    },
+    {
       "name": "id",
       "type": "A",
       "ttl": 3600,
@@ -161,6 +169,7 @@
     "auth",
     "autoconfig",
     "autodiscover",
+    "bl._domainkey",
     "blog",
     "blog2",
     "book",

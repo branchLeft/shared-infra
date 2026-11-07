@@ -25,6 +25,7 @@ banners stripped by `zonecheck.py strip-transcript`, are
 | \_dmarc              | TXT   | 3600 | the DMARC record        |
 | \_domainconnect      | CNAME | 3600 | \_domainconnect.ionos.… |
 | autodiscover         | CNAME | 3600 | adsredir.ionos.info.    |
+| bl.\_domainkey       | TXT   | 3600 | our DKIM public key     |
 | id                   | A     | 3600 | 46.225.95.167           |
 | portal               | A     | 3600 | 46.225.95.167           |
 | s1-ionos.\_domainkey | CNAME | 3600 | s1.dkim.ionos.com.      |
@@ -36,7 +37,11 @@ declared: Hetzner serves its own. That is the only difference in what resolves.
 **The registrar refuses zone transfers, so no list of names is exhaustive.**
 The first capture missed the two `*-ionos._domainkey` CNAMEs: `_domainkey`
 answered NOERROR with no data, so a name sat below it, and a dictionary probe
-found them. Step 6 is the one complete check.
+found them. It also missed `bl._domainkey` (our own DKIM key), which the
+IONOS panel listing showed on 7 Nov 2026 as a twelfth record; a test now
+names every known selector (`bl`, `s1-ionos`, `s2-ionos`) so one missing from
+the zone file, the probe list or the transcript fails. Step 6 is the one
+complete check.
 
 ## Blast radius
 
@@ -74,15 +79,16 @@ that run, wait for **Plan (hetzner dns, pulumi preview)** to go green, and read
 its summary, **Hetzner dns plan - read before approving the apply**. The
 **Apply (hetzner dns, pulumi up)** job then waits in `production-dns`.
 
-Expected: 11 resources to create and nothing else: `hcloud:index/zone:Zone`
-`publicpress-co-uk` and 10 `hcloud:index/zoneRrset:ZoneRrset`, each named
+Expected: 12 resources to create and nothing else: `hcloud:index/zone:Zone`
+`publicpress-co-uk` and 11 `hcloud:index/zoneRrset:ZoneRrset`, each named
 `publicpress-co-uk-` followed by the owner and type (`publicpress-co-uk-apex-a`,
 `publicpress-co-uk-apex-mx`, `publicpress-co-uk-apex-txt`,
 `publicpress-co-uk-_dmarc-txt`, `publicpress-co-uk-_domainconnect-cname`,
-`publicpress-co-uk-autodiscover-cname`, `publicpress-co-uk-id-a`,
-`publicpress-co-uk-portal-a`, `publicpress-co-uk-s1-ionos._domainkey-cname`,
+`publicpress-co-uk-autodiscover-cname`, `publicpress-co-uk-bl._domainkey-txt`,
+`publicpress-co-uk-id-a`, `publicpress-co-uk-portal-a`,
+`publicpress-co-uk-s1-ionos._domainkey-cname`,
 `publicpress-co-uk-s2-ionos._domainkey-cname`). In the JSON, `changeSummary`
-must show `create` 11, with only `same` besides it (the existing
+must show `create` 12, with only `same` besides it (the existing
 branchleft.co.uk resources).
 
 **Any `update`, `delete` or `replace`, or any `create` that is not a
@@ -109,7 +115,7 @@ new one: approve the newest run, and merge nothing under the dns inputs between
 step 2 and this approval.
 
 Creating the zone and its records changes no resolution: the registry still
-points at IONOS until step 8. Expected in the apply job log: `Resources: 11
+points at IONOS until step 8. Expected in the apply job log: `Resources: 12
 created`. Then, from a network that does not intercept port 53 (see above),
 read the nameservers Hetzner assigned (read only):
 
@@ -142,7 +148,7 @@ dig +short DS publicpress.co.uk @1.1.1.1
 its defaults (found at the branchleft.co.uk cutover). Expected, and nothing else:
 
 ```text
-no differences: 10 rrsets, 143 names, 12 types, 7 servers; both controls caught
+no differences: 11 rrsets, 144 names, 12 types, 7 servers; both controls caught
 ```
 
 and an empty line for the DS query (the zone is unsigned; a signed zone moved
@@ -152,7 +158,7 @@ FAILED` is a stop.
 ### 6. Count the records against the registrar's own listing
 
 In the IONOS panel, open **Domains & SSL → publicpress.co.uk → DNS** and check
-it lists exactly the 11 records in the table at the top (the MX counts twice),
+it lists exactly the 12 records in the table at the top (the MX counts twice),
 besides the NS records. **Any extra record is a stop**: add its name to
 `probe_names` in `hetzner/dns/publicpress.co.uk.json`, re-run the capture from a network that does not intercept port 53, which writes
 the verbose transcript to a temporary file and then the minimal form to the
@@ -248,7 +254,7 @@ stop: switch back under Rollback.
 
 ## Rollback
 
-1. Check the IONOS copy still holds all 10 rrsets, from a network that does not
+1. Check the IONOS copy still holds all 11 rrsets, from a network that does not
    intercept port 53 (as in step 5). Every server is compared against the
    committed zone file, in step 5's shape: the four IONOS servers on the left,
    the three Hetzner servers on the right. The comparison needs two different
@@ -262,7 +268,7 @@ stop: switch back under Rollback.
    Expected, and nothing else:
 
    ```text
-   no differences: 10 rrsets, 143 names, 12 types, 7 servers; both controls caught
+   no differences: 11 rrsets, 144 names, 12 types, 7 servers; both controls caught
    ```
 
    Any `DIFF` line names its server and record. A DIFF on an IONOS server means
