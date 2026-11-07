@@ -6,8 +6,8 @@
 // `hetzner/`'s own root — that file pulls in `./network`, which builds the
 // network and subnet at module scope.
 
-export { Host } from './host';
-export type { HostArgs, HostRole } from './host';
+export { assertAdoption, Host } from './host';
+export type { AdoptArgs, HostArgs, HostRole } from './host';
 
 export {
   assertSshSourceAddress,
