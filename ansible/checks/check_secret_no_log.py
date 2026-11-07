@@ -87,7 +87,20 @@ def _parse(text: str, rel: str, where: str, findings: list[str]) -> nodes.Templa
         return None
 
 
-def _secret_key(node: nodes.Node) -> str | None:
+class Attrs(NamedTuple):
+    """The attributes of a variable that holds a secret only in some of them: the secret ones, and
+    the declared non-secret ones. Only a read through a declared non-secret attribute is cleared.
+    Every other read counts: a secret attribute, an undeclared name, and a method call such as
+    .get('x'), .items(), .values() or .copy(), which parses as an attribute read of its name."""
+
+    secret: frozenset[str]
+    safe: frozenset[str]
+
+
+Partial = dict[str, Attrs]
+
+
+def _constant_key(node: nodes.Node) -> str | None:
     """The constant key an attribute or item read names, or None when it is not constant."""
     if isinstance(node, nodes.Getattr):
         return node.attr
@@ -96,16 +109,17 @@ def _secret_key(node: nodes.Node) -> str | None:
     return None
 
 
-def _loaded(node: nodes.Node, partial: dict[str, set[str]]) -> set[str]:
+def _loaded(node: nodes.Node, partial: Partial) -> set[str]:
     """The names a parse tree loads. A name bound by a loop is counted too, which can only ask
     for more no_log. A name in `partial` holds a secret only in some attributes, so it counts
-    when it is read whole, or through one of those attributes, and not when it is read through
-    another attribute, counted, or mapped to another attribute."""
+    unless it is read through a declared non-secret attribute (x.slug, x['slug']), counted
+    (length, count), or mapped to a declared non-secret attribute. Anything else counts,
+    including a call on it: only the read of the name by itself is looked at, never what follows."""
     if isinstance(node, (nodes.Getattr, nodes.Getitem)) and isinstance(node.node, nodes.Name):
         name = node.node.name
-        key = _secret_key(node)
-        if name in partial and key is not None:
-            return {name} if key in partial[name] else set()
+        key = _constant_key(node)
+        if name in partial and key is not None and key in partial[name].safe:
+            return set()
     if isinstance(node, nodes.Filter) and isinstance(node.node, nodes.Name):
         name = node.node.name
         if name in partial and node.name in ("length", "count") and not node.args:
@@ -114,7 +128,7 @@ def _loaded(node: nodes.Node, partial: dict[str, set[str]]) -> set[str]:
             attribute = [k.value for k in node.kwargs if k.key == "attribute"]
             if len(attribute) == 1 and isinstance(attribute[0], nodes.Const):
                 first = str(attribute[0].value).split(".")[0]
-                if first not in partial[name]:
+                if first in partial[name].safe:
                     return set()
     found: set[str] = set()
     if isinstance(node, nodes.Name) and node.ctx == "load":
@@ -124,9 +138,7 @@ def _loaded(node: nodes.Node, partial: dict[str, set[str]]) -> set[str]:
     return found
 
 
-def _names_in(
-    text: str, rel: str, where: str, findings: list[str], partial: dict[str, set[str]]
-) -> set[str]:
+def _names_in(text: str, rel: str, where: str, findings: list[str], partial: Partial) -> set[str]:
     tree = _parse(text, rel, where, findings)
     return set() if tree is None else _loaded(tree, partial)
 
@@ -183,19 +195,20 @@ def _secret_attrs(spec: dict[str, object]) -> set[str]:
     return attrs
 
 
-def _seeds_of(
-    root: Path, role_dir: Path, findings: list[str]
-) -> tuple[set[str], dict[str, set[str]]]:
+def _seeds_of(root: Path, role_dir: Path, findings: list[str]) -> tuple[set[str], Partial]:
     """The seeds of a role: the variables whose whole value is a secret, and the variables
     that hold a secret only in some attributes (a list or mapping option with a no_log
-    sub-option), mapped to those attributes. The loader's own variables are seeds as well."""
+    sub-option), mapped to those attributes and to the declared non-secret ones. The loader's
+    own variables are seeds as well."""
     whole: set[str] = set(LOADER_SEEDS.get(role_dir.name, ()))
-    partial: dict[str, set[str]] = {}
+    partial: Partial = {}
     for name, spec in _option_specs(root, role_dir, findings).items():
         if spec.get("no_log") is True:
             whole.add(name)
         elif _secret_attrs(spec):
-            partial[name] = _secret_attrs(spec)
+            secret = _secret_attrs(spec)
+            declared = {k for k in _dict(spec.get("options")) if isinstance(k, str)}
+            partial[name] = Attrs(frozenset(secret), frozenset(declared - secret))
     return whole, partial
 
 
@@ -207,7 +220,7 @@ def sub_option_secrets(root: Path = ROOT) -> dict[str, dict[str, set[str]]]:
     for role_dir in _role_dirs(root):
         _, partial = _seeds_of(root, role_dir, scratch)
         if partial:
-            out[role_dir.name] = partial
+            out[role_dir.name] = {name: set(attrs.secret) for name, attrs in partial.items()}
     return out
 
 
@@ -294,9 +307,9 @@ def _taint(
     root: Path,
     role_dir: Path,
     seeds: set[str],
-    partial_seeds: dict[str, set[str]],
+    partial_seeds: Partial,
     findings: list[str],
-) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+) -> tuple[dict[str, set[str]], Partial]:
     """Each variable of the role that holds a secret, mapped to the secret options it came from,
     and the subset of those that hold a secret only in some attributes, mapped to the attributes.
     A seed maps to itself, and an attribute seed to `name.attribute`. Taint follows a value that
@@ -304,10 +317,10 @@ def _taint(
     both. It follows a loop over a tainted variable into the loop variable the loop names, role
     wide, because an included task file reads that variable: a loop over the attribute seed
     alone gives a loop variable with the same secret attributes."""
-    partial = {name: set(attrs) for name, attrs in partial_seeds.items()}
+    partial: Partial = dict(partial_seeds)
     origin: dict[str, set[str]] = {seed: {seed} for seed in seeds}
     for name, attrs in partial.items():
-        origin[name] = {f"{name}.{attr}" for attr in sorted(attrs)}
+        origin[name] = {f"{name}.{attr}" for attr in sorted(attrs.secret)}
     pinned = set(origin)
     defs: dict[str, list[nodes.Template]] = {}
     for sub in ("vars", "defaults"):
@@ -346,11 +359,12 @@ def _taint(
             hits: set[str] = set()
             for tree in loop.trees:
                 hits |= _loaded(tree, partial) & origin.keys()
-            if loop.bare in partial and loop.var not in origin:
-                partial[loop.var] = set(partial[loop.bare])
-                origin[loop.var] = set(origin[loop.bare])
-                changed = True
-            elif hits and loop.bare not in partial:
+            if loop.bare is not None and loop.bare in partial:
+                if loop.var not in origin:
+                    partial[loop.var] = partial[loop.bare]
+                    origin[loop.var] = set(origin[loop.bare])
+                    changed = True
+            elif hits:
                 reached = set().union(*(origin[hit] for hit in hits))
                 if loop.var in partial or not reached <= origin.get(loop.var, set()):
                     partial.pop(loop.var, None)
@@ -380,7 +394,7 @@ def _task_refs(
     rel: str,
     name: str,
     findings: list[str],
-    partial: dict[str, set[str]],
+    partial: Partial,
 ) -> set[str]:
     """The variables a task names in any position that prints or uses a value. The expression
     keywords are left out: they print only their expression, and the refusal asserts are read
@@ -406,7 +420,7 @@ def _template_refs(
     rel: str,
     name: str,
     findings: list[str],
-    partial: dict[str, set[str]],
+    partial: Partial,
 ) -> set[str]:
     refs: set[str] = set()
     for key in TEMPLATE_NAMES & task.keys():
@@ -453,7 +467,7 @@ def _judge(
 def _walk(
     items: list[object],
     role_dir: Path,
-    taint: tuple[dict[str, set[str]], dict[str, set[str]]],
+    taint: tuple[dict[str, set[str]], Partial],
     rel: str,
     inherited_no_log: object,
     inherited_diff: object,

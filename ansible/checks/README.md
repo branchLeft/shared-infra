@@ -536,9 +536,11 @@ Rules:
 
 Sub-option secrets. An option such as `tenant_compose_stacks` holds a secret only in an
 attribute of its items (`secrets_env_text`). The option is then a seed for that attribute only:
-a read of the whole option, or of a secret attribute (`x.secrets_env_text`,
-`x['secrets_env_text']`, `map(attribute='secrets_env_text')`), is a secret read, and a read of
-another attribute (`x.slug`, `map(attribute='slug')`) or its `length` is not. A task that loops
+any read of the option needs `no_log`, whatever its spelling (`x.secrets_env_text`,
+`x['secrets_env_text']`, `x.get('secrets_env_text')`, `x.items()`, `x.values()`, `x | to_json`,
+a chain of calls). Only an allow-list is cleared: a read through a declared sub-option that is
+not a secret (`x.slug`, `x['slug']`, `map(attribute='slug')`) and the `length` and `count`
+filters. An attribute the spec does not declare is not cleared. A task that loops
 over the option, and names a `loop_control.loop_var`, makes that loop variable a seed for the
 same attributes in every task file of the role, because an `include_tasks` file reads it. A loop
 over a secret that includes tasks and keeps the default `item` is a finding: the included tasks
@@ -572,7 +574,7 @@ What it does not see:
 - R3 checks the table's rows, not what the consuming role does with a value.
 
 Sabotage, each one a copy of the real files with one control broken, and the baseline copy
-clean (`test_check_secret_no_log.py`, 29 tests, green under the pinned ansible-core venv):
+clean (`test_check_secret_no_log.py`, 32 tests, green under the pinned ansible-core venv):
 
 | Sabotage in the copy                                                  | Finding that goes red                                                                     |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -588,6 +590,7 @@ clean (`test_check_secret_no_log.py`, 29 tests, green under the pinned ansible-c
 | `no_log: true` removed from the loop that includes each tenant's file | R1: `tenant_compose_stacks (secret through ...)`                                          |
 | `no_log: true` removed from the other four sub-option roles' writes   | R1: must set `no_log: true`, each named by its task                                       |
 | A loop over a secret with an include and the default `item`           | R1: must name a loop_var                                                                  |
+| The tenant secrets write read as `.get(...)`, `.items()`, `.values()` | R1: must set `no_log: true` (a call on the item is a read of the item)                    |
 | A row name that is no option (`monitoring_stack_smtp_passwd`)         | R2: resolves to 0 options, not one                                                        |
 | The loader's rows file made unreadable                                | R2                                                                                        |
 | A secret option with its row removed from the README                  | R3: no row for the no_log option                                                          |

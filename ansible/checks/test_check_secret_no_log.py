@@ -24,6 +24,15 @@ LOADER = "ansible/roles/host_inputs/vars/main.yml"
 HOST_INPUTS = "ansible/roles/host_inputs/tasks/main.yml"
 TENANT_STACK = "ansible/roles/tenant_compose/tasks/_stack.yml"
 TENANT_MAIN = "ansible/roles/tenant_compose/tasks/main.yml"
+SECRETS_WRITE = (
+    "    content: '{{ tenant_compose_stack.secrets_env_text }}'\n"
+    "    dest: '{{ tenant_compose_env_path }}'\n"
+    "    owner: root\n"
+    "    group: root\n"
+    "    mode: '0600'\n"
+    "  register: tenant_compose_secrets_delivery\n"
+    "  no_log: true\n"
+)
 README = "ansible/patterns/secrets_and_no_log/README.md"
 
 NTFY_WRITE_TAIL = (
@@ -399,6 +408,68 @@ class SecretNoLogTest(unittest.TestCase):
                     task,
                     "must set no_log: true",
                 )
+
+    # A method call on a tainted value reads it too: only a declared non-secret attribute is
+    # cleared, so .get('secret'), .items(), .values() and chains of calls all need no_log.
+
+    def _secrets_write(self, expression: str, no_log: bool) -> Path:
+        """A copy of the tree where the tenant secrets-file write reads `expression`, with or
+        without its no_log. The anchor is the write task from its content to its no_log."""
+        old = SECRETS_WRITE
+        new = old.replace(
+            "'{{ tenant_compose_stack.secrets_env_text }}'", '"{{ ' + expression + ' }}"'
+        )
+        if not no_log:
+            new = new.replace("  no_log: true\n", "")
+        self.assertNotEqual(old, new, "the sabotage changed nothing")
+        return self._mutate(TENANT_STACK, old, new)
+
+    def test_h3_reviewer_sabotage_get_without_no_log_is_red(self) -> None:
+        root = self._secrets_write("tenant_compose_stack.get('secrets_env_text')", no_log=False)
+        self._assert_red(
+            self._findings(root),
+            "R1 " + TENANT_STACK,
+            "Deliver the secrets file",
+            "tenant_compose_stack (secret through tenant_compose_stacks.secrets_env_text)",
+            "must set no_log: true",
+        )
+
+    def test_h3_every_way_of_reading_the_item_needs_no_log(self) -> None:
+        spellings = (
+            "tenant_compose_stack.get('secrets_env_text')",
+            "tenant_compose_stack.get('secrets_env_text', '')",
+            "tenant_compose_stack.items() | list",
+            "tenant_compose_stack.values() | list",
+            "tenant_compose_stack.copy()",
+            "tenant_compose_stack.get('secrets_env_text').strip()",
+            "tenant_compose_stack.items() | list | first | last",
+            "tenant_compose_stack['secrets_env_text']",
+            "tenant_compose_stack.undeclared_name",
+            "tenant_compose_stack | to_json",
+        )
+        for expression in spellings:
+            with self.subTest(expression=expression):
+                self.assertEqual(
+                    self._findings(self._secrets_write(expression, no_log=True)),
+                    [],
+                    "the same read with no_log must be green, or the red below proves nothing",
+                )
+                self._assert_red(
+                    self._findings(self._secrets_write(expression, no_log=False)),
+                    "Deliver the secrets file",
+                    "must set no_log: true",
+                )
+
+    def test_h3_a_call_on_a_declared_safe_attribute_stays_clean(self) -> None:
+        for expression in (
+            "tenant_compose_stack.slug",
+            "tenant_compose_stack['slug']",
+            "tenant_compose_stack.slug.upper()",
+            "tenant_compose_stack.compose_text | length",
+        ):
+            with self.subTest(expression=expression):
+                root = self._secrets_write(expression, no_log=False)
+                self.assertEqual(self._findings(root), [])
 
     def _append_task(self, relative: str, argument_line: str) -> Path:
         """A copy of the tree with a debug task, without no_log, added to the end of a task file."""
