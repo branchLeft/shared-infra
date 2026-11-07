@@ -44,6 +44,10 @@ COMPOSE_DEFAULT_FILES = frozenset(
 
 OPS1_PRIVATE_IP = "10.20.1.50"
 
+# The edge's private address as ops1 sees it, read from its one home rather than copied here.
+ADDRESS_PLAN = REPOSITORY / "hetzner-host" / "addressPlan.ts"
+EDGE_PRIVATE_IP_PATTERN = re.compile(r"\bedge1:\s*'(\d{1,3}(?:\.\d{1,3}){3})'")
+
 # The owner's reading of ops1 before this stack existed: `free -m` on the host
 # reported 3009 MB available, no swap, with Nextcloud already running. Both
 # numbers are measurements, not vendor sizing.
@@ -328,6 +332,32 @@ class ControlPlaneStackTests(unittest.TestCase):
                 self.assertEqual(published_ports(blocks[name]), [f"{OPS1_PRIVATE_IP}:{port}:{port}"])
                 self.assertIn(f"PORT: '{port}'", "\n".join(blocks[name]))
                 self.assertIn(f"port: {port}", sites, "sites.ts no longer routes this port")
+
+    def test_the_applications_trust_the_edge_as_their_one_proxy(self):
+        """The compose gives each application its proxy list, and the list is the edge alone.
+
+        The applications read it from the container environment; the env file only fills
+        ${VAR} references, so a variable the compose does not name never reaches them.
+        """
+        edge = EDGE_PRIVATE_IP_PATTERN.search(ADDRESS_PLAN.read_text(encoding="utf-8"))
+        self.assertIsNotNone(edge, "addressPlan.ts no longer lists edge1 in HOST_IPS")
+        services = yaml.safe_load(compose_text())["services"]
+        for name, variable in (
+            ("portal", "PORTAL_TRUSTED_PROXIES"),
+            ("console", "CONSOLE_TRUSTED_PROXIES"),
+        ):
+            with self.subTest(service=name):
+                self.assertEqual(str(services[name]["environment"].get(variable)), edge.group(1))
+        for name in ("db", "zitadel"):
+            with self.subTest(service=name):
+                self.assertNotIn("TRUSTED_PROXIES", "\n".join(service_blocks(compose_text())[name]))
+
+    def test_the_edge_address_is_written_once_in_the_compose(self):
+        """One literal, shared by both applications through an anchor, never typed twice."""
+        edge = EDGE_PRIVATE_IP_PATTERN.search(ADDRESS_PLAN.read_text(encoding="utf-8"))
+        self.assertIsNotNone(edge, "addressPlan.ts no longer lists edge1 in HOST_IPS")
+        written = [line for line in code_lines(compose_text()) if edge.group(1) in line]
+        self.assertEqual(len(written), 1, written)
 
     def test_third_party_images_are_pinned_by_digest_and_the_applications_use_the_pin(self):
         blocks = service_blocks(compose_text())

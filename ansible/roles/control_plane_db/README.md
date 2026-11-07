@@ -93,12 +93,12 @@ named limit below.
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the inputs and
 [`defaults/main.yml`](defaults/main.yml) holds the same defaults. No input is a secret.
 
-| Variable                              | Default | Meaning                                                                                        |
-| ------------------------------------- | ------- | ---------------------------------------------------------------------------------------------- |
-| `control_plane_db_step`               | empty   | The step this run confirms. The gated pull sets it on the command line. Never in an inventory. |
-| `control_plane_db_apps_image`         | empty   | The applications image, `NAME@sha256:` and 64 hex digits. Required by every step.              |
-| `control_plane_db_identity_hostnames` | empty   | `console`, `portal` and `identity` hostnames. Required by `identity`.                          |
-| `control_plane_db_identity_tenants`   | `[]`    | The reconciler's tenant list. Empty. See the limits.                                           |
+| Variable                              | Default | Meaning                                                                                                                  |
+| ------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `control_plane_db_step`               | empty   | The step this run confirms. The gated pull sets it on the command line. Never in an inventory.                           |
+| `control_plane_db_apps_image`         | empty   | The applications image, `NAME@sha256:` and 64 hex digits. Required by every step. Set for ops1 in `owner_vars/ops1.yml`. |
+| `control_plane_db_identity_hostnames` | empty   | `console`, `portal` and `identity` hostnames. Required by `identity`.                                                    |
+| `control_plane_db_identity_tenants`   | `[]`    | The reconciler's tenant list. Empty. See the limits.                                                                     |
 
 The fixed values (every path, the modes, the logins, the patterns an image, a password
 and a hostname must match) are in `vars/main.yml`, not in the interface, so an inventory

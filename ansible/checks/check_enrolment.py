@@ -63,9 +63,10 @@ JUMP_VARS = frozenset(
 # keys, nor the keys without the role.
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
+APPS_IMAGE_KEY = "control_plane_db_apps_image"
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS,
-    "ops1": frozenset(("pull_trigger_steps",)),
+    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)),
 }
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
@@ -747,6 +748,10 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     problems: list[str] = []
     if STEPS_KEY in doc:
         problems.extend(_step_shape_problems(doc[STEPS_KEY]))
+    # Only that it is text. That it is NAME@sha256: and 64 hex digits is the role's pattern
+    # (control_plane_db_image_pattern), which test_step_allowlist.py reads by name.
+    if APPS_IMAGE_KEY in doc and not isinstance(doc[APPS_IMAGE_KEY], str):
+        problems.append(f"{APPS_IMAGE_KEY} must be text")
     problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")
