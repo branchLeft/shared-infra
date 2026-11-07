@@ -15,7 +15,7 @@ hetzner/RUNBOOK-nextcloud.md:
   steps: 4
   reason: stays-as-code
 hetzner/RUNBOOK-provision-host.md:
-  steps: 10
+  steps: 8
   reason: pending-role
   role: host_baseline
 mail/RUNBOOK-mx1-disaster-recovery.md:

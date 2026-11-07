@@ -538,49 +538,29 @@ that needs an `INPUT` rule with a different blast radius and is out of scope
 here. Traffic to `169.254.169.254` _is_ forwarded, so that half of the drop
 is real.
 
-Run it the same way as step 5, on each app host. `app1`, at `10.20.1.100`, is
-the only one that exists today; the command is otherwise unchanged for a
-future `app2`/`app3`, substituting that host's own private IP. `$EDGE1_IPV4`
-is set under step 2 above; re-set it first if you are entering here
-independently:
+**On a host the gated Ansible delivery manages, nobody runs this by hand.** The
+`deploy_tooling` role installs the policy program and its unit, applies it, and
+reads the `DOCKER-USER` chain back to prove it is in force, as part of the
+gated pull. How it is delivered, the check that replaces "Confirm it", and what
+the read-back refuses are in
+[the role README](../ansible/roles/deploy_tooling/README.md). A host that is
+not yet enrolled in the gated delivery is enrolled first, and its first gated
+apply installs the policy. The chain the read-back expects on a standard app
+host is the conntrack accept, then the one exception to `db1`
+(`-d 10.20.1.20/32 -p tcp -m tcp --dport 3306 -j ACCEPT`), then the two drops,
+to the private subnet and to the metadata address, with Docker's own return
+last. `app-host-isolation.sh` stays in the tree as code,
+and the role does not run it.
 
-```bash
-cd ~/branchLeft/shared-infra
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@10.20.1.100:/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/app-host-isolation.sh'
-```
-
-Confirm it:
-
-```bash
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 '
-  set -e
-  iptables -t filter -S DOCKER-USER | grep -E -- "-m conntrack --ctstate (ESTABLISHED,RELATED|RELATED,ESTABLISHED) -j ACCEPT"
-  iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.20/32 -p tcp -m tcp --dport 3306 -j ACCEPT"
-  iptables -t filter -S DOCKER-USER | grep -- "-d 10.20.1.0/24 -j DROP"
-  iptables -t filter -S DOCKER-USER | grep -- "-d 169.254.169.254/32 -j DROP"
-  systemctl is-enabled branchleft-docker-user-policy.service
-  echo "app-host isolation ok"
-'
-```
-
-Expect four rule lines, `enabled`, and `app-host isolation ok`. The conntrack
-check matches either bitmask ordering: `iptables -S` renders the state set
-`branchleft_docker_user_policy.sh` passes as `RELATED,ESTABLISHED`, not the
-order the script gives it in — the same normalisation §3's gateway check
-above already accounts for.
-
-**What this does not give you: a signal if it ever silently stops applying.**
-Unlike `branchleft-nat.service`, whose reconciler refuses to run and fails the
-unit when `DOCKER-USER` is absent, an app host that loses `DOCKER-USER` — a
-switch to Docker's `nftables` firewall backend, which `20-install-docker.sh`
-leaves free to happen under unattended-upgrades — keeps every tenant site
-working while this policy's protection quietly stops existing. Closing that
-gap needs a monitoring input this estate does not have yet (an alert on the
-chain's absence or on the reconciler unit's state), and is filed as its own
-piece of work rather than claimed here.
+**A signal if it ever silently stops applying.** An app host that loses
+`DOCKER-USER` — a switch to Docker's `nftables` firewall backend, which
+`20-install-docker.sh` leaves free to happen under unattended-upgrades — keeps
+every tenant site working while this policy's protection quietly stops
+existing. For a host that plays the `deploy_tooling` role the nightly drift
+check reads the chain back in check mode and goes red when it is absent or
+incomplete; the role README, under "Detecting a reopened chain", says what red
+looks like and what it does not cover (a host that does not play the role, such
+as the control-plane host today, is not read).
 
 ## Run the whole set
 
@@ -664,14 +644,14 @@ scp -i ~/.ssh/id_ed25519_hetzner -r hetzner/provision/. root@"$HOST_IPV4":/root/
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
   'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} +'
 
-# 3. Install the wrapper that understands --slot. NOT optional on a host
-#    provisioned before slot keys existed: the grant would succeed, the key
-#    would authenticate, and every deploy would fail with
-#    `invalid stack name: '--slot'` because the forced command's argv means
-#    nothing to the older wrapper. This is a provisioning script, so unlike
-#    cloud-init it does reach an already-running host.
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$HOST_IPV4" \
-  '/root/platform-provision/30-install-deploy-tooling.sh'
+# 3. The wrapper that understands --slot is installed by the deploy_tooling
+#    role (ansible/roles/deploy_tooling/README.md), not by a step here. It
+#    is NOT optional on a host provisioned before slot keys existed: the
+#    grant would succeed, the key would authenticate, and every deploy would
+#    fail with `invalid stack name: '--slot'` because the forced command's
+#    argv means nothing to the older wrapper. On a host the gated delivery
+#    manages the role has already installed it; check the gated apply before
+#    going on.
 
 # 4. Install the public half. It travels on stdin, so the run leaves no copy
 #    of it on the host to remember to delete.
