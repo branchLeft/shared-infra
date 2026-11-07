@@ -10,13 +10,18 @@ references are not allowed (ANS-12), so each copy stays and this test keeps them
 
 from __future__ import annotations
 
+import io
+import ipaddress
 import re
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import NoReturn, cast
 
 from check_pins import load_yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.error import YAMLError
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = ROOT / "ansible" / "roles"
@@ -30,6 +35,12 @@ HOST_SUFFIXES = (".yml", ".yaml", ".j2", ".service", ".sh", ".py", ".conf", ".ti
 # Where a role keeps its copy of files taken from ghost-platform, under files/.
 VENDORED = ("files", "ghost-platform")
 SLOT_NAMES = re.compile(r"default\(\[([^\]]*)\]\)")
+# The rendered Compose file the role carries, at its path from the ghost-platform root.
+GOLDEN = ROLES / ROLE / Path(*VENDORED) / "render-core/test/golden/mail-spool-compose.demo1.yml"
+SERVICE = "mail-spool"
+# The environment key that tells the shim which address its drain listener binds to.
+DRAIN_HOST_KEY = "SHIM_DRAIN_HOST"
+DRAIN_PORT_KEY = "SHIM_DRAIN_PORT"
 OWNED = (
     "demo1_egress_spool_egress_script_dest",
     "demo1_egress_spool_egress_unit_dest",
@@ -240,6 +251,147 @@ def image_route_problems(readme: str) -> list[str]:
     return found
 
 
+def as_map(value: object) -> dict[str, object]:
+    """Return the value when it is a mapping, and an empty mapping when it is anything else."""
+    return cast("dict[str, object]", value) if isinstance(value, dict) else {}
+
+
+def drain_address_problems(address: object) -> list[str]:
+    """Return one line for each way the drain listener's address cannot be a fixed bind address."""
+    if address is None:
+        return [f"{DRAIN_HOST_KEY} is missing from the spool's environment"]
+    try:
+        parsed = ipaddress.IPv4Address(str(address))
+    except ValueError:
+        return [f"{DRAIN_HOST_KEY} {address!r} is not an IPv4 address"]
+    if parsed.is_unspecified:
+        return [f"{DRAIN_HOST_KEY} is {parsed}, which binds the drain listener to every interface"]
+    if parsed.is_loopback:
+        return [f"{DRAIN_HOST_KEY} is {parsed}, a loopback address no published port can reach"]
+    return []
+
+
+def drain_network_problems(
+    declared: dict[str, object], address: object, drain_network: str
+) -> list[str]:
+    """Return one line for each way the drain network's pool fails to hold the drain address."""
+    pools = as_map(declared.get("ipam")).get("config")
+    if not isinstance(pools, list) or len(pools) != 1:
+        return [f"{drain_network} must declare exactly one ipam pool"]
+    pool = as_map(pools[0])
+    try:
+        subnet = ipaddress.IPv4Network(str(pool.get("subnet")))
+        gateway = ipaddress.IPv4Address(str(pool.get("gateway")))
+    except ValueError:
+        return [f"{drain_network}'s ipam pool needs an IPv4 subnet and an IPv4 gateway"]
+    found: list[str] = []
+    if gateway not in subnet:
+        found.append(f"{drain_network}'s gateway {gateway} is outside its subnet {subnet}")
+    try:
+        bound = ipaddress.IPv4Address(str(address))
+    except ValueError:
+        return found
+    if bound not in subnet:
+        found.append(f"the drain address {bound} is outside {drain_network}'s subnet {subnet}")
+    elif bound in (gateway, subnet.network_address, subnet.broadcast_address):
+        found.append(f"the drain address {bound} is the gateway, network or broadcast address")
+    return found
+
+
+def drain_service_problems(
+    service: dict[str, object], drain_network: str, slot_networks: list[str], container_port: int
+) -> tuple[list[str], object]:
+    """Return the findings on the spool service, and the drain address it names (or None)."""
+    environment = as_map(service.get("environment"))
+    address = environment.get(DRAIN_HOST_KEY)
+    found = drain_address_problems(address)
+    if str(environment.get(DRAIN_PORT_KEY)) != str(container_port):
+        found.append(f"{DRAIN_PORT_KEY} is not the container port {container_port}")
+    published = {
+        str(entry).rsplit(":", 1)[-1] for entry in cast("list[object]", service.get("ports") or [])
+    }
+    if published != {str(container_port)}:
+        found.append(f"the published ports reach {sorted(published)}, not the container port")
+    networks = service.get("networks")
+    if not isinstance(networks, dict):
+        found.append(
+            "the spool's networks are a list: a map is needed to give the drain network an address"
+        )
+        return found, address
+    if sorted(networks) != sorted([drain_network, *slot_networks]):
+        found.append("the spool's networks are not exactly the drain network and the slot networks")
+    drain_entry = as_map(networks.get(drain_network))
+    if "ipv4_address" not in drain_entry:
+        found.append(f"{drain_network} has no ipv4_address on the spool")
+    elif address is not None and str(drain_entry["ipv4_address"]) != str(address):
+        found.append(
+            f"{drain_network} ipv4_address {drain_entry['ipv4_address']!r} differs from "
+            f"{DRAIN_HOST_KEY} {address!r}"
+        )
+    found.extend(
+        f"slot network {name} declares an ipv4_address: the address belongs on {drain_network} only"
+        for name in slot_networks
+        if "ipv4_address" in as_map(networks.get(name))
+    )
+    return found, address
+
+
+def drain_golden_problems(
+    compose_text: str, drain_network: str, slot_networks: list[str], container_port: int
+) -> list[str]:
+    """Return one line for each way the rendered Compose file loses the fixed drain address.
+
+    The drain listener binds to the address in SHIM_DRAIN_HOST, so that address must be one the
+    spool holds on the drain network, in a pool the file declares. The checks are relations
+    between lines of the file and the role's own constants, so no address is written here.
+    """
+    try:
+        document = YAML(typ="safe").load(compose_text)
+    except YAMLError as error:
+        return [f"the Compose file cannot be read as YAML: {type(error).__name__}"]
+    root = as_map(document)
+    service = as_map(as_map(root.get("services")).get(SERVICE))
+    if not service:
+        return [f"the Compose file does not define the {SERVICE} service"]
+    found, address = drain_service_problems(service, drain_network, slot_networks, container_port)
+    declared = as_map(as_map(root.get("networks")).get(drain_network))
+    if not declared:
+        found.append(f"the Compose file does not declare the {drain_network} network")
+    else:
+        found.extend(drain_network_problems(declared, address, drain_network))
+    for name in slot_networks:
+        if "ipv4_address" in as_map(as_map(root.get("networks")).get(name)):
+            found.append(f"top-level slot network {name} declares an ipv4_address")
+    return found
+
+
+def role_drain_constants() -> tuple[str, list[str], int]:
+    """Return the drain network, the slot networks and the container port the role declares."""
+    spool_vars = mapping_of(yaml_of(ROLES / ROLE / "vars" / "main.yml"))
+    return (
+        str(spool_vars["demo1_egress_spool_drain_network"]),
+        [
+            str(name)
+            for name in cast("list[object]", spool_vars["demo1_egress_spool_slot_networks"])
+        ],
+        int(str(spool_vars["demo1_egress_spool_container_port"])),
+    )
+
+
+def mutated_golden(change: Callable[[dict[str, object]], None]) -> list[str]:
+    """Return the findings for the vendored file after one change to its parsed form."""
+    document = mapping_of(YAML(typ="safe").load(GOLDEN.read_text(encoding="utf-8")))
+    change(document)
+    out = io.StringIO()
+    YAML(typ="safe").dump(document, out)
+    return drain_golden_problems(out.getvalue(), *role_drain_constants())
+
+
+def service_of(document: dict[str, object]) -> dict[str, object]:
+    """Return the spool service of a parsed Compose file."""
+    return as_map(as_map(document["services"])[SERVICE])
+
+
 class SpoolAgreeTest(unittest.TestCase):
     def test_the_real_tree_agrees(self) -> None:
         self.assertEqual([], disagreements(facts()))
@@ -337,6 +489,86 @@ class SpoolAgreeTest(unittest.TestCase):
             self.assertNotIn(path, host_text(role))
             (role / "tasks" / "main.yml").write_text(f"dest: {path}\n")
             self.assertIn(path, host_text(role))
+
+    def test_the_vendored_golden_binds_the_drain_listener_to_a_fixed_drain_address(self) -> None:
+        found = drain_golden_problems(GOLDEN.read_text(encoding="utf-8"), *role_drain_constants())
+        self.assertEqual([], found)
+
+    def test_each_way_to_lose_the_fixed_drain_address_is_named(self) -> None:
+        drain, slots, _ = role_drain_constants()
+
+        def drain_entry(document: dict[str, object]) -> dict[str, object]:
+            return as_map(as_map(service_of(document)["networks"])[drain])
+
+        def environment(document: dict[str, object]) -> dict[str, object]:
+            return as_map(service_of(document)["environment"])
+
+        def drop_host(document: dict[str, object]) -> None:
+            del environment(document)[DRAIN_HOST_KEY]
+
+        def every_interface(document: dict[str, object]) -> None:
+            environment(document)[DRAIN_HOST_KEY] = "0.0.0.0"  # noqa: S104
+
+        def loopback(document: dict[str, object]) -> None:
+            environment(document)[DRAIN_HOST_KEY] = "127.0.0.1"
+
+        def drop_pool(document: dict[str, object]) -> None:
+            del as_map(as_map(document["networks"])[drain])["ipam"]
+
+        def outside_subnet(document: dict[str, object]) -> None:
+            moved = str(ipaddress.IPv4Address(str(environment(document)[DRAIN_HOST_KEY])) + 256)
+            environment(document)[DRAIN_HOST_KEY] = moved
+            drain_entry(document)["ipv4_address"] = moved
+
+        def address_differs(document: dict[str, object]) -> None:
+            held = ipaddress.IPv4Address(str(drain_entry(document)["ipv4_address"]))
+            drain_entry(document)["ipv4_address"] = str(held + 1)
+
+        def no_address_on_drain(document: dict[str, object]) -> None:
+            drain_entry(document).clear()
+
+        def networks_as_list(document: dict[str, object]) -> None:
+            service_of(document)["networks"] = [drain, *slots]
+
+        def address_on_a_slot(document: dict[str, object]) -> None:
+            networks = as_map(service_of(document)["networks"])
+            as_map(networks[slots[0]])["ipv4_address"] = "10.0.0.9"
+
+        def extra_network(document: dict[str, object]) -> None:
+            as_map(service_of(document)["networks"])["bridge"] = {}
+
+        def wrong_drain_port(document: dict[str, object]) -> None:
+            environment(document)[DRAIN_PORT_KEY] = 9999
+
+        def gateway_is_the_address(document: dict[str, object]) -> None:
+            declared = as_map(as_map(document["networks"])[drain])
+            pools = cast("list[object]", as_map(declared["ipam"])["config"])
+            as_map(pools[0])["gateway"] = environment(document)[DRAIN_HOST_KEY]
+
+        cases: tuple[tuple[Callable[[dict[str, object]], None], str], ...] = (
+            (drop_host, f"{DRAIN_HOST_KEY} is missing"),
+            (every_interface, "every interface"),
+            (loopback, "loopback"),
+            (drop_pool, "exactly one ipam pool"),
+            (outside_subnet, "outside"),
+            (address_differs, "differs from"),
+            (no_address_on_drain, "has no ipv4_address"),
+            (networks_as_list, "are a list"),
+            (address_on_a_slot, "belongs on"),
+            (extra_network, "not exactly the drain network"),
+            (wrong_drain_port, f"{DRAIN_PORT_KEY} is not the container port"),
+            (gateway_is_the_address, "gateway, network or broadcast"),
+        )
+        self.assertEqual([], mutated_golden(lambda document: None))
+        for change, expected in cases:
+            with self.subTest(change=change.__name__):
+                found = mutated_golden(change)
+                self.assertTrue(any(expected in line for line in found), found)
+
+    def test_a_compose_file_that_cannot_be_read_or_has_no_spool_is_named(self) -> None:
+        constants = role_drain_constants()
+        self.assertTrue(drain_golden_problems("a: [", *constants))
+        self.assertTrue(drain_golden_problems("services: {}\n", *constants))
 
     def test_the_slot_table_is_seven_slots_from_30001(self) -> None:
         base = facts()

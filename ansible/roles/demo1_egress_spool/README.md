@@ -113,9 +113,14 @@ the networks, the patterns). A caller cannot override them.
 ### The pin
 
 The files are copies of the ones in `branchLeft/ghost-platform` at commit
-`19622ee9c88bf918949f675a85897cfb64c65a24`, carried under `files/ghost-platform` at the paths they
+`b89149ffa4fe5849daecf4800d71e5a12616cf23`, carried under `files/ghost-platform` at the paths they
 have there. The Compose file is the committed golden of the renderer in that repository, so the
 image digest, the networks and the one published port are written there and nowhere else here.
+It also carries the fixed address the drain listener binds to and the subnet of the drain network
+that holds it, so those are written there and nowhere else here; the networks are a map, so the
+drain network can hold that address, and the role's network assertion reads only their names.
+`ansible/checks/test_demo1_egress_spool_agree.py` holds the file to that shape (an address in the
+drain pool, equal to the address the listener binds to, on the drain network alone).
 Each file is held to its sha256 on the machine that runs the role before anything is written, so a
 file changed without its checksum, or a checksum changed without its file, stops the role at
 `_vendored.yml` and names the file. CI runs the same comparison without a container
