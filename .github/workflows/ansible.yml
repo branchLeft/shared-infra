@@ -223,7 +223,9 @@ jobs:
     name: Quick lint gate
     needs: [discover]
     if: needs.discover.outputs.ansible == 'true'
-    # Pinned until the harness is verified on the next Ubuntu LTS image.
+    # Pinned to ubuntu-24.04: the harness is measured on 24.04 only (cgroup v2 runner,
+    # cgroupns_mode: host), and GitHub moves ubuntu-latest to 26.04 from 19 October 2026.
+    # Owner and exit: ansible/README.md, "The runner image".
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -273,7 +275,9 @@ jobs:
     name: Lint the Ansible inputs
     needs: [discover]
     if: needs.discover.outputs.ansible == 'true'
-    # Pinned until the harness is verified on the next Ubuntu LTS image.
+    # Pinned to ubuntu-24.04: the harness is measured on 24.04 only (cgroup v2 runner,
+    # cgroupns_mode: host), and GitHub moves ubuntu-latest to 26.04 from 19 October 2026.
+    # Owner and exit: ansible/README.md, "The runner image".
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -466,7 +470,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
-    # Pinned until the harness is verified on the next Ubuntu LTS image.
+    # Pinned to ubuntu-24.04: the harness is measured on 24.04 only (cgroup v2 runner,
+    # cgroupns_mode: host), and GitHub moves ubuntu-latest to 26.04 from 19 October 2026.
+    # Owner and exit: ansible/README.md, "The runner image".
     runs-on: ubuntu-24.04
     # The longest shard, ansible/roles/db1_grants, runs about 3,000 tasks, each a docker
     # exec, and its four passing runs took 17 to 24.5 minutes, so a limit of 25 left it

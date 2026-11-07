@@ -301,6 +301,19 @@ maintainer can run them again.
 | What raises a bump                             | `../.github/dependabot.yml`   | a `uv` entry for `/ansible`, a `pip` entry for `/ansible/checks` |
 | The `ansible-lint` pre-commit hook, if any     | `../.pre-commit-config.yaml`  | `rev: v` and the `requirements.txt` pin                          |
 
+### The runner image
+
+The Ansible workflows run on `ubuntu-24.04`, not `ubuntu-latest`. The container
+harness was measured on 24.04 only (a cgroup v2 runner, `cgroupns_mode: host`),
+and GitHub moves `ubuntu-latest` to Ubuntu 26.04 from 19 October 2026, so an
+unpinned label would change the image under the required gate. The pin is in
+`../.github/workflows/ansible.yml` (every job), `ansible-delivery.yml`,
+`ansible-environment-probe.yml` and `ansible-offline.yml`.
+
+Its owner is `branchLeft/workspace#2401`. Its exit is a recorded green harness
+run on 26.04, cited on that issue; the pin then moves in all four files together.
+Nothing in this repository proves that the harness passes on 26.04 yet.
+
 ### Why `requirements.txt` is long, and that a tool writes it
 
 `requirements.txt` is tool output, never edited by hand. `uv pip compile`
