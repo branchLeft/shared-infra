@@ -190,7 +190,7 @@ on the host, and a second run that must report zero changes. The playbook is
 and applies the two pull roles, then `host_inputs`, then `host_baseline`, then
 `db1_stack`, then `db1_backup_timers`, then this role, last. The `host_inputs` loader
 sets this role's two inputs (`db1_grants_tenants`, `db1_grants_ops1_host`) as facts, so
-the playbook carries no value for them. The role has not been applied to the live host.
+the playbook carries no value for them.
 
 ## How to change it safely
 
@@ -261,7 +261,7 @@ pattern. A statement it does not list is refused.
 
 ## Live blockers
 
-The role must not be applied to the live host until each of these is true.
+The role is applied to db1 by the gated pull: the db1 playbook ran it in gated apply run 41903489960 (4 Nov 2026), and a later gated apply, run 41916819852, also succeeded. Each of these must hold for a run to converge it.
 
 1. The program directory `/opt/branchleft/db/provision` is delivered by
    `db1_backup_timers`, including `provision_tenant_db.py`, at the pinned digest.
