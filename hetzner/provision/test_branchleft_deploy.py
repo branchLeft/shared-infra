@@ -701,6 +701,38 @@ class AttestationTests(unittest.TestCase):
         )
         self.assertEqual(bd.read_current_image(self.env_path()), TENANT)
 
+    def test_a_tag_or_port_spelling_of_a_registered_image_is_still_verified(self):
+        spellings = [
+            f"ghcr.io/branchleft/ghost-tenant:v1@sha256:{TENANT_DIGEST}",
+            f"ghcr.io/branchleft/ghost-tenant:latest@sha256:{TENANT_DIGEST}",
+            f"ghcr.io:443/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}",
+            f"ghcr.io:443/branchleft/ghost-tenant:v1@sha256:{TENANT_DIGEST}",
+        ]
+        for image in spellings:
+            with self.subTest(image=image):
+                run = FakeRun([1])
+                with self.assertRaises(bd.DeployError):
+                    self.deploy(image, run)
+                self.assert_refused_before_any_host_change(run)
+
+    def test_a_tag_or_port_spelling_is_verified_by_its_register_name_and_digest(self):
+        image = f"ghcr.io:443/branchleft/ghost-tenant:v1@sha256:{TENANT_DIGEST}"
+        run = FakeRun([0, 0])
+        self.deploy(image, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, TENANT, bd.ATTESTED_REPO, TENANT_SIGNER, "--bundle-from-oci"],
+        )
+        self.assertEqual(bd.read_current_image(self.env_path()), image)
+
+    def test_a_third_party_image_with_a_tag_or_port_is_never_sent_to_the_verifier(self):
+        mysql = f"registry.example:5000/library/mysql:8@sha256:{'d' * 64}"
+        run = FakeRun([0])
+        self.deploy(mysql, run)
+        self.assertEqual(
+            run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
+        )
+
     def test_a_third_party_image_is_never_sent_to_the_verifier(self):
         mysql = f"docker.io/library/mysql@sha256:{'d' * 64}"
         run = FakeRun([0])

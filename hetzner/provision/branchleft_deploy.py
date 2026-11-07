@@ -110,6 +110,18 @@ def verifier_env() -> dict[str, str]:
     }
 
 
+def attested_name(image: str) -> str:
+    """The register key for a validated image reference: registry host and path.
+
+    A tag and a registry port are spellings, not a different image: the digest
+    is what the host pulls, whatever tag or port rides along. Both are dropped
+    here, so `name:tag@sha256:...` and `host:443/name@sha256:...` look up the
+    same register entry as `name@sha256:...` and cannot skip verification.
+    """
+    first, slash, rest = image.partition("@")[0].partition("/")
+    return first.partition(":")[0] + slash + rest.partition(":")[0]
+
+
 def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     """Verify a registered image's attestation before anything touches the host.
 
@@ -122,12 +134,16 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     registered deploy with the credential message; see branchleft_deploy.md for
     the fallback, which is not a host credential.
     """
-    signer = ATTESTED_IMAGES.get(image.partition("@")[0])
+    name = attested_name(image)
+    signer = ATTESTED_IMAGES.get(name)
     if signer is None:
         return False
+    # The verifier takes registry/name@digest only, so it is given the register
+    # name and the digest, however the image was spelled.
+    canonical = f"{name}@{image.partition('@')[2]}"
     try:
         result = run(
-            [VERIFIER, image, ATTESTED_REPO, signer, "--bundle-from-oci"],
+            [VERIFIER, canonical, ATTESTED_REPO, signer, "--bundle-from-oci"],
             check=False,
             capture_output=True,
             text=True,

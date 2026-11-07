@@ -223,6 +223,12 @@ environment variable or stack setting that skips it. An image name outside the
 register is not verified here, so the other images on this host deploy as
 before.
 
+The register is looked up by registry host and path alone (`attested_name`). A
+tag or a registry port on the reference is a spelling, not another image: the
+host pulls the digest, so `name:tag@sha256:...` and `host:443/name@sha256:...`
+are verified exactly as `name@sha256:...` is, and the verifier is given the
+register name and the digest.
+
 The rollback restore is not re-verified. It returns to the pin that last ran,
 and blocking it could leave the host with nothing running.
 
