@@ -507,8 +507,8 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain(
       'expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[15m]) > 0'
     );
-    // Not scoped to zone -- posture.ts's rateLimit is 'off' today, but the
-    // expression must still cover the general zone the moment it flips.
+    // Not scoped to zone -- posture.ts's rateLimit is 'enforcing', and the
+    // expression must cover the general zones as well as the magic-link one.
     expect(rendered).not.toContain('members_magic_link_per_ip');
   });
 
