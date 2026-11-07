@@ -547,7 +547,15 @@ over a secret that includes tasks and keeps the default `item` is a finding: the
 cannot be followed through `item`. Names set under a task's `vars:` are not reads, but they
 carry what they are set to: a name bound under `vars:` (an include's, a block's, an include's
 `apply: vars:`) to a value that reads a secret is a secret in every task file of the role, because
-the included file reads it and `no_log` on an include does not reach the tasks it includes. A bare
+the included file reads it and `no_log` on an include does not reach the tasks it includes. An
+include's `apply:` and its file are read from the include's own value and from the task's `args:`
+keyword, merged as Ansible merges them (a key of the include's own value beats the same key in
+`args:`), so `include_tasks: f.yml` with `args: {apply: {vars: ...}}` and an empty `include_tasks:`
+with `args: {file: f.yml, apply: ...}` are read like `include_tasks: {file: f.yml, apply: ...}`.
+An include whose `args:` is not a mapping, or whose own value is neither text nor a mapping, is a
+finding in a role that holds a secret, because what it binds cannot be read. The check follows the
+spellings in `INCLUDE_NAMES` (bare and `ansible.builtin.`); another spelling of an include, and an
+include through `action:` or `include:`, is not read. A bare
 partial name keeps its attributes. An include that passes such a name into a file the check
 cannot read (a templated name, a file that is not a task file of the role, a role) is a finding.
 
@@ -579,7 +587,7 @@ What it does not see:
 - R3 checks the table's rows, not what the consuming role does with a value.
 
 Sabotage, each one a copy of the real files with one control broken, and the baseline copy
-clean (`test_check_secret_no_log.py`, 39 tests, green under the pinned ansible-core venv):
+clean (`test_check_secret_no_log.py`, 45 tests, green under the pinned ansible-core venv):
 
 | Sabotage in the copy                                                  | Finding that goes red                                                                     |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -598,6 +606,8 @@ clean (`test_check_secret_no_log.py`, 39 tests, green under the pinned ansible-c
 | The tenant secrets write read as `.get(...)`, `.items()`, `.values()` | R1: must set `no_log: true` (a call on the item is a read of the item)                    |
 | A secret bound under an include's `vars:`, written with no `no_log`   | R1: the included file's task names the bound name (secret through ...)                    |
 | A secret bound on an include of a file the check cannot read          | R1: passes the name into an include that cannot be followed                               |
+| A secret bound under the task's `args:` `apply: vars:`, written bare  | R1: the included file's task names the bound name (secret through ...)                    |
+| An include with an `args:` that is not a mapping                      | R1: includes with arguments the check cannot read                                         |
 | A row name that is no option (`monitoring_stack_smtp_passwd`)         | R2: resolves to 0 options, not one                                                        |
 | The loader's rows file made unreadable                                | R2                                                                                        |
 | A secret option with its row removed from the README                  | R3: no row for the no_log option                                                          |

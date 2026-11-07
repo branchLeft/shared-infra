@@ -304,7 +304,8 @@ def _loops(root: Path, role_dir: Path) -> list[_Loop]:
 
 
 class _Bind(NamedTuple):
-    """A name bound by a task's `vars:` (or an include's `apply: vars:`): its parsed value, the
+    """A name bound by a task's `vars:` (or an include's `apply: vars:`, under the include's own
+    value or the task's `args:`): its parsed value, the
     name the value is when it is that name alone, and, when the task includes other tasks, the
     file it names (None when it names no file or a role) with the file that holds the task."""
 
@@ -318,22 +319,49 @@ class _Bind(NamedTuple):
     holder: Path
 
 
-def _include_target(args: object) -> str | None:
-    """The file an include_tasks or import_tasks names: its free-form text, or its file key."""
-    if isinstance(args, str):
-        return args.strip()
-    named = _dict(args).get("file", _dict(args).get("_raw_params"))
+def _include_args(task: dict[str, object], kind: str) -> dict[str, object] | None:
+    """What Ansible gives an include as its arguments: the task's `args:` mapping, under the
+    include's own value (free-form text is `_raw_params`; an own key beats the same key in
+    `args:`, as in Ansible's argument parser). None when either is not what the parser takes:
+    the caller treats that as an include it cannot follow."""
+    own = task[kind]
+    merged: dict[str, object] = {}
+    if "args" in task:
+        if not isinstance(task["args"], dict):
+            return None
+        merged.update(task["args"])
+    if isinstance(own, str):
+        merged["_raw_params"] = own.strip()
+    elif isinstance(own, dict):
+        merged.update(own)
+    elif own is not None:
+        return None
+    return merged
+
+
+def _include_target(args: dict[str, object]) -> str | None:
+    """The file an include_tasks or import_tasks names: its file key, or its free-form text."""
+    named = args.get("file", args.get("_raw_params"))
     return named.strip() if isinstance(named, str) else None
 
 
-def _binds_in(items: list[object], path: Path, rel: str, out: list[_Bind]) -> None:
+def _binds_in(
+    items: list[object], path: Path, rel: str, out: list[_Bind], findings: list[str]
+) -> None:
     for task in items:
         if not isinstance(task, dict):
             continue
         kinds = [k for k in INCLUDE_NAMES if k in task]
-        args = task[kinds[0]] if kinds else None
+        args = _include_args(task, kinds[0]) if kinds else {}
+        if args is None:
+            findings.append(
+                f"R1 {rel}: task '{task.get('name', '(unnamed)')}' includes with arguments the "
+                "check cannot read: `args:` must be a mapping, and the include's own value a file "
+                "name or a mapping"
+            )
+            args = {}
         file_include = bool(kinds) and kinds[0].rsplit(".", 1)[-1].endswith("_tasks")
-        scopes = [task.get("vars"), _dict(_dict(args).get("apply")).get("vars")]
+        scopes = [task.get("vars"), _dict(args.get("apply")).get("vars")]
         for scope in scopes:
             for key, value in _dict(scope).items():
                 if not isinstance(key, str):
@@ -358,19 +386,19 @@ def _binds_in(items: list[object], path: Path, rel: str, out: list[_Bind]) -> No
         for key in CONTAINER_KEYS & task.keys():
             inner = task[key]
             if isinstance(inner, list):
-                _binds_in(inner, path, rel, out)
+                _binds_in(inner, path, rel, out, findings)
 
 
 def _task_paths(role_dir: Path) -> list[Path]:
     return _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers")
 
 
-def _binds(root: Path, role_dir: Path) -> list[_Bind]:
+def _binds(root: Path, role_dir: Path, findings: list[str]) -> list[_Bind]:
     out: list[_Bind] = []
     for path in _task_paths(role_dir):
         doc, problem = load_yaml(path)
         if problem is None and isinstance(doc, list):
-            _binds_in(doc, path, _rel(root, path), out)
+            _binds_in(doc, path, _rel(root, path), out, findings)
     return out
 
 
@@ -425,7 +453,7 @@ def _taint(
                     if tree is not None:
                         defs.setdefault(key, []).append(tree)
     loops = _loops(root, role_dir)
-    binds = _binds(root, role_dir)
+    binds = _binds(root, role_dir, findings)
     changed = True
     while changed:
         changed = False

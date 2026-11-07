@@ -11,6 +11,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -18,6 +19,8 @@ import check_secret_no_log as checker
 
 ROOT = checker.ROOT
 NTFY = "ansible/roles/ntfy_pager/tasks/main.yml"
+PROBE_VALUE = "'{{ ntfy_pager_pager_token }}'"
+VARS_BINDING = f"  vars:\n    probe_token: {PROBE_VALUE}\n"
 MONITORING = "ansible/roles/monitoring_stack/tasks/main.yml"
 CONTROL_PLANE = "ansible/roles/control_plane/tasks/main.yml"
 LOADER = "ansible/roles/host_inputs/vars/main.yml"
@@ -101,12 +104,14 @@ class SecretNoLogTest(unittest.TestCase):
     def _findings(self, root: Path) -> list[str]:
         return checker.check(root)
 
-    def _assert_red(self, findings: list[str], *fragments: str) -> None:
-        self.assertTrue(findings, "expected a finding, the tree passed")
+    def _assert_red(self, findings: list[str], *fragments: str, because: str = "") -> None:
+        """`because` names the mechanism under test, so a failure says which one went unread."""
+        reason = f" ({because})" if because else ""
+        self.assertTrue(findings, f"expected a finding{reason}, the tree passed")
         for fragment in fragments:
             self.assertTrue(
                 any(fragment in finding for finding in findings),
-                f"no finding contains {fragment!r}; findings: {findings}",
+                f"no finding contains {fragment!r}{reason}; findings: {findings}",
             )
 
     # Baseline and guards on the real tree.
@@ -542,10 +547,11 @@ class SecretNoLogTest(unittest.TestCase):
         )
         self._assert_red(self._findings(root), "Appended task", "tenant_compose_second")
 
-    def _ntfy_include(self, include: str, probe: str) -> Path:
+    def _ntfy_include(self, include: str, probe: str, binding: str = VARS_BINDING) -> Path:
         """A copy of the tree where the pager role includes a new file, binding the pager token
-        under the name probe_token. `include` is the include task's key line and `probe` the
-        tail of the write task in the included file."""
+        under the name probe_token. `include` is the include task's key lines, `binding` the
+        lines that bind the name (the task's own `vars:` unless the test puts it elsewhere) and
+        `probe` the tail of the write task in the included file."""
         self.count += 1
         root = _copy_tree(Path(self._scratch.name) / f"tree{self.count}")
         main = root / NTFY
@@ -553,7 +559,8 @@ class SecretNoLogTest(unittest.TestCase):
             main.read_text(encoding="utf-8")
             + "\n- name: Probe through an include\n"
             + include
-            + "  vars:\n    probe_token: '{{ ntfy_pager_pager_token }}'\n  no_log: true\n",
+            + binding
+            + "  no_log: true\n",
             encoding="utf-8",
         )
         (main.parent / "_probe.yml").write_text(
@@ -602,6 +609,130 @@ class SecretNoLogTest(unittest.TestCase):
                     "probe_token",
                     "cannot be followed",
                 )
+
+    def _assert_binding_reaches_the_file(
+        self, include: str, binding_of: Callable[[str], str], because: str
+    ) -> None:
+        """One binding form, three trees: the secret under it and a write with no_log and
+        diff: false is green; a non-secret under it and an unprotected write is green; the secret
+        under it and an unprotected write is red and names the bound name and the included task."""
+        safe = "  no_log: true\n  diff: false\n"
+        self.assertEqual(
+            self._findings(self._ntfy_include(include, safe, binding_of(PROBE_VALUE))),
+            [],
+            "the protected write must be green, or the red proves nothing",
+        )
+        self.assertEqual(
+            self._findings(self._ntfy_include(include, "", binding_of("plain"))),
+            [],
+            "a non-secret bound the same way must be green, or the red is not the secret",
+        )
+        self._assert_red(
+            self._findings(self._ntfy_include(include, "", binding_of(PROBE_VALUE))),
+            "R1 ansible/roles/ntfy_pager/tasks/_probe.yml",
+            "Write the probe",
+            "probe_token (secret through ntfy_pager_pager_token)",
+            "must set no_log: true",
+            because=because,
+        )
+
+    def test_h5_apply_vars_under_the_task_args_keyword_is_followed(self) -> None:
+        # Ansible merges the task's `args:` into the include's arguments, so `apply:` there binds.
+        for kind in ("include_tasks", "import_tasks"):
+            with self.subTest(kind=kind):
+                self._assert_binding_reaches_the_file(
+                    f"  ansible.builtin.{kind}: _probe.yml\n",
+                    lambda value: (
+                        f"  args:\n    apply:\n      vars:\n        probe_token: {value}\n"
+                    ),
+                    f"{kind} binds under the task args: keyword, apply: vars:",
+                )
+
+    def test_h5_file_and_apply_both_under_the_task_args_keyword_are_followed(self) -> None:
+        # The include's own value is empty: `args:` names the file and carries the binding.
+        self._assert_binding_reaches_the_file(
+            "  ansible.builtin.include_tasks:\n",
+            lambda value: (
+                "  args:\n    file: _probe.yml\n    apply:\n      vars:\n"
+                f"        probe_token: {value}\n"
+            ),
+            "include_tasks takes its file and its apply: vars: from the task args: keyword",
+        )
+
+    def test_h5_apply_vars_under_the_includes_own_mapping_is_followed(self) -> None:
+        def include(value: str) -> str:
+            return (
+                "  ansible.builtin.include_tasks:\n    file: _probe.yml\n    apply:\n      vars:\n"
+                f"        probe_token: {value}\n"
+            )
+
+        safe = "  no_log: true\n  diff: false\n"
+        self.assertEqual(self._findings(self._ntfy_include(include(PROBE_VALUE), safe, "")), [])
+        self.assertEqual(
+            self._findings(self._ntfy_include(include("plain"), "", "")),
+            [],
+            "a non-secret under the include's own apply must be green",
+        )
+        self._assert_red(
+            self._findings(self._ntfy_include(include(PROBE_VALUE), "", "")),
+            "R1 ansible/roles/ntfy_pager/tasks/_probe.yml",
+            "Write the probe",
+            "probe_token (secret through ntfy_pager_pager_token)",
+            "must set no_log: true",
+            because="apply: vars: under the include's own mapping",
+        )
+
+    def test_h5_an_apply_under_the_task_args_of_a_role_include_cannot_be_followed(self) -> None:
+        self._assert_red(
+            self._findings(
+                self._ntfy_include(
+                    "  ansible.builtin.include_role:\n    name: ntfy_pager\n",
+                    "  no_log: true\n  diff: false\n",
+                    "  args:\n    apply:\n      vars:\n        probe_token: " + PROBE_VALUE + "\n",
+                )
+            ),
+            "R1 " + NTFY,
+            "Probe through an include",
+            "probe_token",
+            "cannot be followed",
+            because="a role include binding under the task args: keyword",
+        )
+
+    def test_h5_task_args_that_is_not_a_mapping_is_a_finding(self) -> None:
+        mapping = "  args:\n    apply:\n      vars:\n        probe_token: plain\n"
+        self.assertEqual(
+            self._findings(
+                self._ntfy_include("  ansible.builtin.include_tasks: _probe.yml\n", "", mapping)
+            ),
+            [],
+            "the same include with a mapping for args: and nothing secret must be green",
+        )
+        for args in ("'{{ probe_args }}'", "[apply]", "_probe.yml"):
+            with self.subTest(args=args):
+                self._assert_red(
+                    self._findings(
+                        self._ntfy_include(
+                            "  ansible.builtin.include_tasks: _probe.yml\n",
+                            "",
+                            f"  args: {args}\n",
+                        )
+                    ),
+                    "R1 " + NTFY,
+                    "Probe through an include",
+                    "`args:` must be a mapping",
+                    because=f"task args: that is not a mapping, {args}",
+                )
+
+    def test_h5_an_include_value_that_is_not_text_or_a_mapping_is_a_finding(self) -> None:
+        self._assert_red(
+            self._findings(
+                self._ntfy_include("  ansible.builtin.include_tasks: [_probe.yml]\n", "")
+            ),
+            "R1 " + NTFY,
+            "Probe through an include",
+            "must be a mapping",
+            because="an include value that is neither text nor a mapping",
+        )
 
     def _append_task(self, relative: str, argument_line: str) -> Path:
         """A copy of the tree with a debug task, without no_log, added to the end of a task file."""
