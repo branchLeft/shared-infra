@@ -549,10 +549,12 @@ carry what they are set to: a name bound under `vars:` (an include's, a block's,
 `apply: vars:`) to a value that reads a secret is a secret in every task file of the role, because
 the included file reads it and `no_log` on an include does not reach the tasks it includes. An
 include's `apply:` and its file are read from the include's own value and from the task's `args:`
-keyword, merged as Ansible merges them (a key of the include's own value beats the same key in
-`args:`), so `include_tasks: f.yml` with `args: {apply: {vars: ...}}` and an empty `include_tasks:`
-with `args: {file: f.yml, apply: ...}` are read like `include_tasks: {file: f.yml, apply: ...}`.
-An include whose `args:` is not a mapping, or whose own value is neither text nor a mapping, is a
+keyword, merged (a key of the include's own value beats the same key in `args:`), so
+`include_tasks: f.yml` with `args: {apply: {vars: ...}}` and an empty `include_tasks:` with
+`args: {file: f.yml, apply: ...}` are read like `include_tasks: {file: f.yml, apply: ...}`. The
+file is chosen as Ansible chooses it: the free-form text (`_raw_params`) when it is set, else
+`file:`. Both set is a finding, because Ansible includes the free-form one without rejecting the
+other and the check cannot tell which was meant to be safe. An include whose `args:` is not a mapping, or whose own value is neither text nor a mapping, is a
 finding in a role that holds a secret, because what it binds cannot be read. The check follows the
 spellings in `INCLUDE_NAMES` (bare and `ansible.builtin.`); another spelling of an include, and an
 include through `action:` or `include:`, is not read. A bare

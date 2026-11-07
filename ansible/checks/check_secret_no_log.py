@@ -339,10 +339,16 @@ def _include_args(task: dict[str, object], kind: str) -> dict[str, object] | Non
     return merged
 
 
-def _include_target(args: dict[str, object]) -> str | None:
-    """The file an include_tasks or import_tasks names: its file key, or its free-form text."""
-    named = args.get("file", args.get("_raw_params"))
-    return named.strip() if isinstance(named, str) else None
+def _include_target(args: dict[str, object]) -> tuple[str | None, bool]:
+    """The file an include_tasks or import_tasks names, and whether the arguments are ambiguous.
+    Ansible (task_include.py, check_options) takes `_raw_params`, the include's free-form text,
+    when it is set, and reads `file` only when it is not. It does not reject both being set, so
+    the check cannot know which the author meant to be safe: both set is ambiguous, and the
+    caller reports it."""
+    raw, named = args.get("_raw_params"), args.get("file")
+    chosen = raw if raw else named
+    target = chosen.strip() if isinstance(chosen, str) else None
+    return target, bool(raw) and bool(named)
 
 
 def _binds_in(
@@ -361,6 +367,15 @@ def _binds_in(
             )
             args = {}
         file_include = bool(kinds) and kinds[0].rsplit(".", 1)[-1].endswith("_tasks")
+        target, ambiguous = _include_target(args) if file_include else (None, False)
+        if ambiguous:
+            findings.append(
+                f"R1 {rel}: task '{task.get('name', '(unnamed)')}' names its file twice, as "
+                "free-form text (`_raw_params`) and as `file:`: Ansible includes the free-form one "
+                "and ignores `file:`, and the check cannot tell which was meant to be safe; name "
+                "it once"
+            )
+            target = None
         scopes = [task.get("vars"), _dict(args.get("apply")).get("vars")]
         for scope in scopes:
             for key, value in _dict(scope).items():
@@ -370,7 +385,6 @@ def _binds_in(
                     t for t in (_parse(s, rel, "a vars value", []) for s in _strings(value)) if t
                 ]
                 bare = _bare_name(trees[0]) if isinstance(value, str) and len(trees) == 1 else None
-                target = _include_target(args) if file_include else None
                 out.append(
                     _Bind(
                         key,

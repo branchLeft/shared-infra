@@ -638,15 +638,13 @@ class SecretNoLogTest(unittest.TestCase):
 
     def test_h5_apply_vars_under_the_task_args_keyword_is_followed(self) -> None:
         # Ansible merges the task's `args:` into the include's arguments, so `apply:` there binds.
-        for kind in ("include_tasks", "import_tasks"):
-            with self.subTest(kind=kind):
-                self._assert_binding_reaches_the_file(
-                    f"  ansible.builtin.{kind}: _probe.yml\n",
-                    lambda value: (
-                        f"  args:\n    apply:\n      vars:\n        probe_token: {value}\n"
-                    ),
-                    f"{kind} binds under the task args: keyword, apply: vars:",
-                )
+        # import_tasks is not in this test: Ansible rejects `apply` on it (task_include.py,
+        # check_options, "Invalid options for import_tasks: apply"), so the form never runs.
+        self._assert_binding_reaches_the_file(
+            "  ansible.builtin.include_tasks: _probe.yml\n",
+            lambda value: f"  args:\n    apply:\n      vars:\n        probe_token: {value}\n",
+            "include_tasks binds under the task args: keyword, apply: vars:",
+        )
 
     def test_h5_file_and_apply_both_under_the_task_args_keyword_are_followed(self) -> None:
         # The include's own value is empty: `args:` names the file and carries the binding.
@@ -680,6 +678,102 @@ class SecretNoLogTest(unittest.TestCase):
             "probe_token (secret through ntfy_pager_pager_token)",
             "must set no_log: true",
             because="apply: vars: under the include's own mapping",
+        )
+
+    def _benign_include(self, include: str, probe: str, binding: str, outside: bool = True) -> Path:
+        """`_ntfy_include`, plus a task file `benign.yml` in the role's tasks that reads no
+        secret: the file a `file:` key names, so a file-wins choice reads it and finds nothing
+        wrong. With `outside` the probe file moves to the role's `files/`, where the check does
+        not read it but `../files/_probe.yml` from the tasks reaches it, as Ansible does."""
+        root = self._ntfy_include(include, probe, binding)
+        tasks = (root / NTFY).parent
+        tasks.joinpath("benign.yml").write_text(
+            "---\n- name: Benign\n  ansible.builtin.debug:\n    msg: fine\n", encoding="utf-8"
+        )
+        if outside:
+            files = tasks.parent / "files"
+            files.mkdir(exist_ok=True)
+            tasks.joinpath("_probe.yml").rename(files / "_probe.yml")
+        return root
+
+    def test_h6_free_form_text_and_a_file_key_both_naming_a_file_is_a_finding(self) -> None:
+        # Ansible includes `_raw_params` when it is set and reads `file` only when it is not
+        # (task_include.py, check_options), and accepts both. The file Ansible includes may be
+        # one the check never reads (`../files/_probe.yml` is outside the tasks the check
+        # follows), so naming a file twice is a finding, not a pick.
+        safe = "  no_log: true\n  diff: false\n"
+        self.assertEqual(
+            self._findings(
+                self._benign_include(
+                    "  ansible.builtin.include_tasks: _probe.yml\n", safe, VARS_BINDING, False
+                )
+            ),
+            [],
+            "the same include naming its file once and protecting the write must be green",
+        )
+        self._assert_red(
+            self._findings(
+                self._benign_include(
+                    "  ansible.builtin.include_tasks: ../files/_probe.yml\n",
+                    "",
+                    VARS_BINDING + "  args:\n    file: benign.yml\n",
+                )
+            ),
+            "R1 " + NTFY,
+            "Probe through an include",
+            "names its file twice",
+            because="free-form text names one file and args: file: another, secret under vars:",
+        )
+
+    def test_h6_a_templated_free_form_text_beats_a_file_key_that_names_a_followed_file(
+        self,
+    ) -> None:
+        # `_raw_params` wins, so Ansible includes the templated path, which the check cannot
+        # follow, and `file: benign.yml` (a followed file) is ignored: the old file-wins choice
+        # read benign.yml and passed.
+        def binding(value: str, file: str) -> str:
+            return f"  args:\n{file}    apply:\n      vars:\n        probe_token: {value}\n"
+
+        include = "  ansible.builtin.include_tasks: '{{ role_path }}/files/_probe.yml'\n"
+        self.assertEqual(
+            self._findings(self._benign_include(include, "", binding("plain", ""))),
+            [],
+            "a non-secret bound the same way, with the file named once, must be green",
+        )
+        self._assert_red(
+            self._findings(
+                self._benign_include(include, "", binding(PROBE_VALUE, "    file: benign.yml\n"))
+            ),
+            "R1 " + NTFY,
+            "Probe through an include",
+            "probe_token",
+            "names its file twice",
+            because="templated free-form text, args: file:, secret under args: apply: vars:",
+        )
+
+    def test_h6_an_own_mapping_with_a_raw_params_key_and_a_file_key_is_a_finding(self) -> None:
+        def include(raw: str, file: str) -> str:
+            return (
+                f"  ansible.builtin.include_tasks:\n{file}    _raw_params: {raw}\n    apply:\n"
+                f"      vars:\n        probe_token: {PROBE_VALUE}\n"
+            )
+
+        safe = "  no_log: true\n  diff: false\n"
+        self.assertEqual(
+            self._findings(self._benign_include(include("_probe.yml", ""), safe, "", False)),
+            [],
+            "the mapping naming its file once and protecting the write must be green",
+        )
+        self._assert_red(
+            self._findings(
+                self._benign_include(
+                    include("../files/_probe.yml", "    file: benign.yml\n"), "", ""
+                )
+            ),
+            "R1 " + NTFY,
+            "Probe through an include",
+            "names its file twice",
+            because="an include's own mapping holding both _raw_params: and file:",
         )
 
     def test_h5_an_apply_under_the_task_args_of_a_role_include_cannot_be_followed(self) -> None:
