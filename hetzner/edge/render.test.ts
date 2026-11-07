@@ -16,7 +16,7 @@ import {
 } from './posture';
 import type { EdgePosture } from './posture';
 import { PUBLICPRESS_ABUSE_CONTACT } from './publicpressHolding';
-import { SHARED_TENANT_FILES } from './sharedTenantFiles';
+import { SHARED_TENANT_FILES, type StaticTextFile } from './sharedTenantFiles';
 import {
   renderAppsecAcquisition,
   renderCaddyfile,
@@ -982,6 +982,57 @@ describe('the shared tenant domain files', () => {
     for (const file of registered) {
       expect(file.body).toContain('HOSTING_NOTICE_PLACEHOLDER');
     }
+  });
+
+  describe('the renderer refuses a file that could break the Caddyfile', () => {
+    // Why: the registry is a mutable module constant, so each case swaps one bad file in for
+    // the duration of a render and puts the real list back whatever happens.
+    const renderWith = (file: StaticTextFile) => {
+      const original = SHARED_TENANT_FILES['sites-tenant-signals'];
+      SHARED_TENANT_FILES['sites-tenant-signals'] = [file];
+      try {
+        return renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
+      } finally {
+        SHARED_TENANT_FILES['sites-tenant-signals'] = original as StaticTextFile[];
+      }
+    };
+    const good: StaticTextFile = {
+      path: '/robots.txt',
+      contentType: 'text/plain; charset=utf-8',
+      body: '# HOSTING_NOTICE_PLACEHOLDER\n',
+    };
+
+    it('renders the control file, so the refusals below are not a render that always throws', () => {
+      expect(renderWith(good)).toContain('path /robots.txt');
+    });
+
+    it.each([
+      ['no leading slash', 'robots.txt'],
+      ['a space', '/robots .txt'],
+      ['a wildcard', '/*'],
+      ['a matcher-breaking brace', '/{path}'],
+      ['a parent-directory segment', '/a/../etc/passwd'],
+      ['a newline', '/robots.txt\nrespond 200'],
+    ])('refuses a path that is not a plain literal path: %s', (_label, path) => {
+      expect(() => renderWith({ ...good, path })).toThrow(/must be a plain literal path/);
+    });
+
+    it('refuses a body with no trailing newline, so the heredoc would not close on its own line', () => {
+      expect(() => renderWith({ ...good, body: '# HOSTING_NOTICE_PLACEHOLDER' })).toThrow(
+        /must end with a newline/
+      );
+    });
+
+    it('refuses a body line equal to the heredoc marker, which would end the body early', () => {
+      expect(() =>
+        renderWith({ ...good, body: 'a\nSHARED_TENANT_FILE_EOF\nrespond 200 "injected"\n' })
+      ).toThrow(/equal to the heredoc marker/);
+    });
+
+    it('still accepts a body that only contains the marker inside a longer line', () => {
+      const out = renderWith({ ...good, body: '# note SHARED_TENANT_FILE_EOF here\n' });
+      expect(out).toContain('# note SHARED_TENANT_FILE_EOF here');
+    });
   });
 });
 
