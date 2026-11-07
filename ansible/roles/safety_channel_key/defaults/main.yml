@@ -1,0 +1,9 @@
+---
+# The account and group that own the key directory and both files. They default to root until
+# the safety service has a definition of its own that names the account it runs as. The
+# service refuses a key readable by group or others, so the account that reads the key must
+# be the account that owns it: a later change sets these two and the next apply adopts the
+# existing key to that owner, with its bytes unchanged.
+# Names only, never a secret. The module checks the shape of both.
+safety_channel_key_owner: root
+safety_channel_key_group: root

@@ -1,20 +1,11 @@
 ---
-# The refusal cases of the role. Each is one edit of the grant that
-# broker_deploy installed, or one bad input, and the role's grant check must
-# refuse it with its own message. They live in their own scenario so that the
-# default scenario applies the role only a few times (its shard is bound by the
-# time limit); here the role is not applied. The first play stages the pinned
-# programs, which holds the generator the grant is compared with, with the role's
-# own release tasks and its own vendored copies. Every other play runs
-# tasks/_sudoers_check.yml alone against an edited grant, or, for the link cases,
-# tasks/_dirs.yml alone against a link planted in place of a directory. That is all
-# these cases can see: with no install in this scenario, whether a refusal comes
-# before the install is proved in the default scenario, which runs the whole role.
+# The refusal cases of the role. Each is one edit of the grant that broker_deploy
+# installed, or one bad input, and the role must refuse it with its own message.
+# The role is not applied here: the first play stages the pinned programs, and each
+# other play runs one task file alone (_sudoers_check.yml, or _dirs.yml via refused_link.yml).
 #
-# The grant on the host is rendered by broker_deploy's own template (prepare.yml,
-# the default scenario's), and the generator is the real pinned one, so the
-# header of the first differs from the header of the second, as it does on a real
-# host. A plan makes no change, so a check run skips every play.
+# The grant on the host is rendered by broker_deploy's template (prepare.yml), and the
+# generator is the real pinned one, so the two headers differ, as on a real host.
 - name: Stage the pinned programs and read the grant as prepared
   hosts: all
   gather_facts: false
@@ -436,3 +427,358 @@
               - not demo1_build_converge_fresh_release.stat.exists
             quiet: true
             fail_msg: The role wrote a release directory before it refused the wrong pin.
+
+# The owner's edge input for slot 0, read as root by the pinned site renderer. The
+# role refuses a link, an input that is not root's, and an input open to group or
+# others, before the renderer reads it; each case names the check that fires. The
+# control case is a valid input, which the step must stage. The leak case is a
+# hostname the renderer refuses; the step must name the slot without the renderer's
+# message, and the canary must not reach the log (verify.yml reads it).
+- name: Refuse an owner's edge input that is a link
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: link
+      expect: 'is a link or not a regular file'
+
+- name: Refuse an owner's edge input that is not root's
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: owner
+      owner: broker
+      expect: 'is not root:root'
+
+- name: Refuse an owner's edge input open to others
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: mode
+      mode: '0644'
+      expect: 'must be 0600 or narrower'
+
+- name: Accept a valid owner's edge input and stage its candidate
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: valid
+      expect: ''
+
+- name: Refuse a renderer refusal without its message, the hostname a canary
+  ansible.builtin.import_playbook: refused_site_input.yml
+  vars:
+    converge_case:
+      plant: leak
+      host: Canary-Leak-Probe.invalid
+      expect: 'refused the wildcard base or the edge input of the occupied slot(s) 0, 1'
+
+# The DNS token file Caddy reads as root. The role only looks at it, and refuses a file
+# that is a link, a directory, not root's, open to others or empty, each with its own
+# message naming the path and never a value. The control is the valid token that prepare
+# placed: the valid edge input case above stages a candidate only with it in place, and
+# each case here puts it back.
+- name: Case refused_token_link, refuse a DNS token file that is a link
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: link
+      expect: 'is a link.'
+
+- name: Case refused_token_directory, refuse a DNS token file that is a directory
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: directory
+      expect: 'is not a regular file.'
+
+- name: Case refused_token_not_root, refuse a DNS token file that is not root's
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: owner
+      owner: broker
+      expect: 'is not root:root.'
+
+- name: Case refused_token_mode_0644, refuse a DNS token file open to group and others
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: mode
+      mode: '0644'
+      expect: 'is mode 0644.'
+
+- name: Case refused_token_empty, refuse a DNS token file that is empty
+  ansible.builtin.import_playbook: refused_token.yml
+  vars:
+    converge_case:
+      plant: empty
+      expect: 'is empty.'
+
+# The Caddy image that judges the candidate. docker finds it by the digest in its reference,
+# and the role wants exactly one image whose RepoDigests hold the pinned digest. An image that
+# is on the host and lists anything else is refused, whatever the reason (README, "How the
+# Caddy image gets onto the host"): the classic image store lists a loaded image with no
+# digests at all. The control lists the pinned digest and stages the candidate.
+- name: Accept the Caddy image that lists the pinned digest, and stage the candidate
+  ansible.builtin.import_playbook: refused_image.yml
+  vars:
+    converge_case:
+      accepted: true
+
+- name: Case refused_image_no_digests, refuse an image that lists no digests, as a loaded image does on the classic image store
+  ansible.builtin.import_playbook: refused_image.yml
+  vars:
+    converge_case:
+      digests: []
+      expect: 'that is not the pinned image'
+
+- name: Case refused_image_other_digest, refuse an image that lists another digest
+  ansible.builtin.import_playbook: refused_image.yml
+  vars:
+    converge_case:
+      digests:
+        ['demo-edge-test@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210']
+      expect: 'that is not the pinned image'
+
+- name: Case refused_image_two_images, refuse a listing of two images
+  ansible.builtin.import_playbook: refused_image.yml
+  vars:
+    converge_case:
+      count: 2
+      expect: 'It listed 2 image(s).'
+
+- name: Case refused_image_not_json, refuse a listing that is not JSON
+  ansible.builtin.import_playbook: refused_image.yml
+  vars:
+    converge_case:
+      raw: 'this is not json'
+      expect: 'The listing was not JSON.'
+
+# The candidate the renderer prints is refused when Caddy would run it with an interim
+# certificate, or with a site beside the wildcard one, or served over plain HTTP, whatever
+# produced it and however it is spelled. The role asks Caddy; the answers replayed here are
+# the ones real Caddy printed (refused_candidate.yml). The control is the text unchanged.
+- name: Accept a rendered candidate that is one wildcard site with the DNS-01 tls block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      accepted: true
+
+- name: Case refused_tls_internal, refuse a candidate whose wildcard site asks for the internal certificate authority
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      tls: tls internal
+      adapted: site_tls_internal
+      expect: 'REFUSED internal-issuer'
+
+- name: Case refused_tls_internal_indented, refuse the same directive when it is indented and spaced out
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      tls: '      tls    internal'
+      adapted: site_tls_internal_indented
+      expect: 'REFUSED internal-issuer'
+
+- name: Case refused_global_cert_issuer_internal, refuse an internal issuer set in the global block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      global_option: cert_issuer internal
+      adapted: global_cert_issuer_internal
+      expect: 'REFUSED internal-issuer'
+
+- name: Case refused_global_local_certs, refuse local_certs in the global block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      global_option: local_certs
+      adapted: global_local_certs
+      expect: 'REFUSED internal-issuer'
+
+- name: Case refused_global_skip_install_trust, refuse skip_install_trust in the global block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      global_option: skip_install_trust
+      adapted: global_skip_install_trust
+      expect: 'REFUSED apps'
+
+- name: Case refused_global_auto_https_off, refuse auto_https off in the global block
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      global_option: auto_https off
+      adapted: global_auto_https_off
+      expect: 'REFUSED server-keys'
+
+# The three spellings of a second site that a test of the text's column-0 lines missed, and
+# the plain one it caught. Each is refused because Caddy would serve it.
+- name: Case refused_indented_http_site, refuse an indented plain-HTTP site
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n\thttp://demo-0.site-fixture.invalid {\n\trespond \"x\"\n}\n"
+      adapted: indented_http_site
+      expect: 'REFUSED servers'
+
+- name: Case refused_indented_slot_site, refuse an indented second site that would get a certificate of its own
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n  demo-0.site-fixture.invalid {\n\treverse_proxy 127.0.0.1:9300\n}\n"
+      adapted: indented_slot_site
+      expect: 'REFUSED policies'
+
+- name: Case refused_closing_brace_site, refuse a site opened on the closing brace of the wildcard site
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "http://demo-1.site-fixture.invalid {\n\trespond \"x\"\n}\n"
+      adapted: closing_brace_site
+      expect: 'REFUSED servers'
+
+- name: Case refused_http_only_site, refuse a plain-HTTP site at the start of a line
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\nhttp://demo-0.site-fixture.invalid {\n\trespond \"x\"\n}\n"
+      adapted: http_only_site
+      expect: 'REFUSED servers'
+
+# What the adapted config cannot show, refused in the raw text before Caddy adapts it: Caddy
+# adapts with an empty environment and an empty filesystem, and the edge runs with its own.
+# A {$NAME} or an import of a path can add a site there, and a second {file. placeholder in a
+# handler would serve the DNS token. No answer is replayed: the text is refused first.
+- name: Case refused_env_substitution, refuse a {$NAME} that the edge's environment could fill with a site
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n{$R2_SITE}\n"
+      expect: 'REFUSED text-env-var'
+
+- name: Case refused_env_placeholder, refuse an {env. placeholder in a handler
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8081 {\n\trespond \"{env.R2_SECRET}\"\n}\n"
+      expect: 'REFUSED text-env-placeholder'
+
+- name: Case refused_second_file_placeholder, refuse a handler that would serve the DNS token
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8082 {\n\trespond \"{file./etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard}\"\n}\n"
+      expect: 'REFUSED text-file-placeholder'
+
+- name: Case refused_import_of_a_path, refuse an import of files that match a glob
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\nimport /etc/caddy/extra/*.caddy\n"
+      expect: 'REFUSED text-import'
+
+- name: Case refused_import_of_an_undefined_name, refuse an import of a name no snippet in the text defines
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\nimport not-a-snippet\n"
+      expect: 'REFUSED text-import'
+
+# The adapted config holds a placeholder that reads a file or the environment, in a handler
+# the text check did not see. The text is the unchanged candidate and the stand-in replays
+# what real Caddy printed for the same handler.
+- name: Case refused_handler_serves_the_token, refuse an adapted config whose handler answers with the token file
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_respond_token
+      expect: 'REFUSED placeholder'
+
+# A handler that reads a file off the edge's disk can serve the DNS token wherever it sits, so
+# file_server, templates and any root are refused outright, in the raw text and in the adapted
+# config, whatever the root (a directory above the token, a relative one, a link). The adapted
+# cases replay what real Caddy printed for the same handler, the text cases are refused first.
+- name: Case refused_text_file_server, refuse a file_server directive in the text
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8083 {\n\troot * /etc/branchleft/secrets\n\tfile_server browse\n}\n"
+      expect: 'REFUSED text-file-server'
+
+- name: Case refused_text_templates, refuse a templates directive in the text
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8084 {\n\ttemplates\n\trespond \"x\"\n}\n"
+      expect: 'REFUSED text-templates'
+
+- name: Case refused_text_root, refuse a root directive in the text
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8085 {\n\troot * /etc\n\trespond \"x\"\n}\n"
+      expect: 'REFUSED text-root'
+
+- name: Case refused_handler_file_server, refuse an adapted config whose handler serves files from the token's directory
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_file_server_secrets_dir
+      expect: 'REFUSED handler-file-server'
+
+- name: Case refused_handler_templates, refuse an adapted config whose handler can include a file
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_templates_include
+      expect: 'REFUSED handler-templates'
+
+- name: Case refused_handler_root, refuse an adapted config that sets a root
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_root_alone
+      expect: 'REFUSED handler-root'
+
+# A CEL expression matcher builds the name of the placeholder it reads at run time, so the
+# config holds no second {file. and the placeholder count sees nothing. The matcher itself is
+# refused, in the text and in the adapted config.
+- name: Case refused_text_expression, refuse an expression matcher in the text
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      append: "\n:8086 {\n\t@leak expression ph(req, \"fi\" + \
+        \"le./etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard\").startsWith(\"A\")\n\
+        \trespond @leak \"1\"\n}\n"
+      expect: 'REFUSED text-expression'
+
+- name: Case refused_handler_expression, refuse an adapted config whose matcher is an expression
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      adapted: handler_expression_file_oracle
+      expect: 'REFUSED matcher-expression'
+
+# Caddy itself cannot adapt the text: the role does not judge a text Caddy rejects, and says
+# so without Caddy's message, which can echo a hostname.
+- name: Case refused_unadaptable_candidate, refuse a candidate Caddy cannot adapt
+  ansible.builtin.import_playbook: refused_candidate.yml
+  vars:
+    converge_case:
+      no_answer: true
+      expect: 'The Caddy image could not adapt the candidate'
+
+# The colour units. The role refuses to go on when a colour instance does not load,
+# and the message names the missing template, not its path. The control keeps the
+# stand-in, and is accepted.
+- name: Accept the colour instances with the shared compose template in place
+  ansible.builtin.import_playbook: refused_template.yml
+  vars:
+    converge_case:
+      accepted: true
+
+- name: Refuse the colour instances when the shared compose template is missing
+  ansible.builtin.import_playbook: refused_template.yml
+  vars:
+    converge_case: {}

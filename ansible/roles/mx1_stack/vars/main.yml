@@ -29,10 +29,9 @@ mx1_stack_shim_hostname: mx1.branchleft.co.uk
 mx1_stack_shim_tls_port: 8443
 mx1_stack_stalwart_tls_port: 443
 
-# The flat label:secret file the 6x scripts share, and the label of the shim's drain token in it.
-# The token is read on the host only; the role never makes it.
+# The flat label:secret file the 6x scripts share. The shim's secret in it (which label, depends on
+# the pinned image: mx1_stack_shim_contracts below) is read on the host only; the role never makes it.
 mx1_stack_credentials_file: /root/.stalwart-service-credentials
-mx1_stack_drain_label: shim-drain-token
 
 # ----- The stamps -----
 mx1_stack_stamp_dir: /var/lib/branchleft
@@ -70,6 +69,10 @@ mx1_stack_stalwart_compose_text: "{{ lookup('ansible.builtin.file', 'docker-comp
 mx1_stack_shim_compose_text: "{{ lookup('ansible.builtin.file', 'shim-compose.yml', rstrip=false) }}"
 mx1_stack_shim_caddyfile_text: "{{ lookup('ansible.builtin.file', 'shim.Caddyfile', rstrip=false) }}"
 mx1_stack_resolver_dropin_text: "{{ lookup('ansible.builtin.file', '10-branchleft-local-recursive.conf', rstrip=false) }}"
+# What each pinned shim image reads: the digest -> contract table render_shim_env.py renders from too
+# (files/shim-env-contracts.json links to the one file in mail/provision). The module refuses an image
+# whose digest it does not list, so the role never guesses an environment for it.
+mx1_stack_shim_contracts: "{{ lookup('ansible.builtin.file', 'shim-env-contracts.json') | ansible.builtin.from_json }}"
 mx1_stack_dnsbl_script_text: "{{ lookup('ansible.builtin.file', 'check_dnsbl_blocklist.py.txt', rstrip=false) }}"
 
 # ----- The audit: every host input to both compose files -----

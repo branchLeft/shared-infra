@@ -19,6 +19,7 @@ role's vars, or add a published port to a Compose file, and a test below fails.
 
 from __future__ import annotations
 
+import pathlib
 import re
 import unittest
 
@@ -33,7 +34,20 @@ COMPOSE_FILES = (
 )
 FIREWALLS_TS = ROOT / "hetzner-host" / "firewalls.ts"
 RENDER_TS = ROOT / "hetzner" / "monitoring" / "render.ts"
-CADDYFILE = ROOT / "hetzner" / "edge" / "stack" / "Caddyfile"
+def _caddyfile_path() -> pathlib.Path:
+    """The Caddyfile the edge stack mounts, read from the caddy service's /etc/caddy bind mount.
+
+    Reading it from compose, not from a fixed path, means a later move of the file cannot leave
+    this test checking a stale copy: a missing file fails here, loudly, instead of passing."""
+    compose = _mapping(yaml.safe_load(COMPOSE_FILES[0].read_text(encoding="utf-8")))
+    for volume in _mapping(compose["services"])["caddy"]["volumes"]:
+        source, _, target = str(volume).partition(":")
+        if target.split(":")[0] == "/etc/caddy":
+            path = COMPOSE_FILES[0].parent / source / "Caddyfile"
+            assert path.is_file(), f"the caddy mount has no Caddyfile at {path}"
+            return path
+    raise AssertionError("the edge compose file has no /etc/caddy bind mount")
+
 EDGE1_PRIVATE_ADDRESS = "10.20.1.10"
 
 # host address (None for "every address"), host port, protocol
@@ -358,7 +372,7 @@ class PortsAgreeWithTheRestOfTheRepository(unittest.TestCase):
             int(port)
             for port in re.findall(
                 rf"reverse_proxy {re.escape(EDGE1_PRIVATE_ADDRESS)}:(\d+)",
-                CADDYFILE.read_text(encoding="utf-8"),
+                _caddyfile_path().read_text(encoding="utf-8"),
             )
         }
         self.assertEqual({2586}, upstream)

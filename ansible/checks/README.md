@@ -178,13 +178,23 @@ is not loaded there.
   exactly the keys its host is allowed and no other, with values of the right shape. For
   edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
   `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
-  key (a source address list, say) is refused. For ops1 the one key is `pull_trigger_steps`,
+  key (a source address list, say) is refused. The four values of the `ci_jump` role that live in the repository are
+  allowed on every host in `JUMP_HOSTS` (each jump host has its own file, address,
+  destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
+  `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
+  list of `{key}` entries with nothing else (a destination list per key is refused: the role
+  takes one list for every key). `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose row in
+  `checks/host_roles.yml` lists `ci_jump`: a host cannot gain the role without its keys, nor
+  the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
+  the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the
+  role through the host's `host_inputs` row. What a destination or a key may look like is the role's rule alone,
+  in its module. For ops1 the one key is `pull_trigger_steps`,
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text. R10 reads
   only that shape. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
   word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
   real file through the program's own `parse_config`. `control_plane_db_step` is never an owner
   key: it is the role's second key and only the pull sets it. A host with no allowed keys may
-  have no file. The check does not judge a key's text; the `ci_login` role does. The directory is the
+  have no file. The check does not judge a key's text; the `ci_login` and `ci_jump` roles do. The directory is the
   owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
 - **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
   (owner ruling, option A), it is the first role after the two
@@ -209,25 +219,60 @@ source limit; this keeps that visible, so a limit is added by an owner ruling th
 the test too. Each pin runs red on a sabotaged copy of its files and green once the file is
 put back.
 
-# check_role_imports and check_role_paths
+## test_ci_jump_pins.py: the ci_jump copies, its output and its task order
 
-Two checks over the roles, each run by its own test file in the "Test the checks" step.
+The `ci_jump` role carries its own copy of the constants its module also pins (the port, the fixed
+options, the forced command and the paths of the key file and the sshd drop-in; the module is the
+read-back oracle, so the two must be held equal), and a literal list of the accounts other roles
+own, because a role may not call another or load its variables (ANS-12, R6). The test fails when a
+constant differs, when the account names differ from `ci_login_user` in
+`roles/ci_login/vars/main.yml` and `tunnel_account_user` in `roles/tunnel_account/vars/main.yml`
+(read by variable name), when either template writes other text than the module expects, when the
+key template and the drop-in template do not read their destinations from the one variable
+`ci_jump_destinations`, when the module stops requiring `AllowTcpForwarding local` for the jump
+account (a key line with `port-forwarding` also lets its holder open a port on the jump host with
+`ssh -R` under any other value), when the argument spec and the defaults name different variables,
+when the role's own defaults are not inert (the flag false, and no address, destination or key), when
+an `owner_vars` file of a host the owner has not turned the role on for (the flag anything but the
+bool true) does not ship those defaults, when a file that turns the role on (the flag true, as edge1
+does after the owner's data change) lacks an address, a list of destinations or a list of keys,
+when an `owner_vars` file carries the account's name, when a host lists the role without its variables or
+without `ci_jump_user` in its `host_inputs` row, when a path the role writes or the module pins is made
+from the account's name (each is rendered with a realistic name and must not hold it; only the paths
+of the earlier hand-made layout, which the role removes, are), when a task that handles the name or
+one of those paths does not hide its result and its diff, and when the order or hiding of the role's tasks changes
+(the report runs whatever the flag is; the guards and the write are behind it, in that order; the
+two files are written as `root:root` at `0644` by hidden template tasks, never by `authorized_key`;
+the whole configuration is checked with `sshd -t`; a rescue puts the previous files back; the
+read-back is inside the rolled-back block and skipped in check mode).
 
-`check_role_imports.py` is ANS-12 as one sentence: no role imports another role. In
-`tasks/`, `handlers/` and `meta/` of every directory under `roles/` and `patterns/` it refuses
-`include_role`, `import_role` (in any spelling), a `roles:` key, a `dependencies` entry in
-`meta/main.yml`, and a task or vars file loaded from a path with `..` in it. A `molecule/`
-directory is a playbook and may name roles. It reads literal keys: a role loaded through a
-templated name is not seen.
+It also keeps the role's output out of the gated apply's plan scan, which withholds a host's whole
+plan on one line that reads like a credential assignment, and keeps the jump account's name out of
+the report and the plan. The module holds a copy of the scan's credential-assignment pattern
+(`SCAN_PATTERN`, from `branchLeft/github-workflows/.github/actions/ssh-check-hosts/action.yml`
+line 434 at tag v1.0.19). The test runs the module's report and plan over hostile values (option
+values that read like credentials, an account whose name must appear nowhere) and fails when a line
+matches, when the module's last-resort guard had to withhold one, or when the name is printed, and
+it scans every variable name, task name and message of the role. **Drift of the copy from the
+original is not checked here**: no test holds the two equal yet. Each pin runs red on a sabotaged
+copy of its files and green once the file is put back.
 
-`check_role_paths.py` holds that no two roles write the same path. It reads the tasks of every
-role under `roles/`, takes the `dest` or `path` of `copy`, `template`, `get_url`, `lineinfile`,
-`blockinfile`, `replace`, `assemble` and of `file` with `state: link`, `hard` or `touch`, and
-resolves each `{{ name }}` from the defaults and vars of the roles (names carry the role prefix,
-ANS-7). It prints how many paths it compared and how many stayed templated, because a path with a
-loop item or a filter is not compared. A directory two roles both make is not a write. It
-replaces the per-role tests that each asserted one home for one role's files; it does not check
-that a role holds no copy of a program (the DB-1 gate of the standards flags that).
+## test_ci_jump_hosts.py: one role on edge1 and edge-t, and the two address rules
+
+Two hosts apply `ci_jump`: edge1 and edge-t (`edget`, both in `JUMP_HOSTS`). The real-sshd proof in
+the role's `molecule/default` (a destination not on the list is refused) covers both only if the role
+is the same on both. The test fails when a jump host does not apply the role exactly once as a plain
+role entry (no `when`, `vars` or `tags` on it), and when any part of the role that runs on a host
+(tasks, templates, vars, defaults, meta, library, handlers, files) names the host or a group of
+hosts (`enrolled_host`, `inventory_hostname`, `groups`, `hostvars` and the like). It also holds the
+2 Nov ruling on the data: a tenants private address (read from `TENANTS_HOST_IPS` in
+`hetzner-host/addressPlan.ts`, its one home, never copied) in `owner_vars/edge1.yml` is refused, so
+the runner can only reach a tenants host through edge-t; edget's `ci_jump_own_address`, once set, must
+equal `TENANTS_HOST_IPS.edgeT`; and a host that lists destinations must list its own address among
+them. It fails when the address plan cannot be read, so an empty parse cannot let a list through. It
+does not see edge-t's public address, which is in no file of the repository, nor whether a listed
+address is the right one. Each pin runs red on a sabotaged copy of its files and green on the copy
+left alone.
 
 ## ci_select.py: which shards a run executes
 
@@ -251,9 +296,34 @@ run needs, from the event and the files it changed. The rules, in the order they
 - a changed file under `ansible/` that nothing here recognises executes every shard,
   because a new kind of file must be named in the program before it may skip a shard;
 - a changed file in a role or pattern executes that role's or pattern's shards, and the
-  shards of every role or pattern that names it;
+  shards of every role or pattern that reaches it, followed to the end (a cycle ends). A
+  role reaches another when a file of it names it textually (`branchleft.name`, `../name`,
+  `roles/name`, `patterns/name`, a README included), or when the structured scan reads one
+  of these:
+  - `include_role` or `import_role` (block, inline `{name: x}` or `name=x`), and a play's
+    `roles:` or a role's `dependencies:` (`- x`, `- role: x`, `- { role: x }`, an inline
+    list), naming `branchleft.x`, a bare `x`, or a path ending in `x`. A `{{ variable }}` is
+    followed through the same role's own definitions of it (each must resolve, three deep);
+    a `{{ playbook_dir }}` path is tried from the file's directory and each one above it up
+    to the role's root; a name built with a trailing `~ "/x"` names `x`;
+  - `import_playbook`, when the file it names lies in another role or pattern;
+  - `notify:` of a handler that the role does not define itself (by `name:` or `listen:`)
+    but another role or pattern does;
+  - a symlink in the role whose target lies in another role or pattern;
 - a changed file outside `ansible/` executes the shards of every role or pattern that
-  reads it.
+  reads it;
+- a reference the scan cannot map to a role or pattern executes every shard whenever a role
+  or pattern changed: a collection role, a name that is not a role here, a variable with no
+  literal definition, a playbook outside any role, a handler defined nowhere, a symlink that
+  is dangling, leaves the repository or points at a file under `ansible/` that no rule names,
+  a line that names `include_role`, `import_role` or `roles:` in a form the scan does not read
+  (a flow-style task, `action: include_role name=x`, a quoted key), and any file the scan
+  cannot read. Such a reference may be a way the changed role is
+  reached that the selection cannot see. A change that selects no role (a README, a
+  lint-only file) still executes no shard, and the log names the first few such references.
+  `test_ci_select.py` holds the real tree to none, so a new templated role name that the scan
+  cannot place fails there before it sends every pull request to every shard; make the name
+  literal, or give it through a variable of the same role with a literal value.
 
 A shard that is wrongly left out is a gate that passes without running, so every rule
 above errs towards running more.
@@ -262,11 +332,16 @@ above errs towards running more.
 
 These tests hold the CI workflows to what `ci_select.py` assumes:
 
-- the shard job waits for the lint job, so a lint error starts no container;
+- the shard job waits for the quick lint gate (yamllint and `test_ci_select.py`) and not for
+  the full lint, so a malformed file starts no container and the shards start sooner;
 - the shard job runs only when discover chose shards, and refuses the entry that stands
   for none;
-- the gate job (the check the ruleset requires) fails unless the lint passed, and fails
-  when shards were chosen and did not all pass;
+- the gate job (the check the ruleset requires) fails unless the quick gate and the full lint
+  both passed, and fails when shards were chosen and did not all pass. The gate's own script
+  is run under bash against a table of outcomes, with a control that cuts the full-lint
+  refusal out and shows the table sees it go;
+- the quick gate builds its tool environment with the same steps as the full lint, and the
+  full lint keeps every step it had;
 - the merge queue still triggers the workflow, and the weekly sweep is scheduled;
 - the lint and every shard restore the tool environment from a SHA-pinned `actions/cache`
   keyed on the lock files, and install only on a miss;
@@ -347,8 +422,15 @@ itself and refuses the delivery if they disagree, so a skip needs both to agree.
 `ANSIBLE_PUSH_HOSTS` repository secret, passed as `ssh_push_hosts` (the owner creates it; an unset
 secret is empty, and empty means every host is pulled). The `push-playbook` input is the one path
 `PUSH_PLAYBOOK`, defined once in `check_delivery.py` and imported by `test_drift_caller.py`. The
-release floor `MIN_RELEASE` is `v1.0.19`, the first release of `branchLeft/github-workflows` that
-declares both: a call that passes a key the called workflow does not declare fails on GitHub. A
+release floor `MIN_RELEASE` is `v1.0.23`, the first release of `branchLeft/github-workflows` that
+declares the per-host key maps (`ssh_host_check_keys` and, for the delivery, `ssh_host_apply_keys`)
+as well as the push list: a call that passes a key the called workflow does not declare fails on
+GitHub. The delivery names `ssh_host_check_keys` (the repository secret `ANSIBLE_HOST_CHECK_KEYS`,
+passed by the drift caller too) and `ssh_host_apply_keys` (the `SSH_HOST_APPLY_KEYS` secret of the
+`ansible-hosts` environment). Both are optional in the workflow: an unset secret is empty, and a
+host with no entry keeps the shared key. The `environment` command reports `ssh_host_apply_keys`
+missing from the environment's secrets, because a repository secret of that name would be readable
+by every workflow on main without the approval. A
 `push-dry-run-stub` is not an allowed input.
 
 After a lock-file merge (for example Dependabot), dispatch the Ansible workflow, because the
@@ -396,6 +478,14 @@ What the test enforces, over every `copy` and `template` task of the roles the p
   directly in `crowdsec/acquis.d`, found by a `find` on the controller, and the test makes the same
   list from the checkout, so the CrowdSec and acquisition files stay visible in the plan and a
   matching line in one fails.
+
+- A file whose text on a host still matches, though the checkout's no longer does, is listed in
+  `RETIRED_MATCHES` with the line the host holds. A diff is the old text against the new one, so the
+  removed line reaches the plan. The test then requires the task that copies it to set
+  `diff: false`, and accepts that hide although the checkout has no matching line. It fails when the listed line no longer matches the scan or
+  the checkout matches again. The entry and the file's place in the role's hidden list are removed
+  once the apply that rewrites the text is live. It is never used for a line that can be reworded
+  in the checkout.
 
 A finding names the task file, the task, the source and the line number, never the text of the line.
 The test reads the source of a task, not the text Ansible renders from it; a template whose rendered

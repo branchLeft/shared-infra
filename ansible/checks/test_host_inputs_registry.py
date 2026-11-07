@@ -20,6 +20,7 @@ from check_enrolment import HOST_ROLES_FILE, PROTECTED_KEYS, PULL_ROLES, ROOT
 
 LOADER = "host_inputs"
 ROW_VAR = "host_inputs_required_by_host"
+OPTIONAL_VAR = "host_inputs_optional_by_host"
 SET_TASK_PREFIX = "Set each input"
 VALUE_EXPRESSION = "{{{{ host_inputs_doc['{key}'] | default(omit) }}}}"
 # Keys that make a task skippable, ignorable, or re-routable. None may appear on any task. A
@@ -88,6 +89,12 @@ def rows_of(ansible: Path) -> dict[str, list[str]]:
     return {host: _names(names) for host, names in _mapping(doc.get(ROW_VAR)).items()}
 
 
+def optional_of(ansible: Path) -> dict[str, list[str]]:
+    """The inputs of each host's row that the file may leave out."""
+    doc = _mapping(_read(ansible / "roles" / LOADER / "vars" / "main.yml"))
+    return {host: _names(names) for host, names in _mapping(doc.get(OPTIONAL_VAR)).items()}
+
+
 def _top_tasks(ansible: Path) -> list[dict[str, object]]:
     doc = _read(ansible / "roles" / LOADER / "tasks" / "main.yml")
     return [_mapping(entry) for entry in doc] if isinstance(doc, list) else []
@@ -120,7 +127,35 @@ def _declared_with_default(ansible: Path, role: str, name: str) -> bool:
     return name in defaults or "default" in _mapping(options.get(name))
 
 
-def _check_rows(ansible: Path, rows: dict[str, list[str]], findings: list[str]) -> None:
+def _declares(ansible: Path, role: str, name: str) -> bool:
+    """Does the role's main entry point declare the option?"""
+    spec = _mapping(_read(ansible / "roles" / role / "meta" / "argument_specs.yml"))
+    options = _mapping(_mapping(_mapping(spec.get("argument_specs")).get("main")).get("options"))
+    return name in options
+
+
+def _check_optional(
+    rows: dict[str, list[str]], optional: dict[str, list[str]], findings: list[str]
+) -> None:
+    """An optional input is a name of the same host's row, listed once, on a host with a row."""
+    for host, names in sorted(optional.items()):
+        label = f"optional {host}"
+        if host not in rows:
+            findings.append(f"{label}: the host has no row in {ROW_VAR}")
+            continue
+        if not names or len(set(names)) != len(names):
+            findings.append(f"{label}: must be a non-empty list of distinct names")
+        for name in names:
+            if name not in rows[host]:
+                findings.append(f"{label}: {name} is not in the host's row")
+
+
+def _check_rows(
+    ansible: Path,
+    rows: dict[str, list[str]],
+    optional: dict[str, list[str]],
+    findings: list[str],
+) -> None:
     host_roles = _mapping(_read(ansible / HOST_ROLES_FILE))
     for host, names in sorted(rows.items()):
         label = f"row {host}"
@@ -135,7 +170,21 @@ def _check_rows(ansible: Path, rows: dict[str, list[str]], findings: list[str]) 
             required = [
                 r for r in listed if r != LOADER and _required_options(ansible, r).get(name)
             ]
-            if not required:
+            if name in optional.get(host, []):
+                # An absent optional input leaves its role's argument unset, so the role must not
+                # require it (its argument spec would stop the whole play) but must declare it,
+                # and the role's own guard refuses when its switch is on (the role's tests).
+                declared = [r for r in listed if r != LOADER and _declares(ansible, r, name)]
+                if not declared:
+                    findings.append(
+                        f"{label}: {name} is optional but no role on {host}'s list declares it"
+                    )
+                for role in required:
+                    findings.append(
+                        f"{label}: {name} is optional but role {role} requires it,"
+                        " so the play would stop when it is absent"
+                    )
+            elif not required:
                 findings.append(
                     f"{label}: {name} is not a required argument, without a default, "
                     f"of any role on {host}'s list"
@@ -203,7 +252,9 @@ def problems(ansible: Path) -> list[str]:
     rows = rows_of(ansible)
     if not rows:
         findings.append(f"vars/main.yml: {ROW_VAR} holds no host")
-    _check_rows(ansible, rows, findings)
+    optional = optional_of(ansible)
+    _check_optional(rows, optional, findings)
+    _check_rows(ansible, rows, optional, findings)
     _check_set_task(_top_tasks(ansible), rows, findings)
     _check_tasks(ansible, findings)
     return findings
@@ -213,7 +264,7 @@ class RealTree(unittest.TestCase):
     def test_the_loader_the_rows_and_the_host_lists_agree(self) -> None:
         self.assertEqual(problems(ROOT / "ansible"), [])
 
-    def test_the_rows_name_the_edge1_ops1_db1_and_app1_inputs(self) -> None:
+    def test_the_rows_name_the_edge1_edget_ops1_db1_and_app1_inputs(self) -> None:
         # Pinned, so that an edit which changed a row and the loader together still shows.
         self.assertEqual(
             rows_of(ROOT / "ansible"),
@@ -230,7 +281,9 @@ class RealTree(unittest.TestCase):
                     "ntfy_pager_watcher_token",
                     "ntfy_pager_owner_password_hash",
                     "ntfy_pager_machine_password_hash",
+                    "ci_jump_user",
                 ],
+                "edget": ["ci_jump_user"],
                 "ops1": [
                     "backup_worker_db_host",
                     "backup_worker_db_user",
@@ -266,6 +319,14 @@ class RealTree(unittest.TestCase):
                     "deploy_slot_keys_slots",
                 ],
             },
+        )
+
+    def test_the_only_optional_input_is_the_jump_accounts_name(self) -> None:
+        # Pinned: an input the file may leave out is a role that runs without it, so each
+        # addition is a decision that shows here. Every other input is required.
+        self.assertEqual(
+            optional_of(ROOT / "ansible"),
+            {"edge1": ["ci_jump_user"], "edget": ["ci_jump_user"]},
         )
 
     def test_app1_applies_the_loader_then_the_website_role_and_the_deploy_roles(self) -> None:
@@ -306,6 +367,7 @@ class Mutations(unittest.TestCase):
             "db1_grants",
             "db1_backup_timers",
             "tunnel_account",
+            "ci_jump",
             "website_app1",
             "deploy_tooling",
             "deploy_slot_keys",
@@ -321,7 +383,7 @@ class Mutations(unittest.TestCase):
         (self.ansible / "checks").mkdir()
         shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
         (self.ansible / "playbooks").mkdir()
-        for host in ("db1", "app1", "edge1", "ops1"):
+        for host in ("db1", "app1", "edge1", "edget", "ops1"):
             shutil.copy(
                 real / "playbooks" / f"{host}.yml", self.ansible / "playbooks" / f"{host}.yml"
             )
@@ -377,6 +439,45 @@ class Mutations(unittest.TestCase):
             "        required: true\n        no_log: true\n        default: changeme\n",
         )
         self._expect("role db1_stack gives db1_stack_exporter_password a default")
+
+    def test_a_default_given_to_the_jump_accounts_name_is_found(self) -> None:
+        path = self.ansible / "roles" / "ci_jump" / "defaults" / "main.yml"
+        path.write_text(path.read_text(encoding="utf-8") + "ci_jump_user: ''\n", encoding="utf-8")
+        self._expect("role ci_jump gives ci_jump_user a default")
+
+    def test_an_optional_name_that_is_not_in_the_hosts_row_is_found(self) -> None:
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "  edge1:\n    - ci_jump_user\n  edget:",
+            "  edge1:\n    - ci_jump_user\n    - monitoring_stack_smtp_password_x\n  edget:",
+        )
+        self._expect("monitoring_stack_smtp_password_x is not in the host's row")
+
+    def test_an_optional_host_with_no_row_is_found(self) -> None:
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "  edget:\n    - ci_jump_user\n\n# A value",
+            "  edget:\n    - ci_jump_user\n  demo1:\n    - ci_jump_user\n\n# A value",
+        )
+        self._expect("optional demo1: the host has no row")
+
+    def test_an_optional_name_that_a_role_requires_is_found(self) -> None:
+        # An optional input absent from the file leaves the argument unset; a role that requires
+        # it would stop the play, so the plan would fail the way the missing key did.
+        self._edit(
+            "roles/host_inputs/vars/main.yml",
+            "  edget:\n    - ci_jump_user\n\n# A value",
+            "  edget:\n    - ci_jump_user\n  db1:\n    - db1_stack_exporter_password\n\n# A value",
+        )
+        self._expect("db1_stack_exporter_password is optional but role db1_stack requires it")
+
+    def test_an_optional_name_that_no_role_declares_is_found(self) -> None:
+        self._edit(
+            "roles/ci_jump/meta/argument_specs.yml",
+            "      ci_jump_user:\n",
+            "      ci_jump_user_renamed:\n",
+        )
+        self._expect("ci_jump_user is optional but no role on edge1's list declares it")
 
     def test_a_protected_name_in_a_row_is_found(self) -> None:
         self._edit(

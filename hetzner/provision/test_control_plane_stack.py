@@ -25,7 +25,7 @@ HETZNER = pathlib.Path(__file__).resolve().parent.parent
 REPOSITORY = HETZNER.parent
 COMPOSE = HETZNER / "control-plane" / "stack" / "compose.yml"
 SITES = REPOSITORY / "sites.ts"
-PG_HBA = HETZNER / "control-plane" / "stack" / "pg_hba.conf"
+PG_HBA = HETZNER / "control-plane" / "stack" / "postgres" / "pg_hba.conf"
 INIT_OVERLAY = HETZNER / "control-plane" / "stack" / "compose.init.yml"
 UNIT = HETZNER / "provision" / "branchleft-compose@.service"
 FIXTURE = HETZNER / "provision" / "fixtures" / "stack-keys-quoted-env-file.yml"
@@ -113,6 +113,28 @@ def published_ports(block: list[str]) -> list[str]:
     return ports
 
 
+def hba_wiring() -> tuple[str, str]:
+    """How compose.yml wires the rules into the db container: (host source, container file).
+
+    The container file is the one `-c hba_file=` selects; the host source is the left side
+    of the single read-only mount whose container side is that file's directory. The one
+    home of this wiring: the real-server test reads it from here and restates nothing.
+    """
+    block = "\n".join(service_blocks(compose_text())["db"])
+    selected = re.findall(r"'hba_file=(/[^']+)'", block)
+    if len(selected) != 1:
+        raise AssertionError(f"expected one hba_file argument on the db service, found {len(selected)}")
+    container_directory = selected[0].rsplit("/", 1)[0]
+    mounts = [
+        source
+        for source, target in re.findall(r"^\s+- (\S+):(/\S+?):ro\s*$", block, re.MULTILINE)
+        if target == container_directory
+    ]
+    if len(mounts) != 1:
+        raise AssertionError(f"expected one read-only mount of {container_directory}, found {len(mounts)}")
+    return mounts[0], selected[0]
+
+
 def hba_rules() -> list[list[str]]:
     """Each pg_hba.conf rule as its whitespace-separated fields, comments dropped."""
     rules = []
@@ -123,7 +145,28 @@ def hba_rules() -> list[list[str]]:
     return rules
 
 
-PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login"}
+# The portal's four logins, the ones the applications image's program creates
+# (ghost-platform portal/data/provision/manifest.ts): the tenant portal's, the
+# operator console's, the provisioner's and the migrator's. The provisioner is
+# connected to after provisioning commits, so it needs its rule as much as the other
+# two. The migrator is the login the full provision's step 5 and every migrate-only
+# run connect as, so it needs its rule too; it is not a superuser, and the file
+# admits it to the portal database alone.
+PORTAL_LOGINS = {"portal_tenant_login", "portal_owner_login", "portal_provisioner_login", "portal_migrator_login"}
+
+# Every reference to the migrator's credential: the login's name and the names of the
+# password and URL the owner places for it. No compose service may carry any of them.
+MIGRATOR_REFERENCE = re.compile(r"(?i)migrator")
+
+# The one table of who may reach which database: pg_hba.conf must admit exactly
+# these pairs to password authentication and refuse every other. The static test
+# below reads the file against it, and test_control_plane_hba_server.py starts a
+# real server on the file and connects against the same table.
+EXPECTED_DATABASES: dict[str, frozenset[str]] = {
+    "zitadel": frozenset({"zitadel"}),
+    **{login: frozenset({"portal"}) for login in sorted(PORTAL_LOGINS)},
+    "postgres": frozenset({"postgres", "zitadel", "portal"}),
+}
 
 # Each row is one service's YAML fragment, with the sentinel value that must never be echoed.
 MASTER_KEY_ENVIRONMENT_ROWS = (
@@ -356,11 +399,19 @@ class ControlPlaneStackTests(unittest.TestCase):
         self.assertIn("127.0.0.1:8300:8080", ports)
         self.assertIn(f"{OPS1_PRIVATE_IP}:8300:8080", ports)
 
-    def test_the_database_mounts_the_hba_file_and_selects_it_at_start(self):
-        block = "\n".join(service_blocks(compose_text())["db"])
-        self.assertIn("      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro", block)
-        self.assertIn("'hba_file=/etc/postgresql/pg_hba.conf'", block)
+    def test_the_database_mounts_the_hba_directory_and_selects_the_file_in_it_at_start(self):
+        # A directory, not the single file: a delivered file replaces the old one by rename,
+        # and a single-file bind mount keeps pointing at the old inode on a Linux engine.
+        source, container_file = hba_wiring()
+        self.assertEqual(source, "./postgres")
+        self.assertEqual(container_file, "/etc/postgresql-hba/pg_hba.conf")
+        directory = COMPOSE.parent / source
+        self.assertTrue(directory.is_dir())
+        self.assertEqual(sorted(path.name for path in directory.iterdir()), ["pg_hba.conf"])
+        self.assertEqual(PG_HBA, directory / "pg_hba.conf")
         self.assertTrue(PG_HBA.is_file())
+        block = "\n".join(service_blocks(compose_text())["db"])
+        self.assertNotRegex(block, r"(?m)^\s+- \S*pg_hba\.conf:")
 
     def test_the_hba_file_ends_in_a_reject_for_host_and_local(self):
         rules = hba_rules()
@@ -384,10 +435,14 @@ class ControlPlaneStackTests(unittest.TestCase):
                 self.assertNotEqual(user, "all")
                 self.assertNotIn(rule[3], {"all", "0.0.0.0/0", "::/0"})
             allowed.setdefault(user, set()).update(databases)
-        self.assertEqual(allowed["zitadel"], {"zitadel"})
-        for login in PORTAL_LOGINS:
-            self.assertEqual(allowed[login], {"portal"})
-        self.assertEqual(set(allowed), {"zitadel", "postgres"} | PORTAL_LOGINS)
+        self.assertEqual({user: frozenset(databases) for user, databases in allowed.items()}, EXPECTED_DATABASES)
+
+    def test_every_accepting_host_rule_admits_only_the_stack_network(self):
+        accepting = [r for r in hba_rules() if r[0] == "host" and r[-1] != "reject"]
+        self.assertTrue(accepting)
+        for rule in accepting:
+            with self.subTest(rule=rule):
+                self.assertEqual(rule[3], "samenet")
 
     def test_the_local_socket_admits_only_the_administrator(self):
         local = [r for r in hba_rules() if r[0] == "local" and r[-1] != "reject"]
@@ -419,6 +474,12 @@ class ControlPlaneStackTests(unittest.TestCase):
             1,
             "the administrator's password variable is read somewhere other than the db service",
         )
+
+    def test_no_compose_service_names_the_migrator_credential(self):
+        for path in (COMPOSE, INIT_OVERLAY):
+            for line in code_lines(path.read_text(encoding="utf-8")):
+                with self.subTest(file=path.name, line=line.strip()):
+                    self.assertNotRegex(line, MIGRATOR_REFERENCE)
 
     def test_the_stack_files_hold_no_file_pulling_key_and_no_unlisted_service_key(self):
         """Checked on parsed YAML: a quoted, flow, anchored or merged key is the same key to Compose."""

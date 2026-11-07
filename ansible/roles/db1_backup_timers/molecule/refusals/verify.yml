@@ -1,0 +1,24 @@
+---
+# Three cases on provision_tenant_db.py, the program db1_grants runs. The converge
+# has already put it on the host. Each case starts by emptying what the last one
+# left, then breaks the file or the digest and applies the role again.
+- name: Verify the delivery of provision_tenant_db.py is checked and healed
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_role_dir: '{{ playbook_dir }}/../..'
+    verify_program: provision_tenant_db.py
+    verify_program_path: /opt/branchleft/db/provision/provision_tenant_db.py
+  tasks:
+    - name: Read the role's pinned digests
+      ansible.builtin.include_vars:
+        file: '{{ verify_role_dir }}/vars/main.yml'
+
+    - name: Case A, a wrong pinned digest is refused and leaves no file
+      ansible.builtin.include_tasks: tasks/case_wrong_digest.yml
+
+    - name: Case B, a tampered file is replaced by the pinned bytes
+      ansible.builtin.include_tasks: tasks/case_tampered_file.yml
+
+    - name: Case C, a wrong mode on the pinned bytes is reset
+      ansible.builtin.include_tasks: tasks/case_wrong_mode.yml

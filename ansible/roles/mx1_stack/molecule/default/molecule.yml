@@ -74,8 +74,8 @@ provisioner:
   inventory:
     group_vars:
       all:
-        # A throwaway drain token made for this run from the harness's run id: it is never
+        # A throwaway shim secret made for this run from the harness's run id: it is never
         # committed, and the verify play looks for it in the run's log.
-        scenario_drain_token: "THROWAWAY-DRAIN-{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
+        scenario_shim_secret: "THROWAWAY-SHIM-{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
 verifier:
   name: ansible

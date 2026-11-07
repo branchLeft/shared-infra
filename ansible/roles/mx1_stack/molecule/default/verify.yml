@@ -15,7 +15,16 @@
     verify_dnsbl: "{{ lookup('ansible.builtin.file', verify_repo ~ '/check_dnsbl_blocklist.py.txt', rstrip=false) }}"
     # A real line break: a backslash and an n inside a Jinja string are two characters.
     verify_nl: "\n"
-    verify_shim_env: "PORT=8080\nSHIM_DB_PATH=/data/shim.db\nSHIM_THROTTLE_PATH=/data/throttle.json\nSHIM_DRAIN_TOKEN={{ scenario_drain_token }}\n"
+    # The environment file for the pinned image's smtp-delivery contract (mail/provision/shim-env-contracts.json).
+    verify_shim_env: |
+      PORT=8080
+      SHIM_DB_PATH=/data/shim.db
+      SHIM_THROTTLE_PATH=/data/throttle.json
+      SMTP_HOST=mx1.branchleft.co.uk
+      SMTP_PORT=587
+      SMTP_SECURE=false
+      SMTP_USER=blog@branchleft.co.uk
+      SMTP_PASS={{ scenario_shim_secret }}
   tasks:
     # ----- Files: owner, group, mode and what they hold -----
 
@@ -247,7 +256,7 @@
   vars:
     verify_log_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
     verify_secrets:
-      - '{{ hostvars[groups["all"][0]].scenario_drain_token }}'
+      - '{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
       - "{{ hostvars[groups['all'][0]].mx1_stack_verify_prometheus_secret | default('') }}"
   tasks:
     # The control first: a value the converge printed on purpose. A scan that cannot find it

@@ -15,7 +15,8 @@ first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
 with `edge_firewall_nat_source` and `edge_firewall_enforce` pinned in `checks/check_enrolment.py`),
 then `roles/egress_nat` (the estate's NAT gateway forwarding accepts; edge1 alone, with
 `egress_nat_gateway_enabled` pinned in `checks/check_enrolment.py`), then
-`roles/ci_login`, then `roles/deploy_tooling`, then `roles/edge_stack`, then
+`roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
+until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
 `roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
 `roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
@@ -212,11 +213,15 @@ The workflow has three kinds of job:
   the scenario in brackets for any scenario but `default`, so names are unique.
   `ansible/checks/ci_select.py` then narrows that list by the table above (its
   rules are in `ansible/checks/README.md`); any doubt keeps the shard.
-- `lint` runs the static checks once: yamllint, ansible-lint, mypy, ruff and the
-  harness's unit tests.
+- `quick-lint` runs the two cheap checks first: yamllint and the tests of the
+  shard selection (`test_ci_select.py`).
+- `lint` runs the static checks once, all of them, alongside the shards:
+  yamllint, ansible-lint, mypy, ruff and the harness's unit tests. The gate job
+  still fails unless it passed.
 - `shard` runs the harness once for each entry `discover` kept, in parallel,
-  with `--scenario` set to the entry's scenario, and only after `lint` has
-  passed, so a lint error is red in minutes and starts no container. Each shard
+  with `--scenario` set to the entry's scenario, and only after `quick-lint` has
+  passed, so a malformed file is red in minutes and starts no container. It does
+  not wait for the full `lint`. Each shard
   has its own time limit (25 minutes), so the run time does not grow with the
   number of roles in one job. A role whose one scenario would not fit in the
   limit puts its refusal cases in a second scenario, which is a second shard,

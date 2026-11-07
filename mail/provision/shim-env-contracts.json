@@ -1,0 +1,31 @@
+{
+  "contracts": {
+    "smtp-delivery": {
+      "secret_label": "blog-shim-bulk-submission",
+      "mint": false,
+      "env_lines": [
+        "PORT=8080",
+        "SHIM_DB_PATH=/data/shim.db",
+        "SHIM_THROTTLE_PATH=/data/throttle.json",
+        "SMTP_HOST=mx1.branchleft.co.uk",
+        "SMTP_PORT=587",
+        "SMTP_SECURE=false",
+        "SMTP_USER=blog@branchleft.co.uk",
+        "SMTP_PASS={secret}"
+      ]
+    },
+    "drain": {
+      "secret_label": "shim-drain-token",
+      "mint": true,
+      "env_lines": [
+        "PORT=8080",
+        "SHIM_DB_PATH=/data/shim.db",
+        "SHIM_THROTTLE_PATH=/data/throttle.json",
+        "SHIM_DRAIN_TOKEN={secret}"
+      ]
+    }
+  },
+  "digests": {
+    "sha256:37c60999cd3bad612f5f1d4947ddf88716e138b17ddf9dd29a23964b88b7c21d": "smtp-delivery"
+  }
+}

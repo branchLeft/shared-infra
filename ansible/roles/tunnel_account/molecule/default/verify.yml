@@ -967,8 +967,6 @@
           needle: ' : Pin the replica host key'
         - what: the name of a task that writes the authorized key
           needle: ' : Write the authorized key for db1 with from= and the restrictions'
-        - what: the stat result of an input file, the kind that carries a checksum unless told not to
-          needle: '"isreg": true'
         - what: a result censored by no_log
           needle: '(censored due to no_log)'
         - what: a diff header from the check run
@@ -979,6 +977,34 @@
           needle: 'db1 public key for the replica run: ssh-ed25519 '
       loop_control:
         label: '{{ item.what }}'
+
+    # The scan must read the stat of each input file itself, the kind of result
+    # that carries a checksum unless told not to. A stat of any other regular
+    # file (db1's key, read above) also prints "isreg": true, so that line alone
+    # would let the scan pass with every input stat gone from the log. Ansible
+    # prints a result's keys in sorted order, so inside one stat result "isreg"
+    # comes before "path", and [^}] keeps the match inside that one result.
+    # replica_host is left out on purpose: the refusal cases above stat that file
+    # themselves, so its stat is in the log whatever the role does, and naming it
+    # here would prove nothing (seen when the role's two input tasks were hidden
+    # with no_log: the other four went red and this one stayed green).
+    - name: Assert the log holds the stat of each input file, as a regular file
+      ansible.builtin.assert:
+        that:
+          - >-
+            tunnel_account_verify_log is search(
+              '"isreg": true[^}]*"path": "'
+              ~ ('/etc/branchleft/db-tunnel/inputs/' ~ item) | regex_escape
+              ~ '"')
+        fail_msg: >-
+          The log lacks the stat of the input file {{ item }}, so a scan that
+          finds nothing would prove nothing about the inputs.
+        quiet: true
+      loop:
+        - replica_host_key
+        - db1_subnet_prefix
+        - from_address
+        - db1_public_key
 
     - name: Work out which private inputs the log holds
       ansible.builtin.set_fact:

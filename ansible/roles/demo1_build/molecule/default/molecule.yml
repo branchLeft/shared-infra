@@ -52,7 +52,13 @@ platforms:
       ghcr.io: 127.0.0.1
     labels:
       branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+# The run's Ansible log is kept in the scenario's scratch directory, so the refusals
+# scenario's verify can read it and prove that no secret reached it (ANS-16). The
+# verbosity is the one the log reads the task results at.
 provisioner:
   name: ansible
+  env:
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '1'
 verifier:
   name: ansible

@@ -517,6 +517,30 @@ describe('the rendered Caddyfile', () => {
     expect(rendered).toContain('output file /var/log/caddy/access.log');
   });
 
+  it('sets log retention explicitly at 720h (30 days) on every log, never leaving it to Caddy', () => {
+    // 720h is the owner's 30-day decision of 2026-08-24, inside the
+    // 90-day ceiling the website privacy notice states. Caddy's own default is
+    // about 90 days, so an unset value would keep that notice true by accident.
+    const rendered = render(ENFORCING);
+    const explicit =
+      rendered.match(
+        /output file \/var\/log\/caddy\/\S+ \{\n\t+roll_size 100MiB\n\t+roll_keep 31\n\t+roll_keep_for 720h\n\t+roll_at 00:00\n\t+\}/g
+      ) ?? [];
+    expect(explicit.length).toBeGreaterThan(0);
+    expect(rendered.match(/output file /g)).toHaveLength(explicit.length);
+  });
+
+  it('bounds every edge log retention at or below 2160h (the 90-day ceiling the privacy notice states)', () => {
+    // The age prune only runs when a file rolls, so every log also needs a clock
+    // roll (roll_at) or a quiet edge holds entries past the retention.
+    const rendered = render(ENFORCING);
+    const hours = [...rendered.matchAll(/roll_keep_for (\d+)h/g)].map((m) => Number(m[1]));
+    const outputs = rendered.match(/output file /g) ?? [];
+    expect(hours).toHaveLength(outputs.length);
+    expect(Math.max(...hours)).toBeLessThanOrEqual(2160);
+    expect(rendered.match(/roll_at 00:00/g)).toHaveLength(outputs.length);
+  });
+
   it('keys the throttle on the direct peer, not on a header a client controls', () => {
     expect(render(ENFORCING)).toContain('key {http.request.remote.host}');
     expect(render(ENFORCING)).not.toContain('client_ip');
@@ -1136,7 +1160,12 @@ const TOKEN_STRIP_MATCHER = `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&
 /** The blog's site block exactly as it was served before the portal hostnames existed. */
 const BLOG_BLOCK = `
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
 		format filter {
 			wrap json
 			request>uri ${TOKEN_LOG_FILTER}
@@ -1300,7 +1329,7 @@ describe('the owner console and tenant portal routes', () => {
 describe('the committed stack directory', () => {
   it('is what this renderer produces from the registry and the committed posture', async () => {
     await expect(renderCaddyfile(sites, hostRedirects, POSTURE, staticSites)).toMatchFileSnapshot(
-      './stack/Caddyfile'
+      './stack/caddy/Caddyfile'
     );
     await expect(renderAppsecAcquisition(POSTURE)).toMatchFileSnapshot(
       './stack/crowdsec/acquis.d/appsec.yaml'
@@ -1383,7 +1412,17 @@ describe('a site discard route', () => {
 });
 
 describe('the break-glass token in the rendered Caddyfile', () => {
-  const FILTER_HEAD = ['\tlog {', '\t\toutput file ', '\t\tformat filter {', '\t\t\twrap json'];
+  const FILTER_HEAD = [
+    '\tlog {',
+    '\t\toutput file ',
+    '\t\t\troll_size ',
+    '\t\t\troll_keep ',
+    '\t\t\troll_keep_for ',
+    '\t\t\troll_at ',
+    '\t\t}',
+    '\t\tformat filter {',
+    '\t\t\twrap json',
+  ];
   const FIELDS = ['request>uri', 'request>headers>Referer', 'resp_headers>Location'];
   const STRIP_MATCHER = '@break_glass_strip expression';
   const STRIP_RULE = 'uri @break_glass_strip query -bl_break_glass';
@@ -1426,9 +1465,9 @@ describe('the break-glass token in the rendered Caddyfile', () => {
   it('filters the token out of the uri, Referer and Location in every log block', () => {
     for (const { address, log } of everyLog) {
       const lines = log.split('\n');
-      expect(lines.slice(0, 4).map((l, i) => l.slice(0, FILTER_HEAD[i]!.length))).toEqual(
-        FILTER_HEAD
-      );
+      expect(
+        lines.slice(0, FILTER_HEAD.length).map((l, i) => l.slice(0, FILTER_HEAD[i]!.length))
+      ).toEqual(FILTER_HEAD);
       for (const field of FIELDS) {
         const filterLines = lines.filter((l) => l.trim().startsWith(`${field} regexp `));
         expect(filterLines, `${address} must filter ${field}`).toHaveLength(1);

@@ -19,7 +19,7 @@ It keeps three classes, each with its own stamp, and acts on a class only when t
    `STALWART_PROMETHEUS_SECRET` in `/opt/stalwart/.env` when it is absent (the value is generated on
    the host, written at mode `0600` and never printed), and brings the project up.
 2. **The mailgun-shim's project** (`/etc/mailgun-shim`, `/var/lib/mailgun-shim`). It places
-   `shim-compose.yml`, the `Caddyfile` and the shim's `env` file (rendered from the drain token
+   `shim-compose.yml`, the `Caddyfile` and the shim's `env` file (rendered for the pinned image's contract, from the secret
    already on the host), makes the data directory and the throttle file for the shim's user, and
    brings the project up.
 3. **The local resolver.** It installs `unbound` with the three packages the host's
@@ -37,10 +37,16 @@ due the role acts, then reads the result back, and only then writes the stamp.
 
 It does not:
 
-- make the shim's drain token. Its **first creation stays an owner step** (hand script 63, through
+- make the shim's secret, for any image. The SMTP submission credential the pinned image reads
+  (`blog-shim-bulk-submission`) is made on Stalwart by hand script 62. A drain token, which a future
+  image may read, would have its **first creation stay an owner step** (hand script 63, through
   `render_shim_env.py`, run on the host by the owner), and it stays one once a follow-up deletes
-  script 63 and `render_shim_env.py`. The role reads the token on the host only, never passes it
+  script 63 and `render_shim_env.py`. The role reads the secret on the host only, never passes it
   through the controller, and refuses to start a host that lacks it.
+- guess the environment of an image it was not told about. Which variables a shim image reads, and
+  which secret fills them, is the **contract table** (`mail/provision/shim-env-contracts.json`):
+  the role selects the contract by the digest `shim-compose.yml` pins, and an image whose digest the
+  table does not list stops the run before anything is written.
 - reboot the host. The reboot that restores `docker exec` (`mail/RUNBOOK-mx1-reboot.md`) is a
   **precondition of the first converge**: the role reads files back out of running containers with
   `docker exec`, and stops before it writes a stamp where that fails.
@@ -141,7 +147,7 @@ file in place and do nothing.
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables. There are four, all
 optional, none secret: `mx1_stack_stalwart_health_tries`, `mx1_stack_health_interval`,
 `mx1_stack_recursion_tries` and `mx1_stack_recursion_interval`. The role has **no secret variable**:
-the drain token and Stalwart's admin credential are read on the host from
+the shim's secret and Stalwart's admin credential are read on the host from
 `/root/.stalwart-service-credentials`, and Stalwart's Prometheus secret is generated on the host.
 `defaults/main.yml` holds the four numbers and nothing else.
 
@@ -168,7 +174,7 @@ SHA-256 and stamp-line helpers are small enough to repeat in the stamp and probe
 - The repository's files reach the role through links in `files/` (below), so it must be run from a
   checkout of the whole repository, which is what the gated pull delivers (ANS-17).
 - **Before the first converge on the mail host**, the reboot of `mail/RUNBOOK-mx1-reboot.md` must
-  have been done, and `/root/.stalwart-service-credentials` must hold the `shim-drain-token` line.
+  have been done, and `/root/.stalwart-service-credentials` must hold the entry the pinned shim image's contract names (today `blog-shim-bulk-submission`).
 - The modules target Python 3.13, the host's, and use no 3.13-only standard library. The unit
   suites run on the interpreter of the tools' virtual environment (3.12 or later; 3.12 in CI), not on
   3.13, so they do not prove the modules run on the host's interpreter: the Molecule scenarios run the
@@ -205,11 +211,14 @@ role's stamp describing a file it no longer matches.
 ### One home for every file
 
 The role holds no copy of the files it delivers. `files/docker-compose.yml`,
-`files/shim-compose.yml`, `files/shim.Caddyfile` and `files/check_dnsbl_blocklist.py.txt` are links into
-`mail/provision/`. The resolver drop-in is the one file kept in the role (`files/10-branchleft-local-recursive.conf`),
+`files/shim-compose.yml`, `files/shim.Caddyfile`, `files/shim-env-contracts.json` and
+`files/check_dnsbl_blocklist.py.txt` are links into `mail/provision/`. The contract table is read by
+the role (`mx1_stack_shim_contracts`) and by `render_shim_env.py` from that one file, and the test
+compares the two renderers contract by contract. The resolver drop-in is the one file kept in the role (`files/10-branchleft-local-recursive.conf`),
 because script 65 holds it in a heredoc, and `test_mx1_stack_agree.py` fails if it differs from that
 heredoc. The same test holds the resolver packages to script 65's, the cron line to script 70's (the
-path it writes to included), and the shim's env file to what `render_shim_env.py` renders. The
+path it writes to included), and the shim's env file, for every contract in the table, to what
+`render_shim_env.py` renders. The
 shape of the stack therefore changes where it always did, in `mail/provision/`, and the next apply
 delivers it. The Ansible workflow watches `mail/provision/` for that reason
 (`ansible/checks/ci_select.py` lists `mail` among the directories a role reads).
@@ -241,20 +250,20 @@ are split:
 
 The guards:
 
-| Guard | The role refuses                                                        |
-| ----- | ----------------------------------------------------------------------- |
-| G1    | a second compose file in a project directory                            |
-| G2    | a Compose override file                                                 |
-| G3    | a `.env` beside the shim's compose file                                 |
-| G4    | a `COMPOSE_` key in Stalwart's `.env`                                   |
-| G5    | a wrong mode or owner on Stalwart's `.env`                              |
-| G6    | a compose file whose image is not pinned by digest                      |
-| G7    | a host without the shim's drain token                                   |
-| G8    | a port 53 held by anything but `unbound`                                |
-| G9    | an `unbound-checkconf` rejection (the previous drop-in is put back)     |
-| G10   | a changed `/etc/resolv.conf` after the resolver restart                 |
-| G11   | a stamp that cannot be read                                             |
-| G12   | a container still stale after the forced recreate (no stamp is written) |
+| Guard | The role refuses                                                            |
+| ----- | --------------------------------------------------------------------------- |
+| G1    | a second compose file in a project directory                                |
+| G2    | a Compose override file                                                     |
+| G3    | a `.env` beside the shim's compose file                                     |
+| G4    | a `COMPOSE_` key in Stalwart's `.env`                                       |
+| G5    | a wrong mode or owner on Stalwart's `.env`                                  |
+| G6    | a compose file whose image is not pinned by digest                          |
+| G7    | a shim image the contract table does not list, or a host without its secret |
+| G8    | a port 53 held by anything but `unbound`                                    |
+| G9    | an `unbound-checkconf` rejection (the previous drop-in is put back)         |
+| G10   | a changed `/etc/resolv.conf` after the resolver restart                     |
+| G11   | a stamp that cannot be read                                                 |
+| G12   | a container still stale after the forced recreate (no stamp is written)     |
 
 ### Stand-ins and what they model
 

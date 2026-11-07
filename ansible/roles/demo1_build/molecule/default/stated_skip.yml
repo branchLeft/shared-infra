@@ -1,0 +1,57 @@
+---
+# One stated-skip case of the production candidate, imported by converge.yml with
+# converge_case.base, converge_case.token_file and converge_case.expect (the words the
+# notice must contain). The play asserts that the notice starts with "Production
+# candidate NOT staged: " and that the staged Caddyfile is left as it was found.
+#
+# Tagged so the idempotence step skips it, and skipped in check mode.
+- name: Skip the production candidate with a stated reason
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    converge_default_image: 'demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+  tasks:
+    - name: Prove the production candidate is a stated skip and nothing is staged
+      when: not ansible_check_mode
+      block:
+        - name: Look at the staged Caddyfile before the run
+          ansible.builtin.stat:
+            path: /var/lib/branchleft/demo-candidates/Caddyfile
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_skip_before
+
+        - name: Run the role's site step on its own
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _site_candidates.yml
+          vars:
+            demo1_build_wildcard_base: '{{ converge_case.base }}'
+            demo1_build_dns_token_file: '{{ converge_case.token_file }}'
+            demo1_build_caddy_image: '{{ converge_case.caddy_image | default(converge_default_image) }}'
+
+        - name: Assert the step printed the notice this case is for
+          ansible.builtin.assert:
+            that:
+              - "demo1_build_candidate_notice.msg | default('') is search('^Production candidate NOT staged: ')"
+              - converge_case.expect in (demo1_build_candidate_notice.msg | default(''))
+            quiet: true
+            fail_msg: >-
+              The step did not say that the production candidate was not staged for the reason this case sets
+              ({{ converge_case.expect }}). The notice read '{{ demo1_build_candidate_notice.msg | default('no notice') }}'
+
+        - name: Look at the staged Caddyfile after the run
+          ansible.builtin.stat:
+            path: /var/lib/branchleft/demo-candidates/Caddyfile
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_skip_after
+
+        - name: Assert the skip staged nothing and changed nothing
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_skip_after.stat.exists == demo1_build_converge_skip_before.stat.exists
+              - (demo1_build_converge_skip_after.stat.mtime | default(0)) == (demo1_build_converge_skip_before.stat.mtime | default(0))
+            quiet: true
+            fail_msg: The step staged or changed the production candidate it said it was skipping.

@@ -226,12 +226,39 @@ function paramNamePattern(): string {
 /** The log fields the token can appear in: the request line, a refused sign-in's Referer, Ghost's 302. */
 const BREAK_GLASS_LOG_FIELDS = ['request>uri', 'request>headers>Referer', 'resp_headers>Location'];
 
+/**
+ * Retention of every edge log, set explicitly rather than left to Caddy's own
+ * defaults. The owner decided 30 days on 2026-08-24: well inside the 90-day
+ * ceiling the website privacy notice commits to, and far
+ * longer than abuse investigation or incident response needs. Caddy's default
+ * happens to be about 90 days, so leaving it unset would keep the notice true by
+ * coincidence rather than by policy.
+ */
+const LOG_RETENTION = '720h';
+
+/**
+ * Rotation. `roll_keep_for` only prunes files that have already been rolled, so a
+ * roll must happen even on a quiet edge. `roll_at 00:00` (UTC) rolls daily on the
+ * clock; `roll_interval` would not, because it rolls only on the next write. Caddy
+ * v2.11.4 accepts `roll_at` (github.com/DeRuina/timberjack v1.4.2, rotation on a
+ * background timer). The count is 31, so 30 daily rolls are kept: Caddy's default
+ * of 10 would cap a daily roll at 10 days and silently shorten the retention.
+ */
+const LOG_ROLL_AT = '00:00';
+const LOG_ROLL_SIZE = '100MiB';
+const LOG_ROLL_KEEP = 31;
+
 function logDirective(path: string): string[] {
   // Any parameter whose name starts with the token's, in any case, loses its value.
   const pattern = `(?i)([?&]${paramNamePattern()})[^&#]*`;
   return [
     'log {',
-    `\toutput file ${path}`,
+    `\toutput file ${path} {`,
+    `\t\troll_size ${LOG_ROLL_SIZE}`,
+    `\t\troll_keep ${LOG_ROLL_KEEP}`,
+    `\t\troll_keep_for ${LOG_RETENTION}`,
+    `\t\troll_at ${LOG_ROLL_AT}`,
+    '\t}',
     '\tformat filter {',
     '\t\twrap json',
     ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t\t${field} regexp "${pattern}" "$1=REDACTED"`),

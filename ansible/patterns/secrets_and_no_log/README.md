@@ -400,7 +400,8 @@ account identifiers in this list.
 | Name                                         | Read under                | How it is made today                                      |
 | -------------------------------------------- | ------------------------- | --------------------------------------------------------- |
 | `STALWART_PROMETHEUS_SECRET`                 | `mail/provision`          | Minted on the host by the deploy script                   |
-| `SHIM_DRAIN_TOKEN`                           | `mail/provision`          | Minted on the host by the render script                   |
+| `SMTP_PASS`                                  | `mail/provision`          | Rendered by `smtp-delivery`; made by script 62            |
+| `SHIM_DRAIN_TOKEN`                           | `mail/provision`          | Rendered by `drain`; minted on first use                  |
 | `CROWDSEC_BOUNCER_KEY`                       | `hetzner/edge`            | Generated on the host by a runbook command                |
 | `NEXTCLOUD_DB_PASSWORD`                      | `hetzner/nextcloud1`      | Generated on the host by a runbook command                |
 | `NEXTCLOUD_REDIS_PASSWORD`                   | `hetzner/nextcloud1`      | Not read                                                  |

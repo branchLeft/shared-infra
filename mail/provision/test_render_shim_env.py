@@ -11,6 +11,7 @@ Run with: python3 -m unittest discover -s mail/provision -p 'test_*.py' -v
 from __future__ import annotations
 
 import io
+import json
 import os
 import stat
 import tempfile
@@ -19,13 +20,55 @@ from unittest import mock
 
 import render_shim_env as rse
 from render_shim_env import (
-    DRAIN_TOKEN_LABEL,
+    ContractError,
     append_credential_atomic,
+    contract_for_compose,
+    digest_in_compose,
     ensure_drain_token,
     find_credential_secret,
+    load_table,
     render_env_file,
+    validate_table,
     write_env_file_atomic,
 )
+
+PINNED_DIGEST = "sha256:37c60999cd3bad612f5f1d4947ddf88716e138b17ddf9dd29a23964b88b7c21d"
+OTHER_DIGEST = "sha256:" + "b" * 64
+SMTP_LABEL = "blog-shim-bulk-submission"
+DRAIN_LABEL = "shim-drain-token"
+
+
+def compose_with(digest: str) -> str:
+    return (
+        "services:\n  mailgun-shim:\n"
+        f"    image: ghcr.io/branchleft/mailgun-shim@{digest}\n"
+        "  caddy:\n    image: caddy:2-alpine@sha256:" + "c" * 64 + "\n"
+    )
+
+
+# The environment the image pinned at PINNED_DIGEST was run with before the drain handover
+# replaced it (git show 9cf0f01^:mail/provision/render_shim_env.py): the contract must keep
+# producing exactly this, byte for byte.
+SMTP_DELIVERY_ENV = (
+    "PORT=8080\n"
+    "SHIM_DB_PATH=/data/shim.db\n"
+    "SHIM_THROTTLE_PATH=/data/throttle.json\n"
+    "SMTP_HOST=mx1.branchleft.co.uk\n"
+    "SMTP_PORT=587\n"
+    "SMTP_SECURE=false\n"
+    "SMTP_USER=blog@branchleft.co.uk\n"
+    "SMTP_PASS=the-secret\n"
+)
+DRAIN_ENV = (
+    "PORT=8080\n"
+    "SHIM_DB_PATH=/data/shim.db\n"
+    "SHIM_THROTTLE_PATH=/data/throttle.json\n"
+    "SHIM_DRAIN_TOKEN=the-secret\n"
+)
+
+
+def real_table() -> dict:
+    return load_table(rse.CONTRACTS_PATH)
 
 
 class FindCredentialSecretTests(unittest.TestCase):
@@ -138,33 +181,132 @@ class EnsureDrainTokenTests(unittest.TestCase):
 
 
 class RenderEnvFileTests(unittest.TestCase):
-    def test_includes_exactly_the_keys_the_shim_reads_with_no_safe_default(self):
-        contents = render_env_file("the-token")
-        for key in ("PORT=", "SHIM_DB_PATH=", "SHIM_THROTTLE_PATH=", "SHIM_DRAIN_TOKEN="):
-            self.assertIn(key, contents)
+    def test_smtp_delivery_renders_the_pre_drain_environment_byte_for_byte(self):
+        contract = real_table()["contracts"]["smtp-delivery"]
+        self.assertEqual(SMTP_DELIVERY_ENV, render_env_file(contract, "the-secret"))
 
-    def test_no_longer_emits_the_retired_outbound_delivery_variables(self):
-        # The shim's own outbound delivery (worker.ts/smtp.ts) is gone;
-        # config.ts no longer reads any of these. Sabotage: reinstate one of
-        # these lines in render_env_file and this test goes red -- it is not
-        # merely absent from the "includes" list above, it is asserted gone.
-        contents = render_env_file("the-token")
-        for retired_key in ("SMTP_HOST=", "SMTP_PORT=", "SMTP_SECURE=", "SMTP_USER=", "SMTP_PASS="):
-            self.assertNotIn(retired_key, contents)
+    def test_drain_renders_the_drain_only_environment_byte_for_byte(self):
+        contract = real_table()["contracts"]["drain"]
+        self.assertEqual(DRAIN_ENV, render_env_file(contract, "the-secret"))
+
+    def test_the_drain_environment_carries_no_smtp_variable(self):
+        # Sabotage: reinstate an SMTP_ line in the drain contract and this goes red. The drain
+        # image reads none of them, and a stray credential line is a leak for nothing.
+        contents = render_env_file(real_table()["contracts"]["drain"], "the-secret")
+        self.assertNotIn("SMTP_", contents)
+
+    def test_the_smtp_environment_carries_no_drain_token(self):
+        contents = render_env_file(real_table()["contracts"]["smtp-delivery"], "the-secret")
+        self.assertNotIn("SHIM_DRAIN_TOKEN", contents)
+
+    def test_the_secret_appears_exactly_once(self):
+        for name, contract in real_table()["contracts"].items():
+            with self.subTest(contract=name):
+                contents = render_env_file(contract, "distinctive-secret-value")
+                self.assertEqual(contents.count("distinctive-secret-value"), 1)
+
+    def test_every_contract_ends_with_a_single_trailing_newline(self):
+        for name, contract in real_table()["contracts"].items():
+            with self.subTest(contract=name):
+                contents = render_env_file(contract, "the-secret")
+                self.assertTrue(contents.endswith("\n"))
+                self.assertFalse(contents.endswith("\n\n"))
 
     def test_port_matches_shim_compose_ymls_container_side_mapping(self):
-        contents = render_env_file("the-token")
-        self.assertIn("PORT=8080", contents)
+        for name, contract in real_table()["contracts"].items():
+            with self.subTest(contract=name):
+                self.assertIn("PORT=8080", render_env_file(contract, "the-secret"))
 
-    def test_drain_token_appears_exactly_once_as_shim_drain_token(self):
-        contents = render_env_file("distinctive-drain-token-value")
-        self.assertEqual(contents.count("distinctive-drain-token-value"), 1)
-        self.assertIn("SHIM_DRAIN_TOKEN=distinctive-drain-token-value", contents)
 
-    def test_ends_with_a_single_trailing_newline(self):
-        contents = render_env_file("the-token")
-        self.assertTrue(contents.endswith("\n"))
-        self.assertFalse(contents.endswith("\n\n"))
+class ContractTableTests(unittest.TestCase):
+    def test_the_real_table_is_valid_and_the_pinned_digest_is_smtp_delivery(self):
+        table = real_table()
+        self.assertEqual("smtp-delivery", table["digests"][PINNED_DIGEST])
+        self.assertEqual(SMTP_LABEL, table["contracts"]["smtp-delivery"]["secret_label"])
+        self.assertFalse(table["contracts"]["smtp-delivery"]["mint"])
+
+    def test_the_drain_contract_has_no_digest_until_a_drain_image_is_pinned(self):
+        table = real_table()
+        self.assertEqual(DRAIN_LABEL, table["contracts"]["drain"]["secret_label"])
+        self.assertTrue(table["contracts"]["drain"]["mint"])
+        self.assertNotIn("drain", table["digests"].values())
+
+    def test_the_digest_pinned_in_the_compose_file_has_a_contract(self):
+        with open(os.path.join(rse.PROVISION_DIR, "shim-compose.yml"), encoding="utf-8") as f:
+            compose_text = f.read()
+        contract = contract_for_compose(compose_text, real_table())
+        self.assertEqual(SMTP_LABEL, contract["secret_label"])
+
+    def test_a_malformed_table_is_refused(self):
+        good = real_table()
+        bad_tables = {
+            "extra key": dict(good, extra={}),
+            "no placeholder": {
+                "contracts": {"c": {"secret_label": "l", "mint": False, "env_lines": ["A=1"]}},
+                "digests": {},
+            },
+            "two placeholders": {
+                "contracts": {
+                    "c": {"secret_label": "l", "mint": False, "env_lines": ["A={secret}", "B={secret}"]}
+                },
+                "digests": {},
+            },
+            "mint not a bool": {
+                "contracts": {"c": {"secret_label": "l", "mint": "no", "env_lines": ["A={secret}"]}},
+                "digests": {},
+            },
+            "digest names no contract": {"contracts": good["contracts"], "digests": {PINNED_DIGEST: "nope"}},
+            "digest is a tag": {"contracts": good["contracts"], "digests": {"latest": "drain"}},
+        }
+        for case, table in bad_tables.items():
+            with self.subTest(case=case), self.assertRaises(ContractError):
+                validate_table(table)
+
+    def test_an_unreadable_table_is_refused_without_naming_its_content(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "table.json")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("{not json")
+            with self.assertRaises(ContractError):
+                load_table(path)
+            with self.assertRaises(ContractError):
+                load_table(os.path.join(tmp, "absent.json"))
+
+
+class ContractForComposeTests(unittest.TestCase):
+    def test_a_listed_digest_selects_its_contract(self):
+        contract = contract_for_compose(compose_with(PINNED_DIGEST), real_table())
+        self.assertEqual(SMTP_LABEL, contract["secret_label"])
+
+    def test_an_unlisted_digest_is_refused_naming_the_digest_and_the_table(self):
+        with self.assertRaises(ContractError) as ctx:
+            contract_for_compose(compose_with(OTHER_DIGEST), real_table(), "compose.yml", "table.json")
+        self.assertIn(OTHER_DIGEST, str(ctx.exception))
+        self.assertIn("table.json", str(ctx.exception))
+
+    def test_a_tag_pinned_shim_image_is_refused(self):
+        text = "services:\n  s:\n    image: ghcr.io/branchleft/mailgun-shim:latest\n"
+        with self.assertRaises(ContractError):
+            contract_for_compose(text, real_table())
+
+    def test_a_placeholder_digest_is_refused(self):
+        text = "services:\n  s:\n    image: ghcr.io/branchleft/mailgun-shim@sha256:IMAGE_DIGEST_PLACEHOLDER\n"
+        with self.assertRaises(ContractError):
+            contract_for_compose(text, real_table())
+
+    def test_no_shim_image_line_is_refused(self):
+        with self.assertRaises(ContractError):
+            digest_in_compose("services:\n  c:\n    image: caddy:2-alpine\n")
+
+    def test_two_shim_image_lines_are_refused(self):
+        text = compose_with(PINNED_DIGEST) + compose_with(OTHER_DIGEST)
+        with self.assertRaises(ContractError):
+            digest_in_compose(text)
+
+    def test_a_commented_image_line_does_not_select_a_contract(self):
+        text = compose_with(OTHER_DIGEST) + f"# image: ghcr.io/branchleft/mailgun-shim@{PINNED_DIGEST}\n"
+        with self.assertRaises(ContractError):
+            contract_for_compose(text, real_table())
 
 
 class WriteEnvFileAtomicTests(unittest.TestCase):
@@ -209,10 +351,12 @@ class WriteEnvFileAtomicTests(unittest.TestCase):
             self.assertFalse(os.path.exists(path))
 
 
+
+
 class MainOrchestrationTests(unittest.TestCase):
-    """main()'s control flow against a real temp directory -- the happy
-    path on both a fresh host (no credentials file yet) and a re-run
-    (token already recorded), and the no-print guarantee end to end.
+    """main()'s control flow against a real temp directory: each contract's happy path, the
+    fail-closed refusals, the credentials file left byte-unchanged for mint=false, and the
+    no-print guarantee end to end.
     """
 
     def setUp(self):
@@ -222,108 +366,169 @@ class MainOrchestrationTests(unittest.TestCase):
         stderr_patcher = mock.patch("sys.stderr", new_callable=io.StringIO)
         self.stderr = stderr_patcher.start()
         self.addCleanup(stderr_patcher.stop)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.tmp = tmp.name
+        self.creds_path = os.path.join(self.tmp, "creds")
+        self.env_path = os.path.join(self.tmp, "env")
+        self.compose_path = os.path.join(self.tmp, "shim-compose.yml")
+        self.write_compose(PINNED_DIGEST)
 
-    def test_fresh_host_generates_a_token_writes_the_env_file_and_returns_zero(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            creds_path = os.path.join(tmp, "does-not-exist-yet")
-            env_path = os.path.join(tmp, "env")
-            with mock.patch.multiple(
-                rse, SERVICE_CREDENTIALS_PATH=creds_path, SHIM_ENV_PATH=env_path
-            ):
-                result = rse.main()
+    def write_compose(self, digest):
+        with open(self.compose_path, "w", encoding="utf-8") as f:
+            f.write(compose_with(digest))
 
-            self.assertEqual(result, 0)
-            self.assertTrue(os.path.exists(creds_path))
-            with open(env_path, encoding="utf-8") as f:
-                contents = f.read()
-            self.assertRegex(contents, r"SHIM_DRAIN_TOKEN=\S+")
-            self.assertEqual(stat.S_IMODE(os.stat(env_path).st_mode), 0o600)
+    def write_creds(self, text):
+        with open(self.creds_path, "w", encoding="utf-8") as f:
+            f.write(text)
 
-    def test_a_second_run_reuses_the_same_token_the_first_run_generated(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            creds_path = os.path.join(tmp, "creds")
-            env_path = os.path.join(tmp, "env")
-            with mock.patch.multiple(
-                rse, SERVICE_CREDENTIALS_PATH=creds_path, SHIM_ENV_PATH=env_path
-            ):
-                rse.main()
-                with open(env_path, encoding="utf-8") as f:
-                    first_contents = f.read()
+    def read(self, path):
+        with open(path, encoding="utf-8") as f:
+            return f.read()
 
-                rse.main()
-                with open(env_path, encoding="utf-8") as f:
-                    second_contents = f.read()
+    def run_main(self, **extra):
+        paths = dict(
+            SERVICE_CREDENTIALS_PATH=self.creds_path,
+            SHIM_ENV_PATH=self.env_path,
+            SHIM_COMPOSE_PATH=self.compose_path,
+        )
+        with mock.patch.multiple(rse, **{**paths, **extra}):
+            return rse.main()
 
-            self.assertEqual(first_contents, second_contents)
-            with open(creds_path, encoding="utf-8") as f:
-                # exactly one shim-drain-token line across both runs
-                self.assertEqual(
-                    sum(1 for line in f if line.startswith(f"{DRAIN_TOKEN_LABEL}:")), 1
-                )
+    def table_with_drain_digest(self):
+        table = real_table()
+        table["digests"][OTHER_DIGEST] = "drain"
+        path = os.path.join(self.tmp, "table.json")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(table, f)
+        return path
 
-    def test_happy_path_with_a_pre_recorded_token_writes_it_verbatim(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            creds_path = os.path.join(tmp, "creds")
-            with open(creds_path, "w", encoding="utf-8") as f:
-                f.write(f"{DRAIN_TOKEN_LABEL}:a-real-token\n")
-            env_path = os.path.join(tmp, "env")
-            with mock.patch.multiple(
-                rse, SERVICE_CREDENTIALS_PATH=creds_path, SHIM_ENV_PATH=env_path
-            ):
-                result = rse.main()
+    def test_the_pinned_digest_renders_the_smtp_environment_from_the_recorded_credential(self):
+        self.write_creds(f"other-label:unrelated\n{SMTP_LABEL}:the-secret\n")
+        self.assertEqual(0, self.run_main())
+        self.assertEqual(SMTP_DELIVERY_ENV, self.read(self.env_path))
+        self.assertEqual(0o600, stat.S_IMODE(os.stat(self.env_path).st_mode))
 
-            self.assertEqual(result, 0)
-            with open(env_path, encoding="utf-8") as f:
-                contents = f.read()
-            self.assertIn("SHIM_DRAIN_TOKEN=a-real-token", contents)
-            self.assertEqual(stat.S_IMODE(os.stat(env_path).st_mode), 0o600)
+    def test_smtp_delivery_leaves_the_credentials_file_byte_unchanged(self):
+        # The pre-fix main() would have minted a shim-drain-token here and appended it to the
+        # host's credentials file. A mint=false contract must never write that file.
+        self.write_creds(f"other-label:unrelated\n{SMTP_LABEL}:the-secret\n")
+        before = self.read(self.creds_path)
+        self.run_main()
+        self.run_main()
+        self.assertEqual(before, self.read(self.creds_path))
+        self.assertNotIn(DRAIN_LABEL, self.read(self.creds_path))
 
-    def test_token_is_never_printed_to_stdout_or_stderr(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            creds_path = os.path.join(tmp, "creds")
-            with open(creds_path, "w", encoding="utf-8") as f:
-                f.write(f"{DRAIN_TOKEN_LABEL}:a-very-distinctive-drain-token-value\n")
-            env_path = os.path.join(tmp, "env")
-            with mock.patch.multiple(
-                rse, SERVICE_CREDENTIALS_PATH=creds_path, SHIM_ENV_PATH=env_path
-            ):
-                rse.main()
+    def test_smtp_delivery_with_no_recorded_credential_refuses_and_writes_nothing(self):
+        self.write_creds("other-label:unrelated\n")
+        before = self.read(self.creds_path)
+        self.assertEqual(1, self.run_main())
+        self.assertFalse(os.path.exists(self.env_path))
+        self.assertEqual(before, self.read(self.creds_path))
+        self.assertIn(SMTP_LABEL, self.stderr.getvalue())
 
-            self.assertNotIn("a-very-distinctive-drain-token-value", self.stdout.getvalue())
-            self.assertNotIn("a-very-distinctive-drain-token-value", self.stderr.getvalue())
+    def test_smtp_delivery_with_no_credentials_file_refuses_and_creates_none(self):
+        self.assertEqual(1, self.run_main())
+        self.assertFalse(os.path.exists(self.env_path))
+        self.assertFalse(os.path.exists(self.creds_path))
 
-    def test_a_freshly_generated_token_is_also_never_printed(self):
-        # Sabotage-relevant distinction from the case above: this covers
-        # the generate-on-first-use path specifically, not only the
-        # already-recorded path.
-        with tempfile.TemporaryDirectory() as tmp:
-            creds_path = os.path.join(tmp, "does-not-exist-yet")
-            env_path = os.path.join(tmp, "env")
-            with mock.patch.multiple(
-                rse, SERVICE_CREDENTIALS_PATH=creds_path, SHIM_ENV_PATH=env_path
-            ):
-                rse.main()
-                with open(creds_path, encoding="utf-8") as f:
-                    recorded_line = f.read().strip()
-            generated_token = recorded_line.split(":", 1)[1]
+    def test_a_digest_the_table_does_not_list_refuses_and_writes_nothing(self):
+        # Sabotage: make contract_for_compose fall back to a contract on an unknown digest
+        # and this goes red. The failure it guards is a guessed environment for an image
+        # nobody described.
+        self.write_compose(OTHER_DIGEST)
+        self.write_creds(f"{SMTP_LABEL}:the-secret\n")
+        before = self.read(self.creds_path)
+        self.assertEqual(1, self.run_main())
+        self.assertFalse(os.path.exists(self.env_path))
+        self.assertEqual(before, self.read(self.creds_path))
+        self.assertIn(OTHER_DIGEST, self.stderr.getvalue())
+        self.assertIn("shim-env-contracts.json", self.stderr.getvalue())
 
-            self.assertNotIn(generated_token, self.stdout.getvalue())
-            self.assertNotIn(generated_token, self.stderr.getvalue())
+    def test_a_refusal_does_not_replace_an_env_file_already_there(self):
+        self.write_compose(OTHER_DIGEST)
+        self.write_creds(f"{SMTP_LABEL}:the-secret\n")
+        with open(self.env_path, "w", encoding="utf-8") as f:
+            f.write("LIVE=untouched\n")
+        self.assertEqual(1, self.run_main())
+        self.assertEqual("LIVE=untouched\n", self.read(self.env_path))
+
+    def test_a_missing_table_refuses(self):
+        self.write_creds(f"{SMTP_LABEL}:the-secret\n")
+        self.assertEqual(1, self.run_main(CONTRACTS_PATH=os.path.join(self.tmp, "absent.json")))
+        self.assertFalse(os.path.exists(self.env_path))
+
+    def test_an_unreadable_compose_file_refuses(self):
+        self.write_creds(f"{SMTP_LABEL}:the-secret\n")
+        self.assertEqual(1, self.run_main(SHIM_COMPOSE_PATH=os.path.join(self.tmp, "absent.yml")))
+        self.assertFalse(os.path.exists(self.env_path))
+
+    def test_a_drain_digest_on_a_fresh_host_generates_a_token_and_records_it(self):
+        self.write_compose(OTHER_DIGEST)
+        self.assertEqual(0, self.run_main(CONTRACTS_PATH=self.table_with_drain_digest()))
+        self.assertRegex(self.read(self.env_path), r"SHIM_DRAIN_TOKEN=\S+")
+        self.assertEqual(1, sum(1 for line in self.read(self.creds_path).splitlines() if line.startswith(f"{DRAIN_LABEL}:")))
+        self.assertEqual(0o600, stat.S_IMODE(os.stat(self.env_path).st_mode))
+
+    def test_a_second_drain_run_reuses_the_token_the_first_generated(self):
+        self.write_compose(OTHER_DIGEST)
+        table = self.table_with_drain_digest()
+        self.run_main(CONTRACTS_PATH=table)
+        first = self.read(self.env_path)
+        self.run_main(CONTRACTS_PATH=table)
+        self.assertEqual(first, self.read(self.env_path))
+        self.assertEqual(1, sum(1 for line in self.read(self.creds_path).splitlines() if line.startswith(f"{DRAIN_LABEL}:")))
+
+    def test_a_drain_digest_with_a_recorded_token_writes_it_verbatim(self):
+        self.write_compose(OTHER_DIGEST)
+        self.write_creds(f"{DRAIN_LABEL}:a-real-token\n")
+        self.assertEqual(0, self.run_main(CONTRACTS_PATH=self.table_with_drain_digest()))
+        self.assertIn("SHIM_DRAIN_TOKEN=a-real-token", self.read(self.env_path))
+
+    def test_the_secret_is_never_printed_to_stdout_or_stderr(self):
+        self.write_creds(f"{SMTP_LABEL}:a-very-distinctive-secret-value\n")
+        self.run_main()
+        self.assertNotIn("a-very-distinctive-secret-value", self.stdout.getvalue())
+        self.assertNotIn("a-very-distinctive-secret-value", self.stderr.getvalue())
+
+    def test_a_freshly_generated_drain_token_is_also_never_printed(self):
+        self.write_compose(OTHER_DIGEST)
+        self.run_main(CONTRACTS_PATH=self.table_with_drain_digest())
+        generated = self.read(self.creds_path).strip().split(":", 1)[1]
+        self.assertNotIn(generated, self.stdout.getvalue())
+        self.assertNotIn(generated, self.stderr.getvalue())
+
+    def test_a_refusal_never_prints_the_secret(self):
+        self.write_compose(OTHER_DIGEST)
+        self.write_creds(f"{SMTP_LABEL}:a-very-distinctive-secret-value\n")
+        self.run_main()
+        self.assertNotIn("a-very-distinctive-secret-value", self.stdout.getvalue())
+        self.assertNotIn("a-very-distinctive-secret-value", self.stderr.getvalue())
 
     def test_malformed_credentials_file_fails_loudly_via_the_shared_error_path(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            creds_path = os.path.join(tmp, "creds")
-            with open(creds_path, "w", encoding="utf-8") as f:
-                f.write("no-colon-on-this-line\n")
-            env_path = os.path.join(tmp, "env")
-            with mock.patch.multiple(
-                rse, SERVICE_CREDENTIALS_PATH=creds_path, SHIM_ENV_PATH=env_path
-            ):
-                result = rse.main()
+        self.write_creds("no-colon-on-this-line\n")
+        self.assertEqual(1, self.run_main())
+        self.assertFalse(os.path.exists(self.env_path))
+        self.assertIn("malformed", self.stderr.getvalue())
 
-            self.assertEqual(result, 1)
-            self.assertFalse(os.path.exists(env_path))
-            self.assertIn("malformed", self.stderr.getvalue())
+    def test_an_empty_recorded_smtp_secret_is_refused_and_writes_nothing(self):
+        # The role refuses an empty secret, and so must this script: a rendered SMTP_PASS=
+        # line starts the shim with a blank password.
+        self.write_creds(f"other-label:unrelated\n{SMTP_LABEL}:\n")
+        before = self.read(self.creds_path)
+        self.assertEqual(1, self.run_main())
+        self.assertFalse(os.path.exists(self.env_path))
+        self.assertEqual(before, self.read(self.creds_path))
+        self.assertIn(SMTP_LABEL, self.stderr.getvalue())
+
+    def test_an_empty_recorded_drain_token_is_refused_and_not_rendered(self):
+        self.write_compose(OTHER_DIGEST)
+        self.write_creds(f"{DRAIN_LABEL}:\n")
+        before = self.read(self.creds_path)
+        self.assertEqual(1, self.run_main(CONTRACTS_PATH=self.table_with_drain_digest()))
+        self.assertFalse(os.path.exists(self.env_path))
+        self.assertEqual(before, self.read(self.creds_path))
+        self.assertIn(DRAIN_LABEL, self.stderr.getvalue())
 
 
 if __name__ == "__main__":

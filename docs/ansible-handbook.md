@@ -13,7 +13,7 @@ LAYOUT_INTRO_TEXT
 | `ansible/patterns/`        | One directory per pattern, run by the harness like a role.           |
 | `ansible/harness/`         | Test harness and its unit tests.                                     |
 | `ansible/checks/`          | Pin, enrolment, delivery, role and path checks, with tests.          |
-| `ansible/tools/`           | Record a new host's first boot is built from, and its tests.         |
+| `ansible/tools/`           | First-boot record, inputs writer, demo1 bootstrap guards, tests.     |
 | `ansible/inventories/`     | Inventory and group variables. `production` holds `edge1` and `db1`. |
 | `ansible/playbooks/`       | One playbook per host. Shared pull values in `playbooks/includes/`.  |
 | `ansible/trust/`           | One signer file per host, loaded only by its playbook.               |
@@ -64,7 +64,7 @@ GATE_INTRO_TEXT
 | ---------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pull request     | `.github/workflows/ansible.yml`                   | Lint, then the shards of changed roles. Required check: `Lint and test the Ansible roles`.                                                                                                                                   |
 | Merge queue      | `.github/workflows/ansible.yml`                   | Lint and every shard.                                                                                                                                                                                                        |
-| Push to `main`   | `.github/workflows/ansible-delivery.yml`          | Calls `branchLeft/github-workflows` `ansible-gated-apply.yml` at `v1.0.19`, then waits on environment `ansible-hosts`. The optional `ANSIBLE_PUSH_HOSTS` secret lists the hosts pushed to; empty means every host is pulled. |
+| Push to `main`   | `.github/workflows/ansible-delivery.yml`          | Calls `branchLeft/github-workflows` `ansible-gated-apply.yml` at `v1.0.23`, then waits on environment `ansible-hosts`. The optional `ANSIBLE_PUSH_HOSTS` secret lists the hosts pushed to; empty means every host is pulled. |
 | Daily, 05:41 UTC | `.github/workflows/ansible-environment-probe.yml` | Reads the protection of `ansible-hosts` and judges it with `ansible/checks/check_delivery.py environment`.                                                                                                                   |
 
 The delivery workflow re-runs lint and Molecule over every role and pattern, unless the merge queue already tested the same commit (`ansible/checks/merge_group_proof.py`). Each host is asked, in check mode, what the commit would change, before the environment approval.
@@ -103,7 +103,7 @@ DRIFT_INTRO_TEXT
 
 | Workflow                                    | Trigger              | Behaviour                                                                                                                                                                                                      |
 | ------------------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `.github/workflows/ansible-drift-check.yml` | `17 3 * * *`, manual | Calls `branchLeft/github-workflows` `ansible-drift-check.yml` at `v1.0.19` with host label `ansible-estate`. The optional `ANSIBLE_PUSH_HOSTS` secret lists the hosts pushed to. No environment, no apply key. |
+| `.github/workflows/ansible-drift-check.yml` | `17 3 * * *`, manual | Calls `branchLeft/github-workflows` `ansible-drift-check.yml` at `v1.0.23` with host label `ansible-estate`. The optional `ANSIBLE_PUSH_HOSTS` secret lists the hosts pushed to. No environment, no apply key. |
 
 The reusable workflow asks each host in check mode what an apply would change. It goes red on drift or on a refusal, and opens or comments on one issue. `ansible/checks/test_drift_caller.py` checks the caller's shape.
 

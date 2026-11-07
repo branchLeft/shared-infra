@@ -8,6 +8,7 @@ tasks/main.yml and fail when that order or those gates are lost.
 """
 
 import importlib.util
+import re
 import sys
 import tempfile
 import unittest
@@ -159,6 +160,120 @@ class InputTests(unittest.TestCase):
             self.assertNotIn(
                 "control_plane_app_image", used, f"{task.get('name')!r} uses the image as given"
             )
+
+
+WRAPPER = "Start the stack through the deploy wrapper with the pinned image"
+UNIT_ACTIVE = "Refuse a stack unit that is not active after the deploy"
+DELIVER_OTHER = "Deliver the stack's other files"
+DELIVER_COMPOSE = "Deliver the stack's compose files"
+MAKE_SUBDIRECTORIES = "Create the subdirectories of the stack"
+RELOAD = "Reload the database so the delivered access rules are the ones in force"
+REMOVE_LEGACY = "Remove the access rules file from its old place"
+STACK = ROLE.parents[2] / "hetzner" / "control-plane" / "stack"
+# Words that, in a command of this role, would take a container or a volume away.
+DESTRUCTIVE_WORDS = frozenset(
+    {"down", "rm", "-v", "--volumes", "--force-recreate", "prune", "kill", "stop"}
+)
+
+
+def _vars() -> dict[str, Any]:
+    return dict(yaml.safe_load((ROLE / "vars" / "main.yml").read_text(encoding="utf-8")))
+
+
+class HbaDeliveryTests(unittest.TestCase):
+    """A changed pg_hba.conf must reach the running database with no hand step.
+
+    The file is mounted into the db container as a directory, and the role reloads the
+    server after the deploy wrapper on every apply. These tests hold the shape that depends
+    on; the real-server test (hetzner/provision/test_control_plane_hba_server.py) holds the
+    behaviour, and goes red when the reload is not made.
+    """
+
+    def setUp(self) -> None:
+        self.names = [name for name, _ in task_lines(TASKS)]
+        self.by_name = {str(task.get("name")): task for task in _tasks()}
+
+    def _position(self, name: str) -> int:
+        self.assertEqual(self.names.count(name), 1, f"{name!r} must appear exactly once")
+        return self.names.index(name)
+
+    def test_the_reload_comes_after_the_wrapper_and_after_the_stack_files_are_delivered(self) -> None:
+        reload_at = self._position(RELOAD)
+        for earlier in (WRAPPER, UNIT_ACTIVE, DELIVER_OTHER, DELIVER_COMPOSE, MAKE_SUBDIRECTORIES):
+            self.assertLess(self._position(earlier), reload_at, f"the reload comes before {earlier!r}")
+
+    def test_the_reload_runs_the_one_script_in_the_db_container_on_every_apply(self) -> None:
+        task = self.by_name[RELOAD]
+        self.assertEqual(
+            _argv(task),
+            ["docker", "exec", "--interactive", "{{ control_plane_db_container }}", "sh", "-s"],
+        )
+        self.assertEqual(
+            task["ansible.builtin.command"]["stdin"],
+            "{{ lookup('ansible.builtin.file', 'reload_hba.sh') }}",
+        )
+        self.assertTrue((ROLE / "files" / "reload_hba.sh").is_file())
+        self.assertIs(task.get("changed_when"), False)
+        # On every apply: nothing but the units switch decides whether it runs, so an
+        # interrupted run, which leaves the file delivered and not loaded, is finished by
+        # the next one.
+        self.assertEqual(_conditions(task), ["control_plane_start_units | ansible.builtin.bool"])
+        self.assertNotIn("register", task)
+
+    def test_the_reload_script_takes_the_password_from_the_container_and_checks_the_reload(self) -> None:
+        text = (ROLE / "files" / "reload_hba.sh").read_text(encoding="utf-8")
+        self.assertIn('PGPASSWORD="${POSTGRES_PASSWORD:?', text)
+        self.assertIn("pg_reload_conf()", text)
+        self.assertIn("pg_conf_load_time()", text)
+        self.assertIn("pg_hba_file_rules", text)
+        self.assertIn("error is not null", text)
+        self.assertIn("</dev/null", text, "psql would read the script from standard input")
+        # The password is never put on a command line.
+        self.assertNotIn("--password", text)
+        self.assertNotRegex(text, r"(?m)^\s*(export\s+)?PGPASSWORD=['\"]?[A-Za-z0-9]")
+
+    def test_the_container_is_the_one_compose_names_for_the_database(self) -> None:
+        compose = (STACK / "compose.yml").read_text(encoding="utf-8")
+        project = re.search(r"^name: (\S+)\s*$", compose, re.MULTILINE)
+        if project is None:
+            self.fail("the compose file no longer names its project")
+        self.assertEqual(_vars()["control_plane_db_container"], f"{project.group(1)}-db-1")
+
+    def test_the_legacy_file_is_removed_only_after_the_wrapper(self) -> None:
+        self.assertGreater(self._position(REMOVE_LEGACY), self._position(WRAPPER))
+        task = self.by_name[REMOVE_LEGACY]
+        file_module = task["ansible.builtin.file"]
+        self.assertEqual(file_module["state"], "absent")
+        self.assertEqual(file_module["path"], "{{ control_plane_legacy_hba_file }}")
+        self.assertEqual(_conditions(task), ["control_plane_start_units | ansible.builtin.bool"])
+        variables = _vars()
+        self.assertEqual(variables["control_plane_legacy_hba_file"], "{{ control_plane_project_dir }}/pg_hba.conf")
+        # The legacy path is not a path the role still delivers.
+        self.assertNotIn("pg_hba.conf", variables["control_plane_stack_files"])
+
+    def test_the_rules_are_delivered_into_a_subdirectory_the_role_makes_first(self) -> None:
+        variables = _vars()
+        self.assertIn("postgres/pg_hba.conf", variables["control_plane_stack_files"])
+        self.assertEqual(variables["control_plane_stack_dirs"], ["postgres"])
+        self.assertLess(self._position(MAKE_SUBDIRECTORIES), self._position(DELIVER_OTHER))
+        self.assertLess(self._position(MAKE_SUBDIRECTORIES), self._position(DELIVER_COMPOSE))
+        for relative in variables["control_plane_stack_files"]:
+            self.assertTrue((STACK / relative).is_file(), f"{relative} is not in the repository's stack")
+
+    def test_no_task_removes_a_container_or_a_volume(self) -> None:
+        # The data lives in the db-data volume. Nothing the role runs may take it away.
+        for task in _tasks():
+            words = set(_argv(task))
+            self.assertEqual(
+                words & DESTRUCTIVE_WORDS,
+                set(),
+                f"{task.get('name')!r} runs a command that can remove a container or a volume",
+            )
+        text = TASKS.read_text(encoding="utf-8")
+        self.assertNotRegex(text, r"(?m)^\s+- ('?)(down|--volumes|-v|--force-recreate)\1\s*$")
+        script = (ROLE / "files" / "reload_hba.sh").read_text(encoding="utf-8")
+        code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+        self.assertNotRegex(code, r"docker|rm -|--volumes|drop |truncate ")
 
 
 class WrapperRecordTests(unittest.TestCase):

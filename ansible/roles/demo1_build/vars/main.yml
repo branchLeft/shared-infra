@@ -70,9 +70,111 @@ demo1_build_unit_dir: /etc/systemd/system
 demo1_build_router_unit: branchleft-health-router@.service
 demo1_build_dropin_name: colour.conf
 
+# The shared compose template unit that the colour drop-ins extend. Its one home is
+# hetzner/provision/, which the role reads from the checkout it runs, and the role keeps
+# no copy of it (ruled 4 Nov, ws#2364 comment 6630331961). deploy_tooling is the other
+# writer of this path; ansible/checks exempts demo1 for this one file only.
+demo1_build_compose_template_src: '{{ role_path }}/../../../hetzner/provision/branchleft-compose@.service'
+demo1_build_compose_template_dest: /etc/systemd/system/branchleft-compose@.service
+
 # The candidate edge fragment: staged for the owner, never the live edge.
 demo1_build_candidate_dir: /var/lib/branchleft/demo-candidates
 demo1_build_candidate_edge: /var/lib/branchleft/demo-candidates/edge-upstreams.caddy
+
+# The owner's edge input for each slot. {slot} is the slot number. The input is the
+# owner's to place, as root; the role only reads its shape, and the renderer reads its
+# content. A slot with no input is not in the production candidate, and the plan and
+# apply say so with the notice below.
+demo1_build_site_edge_input: '{{ demo1_build_config_dir }}/demo-{slot}.edge.json'
+demo1_build_site_not_rendered_text: 'Site candidate for slot {slot} NOT rendered: no owner-placed edge JSON'
+demo1_build_site_unstaged_text: >-
+  Site candidate for slot {slot} NOT rendered: the pinned site renderer is not staged on this host
+  (check mode, first plan)
+
+# The production candidate: the one Caddyfile the pinned site renderer prints for every
+# occupied slot, under the single wildcard site. What the renderer prints is what is staged.
+demo1_build_candidate_caddyfile: /var/lib/branchleft/demo-candidates/Caddyfile
+# The names an earlier version of this role gave its per-slot candidates, removed on
+# every run (_candidate.yml).
+demo1_build_superseded_candidate_pattern: '^site-[0-9]+\.caddy$'
+
+# The one TLS source the role gives the renderer: Caddy's DNS-01 module reads the token
+# from this file when it runs. The role passes the path and never the token.
+demo1_build_dns_directive: "{{ 'dns hetzner {file.' ~ demo1_build_dns_token_file ~ '}' }}"
+
+# The renderer's flags for the occupied slots: one --site SLOT=EDGE_JSON each.
+demo1_build_site_render_flags: |-
+  {%- set out = [] -%}
+  {%- for slot in demo1_build_site_occupied -%}
+  {%- set _ = out.extend(['--site', slot ~ '=' ~ (demo1_build_site_edge_input | replace('{slot}', slot))]) -%}
+  {%- endfor -%}
+  {{ out }}
+
+# The stated skips of the production candidate. Each starts with the same words, so a
+# plan and an apply say plainly that nothing was staged and why.
+demo1_build_wildcard_unset_text: 'Production candidate NOT staged: the wildcard base (demo1_build_wildcard_base) is not set'
+demo1_build_token_missing_text: "{{ 'Production candidate NOT staged: no DNS token file is placed at ' ~ demo1_build_dns_token_file }}"
+demo1_build_no_occupied_text: 'Production candidate NOT staged: no slot has an owner-placed edge JSON'
+demo1_build_candidate_unstaged_text: >-
+  Production candidate NOT staged: the pinned site renderer is not staged on this host
+  (check mode, first plan)
+
+# The modes a DNS token file may have: no group or other bit and no execute bit.
+demo1_build_dns_token_modes: ['0000', '0200', '0400', '0600']
+
+# How the rendered text is judged (_candidate_refusal.yml). The role does not read the
+# Caddyfile for its sites or its certificate modes. It has the Caddy image adapt the text
+# and judges the JSON that Caddy would run, with files/judge_caddy_config.py, so no
+# spelling of the Caddyfile can get past it. The image is loaded on the host by the owner
+# and is never pulled (--pull never). The container has no network and no writable
+# filesystem, and it reads the candidate on its standard input. NET_BIND_SERVICE is kept
+# because the Caddy binary carries that file capability and will not start without it.
+demo1_build_docker: /usr/bin/docker
+demo1_build_judge_script: judge_caddy_config.py
+demo1_build_judge_env: DEMO1_BUILD_ADAPTED_CONFIG
+demo1_build_judge_text_env: DEMO1_BUILD_CANDIDATE_TEXT
+demo1_build_caddy_adapt_argv: >-
+  {{ [demo1_build_docker, 'run', '--rm', '-i', '--pull', 'never', '--network', 'none', '--read-only',
+  '--cap-drop', 'ALL', '--cap-add', 'NET_BIND_SERVICE', '--security-opt', 'no-new-privileges',
+  '--memory', '512m', '--pids-limit', '128', demo1_build_caddy_image,
+  'caddy', 'adapt', '--adapter', 'caddyfile', '--config', '-'] }}
+# The image is asked for with `docker image inspect`, which finds it by the digest in its
+# reference. `docker images --quiet REF` is not used: its argument is a repository filter,
+# so it prints nothing for a digest reference on a real Docker, loaded or not.
+demo1_build_caddy_image_inspect_argv: "{{ [demo1_build_docker, 'image', 'inspect', demo1_build_caddy_image] }}"
+demo1_build_caddy_unset_text: 'Production candidate NOT staged: no Caddy image (demo1_build_caddy_image) is set to judge the candidate with'
+demo1_build_caddy_missing_text: >-
+  Production candidate NOT staged: the Caddy image (demo1_build_caddy_image) is not loaded on this host
+  under its digest (a Docker on the classic image store never lists a loaded image by digest; README,
+  "How the Caddy image gets onto the host")
+# A Caddy image is named by its content: a name and a digest, nothing else. A tag alone can be
+# re-pointed, an image ID is not found by a digest lookup, and a name with a tag and a digest
+# would be two names for one check.
+demo1_build_caddy_image_pattern: '^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}\Z'
+# True only when docker listed exactly one image for the reference and its RepoDigests hold
+# the digest of the pinned reference. Anything else (none, two, a listing of another shape, a
+# digest that is not the pinned one, RepoDigests empty or absent) is false. The tests
+# short-circuit, so a shape that is not a list of one mapping is never indexed. It reads
+# demo1_build_caddy_image_listed (the parsed JSON, [] when there is none) and
+# demo1_build_caddy_image_unreadable. A template, evaluated where it is used; the unit test
+# renders this same text against what real Docker prints. The pattern ends in a lookahead
+# that holds only at the end of the string, because a backslash in a Jinja string is read one
+# way by Ansible and another by plain Jinja, and this text must mean one thing in both.
+demo1_build_caddy_image_verified_template: >-
+  {{
+    not demo1_build_caddy_image_unreadable
+    and demo1_build_caddy_image_listed is sequence
+    and demo1_build_caddy_image_listed is not string
+    and demo1_build_caddy_image_listed is not mapping
+    and demo1_build_caddy_image_listed | length == 1
+    and demo1_build_caddy_image_listed[0] is mapping
+    and demo1_build_caddy_image_listed[0].RepoDigests is defined
+    and demo1_build_caddy_image_listed[0].RepoDigests is sequence
+    and demo1_build_caddy_image_listed[0].RepoDigests is not string
+    and (demo1_build_caddy_image_listed[0].RepoDigests | select('string')
+         | select('match', '^[^@]+@' ~ (demo1_build_caddy_image.split('@') | last) ~ '(?!(?s:.))')
+         | list | length) > 0
+  }}
 
 # The programs placed outside the release directory. The wrapper is the only
 # one the sudoers grant names, and the only one run directly as a program.
@@ -100,6 +202,9 @@ demo1_build_slot_pattern: '^[0-9]+\Z'
 demo1_build_path_pattern: '^/[A-Za-z0-9._/-]+\Z'
 demo1_build_release_path_pattern: '^demo-host/provision/[a-z_]+\.py\Z'
 demo1_build_instance_pattern: '^branchleft-compose@demo-[0-9]+-[a-z]\Z'
+# Lower-case labels of letters, digits and inner hyphens, at least two, no wildcard.
+demo1_build_wildcard_base_pattern: '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
+demo1_build_dns_token_path_pattern: '^/etc/branchleft/secrets/[A-Za-z0-9][A-Za-z0-9._-]*\Z'
 
 # The slot table as strings, whatever type the host's variables gave. The
 # pinned generator's grant is compared with the installed one line for line, so
@@ -124,17 +229,10 @@ demo1_build_required_programs:
 # the split below also refuses a comment ending in a backslash.
 demo1_build_grant_header_pattern: '^#( .*)?$'
 
-# The installed grant and the pinned generator's output, each cut into a header
-# and a body, as {installed: [...], generated: [...]} (generated only once the
-# release is staged). The header is the leading run of blank lines and comments;
-# it is the one part not compared, because broker_deploy's template and the
-# generator word it differently. The body is everything from the first line that
-# is not header, and _sudoers_check.yml compares it as an ordered list: no comment
-# is exempt after the first rule, and nothing is sorted. A comment ending in a
-# backslash is not header, as sudoers joins such a line to the next. Trailing
-# newlines are dropped before the split, as blank lines at the end are inert.
-# Both texts go through this one template. It reads the registered results of
-# _sudoers_check.yml, so it is a variable and not a copy in a task.
+# The installed grant and the pinned generator's output, each cut into a header and
+# a body, as {installed: [...], generated: [...]}. The header (leading blank lines and
+# comments) is not compared; the body, from the first other line, is compared in order
+# by _sudoers_check.yml. Both texts go through this one template.
 demo1_build_grant_bodies: |-
   {%- set texts = {'installed': demo1_build_sudoers_raw.content | b64decode} -%}
   {%- if demo1_build_release_ready | bool -%}
