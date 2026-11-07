@@ -429,6 +429,47 @@ publicpress.co.uk {
 	}
 }
 
+sites.publicpress.co.uk {
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header Content-Security-Policy "default-src 'none'; script-src 'none'; style-src 'none'; img-src 'none'; font-src 'none'; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+		request_body {
+			max_size 1KiB
+		}
+		appsec
+		@file_0 path /robots.txt
+		header @file_0 Content-Type "text/plain; charset=utf-8"
+		respond @file_0 <<SHARED_TENANT_FILE_EOF
+# HOSTING_NOTICE_PLACEHOLDER
+SHARED_TENANT_FILE_EOF
+		@file_1 path /.well-known/security.txt
+		header @file_1 Content-Type "text/plain; charset=utf-8"
+		respond @file_1 <<SHARED_TENANT_FILE_EOF
+# HOSTING_NOTICE_PLACEHOLDER
+Contact: mailto:abuse@branchleft.co.uk
+Expires: 2027-11-07T00:00:00.000Z
+SHARED_TENANT_FILE_EOF
+		respond 404
+	}
+}
+
 http://edge-probe.invalid:8080 {
 	log {
 		output file /var/log/caddy/probe.log {

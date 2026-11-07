@@ -91,3 +91,30 @@ opposite: always rendered, never proxied.
 Hostname and addressing only, same rule as the rest of this registry: the page
 content itself lives in a file under `hetzner/edge/`, keyed by `name`, so that
 changing the words on the page never touches this file.
+
+## Shared tenant domain files
+
+The `sites-tenant-signals` entry serves `sites.publicpress.co.uk`, the apex of the
+shared tenant domain (customer sites are `*.sites.publicpress.co.uk`, ruled as D10 in
+`ghost-platform-docs/19-try-it-now-design/00-high-level-design.html`). Its two files
+say that PublicPress hosts those sites and does not publish, author or endorse them.
+Their text is in `hetzner/edge/sharedTenantFiles.ts`, and every wording there is an
+ALL_CAPS placeholder until Rob supplies the prose.
+
+Only the files that carry that meaning to a reader that reads them:
+
+- `/robots.txt`, RFC 9309. Read by crawlers. It governs only the host it is served on,
+  so this apex file does not reach a tenant subdomain. The file is comment-only, so it
+  sets no crawl rule and states no crawl policy; the AI-crawler default stays open.
+- `/.well-known/security.txt`, RFC 9116. Read by security researchers and their tooling.
+  `Contact` and `Expires` are required by the RFC. The contact is
+  `PUBLICPRESS_ABUSE_CONTACT`, the abuse mailbox the holding page already uses, so it has
+  one home. `Expires` is 2027-11-07; renew it before it passes.
+
+No convention for a generic "we host this, we do not publish it" file was found, so none
+is built. The sources are the RFC texts above, cited from the RFC numbers and not
+re-fetched in the build that added these files.
+
+The apex serves these files and nothing else. A tenant's own hostname is not covered:
+the registry has no wildcard, and each tenant that needs a file is its own deliberate
+entry.

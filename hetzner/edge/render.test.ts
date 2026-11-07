@@ -16,6 +16,7 @@ import {
 } from './posture';
 import type { EdgePosture } from './posture';
 import { PUBLICPRESS_ABUSE_CONTACT } from './publicpressHolding';
+import { SHARED_TENANT_FILES } from './sharedTenantFiles';
 import {
   renderAppsecAcquisition,
   renderCaddyfile,
@@ -936,6 +937,54 @@ describe('the CrowdSec acquisition files', () => {
 // exercised directly above, against the rendered output; the TLS floor is
 // covered by the 'protocols tls1.2 tls1.3' assertion above too.
 
+describe('the shared tenant domain files', () => {
+  const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
+  const block = () => rendered.split('\nsites.publicpress.co.uk {')[1]?.split('\n}\n')[0] ?? '';
+  const registered = SHARED_TENANT_FILES['sites-tenant-signals'] ?? [];
+  // Each heredoc body in the order the block answers them.
+  const served = () =>
+    [
+      ...block().matchAll(
+        /respond @file_\d+ <<SHARED_TENANT_FILE_EOF\n([\s\S]*?)SHARED_TENANT_FILE_EOF/g
+      ),
+    ].map(([, body]) => body);
+
+  it('serves exactly the sites hostname, with no wildcard over tenant subdomains', () => {
+    expect(rendered).toContain('\nsites.publicpress.co.uk {');
+    expect(rendered).not.toContain('*.sites.publicpress.co.uk');
+  });
+
+  it('answers robots.txt and security.txt at their literal paths, and every other path with 404', () => {
+    expect(block()).toContain('path /robots.txt');
+    expect(block()).toContain('path /.well-known/security.txt');
+    expect(block()).toContain('\trespond 404');
+  });
+
+  it('serves each file as text/plain, with the registered body byte for byte', () => {
+    expect(block()).toContain('header @file_0 Content-Type "text/plain; charset=utf-8"');
+    expect(block()).toContain('header @file_1 Content-Type "text/plain; charset=utf-8"');
+    expect(served()).toEqual(registered.map((file) => file.body));
+  });
+
+  it('names the abuse contact the holding page already uses, and an RFC 9116 expiry', () => {
+    const security = registered.find((file) => file.path === '/.well-known/security.txt');
+    expect(security?.body).toContain(`Contact: mailto:${PUBLICPRESS_ABUSE_CONTACT}`);
+    expect(security?.body).toMatch(/^Expires: \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/m);
+  });
+
+  it('carries the strict CSP and HSTS on every answer, files and 404 alike', () => {
+    expect(block()).toContain(`header Content-Security-Policy "${staticSiteCsp('')}"`);
+    expect(block()).toContain("default-src 'none'; script-src 'none'; style-src 'none'");
+    expect(block()).toContain('Strict-Transport-Security "max-age=31536000; includeSubDomains"');
+  });
+
+  it('wording is ALL_CAPS placeholder text until Rob supplies the prose', () => {
+    for (const file of registered) {
+      expect(file.body).toContain('HOSTING_NOTICE_PLACEHOLDER');
+    }
+  });
+});
+
 describe('the publicpress.co.uk holding page', () => {
   const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
   const block = () => rendered.split('\npublicpress.co.uk {')[1]?.split('\n}')[0] ?? '';
@@ -943,7 +992,9 @@ describe('the publicpress.co.uk holding page', () => {
   it('serves exactly the apex hostname -- no www, no sites.* subdomain, no wildcard', () => {
     expect(rendered).toContain('\npublicpress.co.uk {');
     expect(rendered).not.toContain('www.publicpress.co.uk');
-    expect(rendered).not.toContain('sites.publicpress.co.uk');
+    // The holding block itself; `sites.publicpress.co.uk` is its own block now
+    // (see the shared tenant domain describe below), so it is checked there.
+    expect(block()).not.toContain('sites.publicpress.co.uk');
     expect(rendered).not.toContain('*.publicpress.co.uk');
   });
 
