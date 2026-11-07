@@ -1,0 +1,259 @@
+---
+# Order matters. The pins are read first, and nothing is written until they pass. The verifier
+# is copied from hetzner/provision, and gh is installed at its own path, outside the general
+# PATH. The verifier's empty home is created last, after the credential refusal, so a host that
+# somehow holds a gh credential file there is refused before the directory is touched.
+#
+# Check mode (ANS-10). The role runs under --check --diff on any host. Reads (stat, the gh
+# version, the pin assertions) run in check mode. The writes are reported and not made. The
+# gh download and install are skipped in check mode with the reason beside them, because check
+# mode fetches nothing and extracts nothing; the read-back of what was written is skipped too,
+# for the same reason.
+#
+# Nothing here is a secret (ANS-16).
+
+# ----- The inputs -----
+
+# Refused before anything is written. A refusal names the rule, never the value it refused.
+- name: Refuse a pin that is not in the shape the role takes
+  ansible.builtin.assert:
+    that:
+      - deploy_verifier_gh_version is match('^[0-9]+[.][0-9]+[.][0-9]+\Z')
+      - deploy_verifier_gh_sha256 is match('^sha256:[0-9a-f]{64}\Z')
+      - >-
+        deploy_verifier_gh_download_url == 'https://github.com/cli/cli/releases/download/v'
+        ~ deploy_verifier_gh_version ~ '/gh_' ~ deploy_verifier_gh_version ~ '_linux_amd64.tar.gz'
+    fail_msg: >-
+      deploy_verifier refused its pins (rule: shape): the gh version, its sha256 digest and the
+      download URL must name one release.
+    quiet: true
+
+# ----- The verifier -----
+
+# A link at the verifier path is refused, never written through or replaced. The programs run as
+# root, and a write through a link would change whatever it points at.
+- name: Look at the verifier path before it is written
+  ansible.builtin.stat:
+    path: '{{ deploy_verifier_verifier_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: deploy_verifier_verifier_before
+  check_mode: false
+
+- name: Refuse a link or a directory at the verifier path
+  ansible.builtin.assert:
+    that:
+      - not (deploy_verifier_verifier_before.stat.islnk | default(false))
+      - not (deploy_verifier_verifier_before.stat.isdir | default(false))
+    fail_msg: >-
+      deploy_verifier refused to write {{ deploy_verifier_verifier_path }}: it is a link or a
+      directory. Inspect it, remove it by hand, and run the role again.
+    quiet: true
+
+# The program is read from hetzner/provision/, so the bytes installed are the bytes of the one
+# copy there. It is root's, 0755, and not writable by any other account, because the wrapper runs
+# it as root.
+- name: Install the verifier from hetzner/provision, the one home of the program
+  ansible.builtin.copy:
+    src: '{{ deploy_verifier_programs_dir }}/branchleft-verify-image'
+    dest: '{{ deploy_verifier_verifier_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+# Read back after the write, so a file that is not root's, is not 0755, or is a link is a failure
+# of this run rather than something the wrapper finds later. Skipped in check mode, which wrote
+# nothing for this to read.
+- name: Read the verifier back after it is written
+  ansible.builtin.stat:
+    path: '{{ deploy_verifier_verifier_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: deploy_verifier_verifier_after
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Refuse a verifier that is not root's, 0755, and a regular file
+  ansible.builtin.assert:
+    that:
+      - deploy_verifier_verifier_after.stat.isreg
+      - not deploy_verifier_verifier_after.stat.islnk
+      - deploy_verifier_verifier_after.stat.pw_name == 'root'
+      - deploy_verifier_verifier_after.stat.gr_name == 'root'
+      - deploy_verifier_verifier_after.stat.mode == '0755'
+    fail_msg: >-
+      deploy_verifier: {{ deploy_verifier_verifier_path }} is not a root-owned, 0755, regular file
+      after the copy. The wrapper will refuse every registered deploy until this is put right.
+    quiet: true
+  when: not ansible_check_mode
+
+# ----- The pinned gh -----
+
+# gh lives in a directory of its own, named by the wrapper's fixed PATH, so the verifier finds
+# this binary and no other gh. The directory is root's, 0755.
+- name: Create the directory the pinned gh is installed into
+  ansible.builtin.file:
+    path: '{{ deploy_verifier_gh_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Read whether the pinned gh binary is installed
+  ansible.builtin.stat:
+    path: '{{ deploy_verifier_gh_bin }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: deploy_verifier_gh_stat
+  check_mode: false
+
+# Read without a change, so check mode reads it too.
+- name: Read the version the installed gh reports
+  ansible.builtin.command:
+    argv:
+      - '{{ deploy_verifier_gh_bin }}'
+      - --version
+  register: deploy_verifier_gh_reported
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: deploy_verifier_gh_stat.stat.exists | default(false)
+
+- name: Decide whether the pinned gh is already installed
+  ansible.builtin.set_fact:
+    deploy_verifier_gh_current: >-
+      {{ (deploy_verifier_gh_stat.stat.exists | default(false))
+         and ('gh version ' ~ deploy_verifier_gh_version ~ ' ')
+         in (deploy_verifier_gh_reported.stdout | default('')) }}
+
+# The download goes into a directory of its own, removed when the block is done, whether or not
+# the install succeeded. get_url checks the digest before anything is extracted, so a corrupted or
+# substituted tarball fails the play. Skipped when the pinned gh is already here, and in check mode,
+# which downloads nothing and extracts nothing (ANS-10).
+- name: Make a directory for the gh download
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: deploy_verifier_
+  register: deploy_verifier_tmp
+  when: not deploy_verifier_gh_current and not ansible_check_mode
+
+- name: Fetch the pinned gh release, check its digest, and install gh from it
+  when: not deploy_verifier_gh_current and not ansible_check_mode
+  block:
+    - name: Download the gh release tarball, which must match the pinned digest
+      ansible.builtin.get_url:
+        url: '{{ deploy_verifier_gh_download_url }}'
+        dest: '{{ deploy_verifier_tmp.path }}/gh.tar.gz'
+        checksum: '{{ deploy_verifier_gh_sha256 }}'
+        mode: '0600'
+
+    - name: Extract the release tarball into the download directory
+      ansible.builtin.unarchive:
+        src: '{{ deploy_verifier_tmp.path }}/gh.tar.gz'
+        dest: '{{ deploy_verifier_tmp.path }}'
+        remote_src: true
+
+    - name: Install the gh binary from the release, owned by root, mode 0755
+      ansible.builtin.copy:
+        src: '{{ deploy_verifier_tmp.path }}/gh_{{ deploy_verifier_gh_version }}_linux_amd64/bin/gh'
+        dest: '{{ deploy_verifier_gh_bin }}'
+        owner: root
+        group: root
+        mode: '0755'
+        remote_src: true
+  always:
+    - name: Remove the gh download directory
+      ansible.builtin.file:
+        path: '{{ deploy_verifier_tmp.path }}'
+        state: absent
+      when: deploy_verifier_tmp is defined and deploy_verifier_tmp.path is defined
+
+# Read back after the install. Skipped in check mode, which installed nothing.
+- name: Read the gh binary back after it is installed
+  ansible.builtin.stat:
+    path: '{{ deploy_verifier_gh_bin }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: deploy_verifier_gh_after
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Refuse a gh binary that is not root's, 0755, a regular file, or the pinned version
+  ansible.builtin.command:
+    argv:
+      - '{{ deploy_verifier_gh_bin }}'
+      - --version
+  register: deploy_verifier_gh_check
+  changed_when: false
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Assert the installed gh is the pinned one, root-owned and 0755
+  ansible.builtin.assert:
+    that:
+      - deploy_verifier_gh_after.stat.isreg
+      - deploy_verifier_gh_after.stat.pw_name == 'root'
+      - deploy_verifier_gh_after.stat.gr_name == 'root'
+      - deploy_verifier_gh_after.stat.mode == '0755'
+      - ('gh version ' ~ deploy_verifier_gh_version ~ ' ') in deploy_verifier_gh_check.stdout
+    fail_msg: >-
+      deploy_verifier: the installed gh is not the pinned release, or is not a root-owned 0755
+      regular file. The verifier cannot run from it.
+    quiet: true
+  when: not ansible_check_mode
+
+# ----- The verifier's empty home -----
+
+# The wrapper points HOME, GH_CONFIG_DIR and XDG_CONFIG_HOME here, so gh reads config from this
+# directory and from nowhere else. It is root's, 0700. The parent is created on its own so the
+# mode of the home is the one set here.
+- name: Create the directory the verifier's home is in
+  ansible.builtin.file:
+    path: '{{ deploy_verifier_home_parent }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Look for a gh credential file in the verifier's home before it is used
+  ansible.builtin.stat:
+    path: '{{ deploy_verifier_home }}/{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - hosts.yml
+    - config.yml
+    - gh/hosts.yml
+    - gh/config.yml
+  register: deploy_verifier_home_credentials
+  check_mode: false
+
+- name: Refuse a host where a gh credential file already sits in the verifier's home
+  ansible.builtin.assert:
+    that:
+      - not (item.stat.exists | default(false))
+    fail_msg: >-
+      deploy_verifier refused: a gh config or credential file is in {{ deploy_verifier_home }}. The
+      verifier must hold no GitHub credential. Remove the file by hand, then run the role again.
+    quiet: true
+  loop: '{{ deploy_verifier_home_credentials.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Create the empty, root-only directory the verifier's gh reads its config from
+  ansible.builtin.file:
+    path: '{{ deploy_verifier_home }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'

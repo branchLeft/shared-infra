@@ -78,6 +78,38 @@ ATTESTED_IMAGES: dict[str, str] = {
 }
 
 
+# The directory the pinned gh binary is installed into, by the deploy_verifier
+# role, and the empty root-only directory the verifier's gh reads its config from.
+# Neither is on the general PATH, and the home is empty so that root's own
+# ~/.config/gh cannot become an ambient credential for the check.
+VERIFIER_GH_DIR = "/usr/local/libexec/branchleft-verifier"
+VERIFIER_HOME = "/var/lib/branchleft/verifier-home"
+
+# gh's own words when it holds no credential: its refusal always names the login command. The
+# verifier passes gh's stderr on, so this is read from there.
+_NEEDS_LOGIN = re.compile(r"gh auth login")
+
+
+def verifier_env() -> dict[str, str]:
+    """The verifier's entire environment. Nothing is inherited from the host.
+
+    No GitHub credential is in it, and that is the design: the host holds none,
+    and a token read from anywhere would make the check depend on what the host
+    happens to hold. VERIFY_PLAIN_ERRORS keeps the verifier's refusals as plain
+    text, so the auth refusal above can be read off stderr.
+    """
+    return {
+        "PATH": f"{VERIFIER_GH_DIR}:/usr/bin:/bin",
+        "HOME": VERIFIER_HOME,
+        "GH_CONFIG_DIR": VERIFIER_HOME,
+        "XDG_CONFIG_HOME": VERIFIER_HOME,
+        "GH_PROMPT_DISABLED": "1",
+        "GH_NO_UPDATE_NOTIFIER": "1",
+        "LC_ALL": "C",
+        "VERIFY_PLAIN_ERRORS": "1",
+    }
+
+
 def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     """Verify a registered image's attestation before anything touches the host.
 
@@ -85,6 +117,10 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     Raises DeployError when a registered image cannot be verified, for any
     reason: refused, unknown digest, or the verifier missing. There is no
     argument, environment variable or stack setting that skips this.
+
+    The design is fail-closed. A host with no GitHub credential refuses every
+    registered deploy with the credential message; see branchleft_deploy.md for
+    the fallback, which is not a host credential.
     """
     signer = ATTESTED_IMAGES.get(image.partition("@")[0])
     if signer is None:
@@ -95,12 +131,19 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
             check=False,
             capture_output=True,
             text=True,
+            env=verifier_env(),
+            stdin=subprocess.DEVNULL,
         )
     except OSError as error:
         raise DeployError(
             f"could not run {VERIFIER} ({error}); refusing to deploy {image} "
             "without verifying its attestation"
         ) from None
+    if result.returncode != 0 and _NEEDS_LOGIN.search(result.stderr or ""):
+        raise DeployError(
+            "the host verifier needs GitHub credentials this host does not hold; "
+            "the deploy is refused; see branchleft_deploy.md"
+        )
     if result.returncode != 0:
         raise DeployError(
             f"{image} is not attested by {signer} on refs/heads/main; refusing to "

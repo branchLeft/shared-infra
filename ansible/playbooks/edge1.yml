@@ -50,6 +50,7 @@
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/ci_login # noqa: role-name[path]
     - role: ../roles/ci_jump # noqa: role-name[path]
+    - role: ../roles/deploy_verifier # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/edge_stack # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]

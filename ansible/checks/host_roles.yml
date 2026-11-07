@@ -12,6 +12,7 @@ edge1:
   - egress_nat
   - ci_login
   - ci_jump
+  - deploy_verifier
   - deploy_tooling
   - edge_stack
   - node_exporter
@@ -34,6 +35,7 @@ ops1:
   - safety_channel_key
   - breakglass_mint_host
   - status_page
+  - deploy_verifier
   - control_plane
   - nextcloud_stack
   - backup_worker
@@ -45,11 +47,13 @@ app1:
   - deploy_tooling
   - deploy_slot_keys
   - export_bundler
+  - deploy_verifier
   - website_app1
   - breakglass_grant_host
   - host_baseline
 db1:
   - host_inputs
+  - deploy_verifier
   - db1_stack
   - db1_backup_timers
   - db1_grants

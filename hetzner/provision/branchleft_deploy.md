@@ -230,6 +230,53 @@ The vendored copy is pinned by sha256 in `test_branchleft_deploy.py`. Change
 the copy and that constant in one change, and take the bytes only from
 ghost-platform's script.
 
+### The verifier runs with no credential
+
+`verify_attestation` runs the verifier with a fixed environment, `verifier_env()`,
+and nothing inherited from the host. `PATH` names the pinned gh directory and
+then `/usr/bin:/bin`. `HOME`, `GH_CONFIG_DIR` and `XDG_CONFIG_HOME` point at an
+empty, root-only directory, so root's own `~/.config/gh` cannot become an
+ambient credential. Neither `GH_TOKEN` nor `GITHUB_TOKEN` is passed, whatever
+the host holds. `test_branchleft_deploy.py` pins the exact dictionary.
+
+The design is fail-closed. The host holds no GitHub credential, and a registered
+image is deployed only when gh verifies its attestation without one. When gh
+says it needs a credential, the deploy is refused with "the host verifier needs
+GitHub credentials this host does not hold; the deploy is refused". Nothing in
+the code falls back to an unverified deploy.
+
+**The fallback, if the first live check shows gh needs a token.** Registered
+deploys stay refused, and nothing is configured on the host. The fix is to move
+the verifier to a tokenless sigstore verifier, checking the attestation against
+GitHub's public trust root. **A host credential is not the fallback**: putting a
+token on the host would make the check depend on a secret this design keeps
+off the host, and it would be a second home for the same check.
+
+### Installing the verifier and gh
+
+The `deploy_verifier` role installs the verifier from `hetzner/provision/`, and
+the gh release named in its `vars/main.yml`, with its tarball digest checked at
+download. The role is applied on `edge1`, `app1`, `ops1` and `db1`, before the
+first role that runs this wrapper. A host whose wrapper came from the hand-run
+`30-install-deploy-tooling.sh` and not from a role has no verifier until the
+role runs there. Such a host refuses every registered image and still deploys
+unregistered ones.
+
+### Live checks, in order, after the apply
+
+The apply downloads gh from github.com, so each wrapper host must reach GitHub
+at apply. The first check gates the rest.
+
+1. `gh --version` on each host shows 2.103.3.
+2. `branchleft-verify-image` on `app1`, with the fixed environment and no
+   token, accepts `ghcr.io/branchleft/ghost-tenant@sha256:0d8ddc21a9e51237e1d709614973f7b418d9a0c69e0933e4301281ee90481ae4`.
+   If it refuses for want of a credential, stop and use the fallback above.
+3. The same verifier refuses a locally built, unsigned image of the same name.
+4. Repeat 2 and 3 on `ops1`, `edge1` and `db1`.
+
+Until check 2 passes, a tenant deploy that lands is refused, which is the
+intended failure.
+
 ## LOCK_TIMEOUT_ENV_VAR
 
 Not a new argv flag: the two calling conventions above are validated by

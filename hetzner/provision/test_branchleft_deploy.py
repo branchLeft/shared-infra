@@ -30,20 +30,29 @@ class FakeRun:
     canned responses.
 
     Each queued response is either a bare int (an exit code, empty stdout --
-    what every call except the `docker ps` discriminator check needs) or a
-    `(code, stdout)` pair, for the one call that reads its output rather than
-    only its exit code.
+    what every call except the `docker ps` discriminator check needs), a
+    `(code, stdout)` pair for the one call that reads its output rather than
+    only its exit code, or a `(code, stdout, stderr)` triple for the verifier,
+    whose refusal is named on stderr.
+
+    Every call's keyword arguments are recorded in `kwargs`, so a test can pin
+    the environment and stdin a subprocess was started with.
     """
 
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
+        self.kwargs = []
 
-    def __call__(self, argv, check=False, capture_output=False, text=False):
+    def __call__(self, argv, check=False, capture_output=False, text=False, **kwargs):
         self.calls.append(list(argv))
+        self.kwargs.append(kwargs)
         response = self.responses.pop(0) if self.responses else 0
-        code, stdout = response if isinstance(response, tuple) else (response, "")
-        return subprocess.CompletedProcess(argv, code, stdout=stdout)
+        if not isinstance(response, tuple):
+            response = (response, "")
+        code, stdout = response[0], response[1]
+        stderr = response[2] if len(response) > 2 else None
+        return subprocess.CompletedProcess(argv, code, stdout=stdout, stderr=stderr)
 
 
 class StackNameTests(unittest.TestCase):
@@ -586,6 +595,20 @@ TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 # constant in the same change, and only from that script's own bytes.
 VERIFIER_SHA256 = "a1a83d575ad75d487985d561795f0098480d93917d8d68e4bb498babb3033a2a"
 
+# The verifier's whole environment, exactly. Nothing is inherited from the host,
+# and no GitHub credential is in it: the host holds none. A change to any value
+# here is a change to what gh is allowed to read, and is reviewed as one.
+EXPECTED_VERIFIER_ENV = {
+    "PATH": "/usr/local/libexec/branchleft-verifier:/usr/bin:/bin",
+    "HOME": "/var/lib/branchleft/verifier-home",
+    "GH_CONFIG_DIR": "/var/lib/branchleft/verifier-home",
+    "XDG_CONFIG_HOME": "/var/lib/branchleft/verifier-home",
+    "GH_PROMPT_DISABLED": "1",
+    "GH_NO_UPDATE_NOTIFIER": "1",
+    "LC_ALL": "C",
+    "VERIFY_PLAIN_ERRORS": "1",
+}
+
 
 class AttestationTests(unittest.TestCase):
     """The host verifies a registered image's attestation before it deploys it.
@@ -697,6 +720,49 @@ class AttestationTests(unittest.TestCase):
             with self.assertRaises(bd.DeployError):
                 self.deploy(TENANT, run)
         self.assert_refused_before_any_host_change(run)
+
+    def test_the_verifier_runs_with_exactly_the_fixed_environment_and_no_stdin(self):
+        run = FakeRun([0, 0])
+        self.deploy(TENANT, run)
+        self.assertEqual(run.kwargs[0]["env"], EXPECTED_VERIFIER_ENV)
+        self.assertEqual(run.kwargs[0]["stdin"], subprocess.DEVNULL)
+
+    def test_no_github_credential_reaches_the_verifier_even_when_the_host_holds_one(self):
+        run = FakeRun([0, 0])
+        held = {"GH_TOKEN": "ghs_" + "x" * 36, "GITHUB_TOKEN": "ghs_" + "y" * 36}
+        with mock.patch.dict(os.environ, held):
+            self.deploy(TENANT, run)
+        env = run.kwargs[0]["env"]
+        self.assertNotIn("GH_TOKEN", env)
+        self.assertNotIn("GITHUB_TOKEN", env)
+        for value in held.values():
+            self.assertNotIn(value, env.values())
+
+    def test_the_verifier_path_is_fixed_and_not_inherited_from_the_host(self):
+        run = FakeRun([0, 0])
+        with mock.patch.dict(os.environ, {"PATH": "/home/attacker/bin:/usr/bin"}):
+            self.deploy(TENANT, run)
+        self.assertEqual(run.kwargs[0]["env"]["PATH"], EXPECTED_VERIFIER_ENV["PATH"])
+        self.assertEqual(
+            EXPECTED_VERIFIER_ENV["PATH"],
+            "/usr/local/libexec/branchleft-verifier:/usr/bin:/bin",
+        )
+
+    def test_a_missing_credential_is_named_as_its_own_refusal(self):
+        run = FakeRun([(1, "", "To get started with GitHub CLI, please run:  gh auth login")])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(TENANT, run)
+        self.assertIn("the host verifier needs GitHub credentials this host does not hold", str(raised.exception))
+        self.assertIn("the deploy is refused", str(raised.exception))
+        self.assertNotIn("is not attested by", str(raised.exception))
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_any_other_verifier_failure_keeps_the_not_attested_message(self):
+        run = FakeRun([(1, "", "::error::no valid attestation for " + TENANT)])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(TENANT, run)
+        self.assertIn("is not attested by", str(raised.exception))
+        self.assertNotIn("needs GitHub credentials", str(raised.exception))
 
     def test_the_vendored_verifier_is_pinned_to_its_digest(self):
         path = os.path.join(

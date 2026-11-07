@@ -49,6 +49,7 @@
     - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/breakglass_grant_host # noqa: role-name[path]
+    - role: ../roles/deploy_verifier # noqa: role-name[path]
     - role: ../roles/website_app1 # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/deploy_slot_keys # noqa: role-name[path]
