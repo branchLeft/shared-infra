@@ -498,3 +498,90 @@ at the tag `ansible-gated-apply.yml` pins (v1.0.19 when this was written). The w
 feeds). A test runs the workflow's own expression through `grep -Ei` on sample lines and compares
 verdicts. The other entries of the backstop name key material and tokens that no role file holds, so
 they are not copied.
+
+## check_secret_no_log.py: the secret taint check
+
+The check reads every role under `ansible/roles/` and every pattern under `ansible/patterns/`,
+and the host rows of `host_inputs`. Its test is `test_check_secret_no_log.py`, which runs in the
+`unittest discover` step of `ansible.yml` with no workflow change. Run it as
+`python3 ansible/checks/check_secret_no_log.py`; a finding prints as `FAIL R<n> <path>: <what>`
+and names a task or a variable, never a value.
+
+Rules:
+
+- **R1, taint.** The seeds are the options of the role's `main` argument spec with
+  `no_log: true`. Taint follows a value through the role's `vars/` and `defaults/` by exact
+  variable name, to a fixed point, and a variable that is reached through two secrets names
+  both. A task under `tasks/` or `handlers/` that names a tainted variable must set
+  `no_log: true` as a literal. `block`, `rescue` and `always` are recursed, and a block's
+  literal `no_log` and `diff` are inherited. A task that writes a file (`copy`, `template`,
+  `lineinfile`, `blockinfile`, `replace`, `assemble`) from a tainted variable must set
+  `diff: false` as a literal (ANS-16). A task names a variable in any argument, loop,
+  `with_*`, `vars`, `environment`, `loop_control` or in a template that its `src` names
+  (read from `templates/`). It does not name one in `when`, `failed_when`, `changed_when`,
+  `until` or the `that` of an assert: those print their expression, and the refusal asserts
+  need their coded messages to reach the log. A secret named in an assert's `fail_msg` counts.
+- **R2, the loader's names.** Each row of `host_inputs_required_by_host` must be a non-empty
+  list of names for a host that `checks/host_roles.yml` lists. Each name must resolve to
+  exactly one declared option of a role on that host's list. An unreadable file, row or host
+  list is a finding, so an unreadable file never means that no loader secret exists.
+- **R3, agreement.** The table "The secret options of the roles" in the pattern README must
+  equal, as a set, the `(role, option)` pairs of the `no_log` options, and each Source must
+  equal the value R2 derives: `host_inputs: HOST[, HOST]`, or `none`. The older table of
+  script-side names must have each name read by a file under `hetzner/`, `mail/` or a root
+  `RUNBOOK*.md`. The reverse direction, that every script name is listed, is reviewed by hand.
+
+How references are read: by Jinja's parser alone (`Environment.parse`, then the names the
+parse tree loads). The check does not compile the template, because Ansible's filters
+(`dirname`, `password_hash`) are not Jinja's and a compile refuses them. A name bound by a
+loop counts, which asks for more `no_log`, never less. A text that does not parse is a finding,
+since a text the check cannot read cannot be cleared.
+
+What it does not see:
+
+- Only options that declare `no_log: true` seed the taint. An option that holds a credential
+  without the flag is invisible to R1. Which options are secrets is the owner's classification,
+  so that list is a ticket of its own.
+- Taint is by variable name, within one role (ANS-12). It does not follow `set_fact`,
+  `register`, or a value passed through a playbook, a `trust/` file or another role. The
+  loader's facts are seeded by the role that consumes them, as options of that role.
+- Playbooks and `trust/` files are not scanned, and neither is a `molecule/` directory.
+- `control_plane_masterkey_secret` is not tainted. Its value is a file-attributes record (path,
+  owner, group, mode) and holds no secret. The master key is guarded by the write task that
+  names `control_plane_masterkey` directly, and the test pins that boundary, so it is a visible
+  choice and not an accident. Tainting the record by a name prefix would force `no_log` onto
+  the empty-create and mode tasks and hide their failures.
+- A seed is a top-level option. Five `no_log: true` flags sit on a sub-option of a list
+  option instead, and R1 does not see them: `compose_stack_secret_files.content`,
+  `secrets_and_no_log_secrets.value`, `ci_jump_keys.key`, `deploy_slot_keys_slots.public_key`
+  and `tenant_compose_stacks.secrets_env_text`. Whether a list option of that shape is a
+  secret, and how its items are named in tasks, is a classification of its own, filed as
+  discovered work and not started here.
+- R3 checks the table's rows, not what the consuming role does with a value.
+
+Sabotage, each one a copy of the real files with one control broken, and the baseline copy
+clean (`test_check_secret_no_log.py`, 18 tests, green under the pinned ansible-core venv):
+
+| Sabotage in the copy                                                  | Finding that goes red                                                                     |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `no_log: true` removed from the write of the four `NTFY_` lines       | R1: the task names `ntfy_pager_env_lines (secret through ...)` and the four pager secrets |
+| The same write with `no_log: '{{ true }}'`                            | R1: must set `no_log: true` (a templated value is refused)                                |
+| `no_log: true` removed from the loop over `monitoring_stack_env_keys` | R1: `monitoring_stack_env_keys (secret through ...)` and the monitoring secrets           |
+| `no_log: true` removed from the write of the master key               | R1: names `control_plane_masterkey` and must set `no_log: true`                           |
+| `diff: false` removed from the master key copy                        | R1: must set `diff: false (ANS-16)`                                                       |
+| A task with a template that does not parse                            | R1: does not parse                                                                        |
+| A row name that is no option (`monitoring_stack_smtp_passwd`)         | R2: resolves to 0 options, not one                                                        |
+| The loader's rows file made unreadable                                | R2                                                                                        |
+| A secret option with its row removed from the README                  | R3: no row for the no_log option                                                          |
+| A row with a wrong source                                             | R3: has source `host_inputs: edge1`, the derived source is `host_inputs: edge1, edget`    |
+| The table's heading changed                                           | R3: the table is missing, empty, or not three columns                                     |
+| A script name that nothing reads                                      | R3: the name is read by no file under `hetzner/`, `mail/` or root                         |
+
+The expression-only allowance is pinned too: an assert whose `that` names a secret, with no
+`no_log`, is clean.
+
+On the real tree the check reports 20 `no_log` options in 8 roles and patterns, and six
+variables reached from them: `ntfy_pager_env_lines`, `monitoring_stack_env_keys`, and four
+`ci_jump_legacy_*` paths built from `ci_jump_user`. Every task that names one of them already
+sets `no_log: true`, and every file writer among them sets `diff: false`, so the check finds no
+R1 failure on `main`.

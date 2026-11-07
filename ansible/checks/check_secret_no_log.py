@@ -1,0 +1,487 @@
+"""Check that a secret reaches no task without no_log, and that the secret names agree.
+
+R1 takes each secret option of a role (an argument with no_log: true) and follows it through
+the role's vars/ and defaults/ to every variable whose value names it. A task under tasks/ or
+handlers/ that names one of those variables must set no_log: true, and a task that writes a
+file from one must set diff: false. R2 holds the host_inputs loader's rows to the options they
+feed. R3 holds the secret table of the pattern README to the options and their sources, and the
+older table of script-side names to the files that read them. The rules, and what they do not
+see, are in ansible/checks/README.md, "The secret taint check". A finding names the rule, the
+file and the task, never a value.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+from check_enrolment import _read_host_roles
+from check_pins import load_yaml
+from jinja2 import Environment, TemplateSyntaxError, nodes
+
+ROOT = Path(__file__).resolve().parents[2]
+ROLE_GROUPS = ("roles", "patterns")
+LOADER = "host_inputs"
+ROW_KEY = "host_inputs_required_by_host"
+README = Path("patterns/secrets_and_no_log/README.md")
+SOURCE_HEADING = "## The secret options of the roles"
+SOURCE_COLUMNS = ["Role", "Option", "Source on a pulled host"]
+NAMES_HEADING = "## The secret names the services will need"
+NAMES_COLUMNS = ["Name", "Read under", "How it is made today"]
+NAMES_TREES = ("hetzner", "mail")
+EXPRESSION_KEYS = frozenset(("when", "failed_when", "changed_when", "until"))
+CONTAINER_KEYS = frozenset(("block", "rescue", "always"))
+ASSERT_NAMES = frozenset(("assert", "ansible.builtin.assert"))
+TEMPLATE_NAMES = frozenset(("template", "ansible.builtin.template"))
+DIFF_NAMES = frozenset(
+    f"{prefix}{name}"
+    for prefix in ("", "ansible.builtin.")
+    for name in ("copy", "template", "lineinfile", "blockinfile", "replace", "assemble")
+)
+ENV = Environment(autoescape=True)
+
+
+def _rel(root: Path, path: Path) -> str:
+    return path.relative_to(root).as_posix()
+
+
+def _dict(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
+
+
+def _strings(value: object) -> list[str]:
+    """Every string in a YAML value, keys included; a value holds no template outside a string."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        out: list[str] = []
+        for key, item in value.items():
+            if isinstance(key, str):
+                out.append(key)
+            out.extend(_strings(item))
+        return out
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            out.extend(_strings(item))
+        return out
+    return []
+
+
+def _names_in(text: str, rel: str, where: str, findings: list[str]) -> set[str]:
+    """The names a template text loads, by Jinja's own parser. Only the parse is used, not the
+    compile, because Ansible's filters (dirname, password_hash) are not Jinja's and a compile
+    refuses them. A name bound by a loop is counted too, which can only ask for more no_log. Text
+    that does not parse is a finding: an unreadable template cannot be cleared."""
+    try:
+        tree = ENV.parse(text)
+    except TemplateSyntaxError:
+        findings.append(f"R1 {rel}: {where} holds a template that does not parse")
+        return set()
+    return {node.name for node in tree.find_all(nodes.Name) if node.ctx == "load"}
+
+
+def _yaml_files(directory: Path) -> list[Path]:
+    if not directory.is_dir():
+        return []
+    return sorted(p for p in directory.rglob("*") if p.suffix in (".yml", ".yaml") and p.is_file())
+
+
+def _role_dirs(root: Path) -> list[Path]:
+    dirs: list[Path] = []
+    for group in ROLE_GROUPS:
+        base = root / "ansible" / group
+        if base.is_dir():
+            dirs.extend(sorted(p for p in base.iterdir() if p.is_dir()))
+    return dirs
+
+
+def _option_specs(root: Path, role_dir: Path, findings: list[str]) -> dict[str, dict[str, object]]:
+    """The options of the role's main argument spec, with their specs."""
+    path = role_dir / "meta" / "argument_specs.yml"
+    if not path.is_file():
+        return {}
+    doc, problem = load_yaml(path)
+    if problem is not None:
+        findings.append(f"R1 {_rel(root, path)}: {problem}")
+        return {}
+    main = _dict(_dict(_dict(doc).get("argument_specs")).get("main"))
+    return {
+        name: _dict(spec)
+        for name, spec in _dict(main.get("options")).items()
+        if isinstance(name, str)
+    }
+
+
+def _secrets_of(root: Path, role_dir: Path, findings: list[str]) -> set[str]:
+    return {
+        name
+        for name, spec in _option_specs(root, role_dir, findings).items()
+        if spec.get("no_log") is True
+    }
+
+
+def secret_options(root: Path = ROOT) -> dict[str, set[str]]:
+    """Each role or pattern that declares a no_log option, with the names of those options."""
+    scratch: list[str] = []
+    out: dict[str, set[str]] = {}
+    for role_dir in _role_dirs(root):
+        names = _secrets_of(root, role_dir, scratch)
+        if names:
+            out[role_dir.name] = names
+    return out
+
+
+def _find_role(root: Path, role: str) -> Path | None:
+    for role_dir in _role_dirs(root):
+        if role_dir.name == role:
+            return role_dir
+    return None
+
+
+def _taint(root: Path, role_dir: Path, seeds: set[str], findings: list[str]) -> dict[str, set[str]]:
+    """Each variable of the role that holds a secret, mapped to the secret options it came from.
+    A seed maps to itself. Taint follows a value that names a tainted variable, to a fixed point,
+    and a variable reached through two secrets names both."""
+    origin: dict[str, set[str]] = {seed: {seed} for seed in seeds}
+    defs: dict[str, set[str]] = {}
+    for sub in ("vars", "defaults"):
+        for path in _yaml_files(role_dir / sub):
+            if path.parent != role_dir / sub:
+                continue
+            doc, problem = load_yaml(path)
+            rel = _rel(root, path)
+            if problem is not None:
+                findings.append(f"R1 {rel}: {problem}")
+                continue
+            for key, value in _dict(doc).items():
+                if not isinstance(key, str):
+                    continue
+                names: set[str] = set()
+                for text in _strings(value):
+                    names |= _names_in(text, rel, f"variable {key}", findings)
+                defs[key] = defs.get(key, set()) | names
+    changed = True
+    while changed:
+        changed = False
+        for key, refs in defs.items():
+            if key in seeds:
+                continue
+            reached: set[str] = set()
+            for ref in refs & origin.keys():
+                reached |= origin[ref]
+            if reached and not reached <= origin.get(key, set()):
+                origin[key] = origin.get(key, set()) | reached
+                changed = True
+    return origin
+
+
+def tainted(root: Path, role: str) -> set[str]:
+    """The variables of one role that hold a secret: its seeds and what they reach."""
+    role_dir = _find_role(root, role)
+    if role_dir is None:
+        return set()
+    seeds = _secrets_of(root, role_dir, [])
+    return set(_taint(root, role_dir, seeds, []))
+
+
+def _task_refs(task: dict[str, object], rel: str, name: str, findings: list[str]) -> set[str]:
+    """The variables a task names in any position that prints or uses a value. The expression
+    keywords are left out: they print only their expression, and the refusal asserts are read
+    for their coded messages. A secret named in an assert's fail message still counts."""
+    body = {k: v for k, v in task.items() if k not in EXPRESSION_KEYS and k not in CONTAINER_KEYS}
+    for key in ASSERT_NAMES & body.keys():
+        args = body[key]
+        if isinstance(args, dict):
+            body[key] = {k: v for k, v in args.items() if k != "that"}
+    refs: set[str] = set()
+    for text in _strings(body):
+        refs |= _names_in(text, rel, f"task '{name}'", findings)
+    return refs
+
+
+def _template_refs(
+    task: dict[str, object], role_dir: Path, rel: str, name: str, findings: list[str]
+) -> set[str]:
+    refs: set[str] = set()
+    for key in TEMPLATE_NAMES & task.keys():
+        src = _dict(task[key]).get("src")
+        path = role_dir / "templates" / src if isinstance(src, str) else None
+        if path is None or not path.is_file():
+            findings.append(f"R1 {rel}: task '{name}' names a template that cannot be read")
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            findings.append(f"R1 {rel}: task '{name}' names a template that cannot be read")
+            continue
+        refs |= _names_in(text, rel, f"template of task '{name}'", findings)
+    return refs
+
+
+def _chain(name: str, origin: dict[str, set[str]]) -> str:
+    if origin[name] == {name}:
+        return name
+    return f"{name} (secret through {', '.join(sorted(origin[name]))})"
+
+
+def _judge(
+    refs: set[str],
+    task: dict[str, object],
+    no_log: object,
+    diff: object,
+    name: str,
+    rel: str,
+    origin: dict[str, set[str]],
+    findings: list[str],
+) -> None:
+    hit = sorted(refs & origin.keys())
+    if not hit:
+        return
+    named = ", ".join(_chain(n, origin) for n in hit)
+    if no_log is not True:
+        findings.append(f"R1 {rel}: task '{name}' refers to {named} and must set no_log: true")
+    if DIFF_NAMES.intersection(task.keys()) and diff is not False:
+        findings.append(f"R1 {rel}: task '{name}' writes {named} and must set diff: false (ANS-16)")
+
+
+def _walk(
+    items: list[object],
+    role_dir: Path,
+    origin: dict[str, set[str]],
+    rel: str,
+    inherited_no_log: object,
+    inherited_diff: object,
+    findings: list[str],
+) -> int:
+    count = 0
+    for task in items:
+        if not isinstance(task, dict):
+            findings.append(f"R1 {rel}: an entry is not a task mapping")
+            continue
+        name = str(task.get("name", "(unnamed)"))
+        no_log = task["no_log"] if "no_log" in task else inherited_no_log
+        diff = task["diff"] if "diff" in task else inherited_diff
+        refs = _task_refs(task, rel, name, findings)
+        if CONTAINER_KEYS.intersection(task.keys()):
+            _judge(refs, task, no_log, diff, name, rel, origin, findings)
+            for key in CONTAINER_KEYS.intersection(task.keys()):
+                inner = task[key]
+                if not isinstance(inner, list):
+                    findings.append(f"R1 {rel}: task '{name}' has a {key} that is not a list")
+                    continue
+                count += _walk(inner, role_dir, origin, rel, no_log, diff, findings)
+            continue
+        count += 1
+        refs |= _template_refs(task, role_dir, rel, name, findings)
+        _judge(refs, task, no_log, diff, name, rel, origin, findings)
+    return count
+
+
+def _r1(root: Path, findings: list[str]) -> int:
+    """R1 over every role and pattern that declares a secret. Returns the tasks checked."""
+    checked = 0
+    for role_dir in _role_dirs(root):
+        seeds = _secrets_of(root, role_dir, findings)
+        if not seeds:
+            continue
+        origin = _taint(root, role_dir, seeds, findings)
+        for path in _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers"):
+            rel = _rel(root, path)
+            doc, problem = load_yaml(path)
+            if problem is not None:
+                findings.append(f"R1 {rel}: {problem}")
+                continue
+            if doc is None:
+                continue
+            if not isinstance(doc, list):
+                findings.append(f"R1 {rel}: must be a list of tasks")
+                continue
+            checked += _walk(doc, role_dir, origin, rel, None, None, findings)
+    return checked
+
+
+def _declared(root: Path) -> dict[str, set[str]]:
+    scratch: list[str] = []
+    return {
+        role_dir.name: set(_option_specs(root, role_dir, scratch)) for role_dir in _role_dirs(root)
+    }
+
+
+def _rows(root: Path, findings: list[str]) -> dict[tuple[str, str], set[str]]:
+    """R2: each host_inputs row name resolves to exactly one declared option of a role on the
+    host's list. Returns (role, option) mapped to the hosts whose row feeds it. An unreadable
+    file or host list gives no rows at all, which R3 then reports as missing sources."""
+    rel = f"ansible/roles/{LOADER}/vars/main.yml"
+    doc, problem = load_yaml(root / "ansible" / "roles" / LOADER / "vars" / "main.yml")
+    if problem is not None:
+        findings.append(f"R2 {rel}: {problem}")
+        return {}
+    rows = _dict(doc).get(ROW_KEY)
+    if not isinstance(rows, dict) or not rows:
+        findings.append(f"R2 {rel}: {ROW_KEY} must be a non-empty mapping of host to names")
+        return {}
+    host_scratch: list[str] = []
+    host_roles = _read_host_roles(root / "ansible", host_scratch)
+    if host_scratch:
+        findings.extend(f"R2 host list unreadable: {message}" for message in host_scratch)
+        return {}
+    declared = _declared(root)
+    resolved: dict[tuple[str, str], set[str]] = {}
+    for host, names in rows.items():
+        if host not in host_roles:
+            findings.append(f"R2 {rel}: host {host} has a row but is not in the host list")
+            continue
+        if not isinstance(names, list) or not names or not all(isinstance(n, str) for n in names):
+            findings.append(f"R2 {rel}: the row of {host} is not a non-empty list of names")
+            continue
+        for name in names:
+            owners = [role for role in host_roles[host] if name in declared.get(role, set())]
+            if len(owners) != 1:
+                findings.append(
+                    f"R2 {rel}: the row of {host} names {name}, which resolves to "
+                    f"{len(owners)} options, not one"
+                )
+                continue
+            resolved.setdefault((owners[0], name), set()).add(host)
+    return resolved
+
+
+def _plain(cell: str) -> str:
+    return cell.replace("`", "").strip()
+
+
+def _table(text: str, heading: str, columns: list[str]) -> list[list[str]] | None:
+    """The body rows of the first table under a heading, or None when the table is missing,
+    not the expected columns, or empty."""
+    lines = text.splitlines()
+    if heading not in lines:
+        return None
+    start = lines.index(heading)
+    table: list[str] = []
+    for line in lines[start + 1 :]:
+        stripped = line.strip()
+        if stripped.startswith("|"):
+            table.append(stripped)
+        elif table or stripped.startswith("#"):
+            break
+    cells = [[c.strip() for c in line.strip("|").split("|")] for line in table]
+    if len(cells) < 3 or cells[0] != columns:
+        return None
+    if not all(re.fullmatch(r":?-+:?", c) for c in cells[1]):
+        return None
+    body = cells[2:]
+    if any(len(row) != len(columns) for row in body):
+        return None
+    return body
+
+
+def _source(hosts: set[str]) -> str:
+    if not hosts:
+        return "none"
+    return f"{LOADER}: {', '.join(sorted(hosts))}"
+
+
+def _corpus(root: Path) -> str:
+    parts: list[str] = []
+    paths: list[Path] = []
+    for tree in NAMES_TREES:
+        base = root / tree
+        if base.is_dir():
+            paths.extend(sorted(p for p in base.rglob("*") if p.is_file()))
+    paths.extend(sorted(root.glob("RUNBOOK*.md")))
+    for path in paths:
+        try:
+            parts.append(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+    return "\n".join(parts)
+
+
+def _r3(root: Path, resolved: dict[tuple[str, str], set[str]], findings: list[str]) -> None:
+    """R3: the secret table of the pattern README agrees with the no_log options and their
+    sources; each name in the older table is read by some file under hetzner/, mail/ or root."""
+    rel = f"ansible/{README.as_posix()}"
+    path = root / "ansible" / README
+    if not path.is_file():
+        findings.append(f"R3 {rel}: is missing")
+        return
+    text = path.read_text(encoding="utf-8")
+    expected: dict[tuple[str, str], str] = {
+        (role, name): _source(resolved.get((role, name), set()))
+        for role, names in secret_options(root).items()
+        for name in names
+    }
+    rows = _table(text, SOURCE_HEADING, SOURCE_COLUMNS)
+    if rows is None:
+        findings.append(
+            f"R3 {rel}: the table under '{SOURCE_HEADING}' is missing, empty, or not three columns"
+        )
+    else:
+        seen: dict[tuple[str, str], str] = {}
+        for cells in rows:
+            key = (_plain(cells[0]), _plain(cells[1]))
+            source = _plain(cells[2])
+            if key in seen:
+                findings.append(f"R3 {rel}: {key[0]} {key[1]} has two rows")
+            seen[key] = source
+            if key not in expected:
+                findings.append(f"R3 {rel}: {key[0]} {key[1]} is a row for no no_log option")
+            elif source != expected[key]:
+                findings.append(
+                    f"R3 {rel}: {key[0]} {key[1]} has source '{source}', "
+                    f"the derived source is '{expected[key]}'"
+                )
+        for key in sorted(expected.keys() - seen.keys()):
+            findings.append(f"R3 {rel}: no row for the no_log option {key[0]} {key[1]}")
+    names_rows = _table(text, NAMES_HEADING, NAMES_COLUMNS)
+    if names_rows is None:
+        findings.append(
+            f"R3 {rel}: the table under '{NAMES_HEADING}' is missing, empty, or not three columns"
+        )
+        return
+    corpus = _corpus(root)
+    for cells in names_rows:
+        for name in re.findall(r"`([A-Z][A-Z0-9_]*)`", cells[0]):
+            if not re.search(rf"(?<![A-Z0-9_]){name}(?![A-Za-z0-9_])", corpus):
+                findings.append(
+                    f"R3 {rel}: the name {name} is read by no file under hetzner/, mail/, or root"
+                )
+
+
+def check(root: Path = ROOT) -> list[str]:
+    """One finding per broken rule, or an empty list when the tree passes."""
+    findings: list[str] = []
+    _r1(root, findings)
+    resolved = _rows(root, findings)
+    _r3(root, resolved, findings)
+    return list(dict.fromkeys(findings))
+
+
+def summary(root: Path = ROOT) -> list[str]:
+    """Counts for the reader: the secret options, and the variables that the taint reaches."""
+    secrets = secret_options(root)
+    derived: set[str] = set()
+    for role, names in secrets.items():
+        derived |= tainted(root, role) - names
+    count = sum(len(names) for names in secrets.values())
+    return [
+        f"note: {count} no_log options in {len(secrets)} roles and patterns",
+        f"note: {len(derived)} variables reached from them: {', '.join(sorted(derived))}",
+    ]
+
+
+def main() -> int:
+    findings = check(ROOT)
+    for line in summary(ROOT):
+        print(line)
+    for finding in findings:
+        print(f"FAIL {finding}")
+    if not findings:
+        print("ok: no finding")
+    return 1 if findings else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
