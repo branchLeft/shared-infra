@@ -713,7 +713,7 @@ describe('the rendered Caddyfile', () => {
       membersMagicLinkRateLimit: 'off',
     };
 
-    it('renders the magic-link throttle with the general one off — the committed posture', () => {
+    it('renders the magic-link throttle with the general one off — the magic-link-only posture', () => {
       const rendered = render(MAGIC_LINK_ONLY);
       expect(rendered).toContain('rate_limit @members_magic_link {');
       expect(rendered).toContain('zone members_magic_link_per_ip {');
@@ -762,7 +762,23 @@ describe('the rendered Caddyfile', () => {
       const redirectBlockText = rendered.split('www.apex.test {')[1]?.split('\n}')[0] ?? '';
       expect(redirectBlockText).toContain('redir https://apex.test{uri} permanent');
       expect(redirectBlockText).not.toContain('members_magic_link');
-      expect(redirectBlockText).not.toContain('rate_limit');
+      // Narrowed to the magic-link directive: a redirect block does carry the
+      // general throttle when it is enforcing (next test), so a bare
+      // `not.toContain('rate_limit')` would assert the wrong thing.
+      expect(redirectBlockText).not.toContain('rate_limit @members_magic_link');
+    });
+
+    it('renders the general throttle into a redirect block, in its own redirect zone, when it is enforcing', () => {
+      const rendered = render(
+        GENERAL_ONLY,
+        [site({ hostnames: ['apex.test', 'www.apex.test'] })],
+        [{ from: 'www.apex.test', to: 'apex.test' }]
+      );
+      const redirectBlockText = rendered.split('\nwww.apex.test {')[1]?.split('\n}')[0] ?? '';
+      expect(redirectBlockText).toContain('redir https://apex.test{uri} permanent');
+      expect(redirectBlockText).toContain('rate_limit {');
+      expect(redirectBlockText).toContain('zone example_redirect_per_ip {');
+      expect(redirectBlockText).not.toContain('members_magic_link');
     });
   });
 
@@ -904,14 +920,146 @@ describe('detect-only', () => {
       // In-band AppSec only: a known-bad request shape gets a 403, and no
       // address is banned. The IP-decision handler is the next stage.
       crowdsec: 'inband-only',
-      // Still off: its threshold is inherited from a Cloud Armor rule that has
-      // never enforced, so it is a number no traffic has been measured
-      // against. Deriving a real threshold is tracked as open work.
-      rateLimit: 'off',
+      // On, by the owner's ruling (2026-11-03,
+      // "Turn it on") at the parity value, RATE_LIMIT_EVENTS per
+      // RATE_LIMIT_WINDOW_SECONDS per direct peer address, answered 429. It
+      // throttles every block built through protectionChain: site, redirect,
+      // static and probe blocks, never the :9091 metrics listener. The tree
+      // claims no key or threshold safety; the owner-run pre-apply check in
+      // RUNBOOK-edge.md §10a (percentile and bridge-address share) gates the
+      // live step, not this assertion.
+      rateLimit: 'enforcing',
       // On: bounded to one POST path, threshold derived in `posture.ts`, and
       // what it protects is mx1's deliverability rather than edge compute.
       membersMagicLinkRateLimit: 'enforcing',
     });
+  });
+});
+
+/**
+ * The committed posture's general per-IP throttle (owner ruling of 2026-11-03,
+ * "Turn it on"). `protectionChain` is called by the
+ * site, redirect, static and probe blocks, so the one `rateLimit` field
+ * throttles all of them; only the :9091 metrics listener is exempt. Each kind
+ * is counted separately from the registries, never from a hard-coded total, so
+ * a block that stops calling `protectionChain` fails on its own kind.
+ *
+ * This asserts the shape of the directive in the committed posture. It claims
+ * nothing about whether the key or the threshold is safe for real traffic: that
+ * is the owner-run pre-apply check in RUNBOOK-edge.md §10a.
+ */
+describe("the committed posture's general throttle", () => {
+  const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
+
+  /** Every top-level block, from its address line to its closing brace, keyed by its addresses. */
+  const topLevelBlocks = (text: string): Array<{ addresses: string[]; text: string }> => {
+    const lines = text.split('\n');
+    const found: Array<{ addresses: string[]; text: string }> = [];
+    let start = -1;
+    lines.forEach((line, index) => {
+      if (start === -1 && /^\S.* \{$/.test(line)) {
+        start = index;
+      } else if (start !== -1 && line === '}') {
+        found.push({
+          addresses: lines[start]!.slice(0, -2).split(', '),
+          text: lines.slice(start, index + 1).join('\n'),
+        });
+        start = -1;
+      }
+    });
+    return found;
+  };
+
+  const blocks = topLevelBlocks(rendered);
+  const blockAt = (address: string) => blocks.find((block) => block.addresses.includes(address));
+
+  /** The general directive only: two tabs deep, matcher-less. The magic-link one is `rate_limit @...`. */
+  const GENERAL = /^\t\trate_limit \{$/gm;
+  const generalCount = (text: string): number => (text.match(GENERAL) ?? []).length;
+
+  const servable = servableSites(sites);
+  const servableHostnames = new Set(servable.flatMap((entry) => entry.hostnames));
+  const redirects = hostRedirects.filter(
+    (redirect) => servableHostnames.has(redirect.from) && servableHostnames.has(redirect.to)
+  );
+  const redirectSources = new Set(redirects.map((redirect) => redirect.from));
+  const siteAddresses = servable
+    .map((entry) => entry.hostnames.find((hostname) => !redirectSources.has(hostname)))
+    .filter((address): address is string => address !== undefined);
+  const redirectBlockAddresses = redirects.map((redirect) => redirect.from);
+  const staticAddresses = staticSites.map((entry) => entry.hostname);
+  const PROBE_ADDRESSES = ['http://edge-probe.invalid:8080', ':8080'];
+  const METRICS_ADDRESS = ':9091';
+
+  const kinds: Array<[string, string[]]> = [
+    ['servable site blocks', siteAddresses],
+    ['redirect blocks', redirectBlockAddresses],
+    ['static site blocks', staticAddresses],
+    ['probe blocks', PROBE_ADDRESSES],
+  ];
+
+  it.each(kinds)('puts exactly one general rate_limit in each of the %s', (_kind, addresses) => {
+    expect(addresses.length).toBeGreaterThan(0);
+    for (const address of addresses) {
+      const block = blockAt(address);
+      expect(block, `block ${address} must be rendered`).toBeDefined();
+      expect(generalCount(block!.text), `general rate_limit in ${address}`).toBe(1);
+    }
+  });
+
+  it('renders as many general directives as there are throttled blocks, and no more', () => {
+    const expected =
+      siteAddresses.length +
+      redirectBlockAddresses.length +
+      staticAddresses.length +
+      PROBE_ADDRESSES.length;
+    expect(generalCount(rendered)).toBe(expected);
+  });
+
+  it('leaves the :9091 metrics listener without any rate_limit', () => {
+    const metrics = blockAt(METRICS_ADDRESS);
+    expect(metrics, 'the metrics listener must be rendered').toBeDefined();
+    expect(metrics!.text).not.toContain('rate_limit');
+  });
+
+  it('gives every general directive its own zone, so no block spends another block budget', () => {
+    const zones = [...rendered.matchAll(/^\t\trate_limit \{\n\t\t\tzone (\S+) \{$/gm)].map(
+      (match) => match[1]!
+    );
+    expect(zones.length).toBeGreaterThan(0);
+    expect(zones).toHaveLength(generalCount(rendered));
+    expect(new Set(zones).size).toBe(zones.length);
+  });
+
+  it('keys every general directive on the direct peer at the parity value, from the posture constants', () => {
+    const directives = [
+      ...rendered.matchAll(
+        /^\t\trate_limit \{\n(\t\t\tzone \S+ \{\n(?:\t\t\t\t.*\n)+\t\t\t\})\n\t\t\}$/gm
+      ),
+    ];
+    expect(directives.length).toBeGreaterThan(0);
+    expect(directives).toHaveLength(generalCount(rendered));
+    for (const [, zone] of directives) {
+      expect(zone).toContain('\t\t\t\tkey {http.request.remote.host}\n');
+      expect(zone).toContain(`\t\t\t\twindow ${RATE_LIMIT_WINDOW_SECONDS}s\n`);
+      expect(zone).toContain(`\t\t\t\tevents ${RATE_LIMIT_EVENTS}\n`);
+    }
+  });
+
+  it('runs the general throttle ahead of the magic-link one and of the proxy in every block that has them', () => {
+    const throttled = blocks.filter((entry) => generalCount(entry.text) === 1);
+    expect(throttled.length).toBeGreaterThan(0);
+    for (const block of throttled) {
+      const general = block.text.search(/^\t\trate_limit \{$/m);
+      const magicLink = block.text.indexOf('rate_limit @members_magic_link {');
+      const proxy = block.text.indexOf('reverse_proxy');
+      if (magicLink !== -1) {
+        expect(general, block.addresses[0]).toBeLessThan(magicLink);
+      }
+      if (proxy !== -1) {
+        expect(general, block.addresses[0]).toBeLessThan(proxy);
+      }
+    }
   });
 });
 
@@ -1191,6 +1339,13 @@ const BLOG_BLOCK = `
 		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 64MiB
+		}
+		rate_limit {
+			zone blog_per_ip {
+				key {http.request.remote.host}
+				window ${RATE_LIMIT_WINDOW_SECONDS}s
+				events ${RATE_LIMIT_EVENTS}
+			}
 		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {

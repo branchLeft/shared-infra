@@ -320,27 +320,28 @@ The posture is not one thing, so do not verify it as though it were. Three
 independent switches in `hetzner/edge/posture.ts`, and this section proves each
 is in the state that file says:
 
-| Switch                      | Committed state | What that means here                                                |
-| --------------------------- | --------------- | ------------------------------------------------------------------- |
-| `crowdsec`                  | `detect-only`   | sees everything, records what it would act on, blocks nothing       |
-| `rateLimit`                 | `off`           | the general 200/60s page-serving throttle renders no handler at all |
-| `membersMagicLinkRateLimit` | `enforcing`     | POSTs to Ghost's magic-link path are throttled at 5/60s             |
+| Switch                      | Committed state | What that means here                                           |
+| --------------------------- | --------------- | -------------------------------------------------------------- |
+| `crowdsec`                  | `detect-only`   | sees everything, records what it would act on, blocks nothing  |
+| `rateLimit`                 | `enforcing`     | the general 200/60s per-address throttle is on for every block |
+| `membersMagicLinkRateLimit` | `enforcing`     | POSTs to Ghost's magic-link path are throttled at 5/60s        |
 
 All checks go through the loopback probe listener, which carries the same
 handler chain as a public site and answers 204.
 
 **Both directions matter.** Checks (a) and (b) are a matched pair: (a) proves
-the general throttle is absent, (b) proves the magic-link throttle is present
-and actually fires. Running only the negative one would pass identically if the
-whole `rate_limit` module had silently failed to load, which is the failure this
-pair exists to distinguish (`branchLeft/workspace#209`).
+the general throttle is present and trips, (b) proves the magic-link throttle is
+present and trips on its own, tighter budget. Both expect a `429`, so neither
+passes if the whole `rate_limit` module has silently failed to load
+(`branchLeft/workspace#209`).
 
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering this section independently — every check below
 reuses it.
 
-**a. The general throttle is off.** 250 requests inside the 60-second window
-that would trip a 200-request limit:
+**a. The general throttle is on, and trips.** 250 requests inside the 60-second
+window, against a 200-request limit on the loopback probe's own zone
+(`probe_per_ip`):
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
@@ -349,10 +350,14 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   done | sort | uniq -c'
 ```
 
-Expect `250 204` and no `429`. A `429` here means `rateLimit` is enforcing when
-the committed posture says `off` — stop and read `hetzner/edge/posture.ts` in
-the deployed commit. Note this is a `GET` to `/`, so it never touches the
-magic-link zone; the two counters are independent by construction.
+Expect about `200 204` followed by about `50 429`. No `429` at all means the
+general throttle is not rendered in the deployed Caddyfile — stop and read
+`hetzner/edge/posture.ts` and `hetzner/edge/stack/caddy/Caddyfile` in the deployed
+commit. Note this is a `GET` to `/`, so it never touches the magic-link zone; the
+two counters are independent by construction. **Leave 60 seconds before check
+(b)**: `probe_per_ip` is now spent, and check (b)'s `POST`s pass through the same
+general throttle first, so running them straight away reads `429` for the wrong
+reason.
 
 **b. The members magic-link throttle is on, and trips.** Five events per 60
 seconds, matching `POST` only, on `/members/api/send-magic-link` and its
@@ -372,7 +377,7 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 ```
 
 Expect `5 204` followed by `3 429`, tripped well inside the general throttle's
-own budget, which check (a) has already confirmed is absent entirely.
+own 200-request budget, which check (a) has already confirmed is on.
 
 Then confirm the matcher keys on the **method**, not only the path — a `GET` to
 the same path must not count against this budget at all:
@@ -552,40 +557,54 @@ each is flipped by a pull request, never by a redeploy. Flipping one changes the
 rendered files under `hetzner/edge/stack/`, so the diff a reviewer reads is
 literally the configuration the host will run.
 
-| Switch                      | State                             | Where it is verified                                    |
-| --------------------------- | --------------------------------- | ------------------------------------------------------- |
-| `membersMagicLinkRateLimit` | **`enforcing`** — already flipped | §8b                                                     |
-| `rateLimit`                 | `off`                             | §10a below turns it on; §8a proves it is off until then |
-| `crowdsec`                  | `inband-only`                     | §10b below completes it with the IP-decision handler    |
+| Switch                      | State                             | Where it is verified                                                 |
+| --------------------------- | --------------------------------- | -------------------------------------------------------------------- |
+| `membersMagicLinkRateLimit` | **`enforcing`** — already flipped | §8b                                                                  |
+| `rateLimit`                 | **`enforcing`** — committed       | §10a: the pre-apply check gates the apply; §8a proves it trips after |
+| `crowdsec`                  | `inband-only`                     | §10b below completes it with the IP-decision handler                 |
 
-Turn the remaining two on one at a time, in this order, with time between them:
-the throttle is reversible and low-consequence, and the WAF is the one that can
-lock an author out.
+`rateLimit` is committed as `enforcing`, but committing does not deliver it:
+`hetzner/edge/stack/**` reaches `edge1` only through the gated apply, and §10a's
+pre-apply check is the go/no-go for that apply. Turn the remaining switch
+(`crowdsec`) on after it, with time between them: the throttle is reversible and
+low-consequence, and the WAF is the one that can lock an author out.
 
 ### 10a. The general page-serving throttle
 
-**Do not flip this on the inherited threshold.** `RATE_LIMIT_EVENTS` is 200 per
-60 seconds, a number carried over from the retired edge, and that rule has
-never enforced anything — it is live at `preview: true`, so 200/60s is a number
-no traffic on either edge has ever been measured against. `edge1` averages well
-under 1 req/s but has 1-minute bursts two orders of magnitude above that, and
-nothing currently attributes those to one client or to many. Enabling on the
-inherited number picks one of those on faith.
+The general throttle is committed as `enforcing` at the parity value:
+`RATE_LIMIT_EVENTS` is 200 per 60 seconds per direct peer address, answered
+`429`, on the owner's ruling to turn it on. It throttles every block built
+through the protection chain — site, redirect, static and probe blocks — and not
+the `:9091` metrics listener. Steps 1 to 3 below are done in the pull request
+that committed it.
 
-Derive it first, from the access log — which `posture.ts` names as this
-throttle's observation instrument, and which is enabled in every posture. The
-command below prints the distribution of requests per client address per minute
-and **no addresses**, so client IPs stay on the host. `$EDGE1_IPV4` is set
-under "What has to be true first" above; re-set it first if you are entering
-this section independently:
+**That number has never been measured against traffic.** It was carried over
+from the retired edge, whose rule was live at `preview: true` and never enforced
+anything. `edge1` averages well under 1 req/s but has 1-minute bursts two orders
+of magnitude above that, and nothing currently attributes those to one client or
+to many. The key is the direct peer (`{http.request.remote.host}`), which can
+also collapse real clients onto a Docker bridge address such as `172.18.0.1`
+behind the docker-proxy, so that every collapsed client shares one budget per
+site. `RateLimitDecliningRealClients` excludes `172.16.0.0/12` keys, so that
+collapse would not alert on its own; the tripwire is the blackbox probes seeing
+`429`.
+
+**Pre-apply check: the owner's go/no-go, run before step 4.** Read the access
+log, which `posture.ts` names as this throttle's observation instrument and
+which is enabled in every posture. The command below prints the distribution of
+requests per client address per minute, and the count and share of IP-minutes
+whose address is in `172.16.0.0/12` (the bridge check), and **no addresses**, so
+client IPs stay on the host. `$EDGE1_IPV4` is set under "What has to be true
+first" above; re-set it first if you are entering this section independently:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
   'docker exec $(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=caddy) \
      sh -c "cat /var/log/caddy/access.log"' |
 python3 -c '
-import sys, json, collections
+import sys, json, collections, ipaddress
 buckets = collections.Counter()
+bridge = ipaddress.ip_network("172.16.0.0/12")
 for line in sys.stdin:
     try: e = json.loads(line)
     except ValueError: continue
@@ -594,27 +613,36 @@ for line in sys.stdin:
     if ip and ts: buckets[(ip, int(ts // 60))] += 1
 counts = sorted(buckets.values())
 n = len(counts)
+def in_bridge(ip):
+    try: return ipaddress.ip_address(ip) in bridge
+    except ValueError: return False
+bridged = sum(1 for (ip, _minute) in buckets if in_bridge(ip))
 print("IP-minutes observed:", n)
+print("IP-minutes keyed on 172.16.0.0/12:", bridged, f"({100 * bridged / n:.1f}%)" if n else "")
 for pct in (50, 90, 99, 99.9):
-    print(f"p{pct}:", counts[min(n - 1, int(n * pct / 100))])
+    print(f"p{pct}:", counts[min(n - 1, int(n * pct / 100))] if n else 0)
 print("max:", counts[-1] if counts else 0)
 '
 ```
 
-Check the window the log actually covers before trusting the percentiles — it
-rotates. Set the threshold above the legitimate p99.9 with headroom, and record
-the derivation in `posture.ts` the way the magic-link one is recorded. A
-threshold nobody derived is not a threshold. Tracked as
-`branchLeft/workspace#323`.
+Check the window the log actually covers before trusting the figures — it
+rotates. **Go** means p99.9 sits well below 200 per IP-minute and no material
+share of IP-minutes is keyed on `172.16.0.0/12`. **No-go** means p99.9 is near or
+above 200, or a material share is bridge-keyed: hold the apply and request a
+change to the threshold or the key as a separate pull request. The code that
+renders the throttle is the same either way. Also read the figures for the
+traffic most likely to exceed 200 per minute from one address: Nextcloud sync on
+`cloud.branchleft.co.uk` (100MiB bodies), shared office or NAT addresses, and the
+Prometheus blackbox prober.
 
 Then:
 
-1. In a branch, set `rateLimit: 'enforcing'` in `hetzner/edge/posture.ts`, with
-   `RATE_LIMIT_EVENTS` at the derived value.
-2. `cd hetzner && pnpm run render` — this rewrites `hetzner/edge/stack/caddy/Caddyfile`.
-3. Commit both files together and open a pull request. `pnpm run test` fails if the
-   rendered file and the posture disagree, so they cannot land apart.
-4. After merge, on an up-to-date checkout of `main`, repeat step 4 (`rsync`) and
+1. Done: `rateLimit: 'enforcing'` is set in `hetzner/edge/posture.ts`, with
+   `RATE_LIMIT_EVENTS` at the parity value.
+2. Done: `cd hetzner && pnpm run render` rewrote `hetzner/edge/stack/caddy/Caddyfile`.
+3. Done: both landed in one pull request. `pnpm run test` fails if the rendered
+   file and the posture disagree, so they cannot land apart.
+4. After the go decision above and after merge, on an up-to-date checkout of `main`, repeat step 4 (`rsync`) and
    then reload Caddy in place, which needs no new image. The reload hands the
    new configuration to the running process and keeps its listeners, so the blog
    keeps answering while it happens. Use it for every Caddyfile or snippet
@@ -732,8 +760,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 Then run the §7 check. Expect `Up (healthy)` for the Caddy container.
 
 5. Confirm it took, with §8a's loop. Expect roughly `200 204` followed by
-   `50 429` rather than `250 204` — the inverse of what §8a asserts today, and
-   the point at which §8a's expected output must be updated in this file.
+   `50 429`, as §8a now asserts, and then watch for `429`s on the public
+   hostnames from addresses that are not the bridge.
+
+**Rollback.** Revert the posture change (`rateLimit: 'off'`), re-run
+`pnpm run render`, merge, and redeliver as in step 4.
 
 **Counters are in-memory and per-process.** This runbook has not observed whether
 a reload resets them, so read §8a's figures after the reload rather than assuming
