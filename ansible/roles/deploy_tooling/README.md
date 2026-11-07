@@ -153,6 +153,53 @@ the "Restart the policy unit" handler. The owner reads the plan job before appro
 `iptables -S DOCKER-USER` (and the IPv6 pair) have still not been captured from a real app
 host (see "Named limits").
 
+## Detecting a reopened chain
+
+A chain is **reopened** when the app host's `DOCKER-USER` chain no longer holds the
+policy: the chain is absent (Docker came up on its nftables backend, which does not
+create it, after an unattended upgrade or a reboot), or one of the rules the policy
+program builds is missing, or a rule sits where it can let a packet past. Tenant sites
+keep serving through all of it, so nothing fails loudly unless something reads the chain.
+For a host of class `app` that reader is this role, and the nightly drift check is what
+runs it.
+
+- **What reads the chain.** The task "Read the chains back and compare them with the
+  policy" in `tasks/_isolation.yml` calls the role's own module, `deploy_tooling_chain`,
+  which lists the real chains and compares each rule with what the policy program builds
+  for the host's variant. Each case above fails it: an absent chain, and a policy rule
+  that is missing, displaced or foreign. The task runs with
+  `check_mode: false`, so it reads the real host even in a check-mode run.
+- **When it runs in check mode.** On every run but one. It waits only while the program,
+  its unit or the unit's enabled state would change (the fact
+  `deploy_tooling_apply_pending`), because the handler that applies those does not run in
+  check mode and a read-back would then fail every first plan of a host; a debug line in
+  the plan says so. On a configured host nothing is pending, so a check-mode run reads the
+  chains.
+- **What runs it.** The nightly drift check (`.github/workflows/ansible-drift-check.yml`,
+  03:17 UTC) asks each host on the `ANSIBLE_HOSTS` list, in check mode, what an apply
+  would change. A host whose chain fails the read-back fails its playbook (exit 30,
+  `playbook-failed`), and the check goes red and opens or comments on its one drift issue.
+- **What red looks like, and where.** Open the latest "Ansible drift check" run. Its
+  per-host line for the affected host reads `kind=failed` with the playbook name, where a
+  healthy host reads `kind=ok`. The playbook's own output is relayed to the job's log, and
+  it carries the failed task by name and the module's message, which names the chain, the
+  place of the rule and what is wrong (for example `established accept is missing`), and
+  never the text of a rule. The repair is to restart `branchleft-docker-user-policy.service`
+  on the host; when the cause is Docker's backend, that cause has to be put right first.
+  A gated apply also repairs a flushed chain once, through the rescue in the same block.
+- **How it is proven.** Fast, in the role's unit suite:
+  `tests/unit/test_reopened_chain_detection.py` renders the read-back's condition against
+  a truth table (check mode on a configured host runs it; check mode with a pending apply
+  skips it; a real apply runs it), asserts that no task in the block or its rescue except
+  the unit restart is gated on `ansible_check_mode`, and asserts that every playbook that
+  sets class `app` also plays this role. Slow, in the container test: the case "check mode
+  on a flushed chain" flushes the chain and runs the role under the real `--check` flag.
+
+What the nightly does not see is under "Named limits": an earlier role's failure in the
+same pull stops the run before the read-back, a host that is not on the `ANSIBLE_HOSTS`
+list or does not play this role (the control-plane host today) is not read at all, and the chain is read
+once a night.
+
 ## How to change it safely
 
 - A path or a mode changes in one place, `vars/main.yml`, and in the same change
@@ -299,6 +346,9 @@ leaves every step green is not claimed.
 | The summary prints no text of a rule                                                  | a rule's text put into a summary line                           | the module's unit tests: `test_the_summary_prints_names_positions_and_counts_never_rule_text`                                                                               |
 | The summary marks what the read-back would refuse                                     | the verdict made to say `ok` for every rule                     | the module's unit tests: `test_the_summary_marks_exactly_the_rules_the_apply_would_refuse`                                                                                  |
 | The read-back runs in check mode on a configured host                                 | `not ansible_check_mode` added to the read-back's condition     | check-configured: `EXPECTED A FAILURE, GOT NONE: check mode on a configured host with a rule missing`                                                                       |
+| The same, pinned in fast CI                                                           | `not ansible_check_mode` added, or the pending fact widened     | the unit suite: `test_check_mode_on_a_configured_host_runs_the_read_back`                                                                                                   |
+| Only the unit restart in the read-back is skipped in check mode                       | `when: not ansible_check_mode` on the second read-back          | the unit suite: `test_only_the_unit_restart_in_the_block_or_rescue_is_gated_on_check_mode`                                                                                  |
+| An app host's playbook plays this role                                                | the role's line taken out of the app host's playbook            | the unit suite: `test_every_playbook_that_sets_the_app_class_lists_the_role`                                                                                                |
 | The variant is the role's expectation, read from its input                            | the variant written into the read-back                          | verify, protected phase: `the database accept is missing`                                                                                                                   |
 | An app host must name its variant                                                     | the variant assertion taken out                                 | verify, interface: `WRONG FAILURE for app host with no variant`, failing at the read-back                                                                                   |
 | The host class is required, with no default                                           | `required: true` taken off the class                            | verify, interface: `WRONG FAILURE for no host class`, failing at the role's own assertion and not the argument spec                                                         |
@@ -405,10 +455,31 @@ stayed clean; the harness run that follows them is the green.
   author's machine, amd64 in CI); the `ip` output is a stand-in; Docker is a stub; and the
   address that makes a host the gateway, or the control-plane host, is a file the test
   writes.
-- **The role has not been applied to a host.** The gateway's apply is waiting on the gated
-  workflow being available for this repository, and the first app host's playbook now
-  applies it but no gated run has applied it yet. The ticket is unfinished on both halves until each has run
-  live and a second run of the same commit has reported no change.
+- **Applied on 4 Nov 2026.** The gated delivery run at commit 5d21bf9
+  (a run of the "Ansible delivery" workflow) applied the
+  estate's four hosts, and its second request of the same commit, which the workflow
+  requires to exit 0, passed. Both the gateway (class `gateway`) and the first
+  app host (class `app`, standard variant) play this role in their playbooks at
+  that commit. The approval of an apply for a commit that touches this role is the
+  owner's, because the App's route excludes it.
+- **An earlier role's failure hides the read-back.** The read-back runs inside the
+  `deploy_tooling` role, and a host's roles run in order in one play. On the first app host the role
+  comes after the website role, deliberately, so that a firewall failure cannot hold the
+  website back. The cost is the other way round: if an earlier role fails in the same
+  pull, the play stops before this role, and the nightly shows that earlier failure and
+  not the chain. A reopened chain is read on the next night that the earlier roles pass.
+- **Only hosts that play this role, and are on the host list, are read.** The control-plane host runs the
+  same policy program but through the `control_plane` role, which installs a byte copy of
+  the program and its unit and has no read-back, so a reopened chain there is not
+  seen by any nightly. A host that is not on the `ANSIBLE_HOSTS` list is not asked at all.
+  The role supports the `protected_no_db` variant that host would need; giving it a
+  read-back is a separate change.
+- **The check sees the chain once a night, and Docker may repair it first.** The nightly
+  runs at 03:17 UTC. A chain reopened and then rebuilt in between, by a restart of Docker
+  (the unit follows it through `PartOf=`) or by anyone restarting the policy unit, is
+  repaired and never reported, so the nightly proves the chain on that night and nothing
+  about the hours before it. An alert on the unit's own state would not close this
+  either: it would catch only a run of the program that refused.
 - **The unit tests of the module read the real program.** They parse
   `hetzner/provision/branchleft_docker_user_policy.sh` itself, so a change to a literal in
   the program changes what the module expects; they do not pin a copy of it.
