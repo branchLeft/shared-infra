@@ -76,13 +76,14 @@ export interface HostRedirect {
 }
 
 /**
- * A hostname the Hetzner edge answers directly with a fixed page, proxying
- * nowhere. Always rendered, never proxied; hostname and addressing only.
- * Why it is distinct from `EdgeSite`: `sites.md` section "Static sites".
+ * A hostname the Hetzner edge answers directly with a fixed page, or a fixed
+ * set of text files, proxying nowhere. Always rendered, never proxied;
+ * hostname and addressing only. Why it is distinct from `EdgeSite`:
+ * `sites.md` section "Static sites".
  */
 export interface StaticSite {
-  /** This site's identifier in generated config and log output, and the key its page content is looked up by. */
+  /** This site's identifier in generated config and log output, and the key its content (page or files) is looked up by. */
   name: string;
-  /** The single hostname this page answers on. No `www`, no subdomain, no wildcard -- each needs its own deliberate entry. */
+  /** The single hostname this content answers on. No `www`, no wildcard -- each needs its own deliberate entry; a named subdomain such as `sites.` is one such entry. */
   hostname: string;
 }
