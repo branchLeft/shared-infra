@@ -207,6 +207,29 @@ evidence the pinned image itself is the problem; anything else fails
 loudly with the pin left exactly as this call wrote it, for an operator
 to resolve deliberately rather than have it guessed at.
 
+## verify_attestation and ATTESTED_IMAGES
+
+An image this host deploys is checked for its build attestation before the
+lock, the pin write or any restart. `ATTESTED_IMAGES` is the register: each
+attested image name and the one workflow whose attestation it must carry, both
+under `branchLeft/ghost-platform`. The check runs `VERIFIER`, the host copy of
+ghost-platform's `scripts/verify-image-attestation.sh`, always with
+`--bundle-from-oci`, and any non-zero exit refuses the deploy.
+
+It fails closed. A missing verifier, an unknown digest, an unsigned image and
+an image signed by another workflow are all refused, and each refusal leaves
+the pin file and the running stack as they were. There is no argument,
+environment variable or stack setting that skips it. An image name outside the
+register is not verified here, so the other images on this host deploy as
+before.
+
+The rollback restore is not re-verified. It returns to the pin that last ran,
+and blocking it could leave the host with nothing running.
+
+The vendored copy is pinned by sha256 in `test_branchleft_deploy.py`. Change
+the copy and that constant in one change, and take the bytes only from
+ghost-platform's script.
+
 ## LOCK_TIMEOUT_ENV_VAR
 
 Not a new argv flag: the two calling conventions above are validated by

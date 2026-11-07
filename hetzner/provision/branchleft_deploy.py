@@ -61,6 +61,56 @@ def validate_image_ref(ref: str) -> str:
     return ref
 
 
+# The host's copy of ghost-platform's scripts/verify-image-attestation.sh,
+# installed by the deploy_tooling role. It is held byte for byte to that script
+# by a pinned digest in test_branchleft_deploy.py.
+VERIFIER = "/usr/local/sbin/branchleft-verify-image"
+
+ATTESTED_REPO = "branchLeft/ghost-platform"
+
+# The register: each image this host verifies before it deploys, mapped to the
+# one workflow whose attestation it must carry. An image name absent from this
+# table is not verified here. Adding an image is a reviewed diff; an image it
+# lists is refused unless attested by exactly that workflow on refs/heads/main.
+ATTESTED_IMAGES: dict[str, str] = {
+    "ghcr.io/branchleft/ghost-tenant": f"{ATTESTED_REPO}/.github/workflows/registry-push.yml",
+    "ghcr.io/branchleft/portal-apps": f"{ATTESTED_REPO}/.github/workflows/portal-apps-image.yml",
+}
+
+
+def verify_attestation(image: str, *, run=subprocess.run) -> bool:
+    """Verify a registered image's attestation before anything touches the host.
+
+    Returns False for an image outside the register, which is not verified here.
+    Raises DeployError when a registered image cannot be verified, for any
+    reason: refused, unknown digest, or the verifier missing. There is no
+    argument, environment variable or stack setting that skips this.
+    """
+    signer = ATTESTED_IMAGES.get(image.partition("@")[0])
+    if signer is None:
+        return False
+    try:
+        result = run(
+            [VERIFIER, image, ATTESTED_REPO, signer, "--bundle-from-oci"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as error:
+        raise DeployError(
+            f"could not run {VERIFIER} ({error}); refusing to deploy {image} "
+            "without verifying its attestation"
+        ) from None
+    if result.returncode != 0:
+        raise DeployError(
+            f"{image} is not attested by {signer} on refs/heads/main; refusing to "
+            "deploy it. The image may be unsigned, signed by another workflow, or "
+            "not the digest that was published"
+        )
+    print(f"branchleft-deploy: verified {image} attested by {signer}", file=sys.stderr)
+    return True
+
+
 def image_env_path(stack: str, config_dir: str = CONFIG_DIR) -> str:
     return os.path.join(config_dir, f"{stack}.image.env")
 
@@ -406,6 +456,9 @@ def deploy(
 ) -> None:
     validate_stack_name(stack)
     validate_image_ref(image)
+    # Before the lock, the compose read, the pin write and any restart: a
+    # refusal here leaves the pin file and the running stack exactly as they were.
+    verify_attestation(image, run=run)
 
     compose_file = compose_file_path(stack, stack_dir)
     if not os.path.exists(compose_file):

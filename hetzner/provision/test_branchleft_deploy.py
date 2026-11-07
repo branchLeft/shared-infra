@@ -9,12 +9,14 @@ deploy to discover.
 
 import contextlib
 import fcntl
+import hashlib
 import io
 import os
 import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import branchleft_deploy as bd
 
@@ -573,6 +575,135 @@ class DeployTests(unittest.TestCase):
             bd.read_current_image(bd.image_env_path("monitoring", self.config_dir)),
             VALID_IMAGE,
         )
+
+
+TENANT_DIGEST = "b" * 64
+TENANT = f"ghcr.io/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}"
+TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
+
+# sha256 of hetzner/provision/branchleft-verify-image, the host copy of
+# ghost-platform's scripts/verify-image-attestation.sh. Change the copy and this
+# constant in the same change, and only from that script's own bytes.
+VERIFIER_SHA256 = "a1a83d575ad75d487985d561795f0098480d93917d8d68e4bb498babb3033a2a"
+
+
+class AttestationTests(unittest.TestCase):
+    """The host verifies a registered image's attestation before it deploys it.
+
+    deploy() calls verify_attestation() before the lock, the pin write and any
+    restart. Every refusal here must leave the pin file absent and run no
+    restart, which is what "fails before up" means on this host.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.config_dir = os.path.join(self.directory.name, "etc")
+        self.stack_dir = os.path.join(self.directory.name, "opt")
+        os.makedirs(self.config_dir)
+        os.makedirs(os.path.join(self.stack_dir, "edge"))
+        with open(
+            os.path.join(self.stack_dir, "edge", "compose.yml"), "w", encoding="utf-8"
+        ) as handle:
+            handle.write(
+                "services:\n"
+                "  app:\n"
+                "    image: ${IMAGE}\n"
+                "    healthcheck:\n"
+                "      test: ['CMD', 'true']\n"
+            )
+
+    def deploy(self, image, run):
+        bd.deploy(
+            "edge",
+            image,
+            config_dir=self.config_dir,
+            stack_dir=self.stack_dir,
+            run=run,
+        )
+
+    def env_path(self):
+        return bd.image_env_path("edge", self.config_dir)
+
+    def assert_refused_before_any_host_change(self, run):
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER])
+
+    def test_the_register_names_exactly_the_attested_images_and_their_workflows(self):
+        self.assertEqual(
+            bd.ATTESTED_IMAGES,
+            {
+                "ghcr.io/branchleft/ghost-tenant": TENANT_SIGNER,
+                "ghcr.io/branchleft/portal-apps": (
+                    "branchLeft/ghost-platform/.github/workflows/portal-apps-image.yml"
+                ),
+            },
+        )
+
+    def test_an_unsigned_or_wrong_signer_image_is_refused_before_any_host_change(self):
+        run = FakeRun([1])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(TENANT, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, TENANT, bd.ATTESTED_REPO, TENANT_SIGNER, "--bundle-from-oci"],
+        )
+        self.assert_refused_before_any_host_change(run)
+
+    def test_an_unknown_digest_is_refused_the_same_way(self):
+        unknown = f"ghcr.io/branchleft/ghost-tenant@sha256:{'c' * 64}"
+        run = FakeRun([1])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(unknown, run)
+        self.assertEqual(run.calls[0][1], unknown)
+        self.assert_refused_before_any_host_change(run)
+
+    def test_a_missing_verifier_is_refused_before_any_host_change(self):
+        def missing(argv, **kwargs):
+            raise FileNotFoundError(argv[0])
+
+        with self.assertRaises(bd.DeployError):
+            self.deploy(TENANT, missing)
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_the_real_signer_and_a_registered_name_are_accepted_and_pinned(self):
+        run = FakeRun([0, 0])
+        self.deploy(TENANT, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, TENANT, bd.ATTESTED_REPO, TENANT_SIGNER, "--bundle-from-oci"],
+        )
+        self.assertEqual(
+            run.calls[1], ["systemctl", "restart", "branchleft-compose@edge"]
+        )
+        self.assertEqual(bd.read_current_image(self.env_path()), TENANT)
+
+    def test_a_third_party_image_is_never_sent_to_the_verifier(self):
+        mysql = f"docker.io/library/mysql@sha256:{'d' * 64}"
+        run = FakeRun([0])
+        self.deploy(mysql, run)
+        self.assertEqual(
+            run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
+        )
+
+    def test_no_environment_variable_switches_verification_off(self):
+        run = FakeRun([1])
+        switches = {
+            "BRANCHLEFT_SKIP_VERIFY": "1",
+            "BRANCHLEFT_VERIFY": "0",
+            "BRANCHLEFT_DEPLOY_VERIFY": "off",
+        }
+        with mock.patch.dict(os.environ, switches):
+            with self.assertRaises(bd.DeployError):
+                self.deploy(TENANT, run)
+        self.assert_refused_before_any_host_change(run)
+
+    def test_the_vendored_verifier_is_pinned_to_its_digest(self):
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "branchleft-verify-image"
+        )
+        with open(path, "rb") as handle:
+            self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), VERIFIER_SHA256)
 
 
 class SlotStdinTests(unittest.TestCase):
