@@ -30,6 +30,7 @@
         path: '{{ verify_program_src }}'
         checksum_algorithm: sha256
       register: deploy_verifier_verify_source
+      delegate_to: localhost
 
     - name: Assert the installed files are the ones the role installs
       ansible.builtin.assert:

@@ -47,14 +47,24 @@ PINS = (
 )
 
 
-def load_yaml(path: Path):
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+def load_vars(path: Path) -> dict[str, str]:
+    """Return a role's vars or defaults file as a mapping, empty when the file is empty."""
+    loaded: dict[str, str] | None = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return loaded or {}
+
+
+def load_plays(path: Path) -> list[dict[str, list[str | dict[str, str]]]]:
+    """Return the plays of a playbook."""
+    loaded: list[dict[str, list[str | dict[str, str]]]] | None = yaml.safe_load(
+        path.read_text(encoding="utf-8")
+    )
+    return loaded or []
 
 
 def playbook_roles(path: Path) -> list[list[str]]:
     """Return the role names of each play in a playbook, in the order the play applies them."""
     plays = []
-    for play in load_yaml(path) or []:
+    for play in load_plays(path):
         names = []
         for entry in play.get("roles") or []:
             value = entry.get("role") if isinstance(entry, dict) else entry
@@ -95,16 +105,17 @@ def findings_for(name: str, roles: list[str]) -> list[str]:
 def wrapper_constant(text: str, name: str) -> str:
     match = re.search(rf'^{name} = "([^"]+)"', text, re.MULTILINE)
     if match is None:
-        raise AssertionError(f"{name} is not a string constant in branchleft_deploy.py")
+        message = f"{name} is not a string constant in branchleft_deploy.py"
+        raise AssertionError(message)
     return match.group(1)
 
 
 class VerifierCoverageTests(unittest.TestCase):
-    def test_the_wrapper_roles_are_real_roles(self):
+    def test_the_wrapper_roles_are_real_roles(self) -> None:
         for role in WRAPPER_ROLES:
             self.assertTrue((ROLES / role).is_dir(), f"{role} is in the table but not a role")
 
-    def test_every_role_naming_the_wrapper_is_in_the_table(self):
+    def test_every_role_naming_the_wrapper_is_in_the_table(self) -> None:
         named = roles_naming_wrapper(ROLES)
         self.assertEqual(
             named - WRAPPER_ROLES,
@@ -113,7 +124,7 @@ class VerifierCoverageTests(unittest.TestCase):
             "WRAPPER_ROLES, so the verifier is not required before them",
         )
 
-    def test_only_the_four_wrapper_hosts_apply_a_wrapper_role(self):
+    def test_only_the_four_wrapper_hosts_apply_a_wrapper_role(self) -> None:
         applying = set()
         for path in sorted(PLAYBOOKS.glob("*.yml")):
             for names in playbook_roles(path):
@@ -121,48 +132,46 @@ class VerifierCoverageTests(unittest.TestCase):
                     applying.add(path.stem)
         self.assertEqual(applying, set(WRAPPER_PLAYBOOKS))
 
-    def test_the_playbooks_that_apply_a_wrapper_role_apply_the_verifier_first(self):
+    def test_the_playbooks_that_apply_a_wrapper_role_apply_the_verifier_first(self) -> None:
         findings = []
         for path in sorted(PLAYBOOKS.glob("*.yml")):
             for names in playbook_roles(path):
                 findings.extend(findings_for(path.stem, names))
         self.assertEqual(findings, [])
 
-    def test_a_playbook_applying_a_wrapper_role_without_the_verifier_is_a_finding(self):
+    def test_a_playbook_applying_a_wrapper_role_without_the_verifier_is_a_finding(self) -> None:
         self.assertEqual(
             findings_for("ops1", ["host_inputs", "control_plane"]),
             ["ops1 applies control_plane and never applies deploy_verifier"],
         )
 
-    def test_a_verifier_applied_after_the_wrapper_role_is_a_finding(self):
+    def test_a_verifier_applied_after_the_wrapper_role_is_a_finding(self) -> None:
         self.assertEqual(
             findings_for("app1", ["website_app1", "deploy_verifier"]),
             ["app1 applies deploy_verifier after website_app1"],
         )
 
-    def test_a_verifier_applied_before_the_wrapper_role_is_no_finding(self):
+    def test_a_verifier_applied_before_the_wrapper_role_is_no_finding(self) -> None:
         self.assertEqual(
             findings_for("app1", ["deploy_verifier", "website_app1", "deploy_tooling"]), []
         )
 
-    def test_the_wrapper_and_the_role_agree_on_the_paths_they_share(self):
+    def test_the_wrapper_and_the_role_agree_on_the_paths_they_share(self) -> None:
         text = WRAPPER.read_text(encoding="utf-8")
-        variables = load_yaml(ROLES / VERIFIER_ROLE / "vars" / "main.yml")
+        variables = load_vars(ROLES / VERIFIER_ROLE / "vars" / "main.yml")
         self.assertEqual(
             wrapper_constant(text, "VERIFIER"), variables["deploy_verifier_verifier_path"]
         )
         self.assertEqual(
             wrapper_constant(text, "VERIFIER_GH_DIR"), variables["deploy_verifier_gh_dir"]
         )
-        self.assertEqual(
-            wrapper_constant(text, "VERIFIER_HOME"), variables["deploy_verifier_home"]
-        )
+        self.assertEqual(wrapper_constant(text, "VERIFIER_HOME"), variables["deploy_verifier_home"])
         self.assertEqual(
             f"{variables['deploy_verifier_gh_dir']}/gh", variables["deploy_verifier_gh_bin"]
         )
 
-    def test_the_pins_agree_with_one_another_and_sit_in_vars(self):
-        variables = load_yaml(ROLES / VERIFIER_ROLE / "vars" / "main.yml")
+    def test_the_pins_agree_with_one_another_and_sit_in_vars(self) -> None:
+        variables = load_vars(ROLES / VERIFIER_ROLE / "vars" / "main.yml")
         version = variables["deploy_verifier_gh_version"]
         self.assertRegex(version, r"\A[0-9]+[.][0-9]+[.][0-9]+\Z")
         self.assertRegex(variables["deploy_verifier_gh_sha256"], r"\Asha256:[0-9a-f]{64}\Z")
@@ -171,15 +180,15 @@ class VerifierCoverageTests(unittest.TestCase):
             f"https://github.com/cli/cli/releases/download/v{version}/"
             f"gh_{version}_linux_amd64.tar.gz",
         )
-        defaults = load_yaml(ROLES / VERIFIER_ROLE / "defaults" / "main.yml") or {}
+        defaults = load_vars(ROLES / VERIFIER_ROLE / "defaults" / "main.yml")
         for pin in PINS:
             self.assertNotIn(pin, defaults, f"{pin} is a default, so an inventory can override it")
 
-    def test_the_role_holds_no_copy_of_the_verifier(self):
+    def test_the_role_holds_no_copy_of_the_verifier(self) -> None:
         copies = list((ROLES / VERIFIER_ROLE).rglob("branchleft-verify-image"))
         self.assertEqual(copies, [])
 
-    def test_the_role_copies_the_verifier_from_hetzner_provision(self):
+    def test_the_role_copies_the_verifier_from_hetzner_provision(self) -> None:
         # The verifier's own bytes are pinned by digest in test_branchleft_deploy.py. This holds
         # only that the role reads that one file from its home, and does not hold its own copy.
         source = (ROLES / VERIFIER_ROLE / "tasks" / "main.yml").read_text(encoding="utf-8")
