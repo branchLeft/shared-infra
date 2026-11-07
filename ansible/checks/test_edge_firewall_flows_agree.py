@@ -34,19 +34,31 @@ COMPOSE_FILES = (
 )
 FIREWALLS_TS = ROOT / "hetzner-host" / "firewalls.ts"
 RENDER_TS = ROOT / "hetzner" / "monitoring" / "render.ts"
+
+
 def _caddyfile_path() -> pathlib.Path:
     """The Caddyfile the edge stack mounts, read from the caddy service's /etc/caddy bind mount.
 
     Reading it from compose, not from a fixed path, means a later move of the file cannot leave
-    this test checking a stale copy: a missing file fails here, loudly, instead of passing."""
+    this test checking a stale copy: a missing file fails here, loudly, instead of passing.
+
+    Raises:
+        LookupError: the edge compose file has no /etc/caddy bind mount, or the mount has no
+            Caddyfile.
+    """
     compose = _mapping(yaml.safe_load(COMPOSE_FILES[0].read_text(encoding="utf-8")))
-    for volume in _mapping(compose["services"])["caddy"]["volumes"]:
+    caddy = _mapping(_mapping(compose["services"])["caddy"])
+    for volume in _sequence(caddy["volumes"]):
         source, _, target = str(volume).partition(":")
         if target.split(":")[0] == "/etc/caddy":
             path = COMPOSE_FILES[0].parent / source / "Caddyfile"
-            assert path.is_file(), f"the caddy mount has no Caddyfile at {path}"
+            if not path.is_file():
+                message = f"the caddy mount has no Caddyfile at {path}"
+                raise LookupError(message)
             return path
-    raise AssertionError("the edge compose file has no /etc/caddy bind mount")
+    message = "the edge compose file has no /etc/caddy bind mount"
+    raise LookupError(message)
+
 
 EDGE1_PRIVATE_ADDRESS = "10.20.1.10"
 

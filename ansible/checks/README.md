@@ -274,6 +274,38 @@ does not see edge-t's public address, which is in no file of the repository, nor
 address is the right one. Each pin runs red on a sabotaged copy of its files and green on the copy
 left alone.
 
+## test_edge_firewall_flows_agree.py: the edge_firewall ports against the publications
+
+The `edge_firewall` role accepts a short list of TCP ports on edge1. This test holds that list to
+what the rest of the repository publishes and serves: the Compose files, the Hetzner firewall's
+`EDGE_RULES`, the monitoring renderer, and the Caddyfile. A published port with no rule is a flow the
+default-drop would shut; a rule with no publication is an opening for nothing.
+
+The Caddyfile is read from the caddy service's `/etc/caddy` bind mount in
+`hetzner/edge/stack/compose.yml`, not from a fixed path. A move of the file therefore cannot leave
+the test checking a stale copy: when the mount has no Caddyfile, the test fails by name.
+
+## test_edge_firewall_single_home.py: the source pin ties to the address plan
+
+`TheSourcePinIsThePlansSubnet` ties edge1's `edge_firewall_nat_source` pin, in `HOST_PLAY_VARS`
+(`check_enrolment.py`) and `PINNED` (this file), to the one `SUBNET_CIDR` export in
+`hetzner-host/addressPlan.ts`, its one home. The drift gate ties the playbook and the nat script to
+the same plan; this ties the owner-only pins, which the drift gate does not read. The plan must hold
+exactly one `SUBNET_CIDR` export: zero or two is a finding, so an empty parse cannot pass.
+
+Sabotage rows (run on a copy of the tree, each red then green):
+
+- (a) `ansible/playbooks/edge1.yml` with `edge_firewall_nat_source: 10.20.2.0/24`: the drift gate
+  fails with "1 occurrence of '10.20.2.0/24' disagree with ... SUBNET_CIDR ('10.20.1.0/24')", and
+  `test_edge1s_playbook_carries_exactly_the_pinned_values` fails. The tie test does not read the
+  playbook, so it stays green for this row; it is red for a plan-side change (see the in-file
+  sabotage `test_a_plan_with_another_subnet_fails_by_name`).
+- (b) a second host (`ops1.yml`) carrying `egress_nat_gateway_enabled: true` in its `vars`:
+  `test_no_other_playbook_sets_the_switch` (host `ops1`) and
+  `test_no_file_outside_the_role_the_checks_and_a_gateways_playbook_names_the_switch` fail.
+
+Each row was restored and went green again on the unmodified copy.
+
 ## ci_select.py: which shards a run executes
 
 `ci_select.py` narrows the shard list from `ansible/harness/list_shards.py` to the shards a

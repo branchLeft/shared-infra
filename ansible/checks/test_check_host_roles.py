@@ -63,9 +63,10 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), edge_firewall (the
 # host firewall and the masquerade, after host_baseline for its Docker), egress_nat (the NAT
 # gateway, after the firewall role that loads its masquerade and host_baseline for Docker and
-# iptables), ci_jump (directly after ci_login; it only reports until the owner enables it), deploy_tooling and
-# edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
-# the deploy tooling installs), then edge1's three monitoring roles after the edge stack
+# iptables), ci_jump (directly after ci_login; it only reports until the owner enables it),
+# deploy_tooling and edge_stack (which needs Docker from host_baseline and the compose unit and
+# deploy wrapper that the deploy tooling installs), then edge1's three monitoring roles after the
+# edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
 # host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
 # installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that order: the slot

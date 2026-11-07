@@ -18,6 +18,7 @@ another playbook, and a test below fails.
 from __future__ import annotations
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -257,6 +258,66 @@ class TheRoleIsEdge1Alone(unittest.TestCase):
             and any(name in line for line in code_lines(path) for name in names)
         ]
         self.assertEqual([], stray)
+
+
+# The address plan's one home for the estate subnet. The drift gate (hetzner/scripts/
+# check-address-plan-drift.py) ties the playbook and the nat script to it; this ties the two
+# pins the owner-only checks hold for edge1, which the drift gate does not read.
+ADDRESS_PLAN = ROOT / "hetzner-host" / "addressPlan.ts"
+SUBNET_CIDR_EXPORT = re.compile(r"^export const SUBNET_CIDR = '([^']+)'", re.MULTILINE)
+SOURCE = "edge_firewall_nat_source"
+
+
+def _subnet_tie_findings(plan: Path) -> list[str]:
+    """Name each way the two pins disagree with the plan's SUBNET_CIDR.
+
+    An empty plan read is a finding, not a pass: a parse that found nothing would agree with
+    nothing it was meant to check.
+    """
+    found = SUBNET_CIDR_EXPORT.findall(plan.read_text(encoding="utf-8"))
+    if len(found) != 1:
+        return [f"{plan.name}: expected exactly one SUBNET_CIDR export, found {len(found)}"]
+    subnet = found[0]
+    findings = []
+    if PINNED[SOURCE] != subnet:
+        findings.append(
+            f"PINNED[{SOURCE!r}] is {PINNED[SOURCE]!r}, the plan's SUBNET_CIDR is {subnet!r}"
+        )
+    if HOST_PLAY_VARS[GATEWAY_HOST][SOURCE] != subnet:
+        findings.append(
+            f"HOST_PLAY_VARS[{GATEWAY_HOST!r}][{SOURCE!r}] is "
+            f"{HOST_PLAY_VARS[GATEWAY_HOST][SOURCE]!r}, the plan's SUBNET_CIDR is {subnet!r}"
+        )
+    return findings
+
+
+class TheSourcePinIsThePlansSubnet(unittest.TestCase):
+    """edge1's masquerade source is the one estate subnet the address plan names."""
+
+    def test_the_real_pins_agree_with_the_address_plan(self) -> None:
+        self.assertEqual([], _subnet_tie_findings(ADDRESS_PLAN))
+
+    def test_a_plan_with_another_subnet_fails_by_name(self) -> None:
+        # Sabotage on a copy: the plan with its subnet changed, the pins left as they are.
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "addressPlan.ts"
+            text = ADDRESS_PLAN.read_text(encoding="utf-8")
+            sabotaged = text.replace(
+                "export const SUBNET_CIDR = '10.20.1.0/24'",
+                "export const SUBNET_CIDR = '10.20.9.0/24'",
+                1,
+            )
+            self.assertNotEqual(text, sabotaged, "the sabotage matched nothing in the plan")
+            copy.write_text(sabotaged, encoding="utf-8")
+            findings = _subnet_tie_findings(copy)
+        self.assertTrue(any(SOURCE in finding for finding in findings), findings)
+
+    def test_an_unreadable_subnet_is_a_finding_not_a_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "addressPlan.ts"
+            copy.write_text("export const NETWORK_CIDR = '10.20.0.0/16';\n", encoding="utf-8")
+            findings = _subnet_tie_findings(copy)
+        self.assertEqual(1, len(findings), findings)
 
 
 if __name__ == "__main__":
