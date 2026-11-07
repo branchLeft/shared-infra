@@ -116,8 +116,10 @@ jobs:
       # it, so an edit to that file alone must run the checks and not pass unread.
       # The two hetzner-host files are the ones the tools' tests read. The mx1_stack role links the
       # compose files, the Caddyfile and the DNSBL check from mail/provision and its checks read the
-      # hand scripts there, so mail/provision/ is watched whole; the rest of mail/ (the runbooks,
-      # the other directories) is read by no role and stays unwatched.
+      # hand scripts there. mail/ is watched whole, not only mail/provision/: the hand-step ratchet
+      # (ansible/checks/test_no_new_hand_runbook_steps.py) reads every mail/RUNBOOK-*.md, so a runbook
+      # change must start the lint job, and a file named one by one is the one the next edit forgets.
+      # The other mail/ files (the Pulumi project) cost one lint run; no shard reads them.
       #
       # The full list of changed files is kept for ci_select.py, NUL-separated and with
       # renames shown as a delete and an add, so a moved role names both places.
@@ -168,7 +170,7 @@ jobs:
             .github/workflows/ansible-delivery.yml
             hetzner-host/cloudInit.ts
             hetzner-host/pullBootstrapFixed.json
-            mail/provision/
+            mail/
           )
           git diff --name-only -z --no-renames "$base" "$head" > "$RUNNER_TEMP/changed-files.z"
           echo "changed=$RUNNER_TEMP/changed-files.z" >> "$GITHUB_OUTPUT"

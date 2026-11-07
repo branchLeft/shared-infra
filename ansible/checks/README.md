@@ -230,8 +230,11 @@ key template and the drop-in template do not read their destinations from the on
 `ci_jump_destinations`, when the module stops requiring `AllowTcpForwarding local` for the jump
 account (a key line with `port-forwarding` also lets its holder open a port on the jump host with
 `ssh -R` under any other value), when the argument spec and the defaults name different variables,
-when any host's `owner_vars` file does not ship the role inert (flag false, the address empty), when
-an `owner_vars` file carries the account's name, when a host lists the role without its variables or
+when the role's own defaults are not inert (the flag false, and no address, destination or key), when
+an `owner_vars` file of a host the owner has not turned the role on for (the flag anything but the
+bool true) does not ship those defaults, when a file that turns the role on (the flag true, as edge1
+does after the owner's data change) lacks an address, a list of destinations or a list of keys,
+when an `owner_vars` file carries the account's name, when a host lists the role without its variables or
 without `ci_jump_user` in its `host_inputs` row, when a path the role writes or the module pins is made
 from the account's name (each is rendered with a realistic name and must not hold it; only the paths
 of the earlier hand-made layout, which the role removes, are), when a task that handles the name or
