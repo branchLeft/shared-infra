@@ -254,12 +254,14 @@ class Sabotage(unittest.TestCase):
     def test_the_copy_left_alone_is_green(self) -> None:
         self.assertEqual([], problems(self.root))
 
+    # edge1's destinations are a block list the owner has filled in, so each of these adds one
+    # entry to the head of that list.
     def test_a_tenants_private_address_in_edge1s_list_is_red(self) -> None:
         tenants = tenants_host_ips(self.root)
         self._edit(
             f"{OWNER_VARS}/edge1.yml",
-            f"{DESTINATIONS}: []",
-            f"{DESTINATIONS}: ['{tenants['dbT1']}']",
+            f"{DESTINATIONS}:\n",
+            f"{DESTINATIONS}:\n  - '{tenants['dbT1']}'\n",
         )
         self._expect("a tenants private address")
 
@@ -267,15 +269,15 @@ class Sabotage(unittest.TestCase):
         tenants = tenants_host_ips(self.root)
         self._edit(
             f"{OWNER_VARS}/edge1.yml",
-            f"{DESTINATIONS}: []",
-            f"{DESTINATIONS}: ['{tenants['edgeT']}']",
+            f"{DESTINATIONS}:\n",
+            f"{DESTINATIONS}:\n  - '{tenants['edgeT']}'\n",
         )
         self._expect("a tenants private address")
 
     def test_a_public_address_in_edge1s_list_is_green(self) -> None:
         # 192.0.2.0/24 is documentation space: the stand-in for edge-t's public address.
         self._edit(
-            f"{OWNER_VARS}/edge1.yml", f"{DESTINATIONS}: []", f"{DESTINATIONS}: ['192.0.2.7']"
+            f"{OWNER_VARS}/edge1.yml", f"{DESTINATIONS}:\n", f"{DESTINATIONS}:\n  - '192.0.2.7'\n"
         )
         self.assertEqual([], [line for line in problems(self.root) if "tenants private" in line])
 
