@@ -5,7 +5,7 @@ import { PUBLICPRESS_ABUSE_CONTACT } from './publicpressHolding';
  * `name` of their `StaticSite` in `sites.ts`. Why these files, and what each is
  * read by: `sites.md` section "Shared tenant domain files".
  *
- * Every wording below is an ALL_CAPS placeholder until Rob supplies the prose.
+ * Every wording below is an ALL_CAPS placeholder until the owner supplies the prose.
  * The contact is not prose: it is the abuse mailbox already ruled for the
  * PublicPress holding page (`PUBLICPRESS_ABUSE_CONTACT`), so it has one home.
  */

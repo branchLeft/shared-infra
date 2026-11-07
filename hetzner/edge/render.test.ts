@@ -978,7 +978,7 @@ describe('the shared tenant domain files', () => {
     expect(block()).toContain('Strict-Transport-Security "max-age=31536000; includeSubDomains"');
   });
 
-  it('wording is ALL_CAPS placeholder text until Rob supplies the prose', () => {
+  it('wording is ALL_CAPS placeholder text until the owner supplies the prose', () => {
     for (const file of registered) {
       expect(file.body).toContain('HOSTING_NOTICE_PLACEHOLDER');
     }

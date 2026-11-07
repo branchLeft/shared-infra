@@ -99,7 +99,7 @@ shared tenant domain (customer sites are `*.sites.publicpress.co.uk`, ruled as D
 `ghost-platform-docs/19-try-it-now-design/00-high-level-design.html`). Its two files
 say that PublicPress hosts those sites and does not publish, author or endorse them.
 Their text is in `hetzner/edge/sharedTenantFiles.ts`, and every wording there is an
-ALL_CAPS placeholder until Rob supplies the prose.
+ALL_CAPS placeholder until the owner supplies the prose.
 
 Only the files that carry that meaning to a reader that reads them:
 
