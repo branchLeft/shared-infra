@@ -14,6 +14,93 @@ import { EDGE_RULES, INTERNAL_RULES, sshRestrictedRules } from './firewalls';
 
 export type HostRole = 'edge' | 'app' | 'db' | 'mon';
 
+/**
+ * Adopt a server the owner made by hand instead of creating one.
+ *
+ * Adoption is two stages, because Pulumi refuses an import whose inputs differ
+ * from the live resource, and a console-made server differs from this component's
+ * declaration in exactly the properties the component sets itself (protection,
+ * labels, address names). `import` imports with those properties left alone;
+ * `converge` is the same program with them declared, an ordinary in-place update.
+ * Stay on `converge` for the life of the host: the ids stay, and the firewall
+ * attachment below is part of how the host is held, so removing adoption config
+ * would detach the firewall.
+ */
+export interface AdoptArgs {
+  /** The live Hetzner server's numeric id, as a string: Pulumi's `import` takes a literal, never an output. */
+  serverId: string;
+  /** The live primary IPv4's id. Required with public networking, refused without it. */
+  ipv4Id?: string;
+  /** The live primary IPv6's id. Required with public networking, refused without it. */
+  ipv6Id?: string;
+  /** Defaults to `import`. */
+  stage?: 'import' | 'converge';
+}
+
+const HETZNER_ID = /^[1-9][0-9]{0,15}$/;
+
+/**
+ * Properties a console-made server or primary IP differs on, and which the
+ * `converge` stage then updates in place. Ignored while importing, so the import
+ * is checked against identity (name, type, location, addresses) and nothing the
+ * component merely sets.
+ */
+const IMPORT_STAGE_IGNORED_SERVER = ['deleteProtection', 'rebuildProtection', 'labels'] as const;
+/** A private-only host's network and public interfaces are left to the owner's console steps until `converge`. */
+const IMPORT_STAGE_IGNORED_PRIVATE_SERVER = ['networks', 'publicNets'] as const;
+const IMPORT_STAGE_IGNORED_PRIMARY_IP = [
+  'name',
+  'autoDelete',
+  'deleteProtection',
+  'labels',
+] as const;
+
+function adoptionId(host: string, field: string, value: unknown): string {
+  const id = typeof value === 'number' ? String(value) : value;
+  if (typeof id !== 'string' || !HETZNER_ID.test(id)) {
+    throw new Error(
+      `${host}: adopt.${field} must be the numeric Hetzner id (digits only, no leading zero); got ${JSON.stringify(value)}.`
+    );
+  }
+  return id;
+}
+
+/** Checks the adoption input before any resource exists, and returns it with plain-string ids. */
+export function assertAdoption(
+  host: string,
+  adopt: AdoptArgs,
+  publicNetworking: boolean
+): AdoptArgs {
+  const stage = adopt.stage ?? 'import';
+  if (stage !== 'import' && stage !== 'converge') {
+    throw new Error(
+      `${host}: adopt.stage must be "import" or "converge"; got ${JSON.stringify(stage)}.`
+    );
+  }
+  const serverId = adoptionId(host, 'serverId', adopt.serverId);
+  if (!publicNetworking) {
+    if (adopt.ipv4Id !== undefined || adopt.ipv6Id !== undefined) {
+      throw new Error(
+        `${host} has no public networking, so it declares no primary IP for adopt.ipv4Id or adopt.ipv6Id to import. ` +
+          'A public address left on the live server is removed by hand and deleted, not adopted.'
+      );
+    }
+    return { serverId, stage };
+  }
+  if (adopt.ipv4Id === undefined || adopt.ipv6Id === undefined) {
+    throw new Error(
+      `${host} has public networking, so adopting it needs adopt.ipv4Id and adopt.ipv6Id: ` +
+        'without them the component would create a second pair of addresses beside the live ones.'
+    );
+  }
+  return {
+    serverId,
+    ipv4Id: adoptionId(host, 'ipv4Id', adopt.ipv4Id),
+    ipv6Id: adoptionId(host, 'ipv6Id', adopt.ipv6Id),
+    stage,
+  };
+}
+
 export interface HostArgs {
   /** Hetzner server name, the hostname, and the prefix of every resource
    * name this component creates. */
@@ -90,6 +177,14 @@ export interface HostArgs {
    * state. Decide the backup story for a stateful host before reaching for
    * this. */
   backups?: pulumi.Input<boolean>;
+  /**
+   * Adopt a server (and, for a public host, its two primary IPs) that already
+   * exists, instead of creating them. See `AdoptArgs`. Absent, every resource is
+   * created exactly as before. `userData`, `sshKeys` and `image` are ignored
+   * either way, so cloud-init does not run on an adopted host: whatever it would
+   * have done is the owner's hand bootstrap.
+   */
+  adopt?: AdoptArgs;
 }
 
 export class Host extends pulumi.ComponentResource {
@@ -120,6 +215,11 @@ export class Host extends pulumi.ComponentResource {
         `${args.name} has no public networking, so it has no public SSH rule for sshSourceIp to narrow.`
       );
     }
+    const adopt =
+      args.adopt === undefined
+        ? undefined
+        : assertAdoption(args.name, args.adopt, wantsPublicNetworking);
+    const importing = adopt !== undefined && adopt.stage === 'import';
     let rules: pulumi.Input<hcloud.types.input.FirewallRule[]> = roleRules;
     if (typeof args.sshSourceIp === 'string') {
       rules = sshRestrictedRules(roleRules, args.sshSourceIp);
@@ -177,7 +277,11 @@ export class Host extends pulumi.ComponentResource {
           deleteProtection: protection,
           labels,
         },
-        { parent: this }
+        {
+          parent: this,
+          import: adopt?.ipv4Id,
+          ignoreChanges: importing ? [...IMPORT_STAGE_IGNORED_PRIMARY_IP] : undefined,
+        }
       );
 
       this.primaryIpv6 = new hcloud.PrimaryIp(
@@ -191,7 +295,11 @@ export class Host extends pulumi.ComponentResource {
           deleteProtection: protection,
           labels,
         },
-        { parent: this }
+        {
+          parent: this,
+          import: adopt?.ipv6Id,
+          ignoreChanges: importing ? [...IMPORT_STAGE_IGNORED_PRIMARY_IP] : undefined,
+        }
       );
     }
 
@@ -210,7 +318,13 @@ export class Host extends pulumi.ComponentResource {
         // as being in effect from the moment the server first boots. An
         // attachment applied afterwards leaves a window in which a
         // freshly created host is on the public internet unfiltered.
-        firewallIds: [this.firewall.id.apply((id) => Number(id))],
+        //
+        // An adopted server is the exception: its firewalls were attached when the
+        // owner made it, `firewallIds` is create-time intent at the provider, and
+        // the firewall is attached by `FirewallAttachment` below instead, in
+        // addition to the owner's no-inbound one, which the owner detaches only
+        // afterwards.
+        firewallIds: adopt === undefined ? [this.firewall.id.apply((id) => Number(id))] : undefined,
         publicNets: [
           wantsPublicNetworking
             ? {
@@ -239,6 +353,7 @@ export class Host extends pulumi.ComponentResource {
       },
       {
         parent: this,
+        import: adopt?.serverId,
         // Not `protect: true`, which is right for the imported mail host and
         // wrong here: these hosts are cattle whose whole value is that the
         // create pattern can rebuild them. `deleteProtection` makes a destroy
@@ -261,9 +376,34 @@ export class Host extends pulumi.ComponentResource {
           // SSH; RUNBOOK-provision-host.md carries the procedure, and it is
           // the only path that works on a host this component created.
           'sshKeys',
+          // An adopted server keeps whatever firewalls the console attached to it, and the
+          // owner detaches the holding one by hand. Not declared above, so there is nothing
+          // for this to ignore until a refresh reads the live set; the entry is what keeps
+          // the stack from ever planning to rewrite it.
+          ...(adopt === undefined ? [] : ['firewallIds']),
+          ...(importing ? IMPORT_STAGE_IGNORED_SERVER : []),
+          ...(importing && !wantsPublicNetworking ? IMPORT_STAGE_IGNORED_PRIVATE_SERVER : []),
         ],
       }
     );
+
+    // The firewall of an adopted server. Attached in addition to the firewalls already on
+    // the server, never in place of them, so the server is filtered at every moment: the
+    // owner's holding firewall (no inbound rule at all) stays on until this one is attached
+    // and checked, and is detached by hand after. A private-only host has no public
+    // interface for a firewall to filter, and while a leftover public address is still on it
+    // this firewall's SSH rule would open that address, so it is attached at `converge`
+    // only, once the runbook has removed the address.
+    if (adopt !== undefined && (wantsPublicNetworking || adopt.stage === 'converge')) {
+      new hcloud.FirewallAttachment(
+        `${args.name}-firewall-attachment`,
+        {
+          firewallId: this.firewall.id.apply((id) => Number(id)),
+          serverIds: [this.server.id.apply((id) => Number(id))],
+        },
+        { parent: this }
+      );
+    }
 
     if (wantsPublicNetworking) {
       this.networkAttachment = new hcloud.ServerNetwork(
