@@ -9,6 +9,7 @@
 edge1:
   - host_inputs
   - host_baseline
+  - edge_firewall
   - egress_nat
   - ci_login
   - ci_jump

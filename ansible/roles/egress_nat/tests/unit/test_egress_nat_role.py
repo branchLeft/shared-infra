@@ -107,6 +107,36 @@ class SourceTests(unittest.TestCase):
                 self.assertIn(item[field], SOURCES)
 
 
+class NatReconcilerLeavesTheMasqueradeAloneTests(unittest.TestCase):
+    """The role delivers branchleft_nat.sh unchanged, so what that program is allowed to do is
+    this role's contract too. The masquerade and the forwarding sysctl belong to the
+    edge_firewall role; this one must deliver a reconciler that inserts the forwarding accepts and
+    refuses when the other role's work is missing. The reconciler's own unit tests run it with
+    fakes; this reads the file the role installs, so a re-added masquerade fails here too."""
+
+    def setUp(self) -> None:
+        text = (PROVISION / "branchleft_nat.sh").read_text(encoding="utf-8")
+        self.code = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+
+    def test_it_inserts_nothing_into_the_nat_table(self) -> None:
+        for line in self.code:
+            with self.subTest(line=line):
+                self.assertNotRegex(line, r"ensure_rule\s+nat\b")
+                self.assertNotRegex(line, r"iptables\s+-t\s+nat\s+-[IA]\b")
+
+    def test_it_writes_neither_the_forwarding_drop_in_nor_the_runtime_value(self) -> None:
+        for line in self.code:
+            with self.subTest(line=line):
+                self.assertNotIn("99-branchleft-nat.conf", line)
+                self.assertNotRegex(line, r"sysctl\s+(-q\s+)?-w")
+
+    def test_it_refuses_when_forwarding_is_off_or_no_masquerade_exists(self) -> None:
+        text = "\n".join(self.code)
+        self.assertIn("net.ipv4.ip_forward", text)
+        self.assertIn("branchleft_edge_nat", text)
+        self.assertIn("no masquerade for", text)
+
+
 class UnitContractTests(unittest.TestCase):
     """A unit starts the program the role installs, at the path it installs it to."""
 

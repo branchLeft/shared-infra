@@ -165,8 +165,18 @@ a host's only route off the subnet is the network's own gateway, and Hetzner
 resolves that against this table. It is unprotected on purpose — deleting it
 detaches nothing and loses no state, and moving the gateway to another host
 has to stay an ordinary apply. The forwarding at the far end is not Pulumi's:
-the `egress_nat` role installs it on edge1 (the reconciler is `provision/branchleft_nat.sh`), and
-`RUNBOOK-provision-host.md` carries the order the two have to happen in.
+two roles install it on edge1: `edge_firewall` loads the masquerade in its own nftables table and
+turns forwarding on, and `egress_nat` installs the reconciler (`provision/branchleft_nat.sh`) that
+keeps the forwarding accepts in `DOCKER-USER`. `RUNBOOK-provision-host.md` carries the order the
+two have to happen in.
+
+Three more facts about the route. A private-only host cannot run its own provisioning
+(`apt-get update`, the Docker signing key) without it, and cannot receive the unattended security
+upgrades that `provision/10-harden-updates-fail2ban.sh` enables. The route is additive: it neither
+reads nor writes a property of the network or the subnet, so neither is replaced by its presence.
+`protect: false` is given explicitly, not left absent: a `parent` option makes Pulumi inherit
+`protect` from the parent whenever a child leaves its own unset, and `network` carries
+`protect: true`, so an absent value would silently pick that up.
 
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`
 (`../hetzner-host/addressPlan.ts`). Hetzner's DHCP allocates in creation

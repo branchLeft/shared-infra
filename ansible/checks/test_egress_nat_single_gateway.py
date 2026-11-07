@@ -114,8 +114,18 @@ class EgressNatSingleGateway(unittest.TestCase):
             with self.subTest(host=host):
                 self.assertIs(_play_vars(host).get(SWITCH), True)
 
-    def test_the_checker_table_pins_edge1_to_exactly_the_class_and_the_switch(self) -> None:
-        self.assertEqual(HOST_PLAY_VARS["edge1"], {CLASS_KEY: "gateway", SWITCH: True})
+    def test_the_checker_table_pins_edge1_to_the_class_and_the_switch(self) -> None:
+        # The row also pins the two edge_firewall variables; test_edge_firewall_single_home.py
+        # holds the whole row.
+        row = HOST_PLAY_VARS["edge1"]
+        self.assertEqual(
+            {CLASS_KEY: row[CLASS_KEY], SWITCH: row[SWITCH]},
+            {CLASS_KEY: "gateway", SWITCH: True},
+        )
+        self.assertEqual(
+            set(row) - {CLASS_KEY, SWITCH},
+            {"edge_firewall_nat_source", "edge_firewall_enforce"},
+        )
 
     def test_the_checker_table_pins_edget_to_exactly_the_switch(self) -> None:
         self.assertEqual(HOST_PLAY_VARS["edget"], {SWITCH: True})

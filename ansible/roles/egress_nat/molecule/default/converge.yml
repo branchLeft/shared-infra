@@ -81,6 +81,25 @@
               and neither the reconciler nor the unit left on the host.
               Failed task: {{ egress_nat_failed_task }}.
 
+        # The reconciler no longer masquerades or turns forwarding on: the edge_firewall role does,
+        # and runs first. A gateway with the accepts and no masquerade, or with forwarding off, has
+        # no outbound internet while every check of the reconciler's own would pass, so the
+        # reconciler must refuse both, which fails the apply (the unit does not go active).
+        - name: Put the public address back on the uplink for the refusals
+          ansible.builtin.include_tasks: tasks/uplink_public.yml
+          vars:
+            uplink_public: true
+
+        - name: Apply the role on a host where the role that loads the masquerade has not run
+          ansible.builtin.include_tasks: tasks/refusal.yml
+          vars:
+            egress_nat_refusal_marker: /run/egress-nat-no-nat-table
+
+        - name: Apply the role on a host that is not forwarding
+          ansible.builtin.include_tasks: tasks/refusal.yml
+          vars:
+            egress_nat_refusal_marker: /run/egress-nat-forwarding-off
+
         # A good install, so that there is a previous release to go back to.
         - name: Put the public address back on the uplink
           ansible.builtin.include_tasks: tasks/uplink_public.yml

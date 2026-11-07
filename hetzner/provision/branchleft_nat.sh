@@ -1,12 +1,23 @@
 #!/usr/bin/env bash
-# Makes this host forward and source-NAT the estate's private subnet out of
-# its own public interface, so that hosts created without public networking
-# have an outbound internet path at all.
+# The forwarding half of the estate's NAT gateway: accepts the estate's private
+# subnet in DOCKER-USER, in and out of this host's public interface, so that
+# hosts created without public networking have an outbound internet path at all.
 #
-# Installed as /usr/local/sbin/branchleft-nat by nat-gateway.sh and re-run at
+# It no longer masquerades and no longer writes the forwarding sysctl. Both
+# moved to the edge_firewall role (ansible/roles/edge_firewall), which loads the
+# masquerade in its own nftables table and sets net.ipv4.ip_forward, and which
+# runs before the role that installs this script. A rule in an nftables forward
+# chain cannot rescue a packet that Docker's iptables FORWARD policy drops, so
+# the accepts stay here, in the chain Docker guarantees it will not flush.
+#
+# Installed as /usr/local/sbin/branchleft-nat by the egress_nat role and re-run at
 # every boot by branchleft-nat.service. Idempotent: every rule is checked
 # before it is added, and re-running it is the correct response to "is that
 # host still the gateway".
+#
+# Refuses (exit 1, loudly) when forwarding is off or when no masquerade exists
+# anywhere, so that a gateway with the accepts and no masquerade, which has no
+# outbound internet, fails the apply and the unit instead of reporting success.
 #
 # This is only the host half. The network half is the default route declared
 # in the network stack; without it nothing is ever sent here to forward.
@@ -15,7 +26,6 @@ set -euo pipefail
 # Overridable so the tests can drive a different range; production always gets
 # the default, since nothing sets these in the environment.
 SUBNET="${BRANCHLEFT_NAT_SUBNET:-10.20.1.0/24}"
-SYSCTL_CONF="${BRANCHLEFT_NAT_SYSCTL_CONF:-/etc/sysctl.d/99-branchleft-nat.conf}"
 
 # The membership test below is a string prefix, which is only equivalent to a
 # subnet match at /24. Refusing anything else is deliberate: a widened range
@@ -76,20 +86,31 @@ if [[ "$attached_to_subnet" -ne 1 ]]; then
     exit 1
 fi
 
-TMP="$(mktemp)"
-trap 'rm -f "$TMP"' EXIT
-
-# Written as well as set, because the running value is not ours: dockerd turns
-# forwarding on for its own bridges at start and would turn this into a
-# setting that survives only while Docker happens to be installed.
-printf 'net.ipv4.ip_forward = 1\n' > "$TMP"
-if [[ -f "$SYSCTL_CONF" ]] && cmp -s "$TMP" "$SYSCTL_CONF"; then
-    echo "branchleft-nat: $SYSCTL_CONF already up to date"
-else
-    install -m 644 "$TMP" "$SYSCTL_CONF"
-    echo "branchleft-nat: wrote $SYSCTL_CONF"
+# Forwarding is the edge_firewall role's to turn on and persist. Read here, not
+# set, so that a host where that role has not run (a hand-built gateway) fails
+# visibly instead of carrying the accepts with the kernel not forwarding.
+if [[ "$(sysctl -n net.ipv4.ip_forward 2>/dev/null || echo 0)" != "1" ]]; then
+    echo "branchleft-nat: net.ipv4.ip_forward is not 1 -- the edge_firewall role sets it; apply it first" >&2
+    exit 1
 fi
-sysctl -q -w net.ipv4.ip_forward=1
+
+# The masquerade has two possible homes. The edge_firewall role's nftables table
+# is where it lives now. The iptables rule is the one this script used to insert,
+# and it stays on a host until the role has confirmed its own table. With neither
+# there is a gateway that forwards packets out with private source addresses and
+# no outbound internet, so refuse.
+masquerade_home=""
+if command -v nft >/dev/null 2>&1 \
+    && nft list table ip branchleft_edge_nat 2>/dev/null | grep -q "masquerade"; then
+    masquerade_home="the edge_firewall nftables table"
+elif iptables -t nat -C POSTROUTING -s "$SUBNET" -o "$uplink" -j MASQUERADE 2>/dev/null; then
+    masquerade_home="the legacy iptables rule"
+fi
+if [[ -z "$masquerade_home" ]]; then
+    echo "branchleft-nat: no masquerade for $SUBNET exists (neither the edge_firewall role's nftables table nor the legacy iptables rule), so forwarding would give the estate no outbound internet" >&2
+    echo "branchleft-nat: apply the edge_firewall role before this one" >&2
+    exit 1
+fi
 
 # dockerd sets the filter table's FORWARD policy to DROP, and a rule in any
 # other table cannot rescue a packet that chain drops -- so forwarded traffic
@@ -122,11 +143,6 @@ ensure_rule() {
     fi
 }
 
-# Scoped to the subnet as source and the uplink as output, so private-to-
-# private traffic is never rewritten and no other source can be laundered
-# through this host's public address.
-ensure_rule nat POSTROUTING -s "$SUBNET" -o "$uplink" -j MASQUERADE
-
 # Directional on purpose. Outbound is accepted unconditionally; the return
 # direction is accepted only for a flow conntrack already knows, so
 # forwarding stays a one-way capability and nothing on the internet can
@@ -140,4 +156,4 @@ ensure_rule filter "$forward_chain" -d "$SUBNET" -i "$uplink" \
 # private host, so the MSS it advertises is already derived from the lower of
 # the two and the remote end never sends more than fits.
 
-echo "branchleft-nat: forwarding $SUBNET out of $uplink, filtered in $forward_chain"
+echo "branchleft-nat: forwarding $SUBNET out of $uplink, filtered in $forward_chain, masqueraded by $masquerade_home"

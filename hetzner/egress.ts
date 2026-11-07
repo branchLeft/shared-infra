@@ -12,8 +12,11 @@ import { NETWORK_CIDR } from '@branchleft/hetzner-host';
  * `unattended-upgrades` fetches for the rest of its life.
  *
  * The route is only half the mechanism. It names a gateway address; the host
- * at that address has to forward and source-NAT the traffic, which is
- * `provision/branchleft_nat.sh`.
+ * at that address has to forward and source-NAT the traffic. The
+ * masquerade and the forwarding sysctl are the `edge_firewall` role's
+ * (`ansible/roles/edge_firewall`, its own nftables table); the forwarding
+ * accepts are `provision/branchleft_nat.sh`, which the `egress_nat` role
+ * installs.
  *
  * IPv4 only. Hetzner networks carry no IPv6 range, so there is no v6 default
  * to declare here and a private-only host is v4-only end to end.

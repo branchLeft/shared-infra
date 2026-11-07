@@ -1,0 +1,369 @@
+---
+# The result facts. They are reset first so that a value left by an earlier run on the same
+# host cannot be read as this run's. A test or a caller reads them after the role ends; the
+# README lists them.
+- name: Reset the result facts
+  ansible.builtin.set_fact:
+    edge_firewall_drift: []
+    edge_firewall_reloaded: false
+    edge_firewall_rolled_back: false
+    edge_firewall_failed_task: ''
+    edge_firewall_rejected_listing: ''
+
+# Whether this run is a plan. ansible_check_mode is set only by --check on the command line; a
+# play or a task that sets check_mode: true leaves it false even though its modules run in
+# check mode. A command is skipped in both, so a skipped command is the one signal that covers
+# both. There is deliberately no check_mode: false on this task (ANS-10).
+- name: Detect check mode, however it was asked for
+  ansible.builtin.command:
+    argv: [/bin/true]
+  register: edge_firewall_check_probe
+  changed_when: false
+
+- name: Keep whether this run is a plan
+  ansible.builtin.set_fact:
+    edge_firewall_plan: '{{ (edge_firewall_check_probe.skipped | default(false)) | bool }}'
+
+# The string inputs are rendered into a rules file, so each is refused here unless it is a
+# plain value. A newline in a source once loaded a second masquerade rule, and the connection
+# check passed it.
+- name: Refuse a NAT source that is not a plain dotted /24
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_nat_source is match(edge_firewall_source_pattern)
+    quiet: true
+    fail_msg: edge_firewall_nat_source must be a dotted IPv4 /24 such as 10.20.1.0/24 and nothing else.
+
+- name: Refuse an enforce switch that is not a boolean
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_enforce is boolean
+    quiet: true
+    fail_msg: edge_firewall_enforce must be true or false.
+
+- name: Read the uplink and the private address, and refuse a host the NAT cannot work on
+  ansible.builtin.include_tasks: _preconditions.yml
+
+# nftables.service stays masked for the life of the host. Its ExecStop is `nft flush ruleset`,
+# which removes every table on the host, Docker's included, and a package upgrade restarts it.
+# Masking is the plain `systemctl mask`: a symlink to /dev/null, written by hand so that it
+# works before the package (and so before the unit) exists. It must come before the package is
+# installed: installing the package would otherwise start the unit and flush the ruleset.
+- name: Mask nftables.service before the package is installed
+  ansible.builtin.file:
+    src: /dev/null
+    dest: '{{ edge_firewall_nftables_mask_path }}'
+    state: link
+    force: true
+    owner: root
+    group: root
+  notify: Reload systemd manager
+
+# The mask is only a symlink until systemd reads it, so it is read before apt can start the unit.
+- name: Make systemd read the mask before the package is installed
+  ansible.builtin.meta: flush_handlers
+
+- name: Install the nftables package
+  ansible.builtin.apt:
+    name: nftables
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# check_mode is false because the read changes nothing, and a plan needs its answer (ANS-10).
+- name: Read whether nftables.service is masked
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, nftables.service]
+  register: edge_firewall_mask_state
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# Skipped in a plan, where the mask has not been written on a host that does not have it yet.
+- name: Refuse to go on unless nftables.service is masked
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_mask_state.stdout | trim == 'masked'
+    quiet: true
+    fail_msg: nftables.service is not masked, so a start, stop or restart of it could flush the whole ruleset, Docker's included.
+  when: not edge_firewall_plan | bool
+
+# Forwarding is persisted in the drop-in and set on the running kernel. The reconciler this
+# role replaces did both; the role is now the drop-in's only writer, and its reconciler only
+# reads the running value.
+- name: Persist IPv4 forwarding in the sysctl drop-in and turn it on
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    sysctl_set: true
+    sysctl_file: '{{ edge_firewall_sysctl_file }}'
+    reload: false
+
+- name: Read the running forwarding value
+  ansible.builtin.command:
+    argv: [sysctl, -n, net.ipv4.ip_forward]
+  register: edge_firewall_forwarding
+  changed_when: false
+  check_mode: false
+
+- name: Refuse to go on unless the kernel is forwarding
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_forwarding.stdout | trim == '1'
+    quiet: true
+    fail_msg: net.ipv4.ip_forward does not read 1 on the running kernel after the role set it.
+  when: not edge_firewall_plan | bool
+
+- name: Create the rules directory
+  ansible.builtin.file:
+    path: '{{ edge_firewall_rules_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# The desired rules, as text, in memory. Nothing is written to the host to compute them, so the
+# plan in check mode can compare them with the host.
+- name: Render the desired rules
+  ansible.builtin.set_fact:
+    edge_firewall_rules: "{{ lookup('ansible.builtin.template', edge_firewall_rules_template) }}"
+
+- name: Read the active rules file, if one is on the host
+  ansible.builtin.stat:
+    path: '{{ edge_firewall_rules_dir }}/active.nft'
+    checksum_algorithm: sha256
+    get_checksum: true
+  register: edge_firewall_active
+
+- name: Read whether the nft program is on the host
+  ansible.builtin.stat:
+    path: '{{ edge_firewall_nft_binary }}'
+  register: edge_firewall_nft
+
+# The listing the kernel gave when the active set was last confirmed. It is the kernel's own
+# normal form of the desired rules, which the role cannot compute without loading them.
+- name: Read the listing recorded when the active set was confirmed
+  ansible.builtin.command:
+    argv: [cat, '{{ edge_firewall_rules_dir }}/active.list']
+  register: edge_firewall_recorded
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Read the tables that are loaded now
+  ansible.builtin.include_tasks: _read_loaded.yml
+
+# The unit is installed before the guard and enabled after it: it reads the active file, which
+# does not exist until the guard has confirmed a set.
+- name: Install the boot unit
+  ansible.builtin.copy:
+    src: branchleft-firewall.service
+    dest: '{{ edge_firewall_unit_dir }}/{{ edge_firewall_unit_name }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+# The decision to do nothing is made from two facts: the active file must equal the desired
+# rules, and the kernel's tables must equal what the kernel listed when the active set was
+# confirmed. A flush, a reboot or a foreign reload changes the second and nothing else, and is
+# found here.
+- name: Compare the desired rules with the host
+  ansible.builtin.set_fact:
+    edge_firewall_drift: >-
+      {{
+        (['nftables is not installed']
+          if not edge_firewall_nft.stat.exists
+          else [])
+        + (['the active rules file is absent or differs from the desired rules']
+          if (edge_firewall_active.stat.checksum | default('')) != (edge_firewall_rules | hash('sha256'))
+          else [])
+        + (['the loaded tables differ from the listing recorded when the active set was confirmed']
+          if edge_firewall_listing != edge_firewall_recorded.stdout
+          else [])
+      }}
+
+# Syntax check, loading nothing. It runs in check mode on purpose, and it is the task that
+# reports "changed" there when the host differs from the desired rules, because a check-mode
+# run loads nothing and so has no other task to report with (ANS-10). It reads and changes
+# nothing, hence check_mode: false. A plan on a host that does not have nft yet cannot run it;
+# the package task has already reported that change.
+- name: Check the desired rules parse, loading nothing
+  ansible.builtin.command:
+    argv: ['{{ edge_firewall_nft_binary }}', -c, -f, '-']
+    stdin: '{{ edge_firewall_rules }}'
+  changed_when: edge_firewall_plan and (edge_firewall_drift | length > 0)
+  check_mode: false
+  when: edge_firewall_nft.stat.exists
+
+# The guard. The set is loaded only when the host differs from it, so a second run loads
+# nothing. Check mode skips the guard because it loads nothing and promotes nothing; the
+# syntax check above is what reports the plan (ANS-10).
+- name: Load the desired ruleset behind a revert guard
+  when:
+    - not edge_firewall_plan | bool
+    - edge_firewall_drift | length > 0
+  block:
+    - name: Keep the active rules file as the previous set
+      ansible.builtin.copy:
+        src: '{{ edge_firewall_rules_dir }}/active.nft'
+        dest: '{{ edge_firewall_rules_dir }}/previous.nft'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      when: edge_firewall_active.stat.exists
+
+    - name: Remove any earlier previous set when there is no active set
+      ansible.builtin.file:
+        path: '{{ edge_firewall_rules_dir }}/previous.nft'
+        state: absent
+      when: not edge_firewall_active.stat.exists
+
+    # One transaction: both tables are added, deleted and defined together, or none is.
+    - name: Load the desired ruleset
+      ansible.builtin.command:
+        argv: ['{{ edge_firewall_nft_binary }}', -f, '-']
+        stdin: '{{ edge_firewall_rules }}'
+      changed_when: true
+
+    # What the kernel holds at the moment of the check. It is kept so that a failed check can
+    # say which set it failed, and promoted when it passes.
+    - name: Read the tables the connection check will test
+      ansible.builtin.include_tasks: _read_loaded.yml
+
+    # The host's own private address, not 127.0.0.1. A connection to the host's own address
+    # enters the input chain on the loopback interface with a non-loopback source and
+    # destination, so it passes only through the rule that accepts the control port. A set
+    # that closes the control port but keeps loopback open is refused here. Connecting, not
+    # listing the ruleset, is what proves the port still answers.
+    - name: Connect to the host's own private address on the control port after the load
+      ansible.builtin.wait_for:
+        host: '{{ edge_firewall_private_address }}'
+        port: '{{ edge_firewall_control_port }}'
+        state: started
+        timeout: 5
+
+    - name: Promote the desired rules to the active rules file
+      ansible.builtin.copy:
+        content: '{{ edge_firewall_rules }}'
+        dest: '{{ edge_firewall_rules_dir }}/active.nft'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Record the listing the kernel gave for the confirmed set
+      ansible.builtin.copy:
+        content: '{{ edge_firewall_listing }}'
+        dest: '{{ edge_firewall_rules_dir }}/active.list'
+        owner: root
+        group: root
+        mode: '0600'
+
+    - name: Record that the ruleset was reloaded
+      ansible.builtin.set_fact:
+        edge_firewall_reloaded: true
+  rescue:
+    - name: Record the task that failed and the tables the check was run against
+      ansible.builtin.set_fact:
+        edge_firewall_failed_task: '{{ ansible_failed_task.name }}'
+        edge_firewall_rejected_listing: '{{ edge_firewall_listing }}'
+
+    - name: Read whether a previous set was kept
+      ansible.builtin.stat:
+        path: '{{ edge_firewall_rules_dir }}/previous.nft'
+      register: edge_firewall_previous
+
+    - name: Restore the previous ruleset
+      ansible.builtin.command:
+        argv: ['{{ edge_firewall_nft_binary }}', -f, '{{ edge_firewall_rules_dir }}/previous.nft']
+      when: edge_firewall_previous.stat.exists
+      changed_when: true
+
+    # With no previous set, the only state to return to is no table at all.
+    - name: Remove the tables when there was no previous set
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - ['{{ edge_firewall_nft_binary }}', delete, table, inet, '{{ edge_firewall_table }}']
+        - ['{{ edge_firewall_nft_binary }}', delete, table, ip, '{{ edge_firewall_nat_table }}']
+      when: not edge_firewall_previous.stat.exists
+      changed_when: true
+      failed_when: false
+
+    - name: Record that the rollback completed
+      ansible.builtin.set_fact:
+        edge_firewall_rolled_back: true
+
+    - name: Fail after the rollback
+      ansible.builtin.fail:
+        msg: >-
+          {{ 'The previous ruleset was restored' if edge_firewall_previous.stat.exists
+          else 'There was no previous ruleset, so the role removed its tables' }}
+          because the task "{{ edge_firewall_failed_task }}" failed. The new ruleset was not
+          promoted, and the legacy masquerade rule was not removed.
+
+# The legacy masquerade rule is removed only here, after the guard has confirmed the role's own
+# NAT table, so that the estate's egress has a masquerade at every moment: a failed guard ends
+# the role in its rescue and never reaches this task. iptables -C exits 0 when the rule is
+# present. The rule was inserted once at most (the reconciler checked before it inserted).
+- name: Read whether the legacy iptables masquerade rule is still present
+  ansible.builtin.command:
+    argv:
+      - iptables
+      - -t
+      - nat
+      - -C
+      - POSTROUTING
+      - -s
+      - '{{ edge_firewall_nat_source }}'
+      - -o
+      - '{{ edge_firewall_uplink }}'
+      - -j
+      - MASQUERADE
+  register: edge_firewall_legacy
+  changed_when: edge_firewall_plan and edge_firewall_legacy.rc == 0
+  failed_when: false
+  check_mode: false
+
+- name: Remove the legacy iptables masquerade rule
+  ansible.builtin.command:
+    argv:
+      - iptables
+      - -t
+      - nat
+      - -D
+      - POSTROUTING
+      - -s
+      - '{{ edge_firewall_nat_source }}'
+      - -o
+      - '{{ edge_firewall_uplink }}'
+      - -j
+      - MASQUERADE
+  changed_when: true
+  when:
+    - not edge_firewall_plan | bool
+    - edge_firewall_legacy.rc == 0
+    - "'masquerade' in edge_firewall_listing"
+
+# The unit has to be known to systemd before it can be enabled.
+- name: Load the boot unit before it is enabled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit file, so on a fresh host systemd cannot know the unit and the enable
+# below would fail. stat runs in check mode as in a real run, so the enable runs whenever the
+# unit file is really on disk, and the skip on a fresh host is the stated reason (ANS-10).
+- name: Read back the unit file of the boot unit
+  ansible.builtin.stat:
+    path: '{{ edge_firewall_unit_dir }}/{{ edge_firewall_unit_name }}'
+  register: edge_firewall_unit_now
+
+# Enabled, not started: starting it would load the file the guard has just confirmed, which
+# the guard already did. The unit loads the file when the host starts. Enabling happens last, so
+# a host never has the unit enabled with no confirmed file behind it.
+- name: Enable the boot unit that loads the confirmed rules at start
+  ansible.builtin.systemd_service:
+    name: '{{ edge_firewall_unit_name }}'
+    enabled: true
+  when: edge_firewall_unit_now.stat.exists

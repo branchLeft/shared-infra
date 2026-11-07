@@ -10,6 +10,11 @@ Description=branchLeft estate NAT gateway
 # which an After on an absent unit allows and a Requires would not.
 After=network-online.target docker.service
 Wants=network-online.target
+# The masquerade this reconciler checks for is loaded by branchleft-firewall.service (the
+# edge_firewall role's unit), so at boot that unit finishes first. Wants, not Requires: a failed
+# firewall load must not stop the reconciler from running and saying plainly what is missing.
+After=branchleft-firewall.service
+Wants=branchleft-firewall.service
 # PartOf, not Requires or BindsTo: a later `systemctl restart docker.service`
 # -- what an unattended docker-ce upgrade does -- propagates here as a
 # restart too, rerunning the reconciler against whatever chains dockerd just

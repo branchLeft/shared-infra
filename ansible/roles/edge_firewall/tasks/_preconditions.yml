@@ -1,0 +1,88 @@
+---
+# What the masquerade and the connection check are derived from, read from the host and
+# refused on before anything is loaded. These are the two refusals of the reconciler this
+# role replaces (hetzner/provision/branchleft_nat.sh): the uplink must hold a public address,
+# and the host must hold an address in the estate subnet. The uplink name is never a literal:
+# a wrong or placeholder name would load a rule that matches nothing and leave the estate
+# without egress while every check passed.
+#
+# Sets edge_firewall_uplink and edge_firewall_private_address. All reads run in check mode
+# too (check_mode: false), because the plan needs the same answers (ANS-10).
+- name: Read the default route
+  ansible.builtin.command:
+    argv: [ip, -j, -4, route, show, default]
+  register: edge_firewall_route
+  changed_when: false
+  check_mode: false
+
+- name: Read the global IPv4 addresses
+  ansible.builtin.command:
+    argv: [ip, -j, -4, addr, show, scope, global]
+  register: edge_firewall_addresses
+  changed_when: false
+  check_mode: false
+
+- name: Refuse a host that has no default route
+  ansible.builtin.assert:
+    that:
+      - (edge_firewall_route.stdout | ansible.builtin.from_json) | length > 0
+    quiet: true
+    fail_msg: This host has no default route, so it has nothing to forward to.
+
+- name: Work out the uplink from the default route
+  ansible.builtin.set_fact:
+    edge_firewall_uplink: '{{ (edge_firewall_route.stdout | ansible.builtin.from_json)[0].dev }}'
+
+- name: Refuse an uplink name that is not a plain name
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_uplink is match(edge_firewall_interface_pattern)
+    quiet: true
+    fail_msg: The default route leaves through an interface whose name is not letters, digits, underscore, dot and hyphen only.
+
+- name: Work out the addresses of the uplink, and those in the estate subnet
+  ansible.builtin.set_fact:
+    edge_firewall_uplink_addresses: >-
+      {{
+        edge_firewall_addresses.stdout | ansible.builtin.from_json
+        | selectattr('ifname', 'equalto', edge_firewall_uplink)
+        | map(attribute='addr_info') | flatten | map(attribute='local') | list
+      }}
+    edge_firewall_subnet_addresses: >-
+      {{
+        edge_firewall_addresses.stdout | ansible.builtin.from_json
+        | map(attribute='addr_info') | flatten | map(attribute='local')
+        | select('match', '^' ~ (edge_firewall_nat_source | ansible.builtin.regex_replace('\.0/24\Z', '.') | ansible.builtin.regex_escape))
+        | list
+      }}
+
+# The failure this refuses is a routing loop that takes the whole estate's egress with it: a
+# private-only host's own default route is the network gateway, so a private-only host told to
+# masquerade sends every packet it is given straight back into the network it came from.
+- name: Refuse a default route that leaves through an interface with no public address
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_uplink_addresses | reject('match', edge_firewall_private_pattern) | list | length > 0
+    quiet: true
+    fail_msg: >-
+      The default route leaves through {{ edge_firewall_uplink }}, which holds no public address.
+      Only a host that terminates public traffic can be the estate's gateway.
+
+- name: Refuse a host that holds no address in the estate subnet
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_subnet_addresses | length > 0
+    quiet: true
+    fail_msg: This host holds no address in {{ edge_firewall_nat_source }}, so nothing routed there reaches it.
+
+# The first such address is the one the guard connects to.
+- name: Keep the host's private address in the estate subnet
+  ansible.builtin.set_fact:
+    edge_firewall_private_address: '{{ edge_firewall_subnet_addresses[0] }}'
+
+- name: Refuse a private address that is not a plain address
+  ansible.builtin.assert:
+    that:
+      - edge_firewall_private_address is match(edge_firewall_address_pattern)
+    quiet: true
+    fail_msg: The address read from the host is not a dotted IPv4 address.
