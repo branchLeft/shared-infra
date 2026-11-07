@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import check_secret_no_log as checker
 
@@ -20,6 +21,9 @@ NTFY = "ansible/roles/ntfy_pager/tasks/main.yml"
 MONITORING = "ansible/roles/monitoring_stack/tasks/main.yml"
 CONTROL_PLANE = "ansible/roles/control_plane/tasks/main.yml"
 LOADER = "ansible/roles/host_inputs/vars/main.yml"
+HOST_INPUTS = "ansible/roles/host_inputs/tasks/main.yml"
+TENANT_STACK = "ansible/roles/tenant_compose/tasks/_stack.yml"
+TENANT_MAIN = "ansible/roles/tenant_compose/tasks/main.yml"
 README = "ansible/patterns/secrets_and_no_log/README.md"
 
 NTFY_WRITE_TAIL = (
@@ -252,6 +256,163 @@ class SecretNoLogTest(unittest.TestCase):
             "| `NO_SUCH_SCRIPT_NAME_ANYWHERE`               | `mail/provision`",
         )
         self._assert_red(self._findings(root), "R3", "NO_SUCH_SCRIPT_NAME_ANYWHERE")
+
+    # R1 over the host_inputs loader: its own variables are seeds, because it declares no option.
+
+    def test_h1_removing_no_log_from_the_loader_set_fact_is_red(self) -> None:
+        # Reviewer sabotage 1: the task that sets every input of the host as a fact.
+        root = self._mutate(
+            HOST_INPUTS,
+            "  no_log: true\n  diff: false\n\n"
+            "- name: Drop the file's text from memory (no value is shown)\n",
+            "  diff: false\n\n- name: Drop the file's text from memory (no value is shown)\n",
+        )
+        self._assert_red(
+            self._findings(root),
+            "R1 " + HOST_INPUTS,
+            "Set each input the file holds",
+            "host_inputs_doc",
+            "must set no_log: true",
+        )
+
+    def test_h1b_removing_no_log_from_the_loader_parse_is_red(self) -> None:
+        # The parse task: a parse error of Ansible's own echoes the text it could not parse.
+        root = self._mutate(
+            HOST_INPUTS,
+            "from_json }}'\n      no_log: true\n      diff: false\n",
+            "from_json }}'\n      diff: false\n",
+        )
+        self._assert_red(
+            self._findings(root),
+            "R1 " + HOST_INPUTS,
+            "Parse the file",
+            "host_inputs_raw",
+            "must set no_log: true",
+        )
+
+    def test_h1c_loader_variable_that_no_task_names_is_red(self) -> None:
+        # A renamed loader variable must not leave the check looking at nothing.
+        seeds = {**checker.LOADER_SEEDS, "host_inputs": ("host_inputs_raw", "host_inputs_gone")}
+        with mock.patch.object(checker, "LOADER_SEEDS", seeds):
+            findings = checker.check(ROOT)
+        self._assert_red(findings, "host_inputs_gone", "is named by no task")
+
+    # R1 over a secret held on a sub-option of a list option.
+
+    def test_h2_sub_option_guard(self) -> None:
+        subs = checker.sub_option_secrets(ROOT)
+        self.assertEqual(subs["tenant_compose"], {"tenant_compose_stacks": {"secrets_env_text"}})
+        self.assertEqual(subs["ci_jump"], {"ci_jump_keys": {"key"}})
+        self.assertEqual(subs["deploy_slot_keys"], {"deploy_slot_keys_slots": {"public_key"}})
+        self.assertEqual(subs["compose_stack"], {"compose_stack_secret_files": {"content"}})
+        self.assertEqual(subs["secrets_and_no_log"], {"secrets_and_no_log_secrets": {"value"}})
+
+    def test_h2_removing_no_log_from_the_tenant_secrets_write_is_red(self) -> None:
+        # Reviewer sabotage 2: the write of a tenant's secrets file. The secret is read through
+        # the loop variable of the include in main.yml, so the taint must follow that loop.
+        root = self._mutate(
+            TENANT_STACK,
+            "  register: tenant_compose_secrets_delivery\n  no_log: true\n  diff: false\n",
+            "  register: tenant_compose_secrets_delivery\n  diff: false\n",
+        )
+        self._assert_red(
+            self._findings(root),
+            "R1 " + TENANT_STACK,
+            "Deliver the secrets file",
+            "tenant_compose_stack (secret through tenant_compose_stacks.secrets_env_text)",
+            "must set no_log: true",
+        )
+
+    def test_h2b_removing_diff_false_from_the_tenant_secrets_write_is_red(self) -> None:
+        root = self._mutate(
+            TENANT_STACK,
+            "  register: tenant_compose_secrets_delivery\n  no_log: true\n  diff: false\n",
+            "  register: tenant_compose_secrets_delivery\n  no_log: true\n",
+        )
+        self._assert_red(self._findings(root), "Deliver the secrets file", "diff: false (ANS-16)")
+
+    def test_h2c_removing_no_log_from_the_loop_over_the_tenants_is_red(self) -> None:
+        root = self._mutate(
+            TENANT_MAIN,
+            "    label: '{{ tenant_compose_stack.slug }}'\n  no_log: true\n",
+            "    label: '{{ tenant_compose_stack.slug }}'\n",
+        )
+        self._assert_red(
+            self._findings(root),
+            "R1 " + TENANT_MAIN,
+            "Deliver each tenant's stack",
+            "tenant_compose_stacks (secret through tenant_compose_stacks.secrets_env_text)",
+        )
+
+    def test_h2d_loop_over_secrets_with_include_and_default_item_is_red(self) -> None:
+        root = self._mutate(
+            TENANT_MAIN,
+            "    loop_var: tenant_compose_stack\n    label: '{{ tenant_compose_stack.slug }}'\n",
+            "    label: '{{ item.slug }}'\n",
+        )
+        self._assert_red(
+            self._findings(root), "Deliver each tenant's stack", "must name a loop_var"
+        )
+
+    def test_h2e_reading_a_secret_attribute_without_no_log_is_red(self) -> None:
+        root = self._append_task(
+            TENANT_STACK, "    msg: '{{ tenant_compose_stack.secrets_env_text }}'"
+        )
+        self._assert_red(self._findings(root), "R1 " + TENANT_STACK, "Appended task")
+
+    def test_h2f_reading_another_attribute_without_no_log_is_clean(self) -> None:
+        root = self._append_task(TENANT_STACK, "    msg: '{{ tenant_compose_stack.slug }}'")
+        self.assertEqual(self._findings(root), [])
+
+    def test_h2g_removing_no_log_from_the_other_sub_option_roles_is_red(self) -> None:
+        cases = (
+            (
+                "ansible/roles/deploy_slot_keys/tasks/main.yml",
+                "  failed_when: false\n  no_log: true\n  diff: false\n  when: not (ansible",
+                "  failed_when: false\n  diff: false\n  when: not (ansible",
+                "Make the deploy slots exactly the declared list",
+            ),
+            (
+                "ansible/patterns/compose_stack/tasks/main.yml",
+                "  register: compose_stack_secret_delivery\n  no_log: true\n",
+                "  register: compose_stack_secret_delivery\n",
+                "Deliver the secret files",
+            ),
+            (
+                "ansible/roles/ci_jump/tasks/_readback.yml",
+                "ci_jump_readback\n  failed_when: false\n  changed_when: false\n  no_log: true\n",
+                "ci_jump_readback\n  failed_when: false\n  changed_when: false\n",
+                "Read both files back",
+            ),
+            (
+                "ansible/patterns/secrets_and_no_log/tasks/main.yml",
+                "      no_log: true\n      diff: false\n      register: secrets_and_no_log_wri",
+                "      diff: false\n      register: secrets_and_no_log_wri",
+                "Write the secrets given as values",
+            ),
+        )
+        for relative, old, new, task in cases:
+            with self.subTest(task=task):
+                self._assert_red(
+                    self._findings(self._mutate(relative, old, new)),
+                    "R1 " + relative,
+                    task,
+                    "must set no_log: true",
+                )
+
+    def _append_task(self, relative: str, argument_line: str) -> Path:
+        """A copy of the tree with a debug task, without no_log, added to the end of a task file."""
+        self.count += 1
+        root = _copy_tree(Path(self._scratch.name) / f"tree{self.count}")
+        path = root / relative
+        path.write_text(
+            path.read_text(encoding="utf-8")
+            + "\n- name: Appended task\n  ansible.builtin.debug:\n"
+            + argument_line
+            + "\n",
+            encoding="utf-8",
+        )
+        return root
 
 
 if __name__ == "__main__":

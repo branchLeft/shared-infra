@@ -15,6 +15,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 from check_enrolment import _read_host_roles
 from check_pins import load_yaml
@@ -30,6 +31,12 @@ SOURCE_COLUMNS = ["Role", "Option", "Source on a pulled host"]
 NAMES_HEADING = "## The secret names the services will need"
 NAMES_COLUMNS = ["Name", "Read under", "How it is made today"]
 NAMES_TREES = ("hetzner", "mail")
+LOADER_SEEDS = {LOADER: ("host_inputs_raw", "host_inputs_doc")}
+INCLUDE_NAMES = frozenset(
+    f"{prefix}{name}"
+    for prefix in ("", "ansible.builtin.")
+    for name in ("include_tasks", "import_tasks", "include_role", "import_role")
+)
 EXPRESSION_KEYS = frozenset(("when", "failed_when", "changed_when", "until"))
 CONTAINER_KEYS = frozenset(("block", "rescue", "always"))
 ASSERT_NAMES = frozenset(("assert", "ansible.builtin.assert"))
@@ -69,17 +76,59 @@ def _strings(value: object) -> list[str]:
     return []
 
 
-def _names_in(text: str, rel: str, where: str, findings: list[str]) -> set[str]:
-    """The names a template text loads, by Jinja's own parser. Only the parse is used, not the
-    compile, because Ansible's filters (dirname, password_hash) are not Jinja's and a compile
-    refuses them. A name bound by a loop is counted too, which can only ask for more no_log. Text
-    that does not parse is a finding: an unreadable template cannot be cleared."""
+def _parse(text: str, rel: str, where: str, findings: list[str]) -> nodes.Template | None:
+    """A template text parsed by Jinja's own parser. Only the parse is used, not the compile,
+    because Ansible's filters (dirname, password_hash) are not Jinja's and a compile refuses
+    them. Text that does not parse is a finding: an unreadable template cannot be cleared."""
     try:
-        tree = ENV.parse(text)
+        return ENV.parse(text)
     except TemplateSyntaxError:
         findings.append(f"R1 {rel}: {where} holds a template that does not parse")
-        return set()
-    return {node.name for node in tree.find_all(nodes.Name) if node.ctx == "load"}
+        return None
+
+
+def _secret_key(node: nodes.Node) -> str | None:
+    """The constant key an attribute or item read names, or None when it is not constant."""
+    if isinstance(node, nodes.Getattr):
+        return node.attr
+    if isinstance(node, nodes.Getitem) and isinstance(node.arg, nodes.Const):
+        return node.arg.value if isinstance(node.arg.value, str) else None
+    return None
+
+
+def _loaded(node: nodes.Node, partial: dict[str, set[str]]) -> set[str]:
+    """The names a parse tree loads. A name bound by a loop is counted too, which can only ask
+    for more no_log. A name in `partial` holds a secret only in some attributes, so it counts
+    when it is read whole, or through one of those attributes, and not when it is read through
+    another attribute, counted, or mapped to another attribute."""
+    if isinstance(node, (nodes.Getattr, nodes.Getitem)) and isinstance(node.node, nodes.Name):
+        name = node.node.name
+        key = _secret_key(node)
+        if name in partial and key is not None:
+            return {name} if key in partial[name] else set()
+    if isinstance(node, nodes.Filter) and isinstance(node.node, nodes.Name):
+        name = node.node.name
+        if name in partial and node.name in ("length", "count") and not node.args:
+            return set()
+        if name in partial and node.name == "map" and not node.args:
+            attribute = [k.value for k in node.kwargs if k.key == "attribute"]
+            if len(attribute) == 1 and isinstance(attribute[0], nodes.Const):
+                first = str(attribute[0].value).split(".")[0]
+                if first not in partial[name]:
+                    return set()
+    found: set[str] = set()
+    if isinstance(node, nodes.Name) and node.ctx == "load":
+        found.add(node.name)
+    for child in node.iter_child_nodes():
+        found |= _loaded(child, partial)
+    return found
+
+
+def _names_in(
+    text: str, rel: str, where: str, findings: list[str], partial: dict[str, set[str]]
+) -> set[str]:
+    tree = _parse(text, rel, where, findings)
+    return set() if tree is None else _loaded(tree, partial)
 
 
 def _yaml_files(directory: Path) -> list[Path]:
@@ -122,6 +171,46 @@ def _secrets_of(root: Path, role_dir: Path, findings: list[str]) -> set[str]:
     }
 
 
+def _secret_attrs(spec: dict[str, object]) -> set[str]:
+    """The sub-options of an option spec that hold a secret: one with no_log: true, or one whose
+    own sub-options do. A secret nested deeper counts its whole branch, which asks for more."""
+    attrs: set[str] = set()
+    for name, sub in _dict(spec.get("options")).items():
+        if isinstance(name, str) and (
+            _dict(sub).get("no_log") is True or _secret_attrs(_dict(sub))
+        ):
+            attrs.add(name)
+    return attrs
+
+
+def _seeds_of(
+    root: Path, role_dir: Path, findings: list[str]
+) -> tuple[set[str], dict[str, set[str]]]:
+    """The seeds of a role: the variables whose whole value is a secret, and the variables
+    that hold a secret only in some attributes (a list or mapping option with a no_log
+    sub-option), mapped to those attributes. The loader's own variables are seeds as well."""
+    whole: set[str] = set(LOADER_SEEDS.get(role_dir.name, ()))
+    partial: dict[str, set[str]] = {}
+    for name, spec in _option_specs(root, role_dir, findings).items():
+        if spec.get("no_log") is True:
+            whole.add(name)
+        elif _secret_attrs(spec):
+            partial[name] = _secret_attrs(spec)
+    return whole, partial
+
+
+def sub_option_secrets(root: Path = ROOT) -> dict[str, dict[str, set[str]]]:
+    """Each role or pattern with a list or mapping option that has a no_log sub-option, with the
+    option and the attributes."""
+    scratch: list[str] = []
+    out: dict[str, dict[str, set[str]]] = {}
+    for role_dir in _role_dirs(root):
+        _, partial = _seeds_of(root, role_dir, scratch)
+        if partial:
+            out[role_dir.name] = partial
+    return out
+
+
 def secret_options(root: Path = ROOT) -> dict[str, set[str]]:
     """Each role or pattern that declares a no_log option, with the names of those options."""
     scratch: list[str] = []
@@ -140,12 +229,87 @@ def _find_role(root: Path, role: str) -> Path | None:
     return None
 
 
-def _taint(root: Path, role_dir: Path, seeds: set[str], findings: list[str]) -> dict[str, set[str]]:
-    """Each variable of the role that holds a secret, mapped to the secret options it came from.
-    A seed maps to itself. Taint follows a value that names a tainted variable, to a fixed point,
-    and a variable reached through two secrets names both."""
+class _Loop(NamedTuple):
+    """A task that loops: the loop variable it names (None for the default `item`), the parsed
+    loop expression, the name the expression is when it is that name alone, and whether the task
+    includes other tasks, which see the loop variable."""
+
+    var: str | None
+    trees: list[nodes.Template]
+    bare: str | None
+    includes: bool
+    rel: str
+    name: str
+
+
+def _bare_name(tree: nodes.Template) -> str | None:
+    body = tree.body
+    if len(body) == 1 and isinstance(body[0], nodes.Output) and len(body[0].nodes) == 1:
+        only = body[0].nodes[0]
+        if isinstance(only, nodes.Name):
+            return only.name
+    return None
+
+
+def _loops_in(items: list[object], rel: str, out: list[_Loop]) -> None:
+    for task in items:
+        if not isinstance(task, dict):
+            continue
+        keys = [k for k in task if isinstance(k, str) and (k == "loop" or k.startswith("with_"))]
+        if keys:
+            trees: list[nodes.Template] = []
+            for key in keys:
+                for text in _strings(task[key]):
+                    tree = _parse(text, rel, "a loop", [])
+                    if tree is not None:
+                        trees.append(tree)
+            bare = _bare_name(trees[0]) if len(keys) == 1 and len(trees) == 1 else None
+            var = _dict(task.get("loop_control")).get("loop_var")
+            out.append(
+                _Loop(
+                    var if isinstance(var, str) and var.isidentifier() else None,
+                    trees,
+                    bare,
+                    bool(INCLUDE_NAMES & task.keys()),
+                    rel,
+                    str(task.get("name", "(unnamed)")),
+                )
+            )
+        for key in CONTAINER_KEYS & task.keys():
+            inner = task[key]
+            if isinstance(inner, list):
+                _loops_in(inner, rel, out)
+
+
+def _loops(root: Path, role_dir: Path) -> list[_Loop]:
+    out: list[_Loop] = []
+    for path in _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers"):
+        doc, problem = load_yaml(path)
+        if problem is None and isinstance(doc, list):
+            _loops_in(doc, _rel(root, path), out)
+    return out
+
+
+def _taint(
+    root: Path,
+    role_dir: Path,
+    seeds: set[str],
+    partial_seeds: dict[str, set[str]],
+    findings: list[str],
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Each variable of the role that holds a secret, mapped to the secret options it came from,
+    and the subset of those that hold a secret only in some attributes, mapped to the attributes.
+    A seed maps to itself, and an attribute seed to `name.attribute`. Taint follows a value that
+    names a tainted variable, to a fixed point, and a variable reached through two secrets names
+    both. It follows a loop over a tainted variable into the loop variable the loop names, role
+    wide, because an included task file reads that variable: a loop over the attribute seed
+    alone gives a loop variable with the same secret attributes."""
+    partial = {name: set(attrs) for name, attrs in partial_seeds.items()}
     origin: dict[str, set[str]] = {seed: {seed} for seed in seeds}
-    defs: dict[str, set[str]] = {}
+    for name, attrs in partial.items():
+        origin[name] = {f"{name}.{attr}" for attr in sorted(attrs)}
+    pinned = set(origin)
+    defs: dict[str, list[nodes.Template]] = {}
     for sub in ("vars", "defaults"):
         for path in _yaml_files(role_dir / sub):
             if path.parent != role_dir / sub:
@@ -158,23 +322,48 @@ def _taint(root: Path, role_dir: Path, seeds: set[str], findings: list[str]) -> 
             for key, value in _dict(doc).items():
                 if not isinstance(key, str):
                     continue
-                names: set[str] = set()
                 for text in _strings(value):
-                    names |= _names_in(text, rel, f"variable {key}", findings)
-                defs[key] = defs.get(key, set()) | names
+                    tree = _parse(text, rel, f"variable {key}", findings)
+                    if tree is not None:
+                        defs.setdefault(key, []).append(tree)
+    loops = _loops(root, role_dir)
     changed = True
     while changed:
         changed = False
-        for key, refs in defs.items():
-            if key in seeds:
+        for key, trees in defs.items():
+            if key in pinned:
                 continue
             reached: set[str] = set()
-            for ref in refs & origin.keys():
-                reached |= origin[ref]
+            for tree in trees:
+                for ref in _loaded(tree, partial) & origin.keys():
+                    reached |= origin[ref]
             if reached and not reached <= origin.get(key, set()):
                 origin[key] = origin.get(key, set()) | reached
                 changed = True
-    return origin
+        for loop in loops:
+            if loop.var is None or loop.var in pinned:
+                continue
+            hits: set[str] = set()
+            for tree in loop.trees:
+                hits |= _loaded(tree, partial) & origin.keys()
+            if loop.bare in partial and loop.var not in origin:
+                partial[loop.var] = set(partial[loop.bare])
+                origin[loop.var] = set(origin[loop.bare])
+                changed = True
+            elif hits and loop.bare not in partial:
+                reached = set().union(*(origin[hit] for hit in hits))
+                if loop.var in partial or not reached <= origin.get(loop.var, set()):
+                    partial.pop(loop.var, None)
+                    origin[loop.var] = origin.get(loop.var, set()) | reached
+                    changed = True
+    for loop in loops:
+        if loop.var is None and loop.includes:
+            if any(_loaded(tree, partial) & origin.keys() for tree in loop.trees):
+                findings.append(
+                    f"R1 {loop.rel}: task '{loop.name}' loops over a secret and includes tasks, "
+                    "so it must name a loop_var: the included tasks cannot be followed through item"
+                )
+    return origin, partial
 
 
 def tainted(root: Path, role: str) -> set[str]:
@@ -182,11 +371,17 @@ def tainted(root: Path, role: str) -> set[str]:
     role_dir = _find_role(root, role)
     if role_dir is None:
         return set()
-    seeds = _secrets_of(root, role_dir, [])
-    return set(_taint(root, role_dir, seeds, []))
+    whole, partial = _seeds_of(root, role_dir, [])
+    return set(_taint(root, role_dir, whole, partial, [])[0])
 
 
-def _task_refs(task: dict[str, object], rel: str, name: str, findings: list[str]) -> set[str]:
+def _task_refs(
+    task: dict[str, object],
+    rel: str,
+    name: str,
+    findings: list[str],
+    partial: dict[str, set[str]],
+) -> set[str]:
     """The variables a task names in any position that prints or uses a value. The expression
     keywords are left out: they print only their expression, and the refusal asserts are read
     for their coded messages. A secret named in an assert's fail message still counts."""
@@ -195,14 +390,23 @@ def _task_refs(task: dict[str, object], rel: str, name: str, findings: list[str]
         args = body[key]
         if isinstance(args, dict):
             body[key] = {k: v for k, v in args.items() if k != "that"}
+    scoped = body.get("vars")
+    if isinstance(scoped, dict):
+        # A name bound by `vars:` is set, not read: only what it is set to can leak.
+        body["vars"] = list(scoped.values())
     refs: set[str] = set()
     for text in _strings(body):
-        refs |= _names_in(text, rel, f"task '{name}'", findings)
+        refs |= _names_in(text, rel, f"task '{name}'", findings, partial)
     return refs
 
 
 def _template_refs(
-    task: dict[str, object], role_dir: Path, rel: str, name: str, findings: list[str]
+    task: dict[str, object],
+    role_dir: Path,
+    rel: str,
+    name: str,
+    findings: list[str],
+    partial: dict[str, set[str]],
 ) -> set[str]:
     refs: set[str] = set()
     for key in TEMPLATE_NAMES & task.keys():
@@ -216,7 +420,7 @@ def _template_refs(
         except (OSError, UnicodeDecodeError):
             findings.append(f"R1 {rel}: task '{name}' names a template that cannot be read")
             continue
-        refs |= _names_in(text, rel, f"template of task '{name}'", findings)
+        refs |= _names_in(text, rel, f"template of task '{name}'", findings, partial)
     return refs
 
 
@@ -249,12 +453,13 @@ def _judge(
 def _walk(
     items: list[object],
     role_dir: Path,
-    origin: dict[str, set[str]],
+    taint: tuple[dict[str, set[str]], dict[str, set[str]]],
     rel: str,
     inherited_no_log: object,
     inherited_diff: object,
     findings: list[str],
 ) -> int:
+    origin, partial = taint
     count = 0
     for task in items:
         if not isinstance(task, dict):
@@ -263,7 +468,7 @@ def _walk(
         name = str(task.get("name", "(unnamed)"))
         no_log = task["no_log"] if "no_log" in task else inherited_no_log
         diff = task["diff"] if "diff" in task else inherited_diff
-        refs = _task_refs(task, rel, name, findings)
+        refs = _task_refs(task, rel, name, findings, partial)
         if CONTAINER_KEYS.intersection(task.keys()):
             _judge(refs, task, no_log, diff, name, rel, origin, findings)
             for key in CONTAINER_KEYS.intersection(task.keys()):
@@ -271,10 +476,10 @@ def _walk(
                 if not isinstance(inner, list):
                     findings.append(f"R1 {rel}: task '{name}' has a {key} that is not a list")
                     continue
-                count += _walk(inner, role_dir, origin, rel, no_log, diff, findings)
+                count += _walk(inner, role_dir, taint, rel, no_log, diff, findings)
             continue
         count += 1
-        refs |= _template_refs(task, role_dir, rel, name, findings)
+        refs |= _template_refs(task, role_dir, rel, name, findings, partial)
         _judge(refs, task, no_log, diff, name, rel, origin, findings)
     return count
 
@@ -283,11 +488,18 @@ def _r1(root: Path, findings: list[str]) -> int:
     """R1 over every role and pattern that declares a secret. Returns the tasks checked."""
     checked = 0
     for role_dir in _role_dirs(root):
-        seeds = _secrets_of(root, role_dir, findings)
-        if not seeds:
+        whole, partial = _seeds_of(root, role_dir, findings)
+        if not whole and not partial:
             continue
-        origin = _taint(root, role_dir, seeds, findings)
-        for path in _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers"):
+        taint = _taint(root, role_dir, whole, partial, findings)
+        task_files = _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers")
+        for name in LOADER_SEEDS.get(role_dir.name, ()):
+            if not any(name in path.read_text(encoding="utf-8") for path in task_files):
+                findings.append(
+                    f"R1 {_rel(root, role_dir)}: the loader variable {name} is named by no task, "
+                    "so the check would see nothing"
+                )
+        for path in task_files:
             rel = _rel(root, path)
             doc, problem = load_yaml(path)
             if problem is not None:
@@ -298,7 +510,7 @@ def _r1(root: Path, findings: list[str]) -> int:
             if not isinstance(doc, list):
                 findings.append(f"R1 {rel}: must be a list of tasks")
                 continue
-            checked += _walk(doc, role_dir, origin, rel, None, None, findings)
+            checked += _walk(doc, role_dir, taint, rel, None, None, findings)
     return checked
 
 
@@ -462,12 +674,17 @@ def check(root: Path = ROOT) -> list[str]:
 def summary(root: Path = ROOT) -> list[str]:
     """Counts for the reader: the secret options, and the variables that the taint reaches."""
     secrets = secret_options(root)
+    subs = sub_option_secrets(root)
     derived: set[str] = set()
-    for role, names in secrets.items():
-        derived |= tainted(root, role) - names
+    for role in sorted(set(secrets) | set(subs) | set(LOADER_SEEDS)):
+        seeds = secrets.get(role, set()) | set(subs.get(role, {})) | set(LOADER_SEEDS.get(role, ()))
+        derived |= tainted(root, role) - seeds
     count = sum(len(names) for names in secrets.values())
+    sub_count = sum(len(options) for options in subs.values())
     return [
         f"note: {count} no_log options in {len(secrets)} roles and patterns",
+        f"note: {sub_count} list options with a no_log sub-option in {len(subs)} roles,"
+        f" and the {LOADER} loader's own variables",
         f"note: {len(derived)} variables reached from them: {', '.join(sorted(derived))}",
     ]
 

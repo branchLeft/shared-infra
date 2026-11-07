@@ -510,9 +510,12 @@ and names a task or a variable, never a value.
 Rules:
 
 - **R1, taint.** The seeds are the options of the role's `main` argument spec with
-  `no_log: true`. Taint follows a value through the role's `vars/` and `defaults/` by exact
-  variable name, to a fixed point, and a variable that is reached through two secrets names
-  both. A task under `tasks/` or `handlers/` that names a tainted variable must set
+  `no_log: true`, and, for a list or mapping option, the sub-options with `no_log: true`
+  (see "Sub-option secrets" below). The `host_inputs` loader declares no option, so its own
+  `host_inputs_raw` and `host_inputs_doc` are seeds by name, and a rename that leaves a seed
+  named by no task is a finding. Taint follows a value through the role's `vars/` and
+  `defaults/` by exact variable name, to a fixed point, and a variable that is reached through
+  two secrets names both. A task under `tasks/` or `handlers/` that names a tainted variable must set
   `no_log: true` as a literal. `block`, `rescue` and `always` are recursed, and a block's
   literal `no_log` and `diff` are inherited. A task that writes a file (`copy`, `template`,
   `lineinfile`, `blockinfile`, `replace`, `assemble`) from a tainted variable must set
@@ -531,6 +534,16 @@ Rules:
   script-side names must have each name read by a file under `hetzner/`, `mail/` or a root
   `RUNBOOK*.md`. The reverse direction, that every script name is listed, is reviewed by hand.
 
+Sub-option secrets. An option such as `tenant_compose_stacks` holds a secret only in an
+attribute of its items (`secrets_env_text`). The option is then a seed for that attribute only:
+a read of the whole option, or of a secret attribute (`x.secrets_env_text`,
+`x['secrets_env_text']`, `map(attribute='secrets_env_text')`), is a secret read, and a read of
+another attribute (`x.slug`, `map(attribute='slug')`) or its `length` is not. A task that loops
+over the option, and names a `loop_control.loop_var`, makes that loop variable a seed for the
+same attributes in every task file of the role, because an `include_tasks` file reads it. A loop
+over a secret that includes tasks and keeps the default `item` is a finding: the included tasks
+cannot be followed through `item`. Names set under a task's `vars:` are not reads.
+
 How references are read: by Jinja's parser alone (`Environment.parse`, then the names the
 parse tree loads). The check does not compile the template, because Ansible's filters
 (`dirname`, `password_hash`) are not Jinja's and a compile refuses them. A name bound by a
@@ -539,9 +552,9 @@ since a text the check cannot read cannot be cleared.
 
 What it does not see:
 
-- Only options that declare `no_log: true` seed the taint. An option that holds a credential
-  without the flag is invisible to R1. Which options are secrets is the owner's classification,
-  so that list is a ticket of its own.
+- Only options and sub-options that declare `no_log: true` seed the taint (and the loader's two
+  variables). An option that holds a credential without the flag is invisible to R1. Which
+  options are secrets is the owner's classification, so that list is a ticket of its own.
 - Taint is by variable name, within one role (ANS-12). It does not follow `set_fact`,
   `register`, or a value passed through a playbook, a `trust/` file or another role. The
   loader's facts are seeded by the role that consumes them, as options of that role.
@@ -551,16 +564,15 @@ What it does not see:
   names `control_plane_masterkey` directly, and the test pins that boundary, so it is a visible
   choice and not an accident. Tainting the record by a name prefix would force `no_log` onto
   the empty-create and mode tasks and hide their failures.
-- A seed is a top-level option. Five `no_log: true` flags sit on a sub-option of a list
-  option instead, and R1 does not see them: `compose_stack_secret_files.content`,
-  `secrets_and_no_log_secrets.value`, `ci_jump_keys.key`, `deploy_slot_keys_slots.public_key`
-  and `tenant_compose_stacks.secrets_env_text`. Whether a list option of that shape is a
-  secret, and how its items are named in tasks, is a classification of its own, filed as
-  discovered work and not started here.
+- A loop variable is followed only when the loop names it (`loop_control.loop_var`), or the
+  loop has no include. A `set_fact` or `register` that copies an attribute into another
+  variable is not followed. A value that comes in through `lookup('template', ...)` is not
+  read, and neither is a subscript the parser cannot see as constant (`x[name]`, which counts
+  as a read of the whole option and so asks for more `no_log`).
 - R3 checks the table's rows, not what the consuming role does with a value.
 
 Sabotage, each one a copy of the real files with one control broken, and the baseline copy
-clean (`test_check_secret_no_log.py`, 18 tests, green under the pinned ansible-core venv):
+clean (`test_check_secret_no_log.py`, 29 tests, green under the pinned ansible-core venv):
 
 | Sabotage in the copy                                                  | Finding that goes red                                                                     |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -570,6 +582,12 @@ clean (`test_check_secret_no_log.py`, 18 tests, green under the pinned ansible-c
 | `no_log: true` removed from the write of the master key               | R1: names `control_plane_masterkey` and must set `no_log: true`                           |
 | `diff: false` removed from the master key copy                        | R1: must set `diff: false (ANS-16)`                                                       |
 | A task with a template that does not parse                            | R1: does not parse                                                                        |
+| `no_log: true` removed from the loader's set_fact of every input      | R1: `host_inputs_doc`, must set `no_log: true`                                            |
+| `no_log: true` removed from the loader's parse task                   | R1: `host_inputs_raw`, must set `no_log: true`                                            |
+| `no_log: true` removed from the write of a tenant's secrets file      | R1: `tenant_compose_stack (secret through tenant_compose_stacks.secrets_env_text)`        |
+| `no_log: true` removed from the loop that includes each tenant's file | R1: `tenant_compose_stacks (secret through ...)`                                          |
+| `no_log: true` removed from the other four sub-option roles' writes   | R1: must set `no_log: true`, each named by its task                                       |
+| A loop over a secret with an include and the default `item`           | R1: must name a loop_var                                                                  |
 | A row name that is no option (`monitoring_stack_smtp_passwd`)         | R2: resolves to 0 options, not one                                                        |
 | The loader's rows file made unreadable                                | R2                                                                                        |
 | A secret option with its row removed from the README                  | R3: no row for the no_log option                                                          |
