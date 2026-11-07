@@ -1194,14 +1194,39 @@ class Sabotage(unittest.TestCase):
         self._edit("owner_vars/edget.yml", "ci_jump_keys: []", "ci_jump_keys:\n  - key: 5")
         self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry needs a text key")
 
-    # ops1's owner_vars file holds the step allow-list and nothing else (wiring ws#2531). The
-    # positive control first: the real file passes, and it is the one key, so a check that
-    # refused every ops1 file would not pass for a strict one.
-    def test_r10_ops1_owner_vars_holds_only_the_step_allowlist(self) -> None:
+    # ops1's owner_vars file holds the step allow-list and the applications image the steps run
+    # (wiring ws#2531), and nothing else. The positive control first: the real file passes, and it
+    # is the two keys, so a check that refused every ops1 file would not pass for a strict one.
+    def test_r10_ops1_owner_vars_holds_only_the_step_allowlist_and_the_image(self) -> None:
         self.assertEqual(check(self.root), [])
         text = (self.ansible / "owner_vars" / "ops1.yml").read_text(encoding="utf-8")
         self.assertIn("pull_trigger_steps:", text)
-        self.assertEqual(["pull_trigger_steps"], sorted(self._ops1_keys()))
+        self.assertIn("control_plane_db_apps_image:", text)
+        self.assertEqual(
+            ["control_plane_db_apps_image", "pull_trigger_steps"], sorted(self._ops1_keys())
+        )
+
+    # The image is the one value of the role's interface the owner may fix for ops1; it must be
+    # text, and a file without it is refused as a missing key (the key set is exact).
+    def test_r10_ops1_apps_image_is_not_text(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml",
+            "control_plane_db_apps_image: ",
+            "control_plane_db_apps_image: 7\n#",
+        )
+        self._assert_one("R10 owner_vars/ops1.yml: control_plane_db_apps_image must be text")
+
+    def test_r10_ops1_apps_image_missing(self) -> None:
+        self._write("owner_vars/ops1.yml", "---\npull_trigger_steps: []\n")
+        self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
+
+    def test_r10_the_apps_image_is_ops1s_alone(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys: []\ncontrol_plane_db_apps_image: x\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
 
     def _ops1_keys(self) -> list[str]:
         doc = _load(self.ansible / "owner_vars" / "ops1.yml", [], "ops1.yml")

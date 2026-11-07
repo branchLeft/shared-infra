@@ -160,6 +160,16 @@ would recreate the database, so the role leaves a running stack to the unit. A f
 still uses the direct commands, because the unit cannot start the applications before the
 database and the sign-in service exist.
 
+A change to a service's block in `compose.yml` is a changed config for that service alone, and
+the next deploy wrapper run recreates just that service. The two applications carry their
+trusted proxy list (`PORTAL_TRUSTED_PROXIES` and `CONSOLE_TRUSTED_PROXIES`, the edge's private
+address, written once in the file and taken by alias) in their own `environment:` block, because
+the environment file reaches the containers only through `${VAR}` references in the compose
+file. Delivering that change recreates `portal` and `console` once, on the image the wrapper
+last pinned, and leaves `db` and `zitadel` as they are. It does not move the image: the role
+keeps the running image unless `control_plane_app_image` is given, and the deploy wrapper run
+by the owner is what moves it.
+
 ## Requirements
 
 - ansible-core at the version pinned in `ansible/requirements.txt`; the role's
