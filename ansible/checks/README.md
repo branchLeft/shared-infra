@@ -186,9 +186,11 @@ is not loaded there.
   the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
   the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the
   role through the host's `host_inputs` row. What a destination or a key may look like is the role's rule alone,
-  in its module. For ops1 the one key is `pull_trigger_steps`,
-  the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text. R10 reads
-  only that shape. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
+  in its module. For ops1 the two keys are `pull_trigger_steps`,
+  the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text, and
+  `control_plane_db_apps_image`, the applications image the steps run, which must be text.
+  R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
+  digest pattern, read by name from the role's constants. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
   word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
   real file through the program's own `parse_config`. `control_plane_db_step` is never an owner
   key: it is the role's second key and only the pull sets it. A host with no allowed keys may
