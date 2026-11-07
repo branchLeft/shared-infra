@@ -30,10 +30,10 @@ hetzner/provision/45-install-db-tunnel.sh:
   role: db_tunnel
 hetzner/provision/app-host-isolation.sh:
   reason: pending-role
-  role: app_host_isolation
+  role: deploy_tooling
 hetzner/provision/branchleft_docker_user_policy.sh:
   reason: pending-role
-  role: app_host_isolation
+  role: deploy_tooling
 hetzner/provision/branchleft_host_egress.sh:
   reason: pending-role
   role: egress_nat
