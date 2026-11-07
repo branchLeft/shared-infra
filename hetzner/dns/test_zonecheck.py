@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -673,6 +674,66 @@ class CheckedInPublicPressTest(unittest.TestCase):
         # answered NOERROR with no data, so a name sat below it.
         self.assertEqual(rrsets[("s1-ionos._domainkey", "CNAME")][1], frozenset({"s1.dkim.ionos.com."}))
         self.assertEqual(rrsets[("s2-ionos._domainkey", "CNAME")][1], frozenset({"s2.dkim.ionos.com."}))
+
+    # Every DKIM selector known to sign or delegate signing for this domain.
+    # Names under _domainkey cannot be enumerated from outside, so the first
+    # capture missed bl and a file/transcript agreement cannot show it: both
+    # lacked it. Each selector is therefore named here, and one missing from
+    # the file, the probe list or the transcript fails by name.
+    KNOWN_DKIM_SELECTORS = ("bl", "s1-ionos", "s2-ionos")
+
+    def pinned_selector_problems(self, data, text):
+        problems = []
+        zone = data["zone"]
+        declared = {r["name"]: r for r in data["rrsets"]}
+        for selector in self.KNOWN_DKIM_SELECTORS:
+            name = f"{selector}._domainkey"
+            if name not in declared:
+                problems.append(f"{name}: not declared in the zone file")
+            if name not in data["probe_names"]:
+                problems.append(f"{name}: not in probe_names")
+            owner = zonecheck.fqdn(name, zone)
+            answered = [
+                line for line in text.splitlines()
+                if len(line.split(None, 4)) == 5 and line.split(None, 4)[0] == owner
+            ]
+            if not answered:
+                problems.append(f"{name}: no answer in the transcript")
+        return problems
+
+    def test_every_known_dkim_selector_is_declared_probed_and_in_the_transcript(self):
+        self.assertEqual(self.pinned_selector_problems(self.data, self.text), [])
+
+    def test_bl_is_the_dkim_public_key_served_as_two_strings(self):
+        rrsets = zonecheck.load_zone(self.ZONE_FILE).rrsets
+        ttl, values = rrsets[("bl._domainkey", "TXT")]
+        self.assertEqual(ttl, 3600)
+        (value,) = values
+        self.assertTrue(value.startswith('"v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBg'))
+        self.assertEqual(value.count('" "'), 1)
+
+    def test_a_selector_missing_from_file_probes_and_transcript_alike_fails_naming_it(self):
+        # The control case: the state that shipped before bl was found. Every
+        # existing agreement check passes on it, so only the pinned list can fail.
+        for selector in self.KNOWN_DKIM_SELECTORS:
+            with self.subTest(selector=selector):
+                name = f"{selector}._domainkey"
+                owner = zonecheck.fqdn(name, self.data["zone"])
+                data = dict(self.data)
+                data["rrsets"] = [r for r in self.data["rrsets"] if r["name"] != name]
+                data["probe_names"] = [n for n in self.data["probe_names"] if n != name]
+                blocks = re.split(r"(?m)^(?=;;; QUERY )", self.text)
+                text = "".join(b for b in blocks if not b.startswith(f";;; QUERY {owner} "))
+                self.assertLess(len(text), len(self.text))
+                path = self.tmp / "without.json"
+                path.write_text(json.dumps(data))
+                transcript = self.tmp / "without.txt"
+                transcript.write_text(text)
+                code, out, _ = self.check(zone_file=path, transcript=transcript)
+                self.assertEqual(code, 0, "the agreement check cannot see the gap: " + out)
+                problems = self.pinned_selector_problems(data, text)
+                self.assertEqual(len(problems), 3, problems)
+                self.assertTrue(all(p.startswith(f"{name}:") for p in problems), problems)
 
     def test_the_transcript_shows_the_apex_soa_and_ns_that_are_not_declared(self):
         self.assertIn("\tSOA\t", self.text)
