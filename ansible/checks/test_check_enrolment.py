@@ -21,6 +21,7 @@ from check_enrolment import (
     JUMP_HOSTS,
     JUMP_VARS,
     OWNER_VARS_KEYS,
+    RING_CONTROLLER_TEXT_KEYS,
     ROOT,
     _AnyTagLoader,
     _construct_any_tag,
@@ -1197,14 +1198,45 @@ class Sabotage(unittest.TestCase):
     # ops1's owner_vars file holds the step allow-list and the applications image the steps run
     # (wiring ws#2531), and nothing else. The positive control first: the real file passes, and it
     # is the two keys, so a check that refused every ops1 file would not pass for a strict one.
-    def test_r10_ops1_owner_vars_holds_only_the_step_allowlist_and_the_image(self) -> None:
+    def test_r10_ops1_owner_vars_holds_only_the_step_allowlist_the_image_and_the_ring_inputs(
+        self,
+    ) -> None:
         self.assertEqual(check(self.root), [])
         text = (self.ansible / "owner_vars" / "ops1.yml").read_text(encoding="utf-8")
         self.assertIn("pull_trigger_steps:", text)
         self.assertIn("control_plane_db_apps_image:", text)
         self.assertEqual(
-            ["control_plane_db_apps_image", "pull_trigger_steps"], sorted(self._ops1_keys())
+            sorted(
+                ["control_plane_db_apps_image", "pull_trigger_steps", *RING_CONTROLLER_TEXT_KEYS]
+            ),
+            sorted(self._ops1_keys()),
         )
+
+    # The ring controller role's five inputs are public text, empty until the owner sets them. The
+    # check reads only the type; the role holds the shapes. Each key, set to a non-text value, is
+    # refused by name; each key missing is refused as a key set that is not exact; and none is
+    # allowed on another host's file. The positive control above is the real file passing.
+    def test_r10_ops1_ring_controller_inputs_must_be_text(self) -> None:
+        for key in sorted(RING_CONTROLLER_TEXT_KEYS):
+            with self.subTest(key=key):
+                self._reset()
+                self._edit("owner_vars/ops1.yml", f"{key}: ''", f"{key}: 7")
+                self._assert_one(f"R10 owner_vars/ops1.yml: {key} must be text")
+
+    def test_r10_ops1_ring_controller_inputs_missing_is_refused(self) -> None:
+        for key in sorted(RING_CONTROLLER_TEXT_KEYS):
+            with self.subTest(key=key):
+                self._reset()
+                self._edit("owner_vars/ops1.yml", f"{key}: ''\n", "")
+                self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
+
+    def test_r10_the_ring_controller_inputs_are_ops1s_alone(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys: []\nring_controller_host_bundle_sha256: ''\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
 
     # The image is the one value of the role's interface the owner may fix for ops1; it must be
     # text, and a file without it is refused as a missing key (the key set is exact).

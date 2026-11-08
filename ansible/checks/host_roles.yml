@@ -40,6 +40,7 @@ ops1:
   - backup_restore
   - control_plane_db
   - node_exporter
+  - ring_controller_host
 app1:
   - host_inputs
   - deploy_tooling

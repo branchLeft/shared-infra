@@ -1,0 +1,52 @@
+---
+# The refusal cases of the role (ANS-15): one bad state or bad input at a time, each required to
+# stop the role with its own message and leave the host as it found it. The platform is the default
+# scenario's, for the same reasons.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, trusted by digest (see the default scenario).
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    pre_build_image: true
+    keep_volumes: false
+    # The host cgroup namespace is the stated ANS-15 exception the default scenario explains.
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    command: /lib/systemd/systemd
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        # The role's own constants, spelled out here so that a change of a constant fails the
+        # scenario instead of being followed by it.
+        scenario_keys_dir: /etc/branchleft/ring-controller/keys
+        scenario_ledger_key: /etc/branchleft/ring-controller/keys/ledger-signing
+        scenario_push_key: /etc/branchleft/ring-controller/keys/push
+        # Every place the role writes. A case compares a listing of these before and after the
+        # role runs, so a refusal that changed anything shows.
+        scenario_snapshot_roots:
+          - /etc/branchleft
+          - /opt/branchleft
+          - /var/lib/branchleft
+          - /etc/systemd/system/ring-controller.service
+          - /etc/systemd/system/ring-controller.timer
+        # Well-formed values for the inputs, and a digest of nothing that exists.
+        scenario_digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        scenario_bundle_url: https://bundle.example.test/ring-controller.tar.gz
+        scenario_ledger_url: https://ledger.example.test/ledger
+        scenario_push_remote: ssh://git@git.example.test/example-org/example-ledger.git
+        scenario_known_hosts_line: git.example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA==
+verifier:
+  name: ansible

@@ -64,9 +64,21 @@ JUMP_VARS = frozenset(
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
 APPS_IMAGE_KEY = "control_plane_db_apps_image"
+# The five inputs of the ring_controller_host role. Each is public text that is empty until the
+# owner sets it, and an empty digest keeps the controller's timer off. The role holds the shapes
+# (its vars/main.yml patterns), so only the type is read here, as for APPS_IMAGE_KEY.
+RING_CONTROLLER_TEXT_KEYS = frozenset(
+    (
+        "ring_controller_host_bundle_sha256",
+        "ring_controller_host_bundle_url",
+        "ring_controller_host_ledger_url",
+        "ring_controller_host_ledger_push_remote",
+        "ring_controller_host_push_known_hosts",
+    )
+)
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS,
-    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)),
+    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)) | RING_CONTROLLER_TEXT_KEYS,
 }
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
@@ -752,6 +764,11 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     # (control_plane_db_image_pattern), which test_step_allowlist.py reads by name.
     if APPS_IMAGE_KEY in doc and not isinstance(doc[APPS_IMAGE_KEY], str):
         problems.append(f"{APPS_IMAGE_KEY} must be text")
+    problems.extend(
+        f"{key} must be text"
+        for key in sorted(RING_CONTROLLER_TEXT_KEYS)
+        if key in doc and not isinstance(doc[key], str)
+    )
     problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")
