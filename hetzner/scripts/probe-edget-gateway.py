@@ -1,66 +1,6 @@
 #!/usr/bin/env python3
-"""Prove that edge-t is the tenants network's internet gateway, and nothing else is.
-
-Two probes, one verdict line per control (`GREEN` or `RED`, then the control's
-name, then what was seen). The owner runs the first on edge-t as root, fed on
-stdin so no copy is left behind (`hetzner/tenants/RUNBOOK-edget-gateway-proof.md`
-has the exact commands):
-
-    python3 - gateway             # read-only on the ruleset
-    python3 - gateway --sabotage  # owner-run only: delete the masquerade, restore
-
-and the second from whichever machine is under test:
-
-    probe-edget-gateway.py ssh --target IPV4 --expect refused|accepted
-
-**gateway** builds two throwaway network namespaces on edge-t, each joined to
-the host by a veth pair, and sends a TCP connect to a public address from each:
-
-* `inside-subnet-egress-via-masquerade`: the source is 10.20.1.254, inside
-  10.20.1.0/24. GREEN needs a reply from the internet AND the packet counters
-  of the three rules `branchleft_nat.sh` writes (the nat/POSTROUTING
-  MASQUERADE for the subnet, and the two accepts in DOCKER-USER) all to rise.
-  A private source address cannot be answered by the internet, so the reply is
-  itself the proof that the packet left masqueraded; the counters name which
-  rules carried it.
-* `outside-subnet-no-reply`: the source is 192.0.2.1, outside the subnet. GREEN
-  needs no reply, the host's veth to have received the packets (so the silence
-  is the gateway's, not a broken lab) and no rule counter to have moved: no other
-  source can be laundered through the gateway. It only counts when the
-  inside-subnet control is GREEN in the same run, because "no reply" from a
-  source that nothing could have answered proves nothing.
-
-**--sabotage** then proves the inside-subnet control can fail: it deletes the
-masquerade rule, shows the same probe go RED naming that mechanism, restores it
-by restarting `branchleft-nat.service` (the unit that reasserts the rules at
-boot, so the restore is also the self-heal), and shows GREEN again. The window
-without the masquerade is one probe, about six seconds. The restore runs on any
-exit, including an exception, SIGINT, SIGTERM and SIGHUP. Only SIGKILL can skip
-it, and the script prints the one command that undoes it before it deletes
-anything.
-
-**Fails closed.** Anything unexpected is a failure, never a pass: a host that is
-not edge-t (the hostname and the private address 10.20.1.210 must both match,
-and edge1's 10.20.1.10 must be absent), a missing tool, output that does not
-parse, a probe that neither connected, was refused nor timed out, a rule that is
-missing or present twice. It never writes the default route (the namespaces'
-own routes are set with `ip -n`), never touches the Hetzner network, and removes
-its namespaces and veths on every exit.
-
-**ssh** is the refusal probe. It makes a plain TCP connection to port 22 and
-reads the banner, and needs no key. `--expect refused` is GREEN only when port 22
-times out (Hetzner firewalls drop, they do not reset) while port 443, which the
-stack's firewall opens to everyone, answers: without that second reading a
-timeout could be the machine's own network. `--expect accepted` is GREEN only
-when an SSH banner comes back. Run the first from the owner's machine and the
-second from edge1.
-
-Exit codes: 0 every control GREEN, 1 a control RED, 2 refused to run (wrong
-host, missing tool, bad input), 3 the clean-up or the restore did not complete.
-2 and 3 are never read as a pass.
-
-The addresses are copies of `hetzner-host/addressPlan.ts`; a test in
-`test_probe_edget_gateway.py` fails if they drift from it.
+"""Edge-t gateway proof: `gateway` (+ `--sabotage`, owner-run) on edge-t, `ssh` from any machine; fails closed.
+Commands, expected output and the safety rules: hetzner/tenants/RUNBOOK-edget-gateway-proof.md
 """
 
 from __future__ import annotations
@@ -96,12 +36,7 @@ REACHABILITY_PORT = 443
 
 @dataclass(frozen=True)
 class Source:
-    """One throwaway namespace, joined to the host by a /32 point-to-point veth.
-
-    The /32 pair adds one route to the source's own address and no route to the
-    subnet, so the host's real routes are untouched. The host-side address is
-    never put on a wire.
-    """
+    """One throwaway namespace on a /32 point-to-point veth: one route to its own address, none to the subnet."""
 
     key: str
     netns: str
@@ -117,12 +52,8 @@ INSIDE = Source("inside", "gwproof-in", "gwp-in-h", "gwp-in-n", "10.20.1.254", "
 # TEST-NET-1 (RFC 5737): reserved, never routed, never a real host.
 OUTSIDE = Source("outside", "gwproof-out", "gwp-out-h", "gwp-out-n", "192.0.2.1", "192.0.2.2")
 
-# Run inside the namespace. One line out: REPLY (the far end answered, with
-# SYN-ACK or RST), NOREPLY (nothing came back), or ERROR with the errno. A
-# connection that was made is closed with an RST, not a FIN: the namespace is
-# deleted right after, and a FIN handshake left half done makes the far end send
-# its own FIN and retransmits later, into the gateway's return rule, moving the
-# very counters the next control reads.
+# Run inside the namespace: REPLY (SYN-ACK or RST came back), NOREPLY, or ERROR with the errno.
+# A made connection is closed with an RST so no late FIN reaches the gateway's counters.
 PROBE_CODE = (
     "import socket, struct, sys\n"
     "host, port, timeout = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])\n"
@@ -190,11 +121,7 @@ def say(line: str) -> None:
 
 
 def tcp_connect(host: str, port: int, timeout: float, want_banner: bool) -> tuple[str, str]:
-    """One TCP connection from this machine: (state, detail).
-
-    state: `ssh` (connected and read an SSH banner), `connected`,
-    `connected-no-banner`, `refused` (an RST came back), `timeout`, `error`.
-    """
+    """One TCP connection: (state, detail), state in ssh, connected, connected-no-banner, refused, timeout, error."""
     family = socket.AF_INET6 if ":" in host else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_STREAM)
     sock.settimeout(timeout)
@@ -625,15 +552,20 @@ class Sabotage:
         say(f"restoring: systemctl restart {UNIT}")
         try:
             code, _, _ = run(["systemctl", "restart", UNIT], timeout=90)
-        except Refused:
+        except (Refused, OSError):
             code = 1
         back = False
         try:
             back = masquerade_present(self.ctx)
-        except Refused:
+        except (Refused, OSError):
             pass
-        code2, out2, _ = run(["systemctl", "is-active", UNIT]) if code == 0 else (1, "", "")
-        if code == 0 and back and out2.strip() == "active":
+        active = ""
+        if code == 0:
+            try:
+                _, active, _ = run(["systemctl", "is-active", UNIT])
+            except (Refused, OSError):
+                active = ""
+        if code == 0 and back and active.strip() == "active":
             self.restored = True
             return True
         self.failure = (

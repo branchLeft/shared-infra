@@ -8,9 +8,11 @@ through the masquerade, and that SSH to `edge-t` is refused to everything but
 `edge1`.
 
 Everything here is the platform owner's: it runs on, or against, a production host,
-and nothing in it is run by an agent. It changes no rule, route or firewall,
-except the one sabotage block, which deletes the masquerade rule for about six
-seconds and restores it.
+and nothing in it is run by an agent. The gateway probe adds temporary veths,
+addresses and routes on `edge-t` while it runs and removes them again; it changes
+no firewall rule, default route or setting that outlives the run, except the one
+sabotage block, which deletes the masquerade rule for about six seconds and
+restores it.
 
 It sits inside `RUNBOOK-adopt-console-servers.md`: the gateway proof belongs
 **between its step 7 and its step 9** (the `egress_nat` role converged on
@@ -76,10 +78,14 @@ read -r EDGE1_IPV4
 ```
 
 ```bash
-case "${EDGET_IPV4}${EDGE1_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address"; false;; esac
+case "${EDGET_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address: '${EDGET_IPV4}'"; false;; esac
 ```
 
-## 2. Prove the gateway (read-only)
+```bash
+case "${EDGE1_IPV4}" in ''|*[!0-9.]*) echo "not an IPv4 address: '${EDGE1_IPV4}'"; false;; esac
+```
+
+## 2. Prove the gateway (nothing that outlives the run changes)
 
 Every `ssh` below goes through `edge1`, which the stack's firewall always allows, so
 the same commands work before and after the temporary firewall is removed. The

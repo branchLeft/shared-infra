@@ -1,20 +1,7 @@
 #!/usr/bin/env python3
-"""Tests for probe-edget-gateway: a model of edge-t under the script, plus broken copies of it.
+"""Tests for probe-edget-gateway: a model of edge-t under the script, plus copies of it with a check broken.
 
-The script's only contact with the world is `run`, `which`, `is_root`, `sleep`
-and `tcp_connect`. The tests replace those with `FakeEdgeT`, which models the
-parts of edge-t the probe reads and writes: namespaces and veths, the three
-gateway rules with packet counters, forwarding, the NAT unit, and a reply rule
-that mirrors the kernel's (a private source is answered only if the masquerade
-and both accepts are there). Each test bends one piece of that host and asserts
-the probe notices.
-
-**A check that cannot fail is not a check.** `MutationTests` loads the script
-with one control deliberately broken (the identity guard, the counter rise, the
-reply test on the outside source, the restore, the clean-up ...) and asserts the
-matching scenario goes red against it, and green against the real script.
-The real-kernel run (a privileged Debian 13 container with the real reconciler)
-is a separate record on the pull request; nothing here needs root or Docker.
+A check that cannot fail is not a check, so MutationTests breaks the script and expects red.
 """
 
 from __future__ import annotations
@@ -450,6 +437,26 @@ def scenario_failed_restore_is_loud(module):
     assert "RESULT PASS" not in out, out
 
 
+def scenario_unreadable_unit_state_after_restore_is_loud(module):
+    """If `systemctl is-active` itself times out during the restore, say so and exit 3, not 2."""
+    host = FakeEdgeT(module)
+    original = host.handle
+
+    def is_active_times_out(argv, timeout=30):
+        if argv[:2] == ["systemctl", "is-active"] and argv[2] == module.UNIT and host.restarted:
+            raise module.Refused("systemctl is-active branchleft-nat.service did not finish in 30s")
+        result = original(argv, timeout)
+        if argv[:2] == ["systemctl", "restart"]:
+            host.restarted = True
+        return result
+
+    host.restarted = False
+    host.handle = is_active_times_out
+    code, out = host.run_main(module, ["gateway", "--sabotage"])
+    assert code == 3, (code, out)
+    assert "RESTORE FAILED" in out and "systemctl restart branchleft-nat.service" in out, out
+
+
 def scenario_proof_that_cannot_go_red_fails(module):
     host = FakeEdgeT(module)
     host.reply_without_masq = True
@@ -630,6 +637,9 @@ class SabotageTests(unittest.TestCase):
 
     def test_a_restore_that_did_not_take_exits_3_and_names_the_command(self):
         scenario_failed_restore_is_loud(probe)
+
+    def test_a_unit_state_that_cannot_be_read_after_the_restore_exits_3(self):
+        scenario_unreadable_unit_state_after_restore_is_loud(probe)
 
     def test_a_probe_that_cannot_go_red_is_a_failure_not_a_pass(self):
         scenario_proof_that_cannot_go_red_fails(probe)
@@ -888,6 +898,23 @@ class RunbookTests(unittest.TestCase):
                 seen += 1
         self.assertEqual(seen, 5)
 
+    def test_the_address_checks_fail_on_any_empty_or_malformed_value(self):
+        import subprocess
+
+        text = self.runbook.read_text(encoding="utf-8")
+        checks = [b.strip() for b in re.findall(r"```bash\n(case \"\$\{EDGE[^`]*?)```", text, re.S)]
+        self.assertEqual(len(checks), 2)
+        good = {"EDGET_IPV4": "203.0.113.7", "EDGE1_IPV4": "198.51.100.9"}
+        for check in checks:
+            for bad in ("", "edge1.example", "1.2.3.4;x"):
+                for name in good:
+                    env = dict(good, **{name: bad})
+                    done = subprocess.run(["bash", "-c", check], env=env, capture_output=True, text=True)
+                    expected_fail = f"${{{name}}}" in check and bad != good[name]
+                    self.assertEqual(done.returncode != 0, expected_fail, (check, name, bad))
+            done = subprocess.run(["bash", "-c", check], env=good, capture_output=True, text=True)
+            self.assertEqual(done.returncode, 0, check)
+
     def test_the_sabotage_flag_appears_once_and_only_in_its_own_block(self):
         blocks = [b for b in self.commands() if "--sabotage" in b]
         self.assertEqual(len(blocks), 1)
@@ -965,9 +992,14 @@ MUTATIONS = {
         scenario_sabotage_refuses_on_a_red_baseline,
     ),
     "treats a failed restore as a success": (
-        "        if code == 0 and back and out2.strip() == \"active\":",
+        "        if code == 0 and back and active.strip() == \"active\":",
         "        if True:",
         scenario_failed_restore_is_loud,
+    ),
+    "leaves the unit-state read after the restore unguarded": (
+        "            except (Refused, OSError):\n                active = \"\"",
+        "            except KeyError:\n                active = \"\"",
+        scenario_unreadable_unit_state_after_restore_is_loud,
     ),
     "counts a probe that stays green after the delete as red": (
         "    if reply is False and counters.masquerade is None:",
