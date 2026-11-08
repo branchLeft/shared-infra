@@ -1411,8 +1411,8 @@ class Sabotage(unittest.TestCase):
     def test_r2_deploy_tooling_off_the_list(self) -> None:
         self._edit(
             "checks/host_roles.yml",
-            "  - ci_login\n  - ci_jump\n  - deploy_tooling\n",
-            "  - ci_login\n  - ci_jump\n",
+            "  - ci_jump\n  - deploy_verifier\n  - deploy_tooling\n",
+            "  - ci_jump\n  - deploy_verifier\n",
         )
         self._assert_one("R2 edge1.yml: role deploy_tooling is not on edge1's list")
 

@@ -9,12 +9,14 @@ deploy to discover.
 
 import contextlib
 import fcntl
+import hashlib
 import io
 import os
 import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 import branchleft_deploy as bd
 
@@ -28,20 +30,29 @@ class FakeRun:
     canned responses.
 
     Each queued response is either a bare int (an exit code, empty stdout --
-    what every call except the `docker ps` discriminator check needs) or a
-    `(code, stdout)` pair, for the one call that reads its output rather than
-    only its exit code.
+    what every call except the `docker ps` discriminator check needs), a
+    `(code, stdout)` pair for the one call that reads its output rather than
+    only its exit code, or a `(code, stdout, stderr)` triple for the verifier,
+    whose refusal is named on stderr.
+
+    Every call's keyword arguments are recorded in `kwargs`, so a test can pin
+    the environment and stdin a subprocess was started with.
     """
 
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
+        self.kwargs = []
 
-    def __call__(self, argv, check=False, capture_output=False, text=False):
+    def __call__(self, argv, check=False, capture_output=False, text=False, **kwargs):
         self.calls.append(list(argv))
+        self.kwargs.append(kwargs)
         response = self.responses.pop(0) if self.responses else 0
-        code, stdout = response if isinstance(response, tuple) else (response, "")
-        return subprocess.CompletedProcess(argv, code, stdout=stdout)
+        if not isinstance(response, tuple):
+            response = (response, "")
+        code, stdout = response[0], response[1]
+        stderr = response[2] if len(response) > 2 else None
+        return subprocess.CompletedProcess(argv, code, stdout=stdout, stderr=stderr)
 
 
 class StackNameTests(unittest.TestCase):
@@ -573,6 +584,224 @@ class DeployTests(unittest.TestCase):
             bd.read_current_image(bd.image_env_path("monitoring", self.config_dir)),
             VALID_IMAGE,
         )
+
+
+TENANT_DIGEST = "b" * 64
+TENANT = f"ghcr.io/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}"
+TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
+
+# sha256 of hetzner/provision/branchleft-verify-image, the host copy of
+# ghost-platform's scripts/verify-image-attestation.sh. Change the copy and this
+# constant in the same change, and carry the change to ghost-platform's script.
+VERIFIER_SHA256 = "2342896f33a659a85697a586223b5d970d92082b02f6f3bd7ea2c7637a71cd0d"
+
+# The verifier's whole environment, exactly. Nothing is inherited from the host,
+# and no GitHub credential is in it: the host holds none. A change to any value
+# here is a change to what gh is allowed to read, and is reviewed as one.
+EXPECTED_VERIFIER_ENV = {
+    "PATH": "/usr/local/libexec/branchleft-verifier:/usr/bin:/bin",
+    "HOME": "/var/lib/branchleft/verifier-home",
+    "GH_CONFIG_DIR": "/var/lib/branchleft/verifier-home",
+    "XDG_CONFIG_HOME": "/var/lib/branchleft/verifier-home",
+    "GH_PROMPT_DISABLED": "1",
+    "GH_NO_UPDATE_NOTIFIER": "1",
+    "LC_ALL": "C",
+    "VERIFY_PLAIN_ERRORS": "1",
+}
+
+
+class AttestationTests(unittest.TestCase):
+    """The host verifies a registered image's attestation before it deploys it.
+
+    deploy() calls verify_attestation() before the lock, the pin write and any
+    restart. Every refusal here must leave the pin file absent and run no
+    restart, which is what "fails before up" means on this host.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.config_dir = os.path.join(self.directory.name, "etc")
+        self.stack_dir = os.path.join(self.directory.name, "opt")
+        os.makedirs(self.config_dir)
+        os.makedirs(os.path.join(self.stack_dir, "edge"))
+        with open(
+            os.path.join(self.stack_dir, "edge", "compose.yml"), "w", encoding="utf-8"
+        ) as handle:
+            handle.write(
+                "services:\n"
+                "  app:\n"
+                "    image: ${IMAGE}\n"
+                "    healthcheck:\n"
+                "      test: ['CMD', 'true']\n"
+            )
+
+    def deploy(self, image, run):
+        bd.deploy(
+            "edge",
+            image,
+            config_dir=self.config_dir,
+            stack_dir=self.stack_dir,
+            run=run,
+        )
+
+    def env_path(self):
+        return bd.image_env_path("edge", self.config_dir)
+
+    def assert_refused_before_any_host_change(self, run):
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER])
+
+    def test_the_register_names_exactly_the_attested_images_and_their_workflows(self):
+        self.assertEqual(
+            bd.ATTESTED_IMAGES,
+            {
+                "ghcr.io/branchleft/ghost-tenant": TENANT_SIGNER,
+                "ghcr.io/branchleft/portal-apps": (
+                    "branchLeft/ghost-platform/.github/workflows/portal-apps-image.yml"
+                ),
+            },
+        )
+
+    def test_an_unsigned_or_wrong_signer_image_is_refused_before_any_host_change(self):
+        run = FakeRun([1])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(TENANT, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, TENANT, bd.ATTESTED_REPO, TENANT_SIGNER, "--bundle-from-oci"],
+        )
+        self.assert_refused_before_any_host_change(run)
+
+    def test_an_unknown_digest_is_refused_the_same_way(self):
+        unknown = f"ghcr.io/branchleft/ghost-tenant@sha256:{'c' * 64}"
+        run = FakeRun([1])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(unknown, run)
+        self.assertEqual(run.calls[0][1], unknown)
+        self.assert_refused_before_any_host_change(run)
+
+    def test_a_missing_verifier_is_refused_before_any_host_change(self):
+        def missing(argv, **kwargs):
+            raise FileNotFoundError(argv[0])
+
+        with self.assertRaises(bd.DeployError):
+            self.deploy(TENANT, missing)
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_the_real_signer_and_a_registered_name_are_accepted_and_pinned(self):
+        run = FakeRun([0, 0])
+        self.deploy(TENANT, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, TENANT, bd.ATTESTED_REPO, TENANT_SIGNER, "--bundle-from-oci"],
+        )
+        self.assertEqual(
+            run.calls[1], ["systemctl", "restart", "branchleft-compose@edge"]
+        )
+        self.assertEqual(bd.read_current_image(self.env_path()), TENANT)
+
+    def test_a_tag_or_port_spelling_of_a_registered_image_is_still_verified(self):
+        spellings = [
+            f"ghcr.io/branchleft/ghost-tenant:v1@sha256:{TENANT_DIGEST}",
+            f"ghcr.io/branchleft/ghost-tenant:latest@sha256:{TENANT_DIGEST}",
+            f"ghcr.io:443/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}",
+            f"ghcr.io:443/branchleft/ghost-tenant:v1@sha256:{TENANT_DIGEST}",
+        ]
+        for image in spellings:
+            with self.subTest(image=image):
+                run = FakeRun([1])
+                with self.assertRaises(bd.DeployError):
+                    self.deploy(image, run)
+                self.assert_refused_before_any_host_change(run)
+
+    def test_a_tag_or_port_spelling_is_verified_by_its_register_name_and_digest(self):
+        image = f"ghcr.io:443/branchleft/ghost-tenant:v1@sha256:{TENANT_DIGEST}"
+        run = FakeRun([0, 0])
+        self.deploy(image, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, TENANT, bd.ATTESTED_REPO, TENANT_SIGNER, "--bundle-from-oci"],
+        )
+        self.assertEqual(bd.read_current_image(self.env_path()), image)
+
+    def test_a_third_party_image_with_a_tag_or_port_is_never_sent_to_the_verifier(self):
+        mysql = f"registry.example:5000/library/mysql:8@sha256:{'d' * 64}"
+        run = FakeRun([0])
+        self.deploy(mysql, run)
+        self.assertEqual(
+            run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
+        )
+
+    def test_a_third_party_image_is_never_sent_to_the_verifier(self):
+        mysql = f"docker.io/library/mysql@sha256:{'d' * 64}"
+        run = FakeRun([0])
+        self.deploy(mysql, run)
+        self.assertEqual(
+            run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
+        )
+
+    def test_no_environment_variable_switches_verification_off(self):
+        run = FakeRun([1])
+        switches = {
+            "BRANCHLEFT_SKIP_VERIFY": "1",
+            "BRANCHLEFT_VERIFY": "0",
+            "BRANCHLEFT_DEPLOY_VERIFY": "off",
+        }
+        with mock.patch.dict(os.environ, switches):
+            with self.assertRaises(bd.DeployError):
+                self.deploy(TENANT, run)
+        self.assert_refused_before_any_host_change(run)
+
+    def test_the_verifier_runs_with_exactly_the_fixed_environment_and_no_stdin(self):
+        run = FakeRun([0, 0])
+        self.deploy(TENANT, run)
+        self.assertEqual(run.kwargs[0]["env"], EXPECTED_VERIFIER_ENV)
+        self.assertEqual(run.kwargs[0]["stdin"], subprocess.DEVNULL)
+
+    def test_no_github_credential_reaches_the_verifier_even_when_the_host_holds_one(self):
+        run = FakeRun([0, 0])
+        held = {"GH_TOKEN": "ghs_" + "x" * 36, "GITHUB_TOKEN": "ghs_" + "y" * 36}
+        with mock.patch.dict(os.environ, held):
+            self.deploy(TENANT, run)
+        env = run.kwargs[0]["env"]
+        self.assertNotIn("GH_TOKEN", env)
+        self.assertNotIn("GITHUB_TOKEN", env)
+        for value in held.values():
+            self.assertNotIn(value, env.values())
+
+    def test_the_verifier_path_is_fixed_and_not_inherited_from_the_host(self):
+        run = FakeRun([0, 0])
+        with mock.patch.dict(os.environ, {"PATH": "/home/attacker/bin:/usr/bin"}):
+            self.deploy(TENANT, run)
+        self.assertEqual(run.kwargs[0]["env"]["PATH"], EXPECTED_VERIFIER_ENV["PATH"])
+        self.assertEqual(
+            EXPECTED_VERIFIER_ENV["PATH"],
+            "/usr/local/libexec/branchleft-verifier:/usr/bin:/bin",
+        )
+
+    def test_a_missing_credential_is_named_as_its_own_refusal(self):
+        run = FakeRun([(1, "", "To get started with GitHub CLI, please run:  gh auth login")])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(TENANT, run)
+        self.assertIn("the host verifier needs GitHub credentials this host does not hold", str(raised.exception))
+        self.assertIn("the deploy is refused", str(raised.exception))
+        self.assertNotIn("is not attested by", str(raised.exception))
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_any_other_verifier_failure_keeps_the_not_attested_message(self):
+        run = FakeRun([(1, "", "::error::no valid attestation for " + TENANT)])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(TENANT, run)
+        self.assertIn("is not attested by", str(raised.exception))
+        self.assertNotIn("needs GitHub credentials", str(raised.exception))
+
+    def test_the_vendored_verifier_is_pinned_to_its_digest(self):
+        path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "branchleft-verify-image"
+        )
+        with open(path, "rb") as handle:
+            self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), VERIFIER_SHA256)
 
 
 class SlotStdinTests(unittest.TestCase):
