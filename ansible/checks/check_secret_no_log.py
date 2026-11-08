@@ -5,18 +5,36 @@ the role's vars/ and defaults/ to every variable whose value names it. A task un
 handlers/ that names one of those variables must set no_log: true, and a task that writes a
 file from one must set diff: false. R2 holds the host_inputs loader's rows to the options they
 feed. R3 holds the secret table of the pattern README to the options and their sources, and the
-older table of script-side names to the files that read them. The rules, and what they do not
-see, are in ansible/checks/README.md, "The secret taint check". A finding names the rule, the
-file and the task, never a value.
+older table of script-side names to the files that read them. R4 refuses a task of a role that
+holds a secret that the check cannot follow. What a task calls, and which file an include names,
+is decided by Ansible's own task parser and plugin loaders (see "The task layer" below), never by
+a spelling matcher of this module. The rules, and what they do not see, are in
+ansible/checks/README.md, "The secret taint check". A finding names the rule, the file and the
+task, never a value.
 """
 
 from __future__ import annotations
 
+import copy
+import functools
 import re
 import sys
 from pathlib import Path
 from typing import NamedTuple
 
+from ansible import constants as ansible_constants  # type: ignore[import-untyped]
+from ansible.parsing.dataloader import DataLoader  # type: ignore[import-untyped]
+from ansible.parsing.mod_args import ModuleArgsParser  # type: ignore[import-untyped]
+from ansible.playbook.handler import Handler  # type: ignore[import-untyped]
+from ansible.playbook.handler_task_include import HandlerTaskInclude  # type: ignore[import-untyped]
+from ansible.playbook.role_include import IncludeRole  # type: ignore[import-untyped]
+from ansible.playbook.task import Task  # type: ignore[import-untyped]
+from ansible.playbook.task_include import TaskInclude  # type: ignore[import-untyped]
+from ansible.plugins.loader import (  # type: ignore[import-untyped]
+    add_all_plugin_dirs,
+    init_plugin_loader,
+)
+from ansible.template import Templar  # type: ignore[import-untyped]
 from check_enrolment import _read_host_roles
 from check_pins import load_yaml
 from jinja2 import Environment, TemplateSyntaxError, nodes
@@ -32,18 +50,14 @@ NAMES_HEADING = "## The secret names the services will need"
 NAMES_COLUMNS = ["Name", "Read under", "How it is made today"]
 NAMES_TREES = ("hetzner", "mail")
 LOADER_SEEDS = {LOADER: ("host_inputs_raw", "host_inputs_doc")}
-INCLUDE_NAMES = frozenset(
-    f"{prefix}{name}"
-    for prefix in ("", "ansible.builtin.")
-    for name in ("include_tasks", "import_tasks", "include_role", "import_role")
-)
 EXPRESSION_KEYS = frozenset(("when", "failed_when", "changed_when", "until"))
 CONTAINER_KEYS = frozenset(("block", "rescue", "always"))
-ASSERT_NAMES = frozenset(("assert", "ansible.builtin.assert"))
-TEMPLATE_NAMES = frozenset(("template", "ansible.builtin.template"))
-DIFF_NAMES = frozenset(
-    f"{prefix}{name}"
-    for prefix in ("", "ansible.builtin.")
+# The actions the rules name, as the fully qualified name Ansible's plugin loader resolves a
+# task's action to (`copy`, `ansible.legacy.copy` and `action: copy ...` all resolve to the first).
+ASSERT_FQCNS = frozenset(("ansible.builtin.assert",))
+TEMPLATE_FQCNS = frozenset(("ansible.builtin.template",))
+DIFF_FQCNS = frozenset(
+    f"ansible.builtin.{name}"
     for name in ("copy", "template", "lineinfile", "blockinfile", "replace", "assemble")
 )
 ENV = Environment(autoescape=True)
@@ -242,6 +256,177 @@ def _find_role(root: Path, role: str) -> Path | None:
     return None
 
 
+class _Call(NamedTuple):
+    """What a task calls, as Ansible's own parser and plugin loaders resolve it. `kind` is "tasks"
+    for an include_tasks or import_tasks, "role" for an include_role or import_role, and "module"
+    for every other action. `action` is the name as the parser returns it, `fqcn` the name the
+    plugin loader resolves a module to, `args` the arguments after Ansible has merged the task's
+    `args:` keyword and the free-form text. For an include of tasks, `target` is the file Ansible
+    itself chooses (TaskInclude.check_options) and `apply_vars` what the include binds under
+    `apply: vars:`. `problem` says why the task cannot be followed (the parser refuses it, or the
+    action does not resolve), and is None when the task resolves."""
+
+    kind: str
+    action: str
+    fqcn: str
+    args: dict[str, object]
+    target: str | None
+    apply_vars: dict[str, object]
+    problem: str | None
+
+
+class _Where(NamedTuple):
+    """One task file of a role: where it is, and the task files the check reads in that role
+    (resolved paths), which is what an include can be followed into."""
+
+    role_dir: Path
+    path: Path
+    rel: str
+    handler: bool
+    walked: frozenset[Path]
+
+
+@functools.cache
+def _plugins_ready() -> bool:
+    """Install Ansible's collection finder, as `ansible-playbook` does before it loads a task
+    (CLI.run calls init_plugin_loader), so that a fully qualified name in a collection resolves."""
+    init_plugin_loader()
+    return True
+
+
+@functools.cache
+def _role_plugins(role_dir: Path) -> tuple[str, ...]:
+    """Add the role's own `library/` and plugin directories to Ansible's loaders, as Ansible does
+    when it loads a role (Role._load_role_data calls add_all_plugin_dirs). A module the role
+    ships then resolves, as it does in a play. The directories stay added for the process, as
+    they do for a play, so a module of one role resolves for another role checked after it.
+    Returns the names of the files the role ships there, which a resolution may depend on."""
+    _plugins_ready()
+    add_all_plugin_dirs(str(role_dir))
+    return tuple(
+        sorted(
+            f"{sub}/{p.name}"
+            for sub in ("library", "action_plugins")
+            for p in (role_dir / sub).glob("*")
+        )
+    )
+
+
+@functools.cache
+def _data_loader() -> DataLoader:
+    return DataLoader()
+
+
+@functools.cache
+def _templar() -> Templar:
+    return Templar()
+
+
+def _refused(why: str) -> _Call:
+    return _Call("module", "", "", {}, None, {}, why)
+
+
+def _detail(ex: Exception) -> str:
+    """The class and the message of a parser's refusal. Ansible's messages name keys and actions,
+    never the data of a task, because the task itself travels as `obj`, which is left out."""
+    message = getattr(ex, "message", "")
+    text = message.strip().splitlines()[0][:160] if isinstance(message, str) and message else ""
+    return f"{type(ex).__name__}: {text}" if text else type(ex).__name__
+
+
+def _parse_call(task: dict[str, object], handler: bool) -> _Call:
+    """Resolve one task as the executor does (ansible.playbook.helpers.load_list_of_tasks): the
+    parser's (action, args, delegate_to) classifies it, and the loader of its class validates and
+    normalises it. Nothing here chooses by a module name or a keyword spelling of this module."""
+    _plugins_ready()
+    constants = ansible_constants
+    try:
+        action = ModuleArgsParser(copy.deepcopy(task)).parse(skip_action_validation=True)[0]
+        if action in constants._ACTION_ALL_INCLUDE_IMPORT_TASKS:
+            include = (HandlerTaskInclude if handler else TaskInclude).load(copy.deepcopy(task))
+            kind = "tasks"
+        elif action in constants._ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES:
+            include = IncludeRole.load(copy.deepcopy(task))
+            kind = "role"
+        else:
+            loaded = (Handler if handler else Task).load(copy.deepcopy(task))
+            fqcn = loaded.resolved_action
+            if not isinstance(fqcn, str) or not fqcn:
+                return _refused(
+                    "its action does not resolve to a plugin Ansible can load (a templated "
+                    "action, an unknown name, or a collection that is not installed)"
+                )
+            return _Call("module", str(action), fqcn, dict(loaded.args), None, {}, None)
+        args = dict(include.args)
+        target = args.get("_raw_params") if kind == "tasks" else None
+        apply = args.get("apply") or {}
+        apply_vars = apply.get("vars") if isinstance(apply, dict) else None
+        if kind == "tasks" and not isinstance(target, str):
+            return _refused("the file it includes is not text")
+        if apply_vars is not None and not isinstance(apply_vars, dict):
+            return _refused("its `apply: vars:` is not a mapping")
+        return _Call(kind, str(action), "", args, target, apply_vars or {}, None)
+    except Exception as ex:  # noqa: BLE001 - whatever the parser raises on is a finding
+        return _refused(f"Ansible's own task parser refuses it ({_detail(ex)})")
+
+
+_CALLS: dict[tuple[str, bool, tuple[str, ...]], _Call] = {}
+
+
+def _call(task: dict[str, object], where: _Where) -> _Call:
+    """The resolution of a task, kept by the task's content, whether it is a handler, and the
+    modules and action plugins its role ships (which it may name). It depends on nothing else,
+    so a copy of a tree resolves from what an earlier copy resolved."""
+    shipped = _role_plugins(where.role_dir)
+    key = (repr(task), where.handler, shipped)
+    if key not in _CALLS:
+        _CALLS[key] = _parse_call(task, where.handler)
+    return _CALLS[key]
+
+
+def _included_file(target: str, where: _Where) -> Path | None:
+    """The task file an include names, found by Ansible's own DataLoader the way the executor
+    finds it: beside the including file, then in the role's tasks (or handlers) directory.
+    None when the name is a template, or no file of that name answers."""
+    if _templar().is_possibly_template(target):
+        return None
+    subdir = "handlers" if where.handler else "tasks"
+    for base in (where.path.parent, where.role_dir / subdir):
+        found = Path(_data_loader().path_dwim_relative(str(base), subdir, target, is_role=True))
+        if found.is_file():
+            return found.resolve()
+    return None
+
+
+def _unfollowed(call: _Call, where: _Where) -> str | None:
+    """Why the check cannot follow this task, or None. A task the parser refuses or cannot
+    resolve, an include of a role, and an include whose file is named by a template or is not
+    one of the task files the check reads are all unfollowed."""
+    if call.problem is not None:
+        return call.problem
+    if call.kind == "role":
+        return (
+            "it includes a role, whose tasks and reads are outside this role's taint, and no "
+            "role includes another (ANS-12)"
+        )
+    if call.kind == "tasks" and call.target is not None:
+        if _templar().is_possibly_template(call.target):
+            return "it includes a file named by a template, so no file can be chosen without a run"
+        found = _included_file(call.target, where)
+        if found is None or found not in where.walked:
+            return (
+                f"it includes '{call.target}', which is not a task file of the role that the "
+                "check reads (under tasks/ or handlers/)"
+            )
+    return None
+
+
+def _includes(call: _Call) -> bool:
+    """Whether the task includes other tasks, which see its variables. A task that could not be
+    resolved counts as one, which asks for more no_log."""
+    return call.kind != "module" or call.problem is not None
+
+
 class _Loop(NamedTuple):
     """A task that loops: the loop variable it names (None for the default `item`), the parsed
     loop expression, the name the expression is when it is that name alone, and whether the task
@@ -264,12 +449,14 @@ def _bare_name(tree: nodes.Template) -> str | None:
     return None
 
 
-def _loops_in(items: list[object], rel: str, out: list[_Loop]) -> None:
+def _loops_in(items: list[object], where: _Where, out: list[_Loop]) -> None:
+    rel = where.rel
     for task in items:
         if not isinstance(task, dict):
             continue
         keys = [k for k in task if isinstance(k, str) and (k == "loop" or k.startswith("with_"))]
         if keys:
+            includes = not CONTAINER_KEYS & task.keys() and _includes(_call(task, where))
             trees: list[nodes.Template] = []
             for key in keys:
                 for text in _strings(task[key]):
@@ -283,7 +470,7 @@ def _loops_in(items: list[object], rel: str, out: list[_Loop]) -> None:
                     var if isinstance(var, str) and var.isidentifier() else None,
                     trees,
                     bare,
-                    bool(INCLUDE_NAMES & task.keys()),
+                    includes,
                     rel,
                     str(task.get("name", "(unnamed)")),
                 )
@@ -291,23 +478,31 @@ def _loops_in(items: list[object], rel: str, out: list[_Loop]) -> None:
         for key in CONTAINER_KEYS & task.keys():
             inner = task[key]
             if isinstance(inner, list):
-                _loops_in(inner, rel, out)
+                _loops_in(inner, where, out)
+
+
+def _task_file_wheres(root: Path, role_dir: Path) -> list[_Where]:
+    """Each task file of the role (tasks/ and handlers/) with the set the check reads."""
+    paths = _task_paths(role_dir)
+    walked = frozenset(p.resolve() for p in paths)
+    handlers = role_dir / "handlers"
+    return [_Where(role_dir, p, _rel(root, p), handlers in p.parents, walked) for p in paths]
 
 
 def _loops(root: Path, role_dir: Path) -> list[_Loop]:
     out: list[_Loop] = []
-    for path in _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers"):
-        doc, problem = load_yaml(path)
+    for where in _task_file_wheres(root, role_dir):
+        doc, problem = load_yaml(where.path)
         if problem is None and isinstance(doc, list):
-            _loops_in(doc, _rel(root, path), out)
+            _loops_in(doc, where, out)
     return out
 
 
 class _Bind(NamedTuple):
-    """A name bound by a task's `vars:` (or an include's `apply: vars:`, under the include's own
-    value or the task's `args:`): its parsed value, the
-    name the value is when it is that name alone, and, when the task includes other tasks, the
-    file it names (None when it names no file or a role) with the file that holds the task."""
+    """A name bound by a task's `vars:` (or an include's `apply: vars:`, wherever Ansible's own
+    parser finds `apply`): its parsed value, the name the value is when it is that name alone,
+    and, when the task includes other tasks, whether the check can follow the include (False for
+    a role, a template name, and a file it does not read)."""
 
     key: str
     trees: list[nodes.Template]
@@ -315,68 +510,18 @@ class _Bind(NamedTuple):
     rel: str
     name: str
     includes: bool
-    target: str | None
-    holder: Path
+    followed: bool
 
 
-def _include_args(task: dict[str, object], kind: str) -> dict[str, object] | None:
-    """What Ansible gives an include as its arguments: the task's `args:` mapping, under the
-    include's own value (free-form text is `_raw_params`; an own key beats the same key in
-    `args:`, as in Ansible's argument parser). None when either is not what the parser takes:
-    the caller treats that as an include it cannot follow."""
-    own = task[kind]
-    merged: dict[str, object] = {}
-    if "args" in task:
-        if not isinstance(task["args"], dict):
-            return None
-        merged.update(task["args"])
-    if isinstance(own, str):
-        merged["_raw_params"] = own.strip()
-    elif isinstance(own, dict):
-        merged.update(own)
-    elif own is not None:
-        return None
-    return merged
-
-
-def _include_target(args: dict[str, object]) -> tuple[str | None, bool]:
-    """The file an include_tasks or import_tasks names, and whether the arguments are ambiguous.
-    Ansible (task_include.py, check_options) takes `_raw_params`, the include's free-form text,
-    when it is set, and reads `file` only when it is not. It does not reject both being set, so
-    the check cannot know which the author meant to be safe: both set is ambiguous, and the
-    caller reports it."""
-    raw, named = args.get("_raw_params"), args.get("file")
-    chosen = raw if raw else named
-    target = chosen.strip() if isinstance(chosen, str) else None
-    return target, bool(raw) and bool(named)
-
-
-def _binds_in(
-    items: list[object], path: Path, rel: str, out: list[_Bind], findings: list[str]
-) -> None:
+def _binds_in(items: list[object], where: _Where, out: list[_Bind]) -> None:
+    rel = where.rel
     for task in items:
         if not isinstance(task, dict):
             continue
-        kinds = [k for k in INCLUDE_NAMES if k in task]
-        args = _include_args(task, kinds[0]) if kinds else {}
-        if args is None:
-            findings.append(
-                f"R1 {rel}: task '{task.get('name', '(unnamed)')}' includes with arguments the "
-                "check cannot read: `args:` must be a mapping, and the include's own value a file "
-                "name or a mapping"
-            )
-            args = {}
-        file_include = bool(kinds) and kinds[0].rsplit(".", 1)[-1].endswith("_tasks")
-        target, ambiguous = _include_target(args) if file_include else (None, False)
-        if ambiguous:
-            findings.append(
-                f"R1 {rel}: task '{task.get('name', '(unnamed)')}' names its file twice, as "
-                "free-form text (`_raw_params`) and as `file:`: Ansible includes the free-form one "
-                "and ignores `file:`, and the check cannot tell which was meant to be safe; name "
-                "it once"
-            )
-            target = None
-        scopes = [task.get("vars"), _dict(args.get("apply")).get("vars")]
+        call = None if CONTAINER_KEYS & task.keys() else _call(task, where)
+        includes = call is not None and _includes(call)
+        followed = call is not None and _unfollowed(call, where) is None
+        scopes = [task.get("vars"), call.apply_vars if call is not None else None]
         for scope in scopes:
             for key, value in _dict(scope).items():
                 if not isinstance(key, str):
@@ -392,39 +537,27 @@ def _binds_in(
                         bare,
                         rel,
                         str(task.get("name", "(unnamed)")),
-                        bool(kinds),
-                        target,
-                        path,
+                        includes,
+                        followed,
                     )
                 )
         for key in CONTAINER_KEYS & task.keys():
             inner = task[key]
             if isinstance(inner, list):
-                _binds_in(inner, path, rel, out, findings)
+                _binds_in(inner, where, out)
 
 
 def _task_paths(role_dir: Path) -> list[Path]:
     return _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers")
 
 
-def _binds(root: Path, role_dir: Path, findings: list[str]) -> list[_Bind]:
+def _binds(root: Path, role_dir: Path) -> list[_Bind]:
     out: list[_Bind] = []
-    for path in _task_paths(role_dir):
-        doc, problem = load_yaml(path)
+    for where in _task_file_wheres(root, role_dir):
+        doc, problem = load_yaml(where.path)
         if problem is None and isinstance(doc, list):
-            _binds_in(doc, path, _rel(root, path), out, findings)
+            _binds_in(doc, where, out)
     return out
-
-
-def _followed(bind: _Bind, role_dir: Path) -> bool:
-    """Whether the file an include names is one of the task files the check reads: a literal
-    path, looked for beside the including file and then in the role's tasks directory, as
-    Ansible does. A templated name, a missing file and a role are not followed."""
-    if bind.target is None or "{{" in bind.target or "{%" in bind.target:
-        return False
-    known = {p.resolve() for p in _task_paths(role_dir)}
-    candidates = (bind.holder.parent / bind.target, role_dir / "tasks" / bind.target)
-    return any(c.resolve() in known for c in candidates)
 
 
 def _taint(
@@ -467,7 +600,7 @@ def _taint(
                     if tree is not None:
                         defs.setdefault(key, []).append(tree)
     loops = _loops(root, role_dir)
-    binds = _binds(root, role_dir, findings)
+    binds = _binds(root, role_dir)
     changed = True
     while changed:
         changed = False
@@ -525,7 +658,7 @@ def _taint(
                     changed = True
     role_binds = [b for b in binds if b.includes and b.key in origin]
     for bind in role_binds:
-        if not _followed(bind, role_dir):
+        if not bind.followed:
             findings.append(
                 f"R1 {bind.rel}: task '{bind.name}' passes {bind.key}, which holds a secret, "
                 "into an include that cannot be followed: name a task file of the role"
@@ -551,6 +684,7 @@ def tainted(root: Path, role: str) -> set[str]:
 
 def _task_refs(
     task: dict[str, object],
+    call: _Call | None,
     rel: str,
     name: str,
     findings: list[str],
@@ -558,12 +692,14 @@ def _task_refs(
 ) -> set[str]:
     """The variables a task names in any position that prints or uses a value. The expression
     keywords are left out: they print only their expression, and the refusal asserts are read
-    for their coded messages. A secret named in an assert's fail message still counts."""
+    for their coded messages. A secret named in an assert's fail message still counts. An assert
+    is what Ansible resolves to the assert action, whatever its spelling, and its `that` is read
+    from the arguments Ansible's parser merged, wherever the task wrote them."""
     body = {k: v for k, v in task.items() if k not in EXPRESSION_KEYS and k not in CONTAINER_KEYS}
-    for key in ASSERT_NAMES & body.keys():
-        args = body[key]
-        if isinstance(args, dict):
-            body[key] = {k: v for k, v in args.items() if k != "that"}
+    if call is not None and call.fqcn in ASSERT_FQCNS:
+        for carrier in ("action", "local_action", "args", call.action):
+            body.pop(carrier, None)
+        body["(arguments of the assert)"] = {k: v for k, v in call.args.items() if k != "that"}
     scoped = body.get("vars")
     if isinstance(scoped, dict):
         # A name bound by `vars:` is set, not read: only what it is set to can leak.
@@ -575,26 +711,25 @@ def _task_refs(
 
 
 def _template_refs(
-    task: dict[str, object],
-    role_dir: Path,
-    rel: str,
+    call: _Call,
+    where: _Where,
     name: str,
     findings: list[str],
     partial: Partial,
 ) -> set[str]:
     refs: set[str] = set()
-    for key in TEMPLATE_NAMES & task.keys():
-        src = _dict(task[key]).get("src")
-        path = role_dir / "templates" / src if isinstance(src, str) else None
+    if call.fqcn in TEMPLATE_FQCNS:
+        src = call.args.get("src")
+        path = where.role_dir / "templates" / src if isinstance(src, str) else None
         if path is None or not path.is_file():
-            findings.append(f"R1 {rel}: task '{name}' names a template that cannot be read")
-            continue
+            findings.append(f"R1 {where.rel}: task '{name}' names a template that cannot be read")
+            return refs
         try:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
-            findings.append(f"R1 {rel}: task '{name}' names a template that cannot be read")
-            continue
-        refs |= _names_in(text, rel, f"template of task '{name}'", findings, partial)
+            findings.append(f"R1 {where.rel}: task '{name}' names a template that cannot be read")
+            return refs
+        refs |= _names_in(text, where.rel, f"template of task '{name}'", findings, partial)
     return refs
 
 
@@ -606,7 +741,7 @@ def _chain(name: str, origin: dict[str, set[str]]) -> str:
 
 def _judge(
     refs: set[str],
-    task: dict[str, object],
+    call: _Call | None,
     no_log: object,
     diff: object,
     name: str,
@@ -620,20 +755,20 @@ def _judge(
     named = ", ".join(_chain(n, origin) for n in hit)
     if no_log is not True:
         findings.append(f"R1 {rel}: task '{name}' refers to {named} and must set no_log: true")
-    if DIFF_NAMES.intersection(task.keys()) and diff is not False:
+    if call is not None and call.fqcn in DIFF_FQCNS and diff is not False:
         findings.append(f"R1 {rel}: task '{name}' writes {named} and must set diff: false (ANS-16)")
 
 
 def _walk(
     items: list[object],
-    role_dir: Path,
+    where: _Where,
     taint: tuple[dict[str, set[str]], Partial],
-    rel: str,
     inherited_no_log: object,
     inherited_diff: object,
     findings: list[str],
 ) -> int:
     origin, partial = taint
+    rel = where.rel
     count = 0
     for task in items:
         if not isinstance(task, dict):
@@ -642,49 +777,54 @@ def _walk(
         name = str(task.get("name", "(unnamed)"))
         no_log = task["no_log"] if "no_log" in task else inherited_no_log
         diff = task["diff"] if "diff" in task else inherited_diff
-        refs = _task_refs(task, rel, name, findings, partial)
         if CONTAINER_KEYS.intersection(task.keys()):
-            _judge(refs, task, no_log, diff, name, rel, origin, findings)
+            refs = _task_refs(task, None, rel, name, findings, partial)
+            _judge(refs, None, no_log, diff, name, rel, origin, findings)
             for key in CONTAINER_KEYS.intersection(task.keys()):
                 inner = task[key]
                 if not isinstance(inner, list):
                     findings.append(f"R1 {rel}: task '{name}' has a {key} that is not a list")
                     continue
-                count += _walk(inner, role_dir, taint, rel, no_log, diff, findings)
+                count += _walk(inner, where, taint, no_log, diff, findings)
             continue
         count += 1
-        refs |= _template_refs(task, role_dir, rel, name, findings, partial)
-        _judge(refs, task, no_log, diff, name, rel, origin, findings)
+        call = _call(task, where)
+        why = _unfollowed(call, where)
+        if why is not None:
+            findings.append(f"R4 {rel}: task '{name}' cannot be followed: {why}")
+        refs = _task_refs(task, call, rel, name, findings, partial)
+        refs |= _template_refs(call, where, name, findings, partial)
+        _judge(refs, call, no_log, diff, name, rel, origin, findings)
     return count
 
 
 def _r1(root: Path, findings: list[str]) -> int:
-    """R1 over every role and pattern that declares a secret. Returns the tasks checked."""
+    """R1 over every role and pattern that declares a secret, and R4 over the same tasks.
+    Returns the tasks checked."""
     checked = 0
     for role_dir in _role_dirs(root):
         whole, partial = _seeds_of(root, role_dir, findings)
         if not whole and not partial:
             continue
         taint = _taint(root, role_dir, whole, partial, findings)
-        task_files = _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers")
+        wheres = _task_file_wheres(root, role_dir)
         for name in LOADER_SEEDS.get(role_dir.name, ()):
-            if not any(name in path.read_text(encoding="utf-8") for path in task_files):
+            if not any(name in where.path.read_text(encoding="utf-8") for where in wheres):
                 findings.append(
                     f"R1 {_rel(root, role_dir)}: the loader variable {name} is named by no task, "
                     "so the check would see nothing"
                 )
-        for path in task_files:
-            rel = _rel(root, path)
-            doc, problem = load_yaml(path)
+        for where in wheres:
+            doc, problem = load_yaml(where.path)
             if problem is not None:
-                findings.append(f"R1 {rel}: {problem}")
+                findings.append(f"R1 {where.rel}: {problem}")
                 continue
             if doc is None:
                 continue
             if not isinstance(doc, list):
-                findings.append(f"R1 {rel}: must be a list of tasks")
+                findings.append(f"R1 {where.rel}: must be a list of tasks")
                 continue
-            checked += _walk(doc, role_dir, taint, rel, None, None, findings)
+            checked += _walk(doc, where, taint, None, None, findings)
     return checked
 
 

@@ -680,102 +680,6 @@ class SecretNoLogTest(unittest.TestCase):
             because="apply: vars: under the include's own mapping",
         )
 
-    def _benign_include(self, include: str, probe: str, binding: str, outside: bool = True) -> Path:
-        """`_ntfy_include`, plus a task file `benign.yml` in the role's tasks that reads no
-        secret: the file a `file:` key names, so a file-wins choice reads it and finds nothing
-        wrong. With `outside` the probe file moves to the role's `files/`, where the check does
-        not read it but `../files/_probe.yml` from the tasks reaches it, as Ansible does."""
-        root = self._ntfy_include(include, probe, binding)
-        tasks = (root / NTFY).parent
-        tasks.joinpath("benign.yml").write_text(
-            "---\n- name: Benign\n  ansible.builtin.debug:\n    msg: fine\n", encoding="utf-8"
-        )
-        if outside:
-            files = tasks.parent / "files"
-            files.mkdir(exist_ok=True)
-            tasks.joinpath("_probe.yml").rename(files / "_probe.yml")
-        return root
-
-    def test_h6_free_form_text_and_a_file_key_both_naming_a_file_is_a_finding(self) -> None:
-        # Ansible includes `_raw_params` when it is set and reads `file` only when it is not
-        # (task_include.py, check_options), and accepts both. The file Ansible includes may be
-        # one the check never reads (`../files/_probe.yml` is outside the tasks the check
-        # follows), so naming a file twice is a finding, not a pick.
-        safe = "  no_log: true\n  diff: false\n"
-        self.assertEqual(
-            self._findings(
-                self._benign_include(
-                    "  ansible.builtin.include_tasks: _probe.yml\n", safe, VARS_BINDING, False
-                )
-            ),
-            [],
-            "the same include naming its file once and protecting the write must be green",
-        )
-        self._assert_red(
-            self._findings(
-                self._benign_include(
-                    "  ansible.builtin.include_tasks: ../files/_probe.yml\n",
-                    "",
-                    VARS_BINDING + "  args:\n    file: benign.yml\n",
-                )
-            ),
-            "R1 " + NTFY,
-            "Probe through an include",
-            "names its file twice",
-            because="free-form text names one file and args: file: another, secret under vars:",
-        )
-
-    def test_h6_a_templated_free_form_text_beats_a_file_key_that_names_a_followed_file(
-        self,
-    ) -> None:
-        # `_raw_params` wins, so Ansible includes the templated path, which the check cannot
-        # follow, and `file: benign.yml` (a followed file) is ignored: the old file-wins choice
-        # read benign.yml and passed.
-        def binding(value: str, file: str) -> str:
-            return f"  args:\n{file}    apply:\n      vars:\n        probe_token: {value}\n"
-
-        include = "  ansible.builtin.include_tasks: '{{ role_path }}/files/_probe.yml'\n"
-        self.assertEqual(
-            self._findings(self._benign_include(include, "", binding("plain", ""))),
-            [],
-            "a non-secret bound the same way, with the file named once, must be green",
-        )
-        self._assert_red(
-            self._findings(
-                self._benign_include(include, "", binding(PROBE_VALUE, "    file: benign.yml\n"))
-            ),
-            "R1 " + NTFY,
-            "Probe through an include",
-            "probe_token",
-            "names its file twice",
-            because="templated free-form text, args: file:, secret under args: apply: vars:",
-        )
-
-    def test_h6_an_own_mapping_with_a_raw_params_key_and_a_file_key_is_a_finding(self) -> None:
-        def include(raw: str, file: str) -> str:
-            return (
-                f"  ansible.builtin.include_tasks:\n{file}    _raw_params: {raw}\n    apply:\n"
-                f"      vars:\n        probe_token: {PROBE_VALUE}\n"
-            )
-
-        safe = "  no_log: true\n  diff: false\n"
-        self.assertEqual(
-            self._findings(self._benign_include(include("_probe.yml", ""), safe, "", False)),
-            [],
-            "the mapping naming its file once and protecting the write must be green",
-        )
-        self._assert_red(
-            self._findings(
-                self._benign_include(
-                    include("../files/_probe.yml", "    file: benign.yml\n"), "", ""
-                )
-            ),
-            "R1 " + NTFY,
-            "Probe through an include",
-            "names its file twice",
-            because="an include's own mapping holding both _raw_params: and file:",
-        )
-
     def test_h5_an_apply_under_the_task_args_of_a_role_include_cannot_be_followed(self) -> None:
         self._assert_red(
             self._findings(
@@ -811,9 +715,9 @@ class SecretNoLogTest(unittest.TestCase):
                             f"  args: {args}\n",
                         )
                     ),
-                    "R1 " + NTFY,
+                    "R4 " + NTFY,
                     "Probe through an include",
-                    "`args:` must be a mapping",
+                    "Ansible's own task parser refuses it",
                     because=f"task args: that is not a mapping, {args}",
                 )
 
@@ -822,9 +726,9 @@ class SecretNoLogTest(unittest.TestCase):
             self._findings(
                 self._ntfy_include("  ansible.builtin.include_tasks: [_probe.yml]\n", "")
             ),
-            "R1 " + NTFY,
+            "R4 " + NTFY,
             "Probe through an include",
-            "must be a mapping",
+            "Ansible's own task parser refuses it",
             because="an include value that is neither text nor a mapping",
         )
 
@@ -841,6 +745,519 @@ class SecretNoLogTest(unittest.TestCase):
             encoding="utf-8",
         )
         return root
+
+
+MINI_SPEC = (
+    "---\nargument_specs:\n  main:\n    options:\n      probe_secret:\n"
+    "        type: str\n        no_log: true\n"
+)
+PROTECT = "  no_log: true\n  diff: false\n"
+APPLY_FLAT = "  args:\n    apply:\n      vars:\n        probe_token: '{{ probe_secret }}'\n"
+APPLY_NESTED = "    apply:\n      vars:\n        probe_token: '{{ probe_secret }}'\n"
+WRITE_BOUND = (
+    "---\n- name: Write the probe\n  ansible.builtin.copy:\n"
+    "    content: '{{ probe_token }}'\n    dest: /tmp/probe\n"
+)
+BENIGN = "---\n- name: Benign\n  ansible.builtin.debug:\n    msg: fine\n"
+
+# Each spelling of an include that Ansible's parser accepts: the lines that name `{file}`, and the
+# lines that bind a secret under `apply: vars:` in the spelling's own place (None: `apply` is not
+# accepted on an import).
+FILE_INCLUDES: dict[str, tuple[str, str | None]] = {
+    "include_tasks": ("  ansible.builtin.include_tasks: {file}\n", APPLY_FLAT),
+    "bare include_tasks": ("  include_tasks: {file}\n", APPLY_FLAT),
+    "ansible.legacy.include_tasks": ("  ansible.legacy.include_tasks: {file}\n", APPLY_FLAT),
+    "action: string": ("  action: ansible.builtin.include_tasks {file}\n", APPLY_FLAT),
+    "action: bare name": ("  action: include_tasks {file}\n", APPLY_FLAT),
+    "own mapping file:": ("  ansible.builtin.include_tasks:\n    file: {file}\n", APPLY_NESTED),
+    "own mapping _raw_params:": (
+        "  ansible.legacy.include_tasks:\n    _raw_params: {file}\n",
+        APPLY_NESTED,
+    ),
+    "args: file:": ("  ansible.builtin.include_tasks:\n  args:\n    file: {file}\n", APPLY_NESTED),
+    "args: _raw_params:": (
+        "  ansible.legacy.include_tasks:\n  args:\n    _raw_params: {file}\n",
+        APPLY_NESTED,
+    ),
+    "import_tasks": ("  ansible.builtin.import_tasks: {file}\n", None),
+    "bare import_tasks": ("  import_tasks: {file}\n", None),
+    "ansible.legacy.import_tasks": ("  ansible.legacy.import_tasks: {file}\n", None),
+    "action: import_tasks": ("  action: import_tasks {file}\n", None),
+    "import own mapping": ("  ansible.builtin.import_tasks:\n    file: {file}\n", None),
+    "import args: file:": ("  ansible.builtin.import_tasks:\n  args:\n    file: {file}\n", None),
+}
+ROLE_INCLUDES = {
+    "include_role": "  ansible.builtin.include_role:\n    name: other\n",
+    "import_role": "  ansible.builtin.import_role:\n    name: other\n",
+    "bare include_role": "  include_role:\n    name: other\n",
+    "ansible.legacy.include_role": "  ansible.legacy.include_role:\n    name: other\n",
+    "ansible.legacy.import_role": "  ansible.legacy.import_role:\n    name: other\n",
+    "action: include_role": "  action: include_role name=other\n",
+    "action: import_role": "  action: ansible.builtin.import_role name=other\n",
+    "args: name:": "  ansible.builtin.include_role:\n  args:\n    name: other\n",
+    "role: alias": "  ansible.builtin.include_role:\n    role: other\n",
+}
+# Spellings of a file write whose content is the secret itself.
+COPY_SPELLINGS = {
+    "ansible.builtin.copy": (
+        "  ansible.builtin.copy:\n    content: '{{ probe_secret }}'\n    dest: /tmp/probe\n"
+    ),
+    "ansible.legacy.copy": (
+        "  ansible.legacy.copy:\n    content: '{{ probe_secret }}'\n    dest: /tmp/probe\n"
+    ),
+    "bare copy": "  copy:\n    content: '{{ probe_secret }}'\n    dest: /tmp/probe\n",
+    "free-form copy": "  copy: content='{{ probe_secret }}' dest=/tmp/probe\n",
+    "action: string": (
+        "  action: ansible.builtin.copy content='{{ probe_secret }}' dest=/tmp/probe\n"
+    ),
+    "action: bare name": "  action: copy content='{{ probe_secret }}' dest=/tmp/probe\n",
+    "local_action:": "  local_action: copy content='{{ probe_secret }}' dest=/tmp/probe\n",
+    "args: keyword": (
+        "  ansible.builtin.copy:\n  args:\n    content: '{{ probe_secret }}'\n"
+        "    dest: /tmp/probe\n"
+    ),
+}
+TEMPLATE_SPELLINGS = {
+    "ansible.builtin.template": (
+        "  ansible.builtin.template:\n    src: probe.j2\n    dest: /tmp/probe\n"
+    ),
+    "ansible.legacy.template": (
+        "  ansible.legacy.template:\n    src: probe.j2\n    dest: /tmp/probe\n"
+    ),
+    "free-form template": "  template: src=probe.j2 dest=/tmp/probe\n",
+    "action: string": "  action: ansible.builtin.template src=probe.j2 dest=/tmp/probe\n",
+    "args: keyword": (
+        "  ansible.builtin.template:\n  args:\n    src: probe.j2\n    dest: /tmp/probe\n"
+    ),
+}
+ASSERT_SPELLINGS = {
+    "ansible.builtin.assert": (
+        "  ansible.builtin.assert:\n    that:\n      - probe_secret is defined\n{extra}"
+    ),
+    "ansible.legacy.assert": (
+        "  ansible.legacy.assert:\n    that:\n      - probe_secret is defined\n{extra}"
+    ),
+    "bare assert": "  assert:\n    that:\n      - probe_secret is defined\n{extra}",
+    "action: string": "  action: ansible.builtin.assert that='probe_secret is defined'\n{extra}",
+    "args: keyword": (
+        "  ansible.builtin.assert:\n  args:\n    that:\n      - probe_secret is defined\n{extra}"
+    ),
+}
+
+
+class TaskParserTest(unittest.TestCase):
+    """Task and include resolution is Ansible's own: every spelling its parser accepts resolves
+    to what the executor would run, and one it cannot resolve is a finding (R4).
+
+    Each test builds a one-role tree whose only secret is `probe_secret`, so it is fast, and
+    follows the same rule as the sabotage tests above: a green control for the same shape, then
+    the red. The control proves the red is the spelling and not the tree."""
+
+    def setUp(self) -> None:
+        self._scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self._scratch.cleanup)
+        self.count = 0
+
+    def _role(self, files: dict[str, str], *, secret: bool = True) -> list[str]:
+        """R1 and R4 over a one-role tree with the given files (path in the role: text)."""
+        self.count += 1
+        root = Path(self._scratch.name) / f"tree{self.count}"
+        role = root / "ansible" / "roles" / "probe"
+        (role / "meta").mkdir(parents=True)
+        spec = MINI_SPEC if secret else MINI_SPEC.replace("no_log: true", "no_log: false")
+        (role / "meta" / "argument_specs.yml").write_text(spec, encoding="utf-8")
+        for relative, text in files.items():
+            path = role / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        findings: list[str] = []
+        checker._r1(root, findings)
+        return list(dict.fromkeys(findings))
+
+    @staticmethod
+    def _main(
+        task_lines: str, name: str = "Probe through an include", tail: str = "  no_log: true\n"
+    ) -> str:
+        """A task file of one task. The default tail is what an include may carry: Ansible
+        rejects `diff:` on an include (TaskInclude.VALID_INCLUDE_KEYWORDS), so the parser would
+        refuse a fixture that put it there."""
+        return f"---\n- name: {name}\n{task_lines}{tail}"
+
+    def _include(
+        self, spelling: str, file: str, files: dict[str, str] | None = None, apply: bool = False
+    ) -> list[str]:
+        """The findings for the one include spelling naming `file`, with the usual task files
+        beside it (a followed `_probe.yml` that writes the bound secret under no_log, `benign.yml`,
+        and the same write under `files/`, which the check does not read)."""
+        head, apply_lines = FILE_INCLUDES[spelling]
+        lines = head.format(file=file) + (apply_lines or "" if apply else "")
+        tree = {
+            "tasks/main.yml": self._main(lines),
+            "tasks/_probe.yml": WRITE_BOUND + PROTECT,
+            "tasks/benign.yml": BENIGN,
+            "files/_probe.yml": WRITE_BOUND + PROTECT,
+        }
+        tree.update(files or {})
+        return self._role(tree)
+
+    def _red(self, findings: list[str], *fragments: str, because: str) -> None:
+        self.assertTrue(findings, f"expected a finding ({because}), the tree passed")
+        for fragment in fragments:
+            self.assertTrue(
+                any(fragment in finding for finding in findings),
+                f"no finding contains {fragment!r} ({because}); findings: {findings}",
+            )
+
+    # An include is followed to the file the executor would include, whatever its spelling.
+
+    def test_every_spelling_of_a_file_include_is_followed_to_its_file(self) -> None:
+        for spelling in FILE_INCLUDES:
+            with self.subTest(spelling=spelling):
+                self.assertEqual(
+                    self._include(spelling, "_probe.yml"),
+                    [],
+                    "naming a task file the check reads must be green, or the red proves nothing",
+                )
+                self._red(
+                    self._include(spelling, "../files/_probe.yml"),
+                    "R4 ansible/roles/probe/tasks/main.yml",
+                    "Probe through an include",
+                    "cannot be followed",
+                    "not a task file",
+                    because=f"{spelling} naming a file outside tasks/ and handlers/",
+                )
+
+    def test_a_secret_bound_under_apply_reaches_the_included_file_in_every_spelling(self) -> None:
+        for spelling, (_, apply_lines) in FILE_INCLUDES.items():
+            if apply_lines is None:
+                continue
+            with self.subTest(spelling=spelling):
+                self.assertEqual(
+                    self._include(spelling, "_probe.yml", apply=True),
+                    [],
+                    "the protected write must be green, or the red proves nothing",
+                )
+                self._red(
+                    self._include(
+                        spelling,
+                        "_probe.yml",
+                        {"tasks/_probe.yml": WRITE_BOUND},
+                        apply=True,
+                    ),
+                    "R1 ansible/roles/probe/tasks/_probe.yml",
+                    "Write the probe",
+                    "probe_token (secret through probe_secret)",
+                    "must set no_log: true",
+                    because=f"{spelling} binding a secret under apply: vars:",
+                )
+
+    def test_import_tasks_with_apply_is_refused_as_ansible_refuses_it(self) -> None:
+        for lines in (
+            "  ansible.builtin.import_tasks:\n    file: _probe.yml\n" + APPLY_NESTED,
+            "  ansible.legacy.import_tasks: _probe.yml\n" + APPLY_FLAT,
+            "  action: import_tasks _probe.yml\n" + APPLY_FLAT,
+        ):
+            with self.subTest(lines=lines):
+                self._red(
+                    self._role(
+                        {"tasks/main.yml": self._main(lines), "tasks/_probe.yml": WRITE_BOUND}
+                    ),
+                    "R4 ansible/roles/probe/tasks/main.yml",
+                    "Ansible's own task parser refuses it",
+                    "apply",
+                    because="Ansible rejects apply on an import_tasks",
+                )
+
+    # Which of two names for the file Ansible includes: `_raw_params` when set, else `file`.
+
+    def _both(self, raw: str, file: str, form: int) -> list[str]:
+        lines = (
+            f"  ansible.builtin.include_tasks: {raw}\n  args:\n    file: {file}\n",
+            f"  ansible.builtin.include_tasks:\n    _raw_params: {raw}\n    file: {file}\n",
+            "  ansible.builtin.include_tasks:\n  args:\n"
+            f"    _raw_params: {raw}\n    file: {file}\n",
+        )[form]
+        return self._role(
+            {
+                "tasks/main.yml": self._main(lines),
+                "tasks/_probe.yml": WRITE_BOUND + PROTECT,
+                "tasks/benign.yml": BENIGN,
+                "files/_probe.yml": WRITE_BOUND,
+            }
+        )
+
+    def test_when_both_raw_params_and_file_are_set_the_raw_params_file_is_followed(self) -> None:
+        for form in range(3):
+            with self.subTest(form=form):
+                # `_raw_params` names a followed file and `file` an unread one: the executor
+                # includes the first, so the include is followed and clean.
+                self.assertEqual(self._both("_probe.yml", "../files/_probe.yml", form), [])
+                self.assertEqual(self._both("_probe.yml", "benign.yml", form), [])
+                # `_raw_params` names the unread file and `file` a followed one: the executor
+                # includes the unread one, so the include is not followed.
+                self._red(
+                    self._both("../files/_probe.yml", "_probe.yml", form),
+                    "R4 ansible/roles/probe/tasks/main.yml",
+                    "Probe through an include",
+                    "not a task file",
+                    because="raw params naming an unread file, file naming a followed one",
+                )
+                self._red(
+                    self._both("'{{ role_path }}/files/_probe.yml'", "benign.yml", form),
+                    "R4 ansible/roles/probe/tasks/main.yml",
+                    "named by a template",
+                    because="templated raw params, file naming a followed file",
+                )
+
+    # An include of a role is not followed, whatever its spelling.
+
+    def test_every_spelling_of_a_role_include_is_a_finding(self) -> None:
+        for spelling, lines in ROLE_INCLUDES.items():
+            with self.subTest(spelling=spelling):
+                self._red(
+                    self._role({"tasks/main.yml": self._main(lines)}),
+                    "R4 ansible/roles/probe/tasks/main.yml",
+                    "Probe through an include",
+                    "cannot be followed",
+                    "includes a role",
+                    because=f"{spelling} includes a role the check does not read",
+                )
+
+    # What Ansible's parser refuses, or cannot resolve, is a finding and never a pass.
+
+    def test_an_include_shape_ansible_refuses_is_a_finding(self) -> None:
+        shapes = {
+            "null value, no args": "  ansible.builtin.include_tasks:\n",
+            "empty mapping": "  ansible.builtin.include_tasks: {}\n",
+            "list value": "  ansible.builtin.include_tasks: [_probe.yml]\n",
+            "unknown key": "  ansible.builtin.include_tasks:\n    file: _probe.yml\n    frob: 1\n",
+            "args not a mapping": "  ansible.builtin.include_tasks: _probe.yml\n  args: [apply]\n",
+            "args a template": "  ansible.builtin.include_tasks: _probe.yml\n  args: '{{ a }}'\n",
+            "args a string": "  ansible.builtin.include_tasks: _probe.yml\n  args: _probe.yml\n",
+            "apply not a mapping": (
+                "  ansible.builtin.include_tasks:\n    file: _probe.yml\n    apply: x\n"
+            ),
+            "import null": "  ansible.legacy.import_tasks:\n",
+            "role without a name": "  ansible.builtin.include_role:\n    tasks_from: x\n",
+            "vars a list": "  ansible.builtin.include_tasks: _probe.yml\n  vars:\n    - a: b\n",
+            "local_action, which delegates": "  local_action: include_tasks _probe.yml\n",
+            "diff on an include": "  ansible.builtin.include_tasks: _probe.yml\n  diff: false\n",
+        }
+        for label, lines in shapes.items():
+            with self.subTest(shape=label):
+                self._red(
+                    self._role(
+                        {"tasks/main.yml": self._main(lines), "tasks/_probe.yml": WRITE_BOUND}
+                    ),
+                    "R4 ansible/roles/probe/tasks/main.yml",
+                    "Probe through an include",
+                    "cannot be followed",
+                    "Ansible's own task parser refuses it",
+                    because=label,
+                )
+
+    def test_an_include_whose_file_cannot_be_chosen_without_running_it_is_a_finding(self) -> None:
+        names = {
+            "template in the free-form text": "'{{ probe_file }}'",
+            "template with a statement": "'{% if a %}x{% endif %}.yml'",
+            "template in part of the name": "'_{{ probe_part }}.yml'",
+        }
+        for label, name in names.items():
+            for head in (
+                f"  ansible.builtin.include_tasks: {name}\n",
+                f"  ansible.builtin.import_tasks:\n    file: {name}\n",
+                f"  action: include_tasks {name}\n",
+            ):
+                with self.subTest(label=label, head=head):
+                    self._red(
+                        self._role(
+                            {"tasks/main.yml": self._main(head), "tasks/_probe.yml": BENIGN}
+                        ),
+                        "R4 ansible/roles/probe/tasks/main.yml",
+                        "named by a template",
+                        because=f"{label}: no static target",
+                    )
+
+    def test_an_include_of_a_file_that_is_not_there_is_a_finding(self) -> None:
+        self._red(
+            self._role(
+                {"tasks/main.yml": self._main("  ansible.builtin.include_tasks: gone.yml\n")}
+            ),
+            "R4 ansible/roles/probe/tasks/main.yml",
+            "not a task file",
+            because="a literal name that no file answers",
+        )
+
+    def test_an_action_ansible_cannot_resolve_is_a_finding(self) -> None:
+        cases = {
+            "unknown action": "  frobnicate: x\n",
+            "bare include, removed from ansible-core": "  include: _probe.yml\n",
+            "templated action": "  action: '{{ probe_action }} a=b'\n",
+            "unknown collection module": "  no_such.collection.module:\n    a: b\n",
+            "two actions": "  ansible.builtin.debug:\n    msg: a\n  ansible.builtin.ping:\n",
+            "action is not text": "  action: [debug]\n",
+        }
+        for label, lines in cases.items():
+            with self.subTest(case=label):
+                self._red(
+                    self._role({"tasks/main.yml": self._main(lines, "Odd task")}),
+                    "R4 ansible/roles/probe/tasks/main.yml",
+                    "Odd task",
+                    "cannot be followed",
+                    because=label,
+                )
+
+    def test_a_module_ansible_resolves_is_followed_and_clean(self) -> None:
+        # The control for the refusals above: the same tree shape with a task Ansible resolves.
+        main = (
+            "---\n- name: Plain\n  ansible.builtin.debug:\n    msg: fine\n"
+            "- name: Short name\n  debug:\n    msg: fine\n"
+            "- name: Legacy name\n  ansible.legacy.debug:\n    msg: fine\n"
+            "- name: Action string\n  action: ansible.builtin.debug msg=fine\n"
+            "- name: Meta\n  ansible.builtin.meta: flush_handlers\n"
+            "- name: Loop with a lookup\n  ansible.builtin.debug:\n    msg: '{{ item }}'\n"
+            "  with_items: [a, b]\n"
+        )
+        self.assertEqual(self._role({"tasks/main.yml": main}), [])
+
+    def test_a_role_without_a_secret_is_not_read_by_the_parser(self) -> None:
+        # R4 follows only roles that hold a secret: the check is about where a secret goes.
+        self.assertEqual(
+            self._role({"tasks/main.yml": self._main("  frobnicate: x\n")}, secret=False), []
+        )
+
+    # The kind of task is what Ansible resolves, so a file write or an assert is the same
+    # whatever its spelling: the rules for `copy`, `template` and `assert` apply to all of them.
+
+    def test_every_spelling_of_a_file_write_needs_no_log_and_diff_false(self) -> None:
+        for spelling, lines in COPY_SPELLINGS.items():
+            with self.subTest(spelling=spelling):
+                protected = {"tasks/main.yml": self._main(lines, "Write it", PROTECT)}
+                self.assertEqual(self._role(protected), [], "the protected write must be green")
+                self._red(
+                    self._role(
+                        {"tasks/main.yml": self._main(lines, "Write it", "  no_log: true\n")}
+                    ),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Write it",
+                    "must set diff: false (ANS-16)",
+                    because=f"{spelling} writing a secret without diff: false",
+                )
+                self._red(
+                    self._role(
+                        {"tasks/main.yml": self._main(lines, "Write it", "  diff: false\n")}
+                    ),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Write it",
+                    "must set no_log: true",
+                    because=f"{spelling} writing a secret without no_log",
+                )
+
+    def test_every_spelling_of_a_template_task_reads_its_template(self) -> None:
+        template = "value={{ probe_secret }}\n"
+        for spelling, lines in TEMPLATE_SPELLINGS.items():
+            with self.subTest(spelling=spelling):
+                files = {"templates/probe.j2": template}
+                self.assertEqual(
+                    self._role(
+                        {**files, "tasks/main.yml": self._main(lines, "Render it", PROTECT)}
+                    ),
+                    [],
+                    "the protected template task must be green",
+                )
+                self._red(
+                    self._role(
+                        {
+                            **files,
+                            "tasks/main.yml": self._main(lines, "Render it", "  diff: false\n"),
+                        }
+                    ),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Render it",
+                    "must set no_log: true",
+                    because=f"{spelling} rendering a template that names a secret",
+                )
+                self._red(
+                    self._role({"tasks/main.yml": self._main(lines, "Render it")}),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Render it",
+                    "names a template that cannot be read",
+                    because=f"{spelling} naming a template that is missing",
+                )
+
+    def test_every_spelling_of_an_assert_is_an_expression_only_read(self) -> None:
+        for spelling, lines in ASSERT_SPELLINGS.items():
+            with self.subTest(spelling=spelling):
+                quiet = lines.format(extra="")
+                self.assertEqual(
+                    self._role({"tasks/main.yml": self._main(quiet, "Check it", "")}),
+                    [],
+                    "an assert whose `that` names a secret is an expression-only read",
+                )
+                loud = lines.format(extra="    fail_msg: '{{ probe_secret }}'\n")
+                if spelling.startswith("action"):
+                    loud = lines.format(extra="  vars:\n    probe_copy: '{{ probe_secret }}'\n")
+                self._red(
+                    self._role({"tasks/main.yml": self._main(loud, "Check it", "")}),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Check it",
+                    "must set no_log: true",
+                    because=f"{spelling} naming a secret outside its `that`",
+                )
+
+    def test_a_loop_over_a_secret_that_includes_with_the_default_item_is_a_finding(self) -> None:
+        for head in (
+            "  ansible.legacy.include_tasks: _probe.yml\n",
+            "  action: include_tasks _probe.yml\n",
+            "  ansible.builtin.import_tasks:\n  args:\n    file: _probe.yml\n",
+        ):
+            with self.subTest(head=head):
+                lines = head + "  loop: '{{ probe_secret }}'\n"
+                if "import_tasks" in head:
+                    lines = head.replace("import_tasks", "include_tasks") + (
+                        "  loop: '{{ probe_secret }}'\n"
+                    )
+                self._red(
+                    self._role({"tasks/main.yml": self._main(lines), "tasks/_probe.yml": BENIGN}),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "must name a loop_var",
+                    because="a loop over a secret that includes tasks reads it through item",
+                )
+
+    # Handlers are loaded as handlers, and an include there is followed within handlers/.
+
+    def test_handlers_and_their_includes_are_resolved_as_handlers(self) -> None:
+        handler = (
+            "---\n- name: Reload it\n  listen: probe reload\n  ansible.builtin.debug:\n"
+            "    msg: fine\n"
+            "- name: Reload more\n  listen: probe reload\n"
+            "  ansible.legacy.include_tasks: _more.yml\n"
+        )
+        self.assertEqual(
+            self._role({"handlers/main.yml": handler, "handlers/_more.yml": BENIGN}), []
+        )
+        self._red(
+            self._role({"handlers/main.yml": handler}),
+            "R4 ansible/roles/probe/handlers/main.yml",
+            "Reload more",
+            "not a task file",
+            because="a handler include of a file that is not in handlers/",
+        )
+        self._red(
+            self._role(
+                {
+                    "handlers/main.yml": handler.replace(
+                        "ansible.builtin.debug:\n    msg: fine",
+                        "ansible.builtin.debug:\n    msg: '{{ probe_secret }}'",
+                    ),
+                    "handlers/_more.yml": BENIGN,
+                }
+            ),
+            "R1 ansible/roles/probe/handlers/main.yml",
+            "Reload it",
+            "must set no_log: true",
+            because="a handler that names a secret",
+        )
 
 
 if __name__ == "__main__":

@@ -507,6 +507,11 @@ and the host rows of `host_inputs`. Its test is `test_check_secret_no_log.py`, w
 `python3 ansible/checks/check_secret_no_log.py`; a finding prints as `FAIL R<n> <path>: <what>`
 and names a task or a variable, never a value.
 
+It imports `ansible-core` (the pinned version in `ansible/requirements.txt`), which the `checks`
+job installs into the same virtual environment as `mypy` and `ruff`, so it needs no step of its
+own. Run it under that environment: a Python without `ansible-core` cannot import the module, and
+the failure is loud (an import error), never a pass.
+
 Rules:
 
 - **R1, taint.** The seeds are the options of the role's `main` argument spec with
@@ -533,6 +538,15 @@ Rules:
   equal the value R2 derives: `host_inputs: HOST[, HOST]`, or `none`. The older table of
   script-side names must have each name read by a file under `hetzner/`, `mail/` or a root
   `RUNBOOK*.md`. The reverse direction, that every script name is listed, is reviewed by hand.
+- **R4, tasks the check cannot follow.** In every role or pattern that holds a secret, each task
+  must be one that Ansible's own task parser accepts and the check can follow (see "The task
+  layer"). A finding reads `R4 <file>: task '<name>' cannot be followed: <why>`, and the reasons
+  are: the parser refuses the task (the message names the class and Ansible's own text, never the
+  task's data); the action does not resolve to a plugin Ansible can load (a templated action, an
+  unknown name, a collection that is not installed, the removed bare `include:`); the task
+  includes a file named by a template; it includes a file that is not a task file the check
+  reads (a missing file, or one outside `tasks/` and `handlers/`); or it includes a role. A role
+  with no secret is not read, so R4 never fires there.
 
 Sub-option secrets. An option such as `tenant_compose_stacks` holds a secret only in an
 attribute of its items (`secrets_env_text`). The option is then a seed for that attribute only:
@@ -548,18 +562,39 @@ cannot be followed through `item`. Names set under a task's `vars:` are not read
 carry what they are set to: a name bound under `vars:` (an include's, a block's, an include's
 `apply: vars:`) to a value that reads a secret is a secret in every task file of the role, because
 the included file reads it and `no_log` on an include does not reach the tasks it includes. An
-include's `apply:` and its file are read from the include's own value and from the task's `args:`
-keyword, merged (a key of the include's own value beats the same key in `args:`), so
-`include_tasks: f.yml` with `args: {apply: {vars: ...}}` and an empty `include_tasks:` with
-`args: {file: f.yml, apply: ...}` are read like `include_tasks: {file: f.yml, apply: ...}`. The
-file is chosen as Ansible chooses it: the free-form text (`_raw_params`) when it is set, else
-`file:`. Both set is a finding, because Ansible includes the free-form one without rejecting the
-other and the check cannot tell which was meant to be safe. An include whose `args:` is not a mapping, or whose own value is neither text nor a mapping, is a
-finding in a role that holds a secret, because what it binds cannot be read. The check follows the
-spellings in `INCLUDE_NAMES` (bare and `ansible.builtin.`); another spelling of an include, and an
-include through `action:` or `include:`, is not read. A bare
-partial name keeps its attributes. An include that passes such a name into a file the check
-cannot read (a templated name, a file that is not a task file of the role, a role) is a finding.
+include's `apply: vars:` is read wherever Ansible's parser finds `apply` (see "The task layer").
+A bare partial name keeps its attributes. An include that passes such a name into a file
+the check cannot follow (a templated name, a file that is not a task file of the role, a role)
+is an R1 finding as well as an R4 one, because R1 says which secret went there.
+
+The task layer. What a task calls, which file an include names, and what an include binds under
+`apply:` are never decided by a spelling matcher in the check. Each task of a role that holds a
+secret is resolved the way the executor resolves it (`ansible.playbook.helpers.load_list_of_tasks`):
+
+- `ModuleArgsParser(task).parse(skip_action_validation=True)` classifies it, so `include_tasks`,
+  `ansible.builtin.include_tasks`, `ansible.legacy.include_tasks`, `action: include_tasks f.yml`
+  and the same for the other three include actions all give the same answer.
+- An include of tasks is then loaded by `TaskInclude.load` (`HandlerTaskInclude.load` under
+  `handlers/`), whose `check_options` is the only place that chooses the file: `_raw_params`
+  (the free-form text, or `args: {_raw_params: ...}`) when it is set, otherwise `file`. Both set
+  is not a finding: the file followed is the one the executor includes. It also refuses what
+  Ansible refuses (no file, an unknown key, `apply` on an `import_tasks`, `args` that is not a
+  mapping, `diff:` or `delegate_to` on an include), and each refusal is an R4 finding.
+- An include of a role is loaded by `IncludeRole.load` and is always an R4 finding: the role it
+  runs is outside this role's taint, and no role includes another (ANS-12).
+- Any other task is loaded by `Task.load` (`Handler.load` under `handlers/`) and resolved to its
+  fully qualified name by Ansible's own plugin loaders. `copy`, `ansible.legacy.copy` and
+  `action: copy content=...` are all `ansible.builtin.copy`, so the `diff: false` rule, the
+  `template` source read and the assert allowance apply to every spelling. A module or action
+  plugin a role ships under its own `library/` or `action_plugins/` resolves, because the check
+  registers those directories as Ansible does when it loads a role (`add_all_plugin_dirs`).
+- The file an include names is found by `DataLoader.path_dwim_relative`, beside the including
+  file and then in the role's `tasks/` (or `handlers/`), and must be one of the task files the
+  check reads. A name that is a template (`Templar.is_possibly_template`) has no static target.
+
+The collection finder is installed with `init_plugin_loader`, as `ansible-playbook` installs it.
+The only list of names the check keeps is the fully qualified names of the write actions, assert
+and template, and those are matched after Ansible has resolved the spelling.
 
 How references are read: by Jinja's parser alone (`Environment.parse`, then the names the
 parse tree loads). The check does not compile the template, because Ansible's filters
@@ -581,6 +616,18 @@ What it does not see:
   names `control_plane_masterkey` directly, and the test pins that boundary, so it is a visible
   choice and not an accident. Tainting the record by a name prefix would force `no_log` onto
   the empty-create and mode tasks and hide their failures.
+- The task layer is Ansible's, so its limits are named. A task with a template in its action
+  is refused, not read. A `block` is read for its tasks only: Ansible's own validation of a
+  block's keys is not applied, since a block carrying a stray key does not run. `apply:` can
+  carry attributes of its own (`no_log`, `tags`), which the check does not read as inherited by
+  the included tasks. Each task is resolved on its own: a `collections:` list set at play or role
+  level (`meta/main.yml`) is not in scope, so a short module name that only that list resolves
+  is an R4 finding (no role of this estate sets one). `include_vars` and `vars_files` are not
+  followed. A module of one role resolves for a role checked after it in the same process, as it
+  does in a play that loads both. The action lists the executor itself uses
+  (`ansible.constants._ACTION_*`) are private names of `ansible-core`, and a rename on a version
+  bump fails the import loudly. The check does not run Ansible: it knows what parsing and plugin
+  resolution can say, and nothing that depends on a variable's value at run time.
 - A loop variable is followed only when the loop names it (`loop_control.loop_var`), or the
   loop has no include. A `set_fact` or `register` that copies an attribute into another
   variable is not followed. A value that comes in through `lookup('template', ...)` is not
@@ -589,7 +636,7 @@ What it does not see:
 - R3 checks the table's rows, not what the consuming role does with a value.
 
 Sabotage, each one a copy of the real files with one control broken, and the baseline copy
-clean (`test_check_secret_no_log.py`, 45 tests, green under the pinned ansible-core venv):
+clean (`test_check_secret_no_log.py`, 61 tests, green under the pinned ansible-core venv):
 
 | Sabotage in the copy                                                  | Finding that goes red                                                                     |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -609,7 +656,13 @@ clean (`test_check_secret_no_log.py`, 45 tests, green under the pinned ansible-c
 | A secret bound under an include's `vars:`, written with no `no_log`   | R1: the included file's task names the bound name (secret through ...)                    |
 | A secret bound on an include of a file the check cannot read          | R1: passes the name into an include that cannot be followed                               |
 | A secret bound under the task's `args:` `apply: vars:`, written bare  | R1: the included file's task names the bound name (secret through ...)                    |
-| An include with an `args:` that is not a mapping                      | R1: includes with arguments the check cannot read                                         |
+| An include with an `args:` that is not a mapping                      | R4: Ansible's own task parser refuses it                                                  |
+| An include spelled `ansible.legacy.`, `action:`, `args:` or free-form | R4 or R1 as for the bare spelling, one case per spelling in `TaskParserTest`              |
+| `_raw_params` and `file` both set, the one Ansible includes unread    | R4: not a task file of the role that the check reads                                      |
+| An include whose file is named by a template, a missing file          | R4: named by a template, or not a task file                                               |
+| An include of a role, in any spelling                                 | R4: it includes a role                                                                    |
+| An action Ansible cannot resolve, a templated action, bare `include:` | R4: cannot be followed                                                                    |
+| A secret written by `ansible.legacy.copy` or `action: copy ...`       | R1: must set `diff: false (ANS-16)`, and `no_log: true`                                   |
 | A row name that is no option (`monitoring_stack_smtp_passwd`)         | R2: resolves to 0 options, not one                                                        |
 | The loader's rows file made unreadable                                | R2                                                                                        |
 | A secret option with its row removed from the README                  | R3: no row for the no_log option                                                          |
