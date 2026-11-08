@@ -20,5 +20,6 @@ ci_jump_destinations:
   - '167.233.93.244'
   - '2.28.114.186'
   - '46.225.95.167'
+  - '94.130.108.53'
 ci_jump_keys:
   - key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOKdVw+4KmgNBt/qi/41FLl5HPj16+vR2mfzm7LqxrjL'
