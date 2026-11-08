@@ -107,14 +107,21 @@ one, or an unknown stage throws.
   are the fields the provider treats as replacing, and a console-made server
   differs on all of them. Cloud-init does not run on an adopted host, so whatever
   the document would have done is the owner's hand bootstrap.
+- **`publicNets` is ignored, at both stages, on public and private-only hosts.**
+  The provider's read never sets a server's public interface, so an adopted
+  server has none in state, and the first apply sees the declared `publicNets` as
+  changed. The provider then powers the server off, unassigns the primary IP on
+  it and, because the old set held no address id, deletes that primary IP before
+  it tries to assign the id it just deleted. The addresses are held by the
+  imported `PrimaryIp` resources instead. A created host does not ignore it.
 - **Two stages.** Pulumi refuses an import whose inputs differ from the live
   resource, and a console-made server differs from the component in what the
   component itself sets. `stage: 'import'` (the default) leaves protection, labels
   and the primary IPs' name, auto-delete, protection and labels alone; a
-  private-only host also leaves its `networks` and `publicNets` alone, because the
-  owner attaches the network and removes a leftover public address by hand.
-  `stage: 'converge'` declares them all, and the update is in place. Stay on
-  `converge` afterwards.
+  private-only host also leaves its `networks` alone, because the owner attaches
+  the network and removes a leftover public address by hand.
+  `stage: 'converge'` declares them all except `publicNets`, which stays ignored,
+  and the update is in place. Stay on `converge` afterwards.
 - **The firewall is attached, not declared on the server.** `firewallIds` is
   create-time intent at the provider, so an adopted server gets a
   `FirewallAttachment`, which adds to the firewalls already on it and removes none.
