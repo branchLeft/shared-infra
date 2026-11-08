@@ -9,6 +9,9 @@ egress_nat_host_egress:
   reconciler_dest: /usr/local/sbin/branchleft-host-egress
   unit_src: branchleft-host-egress.service
   unit_name: branchleft-host-egress.service
+  # Re-runs the reconciler about every minute, so a route lost after boot is put back.
+  timer_src: branchleft-host-egress.timer
+  timer_name: branchleft-host-egress.timer
 
 egress_nat_nat_gateway:
   label: the NAT gateway reconciler
