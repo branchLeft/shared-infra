@@ -568,6 +568,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@demo-sidecar`, which is no instance    | nowhere: the sidecar's image pin file, read by `branchLeft/ghost-platform`'s `demo-host/provision`       | no                |
 | `branchleft-compose@broker`, which is not an instance      | nowhere: the broker program has its own unit, built from `branchLeft/ghost-platform`'s `services/broker` | no                |
 | `branchleft-compose@backup-worker`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
+| `branchleft-compose@ring-controller`                       | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@state-copy`                            | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@restore-drill`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@ntfy-pager`, which is not an instance  | nowhere: the pager's secrets file, `/etc/branchleft/ntfy-pager.env`, written by the `ntfy_pager` role    | no                |
