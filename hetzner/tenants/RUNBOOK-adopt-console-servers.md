@@ -15,9 +15,8 @@ runbook changes no server. The applies below are the owner's hand applies, which
 
 - One console firewall, `hold-no-inbound`, is attached to all three. It has no
   inbound rule (SSH and ICMP included are dropped) and no outbound rule (all
-  outbound is allowed). It is the only thing between each server and the internet,
-  so **it is never detached before the stack's own firewall is attached to the
-  same server**. A server with no firewall attached is open to the internet.
+  outbound is allowed). It is the only thing between each public server and the internet,
+  so **it is never detached from a public server before the stack's own firewall is attached to that same server**. A public server with no firewall attached is open to the internet. A private-only server has no public interface for a firewall to filter: `hold-no-inbound` stays attached to it and is never detached.
 - `edge-t` has a public IPv4 and IPv6 address.
 - `db-t1` and `app-t1` have no IPv4 address. Each is in one of two states, and
   this runbook has a path for each:
@@ -51,7 +50,7 @@ Leave `stage: converge` set for the life of the host. Do not remove the adopt
 config afterwards: on a public host the firewall attachment is part of it, and removing it would
 detach the stack's firewall.
 
-**No unfiltered window.** The stack's firewall is attached with a
+**No unfiltered window.** This applies to hosts with a public interface only. The stack's firewall is attached with a
 `FirewallAttachment`, which adds to the firewalls already on the server. The
 owner's `hold-no-inbound` stays attached until the stack's firewall is attached and
 checked, and is detached by hand after. At no point does a server have no
@@ -483,8 +482,8 @@ Expect:
 - `edge-t`: updates in place only, to protection, labels, the primary IPs' names
   (`edge-t-ipv4`, `edge-t-ipv6`), their auto-delete (off) and their delete
   protection (on). The addresses themselves do not change. No replace.
-- `db-t1`: `import` of the server, `create` of the `db-t1` firewall (not attached
-  yet). No primary IP, no attachment, no update to the network or the public
+- `db-t1`: `import` of the server, `create` of the `db-t1` firewall (declared and never
+  attached: a private-only host gets no attachment). No primary IP, no attachment, no update to the network or the public
   interface.
 
 The same stops as step 5 apply. Then the delete guard and the apply, as there:
@@ -729,8 +728,10 @@ recorded here.
 - **An apply fails part-way.** The imports are in state and are harmless; re-run
   `pulumi preview --diff` and read it again. Do not detach `hold-no-inbound` on the
   strength of a failed apply.
-- **The stack's firewall is not on a server whose hold you were about to detach.**
-  Do not detach. A server with no firewall is open to the internet.
+- **The stack's firewall is not on a public server whose hold you were about to detach.**
+  Do not detach. A public server with no firewall is open to the internet. A private-only
+  host (`db-t1`, `app-t1`) has no public interface, so a firewall is neither needed nor
+  possible on it: `hold-no-inbound` stays attached to it, and the owner never detaches it.
 - **Rolling an adopted host back out of the stack.** `pulumi state delete` on the
   server and its addresses leaves the servers as they are in the Console. Do that
   rather than removing the adopt config, which would plan to create duplicates.
