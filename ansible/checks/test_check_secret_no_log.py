@@ -8,6 +8,7 @@ sees the secrets it is meant to see, so it cannot pass by seeing nothing.
 
 from __future__ import annotations
 
+import importlib.util
 import shutil
 import tempfile
 import unittest
@@ -752,6 +753,16 @@ MINI_SPEC = (
     "        type: str\n        no_log: true\n"
 )
 PROTECT = "  no_log: true\n  diff: false\n"
+MINI_SPEC_JSON = (
+    '{"argument_specs": {"main": {"options": {"probe_secret": {"type": "str", "no_log": true}}}}}'
+)
+# A task that prints the secret, without and with no_log, as YAML and as JSON.
+LEAK = "---\n- name: Leak it\n  ansible.builtin.debug:\n    msg: '{{ probe_secret }}'\n"
+QUIET = LEAK + "  no_log: true\n"
+LEAK_JSON = '[{"name": "Leak it", "ansible.builtin.debug": {"msg": "{{ probe_secret }}"}}]'
+QUIET_JSON = (
+    '[{"name": "Leak it", "ansible.builtin.debug": {"msg": "{{ probe_secret }}"}, "no_log": true}]'
+)
 APPLY_FLAT = "  args:\n    apply:\n      vars:\n        probe_token: '{{ probe_secret }}'\n"
 APPLY_NESTED = "    apply:\n      vars:\n        probe_token: '{{ probe_secret }}'\n"
 WRITE_BOUND = (
@@ -858,14 +869,23 @@ class TaskParserTest(unittest.TestCase):
         self.addCleanup(self._scratch.cleanup)
         self.count = 0
 
-    def _role(self, files: dict[str, str], *, secret: bool = True) -> list[str]:
-        """R1 and R4 over a one-role tree with the given files (path in the role: text)."""
+    def _role(
+        self,
+        files: dict[str, str],
+        *,
+        secret: bool = True,
+        spec_at: str | None = "meta/argument_specs.yml",
+        spec: str = MINI_SPEC,
+    ) -> list[str]:
+        """R1 and R4 over a one-role tree with the given files (path in the role: text). The
+        one secret option is declared in `spec` at `spec_at` (None: nowhere)."""
         self.count += 1
         root = Path(self._scratch.name) / f"tree{self.count}"
         role = root / "ansible" / "roles" / "probe"
         (role / "meta").mkdir(parents=True)
-        spec = MINI_SPEC if secret else MINI_SPEC.replace("no_log: true", "no_log: false")
-        (role / "meta" / "argument_specs.yml").write_text(spec, encoding="utf-8")
+        if spec_at is not None:
+            text = spec if secret else spec.replace("no_log: true", "no_log: false")
+            (role / spec_at).write_text(text, encoding="utf-8")
         for relative, text in files.items():
             path = role / relative
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -1258,6 +1278,329 @@ class TaskParserTest(unittest.TestCase):
             "must set no_log: true",
             because="a handler that names a secret",
         )
+
+    # debug takes `var` as a bare expression, so it names a variable with no braces.
+
+    def test_every_spelling_of_debug_var_reads_the_variable(self) -> None:
+        spellings = {
+            "free-form var=": "  ansible.builtin.debug: var=probe_secret\n",
+            "mapping var:": "  ansible.builtin.debug:\n    var: probe_secret\n",
+            "ansible.legacy.debug": "  ansible.legacy.debug:\n    var: probe_secret\n",
+            "bare debug": "  debug: var=probe_secret\n",
+            "action: string": "  action: ansible.builtin.debug var=probe_secret\n",
+            "args: keyword": "  ansible.builtin.debug:\n  args:\n    var: probe_secret\n",
+            "derived variable": "  ansible.builtin.debug:\n    var: probe_derived\n",
+        }
+        files = {"vars/main.yml": "---\nprobe_derived: '{{ probe_secret }}'\n"}
+        for label, lines in spellings.items():
+            with self.subTest(spelling=label):
+                quiet = {**files, "tasks/main.yml": self._main(lines, "Show it")}
+                self.assertEqual(self._role(quiet), [], "debug var with no_log must be green")
+                loud = {**files, "tasks/main.yml": self._main(lines, "Show it", "")}
+                self._red(
+                    self._role(loud),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Show it",
+                    "must set no_log: true",
+                    because=f"{label} prints the secret by its bare name",
+                )
+        other = self._main("  ansible.builtin.debug:\n    var: probe_other\n", "Show it", "")
+        self.assertEqual(self._role({"tasks/main.yml": other}), [], "a variable that is no secret")
+
+    # Parts of a role Ansible loads: where it reads the specs, and every data file it reads.
+
+    def test_a_spec_is_read_from_every_file_ansible_reads_it_from(self) -> None:
+        layouts = {
+            "meta/argument_specs.yaml": ("meta/argument_specs.yaml", MINI_SPEC),
+            "meta/argument_specs.json": ("meta/argument_specs.json", MINI_SPEC_JSON),
+            "argument_specs: in meta/main.yml": ("meta/main.yml", MINI_SPEC),
+            "argument_specs: in meta/main.yaml": ("meta/main.yaml", MINI_SPEC),
+            "argument_specs: in meta/main.json": ("meta/main.json", MINI_SPEC_JSON),
+        }
+        for label, (spec_at, spec) in layouts.items():
+            with self.subTest(layout=label):
+                self.assertEqual(
+                    self._role({"tasks/main.yml": QUIET}, spec_at=spec_at, spec=spec),
+                    [],
+                    "the protected task must be green, or the red proves nothing",
+                )
+                self._red(
+                    self._role({"tasks/main.yml": LEAK}, spec_at=spec_at, spec=spec),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Leak it",
+                    "must set no_log: true",
+                    because=f"the spec is in {label}, where Ansible reads it",
+                )
+
+    def test_the_spec_file_is_the_one_ansible_chooses(self) -> None:
+        # argument_specs.yml beats the `argument_specs:` key of meta/main.yml (data is not
+        # combined), so a secret declared only in main.yml is not a spec Ansible validates.
+        main = MINI_SPEC.replace("probe_secret", "probe_ignored")
+        other = LEAK.replace("probe_secret", "probe_ignored")
+        self.assertEqual(
+            self._role({"tasks/main.yml": other, "meta/main.yml": main}),
+            [],
+            "an option declared only in the file Ansible does not read is not a seed",
+        )
+        self._red(
+            self._role({"tasks/main.yml": LEAK, "meta/main.yml": main}),
+            "Leak it",
+            "must set no_log: true",
+            because="the option of argument_specs.yml is a seed whatever main.yml holds",
+        )
+
+    def test_every_layout_of_tasks_and_handlers_ansible_loads_is_read(self) -> None:
+        benign = "---\n- name: Fine\n  ansible.builtin.debug:\n    msg: fine\n"
+        layouts = {
+            "tasks/main.json": ({"tasks/main.json": LEAK_JSON}, {"tasks/main.json": QUIET_JSON}),
+            "tasks/main.yaml": ({"tasks/main.yaml": LEAK}, {"tasks/main.yaml": QUIET}),
+            "tasks/main (no extension)": ({"tasks/main": LEAK}, {"tasks/main": QUIET}),
+            "handlers/main.json": (
+                {"tasks/main.yml": benign, "handlers/main.json": LEAK_JSON},
+                {"tasks/main.yml": benign, "handlers/main.json": QUIET_JSON},
+            ),
+            "handlers/main (no extension)": (
+                {"tasks/main.yml": benign, "handlers/main": LEAK},
+                {"tasks/main.yml": benign, "handlers/main": QUIET},
+            ),
+            "an include of a .json file": (
+                {
+                    "tasks/main.yml": self._main("  ansible.builtin.include_tasks: x.json\n"),
+                    "tasks/x.json": LEAK_JSON,
+                },
+                {
+                    "tasks/main.yml": self._main("  ansible.builtin.include_tasks: x.json\n"),
+                    "tasks/x.json": QUIET_JSON,
+                },
+            ),
+        }
+        for label, (leak, quiet) in layouts.items():
+            with self.subTest(layout=label):
+                self.assertEqual(self._role(quiet), [], "the protected layout must be green")
+                self._red(
+                    self._role(leak),
+                    "R1 ansible/roles/probe/",
+                    "Leak it",
+                    "must set no_log: true",
+                    because=f"{label} holds a task that prints the secret",
+                )
+
+    def test_every_layout_of_vars_and_defaults_ansible_loads_taints(self) -> None:
+        derived = "Bearer {{ probe_secret }}"
+        layouts = {
+            "defaults/main/x.yml": ("defaults/main/x.yml", f"---\nprobe_hdr: '{derived}'\n"),
+            "defaults/main/sub/x.yaml": ("defaults/main/sub/x.yaml", f"probe_hdr: '{derived}'\n"),
+            "vars/main/x.yml": ("vars/main/x.yml", f"---\nprobe_hdr: '{derived}'\n"),
+            "vars/main.json": ("vars/main.json", f'{{"probe_hdr": "{derived}"}}'),
+            "vars/main/x.json": ("vars/main/x.json", f'{{"probe_hdr": "{derived}"}}'),
+            "defaults/main.yaml": ("defaults/main.yaml", f"probe_hdr: '{derived}'\n"),
+            "vars/main (no extension)": ("vars/main", f"probe_hdr: '{derived}'\n"),
+        }
+        task = "---\n- name: Show header\n  ansible.builtin.debug:\n    msg: '{{ probe_hdr }}'\n"
+        for label, (path, text) in layouts.items():
+            with self.subTest(layout=label):
+                self.assertEqual(
+                    self._role({path: text, "tasks/main.yml": task + "  no_log: true\n"}),
+                    [],
+                    "the protected task must be green",
+                )
+                self._red(
+                    self._role({path: text, "tasks/main.yml": task}),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Show header",
+                    "probe_hdr (secret through probe_secret)",
+                    because=f"{label} derives a variable from the secret",
+                )
+
+    def test_a_file_the_check_does_not_read_is_a_finding(self) -> None:
+        base = {"tasks/main.yml": QUIET}
+        self.assertEqual(self._role(base), [], "the role without the stray file must be green")
+        strays = {
+            "tasks/notes.txt": "x",
+            "tasks/.hidden.yml": QUIET,
+            "tasks/x.yml~": QUIET,
+            "tasks/sub/x.j2": "x",
+            "handlers/x.j2": "x",
+            "vars/x.txt": "a: b",
+            "defaults/README.md": "x",
+            "meta/README.md": "x",
+            "meta/main.json": "{}",  # main.yml is absent here, so this one is read: control
+            "meta/argument_specs.yaml": MINI_SPEC,  # shadowed by argument_specs.yml
+            "meta/other.yml": "---\nx: y\n",
+        }
+        for path, text in strays.items():
+            if path == "meta/main.json":
+                continue
+            with self.subTest(path=path):
+                self._red(
+                    self._role({**base, path: text}),
+                    f"R4 ansible/roles/probe/{path}",
+                    "does not read",
+                    because=f"{path} is a file of the role that no check reads",
+                )
+        # Both meta/main.yml and meta/main.json: Ansible reads the first, so the second is unread.
+        self._red(
+            self._role({**base, "meta/main.yml": "---\ngalaxy_info: {}\n", "meta/main.json": "{}"}),
+            "R4 ansible/roles/probe/meta/main.json",
+            because="main.json is shadowed by main.yml",
+        )
+        self.assertEqual(
+            self._role({**base, "meta/main.yml": "---\ngalaxy_info: {}\n"}),
+            [],
+            "a meta/main.yml beside the spec file is read as the metadata",
+        )
+        self.assertEqual(
+            self._role({**base, "notes.txt": "x", "files/x.txt": "x"}),
+            [],
+            "files outside tasks, handlers, vars, defaults and meta are not the check's",
+        )
+        self.assertEqual(
+            self._role({"tasks/notes.txt": "x", "tasks/main.yml": QUIET}, secret=False),
+            [],
+            "a role with no secret is not read, so a stray file there is no finding",
+        )
+
+    # Indirect reads: through `vars`, `hostvars` and the `vars` lookup.
+
+    def _msg(self, expression: str, tail: str) -> dict[str, str]:
+        task = f'  ansible.builtin.debug:\n    msg: "{expression}"\n'
+        return {"tasks/main.yml": self._main(task, "Show it", tail)}
+
+    def test_a_secret_read_by_a_literal_name_through_vars_or_the_lookup_needs_no_log(self) -> None:
+        reads = {
+            "lookup vars": "{{ lookup('ansible.builtin.vars', 'probe_secret') }}",
+            "lookup vars, short": "{{ lookup('vars', 'probe_secret') }}",
+            "lookup vars, legacy": "{{ lookup('ansible.legacy.vars', 'probe_secret') }}",
+            "query vars": "{{ query('vars', 'probe_secret') }}",
+            "q vars": "{{ q('vars', 'probe_secret') }}",
+            "lookup vars, several": "{{ lookup('vars', 'probe_other', 'probe_secret') }}",
+            "vars subscript": "{{ vars['probe_secret'] }}",
+            "vars attribute": "{{ vars.probe_secret }}",
+            "hostvars attribute": "{{ hostvars[inventory_hostname].probe_secret }}",
+            "hostvars subscript": "{{ hostvars[inventory_hostname]['probe_secret'] }}",
+        }
+        for label, expression in reads.items():
+            with self.subTest(read=label):
+                self.assertEqual(self._role(self._msg(expression, "  no_log: true\n")), [])
+                self._red(
+                    self._role(self._msg(expression, "")),
+                    "R1 ansible/roles/probe/tasks/main.yml",
+                    "Show it",
+                    "probe_secret",
+                    "must set no_log: true",
+                    because=f"{label} reads the secret by a literal name",
+                )
+        other = self._role(self._msg("{{ vars['probe_other'] }}", ""))
+        self.assertEqual(other, [], "a literal name that is no secret stays clean")
+
+    def test_a_secret_read_by_the_vars_lookup_taints_what_derives_from_it(self) -> None:
+        files = {"vars/main.yml": "---\nprobe_hdr: \"{{ lookup('vars', 'probe_secret') }}\"\n"}
+        task = "---\n- name: Show header\n  ansible.builtin.debug:\n    msg: '{{ probe_hdr }}'\n"
+        self.assertEqual(self._role({**files, "tasks/main.yml": task + "  no_log: true\n"}), [])
+        self._red(
+            self._role({**files, "tasks/main.yml": task}),
+            "Show header",
+            "probe_hdr (secret through probe_secret)",
+            because="a variable defined by a vars lookup of the secret",
+        )
+
+    def test_with_vars_reads_each_term_as_a_variable_name(self) -> None:
+        def task(terms: str, tail: str) -> dict[str, str]:
+            body = f"  ansible.builtin.debug:\n    msg: '{{{{ item }}}}'\n  with_vars: {terms}\n"
+            return {"tasks/main.yml": self._main(body, "Show it", tail)}
+
+        self.assertEqual(self._role(task("[probe_secret]", "  no_log: true\n")), [])
+        self._red(
+            self._role(task("[probe_secret]", "")),
+            "Show it",
+            "must set no_log: true",
+            because="with_vars names the secret as a term",
+        )
+        self._red(
+            self._role(task("['{{ probe_name }}']", "  no_log: true\n")),
+            "R4 ansible/roles/probe/tasks/main.yml",
+            "with_vars with a term that is not a literal name",
+            because="a with_vars term that is a template",
+        )
+
+    def test_an_indirect_read_by_a_name_that_is_not_literal_cannot_be_followed(self) -> None:
+        reads = {
+            "vars subscript by a name": "{{ vars[probe_name] }}",
+            "hostvars subscript by a name": "{{ hostvars[inventory_hostname][probe_name] }}",
+            "vars taken whole": "{{ vars | to_json }}",
+            "every variable of a host": "{{ hostvars[inventory_hostname] | to_json }}",
+            "a method called on vars": "{{ vars.get('probe_secret') }}",
+            "a method called on hostvars": "{{ hostvars[inventory_hostname].get('probe_secret') }}",
+            "vars lookup by a name": "{{ lookup('vars', probe_name) }}",
+            "query by a name": "{{ query('ansible.builtin.vars', probe_name) }}",
+            "a lookup whose plugin is a name": "{{ lookup(probe_plugin, 'x') }}",
+            "vars lookup with splatted terms": "{{ lookup('vars', *probe_names) }}",
+        }
+        for label, expression in reads.items():
+            with self.subTest(read=label):
+                self._red(
+                    self._role(self._msg(expression, "  no_log: true\n")),
+                    "R4 ansible/roles/probe/tasks/main.yml",
+                    "Show it",
+                    "reads variables indirectly",
+                    because=f"{label}: even under no_log the check cannot say what is read",
+                )
+        self.assertEqual(
+            self._role(self._msg("{{ probe_vars }} and vars are fine", "")),
+            [],
+            "a name that only contains `vars`, and the word in text, are not an indirect read",
+        )
+
+    def test_an_indirect_read_in_a_vars_file_or_a_template_cannot_be_followed(self) -> None:
+        task = "---\n- name: Show it\n  ansible.builtin.debug:\n    msg: fine\n"
+        self._red(
+            self._role(
+                {
+                    "vars/main.yml": '---\nprobe_x: "{{ vars[probe_name] }}"\n',
+                    "tasks/main.yml": task,
+                }
+            ),
+            "R4 ansible/roles/probe/vars/main.yml",
+            "variable probe_x",
+            "reads variables indirectly",
+            because="a vars file that reads by a name",
+        )
+        template = (
+            "---\n- name: Render it\n  ansible.builtin.template:\n    src: x.j2\n"
+            "    dest: /tmp/x\n  no_log: true\n  diff: false\n"
+        )
+        self._red(
+            self._role({"tasks/main.yml": template, "templates/x.j2": "{{ vars | to_json }}\n"}),
+            "R4 ansible/roles/probe/tasks/main.yml",
+            "template of task 'Render it'",
+            "reads variables indirectly",
+            because="a template that takes vars whole",
+        )
+
+    # A renamed private constant of ansible-core is an import error, not a flood of findings.
+
+    def test_a_renamed_action_constant_fails_the_import(self) -> None:
+        names = ("_ACTION_ALL_INCLUDE_IMPORT_TASKS", "_ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES")
+        constants = importlib.import_module("ansible.constants")
+
+        def load() -> None:
+            spec = importlib.util.spec_from_file_location(
+                "check_secret_no_log_copy", checker.__file__
+            )
+            if spec is None or spec.loader is None:
+                self.fail("the module cannot be loaded from its file")
+            spec.loader.exec_module(importlib.util.module_from_spec(spec))
+
+        load()  # the control: with both constants present the module loads
+        for name in names:
+            with self.subTest(constant=name):
+                saved = getattr(constants, name)
+                delattr(constants, name)
+                try:
+                    with self.assertRaises(AttributeError):
+                        load()
+                finally:
+                    setattr(constants, name, saved)
 
 
 if __name__ == "__main__":

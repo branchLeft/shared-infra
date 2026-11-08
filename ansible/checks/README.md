@@ -545,8 +545,13 @@ Rules:
   task's data); the action does not resolve to a plugin Ansible can load (a templated action, an
   unknown name, a collection that is not installed, the removed bare `include:`); the task
   includes a file named by a template; it includes a file that is not a task file the check
-  reads (a missing file, or one outside `tasks/` and `handlers/`); or it includes a role. A role
-  with no secret is not read, so R4 never fires there.
+  reads (a missing file, or one outside `tasks/` and `handlers/`); it includes a role; or a text
+  reads variables by a name the check cannot see (`vars` or `hostvars` taken whole, called on, or
+  subscripted by a name that is not a literal, a `vars` lookup with a term that is not a literal,
+  a lookup whose plugin is not a literal), in a task, a template or a vars file. A file under
+  `tasks/`, `handlers/`, `vars/`, `defaults/` or `meta/` that the check does not read is an
+  `R4 <file>: ... does not read` finding naming the file (see "The role's files"). A role with no
+  secret is not read, so R4 never fires there.
 
 Sub-option secrets. An option such as `tenant_compose_stacks` holds a secret only in an
 attribute of its items (`secrets_env_text`). The option is then a seed for that attribute only:
@@ -592,6 +597,30 @@ secret is resolved the way the executor resolves it (`ansible.playbook.helpers.l
   file and then in the role's `tasks/` (or `handlers/`), and must be one of the task files the
   check reads. A name that is a template (`Templar.is_possibly_template`) has no static target.
 
+- A module argument that is a bare variable name is a read of that variable with no braces.
+  In `ansible-core` 2.21 that is `debug`'s `var` (any spelling that resolves to
+  `ansible.builtin.debug`: `debug: var=x`, `var:`, `args:`, `action:`, `ansible.legacy.debug`) and
+  `assert`'s `that` (already expression-only). `with_vars` terms are names too. The `with_*`
+  forms of the other lookups take literals, not names.
+
+The role's files. The files of a role are found the way `Role` finds them, not from a list kept
+here. The spec comes from the first of `meta/argument_specs.yml`, `.yaml`, `.json`, else from the
+`argument_specs:` key of the role's `meta/main` file (`Role._get_role_argspecs`); data is not
+combined between the two. `tasks/` and `handlers/` are read from `main` in each layout
+`DataLoader.find_vars_files` resolves (`main.yml`, `main.yaml`, `main.json`, `main` with no
+extension, or a directory named `main`), and `vars/` and `defaults/` from the same names with the
+directory form allowed, where every file under it is read. Any other file under `tasks/`,
+`handlers/`, `vars/`, `defaults/` or `meta/` that the check does not read (a hidden or backup
+file, one with another extension, a second `meta/main` that the first shadows, a spec that
+another spec file shadows) is an R4 finding naming it, because a file the check does not read is
+a file it cannot clear.
+
+Indirect reads. `lookup('ansible.builtin.vars', 'name')` (any spelling of the plugin, and `query`
+and `q`), `vars['name']`, `vars.name`, `hostvars[inventory_hostname].name` and
+`hostvars[...]['name']` read the variable `name`, and count as a read of it, with a Name node of
+its own or not, when the name is a literal. When it is not (`vars[x]`, `vars | to_json`, `vars.get(...)`,
+`lookup('vars', x)`), the check cannot say which variable is read, and the text is an R4 finding.
+
 The collection finder is installed with `init_plugin_loader`, as `ansible-playbook` installs it.
 The only list of names the check keeps is the fully qualified names of the write actions, assert
 and template, and those are matched after Ansible has resolved the spelling.
@@ -625,8 +654,9 @@ What it does not see:
   is an R4 finding (no role of this estate sets one). `include_vars` and `vars_files` are not
   followed. A module of one role resolves for a role checked after it in the same process, as it
   does in a play that loads both. The action lists the executor itself uses
-  (`ansible.constants._ACTION_*`) are private names of `ansible-core`, and a rename on a version
-  bump fails the import loudly. The check does not run Ansible: it knows what parsing and plugin
+  (`ansible.constants._ACTION_*`) are private names of `ansible-core`. The check reads them
+  when it is imported, so a rename on a version bump is an `AttributeError` at import, never a
+  quiet change in what is followed (a test removes each in turn). The check does not run Ansible: it knows what parsing and plugin
   resolution can say, and nothing that depends on a variable's value at run time.
 - A loop variable is followed only when the loop names it (`loop_control.loop_var`), or the
   loop has no include. A `set_fact` or `register` that copies an attribute into another
@@ -636,7 +666,7 @@ What it does not see:
 - R3 checks the table's rows, not what the consuming role does with a value.
 
 Sabotage, each one a copy of the real files with one control broken, and the baseline copy
-clean (`test_check_secret_no_log.py`, 61 tests, green under the pinned ansible-core venv):
+clean (`test_check_secret_no_log.py`, 73 tests, green under the pinned ansible-core venv):
 
 | Sabotage in the copy                                                  | Finding that goes red                                                                     |
 | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
@@ -663,6 +693,13 @@ clean (`test_check_secret_no_log.py`, 61 tests, green under the pinned ansible-c
 | An include of a role, in any spelling                                 | R4: it includes a role                                                                    |
 | An action Ansible cannot resolve, a templated action, bare `include:` | R4: cannot be followed                                                                    |
 | A secret written by `ansible.legacy.copy` or `action: copy ...`       | R1: must set `diff: false (ANS-16)`, and `no_log: true`                                   |
+| `debug` with `var:` or `var=` naming a secret, in every spelling      | R1: must set `no_log: true`                                                               |
+| The spec in each file Ansible reads it from                           | R1: as for the spec in `meta/argument_specs.yml`                                          |
+| Tasks, handlers, vars, defaults in each layout Ansible loads          | R1: the task or the derived variable is named                                             |
+| A file of the role that the check does not read                       | R4: `does not read`, naming the file                                                      |
+| A secret read by `vars[...]`, `hostvars[...]` or the `vars` lookup    | R1: names the secret, must set `no_log: true`                                             |
+| `vars`, `hostvars` or a lookup read by a name that is not literal     | R4: reads variables indirectly                                                            |
+| A renamed `ansible.constants._ACTION_*` name                          | `AttributeError` when the check is imported                                               |
 | A row name that is no option (`monitoring_stack_smtp_passwd`)         | R2: resolves to 0 options, not one                                                        |
 | The loader's rows file made unreadable                                | R2                                                                                        |
 | A secret option with its row removed from the README                  | R3: no row for the no_log option                                                          |
@@ -673,8 +710,8 @@ clean (`test_check_secret_no_log.py`, 61 tests, green under the pinned ansible-c
 The expression-only allowance is pinned too: an assert whose `that` names a secret, with no
 `no_log`, is clean.
 
-On the real tree the check reports 20 `no_log` options in 8 roles and patterns, and six
-variables reached from them: `ntfy_pager_env_lines`, `monitoring_stack_env_keys`, and four
-`ci_jump_legacy_*` paths built from `ci_jump_user`. Every task that names one of them already
+On the real tree the check reports how many `no_log` options it found and how many variables are
+reached from them (run it to read the figures: `ntfy_pager_env_lines`, `monitoring_stack_env_keys`
+and the `ci_jump_legacy_*` paths built from `ci_jump_user` are among them). Every task that names one of them already
 sets `no_log: true`, and every file writer among them sets `diff: false`, so the check finds no
 R1 failure on `main`.

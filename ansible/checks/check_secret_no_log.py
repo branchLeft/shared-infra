@@ -33,6 +33,7 @@ from ansible.playbook.task_include import TaskInclude  # type: ignore[import-unt
 from ansible.plugins.loader import (  # type: ignore[import-untyped]
     add_all_plugin_dirs,
     init_plugin_loader,
+    lookup_loader,
 )
 from ansible.template import Templar  # type: ignore[import-untyped]
 from check_enrolment import _read_host_roles
@@ -56,6 +57,21 @@ CONTAINER_KEYS = frozenset(("block", "rescue", "always"))
 # task's action to (`copy`, `ansible.legacy.copy` and `action: copy ...` all resolve to the first).
 ASSERT_FQCNS = frozenset(("ansible.builtin.assert",))
 TEMPLATE_FQCNS = frozenset(("ansible.builtin.template",))
+# debug takes `var` as a bare expression (an implicit {{ }}), not as a template: its action plugin
+# calls evaluate_expression on it. It is the only action of ansible-core 2.21.5 that does besides
+# assert, whose `that` is the expression-only read above (plugins/action/*.py: evaluate_expression).
+DEBUG_FQCNS = frozenset(("ansible.builtin.debug",))
+VARS_LOOKUP_FQCN = "ansible.builtin.vars"
+LOOKUP_CALLS = frozenset(("lookup", "query", "q"))
+NAMESPACES = frozenset(("vars", "hostvars"))
+# The names the executor classifies includes by, read at import so that a rename in a new
+# ansible-core is an AttributeError when this module loads (loud in CI), not a per-task finding.
+_CONSTANTS = ansible_constants
+INCLUDE_TASKS_ACTIONS = _CONSTANTS._ACTION_ALL_INCLUDE_IMPORT_TASKS
+INCLUDE_ROLE_ACTIONS = _CONSTANTS._ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES
+# What Ansible's Role._load_role_yaml reads: these extensions, or none (hard-coded there, and the
+# default of this setting, which Role._get_role_argspecs reads from it).
+YAML_EXTENSIONS = tuple(_CONSTANTS.YAML_FILENAME_EXTENSIONS)
 DIFF_FQCNS = frozenset(
     f"ansible.builtin.{name}"
     for name in ("copy", "template", "lineinfile", "blockinfile", "replace", "assemble")
@@ -95,10 +111,111 @@ def _parse(text: str, rel: str, where: str, findings: list[str]) -> nodes.Templa
     because Ansible's filters (dirname, password_hash) are not Jinja's and a compile refuses
     them. Text that does not parse is a finding: an unreadable template cannot be cleared."""
     try:
-        return ENV.parse(text)
+        tree = ENV.parse(text)
     except TemplateSyntaxError:
         findings.append(f"R1 {rel}: {where} holds a template that does not parse")
         return None
+    for how in dict.fromkeys(_opaque_reads(tree)):
+        findings.append(
+            f"R4 {rel}: {where} reads variables indirectly ({how}), so the check cannot follow "
+            "what it reads: name the variable"
+        )
+    return tree
+
+
+@functools.cache
+def _is_vars_lookup(plugin: str) -> bool:
+    """Whether Ansible's lookup loader resolves this name to the `vars` lookup, in any spelling
+    (`vars`, `ansible.builtin.vars`, `ansible.legacy.vars`)."""
+    _plugins_ready()
+    context = lookup_loader.find_plugin_with_context(plugin)
+    return bool(context.resolved) and context.resolved_fqcn == VARS_LOOKUP_FQCN
+
+
+def _literal(node: nodes.Node) -> str | None:
+    return node.value if isinstance(node, nodes.Const) and isinstance(node.value, str) else None
+
+
+def _vars_access(node: nodes.Node) -> tuple[str, str | None] | None:
+    """For `vars[k]`, `vars.k`, `hostvars[h][k]` and `hostvars[h].k`: the namespace and the key
+    when it is a literal (None when it is not). `hostvars[h]` alone is not an access to a
+    variable: it is the base of one, or an opaque read of every variable of a host."""
+    if not isinstance(node, (nodes.Getattr, nodes.Getitem)):
+        return None
+    base = node.node
+    if isinstance(base, nodes.Name) and base.name == "vars":
+        return "vars", _constant_key(node)
+    inner = base.node if isinstance(base, (nodes.Getattr, nodes.Getitem)) else None
+    if isinstance(inner, nodes.Name) and inner.name == "hostvars":
+        return "hostvars", _constant_key(node)
+    return None
+
+
+def _lookup_terms(node: nodes.Node) -> tuple[str | None, list[nodes.Node]] | None:
+    """For `lookup('p', ...)`, `query('p', ...)` and `q('p', ...)`: the plugin name when it is a
+    literal, and the terms. None when the node is no such call."""
+    if (
+        isinstance(node, nodes.Call)
+        and isinstance(node.node, nodes.Name)
+        and node.node.name in LOOKUP_CALLS
+        and node.args
+    ):
+        return _literal(node.args[0]), list(node.args[1:])
+    return None
+
+
+def _indirect_names(node: nodes.Node) -> set[str]:
+    """The variables this node reads by a literal name through `vars`, `hostvars` or the `vars`
+    lookup, which have no Name node of their own."""
+    access = _vars_access(node)
+    if access is not None and access[1] is not None:
+        return {access[1]}
+    call = _lookup_terms(node)
+    if call is not None and call[0] is not None and _is_vars_lookup(call[0]):
+        return {t for t in map(_literal, call[1]) if t is not None}
+    return set()
+
+
+def _opaque_reads(node: nodes.Node) -> list[str]:
+    """How this tree reads variables by a name the check cannot see: `vars` or `hostvars` taken
+    whole or called on, a subscript of them that is not a literal, a `vars` lookup with a term
+    that is not a literal or with arguments splatted in, and a lookup whose plugin is not a
+    literal. Each is a finding (R4) in a role that holds a secret."""
+    out: list[str] = []
+    if isinstance(node, nodes.Call):
+        callee = node.node
+        if isinstance(callee, (nodes.Getattr, nodes.Getitem)) and _vars_access(callee):
+            out.append("a method called on vars or hostvars")
+        call = _lookup_terms(node)
+        if call is not None:
+            plugin, terms = call
+            if plugin is None:
+                out.append("a lookup whose plugin is not a literal name")
+            elif _is_vars_lookup(plugin) and (
+                node.dyn_args is not None or any(_literal(t) is None for t in terms)
+            ):
+                out.append("a vars lookup with a term that is not a literal name")
+    access = _vars_access(node)
+    if access is not None:
+        if access[1] is None:
+            out.append(f"a {access[0]} subscript that is not a literal name")
+        walk: list[nodes.Node] = []
+        if isinstance(node, nodes.Getitem):
+            walk.append(node.arg)
+        if (
+            access[0] == "hostvars"
+            and isinstance(node, (nodes.Getattr, nodes.Getitem))
+            and isinstance(node.node, nodes.Getitem)
+        ):
+            walk.append(node.node.arg)
+        for child in walk:
+            out.extend(_opaque_reads(child))
+        return out
+    if isinstance(node, nodes.Name) and node.ctx == "load" and node.name in NAMESPACES:
+        out.append(f"{node.name} taken as a whole")
+    for child in node.iter_child_nodes():
+        out.extend(_opaque_reads(child))
+    return out
 
 
 class Attrs(NamedTuple):
@@ -144,7 +261,7 @@ def _loaded(node: nodes.Node, partial: Partial) -> set[str]:
                 first = str(attribute[0].value).split(".")[0]
                 if first in partial[name].safe:
                     return set()
-    found: set[str] = set()
+    found: set[str] = _indirect_names(node)
     if isinstance(node, nodes.Name) and node.ctx == "load":
         found.add(node.name)
     for child in node.iter_child_nodes():
@@ -157,10 +274,73 @@ def _names_in(text: str, rel: str, where: str, findings: list[str], partial: Par
     return set() if tree is None else _loaded(tree, partial)
 
 
-def _yaml_files(directory: Path) -> list[Path]:
+def _is_data_file(path: Path) -> bool:
+    """Whether Ansible reads this file as data in a role directory: an extension of
+    YAML_FILENAME_EXTENSIONS or none, and not hidden or a backup (DataLoader._get_dir_vars_files
+    skips those)."""
+    if path.name.startswith(".") or path.name.endswith("~"):
+        return False
+    return path.suffix in YAML_EXTENSIONS or path.suffix == ""
+
+
+def _data_files(directory: Path) -> list[Path]:
+    """Every data file under a role directory, at any depth: the check reads all of them, which
+    is more than Ansible loads by name (`main`) and so asks for more, never less."""
     if not directory.is_dir():
         return []
-    return sorted(p for p in directory.rglob("*") if p.suffix in (".yml", ".yaml") and p.is_file())
+    return sorted(p for p in directory.rglob("*") if p.is_file() and _is_data_file(p))
+
+
+def _role_yaml_files(role_dir: Path, subdir: str, main: str | None, allow_dir: bool) -> list[Path]:
+    """The file or files Ansible's Role._load_role_yaml loads for `subdir`: the same name and
+    extension order, resolved by the maintained DataLoader.find_vars_files (a directory named
+    `main`, or `main.yml`, `main.yaml`, `main.json`, then `main` with no extension; with `main`
+    given, that name first with no extension)."""
+    base = role_dir / subdir
+    if not base.is_dir():
+        return []
+    extensions = list(YAML_EXTENSIONS)
+    if main is None:
+        name = "main"
+        extensions.append("")
+    else:
+        name = main
+        extensions.insert(0, "")
+    found = _data_loader().find_vars_files(str(base), name, extensions, allow_dir)
+    return [Path(f) for f in found]
+
+
+def _spec_file(role_dir: Path) -> Path | None:
+    """The file Ansible reads the role's argument specs from (Role._get_role_argspecs): the first
+    of meta/argument_specs.yml, .yaml, .json that exists, else the role's meta/main file, whose
+    `argument_specs` key is then used. Data is not combined between the files."""
+    for ext in YAML_EXTENSIONS:
+        if (role_dir / "meta" / f"argument_specs{ext}").exists():
+            files = _role_yaml_files(role_dir, "meta", "argument_specs", False)
+            return files[0] if files else None
+    files = _role_yaml_files(role_dir, "meta", None, False)
+    return files[0] if files else None
+
+
+def _role_files(role_dir: Path) -> tuple[list[Path], list[Path]]:
+    """Every file under the role's tasks/, handlers/, vars/, defaults/ and meta/, split into the
+    ones the check reads and the ones it does not. In meta/ Ansible loads only the spec file
+    and the metadata file (main) it chooses, so only those are read; elsewhere every data file."""
+    read: list[Path] = []
+    unread: list[Path] = []
+    for sub in ("tasks", "handlers", "vars", "defaults"):
+        base = role_dir / sub
+        if base.is_dir():
+            for path in sorted(p for p in base.rglob("*") if p.is_file()):
+                (read if _is_data_file(path) else unread).append(path)
+    meta = role_dir / "meta"
+    if meta.is_dir():
+        spec = _spec_file(role_dir)
+        chosen = {spec} if spec is not None else set()
+        chosen.update(_role_yaml_files(role_dir, "meta", None, False))
+        for path in sorted(p for p in meta.rglob("*") if p.is_file()):
+            (read if path in chosen else unread).append(path)
+    return read, unread
 
 
 def _role_dirs(root: Path) -> list[Path]:
@@ -173,9 +353,10 @@ def _role_dirs(root: Path) -> list[Path]:
 
 
 def _option_specs(root: Path, role_dir: Path, findings: list[str]) -> dict[str, dict[str, object]]:
-    """The options of the role's main argument spec, with their specs."""
-    path = role_dir / "meta" / "argument_specs.yml"
-    if not path.is_file():
+    """The options of the role's main argument spec, with their specs, from the file Ansible
+    reads the specs from (see `_spec_file`)."""
+    path = _spec_file(role_dir)
+    if path is None:
         return {}
     doc, problem = load_yaml(path)
     if problem is not None:
@@ -339,13 +520,12 @@ def _parse_call(task: dict[str, object], handler: bool) -> _Call:
     parser's (action, args, delegate_to) classifies it, and the loader of its class validates and
     normalises it. Nothing here chooses by a module name or a keyword spelling of this module."""
     _plugins_ready()
-    constants = ansible_constants
     try:
         action = ModuleArgsParser(copy.deepcopy(task)).parse(skip_action_validation=True)[0]
-        if action in constants._ACTION_ALL_INCLUDE_IMPORT_TASKS:
+        if action in INCLUDE_TASKS_ACTIONS:
             include = (HandlerTaskInclude if handler else TaskInclude).load(copy.deepcopy(task))
             kind = "tasks"
-        elif action in constants._ACTION_ALL_PROPER_INCLUDE_IMPORT_ROLES:
+        elif action in INCLUDE_ROLE_ACTIONS:
             include = IncludeRole.load(copy.deepcopy(task))
             kind = "role"
         else:
@@ -548,7 +728,7 @@ def _binds_in(items: list[object], where: _Where, out: list[_Bind]) -> None:
 
 
 def _task_paths(role_dir: Path) -> list[Path]:
-    return _yaml_files(role_dir / "tasks") + _yaml_files(role_dir / "handlers")
+    return _data_files(role_dir / "tasks") + _data_files(role_dir / "handlers")
 
 
 def _binds(root: Path, role_dir: Path) -> list[_Bind]:
@@ -584,9 +764,7 @@ def _taint(
     pinned = set(origin)
     defs: dict[str, list[nodes.Template]] = {}
     for sub in ("vars", "defaults"):
-        for path in _yaml_files(role_dir / sub):
-            if path.parent != role_dir / sub:
-                continue
+        for path in _data_files(role_dir / sub):
             doc, problem = load_yaml(path)
             rel = _rel(root, path)
             if problem is not None:
@@ -707,6 +885,27 @@ def _task_refs(
     refs: set[str] = set()
     for text in _strings(body):
         refs |= _names_in(text, rel, f"task '{name}'", findings, partial)
+    if call is not None and call.fqcn in DEBUG_FQCNS and isinstance(call.args.get("var"), str):
+        # debug evaluates `var` as an expression with an implicit {{ }}, so it names a variable
+        # with no braces: read it as the template it is evaluated as.
+        expression = "{{ " + str(call.args["var"]) + " }}"
+        refs |= _names_in(expression, rel, f"task '{name}'", findings, partial)
+    for key, value in task.items():
+        # with_<lookup> hands its terms to the lookup, and the `vars` lookup reads each term as
+        # the name of a variable.
+        if isinstance(key, str) and key.startswith("with_") and _is_vars_lookup(key[5:]):
+            terms = value if isinstance(value, list) else [value]
+            literal = [
+                t for t in terms if isinstance(t, str) and not _templar().is_possibly_template(t)
+            ]
+            if len(literal) == len(terms):
+                refs |= set(literal)
+            else:
+                findings.append(
+                    f"R4 {rel}: task '{name}' reads variables indirectly ({key} with a term that "
+                    "is not a literal name), so the check cannot follow what it reads: name the "
+                    "variable"
+                )
     return refs
 
 
@@ -807,6 +1006,13 @@ def _r1(root: Path, findings: list[str]) -> int:
         if not whole and not partial:
             continue
         taint = _taint(root, role_dir, whole, partial, findings)
+        for path in _role_files(role_dir)[1]:
+            findings.append(
+                f"R4 {_rel(root, path)}: a file of a role that holds a secret which the check "
+                "does not read, so nothing in it is checked: Ansible loads data files here by "
+                "the extensions .yml, .yaml, .json or none (and in meta/ only the spec file and "
+                "main it chooses), so rename it, or remove it"
+            )
         wheres = _task_file_wheres(root, role_dir)
         for name in LOADER_SEEDS.get(role_dir.name, ()):
             if not any(name in where.path.read_text(encoding="utf-8") for where in wheres):
