@@ -435,6 +435,11 @@ and the forwarding proven with Docker running. The stack's firewall accepts SSH 
 the temporary firewall from step 3 stays until step 11, so the workstation can
 still reach `edge-t` directly for step 9.
 
+"Forwarding proven" is scripted: `RUNBOOK-edget-gateway-proof.md`, its sections 2 and
+3, run from the workstation through `edge1`, prove that a source inside
+`10.20.1.0/24` reaches the internet only through the masquerade and that a source
+outside it gets no reply, red then green. Run them here, before step 9.
+
 ## 8. Converge edge-t and adopt db-t1 (second apply)
 
 Generate `db-t1`'s deploy key first, on the workstation. Its public half is read by
@@ -690,6 +695,11 @@ When that prints `0`:
 ```bash
 hcloud firewall delete hold-no-inbound
 ```
+
+Run the SSH probe of `RUNBOOK-edget-gateway-proof.md` (its section 4) now: from the
+workstation it must show SSH to `edge-t` refused, and from `edge1` accepted. Run it once
+before the first command of this step as well, when it must show SSH accepted from the
+workstation: the red case.
 
 The stack and the live project now agree. This must report no changes, for either
 host and for the addresses:
