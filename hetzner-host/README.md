@@ -25,6 +25,8 @@ each dependent creating its own copy of shared infrastructure.
   address is refused, before anything is created when the value is a plain
   string and when an output resolves otherwise. It is refused on a host with no
   public networking.
+- `HostArgs.adopt`, `AdoptArgs`, `assertAdoption` — adopt a server made by hand
+  instead of creating one ("Adopting a server made by hand" below).
 - `renderCloudInit`, `CloudInitArgs`, `assertDeployPublicKey` — the first-boot
   user-data and the validation that protects it.
 - `Enrolment`, `PullBootstrap`, `PullBootstrapFile`, `assertEnrolment`,
@@ -42,9 +44,9 @@ each dependent creating its own copy of shared infrastructure.
 
 ## `Host`
 
-`Host` creates a machine outright, rather than importing a hand-provisioned
-one and reconciling around it — a different problem from adopting an
-existing server, with a different set of `ignoreChanges`. `sshKeys` and
+`Host` creates a machine outright. Adopting a hand-made one is the opt-in
+`adopt` argument ("Adopting a server made by hand" below); without it nothing
+here imports or reconciles around an existing server. `sshKeys` and
 `image` are ignored on the underlying `hcloud.Server` because both are
 create-time-only at the provider, regardless of how the server came to
 exist.
@@ -91,6 +93,50 @@ component, which turns every throwaway host into manual console cleanup; and
 a lab host labelled `env: production` corrupts cost attribution and any
 label-selector rule that reads it. Both default to the production values, so
 a lab stack has to say so — which is the right way round.
+
+## Adopting a server made by hand
+
+`adopt: { serverId, ipv4Id?, ipv6Id?, stage? }` makes `Host` import a server (and,
+on a public host, its two primary IPs) that already exists, by id, instead of
+creating them. Ids are plain strings, because Pulumi's `import` option takes a
+literal, never an output. The input is checked before any resource exists: a
+non-numeric id, a public host without both address ids, a private-only host given
+one, or an unknown stage throws.
+
+- **`userData`, `sshKeys`, `image` and `firewallIds` are ignored.** The first three
+  are the fields the provider treats as replacing, and a console-made server
+  differs on all of them. Cloud-init does not run on an adopted host, so whatever
+  the document would have done is the owner's hand bootstrap.
+- **`publicNets` is ignored, at both stages, on public and private-only hosts.**
+  The provider's read never sets a server's public interface, so an adopted
+  server has none in state, and the first apply sees the declared `publicNets` as
+  changed. The provider then powers the server off, unassigns the primary IP on
+  it and, because the old set held no address id, deletes that primary IP before
+  it tries to assign the id it just deleted. The addresses are held by the
+  imported `PrimaryIp` resources instead. A created host does not ignore it.
+- **Two stages.** Pulumi refuses an import whose inputs differ from the live
+  resource, and a console-made server differs from the component in what the
+  component itself sets. `stage: 'import'` (the default) leaves protection, labels
+  and the primary IPs' name, auto-delete, protection and labels alone; a
+  private-only host also leaves its `networks` alone, because the owner attaches
+  the network and removes a leftover public address by hand.
+  `stage: 'converge'` declares them all except `publicNets`, which stays ignored,
+  and the update is in place. Stay on `converge` afterwards.
+- **The firewall is attached, not declared on the server.** `firewallIds` is
+  create-time intent at the provider, so an adopted server gets a
+  `FirewallAttachment`, which adds to the firewalls already on it and removes none.
+  The owner's own firewall stays until this one is attached and is detached by
+  hand after, so the host is never unfiltered. A private-only host's attachment is
+  declared at `converge` only: until then a leftover public address may still be
+  on it, and the role's firewall allows SSH from anywhere.
+- **Not covered:** a hand-attached network on a public host (the component attaches
+  it; a hand attachment makes that fail), and a network that exists in the project
+  but not in the stack's state.
+
+The procedure for the tenants project's three servers is
+`hetzner/tenants/RUNBOOK-adopt-console-servers.md`. `host.test.ts` ("adopting a
+server made by hand") reads the `ignoreChanges` list and the import id off the
+request the SDK sends the engine, since the mocks do not pass them on.
 
 ## Cloud-init
 

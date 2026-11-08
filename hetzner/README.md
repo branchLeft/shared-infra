@@ -431,6 +431,12 @@ Hetzner console and rescue system, not a password.
 
 ## Deploys
 
+A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`) is
+verified before the wrapper pins it. The verifier runs with no GitHub credential, and the design is
+fail-closed: a host with no credential refuses every registered deploy. The verifier and its pinned
+gh come from the `deploy_verifier` role, applied on `edge1`, `app1`, `ops1` and `db1`. See
+`provision/branchleft_deploy.md`, "The verifier runs with no credential" and "Live checks, in order".
+
 `branchleft-deploy <stack> <image@sha256:...>` — or `branchleft-deploy --slot
 <stack>` with the reference on stdin, for a slot key — is the whole of what CI
 can do as root. It refuses anything but a digest-pinned reference, refuses a

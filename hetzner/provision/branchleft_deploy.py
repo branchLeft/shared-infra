@@ -61,6 +61,116 @@ def validate_image_ref(ref: str) -> str:
     return ref
 
 
+# The host's copy of ghost-platform's scripts/verify-image-attestation.sh,
+# installed by the deploy_verifier role. A pinned digest in test_branchleft_deploy.py
+# holds the copy to this repo's file; ghost-platform's script carries the same change.
+VERIFIER = "/usr/local/sbin/branchleft-verify-image"
+
+ATTESTED_REPO = "branchLeft/ghost-platform"
+
+# The register: each image this host verifies before it deploys, mapped to the
+# one workflow whose attestation it must carry. An image name absent from this
+# table is not verified here. Adding an image is a reviewed diff; an image it
+# lists is refused unless attested by exactly that workflow on refs/heads/main.
+ATTESTED_IMAGES: dict[str, str] = {
+    "ghcr.io/branchleft/ghost-tenant": f"{ATTESTED_REPO}/.github/workflows/registry-push.yml",
+    "ghcr.io/branchleft/portal-apps": f"{ATTESTED_REPO}/.github/workflows/portal-apps-image.yml",
+}
+
+
+# The directory the pinned gh binary is installed into, by the deploy_verifier
+# role, and the empty root-only directory the verifier's gh reads its config from.
+# Neither is on the general PATH, and the home is empty so that root's own
+# ~/.config/gh cannot become an ambient credential for the check.
+VERIFIER_GH_DIR = "/usr/local/libexec/branchleft-verifier"
+VERIFIER_HOME = "/var/lib/branchleft/verifier-home"
+
+# gh's own words when it holds no credential: its refusal always names the login command. The
+# verifier passes gh's stderr on, so this is read from there.
+_NEEDS_LOGIN = re.compile(r"gh auth login")
+
+
+def verifier_env() -> dict[str, str]:
+    """The verifier's entire environment. Nothing is inherited from the host.
+
+    No GitHub credential is in it, and that is the design: the host holds none,
+    and a token read from anywhere would make the check depend on what the host
+    happens to hold. VERIFY_PLAIN_ERRORS keeps the verifier's refusals as plain
+    text, so the auth refusal above can be read off stderr.
+    """
+    return {
+        "PATH": f"{VERIFIER_GH_DIR}:/usr/bin:/bin",
+        "HOME": VERIFIER_HOME,
+        "GH_CONFIG_DIR": VERIFIER_HOME,
+        "XDG_CONFIG_HOME": VERIFIER_HOME,
+        "GH_PROMPT_DISABLED": "1",
+        "GH_NO_UPDATE_NOTIFIER": "1",
+        "LC_ALL": "C",
+        "VERIFY_PLAIN_ERRORS": "1",
+    }
+
+
+def attested_name(image: str) -> str:
+    """The register key for a validated image reference: registry host and path.
+
+    A tag and a registry port are spellings, not a different image: the digest
+    is what the host pulls, whatever tag or port rides along. Both are dropped
+    here, so `name:tag@sha256:...` and `host:443/name@sha256:...` look up the
+    same register entry as `name@sha256:...` and cannot skip verification.
+    """
+    first, slash, rest = image.partition("@")[0].partition("/")
+    return first.partition(":")[0] + slash + rest.partition(":")[0]
+
+
+def verify_attestation(image: str, *, run=subprocess.run) -> bool:
+    """Verify a registered image's attestation before anything touches the host.
+
+    Returns False for an image outside the register, which is not verified here.
+    Raises DeployError when a registered image cannot be verified, for any
+    reason: refused, unknown digest, or the verifier missing. There is no
+    argument, environment variable or stack setting that skips this.
+
+    The design is fail-closed. The host holds no GitHub credential and the
+    verifier needs none (see branchleft_deploy.md). A gh that still asks for a
+    login is refused with the credential message, and nothing falls back to an
+    unverified deploy.
+    """
+    name = attested_name(image)
+    signer = ATTESTED_IMAGES.get(name)
+    if signer is None:
+        return False
+    # The verifier takes registry/name@digest only, so it is given the register
+    # name and the digest, however the image was spelled.
+    canonical = f"{name}@{image.partition('@')[2]}"
+    try:
+        result = run(
+            [VERIFIER, canonical, ATTESTED_REPO, signer, "--bundle-from-oci"],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=verifier_env(),
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError as error:
+        raise DeployError(
+            f"could not run {VERIFIER} ({error}); refusing to deploy {image} "
+            "without verifying its attestation"
+        ) from None
+    if result.returncode != 0 and _NEEDS_LOGIN.search(result.stderr or ""):
+        raise DeployError(
+            "the host verifier needs GitHub credentials this host does not hold; "
+            "the deploy is refused; see branchleft_deploy.md"
+        )
+    if result.returncode != 0:
+        raise DeployError(
+            f"{image} is not attested by {signer} on refs/heads/main; refusing to "
+            "deploy it. The image may be unsigned, signed by another workflow, or "
+            "not the digest that was published"
+        )
+    print(f"branchleft-deploy: verified {image} attested by {signer}", file=sys.stderr)
+    return True
+
+
 def image_env_path(stack: str, config_dir: str = CONFIG_DIR) -> str:
     return os.path.join(config_dir, f"{stack}.image.env")
 
@@ -406,6 +516,9 @@ def deploy(
 ) -> None:
     validate_stack_name(stack)
     validate_image_ref(image)
+    # Before the lock, the compose read, the pin write and any restart: a
+    # refusal here leaves the pin file and the running stack exactly as they were.
+    verify_attestation(image, run=run)
 
     compose_file = compose_file_path(stack, stack_dir)
     if not os.path.exists(compose_file):

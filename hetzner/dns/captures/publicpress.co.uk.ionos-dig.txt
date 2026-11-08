@@ -2184,6 +2184,43 @@ autodiscover.publicpress.co.uk.	3600 IN	CNAME	adsredir.ionos.info.
 ;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 15995
 ;; flags: qr aa; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
 autodiscover.publicpress.co.uk.	3600 IN	CNAME	adsredir.ionos.info.
+;;; QUERY bl._domainkey.publicpress.co.uk. A @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 58585
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. AAAA @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 32161
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. CAA @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 12255
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. CNAME @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 50124
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. TYPE65 @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 35919
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. MX @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 35708
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. NS @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 59958
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. PTR @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 35078
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. SRV @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 18288
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. TYPE64 @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 28957
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. TLSA @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 10414
+;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1
+;;; QUERY bl._domainkey.publicpress.co.uk. TXT @ns1049.ui-dns.de
+;; ->>HEADER<<- opcode: QUERY, status: NOERROR, id: 60540
+;; flags: qr aa; QUERY: 1, ANSWER: 1, AUTHORITY: 0, ADDITIONAL: 1
+bl._domainkey.publicpress.co.uk. 3600 IN TXT	"v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxhILakyM7YDapZ0m2C/X8rwQzyXiZqAK2P7wAecrq3DIb018rk4Ts6RlFrMh5NHgGGAY6nKC+H7uRidtzU7Q3Qso1FnfdQWoV0SWPw8TbKh0OsdzsS67Qa9uzGFzWH9qzr7FvuPzfykWZR062/CAWDGcsrzQ0LbgVp5hNnymlSp3hsJjAdo6lSg" "KKOwaDw7Zl76C9POHlJjyabVcdOVAJF6uSaDwxiJ/6GX/pGPBRUErkWKnI35lNk3k2BpfraI88WeP3wPphdxUqqmUPoidKNk5Kc1++f4EtKpWmWcAgmLhXvlJIKx7vCiKOH15+th0K5O4/QnNz/Qk64mU17OksQIDAQAB"
 ;;; QUERY blog.publicpress.co.uk. A @ns1049.ui-dns.de
 ;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN, id: 39675
 ;; flags: qr aa; QUERY: 1, ANSWER: 0, AUTHORITY: 1, ADDITIONAL: 1

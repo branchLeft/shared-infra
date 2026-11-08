@@ -47,6 +47,7 @@
     - role: ../roles/breakglass_mint_host # noqa: role-name[path]
     - role: ../roles/safety_channel_key # noqa: role-name[path]
     - role: ../roles/status_page # noqa: role-name[path]
+    - role: ../roles/deploy_verifier # noqa: role-name[path]
     - role: ../roles/control_plane # noqa: role-name[path]
     - role: ../roles/nextcloud_stack # noqa: role-name[path]
     - role: ../roles/backup_worker # noqa: role-name[path]

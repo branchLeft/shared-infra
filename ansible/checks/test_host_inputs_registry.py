@@ -346,6 +346,7 @@ class RealTree(unittest.TestCase):
                 LOADER,
                 "host_baseline",
                 "breakglass_grant_host",
+                "deploy_verifier",
                 "website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
