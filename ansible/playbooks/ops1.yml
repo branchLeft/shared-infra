@@ -14,7 +14,10 @@
 # control plane (it asserts the directory that role makes). A plain apply makes one
 # directory and runs no step; a step runs only when the gated pull asks for it, by tag,
 # for an id on the step allow-list in owner_vars/ops1.yml. No playbook, inventory or
-# owner file sets its step variable. Only this host's name is set
+# owner file sets its step variable. The ring controller's host role is last of all: it makes
+# the controller's two keys and installs its units, takes five public inputs from
+# owner_vars/ops1.yml, and holds its timer off until the owner sets a bundle digest there, so
+# its failure holds nothing else back. Only this host's name is set
 # here; the remote, the playbook allowlist and the signer list come from the shared
 # includes and the one trust file, all loaded through vars_files, and the step
 # allow-list from the owner's file.
@@ -54,3 +57,4 @@
     - role: ../roles/backup_restore # noqa: role-name[path]
     - role: ../roles/control_plane_db # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]
+    - role: ../roles/ring_controller_host # noqa: role-name[path]

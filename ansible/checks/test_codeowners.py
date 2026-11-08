@@ -176,6 +176,26 @@ BOOTSTRAP_GUARD_PATHS = [
     "ansible/tools/fixtures/docker-inspect-absent.json",
 ]
 
+# safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
+# whole role is the owner's, its module, units, environment template and the tests that hold them
+# included. The ring controller role also installs the unit of a service that holds a push key.
+KEY_ROLE_PATHS = [
+    "ansible/roles/safety_channel_key/tasks/main.yml",
+    "ansible/roles/safety_channel_key/library/safety_channel_key.py",
+    "ansible/roles/safety_channel_key/README.md",
+    "ansible/roles/ring_controller_host/tasks/main.yml",
+    "ansible/roles/ring_controller_host/vars/main.yml",
+    "ansible/roles/ring_controller_host/meta/argument_specs.yml",
+    "ansible/roles/ring_controller_host/library/ring_controller_host_keys.py",
+    "ansible/roles/ring_controller_host/files/ring-controller.service",
+    "ansible/roles/ring_controller_host/files/ring-controller.timer",
+    "ansible/roles/ring_controller_host/templates/ring-controller.env.j2",
+    "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_keys.py",
+    "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_units.py",
+    "ansible/roles/ring_controller_host/molecule/default/verify.yml",
+    "ansible/roles/ring_controller_host/README.md",
+]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -251,6 +271,27 @@ class CodeownersTests(unittest.TestCase):
     def test_the_ci_jump_role_is_owned_by_the_owner(self) -> None:
         self.assert_owned(CI_JUMP_PATHS)
 
+    def test_the_key_making_roles_are_owned_by_the_owner(self) -> None:
+        # The CODEOWNERS line for ring_controller_host is the control: delete it and every role
+        # path above that is not under a loader directory falls back to no owner and this fails.
+        self.assert_owned(KEY_ROLE_PATHS)
+
+    def test_the_ring_controller_role_line_is_its_own_not_a_loader_line(self) -> None:
+        patterns = {pattern for pattern, _ in self.rules}
+        self.assertIn("/ansible/roles/ring_controller_host/", patterns)
+        for path in (
+            "ansible/roles/ring_controller_host/README.md",
+            "ansible/roles/ring_controller_host/vars/main.yml",
+            "ansible/roles/ring_controller_host/tasks/main.yml",
+        ):
+            with self.subTest(path=path):
+                lines = [
+                    p
+                    for p, _ in self.rules
+                    if pathspec.GitIgnoreSpec.from_lines([p]).match_file(path)
+                ]
+                self.assertEqual(lines, ["/ansible/roles/ring_controller_host/"])
+
     def test_the_seeding_tool_is_owned_by_the_owner(self) -> None:
         self.assert_owned(SEEDING_TOOL_PATHS)
 
@@ -289,6 +330,7 @@ class CodeownersTests(unittest.TestCase):
             + CI_LOGIN_PATHS
             + SEEDING_TOOL_PATHS
             + BOOTSTRAP_GUARD_PATHS
+            + KEY_ROLE_PATHS
         )
         for path in ESTATE_PATHS + GATE_PATHS + owned + UNOWNED_PATHS:
             if path in stands_for_more:

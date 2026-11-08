@@ -189,6 +189,11 @@ is not loaded there.
   in its module. For ops1 the two keys are `pull_trigger_steps`,
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text, and
   `control_plane_db_apps_image`, the applications image the steps run, which must be text.
+  The `ring_controller_host` role adds five more, all text and all allowed on ops1 only:
+  `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url`,
+  `ring_controller_host_ledger_url`, `ring_controller_host_ledger_push_remote` and
+  `ring_controller_host_push_known_hosts`. Each may be the empty string, which is how the role
+  starts inert; what a value may look like is the role's rule alone.
   R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
   digest pattern, read by name from the role's constants. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
   word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
