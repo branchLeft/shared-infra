@@ -323,9 +323,9 @@ export class Host extends pulumi.ComponentResource {
         //
         // An adopted server is the exception: its firewalls were attached when the
         // owner made it, `firewallIds` is create-time intent at the provider, and
-        // the firewall is attached by `FirewallAttachment` below instead, in
-        // addition to the owner's no-inbound one, which the owner detaches only
-        // afterwards.
+        // the firewall of a public adopted server is attached by `FirewallAttachment`
+        // below instead, in addition to the owner's no-inbound one, which the owner
+        // detaches only afterwards. A private-only host gets no attachment (see below).
         firewallIds: adopt === undefined ? [this.firewall.id.apply((id) => Number(id))] : undefined,
         publicNets: [
           wantsPublicNetworking
@@ -398,14 +398,19 @@ export class Host extends pulumi.ComponentResource {
       }
     );
 
-    // The firewall of an adopted server. Attached in addition to the firewalls already on
-    // the server, never in place of them, so the server is filtered at every moment: the
+    // The firewall of an adopted public server. Attached in addition to the firewalls already
+    // on the server, never in place of them, so the server is filtered at every moment: the
     // owner's holding firewall (no inbound rule at all) stays on until this one is attached
-    // and checked, and is detached by hand after. A private-only host has no public
-    // interface for a firewall to filter, and while a leftover public address is still on it
-    // this firewall's SSH rule would open that address, so it is attached at `converge`
-    // only, once the runbook has removed the address.
-    if (adopt !== undefined && (wantsPublicNetworking || adopt.stage === 'converge')) {
+    // and checked, and is detached by hand after.
+    //
+    // A private-only host gets no attachment at any stage. A Hetzner Cloud Firewall filters
+    // only a server's public interface, and a private-only host has none, so the provider
+    // refuses the attachment: "no public network interfaces found, firewall cannot be attached
+    // to server with ID ... (private_net_only_server...)". The stack's own Firewall for the
+    // host is still declared, since it costs nothing and keeps its live object from being
+    // deleted. The owner's `hold-no-inbound` stays on the host as an inert second line: it
+    // filters nothing now, and would again if a public interface were ever added.
+    if (adopt !== undefined && wantsPublicNetworking) {
       new hcloud.FirewallAttachment(
         `${args.name}-firewall-attachment`,
         {

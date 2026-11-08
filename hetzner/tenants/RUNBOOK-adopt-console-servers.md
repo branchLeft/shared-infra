@@ -42,13 +42,13 @@ imported primary IP resources.
 
 Adoption has two stages, set with `adopt.stage`:
 
-| Stage                  | What it does                                                                                                                                                                                                                                                                                                                                                                           | Why                                                                                                                                       |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `import` (the default) | Imports by id and leaves protection, labels and the primary IPs' names and settings alone. Attaches the stack's firewall on a public host.                                                                                                                                                                                                                                             | Pulumi refuses an import whose inputs differ from the live resource, and a console-made server differs from the program in exactly those. |
-| `converge`             | The same program with them declared: an in-place update that turns on delete and rebuild protection, sets the labels, renames the addresses `edge-t-ipv4` and `edge-t-ipv6` and turns off their auto-delete. On a private-only host it also attaches the firewall and checks the network. The absence of a public address is the owner's check in step 9: the stack does not check it. | The host ends exactly as the program declares it.                                                                                         |
+| Stage                  | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                    | Why                                                                                                                                       |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `import` (the default) | Imports by id and leaves protection, labels and the primary IPs' names and settings alone. Attaches the stack's firewall on a public host.                                                                                                                                                                                                                                                                                                      | Pulumi refuses an import whose inputs differ from the live resource, and a console-made server differs from the program in exactly those. |
+| `converge`             | The same program with them declared: an in-place update that turns on delete and rebuild protection, sets the labels, renames the addresses `edge-t-ipv4` and `edge-t-ipv6` and turns off their auto-delete. On a private-only host it checks the network and attaches no firewall: a private-only host has no public interface for one to filter. The absence of a public address is the owner's check in step 9: the stack does not check it. | The host ends exactly as the program declares it.                                                                                         |
 
 Leave `stage: converge` set for the life of the host. Do not remove the adopt
-config afterwards: the firewall attachment is part of it, and removing it would
+config afterwards: on a public host the firewall attachment is part of it, and removing it would
 detach the stack's firewall.
 
 **No unfiltered window.** The stack's firewall is attached with a
@@ -58,11 +58,12 @@ checked, and is detached by hand after. At no point does a server have no
 firewall. The stack never declares `firewallIds` on an adopted server, so it never
 plans to rewrite the live set.
 
-**Why `db-t1` and `app-t1` get their firewall later.** A private-only host has no
-public interface for a firewall to filter, and its role's firewall allows SSH from
-anywhere. While a leftover public IPv6 address is still on the server (case B), that
-rule would open the address. The firewall of a private-only host is therefore
-attached at `converge`, after step 9 has removed the address.
+**Why `db-t1` and `app-t1` get no firewall attachment.** A Hetzner Cloud Firewall
+filters only a server's public interface, and a private-only host has none, so the
+provider refuses the attachment ("no public network interfaces found"). The stack
+still declares their own firewalls, and `hold-no-inbound` stays on them as an inert
+second line. While a leftover public IPv6 address is on the server (case B),
+`hold-no-inbound` is what filters it; step 9 removes that address.
 
 **Why the stack does not remove a leftover public address itself.** Unassigning a
 primary IP needs the server powered off, and the component's own notes record that
@@ -576,9 +577,9 @@ has no public address", describes. That installs the permanent default-route uni
 
 ### Case B only: remove the public IPv6 address
 
-Only after the private path above works. The leftover address is unreachable while
-`hold-no-inbound` is the only firewall on `db-t1`, which is why the stack's firewall
-is not attached yet. Read the primary IP id from the Console (**Primary IPs**, the
+Only after the private path above works. The leftover address is filtered by
+`hold-no-inbound`, which has no inbound rule, and the stack's firewall is never
+attached to a private-only host. Read the primary IP id from the Console (**Primary IPs**, the
 IPv6 assigned to `db-t1`):
 
 ```bash
@@ -643,8 +644,8 @@ pulumi config set --path dbt1Adopt.stage converge
 pulumi preview --diff
 ```
 
-Expect for `db-t1` only: updates in place to protection and labels, and `create` of
-`db-t1-firewall-attachment`. Nothing for the network or the public interface: if the
+Expect for `db-t1` only: updates in place to protection and labels, and no firewall
+attachment, since a private-only host gets none. Nothing for the network or the public interface: if the
 preview proposes a change to either, the server is not in the state step 9 left it,
 and the apply stops there. No replace, no delete, nothing on `edge-t`.
 
@@ -660,17 +661,9 @@ python3 ~/branchLeft/shared-infra/scripts/assert-no-hetzner-deletes.py ~/tenants
 pulumi up
 ```
 
-Check the stack's firewall is applied to `db-t1`, then detach the holding one:
-
-```bash
-hcloud firewall describe db-t1 -o format='{{range .AppliedTo}}{{.Server.ID}}{{"\n"}}{{end}}'
-```
-
-Expect `${DBT1_SERVER_ID}`. Only then:
-
-```bash
-hcloud firewall remove-from-resource hold-no-inbound --type server --server db-t1
-```
+Do not detach `hold-no-inbound` from `db-t1`. It stays on as an inert second line:
+with no public interface it filters nothing, and it would filter again if one were
+ever added. There is no firewall attachment on `db-t1` to check.
 
 ## 11. Remove the temporary SSH firewall and prove nothing is left to change
 
@@ -684,17 +677,9 @@ hcloud firewall remove-from-resource bootstrap-ssh-edge-t --type server --server
 hcloud firewall delete bootstrap-ssh-edge-t
 ```
 
-Once `app-t1` (below) is also off `hold-no-inbound`, delete that too:
-
-```bash
-hcloud firewall describe hold-no-inbound -o format='{{len .AppliedTo}}{{"\n"}}'
-```
-
-When that prints `0`:
-
-```bash
-hcloud firewall delete hold-no-inbound
-```
+Do not delete `hold-no-inbound` here. It stays on `db-t1` and `app-t1` as an inert
+second line (step 10), so this step does not apply to it. Whether to delete it later
+is the owner's decision.
 
 Run the SSH probe of `RUNBOOK-edget-gateway-proof.md` (its section 4) now: from the
 workstation it must show SSH to `edge-t` refused, and from `edge1` accepted. Run it once
@@ -729,8 +714,9 @@ its own change.
 way, with the same `adopt` argument on the same `Host`, set from that stack's config,
 and its console state is one of the two cases above. Its steps are step 2 (the case),
 step 9 (network attach, bootstrap, leftover address removal, confirming it is
-private-only), the converge update, and the detach of `hold-no-inbound`, in that
-order and with the same stops. Its register address is that stack's, and is not
+private-only), and the converge update, in that order and with the same stops. As for `db-t1`
+(step 10), `hold-no-inbound` is not detached from it, and the stack attaches no
+firewall to it. Its register address is that stack's, and is not
 recorded here.
 
 ## If something goes wrong

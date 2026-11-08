@@ -592,20 +592,50 @@ describe('adopting a server made by hand', () => {
       expect(find(SERVER)?.inputs.publicNets).toEqual([{ ipv4Enabled: false, ipv6Enabled: false }]);
     });
 
-    // Its firewall allows SSH from anywhere, so attached while a leftover public
-    // IPv6 address is still on the server it would open that address. Red when the
-    // attachment is declared at the import stage.
-    it('attaches its firewall only at converge, after the leftover public address is gone', async () => {
-      const early = await adopt({ name: 'adopt-priv4', ...PRIVATE, adopt: { serverId: '1002' } });
-      expect(early.find(FIREWALL_ATTACHMENT)).toBeUndefined();
-      const late = await adopt({
-        name: 'adopt-priv5',
-        ...PRIVATE,
-        adopt: { serverId: '1002', stage: 'converge' },
-      });
-      expect(late.find(FIREWALL_ATTACHMENT)).toBeDefined();
+    // A Hetzner Cloud Firewall filters only a server's public interface, and a private-only
+    // host has none: the provider refuses the attachment with "no public network interfaces
+    // found, firewall cannot be attached to server". Red when a private-only host is given
+    // a FirewallAttachment at either stage. Its own Firewall stays declared (see below).
+    it.each(['import', 'converge'] as const)(
+      'never attaches a firewall to a private-only host, at the %s stage',
+      async (stage) => {
+        const { made, find } = await adopt({
+          name: `adopt-priv-fw-${stage}`,
+          ...PRIVATE,
+          adopt: { serverId: '1002', stage },
+        });
+        expect(
+          made.filter((r) => r.type === FIREWALL_ATTACHMENT),
+          'a private-only host has no public interface, so it must get no FirewallAttachment'
+        ).toHaveLength(0);
+        expect(
+          find('hcloud:index/firewall:Firewall'),
+          'the stack still declares its own Firewall for a private-only host'
+        ).toBeDefined();
+      }
+    );
+
+    it('never attaches a firewall to a private-only host that is not adopted', async () => {
+      const { made } = await adopt({ name: 'plain-priv-fw', ...PRIVATE });
+      expect(made.filter((r) => r.type === FIREWALL_ATTACHMENT)).toHaveLength(0);
     });
   });
+
+  // The public control: a public adopted host still gets exactly one attachment at each stage.
+  it.each(['import', 'converge'] as const)(
+    'attaches exactly one firewall to a public adopted host, at the %s stage',
+    async (stage) => {
+      const { made } = await adopt({
+        name: `adopt-pub-fw-${stage}`,
+        ...PUBLIC,
+        adopt: { ...PUBLIC.adopt, stage },
+      });
+      expect(
+        made.filter((r) => r.type === FIREWALL_ATTACHMENT),
+        'a public adopted host gets one FirewallAttachment'
+      ).toHaveLength(1);
+    }
+  );
 
   describe('refuses a bad input before creating anything', () => {
     it.each([

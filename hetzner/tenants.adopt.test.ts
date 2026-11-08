@@ -105,8 +105,8 @@ describe('the tenants program with edge-t and db-t1 adopted', () => {
   it('gives each server its own firewall by attachment, never on the server', () => {
     expect(server('edge-t')?.inputs.firewallIds).toBeUndefined();
     const attached = registrations.filter((r) => r.type === FIREWALL_ATTACHMENT).map((r) => r.name);
-    // db-t1 is at the import stage, with a possible leftover public address: its
-    // firewall waits for the converge stage.
+    // db-t1 is private-only, so it gets no firewall attachment at any stage: the
+    // provider refuses one, as it has no public interface to filter.
     expect(attached).toEqual(['edge-t-firewall-attachment']);
   });
 
