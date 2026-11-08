@@ -445,6 +445,20 @@ describe('adopting a server made by hand', () => {
     expect(find(SERVER)?.inputs.firewallIds).toBeDefined();
   });
 
+  // A server this program creates has its public interface set at creation, so a
+  // change to the declared publicNets is a real change to apply, never to hide.
+  it.each([
+    ['public', { name: 'plain-pub', role: 'edge' }],
+    ['private-only', { name: 'plain-priv', ...PRIVATE }],
+  ] as const)(
+    'declares and does not ignore publicNets on a created %s host',
+    async (_label, args) => {
+      const { find } = await adopt(args);
+      expect(find(SERVER)?.ignoreChanges).not.toContain('publicNets');
+      expect(find(SERVER)?.inputs.publicNets).toBeDefined();
+    }
+  );
+
   it('imports the server and both primary IPs by id, and creates no second pair', async () => {
     const { made, find } = await adopt({ name: 'adopt-ids', ...PUBLIC });
     expect(find(SERVER)?.importId).toBe('1001');
@@ -473,6 +487,31 @@ describe('adopting a server made by hand', () => {
     }
   );
 
+  // The power-off-and-delete control. The provider reads a server without ever
+  // setting its public_net, so an adopted server has none in state and the first
+  // apply sees the declared publicNets as changed. It then powers the server off,
+  // unassigns the primary IP on it and, because the old set held no id, deletes
+  // that primary IP before trying to assign the id it just deleted. Red when
+  // publicNets is dropped from the list for an adopted server at either stage.
+  it.each(['import', 'converge'] as const)(
+    'never lets publicNets power off the server and delete its primary IP, at the %s stage',
+    async (stage) => {
+      const { find } = await adopt({
+        name: `adopt-pubnets-${stage}`,
+        ...PUBLIC,
+        adopt: { ...PUBLIC.adopt, stage },
+      });
+      expect(find(SERVER)?.ignoreChanges).toContain('publicNets');
+    }
+  );
+
+  it('still declares the primary IPs as separate resources and the address ids on publicNets', async () => {
+    const { made, find } = await adopt({ name: 'adopt-pubnets-decl', ...PUBLIC });
+    expect(made.filter((r) => r.type === PRIMARY_IP)).toHaveLength(2);
+    const nets = find(SERVER)?.inputs.publicNets as { ipv4Enabled: boolean }[] | undefined;
+    expect(nets?.[0]?.ipv4Enabled).toBe(true);
+  });
+
   it('declares no firewallIds on an adopted server, so its live set is never rewritten', async () => {
     const { find } = await adopt({ name: 'adopt-fwids', ...PUBLIC });
     expect(find(SERVER)?.inputs.firewallIds).toBeUndefined();
@@ -496,8 +535,9 @@ describe('adopting a server made by hand', () => {
         expect.arrayContaining(['name', 'autoDelete', 'deleteProtection', 'labels'])
       );
     }
-    // A public host's addresses are imported by id, so its public interface is checked.
-    expect(find(SERVER)?.ignoreChanges).not.toContain('publicNets');
+    // The addresses are imported by id as PrimaryIp resources, which is where they are
+    // checked; the server's own publicNets is ignored (see the control above).
+    expect(find(SERVER)?.ignoreChanges).toContain('publicNets');
     expect(find(SERVER)?.ignoreChanges).not.toContain('networks');
   });
 
@@ -541,14 +581,14 @@ describe('adopting a server made by hand', () => {
       );
     });
 
-    it('checks its network and public interface again at converge', async () => {
+    it('checks its network again at converge, but never rewrites its public interface', async () => {
       const { find } = await adopt({
         name: 'adopt-priv3',
         ...PRIVATE,
         adopt: { serverId: '1002', stage: 'converge' },
       });
       expect(find(SERVER)?.ignoreChanges).not.toContain('networks');
-      expect(find(SERVER)?.ignoreChanges).not.toContain('publicNets');
+      expect(find(SERVER)?.ignoreChanges).toContain('publicNets');
       expect(find(SERVER)?.inputs.publicNets).toEqual([{ ipv4Enabled: false, ipv6Enabled: false }]);
     });
 

@@ -22,6 +22,8 @@ export type HostRole = 'edge' | 'app' | 'db' | 'mon';
  * declaration in exactly the properties the component sets itself (protection,
  * labels, address names). `import` imports with those properties left alone;
  * `converge` is the same program with them declared, an ordinary in-place update.
+ * `publicNets` is the exception: ignored at both stages, because the provider never
+ * reads it into state and would power the server off and delete its primary IP.
  * Stay on `converge` for the life of the host: the ids stay, and the firewall
  * attachment below is part of how the host is held, so removing adoption config
  * would detach the firewall.
@@ -46,8 +48,8 @@ const HETZNER_ID = /^[1-9][0-9]{0,15}$/;
  * component merely sets.
  */
 const IMPORT_STAGE_IGNORED_SERVER = ['deleteProtection', 'rebuildProtection', 'labels'] as const;
-/** A private-only host's network and public interfaces are left to the owner's console steps until `converge`. */
-const IMPORT_STAGE_IGNORED_PRIVATE_SERVER = ['networks', 'publicNets'] as const;
+/** A private-only host's network is left to the owner's console steps until `converge`. */
+const IMPORT_STAGE_IGNORED_PRIVATE_SERVER = ['networks'] as const;
 const IMPORT_STAGE_IGNORED_PRIMARY_IP = [
   'name',
   'autoDelete',
@@ -381,6 +383,15 @@ export class Host extends pulumi.ComponentResource {
           // for this to ignore until a refresh reads the live set; the entry is what keeps
           // the stack from ever planning to rewrite it.
           ...(adopt === undefined ? [] : ['firewallIds']),
+          // An adopted server never has a public interface in state: the provider's read
+          // does not set it, so the first apply sees the declared `publicNets` as changed
+          // and runs its public-interface update. That update powers the server off, then
+          // unassigns the primary IP on it and, because the old set held no address id,
+          // deletes that primary IP before trying to assign the id it just deleted. It
+          // would take a live address from a running host, at either stage and on a
+          // private-only host too. The addresses are held by the imported `PrimaryIp`
+          // resources above, which is where they are checked and updated.
+          ...(adopt === undefined ? [] : ['publicNets']),
           ...(importing ? IMPORT_STAGE_IGNORED_SERVER : []),
           ...(importing && !wantsPublicNetworking ? IMPORT_STAGE_IGNORED_PRIVATE_SERVER : []),
         ],

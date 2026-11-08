@@ -94,6 +94,14 @@ describe('the tenants program with edge-t and db-t1 adopted', () => {
     }
   );
 
+  // Red when publicNets is dropped from an adopted server's ignored set: the provider
+  // never reads a server's public interface into state, so the first apply would power
+  // the server off and delete the primary IP it unassigns. edge-t is at the import
+  // stage in this file; hetzner-host/host.test.ts covers the converge stage.
+  it.each(['edge-t', 'db-t1'])('never lets publicNets be rewritten on adopted %s', (name) => {
+    expect(server(name)?.ignoreChanges, name).toContain('publicNets');
+  });
+
   it('gives each server its own firewall by attachment, never on the server', () => {
     expect(server('edge-t')?.inputs.firewallIds).toBeUndefined();
     const attached = registrations.filter((r) => r.type === FIREWALL_ATTACHMENT).map((r) => r.name);
