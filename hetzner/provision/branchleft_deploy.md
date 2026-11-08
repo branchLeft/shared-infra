@@ -251,12 +251,38 @@ says it needs a credential, the deploy is refused with "the host verifier needs
 GitHub credentials this host does not hold; the deploy is refused". Nothing in
 the code falls back to an unverified deploy.
 
-**The fallback, if the first live check shows gh needs a token.** Registered
-deploys stay refused, and nothing is configured on the host. The fix is to move
-the verifier to a tokenless sigstore verifier, checking the attestation against
-GitHub's public trust root. **A host credential is not the fallback**: putting a
-token on the host would make the check depend on a secret this design keeps
-off the host, and it would be a second home for the same check.
+**gh's local token gate, and the placeholder.** gh refuses to start without a
+non-empty token (`gh auth login`), even on `--bundle-from-oci`, where it makes no
+GitHub API call. Observed on a hosted runner (gh 2.103.3, every token variable
+unset, no gh credentials file), in
+[ghost-platform run 42427972700](https://github.com/branchLeft/ghost-platform/actions/runs/42427972700)
+without a token (gh stopped in about 0.03 s with "verification needs a GitHub
+token") and
+[run 42428728854](https://github.com/branchLeft/ghost-platform/actions/runs/42428728854)
+with `GH_TOKEN` set to the literal `placeholder-not-a-credential`: the real tenant
+digest verified, a forged control was refused for its identity, and a `GH_DEBUG=api`
+log showed 22 requests, all to `tuf-repo-cdn.sigstore.dev` and `tuf-repo.github.com`,
+none to `api.github.com`, and no `Authorization` header. So on this path gh's gate
+needs only a non-empty value.
+
+`branchleft-verify-image` therefore sets `GH_TOKEN` to that fixed constant, for its
+gh call only, when `--bundle-from-oci` is given and neither `GH_TOKEN` nor
+`GITHUB_TOKEN` holds a value. A real token already set is left alone. Without
+`--bundle-from-oci` gh needs the API and a real token, so the verifier refuses there
+with a message that names the two variables and sets no placeholder. The constant is
+not a credential and is never printed, read from a file or read from a credential
+store. `verifier_env()` still carries no token, and the placeholder is added inside
+the verifier, so the wrapper's pinned environment is unchanged.
+
+The honest limit: this shows gh's local gate is satisfied, not that the host is
+authenticated. Verification is cryptographic, against the Sigstore trust root (TUF)
+and the signer identity, digest and `refs/heads/main`, and is not account-based.
+**A host credential is still not the fallback**: if the placeholder stops working,
+the registered deploys stay refused and the next step is a tokenless sigstore
+verifier. gh writes its TUF cache and a device id under the verifier's `HOME`
+(`.cache/gh`, `.local/state/gh`) and no `config.yml` or `hosts.yml`, so the role's
+credential-file refusal does not trip on a second apply; the directory is empty only
+until the first check.
 
 ### Installing the verifier and gh
 
@@ -276,7 +302,7 @@ at apply. The first check gates the rest.
 1. `gh --version` on each host shows 2.103.3.
 2. `branchleft-verify-image` on `app1`, with the fixed environment and no
    token, accepts `ghcr.io/branchleft/ghost-tenant@sha256:0d8ddc21a9e51237e1d709614973f7b418d9a0c69e0933e4301281ee90481ae4`.
-   If it refuses for want of a credential, stop and use the fallback above.
+   If it refuses for want of a credential, stop: the placeholder above is not working.
 3. The same verifier refuses a locally built, unsigned image of the same name.
 4. Repeat 2 and 3 on `ops1`, `edge1` and `db1`.
 

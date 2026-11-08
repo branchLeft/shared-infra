@@ -62,8 +62,8 @@ def validate_image_ref(ref: str) -> str:
 
 
 # The host's copy of ghost-platform's scripts/verify-image-attestation.sh,
-# installed by the deploy_tooling role. It is held byte for byte to that script
-# by a pinned digest in test_branchleft_deploy.py.
+# installed by the deploy_verifier role. A pinned digest in test_branchleft_deploy.py
+# holds the copy to this repo's file; ghost-platform's script carries the same change.
 VERIFIER = "/usr/local/sbin/branchleft-verify-image"
 
 ATTESTED_REPO = "branchLeft/ghost-platform"
@@ -130,9 +130,10 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     reason: refused, unknown digest, or the verifier missing. There is no
     argument, environment variable or stack setting that skips this.
 
-    The design is fail-closed. A host with no GitHub credential refuses every
-    registered deploy with the credential message; see branchleft_deploy.md for
-    the fallback, which is not a host credential.
+    The design is fail-closed. The host holds no GitHub credential and the
+    verifier needs none (see branchleft_deploy.md). A gh that still asks for a
+    login is refused with the credential message, and nothing falls back to an
+    unverified deploy.
     """
     name = attested_name(image)
     signer = ATTESTED_IMAGES.get(name)

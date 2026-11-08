@@ -17,12 +17,17 @@ one another.
 ## The fail-closed design
 
 The verifier runs with a fixed environment and **no GitHub credential**. The host holds none. A
-registered image is deployed only when `gh attestation verify` succeeds for its digest, signer and
-`refs/heads/main`. When gh needs a credential the host does not hold, the deploy is refused with the
+registered image is deployed only when `gh attestation verify --bundle-from-oci` succeeds for its
+digest, signer and `refs/heads/main`. gh will not start without a non-empty token, so the verifier
+gives it the fixed constant `placeholder-not-a-credential` on that path when no token is set. That
+satisfies gh's local gate only: no API call is made and verification is against Sigstore and the
+signer identity, not an account. When gh still asks for a login, the deploy is refused with the
 message "the host verifier needs GitHub credentials this host does not hold". The design is
-fail-closed: nothing in it falls back to an unverified deploy.
+fail-closed: nothing in it falls back to an unverified deploy. The why and the observed runs are in
+`hetzner/provision/branchleft_deploy.md`, "The verifier runs with no credential".
 
 The role refuses a host where a gh config or credential file already sits in the verifier's home.
+gh writes none there with the placeholder (only a cache and a device id), so a second apply passes.
 
 ## Where it runs
 
