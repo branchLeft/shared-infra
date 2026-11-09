@@ -63,11 +63,11 @@ GATE_INTRO_TEXT
 | Event            | Workflow                                          | What runs                                                                                                                                                                                                                    |
 | ---------------- | ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Pull request     | `.github/workflows/ansible.yml`                   | Lint, then the shards of changed roles. Required check: `Lint and test the Ansible roles`.                                                                                                                                   |
-| Merge queue      | `.github/workflows/ansible.yml`                   | Lint and every shard.                                                                                                                                                                                                        |
+| Merge queue      | `.github/workflows/ansible.yml`                   | Lint and unit tests only; the container shards ran on the pull request.                                                                                                                                                      |
 | Push to `main`   | `.github/workflows/ansible-delivery.yml`          | Calls `branchLeft/github-workflows` `ansible-gated-apply.yml` at `v1.0.23`, then waits on environment `ansible-hosts`. The optional `ANSIBLE_PUSH_HOSTS` secret lists the hosts pushed to; empty means every host is pulled. |
 | Daily, 05:41 UTC | `.github/workflows/ansible-environment-probe.yml` | Reads the protection of `ansible-hosts` and judges it with `ansible/checks/check_delivery.py environment`.                                                                                                                   |
 
-The delivery workflow re-runs lint and Molecule over every role and pattern, unless the merge queue already tested the same commit (`ansible/checks/merge_group_proof.py`). Each host is asked, in check mode, what the commit would change, before the environment approval.
+The delivery workflow re-runs lint and Molecule over every role and pattern on every push to `main`, because the merge queue runs the lint and the unit tests only. Each host is asked, in check mode, what the commit would change, before the environment approval.
 
 GATE_READ_RUN_TEXT
 

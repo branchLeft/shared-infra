@@ -195,7 +195,7 @@ What runs, by event:
 | Event          | Lint | Shards                                                                                                                                                                                                                                                    |
 | -------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, the lock, the lint config, the workflow, or `ci_select.py`, `check_pins.py` or `pip-requirements.txt` changed |
-| merge queue    | yes  | the shards its diff selects, as on a pull request                                                                                                                                                                                                         |
+| merge queue    | yes  | none: the pull request ran them on its own head, so the queue runs the lint and the unit tests only                                                                                                                                                       |
 | push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything                                                                                                                                                                                   |
 
 The workflow has three kinds of job:
@@ -231,7 +231,10 @@ other names, so the gate stays one job. It fails unless `discover` succeeded
 and, when the Ansible inputs changed, `lint` succeeded and, when `discover`
 chose shards, every chosen shard did. When nothing changed, `lint` and the
 shards are skipped and the gate passes; when the lint passed and no shard was
-needed, the shard job is skipped on purpose and the gate passes.
+needed, the shard job is skipped on purpose and the gate passes. In the merge
+queue the shard job is always skipped, by a condition on the event name, and the
+gate accepts that skip for that event alone: on a pull request, the weekly run or
+a manual run, a skipped shard job fails the gate.
 
 How to add a pattern: nothing to edit here. A directory directly under
 `ansible/patterns/` or `ansible/roles/` is picked up by `discover` on the next

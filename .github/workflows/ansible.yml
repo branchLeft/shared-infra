@@ -30,15 +30,18 @@ name: Ansible
 #     does a change to one of the three checks files the shards read (ci_select.py,
 #     check_pins.py, pip-requirements.txt). Any other file under ansible/checks/ runs the
 #     lint job only;
-#   - the merge queue: the same choice, made from the queue entry's own diff
-#     (base_sha..head_sha of the merge_group event), by the same rules. The entry is
-#     tested on the tree it will merge into, so this is the last check before `main`;
+#   - the merge queue: the cheap checks only, made from the queue entry's own diff
+#     (base_sha..head_sha of the merge_group event): the lint, with the unit tests of the
+#     roles and the checks. The container shards do not run there: the pull request ran
+#     them on its own head and they passed. The gate job accepts the skipped shard job
+#     for that event alone, and for no other;
 #   - the weekly schedule (and a manual run): lint and every shard, whatever changed. It
 #     is what catches drift in the external images and collections that no diff shows,
 #     and it saves the tool environment's cache on `main`, where every other run can
 #     restore it;
-#   - a push to `main`: nothing. The pushed tree is the tree the merge queue tested, so
-#     a lint here would repeat the one that just passed. Delivery still runs its own.
+#   - a push to `main`: nothing. The pushed tree is the tree the merge queue linted, so
+#     a lint here would repeat the one that just passed. Delivery runs its own lint and
+#     every shard, because the queue did not run the shards.
 #
 # The tools and the `ansible` package, which carries the collections, install
 # from ansible/requirements.txt at exact versions, each file checked against its
@@ -55,9 +58,9 @@ on:
   # The merge queue tests a queued pull request on a gh-readonly-queue/main/...
   # ref, and only this event reports checks there. No `paths:` filter (merge_group
   # supports none, and this workflow has none). Under it the first job diffs the
-  # entry's base_sha against its head_sha, and ci_select.py keeps the shards that diff
-  # calls for, by the rules a pull request has: a shared file runs every shard. A
-  # base or head the runner cannot resolve runs everything.
+  # entry's base_sha against its head_sha, and the lint runs when an Ansible input
+  # changed. A base or head the runner cannot resolve runs the lint. The shard job
+  # is skipped for this event (its condition names it), whatever ci_select.py keeps.
   merge_group:
     types: [checks_requested]
   # The full sweep. Nothing in a diff shows an external image or a collection that
@@ -138,7 +141,7 @@ jobs:
           # event nobody planned for) runs every check and diffs nothing.
           case "$EVENT_NAME" in
             push)
-              echo "A push to main is the tree the merge queue already tested, so there is nothing to run."
+              echo "A push to main is the tree the merge queue already linted, and the delivery workflow runs the shards, so there is nothing to run."
               echo "ansible=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
@@ -464,7 +467,13 @@ jobs:
     # waited for here; the gate job still fails unless it succeeded. A failed or skipped quick
     # gate skips every shard, and the gate job fails on that result too.
     needs: [discover, quick-lint]
-    if: needs.discover.outputs.ansible == 'true' && needs.discover.outputs.shards == 'true'
+    # The merge queue does not run the shards: the pull request ran them on its own head and
+    # they passed, and a queue re-run repeated them. The event name decides, never a
+    # result, and the gate job below accepts the skip for that event alone.
+    if: >-
+      needs.discover.outputs.ansible == 'true' &&
+      needs.discover.outputs.shards == 'true' &&
+      github.event_name != 'merge_group'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
@@ -564,7 +573,8 @@ jobs:
   # gate passes. When it found inputs but no shard to run (a
   # pull request or queue entry that changed only files no shard reads), the quick gate and the full
   # lint must pass and the shard job is skipped on purpose. A shard job that is skipped when discover
-  # chose shards, because the quick gate failed or for any other reason, fails the gate.
+  # chose shards, because the quick gate failed or for any other reason, fails the gate, except in
+  # the merge queue, where the shard job is skipped by its condition and the event name says so.
   roles:
     name: Lint and test the Ansible roles
     needs: [discover, quick-lint, lint, shard]
@@ -580,6 +590,7 @@ jobs:
           QUICK: ${{ needs.quick-lint.result }}
           LINT: ${{ needs.lint.result }}
           SHARD: ${{ needs.shard.result }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           if [ "$DISCOVER" != "success" ]; then
@@ -611,6 +622,11 @@ jobs:
           if [ "$SHARDS" != "true" ]; then
             echo "The discover job did not report whether shards are needed: '$SHARDS'"
             exit 1
+          fi
+          if [ "$EVENT" = "merge_group" ] && [ "$SHARD" = "skipped" ]; then
+            echo "The merge queue does not run the container shards: the pull request ran them and they passed."
+            echo "The lint and the quick gate succeeded, which is all the queue asks."
+            exit 0
           fi
           if [ "$SHARD" != "success" ]; then
             echo "The shard job reported: $SHARD"
