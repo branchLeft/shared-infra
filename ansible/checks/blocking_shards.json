@@ -1,0 +1,13 @@
+{
+  "blocking": [
+    "ansible/roles/breakglass_mint_host",
+    "ansible/roles/ci_jump",
+    "ansible/roles/ci_jump (refusals)",
+    "ansible/roles/deploy_tooling",
+    "ansible/roles/egress_nat",
+    "ansible/roles/host_baseline",
+    "ansible/roles/pull_trigger",
+    "ansible/roles/pull_trigger (push)",
+    "ansible/roles/tunnel_account"
+  ]
+}

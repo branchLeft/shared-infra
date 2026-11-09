@@ -197,8 +197,18 @@ What runs, by event:
 | pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, the lock, the lint config, the workflow, or `ci_select.py`, `check_pins.py` or `pip-requirements.txt` changed |
 | merge queue    | yes  | none: the pull request ran them on its own head, so the queue runs the lint and the unit tests only                                                                                                                                                       |
 | push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything                                                                                                                                                                                   |
+| schedule       | yes  | every shard, each blocking for the run's own result, once a day and on a manual run; a red scheduled run opens one issue                                                                                                                                  |
 
-The workflow has three kinds of job:
+Every container test (shard) the table names runs on every pull request, and each is
+either blocking or advisory. The one list of blocking shards is
+`ansible/checks/blocking_shards.json`; every shard not on it is advisory. A blocking shard
+fails the required check. An advisory shard runs, shows red on its own check line when it
+fails, and the required check neither waits for it nor reads it. The `report` job writes the
+counts and one table of every red shard to the run's step summary, and the approver records
+each red advisory shard on the pull request. Rules for moving a shard on or off the list are
+in `ansible/checks/README.md`.
+
+The workflow has these kinds of job:
 
 - `discover` runs `ansible/harness/list_shards.py`, which lists one shard for
   each scenario of every directory directly under `ansible/roles/` and
@@ -216,10 +226,11 @@ The workflow has three kinds of job:
 - `lint` runs the static checks once, all of them, alongside the shards:
   yamllint, ansible-lint, mypy, ruff and the harness's unit tests. The gate job
   still fails unless it passed.
-- `shard` runs the harness once for each entry `discover` kept, in parallel,
+- `shard` runs the harness once for each blocking entry `discover` kept, in parallel,
   with `--scenario` set to the entry's scenario, and only after `quick-lint` has
   passed, so a malformed file is red in minutes and starts no container. It does
-  not wait for the full `lint`. Each shard
+  not wait for the full `lint`. `shard-advisory` is the same job for the advisory
+  entries. `report` and `daily-issue` are described below. Each shard
   has its own time limit (25 minutes), so the run time does not grow with the
   number of roles in one job. A role whose one scenario would not fit in the
   limit puts its refusal cases in a second scenario, which is a second shard,
@@ -229,12 +240,23 @@ The gate job is named `Lint and test the Ansible roles`. The ruleset requires
 a check with exactly that name, and a matrix job would report its checks under
 other names, so the gate stays one job. It fails unless `discover` succeeded
 and, when the Ansible inputs changed, `lint` succeeded and, when `discover`
-chose shards, every chosen shard did. When nothing changed, `lint` and the
-shards are skipped and the gate passes; when the lint passed and no shard was
+chose blocking shards, every chosen blocking shard did. It does not need the
+advisory job, so it does not wait for it. When nothing changed, `lint` and the
+shards are skipped and the gate passes; when the lint passed and no blocking shard was
 needed, the shard job is skipped on purpose and the gate passes. In the merge
 queue the shard job is always skipped, by a condition on the event name, and the
-gate accepts that skip for that event alone: on a pull request, the weekly run or
-a manual run, a skipped shard job fails the gate.
+gate accepts that skip for that event alone: on a pull request, the daily run or
+a manual run, a skipped blocking shard job fails the gate. A scheduled or manual run
+treats every shard as blocking.
+
+`report` runs after every shard job, reads the Actions API with a read-only token and
+writes the step summary; it is not a required check. `daily-issue` runs only for a
+scheduled run whose gate failed. It opens one issue titled "Daily container tests red:
+DATE" with the run link and the failed shard ids and the label `ci-red-daily`, or comments
+on the one still open. It mentions and assigns no one and wakes no agent; it is the only
+job with write access, `issues: write`.
+`ansible/checks/advisory_passes.py SHARD` counts how many daily runs in a row a shard
+passed, for the pull request that moves it on or off the list.
 
 How to add a pattern: nothing to edit here. A directory directly under
 `ansible/patterns/` or `ansible/roles/` is picked up by `discover` on the next
