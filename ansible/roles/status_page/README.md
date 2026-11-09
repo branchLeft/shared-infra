@@ -124,7 +124,11 @@ The renderer has its own test, run from `hetzner/` with `npm test`.
 ## How it is delivered
 
 The role is listed in the playbook of the control-plane host, after the roles that bring
-that host under the gated pull, and in `ansible/checks/host_roles.yml`. A merge to `main`
+that host under the gated pull and after `control_plane`, and in `ansible/checks/host_roles.yml`.
+The order is the control: the page is published on the private address, and the DOCKER-USER
+drop that confines that port to the gateway is installed by the last tasks of `control_plane`,
+so a run that stops in `control_plane` never reaches the bind. `tests/unit/test_status_page_order.py`
+fails if the page is moved before it. A merge to `main`
 queues the gated apply, which waits for the owner's approval. After the apply, the page is
 reached at its public hostname through edge1 (the private bind on ops1 is what edge1 uses),
 and still through an SSH tunnel to the loopback port. The TEST target is stopped and started

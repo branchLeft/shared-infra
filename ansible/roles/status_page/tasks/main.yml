@@ -22,7 +22,10 @@
     that:
       - status_page_listen_address in status_page_allowed_listen_addresses
       - status_page_rendered.services is ansible.builtin.mapping
-      - status_page_published | ansible.builtin.reject('ansible.builtin.match', '^' ~ (status_page_listen_address | ansible.builtin.regex_escape) ~ ':') | ansible.builtin.list | ansible.builtin.length == 0
+      - >-
+        status_page_published
+        | ansible.builtin.reject('ansible.builtin.match', '^' ~ (status_page_listen_address | ansible.builtin.regex_escape) ~ ':')
+        | ansible.builtin.list | ansible.builtin.length == 0
       - status_page_published | ansible.builtin.length == 1
     quiet: true
     fail_msg: >-
