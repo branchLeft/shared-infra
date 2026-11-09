@@ -93,9 +93,25 @@ command reaching it (`db1` and `ops1` are the two such hosts today).
 Neither address is typed in: each comes from a lookup run once, in the same
 session, ahead of the command that consumes it.
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
-HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being checked; substitute ops1 for the other private-only host
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_IPV4=$(hcloud server ip edge1)
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o format='{{(index .PrivateNet 0).IP}}')   # the host being checked; substitute ops1 for the other private-only host
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   ip route show default
@@ -183,7 +199,7 @@ unset PASSPHRASE
 
 pulumi stack select production
 pulumi stack export --file /tmp/hetzner-network.json
-SALT=$(python3 -c "import json; print(json.load(open('/tmp/hetzner-network.json'))['deployment']['secrets_providers']['state']['salt'])")
+SALT=$(jq -r '.deployment.secrets_providers.state.salt' /tmp/hetzner-network.json)   # needs jq: brew install jq
 rm /tmp/hetzner-network.json
 printf '\nencryptionsalt: %s\n' "$SALT" >> Pulumi.production.yaml
 pulumi config set --secret hcloud:token
@@ -262,7 +278,7 @@ those steps independently, later:
 
 ```bash
 cd ~/branchLeft/shared-infra
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+EDGE1_IPV4=$(hcloud server ip edge1)
 ```
 
 A second apply does not put back a rule that was lost while the unit stays active.
@@ -397,7 +413,7 @@ independently.
 
 ```bash
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-HOST_PRIVATE_IP=$(hcloud server describe db1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")   # the host being provisioned; substitute ops1 for the other private-only host
+HOST_PRIVATE_IP=$(hcloud server describe db1 -o format='{{(index .PrivateNet 0).IP}}')   # the host being provisioned; substitute ops1 for the other private-only host
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
   getent hosts deb.debian.org &&
   curl -fsS -o /dev/null https://download.docker.com/linux/debian/gpg &&
@@ -442,9 +458,11 @@ network loops that network's egress. The same ordering applies as for edge1 —
 the route and the forwarding must be live before a private-only host in that
 project is created, and `db-t1` stays off (`dbt1Enabled`) until they are. The
 forwarding has only been proven with Docker's FORWARD chain on edge1; prove it
-on `edge-t` with Docker running before `db-t1`'s first boot (for example from a
-network namespace on `edge-t` itself, which costs nothing), and record the
-result in the change that brings up `db-t1`.
+on `edge-t` with Docker running before `db-t1`'s first boot, and record the
+result in the change that brings up `db-t1`. The proof is scripted, from a network
+namespace on `edge-t` itself, which costs nothing: `tenants/RUNBOOK-edget-gateway-proof.md`
+runs it, with the red case (the masquerade deleted, then restored) and the SSH
+refusal probe.
 
 ### What this does not solve
 
@@ -579,7 +597,7 @@ you are returning to one of those sections independently, for a different
 host, later:
 
 ```bash
-HOST_IPV4=$(hcloud server describe <host> -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+HOST_IPV4=$(hcloud server ip <host>)
 ```
 
 A host with no public address is provisioned through the gateway instead —
@@ -792,7 +810,7 @@ Set `HOST_IPV4` fresh, for whichever host's key is being rotated, if you are
 not continuing directly from a section above:
 
 ```bash
-HOST_IPV4=$(hcloud server describe <host> -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+HOST_IPV4=$(hcloud server ip <host>)
 ```
 
 This is the **unscoped, host-level** key — the one whose holder can name any

@@ -96,6 +96,10 @@ applied to a host by a path other than its `roles` list. A listed role is truste
 name: the list does not say what the role does as root, and a role's own edit is still not
 gated here. A playbook is a place a literal can hide as well as a role.
 
+dbt1 (db-t1) has no `HOST_PLAY_VARS` row. It lists `egress_nat` bare, as a non-gateway, and its
+play sets no switch: `test_egress_nat_single_gateway.py` pins the switch to edge1 and edget alone,
+and requires any non-gateway that applies the role to apply it bare.
+
 Limits of the loader rule. It reads literal mapping keys. It names the loaders listed in
 `ROLE_LOADERS`, `TASK_FILE_LOADERS` and `INCLUDE_VARS`, in their bare, `ansible.builtin.`
 and `ansible.legacy.` spellings, and the `action:` and `local_action:` forms of those. It
@@ -176,13 +180,30 @@ is not loaded there.
   exactly the keys its host is allowed and no other, with values of the right shape. For
   edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
   `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
-  key (a source address list, say) is refused. For ops1 the one key is `pull_trigger_steps`,
-  the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text. R10 reads
-  only that shape. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
+  key (a source address list, say) is refused. The four values of the `ci_jump` role that live in the repository are
+  allowed on every host in `JUMP_HOSTS` (each jump host has its own file, address,
+  destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
+  `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
+  list of `{key}` entries with nothing else (a destination list per key is refused: the role
+  takes one list for every key). `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose row in
+  `checks/host_roles.yml` lists `ci_jump`: a host cannot gain the role without its keys, nor
+  the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
+  the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the
+  role through the host's `host_inputs` row. What a destination or a key may look like is the role's rule alone,
+  in its module. For ops1 the two keys are `pull_trigger_steps`,
+  the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text, and
+  `control_plane_db_apps_image`, the applications image the steps run, which must be text.
+  The `ring_controller_host` role adds five more, all text and all allowed on ops1 only:
+  `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url`,
+  `ring_controller_host_ledger_url`, `ring_controller_host_ledger_push_remote` and
+  `ring_controller_host_push_known_hosts`. Each may be the empty string, which is how the role
+  starts inert; what a value may look like is the role's rule alone.
+  R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
+  digest pattern, read by name from the role's constants. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
   word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
   real file through the program's own `parse_config`. `control_plane_db_step` is never an owner
   key: it is the role's second key and only the pull sets it. A host with no allowed keys may
-  have no file. The check does not judge a key's text; the `ci_login` role does. The directory is the
+  have no file. The check does not judge a key's text; the `ci_login` and `ci_jump` roles do. The directory is the
   owner's (`/ansible/owner_vars/` in CODEOWNERS), so filling in the keys is the owner's merge.
 - **R11** When a host applies `host_inputs`, the loader of the host's private role inputs
   (owner ruling, option A), it is the first role after the two
@@ -207,25 +228,60 @@ source limit; this keeps that visible, so a limit is added by an owner ruling th
 the test too. Each pin runs red on a sabotaged copy of its files and green once the file is
 put back.
 
-# check_role_imports and check_role_paths
+## test_ci_jump_pins.py: the ci_jump copies, its output and its task order
 
-Two checks over the roles, each run by its own test file in the "Test the checks" step.
+The `ci_jump` role carries its own copy of the constants its module also pins (the port, the fixed
+options, the forced command and the paths of the key file and the sshd drop-in; the module is the
+read-back oracle, so the two must be held equal), and a literal list of the accounts other roles
+own, because a role may not call another or load its variables (ANS-12, R6). The test fails when a
+constant differs, when the account names differ from `ci_login_user` in
+`roles/ci_login/vars/main.yml` and `tunnel_account_user` in `roles/tunnel_account/vars/main.yml`
+(read by variable name), when either template writes other text than the module expects, when the
+key template and the drop-in template do not read their destinations from the one variable
+`ci_jump_destinations`, when the module stops requiring `AllowTcpForwarding local` for the jump
+account (a key line with `port-forwarding` also lets its holder open a port on the jump host with
+`ssh -R` under any other value), when the argument spec and the defaults name different variables,
+when the role's own defaults are not inert (the flag false, and no address, destination or key), when
+an `owner_vars` file of a host the owner has not turned the role on for (the flag anything but the
+bool true) does not ship those defaults, when a file that turns the role on (the flag true, as edge1
+does after the owner's data change) lacks an address, a list of destinations or a list of keys,
+when an `owner_vars` file carries the account's name, when a host lists the role without its variables or
+without `ci_jump_user` in its `host_inputs` row, when a path the role writes or the module pins is made
+from the account's name (each is rendered with a realistic name and must not hold it; only the paths
+of the earlier hand-made layout, which the role removes, are), when a task that handles the name or
+one of those paths does not hide its result and its diff, and when the order or hiding of the role's tasks changes
+(the report runs whatever the flag is; the guards and the write are behind it, in that order; the
+two files are written as `root:root` at `0644` by hidden template tasks, never by `authorized_key`;
+the whole configuration is checked with `sshd -t`; a rescue puts the previous files back; the
+read-back is inside the rolled-back block and skipped in check mode).
 
-`check_role_imports.py` is ANS-12 as one sentence: no role imports another role. In
-`tasks/`, `handlers/` and `meta/` of every directory under `roles/` and `patterns/` it refuses
-`include_role`, `import_role` (in any spelling), a `roles:` key, a `dependencies` entry in
-`meta/main.yml`, and a task or vars file loaded from a path with `..` in it. A `molecule/`
-directory is a playbook and may name roles. It reads literal keys: a role loaded through a
-templated name is not seen.
+It also keeps the role's output out of the gated apply's plan scan, which withholds a host's whole
+plan on one line that reads like a credential assignment, and keeps the jump account's name out of
+the report and the plan. The module holds a copy of the scan's credential-assignment pattern
+(`SCAN_PATTERN`, from `branchLeft/github-workflows/.github/actions/ssh-check-hosts/action.yml`
+line 434 at tag v1.0.19). The test runs the module's report and plan over hostile values (option
+values that read like credentials, an account whose name must appear nowhere) and fails when a line
+matches, when the module's last-resort guard had to withhold one, or when the name is printed, and
+it scans every variable name, task name and message of the role. **Drift of the copy from the
+original is not checked here**: no test holds the two equal yet. Each pin runs red on a sabotaged
+copy of its files and green once the file is put back.
 
-`check_role_paths.py` holds that no two roles write the same path. It reads the tasks of every
-role under `roles/`, takes the `dest` or `path` of `copy`, `template`, `get_url`, `lineinfile`,
-`blockinfile`, `replace`, `assemble` and of `file` with `state: link`, `hard` or `touch`, and
-resolves each `{{ name }}` from the defaults and vars of the roles (names carry the role prefix,
-ANS-7). It prints how many paths it compared and how many stayed templated, because a path with a
-loop item or a filter is not compared. A directory two roles both make is not a write. It
-replaces the per-role tests that each asserted one home for one role's files; it does not check
-that a role holds no copy of a program (the DB-1 gate of the standards flags that).
+## test_ci_jump_hosts.py: one role on edge1 and edge-t, and the two address rules
+
+Two hosts apply `ci_jump`: edge1 and edge-t (`edget`, both in `JUMP_HOSTS`). The real-sshd proof in
+the role's `molecule/default` (a destination not on the list is refused) covers both only if the role
+is the same on both. The test fails when a jump host does not apply the role exactly once as a plain
+role entry (no `when`, `vars` or `tags` on it), and when any part of the role that runs on a host
+(tasks, templates, vars, defaults, meta, library, handlers, files) names the host or a group of
+hosts (`enrolled_host`, `inventory_hostname`, `groups`, `hostvars` and the like). It also holds the
+2 Nov ruling on the data: a tenants private address (read from `TENANTS_HOST_IPS` in
+`hetzner-host/addressPlan.ts`, its one home, never copied) in `owner_vars/edge1.yml` is refused, so
+the runner can only reach a tenants host through edge-t; edget's `ci_jump_own_address`, once set, must
+equal `TENANTS_HOST_IPS.edgeT`; and a host that lists destinations must list its own address among
+them. It fails when the address plan cannot be read, so an empty parse cannot let a list through. It
+does not see edge-t's public address, which is in no file of the repository, nor whether a listed
+address is the right one. Each pin runs red on a sabotaged copy of its files and green on the copy
+left alone.
 
 ## ci_select.py: which shards a run executes
 
@@ -249,9 +305,34 @@ run needs, from the event and the files it changed. The rules, in the order they
 - a changed file under `ansible/` that nothing here recognises executes every shard,
   because a new kind of file must be named in the program before it may skip a shard;
 - a changed file in a role or pattern executes that role's or pattern's shards, and the
-  shards of every role or pattern that names it;
+  shards of every role or pattern that reaches it, followed to the end (a cycle ends). A
+  role reaches another when a file of it names it textually (`branchleft.name`, `../name`,
+  `roles/name`, `patterns/name`, a README included), or when the structured scan reads one
+  of these:
+  - `include_role` or `import_role` (block, inline `{name: x}` or `name=x`), and a play's
+    `roles:` or a role's `dependencies:` (`- x`, `- role: x`, `- { role: x }`, an inline
+    list), naming `branchleft.x`, a bare `x`, or a path ending in `x`. A `{{ variable }}` is
+    followed through the same role's own definitions of it (each must resolve, three deep);
+    a `{{ playbook_dir }}` path is tried from the file's directory and each one above it up
+    to the role's root; a name built with a trailing `~ "/x"` names `x`;
+  - `import_playbook`, when the file it names lies in another role or pattern;
+  - `notify:` of a handler that the role does not define itself (by `name:` or `listen:`)
+    but another role or pattern does;
+  - a symlink in the role whose target lies in another role or pattern;
 - a changed file outside `ansible/` executes the shards of every role or pattern that
-  reads it.
+  reads it;
+- a reference the scan cannot map to a role or pattern executes every shard whenever a role
+  or pattern changed: a collection role, a name that is not a role here, a variable with no
+  literal definition, a playbook outside any role, a handler defined nowhere, a symlink that
+  is dangling, leaves the repository or points at a file under `ansible/` that no rule names,
+  a line that names `include_role`, `import_role` or `roles:` in a form the scan does not read
+  (a flow-style task, `action: include_role name=x`, a quoted key), and any file the scan
+  cannot read. Such a reference may be a way the changed role is
+  reached that the selection cannot see. A change that selects no role (a README, a
+  lint-only file) still executes no shard, and the log names the first few such references.
+  `test_ci_select.py` holds the real tree to none, so a new templated role name that the scan
+  cannot place fails there before it sends every pull request to every shard; make the name
+  literal, or give it through a variable of the same role with a literal value.
 
 A shard that is wrongly left out is a gate that passes without running, so every rule
 above errs towards running more.
@@ -260,11 +341,16 @@ above errs towards running more.
 
 These tests hold the CI workflows to what `ci_select.py` assumes:
 
-- the shard job waits for the lint job, so a lint error starts no container;
+- the shard job waits for the quick lint gate (yamllint and `test_ci_select.py`) and not for
+  the full lint, so a malformed file starts no container and the shards start sooner;
 - the shard job runs only when discover chose shards, and refuses the entry that stands
   for none;
-- the gate job (the check the ruleset requires) fails unless the lint passed, and fails
-  when shards were chosen and did not all pass;
+- the gate job (the check the ruleset requires) fails unless the quick gate and the full lint
+  both passed, and fails when shards were chosen and did not all pass. The gate's own script
+  is run under bash against a table of outcomes, with a control that cuts the full-lint
+  refusal out and shows the table sees it go;
+- the quick gate builds its tool environment with the same steps as the full lint, and the
+  full lint keeps every step it had;
 - the merge queue still triggers the workflow, and the weekly sweep is scheduled;
 - the lint and every shard restore the tool environment from a SHA-pinned `actions/cache`
   keyed on the lock files, and install only on a miss;
@@ -307,6 +393,15 @@ listed, and on an entry whose script is gone. The list is the baseline as it sto
 was added, so a new installer needs a reviewed entry, which is an owner merge under CODEOWNERS.
 The test reads the role name and does not check that the role exists, as `host_roles.yml` does.
 
+## test_no_new_script_dependents.py: no new caller of a pending-role script
+
+A tracked file depends on a `pending-role` script when its text names the script's path or its
+basename, and a shared basename counts for each script that carries it.
+`hand_installers_dependents.yml` maps each dependent file to the sorted scripts it names. The test
+fails on a new dependency, on a file that names one with no row, on a row naming a script the file
+no longer names, and on a row for a file that is gone. The baseline only shrinks; it is edited by
+hand, never regenerated.
+
 ## test_no_new_hand_runbook_steps.py: the hand runbook steps stay frozen
 
 A hand step is a fenced shell block in any `RUNBOOK*.md` that reaches a host (`ssh`, `scp`,
@@ -345,8 +440,15 @@ itself and refuses the delivery if they disagree, so a skip needs both to agree.
 `ANSIBLE_PUSH_HOSTS` repository secret, passed as `ssh_push_hosts` (the owner creates it; an unset
 secret is empty, and empty means every host is pulled). The `push-playbook` input is the one path
 `PUSH_PLAYBOOK`, defined once in `check_delivery.py` and imported by `test_drift_caller.py`. The
-release floor `MIN_RELEASE` is `v1.0.19`, the first release of `branchLeft/github-workflows` that
-declares both: a call that passes a key the called workflow does not declare fails on GitHub. A
+release floor `MIN_RELEASE` is `v1.0.23`, the first release of `branchLeft/github-workflows` that
+declares the per-host key maps (`ssh_host_check_keys` and, for the delivery, `ssh_host_apply_keys`)
+as well as the push list: a call that passes a key the called workflow does not declare fails on
+GitHub. The delivery names `ssh_host_check_keys` (the repository secret `ANSIBLE_HOST_CHECK_KEYS`,
+passed by the drift caller too) and `ssh_host_apply_keys` (the `SSH_HOST_APPLY_KEYS` secret of the
+`ansible-hosts` environment). Both are optional in the workflow: an unset secret is empty, and a
+host with no entry keeps the shared key. The `environment` command reports `ssh_host_apply_keys`
+missing from the environment's secrets, because a repository secret of that name would be readable
+by every workflow on main without the approval. A
 `push-dry-run-stub` is not an allowed input.
 
 After a lock-file merge (for example Dependabot), dispatch the Ansible workflow, because the
@@ -395,6 +497,14 @@ What the test enforces, over every `copy` and `template` task of the roles the p
   list from the checkout, so the CrowdSec and acquisition files stay visible in the plan and a
   matching line in one fails.
 
+- A file whose text on a host still matches, though the checkout's no longer does, is listed in
+  `RETIRED_MATCHES` with the line the host holds. A diff is the old text against the new one, so the
+  removed line reaches the plan. The test then requires the task that copies it to set
+  `diff: false`, and accepts that hide although the checkout has no matching line. It fails when the listed line no longer matches the scan or
+  the checkout matches again. The entry and the file's place in the role's hidden list are removed
+  once the apply that rewrites the text is live. It is never used for a line that can be reworded
+  in the checkout.
+
 A finding names the task file, the task, the source and the line number, never the text of the line.
 The test reads the source of a task, not the text Ansible renders from it; a template whose rendered
 text differs from its source is judged by its source.
@@ -408,3 +518,230 @@ at the tag `ansible-gated-apply.yml` pins (v1.0.19 when this was written). The w
 feeds). A test runs the workflow's own expression through `grep -Ei` on sample lines and compares
 verdicts. The other entries of the backstop name key material and tokens that no role file holds, so
 they are not copied.
+
+## check_secret_no_log.py: the secret taint check
+
+The check reads every role under `ansible/roles/` and every pattern under `ansible/patterns/`,
+and the host rows of `host_inputs`. Its test is `test_check_secret_no_log.py`, which runs in the
+`unittest discover` step of `ansible.yml` with no workflow change. Run it as
+`python3 ansible/checks/check_secret_no_log.py`; a finding prints as `FAIL R<n> <path>: <what>`
+and names a task or a variable, never a value.
+
+It imports `ansible-core` (the pinned version in `ansible/requirements.txt`), which the `checks`
+job installs into the same virtual environment as `mypy` and `ruff`, so it needs no step of its
+own. Run it under that environment: a Python without `ansible-core` cannot import the module, and
+the failure is loud (an import error), never a pass.
+
+Rules:
+
+- **R1, taint.** The seeds are the options of the role's `main` argument spec with
+  `no_log: true`, and, for a list or mapping option, the sub-options with `no_log: true`
+  (see "Sub-option secrets" below). The `host_inputs` loader declares no option, so its own
+  `host_inputs_raw` and `host_inputs_doc` are seeds by name, and a rename that leaves a seed
+  named by no task is a finding. Taint follows a value through the role's `vars/` and
+  `defaults/` by exact variable name, to a fixed point, and a variable that is reached through
+  two secrets names both. A task under `tasks/` or `handlers/` that names a tainted variable must set
+  `no_log: true` as a literal. `block`, `rescue` and `always` are recursed, and a block's
+  literal `no_log` and `diff` are inherited. A task that writes a file (`copy`, `template`,
+  `lineinfile`, `blockinfile`, `replace`, `assemble`) from a tainted variable must set
+  `diff: false` as a literal (ANS-16). A task names a variable in any argument, loop,
+  `with_*`, `vars`, `environment`, `loop_control` or in a template that its `src` names
+  (read from `templates/`). It does not name one in `when`, `failed_when`, `changed_when`,
+  `until` or the `that` of an assert: those print their expression, and the refusal asserts
+  need their coded messages to reach the log. A secret named in an assert's `fail_msg` counts.
+- **R2, the loader's names.** Each row of `host_inputs_required_by_host` must be a non-empty
+  list of names for a host that `checks/host_roles.yml` lists. Each name must resolve to
+  exactly one declared option of a role on that host's list. An unreadable file, row or host
+  list is a finding, so an unreadable file never means that no loader secret exists.
+- **R3, agreement.** The table "The secret options of the roles" in the pattern README must
+  equal, as a set, the `(role, option)` pairs of the `no_log` options, and each Source must
+  equal the value R2 derives: `host_inputs: HOST[, HOST]`, or `none`. The older table of
+  script-side names must have each name read by a file under `hetzner/`, `mail/` or a root
+  `RUNBOOK*.md`. The reverse direction, that every script name is listed, is reviewed by hand.
+- **R4, tasks the check cannot follow.** In every role or pattern that holds a secret, each task
+  must be one that Ansible's own task parser accepts and the check can follow (see "The task
+  layer"). A finding reads `R4 <file>: task '<name>' cannot be followed: <why>`, and the reasons
+  are: the parser refuses the task (the message names the class and Ansible's own text, never the
+  task's data); the action does not resolve to a plugin Ansible can load (a templated action, an
+  unknown name, a collection that is not installed, the removed bare `include:`); the task
+  includes a file named by a template; it includes a file that is not a task file the check
+  reads (a missing file, or one outside `tasks/` and `handlers/`); it includes a role; or a text
+  reads variables by a name the check cannot see (`vars` or `hostvars` taken whole, called on, or
+  subscripted by a name that is not a literal, a `vars` lookup with a term that is not a literal,
+  a lookup whose plugin is not a literal), in a task, a template or a vars file. A file under
+  `tasks/`, `handlers/`, `vars/`, `defaults/` or `meta/` that the check does not read is an
+  `R4 <file>: ... does not read` finding naming the file (see "The role's files"). A role with no
+  secret is not read, so R4 never fires there.
+
+Sub-option secrets. An option such as `tenant_compose_stacks` holds a secret only in an
+attribute of its items (`secrets_env_text`). The option is then a seed for that attribute only:
+any read of the option needs `no_log`, whatever its spelling (`x.secrets_env_text`,
+`x['secrets_env_text']`, `x.get('secrets_env_text')`, `x.items()`, `x.values()`, `x | to_json`,
+a chain of calls). Only an allow-list is cleared: a read through a declared sub-option that is
+not a secret (`x.slug`, `x['slug']`, `map(attribute='slug')`) and the `length` and `count`
+filters. An attribute the spec does not declare is not cleared. A task that loops
+over the option, and names a `loop_control.loop_var`, makes that loop variable a seed for the
+same attributes in every task file of the role, because an `include_tasks` file reads it. A loop
+over a secret that includes tasks and keeps the default `item` is a finding: the included tasks
+cannot be followed through `item`. Names set under a task's `vars:` are not reads, but they
+carry what they are set to: a name bound under `vars:` (an include's, a block's, an include's
+`apply: vars:`) to a value that reads a secret is a secret in every task file of the role, because
+the included file reads it and `no_log` on an include does not reach the tasks it includes. An
+include's `apply: vars:` is read wherever Ansible's parser finds `apply` (see "The task layer").
+A bare partial name keeps its attributes. An include that passes such a name into a file
+the check cannot follow (a templated name, a file that is not a task file of the role, a role)
+is an R1 finding as well as an R4 one, because R1 says which secret went there.
+
+The task layer. What a task calls, which file an include names, and what an include binds under
+`apply:` are never decided by a spelling matcher in the check. Each task of a role that holds a
+secret is resolved the way the executor resolves it (`ansible.playbook.helpers.load_list_of_tasks`):
+
+- `ModuleArgsParser(task).parse(skip_action_validation=True)` classifies it, so `include_tasks`,
+  `ansible.builtin.include_tasks`, `ansible.legacy.include_tasks`, `action: include_tasks f.yml`
+  and the same for the other three include actions all give the same answer.
+- An include of tasks is then loaded by `TaskInclude.load` (`HandlerTaskInclude.load` under
+  `handlers/`), whose `check_options` is the only place that chooses the file: `_raw_params`
+  (the free-form text, or `args: {_raw_params: ...}`) when it is set, otherwise `file`. Both set
+  is not a finding: the file followed is the one the executor includes. It also refuses what
+  Ansible refuses (no file, an unknown key, `apply` on an `import_tasks`, `args` that is not a
+  mapping, `diff:` or `delegate_to` on an include), and each refusal is an R4 finding.
+- An include of a role is loaded by `IncludeRole.load` and is always an R4 finding: the role it
+  runs is outside this role's taint, and no role includes another (ANS-12).
+- Any other task is loaded by `Task.load` (`Handler.load` under `handlers/`) and resolved to its
+  fully qualified name by Ansible's own plugin loaders. `copy`, `ansible.legacy.copy` and
+  `action: copy content=...` are all `ansible.builtin.copy`, so the `diff: false` rule, the
+  `template` source read and the assert allowance apply to every spelling. A module or action
+  plugin a role ships under its own `library/` or `action_plugins/` resolves, because the check
+  registers those directories as Ansible does when it loads a role (`add_all_plugin_dirs`).
+- The file an include names is found by `DataLoader.path_dwim_relative`, beside the including
+  file and then in the role's `tasks/` (or `handlers/`), and must be one of the task files the
+  check reads. A name that is a template (`Templar.is_possibly_template`) has no static target.
+
+- A module argument that is a bare variable name is a read of that variable with no braces.
+  In `ansible-core` 2.21 that is `debug`'s `var` (any spelling that resolves to
+  `ansible.builtin.debug`: `debug: var=x`, `var:`, `args:`, `action:`, `ansible.legacy.debug`) and
+  `assert`'s `that` (already expression-only). `with_vars` terms are names too. The `with_*`
+  forms of the other lookups take literals, not names.
+
+The role's files. The files of a role are found the way `Role` finds them, not from a list kept
+here. The spec comes from the first of `meta/argument_specs.yml`, `.yaml`, `.json`, else from the
+`argument_specs:` key of the role's `meta/main` file (`Role._get_role_argspecs`); data is not
+combined between the two. `tasks/` and `handlers/` are read from `main` in each layout
+`DataLoader.find_vars_files` resolves (`main.yml`, `main.yaml`, `main.json`, `main` with no
+extension, or a directory named `main`), and `vars/` and `defaults/` from the same names with the
+directory form allowed, where every file under it is read. Any other file under `tasks/`,
+`handlers/`, `vars/`, `defaults/` or `meta/` that the check does not read (a hidden or backup
+file, one with another extension, a second `meta/main` that the first shadows, a spec that
+another spec file shadows) is an R4 finding naming it, because a file the check does not read is
+a file it cannot clear.
+
+Indirect reads. `lookup('ansible.builtin.vars', 'name')` (any spelling of the plugin, and `query`
+and `q`), `vars['name']`, `vars.name`, `hostvars[inventory_hostname].name` and
+`hostvars[...]['name']` read the variable `name`, and count as a read of it, with a Name node of
+its own or not, when the name is a literal. When it is not (`vars[x]`, `vars | to_json`, `vars.get(...)`,
+`lookup('vars', x)`), the check cannot say which variable is read, and the text is an R4 finding.
+
+The collection finder is installed with `init_plugin_loader`, as `ansible-playbook` installs it.
+The only list of names the check keeps is the fully qualified names of the write actions, assert
+and template, and those are matched after Ansible has resolved the spelling.
+
+How references are read: by Jinja's parser alone (`Environment.parse`, then the names the
+parse tree loads). The check does not compile the template, because Ansible's filters
+(`dirname`, `password_hash`) are not Jinja's and a compile refuses them. A name bound by a
+loop counts, which asks for more `no_log`, never less. A text that does not parse is a finding,
+since a text the check cannot read cannot be cleared.
+
+What it does not see:
+
+- Only options and sub-options that declare `no_log: true` seed the taint (and the loader's two
+  variables). An option that holds a credential without the flag is invisible to R1. Which
+  options are secrets is the owner's classification, so that list is a ticket of its own.
+- Taint is by variable name, within one role (ANS-12). It does not follow `set_fact`,
+  `register`, or a value passed through a playbook, a `trust/` file or another role. The
+  loader's facts are seeded by the role that consumes them, as options of that role.
+- Playbooks and `trust/` files are not scanned, and neither is a `molecule/` directory.
+- `control_plane_masterkey_secret` is not tainted. Its value is a file-attributes record (path,
+  owner, group, mode) and holds no secret. The master key is guarded by the write task that
+  names `control_plane_masterkey` directly, and the test pins that boundary, so it is a visible
+  choice and not an accident. Tainting the record by a name prefix would force `no_log` onto
+  the empty-create and mode tasks and hide their failures.
+- The task layer is Ansible's, so its limits are named. A task with a template in its action
+  is refused, not read. A `block` is read for its tasks only: Ansible's own validation of a
+  block's keys is not applied, since a block carrying a stray key does not run. `apply:` can
+  carry attributes of its own (`no_log`, `tags`), which the check does not read as inherited by
+  the included tasks. Each task is resolved on its own: a `collections:` list set at play or role
+  level (`meta/main.yml`) is not in scope, so a short module name that only that list resolves
+  is an R4 finding (no role of this estate sets one). `include_vars` and `vars_files` are not
+  followed. A module of one role resolves for a role checked after it in the same process, as it
+  does in a play that loads both. The action lists the executor itself uses
+  (`ansible.constants._ACTION_*`) are private names of `ansible-core`. The check reads them
+  when it is imported, so a rename on a version bump is an `AttributeError` at import, never a
+  quiet change in what is followed (a test removes each in turn). The check does not run Ansible: it knows what parsing and plugin
+  resolution can say, and nothing that depends on a variable's value at run time.
+- A loop variable is followed only when the loop names it (`loop_control.loop_var`), or the
+  loop has no include. A `set_fact` or `register` that copies an attribute into another
+  variable is not followed. A value that comes in through `lookup('template', ...)` is not
+  read, and neither is a subscript the parser cannot see as constant (`x[name]`, which counts
+  as a read of the whole option and so asks for more `no_log`).
+- R3 checks the table's rows, not what the consuming role does with a value.
+
+Sabotage, each one a copy of the real files with one control broken, and the baseline copy
+clean (`test_check_secret_no_log.py`, 73 tests, green under the pinned ansible-core venv):
+
+| Sabotage in the copy                                                  | Finding that goes red                                                                     |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `no_log: true` removed from the write of the four `NTFY_` lines       | R1: the task names `ntfy_pager_env_lines (secret through ...)` and the four pager secrets |
+| The same write with `no_log: '{{ true }}'`                            | R1: must set `no_log: true` (a templated value is refused)                                |
+| `no_log: true` removed from the loop over `monitoring_stack_env_keys` | R1: `monitoring_stack_env_keys (secret through ...)` and the monitoring secrets           |
+| `no_log: true` removed from the write of the master key               | R1: names `control_plane_masterkey` and must set `no_log: true`                           |
+| `diff: false` removed from the master key copy                        | R1: must set `diff: false (ANS-16)`                                                       |
+| A task with a template that does not parse                            | R1: does not parse                                                                        |
+| `no_log: true` removed from the loader's set_fact of every input      | R1: `host_inputs_doc`, must set `no_log: true`                                            |
+| `no_log: true` removed from the loader's parse task                   | R1: `host_inputs_raw`, must set `no_log: true`                                            |
+| `no_log: true` removed from the write of a tenant's secrets file      | R1: `tenant_compose_stack (secret through tenant_compose_stacks.secrets_env_text)`        |
+| `no_log: true` removed from the loop that includes each tenant's file | R1: `tenant_compose_stacks (secret through ...)`                                          |
+| `no_log: true` removed from the other four sub-option roles' writes   | R1: must set `no_log: true`, each named by its task                                       |
+| A loop over a secret with an include and the default `item`           | R1: must name a loop_var                                                                  |
+| The tenant secrets write read as `.get(...)`, `.items()`, `.values()` | R1: must set `no_log: true` (a call on the item is a read of the item)                    |
+| A secret bound under an include's `vars:`, written with no `no_log`   | R1: the included file's task names the bound name (secret through ...)                    |
+| A secret bound on an include of a file the check cannot read          | R1: passes the name into an include that cannot be followed                               |
+| A secret bound under the task's `args:` `apply: vars:`, written bare  | R1: the included file's task names the bound name (secret through ...)                    |
+| An include with an `args:` that is not a mapping                      | R4: Ansible's own task parser refuses it                                                  |
+| An include spelled `ansible.legacy.`, `action:`, `args:` or free-form | R4 or R1 as for the bare spelling, one case per spelling in `TaskParserTest`              |
+| `_raw_params` and `file` both set, the one Ansible includes unread    | R4: not a task file of the role that the check reads                                      |
+| An include whose file is named by a template, a missing file          | R4: named by a template, or not a task file                                               |
+| An include of a role, in any spelling                                 | R4: it includes a role                                                                    |
+| An action Ansible cannot resolve, a templated action, bare `include:` | R4: cannot be followed                                                                    |
+| A secret written by `ansible.legacy.copy` or `action: copy ...`       | R1: must set `diff: false (ANS-16)`, and `no_log: true`                                   |
+| `debug` with `var:` or `var=` naming a secret, in every spelling      | R1: must set `no_log: true`                                                               |
+| The spec in each file Ansible reads it from                           | R1: as for the spec in `meta/argument_specs.yml`                                          |
+| Tasks, handlers, vars, defaults in each layout Ansible loads          | R1: the task or the derived variable is named                                             |
+| A file of the role that the check does not read                       | R4: `does not read`, naming the file                                                      |
+| A secret read by `vars[...]`, `hostvars[...]` or the `vars` lookup    | R1: names the secret, must set `no_log: true`                                             |
+| `vars`, `hostvars` or a lookup read by a name that is not literal     | R4: reads variables indirectly                                                            |
+| A renamed `ansible.constants._ACTION_*` name                          | `AttributeError` when the check is imported                                               |
+| A row name that is no option (`monitoring_stack_smtp_passwd`)         | R2: resolves to 0 options, not one                                                        |
+| The loader's rows file made unreadable                                | R2                                                                                        |
+| A secret option with its row removed from the README                  | R3: no row for the no_log option                                                          |
+| A row with a wrong source                                             | R3: has source `host_inputs: edge1`, the derived source is `host_inputs: edge1, edget`    |
+| The table's heading changed                                           | R3: the table is missing, empty, or not three columns                                     |
+| A script name that nothing reads                                      | R3: the name is read by no file under `hetzner/`, `mail/` or root                         |
+
+The expression-only allowance is pinned too: an assert whose `that` names a secret, with no
+`no_log`, is clean.
+
+On the real tree the check reports how many `no_log` options it found and how many variables are
+reached from them (run it to read the figures: `ntfy_pager_env_lines`, `monitoring_stack_env_keys`
+and the `ci_jump_legacy_*` paths built from `ci_jump_user` are among them). Every task that names one of them already
+sets `no_log: true`, and every file writer among them sets `diff: false`, so the check finds no
+R1 failure on `main`.
+
+## test_deploy_verifier_coverage.py: the verifier before every wrapper role
+
+The deploy wrapper refuses a registered image unless `deploy_verifier` has put the verifier and its
+pinned gh on the host. The test holds three things: the table `WRAPPER_ROLES` names every role that
+names the wrapper's path in its tasks, vars or defaults; every playbook that applies one of those
+roles applies `deploy_verifier` earlier in the same play, and only the four hosts in
+`WRAPPER_PLAYBOOKS` apply one at all; and the paths the wrapper reads, and the pins the role
+installs, agree and sit in `vars/`. A new wrapper role is added to the table in the same change, or
+the test names it.

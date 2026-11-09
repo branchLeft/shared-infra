@@ -7,8 +7,10 @@
 #   default      no case of its own: the checks on what the converge left, the source
 #                checks and the log scan, with the plan, idempotence and check-mode steps
 #                that only this scenario runs
-#   refusals     the inputs, the downloads, the pins, the second compose files and the
-#                apt source files the role does not manage that it must refuse
+#   refusals     the inputs, the downloads and the apt source files the role does not
+#                manage that it must refuse
+#   refusals_pins     the forms of the database image pin the deploy program does not write
+#   refusals_compose  the second compose files, override files and .env file the role refuses
 #   paths        the paths Docker or an earlier release left in the way
 #   rotation     the wide file an earlier release left, and the rotation
 #   repository   the changes to a repository file that make the role refresh the index
@@ -29,6 +31,8 @@
     verify_parts:
       - default
       - refusals
+      - refusals_pins
+      - refusals_compose
       - paths
       - rotation
       - repository
@@ -426,18 +430,23 @@
 
     # Part two: the database stack's files and the order of the legacy drop-in and
     # the exporter file (verify_part_two.yml), the source of the role's task files
-    # (verify_role_source.yml), and the refusals of the image pin and of a second
-    # compose or an override file (verify_refusals.yml, in the `refusals` scenario
-    # only). The source checks read the file list registered above.
+    # (verify_role_source.yml), and the refusals of the image pin (verify_refusals.yml,
+    # in the `refusals_pins` scenario only) and of a second compose or an override file
+    # (verify_compose_names.yml, in the `refusals_compose` scenario only). The source
+    # checks read the file list registered above.
     - name: Check the database stack's files and the order of its tasks
       ansible.builtin.import_tasks: tasks/verify_part_two.yml
 
     - name: Check the source of the role's task files, templates and metadata
       ansible.builtin.import_tasks: tasks/verify_role_source.yml
 
-    - name: Check the refusals of the image pin and of a second compose or an override file
+    - name: Check the refusals of the image pin
       ansible.builtin.include_tasks: tasks/verify_refusals.yml
-      when: verify_part == 'refusals'
+      when: verify_part == 'refusals_pins'
+
+    - name: Check the refusals of a second compose or an override file
+      ansible.builtin.include_tasks: tasks/verify_compose_names.yml
+      when: verify_part == 'refusals_compose'
 
 # The other files this run leaves on the controller: Molecule's own copy of the
 # configuration, the inventory it built, its state, and the log. The sentinel

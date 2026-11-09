@@ -3,14 +3,19 @@
 # and puts the previous files back if the run fails. The caller sets
 # egress_nat_item (vars/main.yml). It is the install-and-restart of
 # 05-configure-host-egress.sh and nat-gateway.sh, written once.
+#
+# An item may also name a timer (timer_name). The timer re-runs the
+# reconciler about every minute; it is installed, enabled and reverted the same
+# way as the unit, and an item without one skips every timer task.
 
-# The two copy registers are read by the rescue, and both includes write them, so
+# The copy registers are read by the rescue, and both includes write them, so
 # each include starts them empty. Without this a rescue in the second include reads
 # the first include's register, whose kept copy the first include already removed.
 - name: Clear the copy registers left by the previous include
   ansible.builtin.set_fact:
     egress_nat_reconciler_copy: {}
     egress_nat_unit_copy: {}
+    egress_nat_timer_copy: {}
 
 # What was on the host before this run, so a failed run can tell a first
 # install (remove what it wrote) from an update (put the old files back).
@@ -23,6 +28,12 @@
   ansible.builtin.stat:
     path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
   register: egress_nat_unit_before
+
+- name: Read whether the timer is already installed
+  ansible.builtin.stat:
+    path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.timer_name }}'
+  register: egress_nat_timer_before
+  when: egress_nat_item.timer_name is defined
 
 - name: Install, enable and run the reconciler, reverting on failure
   block:
@@ -54,6 +65,23 @@
       register: egress_nat_unit_copy
       notify: Reload systemd manager
 
+    # The timer is on disk before anything enables it, and needs the same reload.
+    # The source is the host-egress item's timer_src, not the loop item's: the NAT gateway
+    # item names no timer, so its timer_src is undefined, and the static check cannot
+    # resolve it. Only an item with timer_name gets here, and only host-egress has one, so
+    # for that item the two keys are the same file and the installed bytes do not change.
+    - name: Install the timer {{ egress_nat_item.timer_name }}
+      ansible.builtin.copy:
+        src: '{{ role_path }}/../../../hetzner/provision/{{ egress_nat_host_egress.timer_src }}'
+        dest: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.timer_name }}'
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      register: egress_nat_timer_copy
+      notify: Reload systemd manager
+      when: egress_nat_item.timer_name is defined
+
     - name: Load the unit before it is enabled
       ansible.builtin.meta: flush_handlers
 
@@ -66,11 +94,23 @@
         path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
       register: egress_nat_unit_now
 
+    - name: Read back the timer file of {{ egress_nat_item.timer_name }}
+      ansible.builtin.stat:
+        path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.timer_name }}'
+      register: egress_nat_timer_now
+      when: egress_nat_item.timer_name is defined
+
     - name: Enable the unit {{ egress_nat_item.unit_name }}
       ansible.builtin.systemd_service:
         name: '{{ egress_nat_item.unit_name }}'
         enabled: true
       when: egress_nat_unit_now.stat.exists
+
+    - name: Enable the timer {{ egress_nat_item.timer_name }}
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.timer_name }}'
+        enabled: true
+      when: egress_nat_item.timer_name is defined and egress_nat_timer_now.stat.exists
 
     # restart, not start. The unit is a RemainAfterExit oneshot, so once it has
     # succeeded systemd counts it as active and a start does nothing, which
@@ -82,6 +122,13 @@
         state: restarted
       when: egress_nat_unit_now.stat.exists and (egress_nat_reconciler_copy.changed or egress_nat_unit_copy.changed)
 
+    # A changed timer file is loaded only on a restart, as the unit above is.
+    - name: 'Restart the timer so the installed schedule is loaded: {{ egress_nat_item.timer_name }}'
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.timer_name }}'
+        state: restarted
+      when: egress_nat_item.timer_name is defined and egress_nat_timer_now.stat.exists and egress_nat_timer_copy.changed
+
     # A unit that failed on an earlier run is not active and nothing above
     # touched it, so this starts it, which runs the reconciler again. On an
     # active unit it does nothing.
@@ -91,11 +138,23 @@
         state: started
       when: egress_nat_unit_now.stat.exists
 
+    - name: 'Start the timer if it is not active: {{ egress_nat_item.timer_name }}'
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.timer_name }}'
+        state: started
+      when: egress_nat_item.timer_name is defined and egress_nat_timer_now.stat.exists
+
     - name: Read the state of the unit {{ egress_nat_item.unit_name }}
       ansible.builtin.systemd_service:
         name: '{{ egress_nat_item.unit_name }}'
       register: egress_nat_unit_state
       when: egress_nat_unit_now.stat.exists and not ansible_check_mode
+
+    - name: Read the state of the timer {{ egress_nat_item.timer_name }}
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.timer_name }}'
+      register: egress_nat_timer_state
+      when: egress_nat_item.timer_name is defined and egress_nat_timer_now.stat.exists and not ansible_check_mode
 
     # What the shell script's closing systemctl status did: a unit that is not
     # active after the run is a failure, not a silent success. Skipped in check
@@ -107,6 +166,14 @@
         quiet: true
         fail_msg: The unit {{ egress_nat_item.unit_name }} is not active after the reconciler ran.
       when: egress_nat_unit_now.stat.exists and not ansible_check_mode
+
+    - name: 'Assert the timer is active after the run: {{ egress_nat_item.timer_name }}'
+      ansible.builtin.assert:
+        that:
+          - egress_nat_timer_state.status.ActiveState == 'active'
+        quiet: true
+        fail_msg: The timer {{ egress_nat_item.timer_name }} is not active after the run.
+      when: egress_nat_item.timer_name is defined and egress_nat_timer_now.stat.exists and not ansible_check_mode
 
     # The run succeeded, so the files kept for a revert are not needed.
     - name: Remove the kept copy of the previous reconciler
@@ -121,6 +188,12 @@
         state: absent
       when: egress_nat_unit_copy.backup_file is defined
 
+    - name: Remove the kept copy of the previous timer
+      ansible.builtin.file:
+        path: '{{ egress_nat_timer_copy.backup_file }}'
+        state: absent
+      when: egress_nat_item.timer_name is defined and egress_nat_timer_copy.backup_file is defined
+
   rescue:
     - name: Record which task failed
       ansible.builtin.set_fact:
@@ -132,6 +205,12 @@
         path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
       register: egress_nat_unit_after
 
+    - name: Read the timer file the failed run left
+      ansible.builtin.stat:
+        path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.timer_name }}'
+      register: egress_nat_timer_after
+      when: egress_nat_item.timer_name is defined
+
     # First install: there is no previous version to go back to, so what this
     # run installed is taken out. A unit left enabled would fail again at every
     # boot with a reconciler that has just been shown to fail.
@@ -142,11 +221,26 @@
         enabled: false
       when: not egress_nat_unit_before.stat.exists and egress_nat_unit_after.stat.exists
 
+    # The timer goes first for the same reason: left enabled, it would re-run a
+    # reconciler that has just been shown to fail, every minute.
+    - name: Stop and disable a timer this run installed for the first time
+      ansible.builtin.systemd_service:
+        name: '{{ egress_nat_item.timer_name }}'
+        state: stopped
+        enabled: false
+      when: egress_nat_item.timer_name is defined and not egress_nat_timer_before.stat.exists and egress_nat_timer_after.stat.exists
+
     - name: Remove a unit this run installed for the first time
       ansible.builtin.file:
         path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
         state: absent
       when: not egress_nat_unit_before.stat.exists
+
+    - name: Remove a timer this run installed for the first time
+      ansible.builtin.file:
+        path: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.timer_name }}'
+        state: absent
+      when: egress_nat_item.timer_name is defined and not egress_nat_timer_before.stat.exists
 
     - name: Remove a reconciler this run installed for the first time
       ansible.builtin.file:
@@ -176,6 +270,16 @@
         mode: '0644'
       when: egress_nat_unit_copy.backup_file | default('') | length > 0
 
+    - name: Put the previous timer back
+      ansible.builtin.copy:
+        src: '{{ egress_nat_timer_copy.backup_file }}'
+        dest: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.timer_name }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when: egress_nat_item.timer_name is defined and egress_nat_timer_copy.backup_file | default('') | length > 0
+
     - name: Remove the kept copy of the previous reconciler after the revert
       ansible.builtin.file:
         path: '{{ egress_nat_reconciler_copy.backup_file }}'
@@ -187,6 +291,12 @@
         path: '{{ egress_nat_unit_copy.backup_file }}'
         state: absent
       when: egress_nat_unit_copy.backup_file | default('') | length > 0
+
+    - name: Remove the kept copy of the previous timer after the revert
+      ansible.builtin.file:
+        path: '{{ egress_nat_timer_copy.backup_file }}'
+        state: absent
+      when: egress_nat_item.timer_name is defined and egress_nat_timer_copy.backup_file | default('') | length > 0
 
     - name: Make systemd read the unit files as they are now
       ansible.builtin.systemd_service:

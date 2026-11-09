@@ -3,16 +3,21 @@
 
 ``mint`` creates Stalwart's ``.env`` once, with a Prometheus secret made here, and never
 replaces a file that is there. ``shim`` renders the mailgun-shim's environment file from the
-drain token the credentials file already holds, and never makes that token. ``check_token``
-says whether the credentials file holds the drain token, so the role can refuse before it
-writes anything.
+secret the credentials file already holds, and never makes that secret. ``check_token`` says
+whether the credentials file holds the secret the pinned image's contract names, so the role
+can refuse before it writes anything.
+
+What the shim's environment holds depends on the image: the contract table
+(``mail/provision/shim-env-contracts.json``, the one home of it, passed in whole by the role)
+maps each image digest to the label of its secret and its environment lines. An image whose
+digest the table does not list is refused, so no environment is ever guessed for it.
 
 Every secret is read and written on the host. The module returns key names, booleans and the
 SHA-256 of a file, never a value, and in check mode it writes nothing.
 
-The shim's file is rendered exactly as ``mail/provision/render_shim_env.py`` renders it, so
-the repository's hand route and this module agree; ``ansible/checks/test_mx1_stack_agree.py``
-holds them together.
+The shim's file is rendered exactly as ``mail/provision/render_shim_env.py`` renders it from
+the same table, so the repository's hand route and this module agree;
+``ansible/checks/test_mx1_stack_agree.py`` holds them together, contract by contract.
 """
 
 import hashlib
@@ -20,6 +25,7 @@ import os
 import re
 import secrets
 import tempfile
+from typing import cast
 
 from ansible.module_utils.basic import AnsibleModule
 
@@ -30,10 +36,12 @@ description:
   - C(mint) creates a file holding one secret, only when the file is absent. An existing file
     is valid if it has exactly one non-empty line for the key, whatever its length or characters,
     because the owner may have pasted it by hand.
-  - C(shim) renders the mailgun-shim's environment file from the drain token in the credentials
-    file, replacing it atomically at mode 0600 only when the content differs. It never makes
-    the token.
-  - C(check_token) reads the credentials file and reports whether it holds the token.
+  - C(shim) renders the mailgun-shim's environment file from the secret in the credentials
+    file, for the contract the image's digest selects, replacing it atomically at mode 0600 only
+    when the content differs. It never makes the secret, and refuses an image whose digest the
+    contract table does not list.
+  - C(check_token) reads the credentials file and reports whether it holds the secret that
+    contract names.
   - C(reserved_keys) names the keys of a file that start with a prefix (Compose reads C(COMPOSE_*)
     from a C(.env) file), and never a value.
   - Never returns a secret. Results carry key names, booleans and a SHA-256.
@@ -58,12 +66,19 @@ options:
     type: str
     default: STALWART_PROMETHEUS_SECRET
   credentials_path:
-    description: The flat C(label:secret) file that holds the drain token (C(shim), C(check_token)).
+    description: >-
+      The flat C(label:secret) file that holds the shim's secret (C(shim), C(check_token)).
     type: path
-  label:
-    description: The label of the drain token in the credentials file.
+  image:
+    description: >-
+      The shim's image as the compose file pins it, C(ghcr.io/branchleft/mailgun-shim@sha256:...)
+      (C(shim), C(check_token)).
     type: str
-    default: shim-drain-token
+  contracts:
+    description: >-
+      The contract table, C(contracts) and C(digests), as C(shim-env-contracts.json) holds it
+      (C(shim), C(check_token)).
+    type: dict
 attributes:
   check_mode:
     support: full
@@ -90,9 +105,13 @@ valid:
   returned: when action is mint
   type: bool
 found:
-  description: Whether the credentials file holds the token.
+  description: Whether the credentials file holds the secret.
   returned: when action is check_token
   type: bool
+label:
+  description: The label the image's contract records its secret under. A label is not a secret.
+  returned: when action is check_token
+  type: str
 found_keys:
   description: The keys that start with the prefix, sorted. Never a value.
   returned: when action is reserved_keys
@@ -104,12 +123,11 @@ sha256:
   type: str
 """
 
-# The shim's fixed configuration, the same values as render_shim_env.py. PORT matches the
-# container side of shim-compose.yml's mapping and its healthcheck.
-SHIM_PORT = "8080"
-SHIM_DB_PATH = "/data/shim.db"
-SHIM_THROTTLE_PATH = "/data/throttle.json"
-SHIM_TOKEN_KEY = "SHIM_DRAIN_TOKEN"  # noqa: S105
+# The shim's environment is not written here: it is the contract table's, passed in whole, the
+# same file render_shim_env.py renders from. The marker in an environment line that stands for
+# the secret, and the one image reference a contract can be selected for:
+SECRET_PLACEHOLDER = "{secret}"  # noqa: S105
+SHIM_IMAGE_PATTERN = re.compile(r"ghcr\.io/branchleft/mailgun-shim@(sha256:[0-9a-f]{64})\Z")
 SECRET_LENGTH = 48
 ALPHANUMERIC = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
 FILE_MODE = 0o600
@@ -117,8 +135,8 @@ KEY_PATTERN = re.compile(r"[A-Z][A-Z0-9_]*")
 TOKEN_FORBIDDEN = re.compile(r"[\s\x00-\x1f\x7f]")
 
 OWNER_STEP = (
-    "the drain token is made once by the owner, on the host, and recorded in the credentials "
-    "file under that label; this role never makes it"
+    "the secret is made once by the owner's hand scripts, on the host, and recorded in the "
+    "credentials file under that label; this role never makes it"
 )
 
 
@@ -131,15 +149,51 @@ def sha256_of(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def render_shim_env(token: str) -> str:
-    """Return the exact text of the shim's environment file for a drain token."""
-    lines = [
-        f"PORT={SHIM_PORT}",
-        f"SHIM_DB_PATH={SHIM_DB_PATH}",
-        f"SHIM_THROTTLE_PATH={SHIM_THROTTLE_PATH}",
-        f"{SHIM_TOKEN_KEY}={token}",
-    ]
-    return "\n".join(lines) + "\n"
+def render_shim_env(contract: dict[str, object], secret: str) -> str:
+    """Return the exact text of the shim's environment file for a contract and its secret."""
+    template = cast("list[str]", contract["env_lines"])
+    return "\n".join(line.replace(SECRET_PLACEHOLDER, secret) for line in template) + "\n"
+
+
+def contract_for_image(image: str, table: dict[str, object]) -> dict[str, object]:
+    """Return the contract the image's digest selects in the contract table.
+
+    Raises:
+        EnvFileError: The image is not the shim pinned by digest, the table is malformed, or it
+            does not list the digest (an environment is never guessed for an image nobody
+            described).
+    """
+    match = SHIM_IMAGE_PATTERN.fullmatch(image)
+    if match is None:
+        message = "the shim image is not ghcr.io/branchleft/mailgun-shim pinned by a sha256 digest"
+        raise EnvFileError(message)
+    digest = match.group(1)
+    contracts, digests = table.get("contracts"), table.get("digests")
+    if not isinstance(contracts, dict) or not isinstance(digests, dict):
+        message = "the contract table must hold 'contracts' and 'digests' objects"
+        raise EnvFileError(message)
+    name = digests.get(digest)
+    if name is None:
+        message = (
+            f"image digest {digest} has no contract in shim-env-contracts.json: refusing to "
+            "render an environment for an image nobody has described"
+        )
+        raise EnvFileError(message)
+    contract = contracts.get(name)
+    lines = contract.get("env_lines") if isinstance(contract, dict) else None
+    label = contract.get("secret_label") if isinstance(contract, dict) else None
+    if (
+        not isinstance(label, str)
+        or not label
+        or not isinstance(lines, list)
+        or not all(isinstance(line, str) for line in lines)
+        or sum(line.count(SECRET_PLACEHOLDER) for line in lines) != 1
+    ):
+        message = (
+            f"contract {name} needs a secret_label and env_lines holding {SECRET_PLACEHOLDER} once"
+        )
+        raise EnvFileError(message)
+    return cast("dict[str, object]", contract)
 
 
 def find_token(credentials_text: str, label: str, path: str) -> str | None:
@@ -179,11 +233,11 @@ def read_credentials(path: str) -> str:
         raise EnvFileError(message) from None
 
 
-def drain_token(credentials_path: str, label: str) -> str | None:
-    """Return the drain token, or None when the credentials file does not hold it.
+def recorded_secret(credentials_path: str, label: str) -> str | None:
+    """Return the secret recorded under ``label``, or None when the credentials file lacks it.
 
     Raises:
-        EnvFileError: The file is unreadable or malformed, or holds a token that cannot be
+        EnvFileError: The file is unreadable or malformed, or holds a secret that cannot be
             one line of an environment file.
     """
     token = find_token(read_credentials(credentials_path), label, credentials_path)
@@ -191,7 +245,7 @@ def drain_token(credentials_path: str, label: str) -> str | None:
         return None
     if not token or TOKEN_FORBIDDEN.search(token) is not None:
         message = (
-            f"the token under label {label} in {credentials_path} is empty or holds whitespace"
+            f"the secret under label {label} in {credentials_path} is empty or holds whitespace"
         )
         raise EnvFileError(message)
     return token
@@ -309,17 +363,27 @@ def mint(path: str, key: str, *, check_mode: bool) -> dict[str, object]:
     }
 
 
-def shim(path: str, credentials_path: str, label: str, *, check_mode: bool) -> dict[str, object]:
-    """Render the shim's environment file from the token, writing only when it differs.
+def shim(
+    path: str,
+    credentials_path: str,
+    image: str,
+    table: dict[str, object],
+    *,
+    check_mode: bool,
+) -> dict[str, object]:
+    """Render the shim's environment file for the image's contract, writing only when it differs.
 
     Raises:
-        EnvFileError: The credentials file does not hold the drain token.
+        EnvFileError: The table does not list the image's digest, or the credentials file does
+            not hold the secret the contract names.
     """
-    token = drain_token(credentials_path, label)
+    contract = contract_for_image(image, table)
+    label = str(contract["secret_label"])
+    token = recorded_secret(credentials_path, label)
     if token is None:
         message = f"{credentials_path} holds no entry labelled {label}: {OWNER_STEP}"
         raise EnvFileError(message)
-    text = render_shim_env(token)
+    text = render_shim_env(contract, token)
     current = read_text(path)
     mode_ok = current is not None and os.stat(path).st_mode & 0o777 == FILE_MODE
     changed = current != text or not mode_ok
@@ -328,9 +392,18 @@ def shim(path: str, credentials_path: str, label: str, *, check_mode: bool) -> d
     return {"changed": changed, "sha256": sha256_of(text)}
 
 
-def check_token(credentials_path: str, label: str) -> dict[str, object]:
-    """Say whether the credentials file holds the drain token."""
-    return {"changed": False, "found": drain_token(credentials_path, label) is not None}
+def check_token(credentials_path: str, image: str, table: dict[str, object]) -> dict[str, object]:
+    """Say whether the credentials file holds the secret the image's contract names.
+
+    Raises:
+        EnvFileError: The table does not list the image's digest.
+    """
+    label = str(contract_for_image(image, table)["secret_label"])
+    return {
+        "changed": False,
+        "found": recorded_secret(credentials_path, label) is not None,
+        "label": label,
+    }
 
 
 def reserved_keys(path: str, prefix: str) -> dict[str, object]:
@@ -361,12 +434,13 @@ def main() -> None:
             "prefix": {"type": "str", "default": "COMPOSE_", "no_log": False},
             "key": {"type": "str", "default": "STALWART_PROMETHEUS_SECRET", "no_log": False},
             "credentials_path": {"type": "path"},
-            "label": {"type": "str", "default": "shim-drain-token", "no_log": False},
+            "image": {"type": "str"},
+            "contracts": {"type": "dict"},
         },
         required_if=[
             ("action", "mint", ["path"]),
-            ("action", "shim", ["path", "credentials_path"]),
-            ("action", "check_token", ["credentials_path"]),
+            ("action", "shim", ["path", "credentials_path", "image", "contracts"]),
+            ("action", "check_token", ["credentials_path", "image", "contracts"]),
             ("action", "reserved_keys", ["path"]),
         ],
         supports_check_mode=True,
@@ -381,14 +455,17 @@ def main() -> None:
             result = shim(
                 str(module.params["path"]),
                 str(module.params["credentials_path"]),
-                str(module.params["label"]),
+                str(module.params["image"]),
+                dict(module.params["contracts"]),
                 check_mode=module.check_mode,
             )
         elif action == "reserved_keys":
             result = reserved_keys(str(module.params["path"]), str(module.params["prefix"]))
         else:
             result = check_token(
-                str(module.params["credentials_path"]), str(module.params["label"])
+                str(module.params["credentials_path"]),
+                str(module.params["image"]),
+                dict(module.params["contracts"]),
             )
     except EnvFileError as error:
         module.fail_json(msg=f"mx1 {action}: {error}")

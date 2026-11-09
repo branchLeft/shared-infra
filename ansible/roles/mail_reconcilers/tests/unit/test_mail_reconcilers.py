@@ -41,6 +41,7 @@ INSTALLED = (
 STACK_OWNED = (
     "30-deploy-stalwart.sh", "63-deploy-mailgun-shim.sh", "65-install-local-resolver.sh",
     "70-schedule-dnsbl-check.sh", "run-all.sh", "shim-compose.yml", "render_shim_env.py",
+    "shim-env-contracts.json",
     "check_dnsbl_blocklist.py", "docker-compose.yml", "Caddyfile",
 )
 Task = dict[str, object]

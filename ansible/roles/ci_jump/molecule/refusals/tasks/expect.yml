@@ -1,0 +1,16 @@
+---
+# Test scaffolding, not role tasks. Included from a rescue section with expect_phrase set:
+# asserts the step failed for the reason the case is for. By default the whole failed result is
+# searched, not its msg alone, because the refusal code is in the message of the assertion that
+# stopped the run, and the module's own result is hidden. A caller that has the module's own
+# result (expect_result, a read-back's register) searches that instead: the role's failure message
+# names the step only, so the code is not in the failed result.
+- name: Assert the refusal was the one this case is for
+  ansible.builtin.assert:
+    that:
+      - expect_phrase in ((expect_result | default(ansible_failed_result)) | to_json)
+    quiet: true
+    fail_msg: >-
+      The step failed for a reason other than the one this case is for. Expected
+      '{{ expect_phrase }}'; the result it was checked against was:
+      {{ (expect_result | default(ansible_failed_result)) | to_json }}

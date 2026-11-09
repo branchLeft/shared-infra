@@ -1,0 +1,13 @@
+# Validators for templates whose role gives no validate: of its own, by template name.
+# Each names the binary it needs; a run where it is absent reports not-covered. {file} is
+# the rendered output. A role's own validate: argument is reused as written.
+validators:
+  compose.yml.j2:
+    binary: docker
+    argv: [docker, compose, -f, '{file}', config, --no-interpolate, -q]
+  authorized_keys.j2:
+    binary: ssh-keygen
+    argv: [ssh-keygen, -l, -f, '{file}']
+  known_hosts.j2:
+    binary: ssh-keygen
+    argv: [ssh-keygen, -l, -f, '{file}']

@@ -86,48 +86,72 @@ What the role does, in the order of `tasks/main.yml`:
    directory under the state root, which only root can write, and the directory is
    moved to the flag directory's name in one rename (see "Drain flags"), so root
    never writes through a name in the broker's own tree.
-8. **Writes the units** (`_units.yml`): the fourteen colour drop-ins and the
-   health router's template unit, from the pinned renderers' output; one systemd
-   reload when any changed.
-9. **Stages the edge candidate** (`_candidate.yml`): the edge's upstream snippets,
-   rendered by the pinned edge renderer, into a root-only candidate directory.
+8. **Writes the units** (`_units.yml`): the shared compose template unit, copied
+   from `hetzner/provision/` of the checkout (A-7); the fourteen colour drop-ins and
+   the health router's template unit, from the pinned renderers' output; one systemd
+   reload when any changed. Then it asks systemd whether each colour instance
+   loads (`_units_loaded.yml`, read-only). An instance that does not load stops the
+   run, and the message names the cause: the shared compose template unit is not
+   installed, or does not load with the drop-ins (see Phase A-7).
+9. **Stages the candidates** (`_candidate.yml`, `_site_candidates.yml`,
+   `_dns_token.yml`, `_candidate_refusal.yml`): two files in a root-only candidate
+   directory, for the owner to diff against the live edge before going live.
+   `edge-upstreams.caddy` is the edge's upstream snippets, rendered by the pinned edge
+   renderer. `Caddyfile` is the one combined candidate: the pinned site renderer is
+   called once, with every slot that has an owner-placed edge input, and prints the
+   upstream snippets once and one `*.<base>` site, with a host matcher for each slot
+   and a final `handle { abort }`. The site's one certificate is the wildcard that
+   Caddy obtains by DNS-01, through a `tls { dns hetzner {file.<token path>} }` block
+   that the role passes to the renderer; there is no interim certificate mode. The
+   role checks each input's shape first (a regular file, not a link, `root:root`, mode
+   0600 or narrower), looks at the token file (below), and reports the renderer's own
+   refusal by slot number, without its message. Before it stages the text it has the
+   demo edge's Caddy image adapt it and judges the config Caddy would run (see
+   "How the candidate is judged"): anything but one wildcard site on port 443 with one
+   ACME issuer, the DNS-01 provider and the token file is refused. The role also
+   removes any `site-<n>.caddy` an earlier version staged. A slot with no input is
+   named "Site candidate for slot <n> NOT rendered", and a candidate that is not
+   staged at all says "Production candidate NOT staged" and why. Both are stated
+   skips, not a pass. The renderer lives in ghost-platform: this role carries its
+   sha256-pinned copy and holds the text it prints to the check above, and never
+   edits or rewrites that text.
 10. **Reads back what root will run** (`_integrity.yml`): each installed program is
     the pinned file, `root:root`, mode `0755`, not a link, and every directory
     above it is root-owned and not writable by anyone else.
 
 ### What each Phase A step becomes
 
-| Runbook step                                              | Becomes                                                                                                    | Where                                 |
-| --------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| A-1 stage the scripts in a root-only directory            | RUN as a pinned release, kept (not removed)                                                                | `_release.yml`                        |
-| A-2 install sudo and xz-utils                             | NOT ROLE: the role requires `visudo` and refuses without it; xz belongs to the Node step                   | `_sudoers_check.yml`                  |
-| A-3 claim the uids                                        | RUN the pinned `demo_uid_claims.py`, only when a claim is missing                                          | `_accounts.yml`                       |
-| A-4 the two accounts                                      | `demo-router` created here (create or assert, never `usermod`); `broker` is `broker_deploy`'s and asserted | `_accounts.yml`, `_preconditions.yml` |
-| A-5 wrapper, then the sudoers boundary                    | wrapper INSTALL; the boundary is `broker_deploy`'s and is compared, never written                          | `_programs.yml`, `_sudoers_check.yml` |
-| A-6 read the boundary back                                | the assertions of the sudoers check                                                                        | `_sudoers_check.yml`                  |
-| A-7 compose template and drop-ins                         | the fourteen drop-ins are written; the compose template unit is not (named gap)                            | `_units.yml`                          |
-| A-8 health routers                                        | the template unit is written and systemd reloaded; no router is enabled or started                         | `_units.yml`                          |
-| A-9, A-9b drain-flag directory                            | declared with modules, links refused; flags pre-seeded once, under a root-owned marker                     | `_dirs.yml`                           |
-| A-10 the seven slot directories, by the wrapper's `reset` | NOT ROLE: `reset` wipes and recreates a tenancy and is the owner's to run                                  | none                                  |
-| A-11 remove the staging directory                         | retired: the release is the staging and is kept                                                            | none                                  |
-| A-12 evidence                                             | the Molecule `verify.yml` and the harness                                                                  | `molecule/default`                    |
+| Runbook step                                              | Becomes                                                                                                                                                                  | Where                                 |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------- |
+| A-1 stage the scripts in a root-only directory            | RUN as a pinned release, kept (not removed)                                                                                                                              | `_release.yml`                        |
+| A-2 install sudo and xz-utils                             | NOT ROLE: the role requires `visudo` and refuses without it; xz belongs to the Node step                                                                                 | `_sudoers_check.yml`                  |
+| A-3 claim the uids                                        | RUN the pinned `demo_uid_claims.py`, only when a claim is missing                                                                                                        | `_accounts.yml`                       |
+| A-4 the two accounts                                      | `demo-router` created here (create or assert, never `usermod`); `broker` is `broker_deploy`'s and asserted                                                               | `_accounts.yml`, `_preconditions.yml` |
+| A-5 wrapper, then the sudoers boundary                    | wrapper INSTALL; the boundary is `broker_deploy`'s and is compared, never written                                                                                        | `_programs.yml`, `_sudoers_check.yml` |
+| A-6 read the boundary back                                | the assertions of the sudoers check                                                                                                                                      | `_sudoers_check.yml`                  |
+| A-7 compose template and drop-ins                         | the template unit is copied from `hetzner/provision/` (read, not copied into the role); the fourteen drop-ins are written and the fourteen instances are checked to load | `_units.yml`, `_units_loaded.yml`     |
+| A-8 health routers                                        | the template unit is written and systemd reloaded; no router is enabled or started                                                                                       | `_units.yml`                          |
+| A-9, A-9b drain-flag directory                            | declared with modules, links refused; flags pre-seeded once, under a root-owned marker                                                                                   | `_dirs.yml`                           |
+| A-10 the seven slot directories, by the wrapper's `reset` | NOT ROLE: `reset` wipes and recreates a tenancy and is the owner's to run                                                                                                | none                                  |
+| A-11 remove the staging directory                         | retired: the release is the staging and is kept                                                                                                                          | none                                  |
+| A-12 evidence                                             | the Molecule `verify.yml` and the harness                                                                                                                                | `molecule/default`                    |
 
 ### What each pinned program becomes
 
-| Program                                         | Role                     | Notes                                                                |
-| ----------------------------------------------- | ------------------------ | -------------------------------------------------------------------- |
-| `branchleft_slot.py`                            | INSTALL                  | The wrapper. Installed, never run.                                   |
-| `demo_sidecar.py`                               | INSTALL                  | Run by the colour drop-ins, never by the role.                       |
-| `health_router.py`                              | INSTALL                  | Run by the router unit, never by the role.                           |
-| `render_slot_sudoers.py`                        | RUN, stdout only         | Printed, not written: the comparison.                                |
-| `render_colour_units.py`                        | RUN, stdout only         | The drop-ins' text.                                                  |
-| `render_router_unit.py`                         | RUN, stdout only         | The router unit's text.                                              |
-| `render_demo_edge.py`                           | RUN, stdout only         | The candidate fragment.                                              |
-| `demo_uid_claims.py`                            | RUN, writes the register | Only when a claim is missing; never in check mode.                   |
-| `render_demo_site.py`                           | STAGED                   | Part of the release the owner opens the demo from.                   |
-| `demo_go_live.py`                               | STAGED, NOT ROLE         | The owner's go-live. The role never runs it.                         |
-| `provision_socket_dirs.py`, `drain_flag_dir.py` | NOT FETCHED              | Their jobs are declared with `file` tasks, so a plan shows each one. |
-| `branchleft_demo_egress.sh`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                    |
+| Program                                         | Role                     | Notes                                                                                                              |
+| ----------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------ |
+| `branchleft_slot.py`                            | INSTALL                  | The wrapper. Installed, never run.                                                                                 |
+| `demo_sidecar.py`                               | INSTALL                  | Run by the colour drop-ins, never by the role.                                                                     |
+| `health_router.py`                              | INSTALL                  | Run by the router unit, never by the role.                                                                         |
+| `render_slot_sudoers.py`                        | RUN, stdout only         | Printed, not written: the comparison.                                                                              |
+| `render_colour_units.py`                        | RUN, stdout only         | The drop-ins' text.                                                                                                |
+| `render_router_unit.py`                         | RUN, stdout only         | The router unit's text.                                                                                            |
+| `render_demo_edge.py`                           | RUN, stdout only         | The candidate fragment.                                                                                            |
+| `demo_uid_claims.py`                            | RUN, writes the register | Only when a claim is missing; never in check mode.                                                                 |
+| `render_demo_site.py`                           | RUN, stdout only         | One call for every slot with an input, staged as the one Caddyfile. Never run with `--gate-env-out`, which writes. |
+| `demo_go_live.py`                               | STAGED, NOT ROLE         | The owner's go-live. The role never runs it.                                                                       |
+| `provision_socket_dirs.py`, `drain_flag_dir.py` | NOT FETCHED              | Their jobs are declared with `file` tasks, so a plan shows each one.                                               |
+| `branchleft_demo_egress.sh`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                                                                  |
 
 "RUN, stdout only" means the renderer is run with no output flag: it prints to
 standard output and writes nothing, so running it is a read and is the one
@@ -148,12 +172,26 @@ file reaches the release.
 - It does not enable or start a health router or a colour unit.
 - It does not fetch secrets. Anything secret on the host is a root-only file the
   owner puts there.
+- It does not read the DNS token. The token is the owner's, placed once as a root-only
+  file in `/etc/branchleft/secrets/`; the role only looks at the file's type, owner,
+  mode and size, never opens it, takes no checksum of it and never copies it, and
+  gives Caddy the path. Caddy reads the file when it runs.
+- It does not make the owner's edge input for a slot, and does not decide what it
+  holds. The renderer reads the file, the role checks its shape and stages the
+  output, and no task of the role prints the output (ANS-16).
+- It does not hold or change renderer logic. The renderer lives in ghost-platform and
+  the role carries sha256-pinned copies of it; it never edits a vendored file and
+  never rewrites the text the renderer prints.
+- It does not keep a copy of the shared compose template unit. It installs the file
+  `hetzner/provision/branchleft-compose@.service` of the checkout (A-7, Phase A-7
+  below). A byte copy or a link of that file in this role is refused by
+  `test_deploy_tooling_single_owner.py`.
 
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares every variable and
 [`defaults/main.yml`](defaults/main.yml) holds them. There is no required input and
-no secret.
+no secret: the one file that holds a secret is named by a path input and never read.
 
 - `demo1_build_source_sha`: the ghost-platform commit the vendored programs were
   taken from. It names the release directory.
@@ -166,13 +204,228 @@ no secret.
   installed grant differ from the generator's, and every rule must name this path
   anyway. The input exists so the role states the path it installs at; it is not a
   place to choose another one.
+- `demo1_build_wildcard_base`: the base domain of the demo's one wildcard site
+  (`*.<base>`), empty by default. Every demo hostname is exactly one label below it.
+  The role refuses anything that is not a lower-case domain of at least two labels
+  (letters, digits and inner hyphens, no wildcard character, no leading or trailing
+  dot). Empty, the production candidate is not staged and the plan and apply say so.
+- `demo1_build_dns_token_file`: the path of the root-only file that holds the DNS-01
+  token of the demo's own DNS project, by default
+  `/etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard`. It must be a file directly
+  in `/etc/branchleft/secrets`, named with letters, digits, dot, underscore and
+  hyphen. The role passes the path to the renderer as `dns hetzner {file.<path>}`.
+- `demo1_build_caddy_image`: the Caddy image that judges the candidate, by default the
+  demo edge's published image at its digest. Pinned by its digest: `<name>@sha256:` and 64
+  hex digits, with no tag and no image ID (the role refuses anything else). The default's
+  name, `demo-edge`, is only the host's own label: the owner tags the carried image with it,
+  and the role names no registry, because demo1 reaches none (a test holds the tasks,
+  defaults and vars of every role demo1 applies free of `ghcr.io`). The digest is the
+  published image's. It is the demo edge's image (Caddy with the
+  Hetzner DNS module), carried onto the host by the owner ("How the Caddy image gets onto
+  the host"); the role never pulls. The role finds it with `docker image inspect` and
+  wants exactly one image whose `RepoDigests` hold the pinned digest. Empty, or an
+  image that docker does not find, the production candidate is not staged and the plan
+  and apply say so. An image that docker finds and that lists anything else (no digests,
+  another digest, two images, output that is not JSON) is refused.
 
 `vars/main.yml` holds the constants (paths, accounts, uids, patterns). A caller
 cannot override them.
 
+### The wildcard candidate and the DNS token
+
+The owner places the DNS token once, as `root:root` mode `0600`, in a root-only
+`/etc/branchleft/secrets/` (the role neither creates nor checks the directory: a
+token the owner has not placed reads as missing). The role looks at it with `stat`
+and nothing else: `get_checksum`, `get_mime` and `get_attributes` are off because
+each opens the file, and `follow` is off so a link is seen as a link. Nothing in the
+candidate, the plan or the log holds the token's value, only its path, and only
+inside the `dns hetzner {file.<path>}` reference.
+
+A run stages `Caddyfile` only when the base is set, the token file is placed, the
+Caddy image is set and loaded, the renderer is staged and at least one slot has an
+edge input. When one of those is missing the run completes with a stated skip, never a
+failure, and prints the first that applies, in this order, each starting "Production
+candidate NOT staged:":
+
+| Reason                                           | Words that follow                                                                     |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| The wildcard base is empty                       | the wildcard base (demo1_build_wildcard_base) is not set                              |
+| No token file at the token path                  | no DNS token file is placed at the path                                               |
+| No Caddy image is set                            | no Caddy image (demo1_build_caddy_image) is set to judge the candidate with           |
+| The Caddy image is not on the host, by digest    | the Caddy image (demo1_build_caddy_image) is not loaded on this host under its digest |
+| No renderer staged (a check run on a fresh host) | the pinned site renderer is not staged on this host                                   |
+| No slot has an owner-placed edge input           | no slot has an owner-placed edge JSON                                                 |
+
+A Caddy image that docker finds and that is not the pinned one is a refusal, not a skip: it
+names the pinned digest and what docker listed, before the renderer runs. A host that has
+the image on the classic image store lands here or in the skip above, never in a pass
+("How the Caddy image gets onto the host").
+
+A token file that is there and is not right is refused, each in its own check, and
+the message names the path and never a value: it is a link, it is not a regular file,
+it is not `root:root`, it has a group or other bit or an execute bit (it must be
+`0600` or narrower), or it is empty. A renderer that refuses the base or an input is
+reported as "The pinned site renderer refused the wildcard base or the edge input of
+the occupied slot(s) <numbers>", with its own message withheld because it can echo a
+hostname.
+
+### How the candidate is judged
+
+The role never reads the Caddyfile for its sites or its certificate modes. Caddy ignores
+indentation and line breaks, so a test of the text's lines tests one spelling of the
+file: an indented second site, a site opened on the closing brace of the wildcard
+site, or an `internal` issuer in the global block all get past it, and Caddy serves
+each. So the role asks Caddy. `_candidate_refusal.yml` runs, as root and before the
+text is staged:
+
+1. `files/judge_caddy_config.py --what candidate` on the text, before Caddy sees it. Caddy
+   adapts with the environment and the filesystem of the judging container, which hold
+   nothing, and the edge runs with its own, so the JSON cannot show two things: a
+   `{$NAME}`, which Caddy replaces with the environment's value as it reads the text and
+   which can bring in a whole extra site, and an `import` of a path, which brings in
+   whatever files match it (none, in the judging container). Both are fixed syntax of
+   Caddy's lexer, so a test of the text is sound here and not a test of one spelling. The
+   text is refused if it holds `{$`, an `{env.` placeholder, a `{file.` placeholder other
+   than the DNS token reference, which may occur once (a handler with a second one serves
+   the token), or an
+   `import` that is not `import <name>` of a snippet the text defines (Caddy reads any
+   other name as a file). It is also refused if it names `file_server`, `templates` or
+   `root` as a whole word (not one run into a host name such as `root.example`, so
+   neither side may be a letter, digit, underscore, dot or hyphen): a file handler, or the
+   directory it reads from, can serve the DNS token wherever it sits. It is also refused if
+   it names `expression` as a whole word or holds a `ph(` call (a space may follow `ph`): a
+   CEL expression matcher reads a placeholder by a name it builds at run time
+   (`ph(req, "fi" + "le.<path>")`), which no `{file.` count in the text or the JSON sees,
+   and its yes or no answer leaks the file a byte at a time. The renderer emits none of
+   these.
+2. `docker run --rm -i --pull never --network none --read-only --cap-drop ALL
+--cap-add NET_BIND_SERVICE ... <demo1_build_caddy_image> caddy adapt --adapter
+caddyfile --config -`, the candidate on standard input. Nothing is pulled, started
+   as a server or written. Caddy refusing the text is a refusal.
+3. `files/judge_caddy_config.py` on the JSON Caddy printed, which is what Caddy would
+   run. It accepts only: the admin endpoint off; the `http` and `tls` apps and no
+   other (`pki` is where `skip_install_trust` shows); one server, listening on `:443`
+   alone (a plain-HTTP site is a server on `:80`), with one route whose host matcher
+   is `*.<base>` and no other key (`auto_https` options show as keys); one TLS
+   automation policy, for the subject `*.<base>` alone, with one issuer that is ACME
+   with exactly the DNS-01 provider `hetzner` and the token file reference
+   `{file.<token path>}`; no `internal` issuer anywhere in the JSON; and no other
+   `{file.` or `{env.` placeholder anywhere in it, in a key or a value (the reference
+   in the issuer is the only one); and no `file_server` or `templates` handler and no
+   `root` key anywhere in it, at any depth (a `root` directive and `vars root` adapt to
+   one). These are refused outright, not by path: a root of `/` or `/etc` above the token,
+   a relative root, a placeholder root and a link all reach it, and the demo edge serves no
+   file; and no `expression` key anywhere in it, at any depth, for the same reason as the
+   text's `expression` and `ph(`. Adapting does not resolve a placeholder, so a
+   handler that answers with the token file keeps its placeholder in the JSON. It prints
+   one line, `OK` or `REFUSED <code>: <reason>`, that holds no hostname.
+
+The judge takes the JSON in its environment, because a script task has no standard
+input. Both steps are hidden (`no_log`, ANS-16), and the registered results are emptied.
+
+The Caddy image is a role input because demo1 runs no Caddy of its own and the owner
+loads the demo edge's image onto it (an image that must not be pulled from a registry).
+Until it is set and found on the host the candidate is not staged. This is the point of the
+check: a judge that cannot ask Caddy would have to read the text.
+
+`tests/unit/test_caddy_judge.py` is the proof. It builds the demo edge's Caddy (2.11.4
+with the Hetzner DNS module, the pins of ghost-platform's `services/demo-edge`), renders
+the candidate with the real vendored renderer, applies each bypass to it (the three
+indentation spellings, the closing-brace spelling, a plain-HTTP site, `tls internal` in
+the site, `cert_issuer internal`, `local_certs`, `skip_install_trust`, `auto_https`
+options, a custom ACME CA, certificate files, a token from the environment, a handler that
+answers with the token file or an environment value, and a `file_server`, `templates` or
+`root` handler with a root at the token's directory, above it or relative, and an
+expression matcher that reads the token or an environment value by a built name), adapts each with the role's own
+argument list and judges it. Each result must equal the JSON recorded in
+`tests/unit/fixtures/`. For the refusals of the raw text it adapts each with real Caddy and
+shows the hole: with the environment value or the files the edge would have, the same
+text adds a second server, while adapted alone it gives one server the judge accepts. For
+the file handlers it serves each one from real Caddy beside a fake token (a random string,
+never a secret) in a throwaway container with no network, and fetches the token back with
+the container's own `wget`; a handler that serves no file gets nothing back. It serves the
+expression matcher the same way and shows a right guess of the token's start answering
+`match` and a wrong one `nomatch`. The
+Molecule scenarios replay those recorded files through a stand-in for docker, so the
+refusals' messages and the nothing-staged check are tested in the container and the
+recorded files are tied to real Caddy by that unit test.
+
+The same test file proves the image check against a real Docker on both image stores. It
+starts two throwaway Docker-in-Docker daemons with no network (pinned by digest), one on
+the classic image store and one on the containerd image store, makes an image in the
+second, carries it with `docker save` and `docker load` as the owner does, and runs the
+role's own `docker image inspect` argument list and its own RepoDigests test (both rendered
+from `vars/main.yml`) in each. It also runs the Molecule stand-in for docker
+(`molecule/default/files/standin-docker.sh`) beside the real one and requires the same
+answers to the calls the role makes, so the stand-in can no longer pass where a host would
+not. A runner with no Docker fails these tests.
+`DEMO1_BUILD_RECORD=1` rewrites the fixtures after a Caddy or renderer change (run
+Prettier on them afterwards; the test compares the JSON, not the text).
+
+### How the Caddy image gets onto the host
+
+**The route: a one-off carry by the owner, then a check by digest.** The host has no route
+to a registry and its egress allowlist holds the package mirrors only, so it never pulls
+the image. The owner pulls the pinned image on a workstation, anonymously (the package is
+public, so there is no login), checks the digest there, tags it with the name of the pin,
+and streams `docker save` into `docker load` on demo1 over the edge1 jump that every other
+bootstrap step uses. The host opens no connection and its allowlist is not touched. This is
+the route the spool role's image takes (`demo1_egress_spool`), and the commands are in the
+demo1 bootstrap runbook as owner steps, and only there: this README does not copy them, so
+there is one home for them. The owner steps are:
+
+1. Pull the published image by the pinned digest on the workstation, from the registry that
+   holds it (the demo bootstrap runbook names it; the role does not), for `linux/amd64` (a
+   workstation may be arm64; demo1 is amd64).
+2. Read the digest of what arrived and compare it with the digest in
+   `demo1_build_caddy_image`. They must be equal, or the carry stops.
+3. Tag the image with the name part of the pin (`demo-edge`), whatever registry name it was
+   pulled under.
+4. `docker save` the tag, with no platform flag, into `docker load` on demo1.
+5. On demo1, `docker image inspect <name>@sha256:<digest>` must list one image whose
+   `RepoDigests` hold the digest. This is the check the role makes before it uses the image.
+
+**What the trust rests on.** The digest in `demo1_build_caddy_image`, which is in the signed
+commit. The workstation is only a carrier. The check on demo1 is made again from what is on
+demo1, and the role makes it a last time before it judges anything: it asks docker for the
+image by the pinned reference, wants exactly one image back, and wants the pinned digest in
+its `RepoDigests`.
+
+**Observed with a real Docker (29.8.2 on the workstation, 27.5 in the throwaway daemons),
+each store.** They fix the steps, so they are named here:
+
+- On the containerd image store, a save by tag then a load keeps the digest. The loaded image
+  is found by `name@sha256:<digest>` and lists that reference in `RepoDigests`.
+- On the classic image store, the same carry gives an image with a different ID, found by its
+  tag with an empty `RepoDigests`, and `docker image inspect name@sha256:<digest>` exits 1,
+  "No such image". The role sees an image that is not there and states a skip. The owner reads
+  the store on both ends first (`docker info`, "Storage Driver" or "driver-type"), and the
+  carry is for the containerd image store.
+- `docker images --quiet <reference>` prints nothing for a digest reference on either store,
+  whether the image is loaded or not, because its argument is a repository filter. The role
+  does not use it, and a test holds that it would have found nothing.
+- A wrong digest under the right name is not found: `docker image inspect` exits 1.
+
+The traps of the spool image's carry apply unchanged, because the steps are the same: a
+save by a digest reference carries no name, `docker save --platform` changes the digest, and
+a tar with a changed layer loads with exit 0 and fails only when a container is created from
+it. The image is not run by the role beyond `caddy adapt`, which fails on such an image.
+
+**Limits, named:**
+
+- **The pin is the digest of one published image.** A new build of the demo edge is a new
+  digest in `demo1_build_caddy_image` and the same carry again; until then the host holds
+  the old image and judges with it. A host the image was not carried to states a skip.
+- **The carry is a bootstrap route.** A new digest needs the same steps again.
+- **It fails closed on a classic image store**, as above: the role finds no image and stages
+  nothing.
+- **The role proves identity, not completeness.** A half-loaded image is found by
+  `docker image inspect`; `caddy adapt` is what fails on it, and the role then refuses the
+  candidate as one Caddy could not adapt.
+
 ### The pin
 
-The commit is `5e52f78427cab104438057164e4baa16b329875c`, which is at or after
+The commit is `595bcce0ee2bb1c7f8de565cf008060ea43122cf`, which is at or after
 `0a23634b652a37260d77e656ded3c37ff24d62ec`, the ghost-platform commit that moved the
 drain flags out of the slot directory to
 `/var/lib/branchleft-broker/drain-flags`. A pin older than that commit puts flags
@@ -243,11 +496,19 @@ runs them.
 - `/var/lib/branchleft/demo-drain-flags-staging` (`root:root` `0700`): where the flags
   are written before the directory is moved into place. It exists only during the run
   that makes the flag directory, and a run that died in the middle leaves it.
+- `/etc/systemd/system/branchleft-compose@.service` (`root:root` `0644`): the shared
+  compose template unit, the bytes of `hetzner/provision/branchleft-compose@.service`
+  of the checkout. Written before the reload; not enabled or started.
 - `/etc/systemd/system/branchleft-compose@demo-<n>-<colour>.service.d/colour.conf`
   (`root:root` `0644`) for each slot and colour, and
   `branchleft-health-router@.service`; one systemd reload when any changed.
 - `/var/lib/branchleft/demo-candidates/` (`root` `0700`) holding
-  `edge-upstreams.caddy` (`root` `0600`).
+  `edge-upstreams.caddy` (`root` `0600`), and, when the wildcard base is set and the
+  DNS token file is placed, one `Caddyfile` (`root` `0600`): the pinned renderer's
+  output for every slot whose owner-placed input `/etc/branchleft/demo-<n>.edge.json`
+  it read, one `*.<base>` site. There is no per-slot file. The role never writes or
+  reads back those inputs' values, never reads the DNS token, and never writes the
+  live edge.
 
 ### Drain flags
 
@@ -336,21 +597,23 @@ A plan makes no change on the host. Every program the role runs in check mode on
 prints, and every program that writes is skipped there with its reason stated at
 the task. In order:
 
-| Task                                                     | In check mode                                                                                                                                              |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Reads (`stat`, `slurp`, `getent`, `find`, `visudo -csf`) | Run.                                                                                                                                                       |
-| Pinned renderers (stdout only)                           | Run with `check_mode: false`, only on a host that has the release; otherwise skipped, because there is no release to run.                                  |
-| Sudoers grant against the generator                      | Compared where the release is staged. On a host with none it is skipped and the plan prints "Sudoers grant NOT verified", with the reason; it never fails. |
-| Directories, links, accounts, files, units               | Modules report what would change.                                                                                                                          |
-| Hash of each vendored program (`_vendored.yml`)          | Run: reads where the role runs and refuses a program that is not its pin.                                                                                  |
-| `copy` of the programs                                   | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `copy` cannot write into a missing directory.  |
-| Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                     |
-| `demo_uid_claims.py`                                     | Never run.                                                                                                                                                 |
-| Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                 |
-| Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                              |
-| Same-filesystem check of the staged move                 | Run where the move would run (no flag directory, no marker): reads and refuses, so a plan on a host whose state root and broker directory are split stops. |
-| Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                     |
-| Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                |
+| Task                                                     | In check mode                                                                                                                                                                                                    |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reads (`stat`, `slurp`, `getent`, `find`, `visudo -csf`) | Run.                                                                                                                                                                                                             |
+| Pinned renderers (stdout only)                           | Run with `check_mode: false`, only on a host that has the release; otherwise skipped, because there is no release to run.                                                                                        |
+| Sudoers grant against the generator                      | Compared where the release is staged. On a host with none it is skipped and the plan prints "Sudoers grant NOT verified", with the reason; it never fails.                                                       |
+| Directories, links, accounts, files, units               | Modules report what would change.                                                                                                                                                                                |
+| Hash of each vendored program (`_vendored.yml`)          | Run: reads where the role runs and refuses a program that is not its pin.                                                                                                                                        |
+| `copy` of the programs                                   | Run where the release directory exists (nothing to do); skipped where the directory does not exist, because `copy` cannot write into a missing directory.                                                        |
+| Colour drop-ins and edge candidate                       | Skipped where their directories do not exist yet, for the same reason.                                                                                                                                           |
+| Edge inputs, DNS token and site candidates               | Inputs and the token file are read as a stat, no checksum, and refused on their shape. Without a renderer, base or token the run says "Production candidate NOT staged"; a slot with no input is "NOT rendered". |
+| Colour instances load (`_units_loaded.yml`)              | Where the drop-in directories are not on the host, skipped with the line "Colour units NOT verified". Elsewhere systemd is asked, changing nothing, and the check stops a run whose instance does not load.      |
+| `demo_uid_claims.py`                                     | Never run.                                                                                                                                                                                                       |
+| Drain-flag staging, pre-seed, move and marker            | Never run.                                                                                                                                                                                                       |
+| Link check on the declared directories                   | Run: reads and refuses, so a plan on a host with a link in place stops there.                                                                                                                                    |
+| Same-filesystem check of the staged move                 | Run where the move would run (no flag directory, no marker): reads and refuses, so a plan on a host whose state root and broker directory are split stops.                                                       |
+| Refusal of an empty flag directory with no marker        | Run: reads and refuses, so a plan on such a host stops there with both remedies named.                                                                                                                           |
+| Integrity read-back                                      | Not run: it reads the result of a real run.                                                                                                                                                                      |
 
 The `plan` scenario's `converge.yml` runs the role in check mode and compares a list of
 watched paths before and after: a path that did not exist must still not exist and
@@ -457,6 +720,11 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
 - `prepare.yml` renders `broker_deploy`'s own sudoers template and `broker.env`
   template with its own defaults and installs them. The role is therefore tested
   against the real component's output, and not against a fixture written to match.
+  It also places what the owner places: the edge inputs of slots 0 and 1, with
+  hostnames under the reserved `site-fixture.invalid` (one label below the wildcard
+  base the converges set), and a DNS token file in `/etc/branchleft/secrets/`,
+  `root:root` `0600`, holding a stand-in value that is not a credential. Both are
+  placed with `no_log`.
 - The pinned programs are the real ones, run: the renderers, the claim program and
   the checks of the sidecar's text. The scenario uses the role's own
   `files/ghost-platform/`, the same files a real apply copies, with no second copy;
@@ -480,7 +748,12 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
 
 - A check run changes nothing on the host (above), and says whether the sudoers
   grant was verified. Both hold on a fresh host and on a configured one, because
-  the scenario runs the converge in check mode before the apply and after it.
+  the scenario runs the converge in check mode before the apply and after it. The
+  watched paths include the staged `Caddyfile` and the token file.
+- A plan names the five slots with no edge input as "NOT rendered" on either host, and
+  names all seven on a fresh host, where no renderer is staged. On a fresh host it also
+  says "Production candidate NOT staged: the pinned site renderer is not staged"; on a
+  configured one it says nothing, because the candidate is staged.
 
 ### What `default/converge.yml` proves
 
@@ -494,6 +767,16 @@ one over its bar, `molecule-check` is the step to move, to a scenario of its own
   This is the one refusal that needs the whole role, so it stays here. A second
   case, a dotted spelling of a system binary, is refused by the input check before
   anything runs.
+- `base_unset_is_a_stated_skip`, `token_missing_is_a_stated_skip`,
+  `caddy_image_unset_is_a_stated_skip` and `caddy_image_not_loaded_is_a_stated_skip`
+  run first, on a
+  host where nothing is staged (`stated_skip.yml`, tagged so the idempotence step
+  skips it): the role's site step completes, prints "Production candidate NOT staged:"
+  with the reason, and the staged `Caddyfile` is exactly as it was, absent.
+- After the apply, the five slots with no edge input are named "NOT rendered" and no
+  "NOT staged" notice was printed. `secrets_never_logged` starts here: the stat result
+  the role keeps of the token file holds no checksum, mime type, charset or content,
+  so the role never opened it. Its other half is in `verify.yml`.
 
 ### What `refusals/converge.yml` proves
 
@@ -552,7 +835,43 @@ prepared grant back in every outcome. Each expects the refusal named in its case
 - a pinned checksum with one digit changed, which stops the role at the vendored
   check, naming the program and before anything is written: the control is the
   same check with the real pins, and the whole-role case uses a source commit the
-  host has no release directory for and asserts that none was made.
+  host has no release directory for and asserts that none was made;
+- the owner's edge input as a link, not root's and open to others, each refused with
+  its own message, and a valid pair of inputs accepted and staged as `Caddyfile`
+  (`refused_site_input.yml`); and a hostname the renderer refuses, whose message is
+  withheld and whose hostname, a canary, must not reach the log;
+- the DNS token file, with the valid one prepare placed put back after every case
+  (`refused_token.yml`): `refused_token_link`, `refused_token_directory`,
+  `refused_token_not_root`, `refused_token_mode_0644` and `refused_token_empty`, each
+  expecting the role's own message, which names the path and no value, and each
+  asserting that no `Caddyfile` was left. A link is refused for being a link; take
+  that check away and the next one still refuses it, but with another message, so the
+  case still goes red;
+- the refusal of the staged text (`refused_candidate.yml`), run on a stand-in with
+  the renderer's shape and one change, because the renderer cannot be made to print an
+  interim certificate. The container has no Caddy, so docker is a stand-in that replays
+  the JSON real Caddy printed for the same change (`tests/unit/fixtures`; "How the
+  candidate is judged"). The cases are `refused_tls_internal`,
+  `refused_tls_internal_indented`, `refused_global_cert_issuer_internal`,
+  `refused_global_local_certs`, `refused_global_skip_install_trust`,
+  `refused_global_auto_https_off`, `refused_indented_http_site`,
+  `refused_indented_slot_site`, `refused_closing_brace_site`, `refused_http_only_site`
+  and `refused_unadaptable_candidate`, each failing with its own code and no hostname,
+  and the refusals of the raw text, `refused_env_substitution`,
+  `refused_env_placeholder`, `refused_second_file_placeholder`, `refused_import_of_a_path`
+  and `refused_import_of_an_undefined_name`, which are refused before Caddy is asked,
+  with `refused_text_file_server`, `refused_text_templates`, `refused_text_root` and
+  `refused_text_expression`,
+  and `refused_handler_serves_the_token`, which is the JSON of a handler that answers
+  with the token file, with `refused_handler_file_server`, `refused_handler_templates`
+  `refused_handler_root` and `refused_handler_expression`, the JSON of a handler that reads
+  a file or builds the name of one. The control is
+  the text unchanged, accepted;
+- the refusal of the Caddy image the host holds (`refused_image.yml`), with docker a
+  stand-in that lists what the case says: `refused_image_no_digests` (what a loaded image
+  lists on the classic store), `refused_image_other_digest`, `refused_image_two_images`
+  and `refused_image_not_json`, each failing before the renderer runs and staging
+  nothing. The control lists the pinned digest and stages the root-only candidate.
 
 What `refusals` cannot see is an install, since it never applies the role. It
 also cannot stage a stand-in for the generator: the real one is staged through
@@ -568,9 +887,22 @@ pinned checksum, which is the pin. It checks the release (files, owners, modes, 
 bytecode, `current`), the three installed programs, the register and its eight
 claims, the router's account, the socket tree, the state and flag directories and
 the thirteen flags that remain, the fourteen drop-ins and the router unit, systemd
-loading the router unit without enabling it, the candidate directory and file, and
-the absences: no `Caddyfile` anywhere, no slot directory a `reset` would make, no
-wrapper lock directory.
+loading the router unit without enabling it, the candidate directory and its
+fragment, and the absences: no `Caddyfile` anywhere but the staged candidate, no slot
+directory a `reset` would make, no wrapper lock directory.
+
+`candidate_staged_root_0600_when_token_present` reads the staged candidate back: the
+directory holds the `Caddyfile` and the fragment and no per-slot file (`prepare.yml`
+leaves `site-0.caddy` and `site-3.caddy` there, carrying `tls internal`, as an earlier
+version of the role staged them, so the role must have removed them); the
+`Caddyfile` is `root:root` `0600`; its one top-level site is `*.site-fixture.invalid`;
+both hostnames occur once each, in an `@slotN host` matcher and nowhere else; there
+is no `https://`; exactly one `tls` line and no `internal` or `local_certs`; and the
+token path occurs once, inside the `dns hetzner {file.<path>}` reference.
+`secrets_never_logged` then scans the staged files and the run's Ansible log for the
+stand-in token value and finds nothing. The scan counts only because its control is
+found in the same log: the "Production candidate NOT staged" notice the stated skips
+printed.
 
 ### What breaks which step
 
@@ -591,43 +923,63 @@ assertion fires in its place or a later one is the only one left:
 4. the slots in the generator's grant are the slots of the role;
 5. every rule runs the wrapper path the role installs at.
 
-| Mechanism removed or changed                                                                              | Scenario, step                          | Owning assertion and message                                                                                               |
-| --------------------------------------------------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| A task that writes a different valid sudoers file                                                         | default, `converge`                     | "The role wrote the sudoers grant."                                                                                        |
-| The header split of the body reverted to a filter on any `#` line                                         | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders" for the `#1000` and `#includedir` cases, in both positions                 |
-| The body equality weakened to a prefix match on each rule                                                 | refusals, `converge`                    | 3: the same message, for the `, ALL` and `, /bin/sh` cases                                                                 |
-| The comparison made one-directional (extra lines only)                                                    | refusals, `converge`                    | 3: the same message, for the case with a rule removed                                                                      |
-| Both sides sorted before the comparison                                                                   | refusals, `converge`                    | 3: the same message, for the swapped-rules case                                                                            |
-| The slot-table assertion removed                                                                          | refusals, `converge`                    | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                                 |
-| The wrapper tie (assertion 5) removed                                                                     | refusals, `converge`                    | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                                       |
-| The wrapper tie weakened to a prefix match (`[^ ]` at its end)                                            | refusals, `converge`                    | 5: "does not run /usr/local/sbin/branchleft-slot in every rule", for the `, /bin/sh` case with no release staged           |
-| A backslash comment counted as header                                                                     | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders", for the comment ending in a backslash                                     |
-| The link check removed and `follow: false` set to true                                                    | refusals, `converge`                    | "is a link or is not a directory"; the case gets "The role accepted a link or a file in place of a directory it declares." |
-| The link check removed, `follow: false` kept                                                              | refusals, `converge`                    | the module refuses with its own message, "already exists as a link", which is not the case's phrase, so the case is red    |
-| The not-a-directory half removed (the link test alone)                                                    | refusals, `converge`                    | "is a link or is not a directory", for the regular-file case: without it the flag-directory refusal answers in its place   |
-| The refusal of an empty flag directory with no marker removed                                             | refusals, `converge`                    | "The role accepted a flag directory that is empty and has no marker."                                                      |
-| One of the two seeding tests removed (the other still holds)                                              | none                                    | not detected: the directory test and the marker test each hold alone (a named limit below)                                 |
-| The flags written in the broker's tree (staging removed, the directory made at its name and filled there) | refusals, `converge`                    | "gained the drain-flag directory before the newest flag was in it", in the accepted control of `refused_link.yml`          |
-| The move replaced by a copy (the staging directory left behind)                                           | refusals, `converge`                    | "The drain-flag staging directory is still there. The directory was copied and not moved into place."                      |
-| The same-filesystem assertion made vacuous (`- true`)                                                     | refusals, `converge`                    | "The role accepted a staging directory and a flag directory on different filesystems." (the copy fallback of `mv` ran)     |
-| The broker directory's parent no longer read where the directory does not exist yet                       | refusals, `converge`                    | the same message, for the staging directory on a tmpfs                                                                     |
-| A task that sets an existing flag directory to root's before it is handed back                            | refusals, `converge`                    | "The role changed a flag directory that was already the broker's", in the two accepted cases of `refused_unmarked.yml`     |
-| `_programs.yml` run before `_sudoers_check.yml`                                                           | default, `converge`                     | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run)  |
-| The NOT verified notice removed, or printed on a configured host                                          | plan, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                   |
-| The dot-segment condition of `_inputs.yml` removed                                                        | default, `converge`                     | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                  |
-| The checksum comparison of `_vendored.yml` removed                                                        | refusals, `converge`                    | "The role accepted a program whose pinned checksum was wrong", for the case with one digit of a pin changed                |
-| `_vendored.yml` moved after another step of `main.yml`                                                    | CI, `test_demo1_no_github_fetch.py`     | "main.yml includes ... first, not _inputs.yml then _vendored.yml"                                                          |
-| `etc_hosts` removed from `molecule.yml`                                                                   | default and refusals, `verify`          | "resolves to an address outside the container, so the block on it is not in force"                                         |
-| The old `get_url` task put back                                                                           | CI, `test_demo1_no_github_fetch.py`     | the file and line of the `get_url` and of the `raw.githubusercontent.com` URL                                              |
-| The socket directory mode changed                                                                         | default, `verify`                       | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                      |
-| The drain-flag directory's owner changed to root                                                          | default, `verify`                       | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."           |
-| The candidate written as a `Caddyfile`                                                                    | default, `verify`                       | "A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists."                                     |
-| The real wrapper's `reset` run by a task                                                                  | default, `verify`                       | the same assertion (the real wrapper leaves its lock directory)                                                            |
-| The register directory made `0755` on the host                                                            | default, `converge`                     | "is not a directory owned by root with mode 0700."                                                                         |
-| The wrapper installed group-writable                                                                      | default, `converge`                     | the integrity assertion on the installed programs                                                                          |
-| The claim program run in check mode                                                                       | plan, `check-*`                         | "The check run changed"                                                                                                    |
-| A file added to the broker's slots directory                                                              | default, `converge`                     | "The role changed the broker's slots directory"                                                                            |
-| Both seeding tests removed (the pre-seed guard)                                                           | default, `converge`                     | "The role put a cleared drain flag back."                                                                                  |
+| Mechanism removed or changed                                                                              | Scenario, step                          | Owning assertion and message                                                                                                  |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| A task that writes a different valid sudoers file                                                         | default, `converge`                     | "The role wrote the sudoers grant."                                                                                           |
+| The header split of the body reverted to a filter on any `#` line                                         | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders" for the `#1000` and `#includedir` cases, in both positions                    |
+| The body equality weakened to a prefix match on each rule                                                 | refusals, `converge`                    | 3: the same message, for the `, ALL` and `, /bin/sh` cases                                                                    |
+| The comparison made one-directional (extra lines only)                                                    | refusals, `converge`                    | 3: the same message, for the case with a rule removed                                                                         |
+| Both sides sorted before the comparison                                                                   | refusals, `converge`                    | 3: the same message, for the swapped-rules case                                                                               |
+| The slot-table assertion removed                                                                          | refusals, `converge`                    | 4: "are not the slots in demo1_build_slot_names", for the eighth-slot case                                                    |
+| The wrapper tie (assertion 5) removed                                                                     | refusals, `converge`                    | 5: "does not run /usr/bin/passwd in every rule"; and in default, the probe-path play                                          |
+| The wrapper tie weakened to a prefix match (`[^ ]` at its end)                                            | refusals, `converge`                    | 5: "does not run /usr/local/sbin/branchleft-slot in every rule", for the `, /bin/sh` case with no release staged              |
+| A backslash comment counted as header                                                                     | refusals, `converge`                    | 3: "is not what render_slot_sudoers.py renders", for the comment ending in a backslash                                        |
+| The link check removed and `follow: false` set to true                                                    | refusals, `converge`                    | "is a link or is not a directory"; the case gets "The role accepted a link or a file in place of a directory it declares."    |
+| The link check removed, `follow: false` kept                                                              | refusals, `converge`                    | the module refuses with its own message, "already exists as a link", which is not the case's phrase, so the case is red       |
+| The not-a-directory half removed (the link test alone)                                                    | refusals, `converge`                    | "is a link or is not a directory", for the regular-file case: without it the flag-directory refusal answers in its place      |
+| The refusal of an empty flag directory with no marker removed                                             | refusals, `converge`                    | "The role accepted a flag directory that is empty and has no marker."                                                         |
+| One of the two seeding tests removed (the other still holds)                                              | none                                    | not detected: the directory test and the marker test each hold alone (a named limit below)                                    |
+| The flags written in the broker's tree (staging removed, the directory made at its name and filled there) | refusals, `converge`                    | "gained the drain-flag directory before the newest flag was in it", in the accepted control of `refused_link.yml`             |
+| The move replaced by a copy (the staging directory left behind)                                           | refusals, `converge`                    | "The drain-flag staging directory is still there. The directory was copied and not moved into place."                         |
+| The same-filesystem assertion made vacuous (`- true`)                                                     | refusals, `converge`                    | "The role accepted a staging directory and a flag directory on different filesystems." (the copy fallback of `mv` ran)        |
+| The broker directory's parent no longer read where the directory does not exist yet                       | refusals, `converge`                    | the same message, for the staging directory on a tmpfs                                                                        |
+| A task that sets an existing flag directory to root's before it is handed back                            | refusals, `converge`                    | "The role changed a flag directory that was already the broker's", in the two accepted cases of `refused_unmarked.yml`        |
+| `_programs.yml` run before `_sudoers_check.yml`                                                           | default, `converge`                     | "The role wrote /usr/local/sbin/branchleft-slot-refused-probe and then refused it." (the probe path exists after the run)     |
+| The NOT verified notice removed, or printed on a configured host                                          | plan, `check-fresh`, `check-configured` | "A plan on a host with no staged release did not say the sudoers grant was NOT verified"                                      |
+| The dot-segment condition of `_inputs.yml` removed                                                        | default, `converge`                     | the dotted-path play: "for a reason other than The wrapper path must be an absolute path"                                     |
+| The checksum comparison of `_vendored.yml` removed                                                        | refusals, `converge`                    | "The role accepted a program whose pinned checksum was wrong", for the case with one digit of a pin changed                   |
+| `_vendored.yml` moved after another step of `main.yml`                                                    | CI, `test_demo1_no_github_fetch.py`     | "main.yml includes ... first, not _inputs.yml then _vendored.yml"                                                             |
+| `etc_hosts` removed from `molecule.yml`                                                                   | default and refusals, `verify`          | "resolves to an address outside the container, so the block on it is not in force"                                            |
+| The old `get_url` task put back                                                                           | CI, `test_demo1_no_github_fetch.py`     | the file and line of the `get_url` and of the `raw.githubusercontent.com` URL                                                 |
+| The socket directory mode changed                                                                         | default, `verify`                       | "The router's socket tree is not root's 0755 at the top and the router's 0700 below."                                         |
+| The drain-flag directory's owner changed to root                                                          | default, `verify`                       | "The broker's state directory is not broker:broker 0750, or the drain-flag directory is not broker:broker 0755."              |
+| A Caddyfile written anywhere but the staged candidate                                                     | default, `verify`                       | "A Caddyfile other than the staged candidate exists"                                                                          |
+| The real wrapper's `reset` run by a task                                                                  | default, `verify`                       | the same assertion (the real wrapper leaves its lock directory)                                                               |
+| The register directory made `0755` on the host                                                            | default, `converge`                     | "is not a directory owned by root with mode 0700."                                                                            |
+| The wrapper installed group-writable                                                                      | default, `converge`                     | the integrity assertion on the installed programs                                                                             |
+| The claim program run in check mode                                                                       | plan, `check-*`                         | "The check run changed"                                                                                                       |
+| A file added to the broker's slots directory                                                              | default, `converge`                     | "The role changed the broker's slots directory"                                                                               |
+| The site input link check removed (`_site_candidates.yml`)                                                | refusals, `converge`                    | "is a link or not a regular file", for the link case; the mode check then refuses the link instead                            |
+| The site input owner check removed                                                                        | refusals, `converge`                    | "is not root:root", for the case of an input owned by broker                                                                  |
+| The site input mode check removed                                                                         | refusals, `converge`                    | "must be 0600 or narrower", for the case of an input of mode 0644                                                             |
+| The renderer's output not hidden (`no_log: false` on the render task)                                     | refusals, `verify`                      | "The scenario's log does not hold the scan control, or it holds the canary", for the leak case                                |
+| The staged Caddyfile written with mode 0644                                                               | default, `verify`                       | "The staged Caddyfile is not a regular file of root:root mode 0600."                                                          |
+| The NOT rendered notice made silent                                                                       | default, `converge`                     | "The site candidates are not the five slots with no edge input, a slot with no input was not named as NOT rendered"           |
+| The token link check removed (`_dns_token.yml`)                                                           | refusals, `converge`                    | "is a link.", for `refused_token_link`; the next check then refuses it with another message                                   |
+| The token regular-file check removed                                                                      | refusals, `converge`                    | "is not a regular file.", for `refused_token_directory`; the mode check then refuses it instead                               |
+| The token owner check removed                                                                             | refusals, `converge`                    | "is not root:root.", for `refused_token_not_root`                                                                             |
+| The token mode check removed                                                                              | refusals, `converge`                    | "is mode 0644.", for `refused_token_mode_0644`                                                                                |
+| The token empty check removed                                                                             | refusals, `converge`                    | "is empty.", for `refused_token_empty`                                                                                        |
+| The judge made to accept every config (`files/judge_caddy_config.py`, `judge` returns `None`)             | refusals, `converge`; `tests/unit`      | "The role accepted a candidate it must refuse.", for every `refused_*` case of the candidate; the unit test names each bypass |
+| The notice of a skipped candidate changed or removed                                                      | default, `converge`                     | "The step did not say that the production candidate was not staged for the reason this case sets"                             |
+| The token stat given `get_mime` or `get_checksum`                                                         | default, `converge`                     | "The role's stat of the DNS token file read it"                                                                               |
+| The token value let into the log or a staged file                                                         | default, `verify`                       | "the stand-in token value is in the log or in a staged candidate (ANS-16)"                                                    |
+| The colour instance check (`_units_loaded.yml`) assert removed                                            | refusals, `converge`                    | "The colour unit check accepted instances that load from no template."                                                        |
+| Both seeding tests removed (the pre-seed guard)                                                           | default, `converge`                     | "The role put a cleared drain flag back."                                                                                     |
+
+The row "The NOT rendered notice made silent" has not been run, so its red is not yet
+recorded. It is a mechanism the default scenario would show, and it is not in the PR
+body's sabotage record.
 
 The harness's own controls (a failing second scenario fails its shard, a role with
 no `molecule/` still gets a shard and fails at the scenario limits, a privileged
@@ -688,8 +1040,10 @@ other unit tests of `ansible/harness`.
   the new file unread by systemd. The next run finds nothing changed and does not
   reload, so the file is read at the next reload from any source (another role, a
   boot). Every file is written atomically, so none is ever half-written.
-- Python unit tests, if any are added under `roles/*/tests`, are not run by CI.
-  The Molecule scenario carries the controls.
+- The Python unit tests in `tests/unit` run in the Ansible workflow's lint job
+  (`ansible/checks/run_role_unit_tests.sh`), and need Docker (real Caddy, and the
+  throwaway daemons of the image check). The Molecule scenarios carry the controls that
+  need the role applied.
 - CI runs both scenarios: the Ansible workflow runs one job per scenario of every
   directory under `ansible/roles/` (`ansible/harness/list_shards.py` lists them),
   and this role's shards are `demo1_build` and `demo1_build (refusals)`.
@@ -702,8 +1056,31 @@ other unit tests of `ansible/harness`.
   until the owner places the file.
 - **No router is enabled or started.** The template unit is installed and systemd is
   reloaded; starting is the owner's step.
-- **The compose template unit is not installed.** The drop-ins extend
-  `branchleft-compose@`; the template they extend is delivered elsewhere.
+- **The compose template unit is written from `hetzner/provision/` (A-7, the owner's
+  ruling B of 4 Nov, ws#2364 comment 6630331961).** The drop-ins extend
+  `branchleft-compose@`, and `deploy_tooling` owns that file on the other hosts. The
+  single-owner test (`ansible/checks/test_deploy_tooling_single_owner.py`) refused a
+  second role that names it, so it now exempts demo1 by program
+  (`ALLOWED_SECOND_OWNER_PROGRAMS`): demo1 may read and name that one file, and a byte
+  copy or a link of it stays refused. That exemption sits in an owner-merged file, so
+  the PR that adds it waits for the owner's merge. The role-path check
+  (`ansible/checks/check_role_paths.py`) does not object and needs no exemption:
+  `deploy_tooling` writes the template through a loop item (`dest: '{{ item.path }}'`),
+  which that check leaves templated and does not compare. demo1 never applies
+  `deploy_tooling`, so the host has one writer of the file. What demo1 holds today is
+  unknown without host access: the first plan shows any difference, and
+  `_units_loaded.yml` stops a run whose colour instance does not load.
+- **The candidate has no interim certificate and the role refuses one.** The role
+  passes the renderer `--dns-directive` with a `dns hetzner {file.<token path>}`
+  line and never `--tls`, so the one site's certificate is the wildcard Caddy obtains
+  by DNS-01. A candidate that holds `tls internal`, `local_certs`, `skip_install_trust`,
+  a second `tls` directive or a second site is refused before it is staged, whatever
+  produced it. The role does not look at the other global options that can change
+  certificate behaviour (an `auto_https` setting, an issuer in the global block), nor
+  at a `tls` line inside an upstream transport, which would fail closed. The owner
+  still diffs the candidate against the live edge, and places the token, before any
+  go-live step. The role does not create or check `/etc/branchleft/secrets`: if the
+  owner has not made it, the token reads as missing and the candidate is not staged.
 - **The slot directories `/opt/branchleft/demo-<n>`** are made by the wrapper's
   `reset`, which this role never runs. They do not exist after the role.
 - **The egress interaction is unverified.** The demo host's egress ruleset
@@ -753,3 +1130,147 @@ therefore not reachable from this role.
    `changed_when`, `creates` or `removes`. Never weaken the idempotence step.
 6. Run the test command above before opening a pull request, then break the control
    you touched and see the step fail.
+
+## Design notes for the task and scenario files
+
+These notes hold the reasoning that was once in the comments of the task, variable
+and scenario files. Each section names the file it belongs to. The code beneath each
+comment is the source of truth.
+
+### defaults/main.yml
+
+- The copies under `files/ghost-platform` are of the ghost-platform commit in
+  `demo1_build_source_sha`. The same commit names the release directory: the
+  role stages the release under the releases directory, in a directory named by
+  that commit (`demo1_build_release_dir` in `vars/main.yml`).
+- The demo host takes the programs from the signed commit CI pushes to it. The host
+  never fetches them from anywhere. Each file is held to its sha256 on the machine
+  that runs the role, before the role writes anything to the host.
+- A bump changes the files, the commit and every checksum in one change. See
+  "Vendored files" and "The pin" above.
+- The role also refuses an installed sidecar that does not name the drain-flag
+  directory (`tasks/_programs.yml`).
+- Nothing in this file is private. The role has no secret input and no required
+  input: every value has a default, and the pinned programs are public.
+
+### vars/main.yml
+
+- The generator's output exists only once the release is staged
+  (`demo1_build_release_ready`). Until then only the installed grant is cut.
+- The header is the leading run of blank lines and comments. It is not compared,
+  because broker_deploy's template and the generator word it differently.
+- The body is everything from the first line that is not header. It is compared as
+  an ordered list: no comment is exempt after the first rule, and nothing is sorted.
+- A comment ending in a backslash is not header, because sudoers joins such a line
+  to the next. Trailing newlines are dropped before the split, since blank lines at
+  the end are inert.
+
+### tasks/_candidate.yml
+
+- The role never runs the go-live program and never runs a slot reset. Opening the
+  demo to visitors is the owner's decision. The pinned go-live program makes it, and
+  it refuses while a test stand-in is loaded.
+- The candidate directory is under the root-owned state root and is root's alone, so
+  a root writer cannot be led through a link that someone else planted.
+- Nothing reads the candidates automatically. They are evidence the owner diffs
+  against the live edge before running the go-live program.
+
+### tasks/_site_candidates.yml
+
+- Each edge input is checked in its own assert, in this order: not a link and a
+  regular file, owned by root:root, and mode 0000, 0200, 0400 or 0600. Each failure
+  names the input path and never a value.
+- The renderer is run with no output flag, so it only reads and writes nothing.
+  `failed_when` is off, and its output is hidden, so a refusal is handled by the
+  role. A renderer refusal is reported by the occupied slot numbers, never with the
+  renderer's message, which can echo a hostname.
+- A printed notice says why the production candidate is not staged. The checks run
+  in order: the wildcard base is unset, the DNS token is not placed, no release is
+  staged, and no slot has an input. The first that applies is the one named.
+- Each slot with no edge input gets a printed line. The list of slots that were not
+  rendered is sorted, because `difference()` returns them in no fixed order.
+- The role never passes the renderer `--gate-env-out`, because that flag writes. It
+  never writes the live edge and never runs the go-live program.
+- The candidate is staged root-owned, mode 0600, in the candidate directory, and only
+  when that directory exists. In check mode it does not exist yet.
+- The registered render holds the Caddyfile, so it is emptied at the end of the play.
+
+### tasks/_candidate_refusal.yml
+
+- There is no interim-certificate mode. The one certificate is the wildcard that Caddy
+  obtains by DNS-01. A candidate with a `tls internal` directive, a `local_certs`
+  option or a `skip_install_trust` option is refused.
+- The candidate must hold exactly one `tls` directive, and that directive must be a
+  block holding only the role's DNS directive line. It must hold exactly one site: the
+  wildcard site of the base.
+- The checks are separate asserts, so a scenario can name the one that fired. No
+  message names a hostname, and none carries the candidate text.
+
+### molecule/default/stated_skip.yml
+
+- The play is imported twice by `converge.yml`: once with an empty wildcard base and
+  once with the token file not placed.
+- It runs the site step alone, with the two edge inputs that `prepare.yml` placed. So
+  the only reason to stage nothing is the one the case sets.
+- It asserts the notice starts with `Production candidate NOT staged: `, and that the
+  staged Caddyfile is left as it was found: absent if it was absent, and with the same
+  modification time. A silent skip would read as a configured host. A failure would
+  stop a plan that has nothing to approve.
+- It runs before the role is applied, where nothing is staged.
+
+### molecule/default/converge.yml, the wrapper path control
+
+- A role that only fails does not prove the order. It can fail after the install and
+  leave the wrapper live under a refused grant. That is why the control runs the whole
+  role, and the probe path is one that does not exist.
+- The other refusal cases are in the refusals scenario, so the default scenario applies
+  the role only a few times. Its shard is bound by the time limit.
+
+### molecule/refusals/converge.yml
+
+- The refusals scenario does not apply the role. The first play stages the pinned
+  programs with the role's own release tasks (`_release.yml`), which holds the
+  generator. Every other play runs one task file alone against an edited grant or a
+  planted link.
+- Links are checked by `refused_link.yml`, which runs `_dirs.yml`.
+- This scenario cannot see an install, so whether a refusal comes before the install
+  is proved in the default scenario.
+
+### molecule/refusals/refused_candidate.yml
+
+- The pinned renderer cannot be made to print a refused candidate. So the stand-in
+  text has the shape the renderer prints for two slots, with one change.
+- `converge_case.tls` replaces the wildcard site's tls block. `converge_case.append`
+  is added after the text.
+- The control case, `converge_case.accepted: true`, runs the unchanged text and must
+  pass. That shows the other cases are refused for their change, and not because the
+  step refuses everything.
+- No failure may carry the stand-in hostname. The failure text is read whole.
+- The step writes nothing.
+
+### molecule/refusals/refused_token.yml
+
+- `converge_case.plant` is one of: `link` (a link to a root file of mode 0600),
+  `directory`, `owner` (a file owned by `converge_case.owner`, mode 0600), `mode` (a
+  root file of `converge_case.mode`), or `empty` (an empty root file of mode 0600).
+- `converge_case.expect` is the text the refusal must name. The play also asserts the
+  token path is in the message, so no other check may be the one that fires.
+- A refusal leaves no Caddyfile behind, and the stand-in token value must not appear
+  in the failure.
+- The `always` block removes the planted file and target, then puts back the token
+  file that `prepare.yml` placed.
+
+### molecule/refusals/refused_site_input.yml
+
+- `converge_case.plant` is one of: `link`, `owner`, `mode`, `valid` or `leak`.
+  `valid` is a root file of mode 0600 that the renderer accepts, and the step must stage
+  a root-only, mode 0600 Caddyfile from it. `leak` is a root file whose hostname the
+  renderer refuses. That hostname is the canary: it must not reach the log.
+- The step runs with the wildcard base set, and with the token file and the slot 1
+  input that `prepare.yml` placed left as they are. So the valid case renders two
+  slots, and no other case is refused for a token or a second input.
+- The "Scan control line" debug task is the positive control for the log scan in
+  `verify.yml`. The scan reads this run's log, and this line proves that the scan can
+  read it, so a scan that finds no canary means something.
+- The play is tagged for the idempotence step to skip, because the valid case stages a
+  candidate. It is a control, not a state.

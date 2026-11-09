@@ -218,15 +218,17 @@
   changed_when: false
   when: status_page_compose_file_stat.stat.exists
 
-- name: Refuse a stack with a service that is missing or not running
+- name: Refuse a stack with a service that is missing, not running or unhealthy
   ansible.builtin.assert:
     that:
       - status_page_missing | ansible.builtin.length == 0
       - status_page_not_running | ansible.builtin.length == 0
+      - status_page_unhealthy | ansible.builtin.length == 0
     quiet: true
     fail_msg: >-
-      The status page stack is not running. Services with no container:
+      The status page stack is not healthy. Services with no container:
       {{ status_page_missing }}. Not running: {{ status_page_not_running }}.
+      Unhealthy or still starting: {{ status_page_unhealthy }}.
   vars:
     status_page_containers: '{{ status_page_state.containers }}'
     status_page_declared: '{{ status_page_rendered.services.keys() | ansible.builtin.list }}'
@@ -235,6 +237,10 @@
       | ansible.builtin.map(attribute='Service') | ansible.builtin.list) }}
     status_page_not_running: >-
       {{ status_page_containers | ansible.builtin.rejectattr('State', 'ansible.builtin.equalto', 'running')
+      | ansible.builtin.map(attribute='Service') | ansible.builtin.list }}
+    status_page_unhealthy: >-
+      {{ status_page_containers | ansible.builtin.selectattr('Health', 'ansible.builtin.defined')
+      | ansible.builtin.selectattr('Health', 'ansible.builtin.in', ['unhealthy', 'starting'])
       | ansible.builtin.map(attribute='Service') | ansible.builtin.list }}
   when: status_page_compose_file_stat.stat.exists
 
@@ -250,8 +256,11 @@
     timeout: 5
   register: status_page_health
   until: status_page_health.status | ansible.builtin.default(-1) == 200
-  retries: '{{ [1, (status_page_wait_timeout | ansible.builtin.int) // (status_page_health_delay | ansible.builtin.int)] | ansible.builtin.max }}'
-  delay: '{{ status_page_health_delay }}'
+  retries: '{{ [1, (status_page_wait_timeout | ansible.builtin.int) // status_page_health_every] | ansible.builtin.max }}'
+  delay: '{{ status_page_health_every }}'
+  # A delay of zero would divide by zero, and retry without a pause: at least one second.
+  vars:
+    status_page_health_every: '{{ [status_page_health_delay | ansible.builtin.int, 1] | ansible.builtin.max }}'
   failed_when: false
   changed_when: false
   check_mode: false

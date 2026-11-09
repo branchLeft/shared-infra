@@ -1,0 +1,228 @@
+---
+# One migration case, included by converge.yml with migration_expect (the phrase the step must fail
+# with, or empty when it must succeed), migration_tasks_from (the role's tasks file to run),
+# migration_block_ahead (a drop-in that sorts first and loosens the account's forwarding, so the
+# first read-back of the new files fails), migration_arm (the reload hook puts a file of the old
+# layout back once the role removed it, so the last read-back fails) and migration_inode_kept
+# (whether the old files must be the very files that were there, not copies of them).
+#
+# The account's name is in the old paths, so every task that handles one hides its result.
+- name: Put the host in the state the prepare made, the hand-made files and none of the role's own
+  block:
+    - name: Remove the files the role writes
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+        - '{{ migration_marker }}'
+
+    - name: Make the directory of the hand-made key file
+      ansible.builtin.file:
+        path: '/etc/ssh/{{ scenario_jump_user }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      no_log: true
+      diff: false
+
+    - name: Put the hand-made key file in place
+      ansible.builtin.copy:
+        content: >-
+          restrict,port-forwarding,permitopen="{{ scenario_unlisted }}:22",command="/usr/sbin/nologin"
+          {{ ci_jump_scenario_pub_jump.split(' ')[0:2] | join(' ') }}
+        dest: '/etc/ssh/{{ scenario_jump_user }}/authorized_keys'
+        owner: root
+        group: root
+        mode: '0644'
+      no_log: true
+      diff: false
+
+    - name: Put the hand-made sshd drop-in in place
+      ansible.builtin.copy:
+        content: |
+          Match User {{ scenario_jump_user }}
+              AuthorizedKeysFile /etc/ssh/{{ scenario_jump_user }}/authorized_keys
+              AuthenticationMethods publickey
+              AllowTcpForwarding local
+              PermitOpen {{ scenario_unlisted }}:22
+              GatewayPorts no
+              AllowAgentForwarding no
+              AllowStreamLocalForwarding no
+              X11Forwarding no
+              PermitTTY no
+              PermitTunnel no
+              PermitUserRC no
+              ForceCommand /usr/sbin/nologin
+          Match all
+        dest: '/etc/ssh/sshd_config.d/50-branchleft-{{ scenario_jump_user }}.conf'
+        owner: root
+        group: root
+        mode: '0644'
+      no_log: true
+      diff: false
+
+    # Not in the log: a checksum of the old files is the proof they came back unchanged.
+    - name: Look at the hand-made files, with their checksums
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - '/etc/ssh/sshd_config.d/50-branchleft-{{ scenario_jump_user }}.conf'
+        - '/etc/ssh/{{ scenario_jump_user }}/authorized_keys'
+      register: ci_jump_migration_old
+      no_log: true
+
+    - name: Count the reloads so far
+      ansible.builtin.slurp:
+        src: '{{ migration_reloads }}'
+      register: ci_jump_migration_reloads_before
+      no_log: true
+
+    - name: Arm the hook, which puts the old drop-in back once it is gone
+      ansible.builtin.copy:
+        content: '/etc/ssh/sshd_config.d/50-branchleft-{{ scenario_jump_user }}.conf'
+        dest: '{{ scenario_record_dir }}/resurrect-path'
+        owner: root
+        group: root
+        mode: '0644'
+      when: migration_arm | bool
+      no_log: true
+
+    - name: Make the copy the hook puts back, a drop-in that sshd accepts and that is not the old one
+      ansible.builtin.copy:
+        content: "# put back by the test\n"
+        dest: '{{ scenario_record_dir }}/resurrect-content'
+        owner: root
+        group: root
+        mode: '0644'
+      when: migration_arm | bool
+
+    - name: Put a drop-in ahead of the role's that loosens the account's forwarding
+      ansible.builtin.copy:
+        content: "Match User {{ scenario_jump_user }}\n  AllowTcpForwarding yes\nMatch all\n"
+        dest: /etc/ssh/sshd_config.d/05-case-ahead.conf
+        owner: root
+        group: root
+        mode: '0644'
+      when: migration_block_ahead | bool
+      no_log: true
+      diff: false
+
+    # The refusal code is checked against this case's own read-back, not against a result that an
+    # earlier case or the scenario left behind (the register outlives its task).
+    - name: Empty the read-back of any earlier case, so this case is checked against its own
+      ansible.builtin.set_fact:
+        ci_jump_readback: {}
+
+    - name: Run the role's step with the scenario's values
+      block:
+        - name: Run the step
+          ansible.builtin.include_role:
+            name: branchleft.ci_jump
+            tasks_from: '{{ migration_tasks_from }}'
+          vars:
+            ci_jump_manage_keys: true
+            ci_jump_user: '{{ scenario_jump_user }}'
+            ci_jump_own_address: '{{ scenario_own }}'
+            ci_jump_destinations: ['{{ scenario_listed }}', '{{ scenario_own }}']
+            ci_jump_keys:
+              - key: '{{ ci_jump_scenario_pub_jump }}'
+              - key: '{{ ci_jump_scenario_pub_second }}'
+
+        - name: Fail if the step succeeded where it must fail
+          ansible.builtin.fail:
+            msg: 'The step succeeded where it must fail with {{ migration_expect }}.'
+          when: migration_expect | length > 0
+      rescue:
+        # The failed result is not printed: it can carry a path with the account's name.
+        - name: Fail if the step failed where it must succeed
+          ansible.builtin.fail:
+            msg: 'The step failed where it must succeed, at {{ ansible_failed_task.name }}.'
+          when: migration_expect | length == 0
+
+        - name: Assert the failure was the one this case is for
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
+          vars:
+            expect_phrase: '{{ migration_expect }}'
+            expect_result: '{{ ci_jump_readback }}'
+
+    - name: Look at the hand-made files and the new files afterwards
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - '/etc/ssh/sshd_config.d/50-branchleft-{{ scenario_jump_user }}.conf'
+        - '/etc/ssh/{{ scenario_jump_user }}/authorized_keys'
+        - '/etc/ssh/{{ scenario_jump_user }}'
+        - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+        - /etc/ssh/authorized_keys.d/branchleft-jump
+      register: ci_jump_migration_after
+      no_log: true
+
+    - name: Count the reloads afterwards
+      ansible.builtin.slurp:
+        src: '{{ migration_reloads }}'
+      register: ci_jump_migration_reloads_after
+      no_log: true
+
+    # A failed step leaves the hand-made files as they were, and the new files as they were before
+    # (none). A step that succeeds leaves the new files and none of the hand-made ones.
+    - name: Assert a failed step left the hand-made files as they were and the new files absent
+      ansible.builtin.assert:
+        that:
+          - ci_jump_migration_after.results[0].stat.exists
+          - ci_jump_migration_after.results[1].stat.exists
+          - ci_jump_migration_after.results[2].stat.exists
+          - ci_jump_migration_after.results[2].stat.isdir
+          - ci_jump_migration_after.results[2].stat.mode == '0755'
+          - ci_jump_migration_after.results[0].stat.checksum == ci_jump_migration_old.results[0].stat.checksum
+          - ci_jump_migration_after.results[1].stat.checksum == ci_jump_migration_old.results[1].stat.checksum
+          - not ci_jump_migration_after.results[3].stat.exists
+          - not ci_jump_migration_after.results[4].stat.exists
+          - >-
+            not (migration_inode_kept | bool) or
+            (ci_jump_migration_after.results[0].stat.inode == ci_jump_migration_old.results[0].stat.inode
+            and ci_jump_migration_after.results[1].stat.inode == ci_jump_migration_old.results[1].stat.inode)
+        quiet: true
+        fail_msg: >-
+          A step that failed did not leave the hand-made files as they were (the account's name is
+          not shown), or left a file of its own.
+      when: migration_expect | length > 0
+
+    - name: Assert a step that succeeded removed the hand-made layout and wrote the new files
+      ansible.builtin.assert:
+        that:
+          - not ci_jump_migration_after.results[0].stat.exists
+          - not ci_jump_migration_after.results[1].stat.exists
+          - not ci_jump_migration_after.results[2].stat.exists
+          - ci_jump_migration_after.results[3].stat.exists
+          - ci_jump_migration_after.results[4].stat.exists
+          # One reload for the new files, one for the removal of the old.
+          - (ci_jump_migration_reloads_after.content | b64decode).splitlines() | length
+            == (ci_jump_migration_reloads_before.content | b64decode).splitlines() | length + 2
+        quiet: true
+        fail_msg: >-
+          A step that succeeded left the hand-made layout, did not write the new files, or did not
+          reload sshd twice (the account's name is not shown).
+      when: migration_expect | length == 0
+  always:
+    - name: Disarm the hook, and take away the drop-in ahead and the marker
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ scenario_record_dir }}/resurrect-path'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Take away the drop-in ahead of the role's, and the marker
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - /etc/ssh/sshd_config.d/05-case-ahead.conf
+        - '{{ migration_marker }}'

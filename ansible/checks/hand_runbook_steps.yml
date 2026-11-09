@@ -18,6 +18,12 @@ hetzner/RUNBOOK-provision-host.md:
   steps: 10
   reason: pending-role
   role: host_baseline
+# Two blocks: the first-boot bootstrap of the servers the owner made by hand (edge-t, db-t1), the
+# route the owner chose on 7 Nov ("Buy 3 now, I adopt", ws#1634). The count may only go down.
+hetzner/tenants/RUNBOOK-adopt-console-servers.md:
+  steps: 2
+  reason: pending-role
+  role: host_baseline
 mail/RUNBOOK-mx1-disaster-recovery.md:
   steps: 1
   reason: pending-role

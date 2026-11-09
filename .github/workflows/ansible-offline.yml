@@ -1,0 +1,78 @@
+name: Ansible offline render
+
+# Renders every template of every host's roles on the runner, with typed dummies for the
+# inputs the owner supplies and a fact fixture per host, and validates the result with the
+# role's own validate: and a table of tools (ansible/checks/offline_render.py). Nothing here
+# touches a host: no secret, no environment, no SSH. It is advisory: it is not a required
+# check, so a red here does not block a merge until it is promoted into the gate in
+# ansible.yml, after ten green runs on `main` with nothing not-covered. It is a separate
+# workflow so that adding it does not touch ansible.yml, whose edit runs every shard.
+#
+# The second step proves the tool is not vacuous: it plants defects in a copy of the tree and
+# requires each to be named (red), then requires the clean copy to pass (green)
+# (ansible/checks/sabotage_offline_render.py). A run with fewer tests than that file has fails.
+# Narrative, limits and the outcome classes: ansible/checks/offline/README.md.
+
+on:
+  pull_request:
+    paths:
+      - ansible/**
+      - hetzner/estate/Pulumi.production.yaml
+      - .github/workflows/ansible-offline.yml
+      - .github/actions/ansible-venv/**
+  push:
+    branches: [main]
+    paths:
+      - ansible/**
+      - hetzner/estate/Pulumi.production.yaml
+      - .github/workflows/ansible-offline.yml
+      - .github/actions/ansible-venv/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run per pull request. A push run is its own group and is never cancelled (pinned by
+# scripts/test_workflow_concurrency.py).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  render:
+    name: Render the Ansible templates offline
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore or build the tool environment
+        uses: ./.github/actions/ansible-venv
+
+      # The validators the table names. A tool missing here is reported as not-covered by the
+      # render below, and this listing is how the first run shows which.
+      - name: List the validator tools on this runner
+        run: |
+          set -uo pipefail
+          for tool in docker visudo ssh-keygen test; do
+            if command -v "$tool" > /dev/null; then echo "present: $tool"; else echo "absent:  $tool"; fi
+          done
+          docker compose version || true
+
+      - name: Render every host's templates and validate them
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/offline_render.py --summary-file "$GITHUB_STEP_SUMMARY"'
+
+      # Red then green, from a copy of the tree. The count is read back so that deleting a test
+      # cannot turn the step green; the output is teed so a failure shows its text.
+      - name: Prove the render catches planted defects
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p 'sabotage_*.py' -v 2>&1 | tee "$RUNNER_TEMP/sabotage.log"
+          ran="$(sed -n 's/^Ran \([0-9][0-9]*\) tests.*/\1/p' "$RUNNER_TEMP/sabotage.log")"
+          if [ "${ran:-0}" -lt 15 ]; then
+            echo "The sabotage proof ran ${ran:-0} tests; it has 15, so a test was removed or not found."
+            exit 1
+          fi

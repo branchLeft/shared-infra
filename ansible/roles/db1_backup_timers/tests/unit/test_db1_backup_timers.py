@@ -11,6 +11,8 @@ import re
 import unittest
 from pathlib import Path
 
+import yaml
+
 ROLE = Path(__file__).resolve().parents[2]
 FILES = ROLE / "files"
 VARS = ROLE / "vars" / "main.yml"
@@ -101,6 +103,54 @@ class DeliveryTests(unittest.TestCase):
         self.assertEqual(set(digests), fetched)
         for name, digest in digests.items():
             self.assertRegex(digest, r"^[0-9a-f]{64}$", name)
+
+
+class DeliveryControlTests(unittest.TestCase):
+    """The task that fetches a program checks its digest and sets its owner and mode.
+
+    A fetch with no checksum, or with a mode other than 0644, still reads as a
+    delivery. These tests fail on that, as the refusals scenario does on a host.
+    """
+
+    TASKS = ROLE / "tasks" / "main.yml"
+
+    def _fetch_tasks(self) -> list[dict]:
+        tasks = yaml.safe_load(self.TASKS.read_text(encoding="utf-8"))
+        fetches = [task for task in tasks if "ansible.builtin.get_url" in task]
+        self.assertEqual(len(fetches), 2, "expected one fetch task for provision and one for recovery")
+        return fetches
+
+    def test_every_fetch_is_checked_against_the_pinned_digest_of_its_item(self) -> None:
+        for task in self._fetch_tasks():
+            self.assertEqual(
+                task["ansible.builtin.get_url"].get("checksum"),
+                "sha256:{{ db1_backup_timers_program_sha256[item] }}",
+                task["name"],
+            )
+
+    def test_every_fetch_is_root_owned_with_mode_0644(self) -> None:
+        for task in self._fetch_tasks():
+            args = task["ansible.builtin.get_url"]
+            self.assertEqual(args.get("owner"), "root", task["name"])
+            self.assertEqual(args.get("group"), "root", task["name"])
+            self.assertEqual(args.get("mode"), "0644", task["name"])
+
+    def test_every_fetch_is_skipped_only_in_check_mode(self) -> None:
+        for task in self._fetch_tasks():
+            self.assertEqual(task.get("when"), "not ansible_check_mode", task["name"])
+
+    def test_the_fetches_loop_over_the_two_file_lists(self) -> None:
+        loops = {task["loop"] for task in self._fetch_tasks()}
+        self.assertEqual(
+            loops,
+            {"{{ db1_backup_timers_provision_files }}", "{{ db1_backup_timers_recovery_files }}"},
+        )
+
+    def test_provision_tenant_db_is_in_the_provision_list_with_its_digest(self) -> None:
+        self.assertIn("provision_tenant_db.py", _list_under("db1_backup_timers_provision_files"))
+        self.assertRegex(
+            _mapping_under("db1_backup_timers_program_sha256")["provision_tenant_db.py"], r"^[0-9a-f]{64}$"
+        )
 
 
 class PinTests(unittest.TestCase):

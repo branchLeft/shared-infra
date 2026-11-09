@@ -6,9 +6,9 @@ Moved verbatim from `posture.ts` for CMT-3. Only the comment delimiters were rem
 
 Whether the edge acts on what it detects, and the one place that changes.
 
-Both fields start non-enforcing and each is flipped by a pull request, never
-by a redeploy: `render.ts` derives the Caddy route chain _and_ the CrowdSec
-acquisition file from these two values, and both rendered artifacts are
+Each field is flipped by a pull request, never by a redeploy: `render.ts`
+derives the Caddy route chain _and_ the CrowdSec acquisition file from these
+values, and both rendered artifacts are
 committed, so a flip shows up as a reviewable diff in the files that will be
 copied onto the host. A redeploy of an unchanged tree cannot change posture.
 
@@ -25,10 +25,12 @@ opposite risk profiles, and holding them behind one flag made the cheap
 control hostage to the expensive one. The magic-link throttle is bounded to
 a single POST path, its threshold is derived below from first principles,
 and its worst failure is a member seeing a generic portal error. The general
-throttle applies to every request on every hostname at a threshold inherited
-from a Cloud Armor rule that has never actually enforced (it is live at
-`preview: true`), and its worst failure is 429s for legitimate readers.
-One decision each.
+throttle applies to every request on every block built through the protection
+chain (site, redirect, static and probe blocks; not the `:9091` metrics
+listener) at a threshold inherited from a Cloud Armor rule that never
+actually enforced (it was `preview: true`), and its worst failure is 429s for
+legitimate readers, or for every client at once if the key collapses real
+clients onto one address. One decision each.
 
 Two properties of the module worth knowing before reasoning about either:
 
@@ -61,14 +63,35 @@ The general per-IP page-serving throttle. `off` renders no general
 `rate_limit` handler at all; `enforcing` renders it at `RATE_LIMIT_EVENTS`
 below.
 
-Deliberately still `off`. Its threshold is inherited from the captured
-Cloud Armor policy, and that rule has never enforced anything — it is live
-at `preview: true`, so 200/60s is a number no traffic has ever been
-measured against. Enabling it needs a threshold derived from this edge's
-own access log (the instrument named above), not the inherited one:
-`edge1` averages well under 1 req/s but has 1-minute bursts two orders of
-magnitude above that, and nothing currently attributes those to one client
-or to many. Tracked as open work in the issue tracker.
+`enforcing`, by the owner's ruling (answered
+2026-11-03, "Turn it on"), at the parity value
+`RATE_LIMIT_EVENTS` per `RATE_LIMIT_WINDOW_SECONDS` per direct peer address
+(200 requests per 60 seconds), answered 429. It is one throttle for every
+hostname: no per-site or per-path exemption.
+
+It throttles every block built through `protectionChain` in `render.ts`: the
+servable site blocks, the redirect blocks (zone `<site>_redirect_per_ip`),
+the static blocks (the `publicpress.co.uk` holding page), and both probe
+blocks (`probe_host_per_ip`, `probe_per_ip`). Only the `:9091` metrics
+listener is exempt, because `metricsBlock` never calls `protectionChain`.
+
+What this does not claim. The 200/60s figure was inherited from a Cloud Armor
+rule that never enforced (it was `preview: true`), so it is a number no
+traffic has been measured against, and the key `{http.request.remote.host}`
+could collapse real clients onto a Docker bridge address (for example
+`172.18.0.1` behind the docker-proxy), in which case every collapsed client
+shares one budget per site. The `RateLimitDecliningRealClients` alert excludes
+`172.16.0.0/12` keys, so a bridge collapse would not alert on its own; the
+tripwire is the blackbox probes seeing a 429. Traffic that may legitimately
+exceed 200 requests per 60 seconds from one address includes Nextcloud sync
+(`cloud.branchleft.co.uk`, 100MiB bodies), shared office or NAT addresses,
+and the Prometheus blackbox prober.
+
+The gate is therefore on the live step, not on this file: the owner-run
+percentile and bridge-address check in `RUNBOOK-edge.md` §10a is a hard
+go/no-go before the gated apply. A no-go means a separate change to the
+threshold or the key; the code here is the same either way. To roll back,
+revert the posture, re-render and redeliver.
 
 ## membersMagicLinkRateLimit
 

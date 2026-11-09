@@ -190,7 +190,7 @@ on the host, and a second run that must report zero changes. The playbook is
 and applies the two pull roles, then `host_inputs`, then `host_baseline`, then
 `db1_stack`, then `db1_backup_timers`, then this role, last. The `host_inputs` loader
 sets this role's two inputs (`db1_grants_tenants`, `db1_grants_ops1_host`) as facts, so
-the playbook carries no value for them. The role has not been applied to the live host.
+the playbook carries no value for them.
 
 ## How to change it safely
 
@@ -261,12 +261,13 @@ pattern. A statement it does not list is refused.
 
 ## Live blockers
 
-The role must not be applied to the live host until each of these is true.
+The role is applied to db1 by the gated pull: the db1 playbook ran it in gated apply run 41903489960 (4 Nov 2026), and a later gated apply, run 41916819852, also succeeded. Each of these must hold for a run to converge it.
 
 1. The program directory `/opt/branchleft/db/provision` is delivered by
    `db1_backup_timers`, including `provision_tenant_db.py`, at the pinned digest.
    That role must have applied once on db1 (a real apply, not check mode) before
-   this role is planned.
+   this role is planned. Its Molecule scenarios show a wrong digest is refused and
+   a wrong mode or owner is corrected (`db1_backup_timers` README, "Tests").
 2. The ops1 password file is placed once, by hand, as `printf '%s'` of the password
    into `/etc/branchleft/db1-backup-ops1.pw`, root-owned, mode `0600`, no trailing
    newline.
@@ -278,9 +279,11 @@ The role must not be applied to the live host until each of these is true.
    `db1_grants_tenants` and `db1_grants_ops1_host` among its keys.
 6. The `db1_backup_timers` role is in the playbook before this one, so the dump
    code (`naming.py`, `dump_nightly.py`) is delivered before the dump account
-   changes. No role delivers `provision_tenant_db.py`: until one does, the owner
-   places it by hand (blocker 1), or this role stops with `program-missing`,
-   in check mode too.
+   changes. `db1_backup_timers` delivers `provision_tenant_db.py`, pinned
+   by digest, in a real apply only: its fetch is skipped in check mode. Until
+   that apply has happened on db1, a plan of this role stops with
+   `program-missing`, in check mode too (ISSUE branchLeft/workspace#2861 is open
+   for the plan of a fresh db1).
 
 ## Differences from the family base
 

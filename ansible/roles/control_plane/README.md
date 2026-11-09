@@ -34,9 +34,12 @@ It does these, in order:
    and mode of both files back to the values in `control_plane_secret_files`
    (`vars/main.yml`), so a file widened by hand is corrected. It never changes
    the content of either file.
-3. Copies `compose.yml`, `compose.init.yml` and `pg_hba.conf` from
+3. Makes the `postgres` subdirectory of `/opt/branchleft/control-plane`, then copies
+   `compose.yml`, `compose.init.yml` and `postgres/pg_hba.conf` from
    `hetzner/control-plane/stack/` into `/opt/branchleft/control-plane`, as
-   `root:root` mode `0644` in a `0755` directory.
+   `root:root` mode `0644` in `0755` directories. The database's access rules sit alone
+   in `postgres/` because the compose file mounts that directory (not the single file)
+   into the `db` container.
 4. Only where the stack is not yet deployed: starts the database alone and
    waits until it is healthy.
 5. Only where the stack is not yet deployed: runs the sign-in service's init
@@ -47,13 +50,49 @@ It does these, in order:
    waits until it is healthy.
 7. Enables `branchleft-compose@control-plane.service`, runs the deploy wrapper
    with the pinned image, and fails if the unit is not `active` afterwards.
+   Then, on every apply, reloads the database (`files/reload_hba.sh`, run in the `db`
+   container) so the delivered `pg_hba.conf` is the one in force, and removes the old
+   `/opt/branchleft/control-plane/pg_hba.conf`. See "How a changed pg_hba.conf reaches the
+   running database".
 8. Installs the DOCKER-USER isolation reconciler and its unit byte for byte from
    `hetzner/provision/`, enables the unit, and restarts it only when the
    reconciler or the unit changed.
 
-The role never removes a volume, a file, an environment file, a master key or a
-container. The sign-in service's data lives in a Docker volume, and
-`docker compose down -v` is not run by any task.
+The role never removes a volume, an environment file, a master key or a container, and
+removes one file only: the access rules at their old place, once the stack runs on the
+new one. The sign-in service's data lives in a Docker volume, and `docker compose down -v`
+is not run by any task (a unit test fails on `down`, `rm`, `-v`, `--volumes` and
+`--force-recreate` in any command of the role).
+
+### How a changed pg_hba.conf reaches the running database
+
+A merged change to `postgres/pg_hba.conf` takes effect on the next gated apply, with no
+hand step:
+
+1. The role copies the file into `/opt/branchleft/control-plane/postgres/`. Ansible
+   replaces a file by rename, which gives it a new inode. The `db` container mounts the
+   directory, so it sees the new file at once. (A single-file bind mount keeps the old
+   inode on a Linux engine and would never see it. That was the previous shape, and why a
+   hand recreate of the container was needed.)
+2. The deploy wrapper restarts the stack's unit. Compose recreates a service only when its
+   configuration changed, so on a steady state it recreates nothing.
+3. `files/reload_hba.sh` runs in the container as `docker exec -i ... sh -s`. It refuses a
+   file that does not parse (`pg_hba_file_rules`, any row with an `error`), sends
+   `SELECT pg_reload_conf()`, waits until `pg_conf_load_time()` has moved, and checks the
+   file once more. A reload drops no connection and restarts nothing. The administrator's
+   password is read from the container's own environment, so the role holds no secret and
+   no value is in an argument. A file that does not parse fails the apply and the server
+   keeps the rules it holds.
+
+The reload runs on every apply, not only when the file changed, so a run interrupted after
+the copy is finished by the next one.
+
+**The first apply after the directory mount ships** is the one that recreates the `db`
+container: the compose file's mount line changed, so Compose recreates it once, on the new
+mount, with its `db-data` volume untouched. Compose may recreate the services that depend
+on the database (the sign-in service, the portal and the console) in the same step, which
+is a brief sign-in, portal and console interruption. The owner chooses the apply window
+when approving the gate. Every apply after that only reloads.
 
 ### What the role does not do
 
@@ -68,9 +107,10 @@ container. The sign-in service's data lives in a Docker volume, and
   `branchleft-compose@.service`, or the Docker engine. Those are the deploy
   tooling and host baseline roles. The role calls the wrapper and enables the
   unit; it does not provide either.
-- It does not delete a file that was removed from the stack directory. The
-  runbook's rsync used `--delete`; this role copies, and a removed file stays on
-  the host until someone removes it by hand.
+- It does not delete a file that was removed from the stack directory, except the
+  access rules at their old path (`/opt/branchleft/control-plane/pg_hba.conf`). The
+  runbook's rsync used `--delete`; this role copies, and any other removed file stays
+  on the host until someone removes it by hand.
 
 ## Interface
 
@@ -120,6 +160,16 @@ would recreate the database, so the role leaves a running stack to the unit. A f
 still uses the direct commands, because the unit cannot start the applications before the
 database and the sign-in service exist.
 
+A change to a service's block in `compose.yml` is a changed config for that service alone, and
+the next deploy wrapper run recreates just that service. The two applications carry their
+trusted proxy list (`PORTAL_TRUSTED_PROXIES` and `CONSOLE_TRUSTED_PROXIES`, the edge's private
+address, written once in the file and taken by alias) in their own `environment:` block, because
+the environment file reaches the containers only through `${VAR}` references in the compose
+file. Delivering that change recreates `portal` and `console` once, on the image the wrapper
+last pinned, and leaves `db` and `zitadel` as they are. It does not move the image: the role
+keeps the running image unless `control_plane_app_image` is given, and the deploy wrapper run
+by the owner is what moves it.
+
 ## Requirements
 
 - ansible-core at the version pinned in `ansible/requirements.txt`; the role's
@@ -143,7 +193,11 @@ database and the sign-in service exist.
   `/etc/branchleft/control-plane/zitadel-masterkey` (`0400`, `1000:1000`), each
   created once, with their content written once. On every run their owner, group
   and mode are set back to these values, and their content is not changed.
-- `/opt/branchleft/control-plane` (`0755`) and its three files (`0644`).
+- `/opt/branchleft/control-plane` (`0755`), its `postgres` subdirectory (`0755`) and its
+  three files (`0644`), one of them `postgres/pg_hba.conf`. The old
+  `/opt/branchleft/control-plane/pg_hba.conf` is removed after the deploy wrapper.
+- The running database's configuration is reloaded on every apply (no restart, no
+  dropped connection).
 - Containers: on a fresh host only, the database and the sign-in service are started
   and healthy and the init phase runs once. On a host where the stack runs, the role
   starts no container itself.
@@ -237,8 +291,16 @@ every input refusal is before the first write, every task that runs Compose dire
 is gated on a stack that is not yet deployed, the two reads of the running stack run in
 check mode and change nothing, and no task uses the image as given.
 
-The container does not run Docker, so the bring-up tasks, the stack's health and
-the isolation policy's effect on the firewall are not proven by this scenario.
+The container does not run Docker, so the bring-up tasks, the stack's health, the
+reload and the isolation policy's effect on the firewall are not proven by this scenario.
+The reload is proven elsewhere, against a real server:
+`hetzner/provision/test_control_plane_hba_server.py` delivers the repository's
+`pg_hba.conf` by temporary file and rename, as `copy` does, runs `files/reload_hba.sh` in a
+real PostgreSQL at the stack's pinned image, and requires the server's answer for every
+login and database to equal the one table. It is red with no reload, and on a Linux engine
+with the old single-file mount. `tests/unit/` pins the task's place (after the wrapper,
+after the delivery), its gate (`control_plane_start_units` and nothing else) and that no
+command of the role can remove a container or a volume.
 
 ## Named limits
 
@@ -246,6 +308,12 @@ the isolation policy's effect on the firewall are not proven by this scenario.
   in the test, and the reads of the running stack are answered by a stand-in, so
   the real output of `docker inspect` is not seen. The first live run through the
   gated pull is the proof.
+- **Check mode does not run the reload.** It is a `command` task, skipped like the others.
+  A plan shows the copy of a changed `postgres/pg_hba.conf` and the removal of the old file,
+  and not the reload that follows.
+- **The single-file mount's stale inode only reproduces on a Linux engine.** Docker
+  Desktop (macOS) showed the single-file mount updating, so the real-server test's
+  old-shape control case runs on Linux (CI) and is skipped, with its reason, elsewhere.
 - **Check mode does not run the deploy.** The compose commands and the deploy
   wrapper are `command` tasks that check mode skips; it shows the owner, group and mode
   corrections, the stack files and the isolation files only.

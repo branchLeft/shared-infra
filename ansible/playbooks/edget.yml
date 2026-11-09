@@ -4,23 +4,30 @@
 # hyphen of the server's name cannot appear); the server and its hostname are edge-t.
 # Two pull roles, in order: the Ansible toolchain the host runs this playbook with, then the
 # trigger that runs it. After them, the roles on edget's list in checks/host_roles.yml that
-# this playbook wires: the host baseline, then the NAT gateway (egress_nat, with
-# egress_nat_gateway_enabled on). The gateway follows the baseline because its reconciler
-# needs Docker and iptables from it. edget is the gateway of the tenants network, which is not
-# the estate's network (a network does not span hcloud projects), so the switch is on here and
+# this playbook wires: the loader of the host's private inputs (host_inputs, first: check_enrolment
+# R11), which reads the one root-only file the owner places on the host and stops the run if it is
+# missing or unsafe, the host baseline, then the NAT gateway (egress_nat, with
+# egress_nat_gateway_enabled on), then the jump account's key options (ci_jump; it only reports
+# until the owner turns it on in owner_vars/edget.yml). The gateway follows the baseline because its
+# reconciler needs Docker and iptables from it. edget is the gateway of the tenants network, which is
+# not the estate's network (a network does not span hcloud projects), so the switch is on here and
 # on edge1 and nowhere else: one gateway per network, pinned in checks/check_enrolment.py and
 # tested in checks/test_egress_nat_single_gateway.py.
 #
-# Not here yet, each with its own change: ci_login and deploy_tooling (the pipeline reaches
-# edge-t through edge1 once the ci_jump role is on main), the edge stack (Caddy) and the
-# monitoring roles. No host_inputs: neither host_baseline
-# nor egress_nat takes an input. No owner_vars file for the same reason.
+# The pipeline reaches edge-t in two hops, through edge1 and then through this host's jump account
+# (ws#2899). ci_jump is the same role edge1 applies, with no branch on the host
+# (checks/test_ci_jump_hosts.py); only owner_vars/edget.yml and the host's private input
+# ci_jump_user differ.
+#
+# Not here yet, each with its own change: ci_login and deploy_tooling (the pipeline account on
+# edge-t belongs to the edge-t server's own ticket, ws#2898), the edge stack (Caddy) and the
+# monitoring roles.
 #
 # The host's trigger runs this file on a signed checkout with the inventory `localhost,`,
 # which loads no group variables, so every value the roles read comes from vars_files: the
-# shared includes and edget's own trust file. The one-time bootstrap loads the same files
-# the same way, on an inline one-host inventory. Run against more than one host, the
-# refusal in includes/refuse_other_hosts.yml stops the play.
+# shared includes, edget's own trust file and its owner_vars file. The one-time bootstrap loads
+# the same files the same way, on an inline one-host inventory. Run against more than one host,
+# the refusal in includes/refuse_other_hosts.yml stops the play.
 - name: Bring edget under the pull
   hosts: all
   gather_facts: false
@@ -30,6 +37,7 @@
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/edget.yml'
+    - '{{ playbook_dir }}/../owner_vars/edget.yml'
   pre_tasks:
     - name: Refuse a run that is not edget's
       ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
@@ -42,5 +50,7 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/egress_nat # noqa: role-name[path]
+    - role: ../roles/ci_jump # noqa: role-name[path]

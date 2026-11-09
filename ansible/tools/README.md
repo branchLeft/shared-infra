@@ -1,8 +1,8 @@
 # ansible/tools
 
-This folder holds `pull_bootstrap.py` and `seed_host_inputs.py`. Their narrative lived in the
-module docstrings until the CMT-3 gate required it cut below 11 lines; the constraints they
-stated are kept here in full.
+This folder holds `pull_bootstrap.py`, `seed_host_inputs.py` and the three demo1 bootstrap guards,
+described in the last section. The narrative of the first two lived in the module docstrings until
+the CMT-3 gate required it cut below 11 lines; the constraints they stated are kept here in full.
 
 ## pull_bootstrap.py: the bootstrap record
 
@@ -45,7 +45,8 @@ Usage:
 Place or rotate `/etc/branchleft/host-inputs.json`, the one root-only file the `host_inputs`
 loader reads on a pulled host. The loader never writes it; this is the owner-run writer. It runs
 ON the host, as root, with the interpreter the host already has (standard library only), and
-seeds edge1, ops1 and app1. db1 already has its file and no live file to read; a test names it, so
+seeds edge1, edget (edge-t), ops1 and app1. edget has one input, `ci_jump_user`, typed because it
+exists nowhere on the host. db1 already has its file and no live file to read; a test names it, so
 a new host row in the loader fails until it is classified.
 
 What it does, in this order:
@@ -73,8 +74,13 @@ What it does, in this order:
    until an empty one (`adopt`, the literal word at the end, sets `adopt_existing`; a slot the
    host already runs needs it). A slot line that is malformed, or repeats a stack or a key, is
    refused and the whole list is left missing, so nothing is written and the line is never shown.
-   The role checks each slot's shape on the host, so the tool judges none of it. An empty answer,
-   or no terminal, leaves the key missing.
+   The tool checks each slot's shape at the prompt: a stack, then the type `ssh-ed25519`, then a
+   base64 key. It drops any comment, and it discards pending terminal input on a refusal. The role
+   checks the key and the stack again on the host. An empty answer,
+   or no terminal, leaves the key missing. edge1's `ci_jump_user`, the CI jump account's name, is
+   typed in the same way: it exists on no live file, and it is held out of the repository and of
+   every log, so the prompt is hidden and the name is never printed (a fill asks for it last; on
+   a host whose file already exists, add it once with `--set ci_jump_user`, see below).
 4. If any key is missing, writes nothing, names the missing keys, and exits 1. A rerun then needs
    no `--replace`, and the loader never meets a half file.
 5. Writes a temporary file in `/etc/branchleft` created exclusively with mode `0600`, owner
@@ -88,7 +94,9 @@ What it does, in this order:
 0600`, one JSON object with keys inside the row, and KEY must be in the row. The new value is
 asked with `getpass`; nothing else changes; the file is replaced atomically as above. It prints
 the key name and the byte length of the new value, to catch a truncated paste, and never the
-value. Do not run the fill step with `--replace` between a `--set` and the apply that delivers it:
+value. On edge1 whose file was placed before the jump account existed, this is the one-time owner
+step that adds the twelfth key, as root on the host:
+`python3 -I seed_host_inputs.py --host edge1 --set ci_jump_user`. Do not run the fill step with `--replace` between a `--set` and the apply that delivers it:
 the fill reads the live files, which still hold the old value.
 
 Output is key names in three lists (filled from live, typed, still missing), the unusable live
@@ -110,3 +118,81 @@ Usage, on the host as root:
 It is at `/var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py` once a commit that
 holds it has been applied on the host; before that the file is copied there by hand from the
 branch.
+
+## The three guards of the demo1 root bootstrap
+
+`pubkey_only.py`, `ci_key_line.py` and `spool_image_gate.py` are small, standard-library-only
+programs that the demo1 bootstrap runbook calls before it changes anything on the host, so that a
+mistake stops there and not on a production machine. Each prints a verdict and a reason code, never
+a key, a line read back, an address or any other text it was given; an argument it does not know is
+refused as `usage error` without being shown. Each is run as the runbook prints it, with the
+interpreter of the pinned worktree's virtual environment in isolated mode:
+`python -I ansible/tools/<tool>.py ...`. Each has its own test file, and each test file holds a
+corpus of bad inputs that must be refused with their own reason code, runs the same corpus against
+a stand-in that accepts everything to show each case would go red without the guard, runs the exact
+command line, and plants sentinels to prove nothing leaks. CI runs them in the `Test the tools`
+step. The tools, their tests and the captured output in `fixtures/` are the owner's in CODEOWNERS.
+
+### pubkey_only.py: a file that is one public key and nothing else
+
+    pubkey_only.py check FILE [--type ssh-ed25519]
+
+Exit 0 and `pubkey=ok type=T fingerprint=SHA256:...`, or exit 1 and `pubkey=REFUSED reason=CODE`.
+The reasons are `unreadable`, `too_large` (over 2 KiB), `private_key` (armour, or the binary
+magic, of a private key anywhere in the file), `not_text`, `empty`, `several_lines`,
+`options_in_front` (anything before the key type), `several_keys` (a second key type or key body
+after the first key; the rest of the line is a comment and nothing else), `bad_shape` (not a key type the `ci_login`
+role accepts, a body of the wrong length, or a body that does not name its own type) and
+`wrong_type` (with `--type`). The key shapes are the `ci_login` role's `ci_login_key_shapes`, held
+equal by a test.
+
+### ci_key_line.py: the two forced-command lines of a CI account
+
+    ci_key_line.py build --mode check|apply --pub FILE --from IPV4
+    ci_key_line.py verify --file READBACK --check-pub FILE --apply-pub FILE --from IPV4 [--not-keys FILE]
+
+`build` runs the public-key check (an `ssh-ed25519` key is required) and prints exactly
+`restrict,from="IPV4",command="sudo /usr/local/sbin/pull-trigger --mode MODE" ssh-ed25519 BODY`
+on stdout, with the key's comment dropped. A refusal writes `keyline=REFUSED reason=CODE` to stderr
+and nothing to stdout, so a redirect into a key file never receives it. The address is a dotted
+quad in plain form (`bad_from` otherwise); a mode other than the two is `bad_mode`. `--from` is
+required by both subcommands: leaving it out is a `usage error`, so a line with no source address
+cannot be built or accepted.
+
+`verify` rebuilds both lines and requires the read-back to equal them byte for byte: check then
+apply, two lines, a final line break, nothing else. It prints `keylines=ok` or exit 1 and
+`keylines=REFUSED reason=CODE`. The reasons are `check_pub_*` and `apply_pub_*` (the public-key
+reasons above), `same_key_both_modes`, `key_in_not_keys` (a key body present in the `--not-keys`
+file, which is how a stop-gap key shared with another host is refused as this host's own),
+`not_keys_unreadable`, `readback_unreadable` (including over 4 KiB), `bad_from`, `line_count`,
+`order_swapped`, `restrict_missing`, `command_mismatch`, `from_missing` (a read-back line with no
+`from=`), `several_from` (more than one), `from_mismatch`, `options_differ`,
+`key_mismatch` and `not_identical`. The program path, the option and the two modes are the
+`ci_login` role's, held equal to it, to the `pull_trigger` role and to the role's sudoers grant by
+tests.
+
+### spool_image_gate.py: the mail spool's image is on the host
+
+    spool_image_gate.py ref --compose FILE (--pin-file FILE | --no-pin)
+    spool_image_gate.py check --ref REF   (the output of `docker image inspect REF` on stdin)
+
+`ref` prints the digest-pinned image the host would run. Where the host has its pin file
+`/etc/branchleft/mail-spool.image.env`, the runbook reads it over ssh into a file and passes
+`--pin-file`: the file must be exactly one `IMAGE=<name>@sha256:<64 hex digits>` line (the role's
+own pattern), and the printed image is that one, not the Compose file's. Anything else is refused
+on stderr as `ref=REFUSED reason=CODE`: `pin_old_form` (the older `MAIL_SPOOL_IMAGE=` form),
+`pin_malformed` (any other text, a second line, carriage returns, quotes, over 4 KiB) or
+`pin_unreadable`. Only where the pin file was checked to be absent on the host does the runbook
+pass `--no-pin`, and then the image is the `mail-spool` service's in the vendored Compose file
+(`compose_unreadable`, `compose_too_large`, `no_image`, `several_images`, `ref_not_digest_pinned`).
+Naming neither flag, or both, is a `usage error`, so the pin file cannot be skipped by leaving it
+out.
+
+`check` prints `gate=pass`, or exit 1 and `gate=STOP reason=CODE`: `ref_not_digest_pinned`,
+`no_output`, `unreadable`, `image_absent` (the empty list `docker` prints with exit 1),
+`several_images`, `no_repo_digest` (the image lists no `RepoDigests`, empty, null or missing: the
+daemon finding it by name does not show it is the pinned one), `digest_mismatch`. It passes only
+when exactly one image came back and its `RepoDigests` hold the pinned digest (under any name).
+The pattern and the service are the `demo1_egress_spool` role's, held equal by a test. The two
+fixtures are real `docker image inspect` output (Docker 29, containerd image store) for a loaded
+image queried by its digest-form reference, and for an absent one.

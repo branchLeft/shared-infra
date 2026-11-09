@@ -11,4 +11,4 @@ main: ../dns.ts
 # endpoint host and `region` must name it.
 backend:
   url: 's3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1'
-description: The branchleft.co.uk DNS zone at Hetzner DNS, record for record from dns/zone.json. Its own project because its token belongs to a Hetzner project holding only DNS zones, and because the zone is the one resource whose loss takes the website, the edge and mail down together.
+description: The branchleft.co.uk and publicpress.co.uk DNS zones at Hetzner DNS, record for record from dns/zone.json and dns/publicpress.co.uk.json. Its own project because its token belongs to a Hetzner project holding only DNS zones, and because the zone is the one resource whose loss takes the website, the edge and mail down together.

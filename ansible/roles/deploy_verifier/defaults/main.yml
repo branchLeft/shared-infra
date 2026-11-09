@@ -1,0 +1,3 @@
+---
+# This role takes no inputs. Its pins and paths are role variables in vars/main.yml, which
+# outrank any value a caller passes, so there is nothing here for an inventory to override.

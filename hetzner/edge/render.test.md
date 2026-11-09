@@ -17,3 +17,20 @@ Caddyfile would carry `rate_limit @members_magic_link` against an undefined
 matcher, Caddy would refuse to load the file, and the restart that deployed
 it would take every hostname on this edge down rather than throttling one
 path.
+
+## The committed posture's general throttle
+
+The `the committed posture's general throttle` describe renders the committed
+`POSTURE` and splits it into top-level blocks. It then asserts, per kind
+(servable site, redirect, static and probe blocks), that each carries exactly one
+matcher-less `rate_limit`, with expected counts derived from `sites`,
+`hostRedirects` and `staticSites` rather than a hard-coded total. A builder that
+stops calling `protectionChain` therefore fails on its own kind. It also asserts
+that the `:9091` metrics listener carries none, that every general zone is
+distinct, that each uses the direct-peer key at `RATE_LIMIT_EVENTS` per
+`RATE_LIMIT_WINDOW_SECONDS`, and that the general directive precedes the
+magic-link directive and `reverse_proxy`.
+
+It asserts the shape of the directive, not that the key or the threshold is safe
+for real traffic. That is the owner-run pre-apply check in `RUNBOOK-edge.md`
+§10a.

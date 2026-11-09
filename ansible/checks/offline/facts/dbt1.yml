@@ -1,0 +1,6 @@
+# Facts db-t1's roles read (dbt1), as a Debian 13 (trixie) x86_64 server reports them. These are
+# the values the offline render needs; they are not read from the host, and the host's own facts
+# are checked by the owner's dry run.
+architecture: x86_64
+distribution_release: trixie
+packages: {}

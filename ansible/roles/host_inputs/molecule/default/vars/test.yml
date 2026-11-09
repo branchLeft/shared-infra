@@ -45,6 +45,22 @@ host_inputs_test_app1_doc:
       public_key: '{{ host_inputs_test_slot_key }}'
       adopt_existing: false
 
+# edge1's eleven required inputs, and the jump account's name, its one optional input. The name is
+# a sentinel of letters, not a real account, so the log scan can look for it.
+host_inputs_test_jump_name: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-jump chars=ascii_lowercase length=16') }}"
+host_inputs_test_edge1_required_doc:
+  monitoring_stack_smtp_username: '{{ host_inputs_test_smtp_user }}'
+  monitoring_stack_smtp_password: '{{ host_inputs_test_smtp_password }}'
+  monitoring_stack_healthchecks_ping_url: https://ping.example.test/one
+  monitoring_stack_alert_recipient_email: alerts@example.test
+  monitoring_stack_mailhost_ping_url: https://ping.example.test/two
+  monitoring_stack_grafana_admin_password: '{{ host_inputs_test_password }}'
+  monitoring_stack_snds_data_url: https://snds.example.test/data
+  ntfy_pager_pager_token: '{{ host_inputs_test_password }}'
+  ntfy_pager_watcher_token: '{{ host_inputs_test_password }}'
+  ntfy_pager_owner_password_hash: '{{ host_inputs_test_password }}'
+  ntfy_pager_machine_password_hash: '{{ host_inputs_test_password }}'
+
 # Template syntax in a value must reach the role that uses it as the characters the
 # owner typed, and not be evaluated a second time on the host.
 host_inputs_test_template_text: '{% raw %}{{ 7 * 7 }}{% if 1 %}x{% endif %}{% endraw %}'

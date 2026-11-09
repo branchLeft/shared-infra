@@ -1,0 +1,50 @@
+---
+# Every input is judged by the module before a file is touched, inputs first and then the host.
+# No assertion loops: a failed loop prints its item, which here would be a key. The module task
+# hides its result (ANS-16), and the account's name with it; a refusal is a code and an entry
+# number, read out by the assertion after it, so the cause of a stop shows in the log with no
+# value in it. The earlier layout's paths are made from the account's name, so the module is given
+# them and only counts them, and says whether a write is owed (pending). failed_when: false makes the result's failed flag false, so a refusal is read
+# from msg: only a refusal carries one.
+# The account's name is the host's one optional input (host_inputs_optional_by_host): the file may
+# leave it out until the owner turns this role on, so the flag being true with no name is a
+# misconfiguration and not an inert role. This task only asks whether the name is set, never
+# what it is; quiet keeps the condition out of the log, and the message holds no value.
+- name: Stop if the flag is on but the account's name was never seeded
+  ansible.builtin.assert:
+    that:
+      - ci_jump_user is defined
+    fail_msg: >-
+      ci_jump[user-missing]: ci_jump_manage_keys is true but the host's private inputs file holds no
+      ci_jump_user. The owner seeds it once with seed_host_inputs.py --set ci_jump_user (README,
+      "How the account's name reaches the role"), before the flag is turned on.
+    quiet: true
+
+- name: Judge the inputs and the host, and compare the live files with the wanted ones
+  ci_jump_authorized_keys:
+    action: plan
+    user: '{{ ci_jump_user }}'
+    own_address: '{{ ci_jump_own_address }}'
+    destinations: '{{ ci_jump_destinations }}'
+    keys: "{{ ci_jump_keys | map(attribute='key') | list }}"
+    owned_accounts: '{{ ci_jump_owned_accounts }}'
+    legacy_files: '{{ ci_jump_legacy_files }}'
+  register: ci_jump_plan
+  failed_when: false
+  changed_when: false
+  no_log: true
+  diff: false
+
+- name: Stop if the module refused
+  ansible.builtin.assert:
+    that:
+      - ci_jump_plan.msg is not defined
+    fail_msg: "{{ ci_jump_plan.msg | default('the module returned no result') }}"
+    quiet: true
+
+# The lines hold host names, ports, key types and fingerprints, never the account. This is what
+# the owner reads in the check-mode plan before approving an apply: each destination live against
+# wanted, in the key file and in sshd, and each key.
+- name: Show the live files against the wanted ones
+  ansible.builtin.debug:
+    msg: '{{ ci_jump_plan.lines }}'

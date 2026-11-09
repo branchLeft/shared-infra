@@ -12,7 +12,7 @@
   vars:
     verify_slots: ['0', '1', '2', '3', '4', '5', '6']
     verify_colours: [a, b]
-    verify_release: /opt/branchleft/demo-host/releases/5e52f78427cab104438057164e4baa16b329875c
+    verify_release: /opt/branchleft/demo-host/releases/595bcce0ee2bb1c7f8de565cf008060ea43122cf
     verify_wrapper: /usr/local/sbin/branchleft-slot
     verify_sidecar: /usr/local/lib/branchleft/demo_sidecar.py
     verify_router: /usr/local/lib/branchleft/health_router.py
@@ -317,6 +317,37 @@
         quiet: true
         fail_msg: The router unit does not run the installed router as demo-router.
 
+    # The shared template the drop-ins extend. The role installed the checkout's own file,
+    # root's and mode 0644, over the stand-in prepare placed; the expected file is read on
+    # the controller from the checkout (playbook_dir is molecule/default).
+    - name: Look at the checkout's compose template unit
+      ansible.builtin.stat:
+        path: '{{ playbook_dir }}/../../../../../hetzner/provision/branchleft-compose@.service'
+        checksum_algorithm: sha256
+      delegate_to: localhost
+      become: false
+      register: demo1_build_verify_template_source
+
+    - name: Look at the compose template unit on the host
+      ansible.builtin.stat:
+        path: /etc/systemd/system/branchleft-compose@.service
+        follow: false
+        checksum_algorithm: sha256
+      register: demo1_build_verify_template
+
+    - name: Assert the host's template is the checkout's file, root:root mode 0644, not a link
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_template_source.stat.exists
+          - demo1_build_verify_template.stat.isreg
+          - not demo1_build_verify_template.stat.islnk
+          - demo1_build_verify_template.stat.pw_name == 'root'
+          - demo1_build_verify_template.stat.gr_name == 'root'
+          - demo1_build_verify_template.stat.mode == '0644'
+          - demo1_build_verify_template.stat.checksum == demo1_build_verify_template_source.stat.checksum
+        quiet: true
+        fail_msg: The compose template unit on the host is not the checkout's hetzner/provision file, root:root mode 0644.
+
     # systemd has read the files: a reload ran, and the units load. Nothing is
     # started or enabled.
     - name: Ask systemd about a router instance
@@ -368,8 +399,96 @@
         quiet: true
         fail_msg: The candidate fragment is not the edge's global options and seven upstream snippets.
 
-    # What the role must never do. A file named for a Caddyfile anywhere on the
-    # host is the live edge or a copy of it, and a numbered slot directory under
+    # The production candidate: one Caddyfile, the pinned renderer's output for the two
+    # occupied slots, staged beside the edge fragment. The stat reads no checksum, and the
+    # content is read with no_log (ANS-16). Every expected value is written out here.
+    - name: Case candidate_staged_root_0600_when_token_present, list the staged candidates
+      ansible.builtin.find:
+        paths: '{{ verify_candidate_dir }}'
+        hidden: true
+        file_type: any
+      register: demo1_build_verify_candidate_list
+
+    - name: Case candidate_staged_root_0600_when_token_present, assert one Caddyfile and the fragment, and no per-slot file
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_candidate_list.files | map(attribute='path') | map('basename') | sort == ['Caddyfile', 'edge-upstreams.caddy']
+          - demo1_build_verify_candidate_list.files | map(attribute='path') | map('basename') | select('match', '^site-') | list | length == 0
+        quiet: true
+        fail_msg: The candidate directory does not hold exactly the Caddyfile and the edge fragment, or it holds a per-slot site file.
+
+    - name: Case candidate_staged_root_0600_when_token_present, look at the Caddyfile
+      ansible.builtin.stat:
+        path: '{{ verify_candidate_dir }}/Caddyfile'
+        follow: false
+        get_checksum: false
+      register: demo1_build_verify_caddyfile_stat
+
+    - name: Case candidate_staged_root_0600_when_token_present, assert it is root:root mode 0600
+      ansible.builtin.assert:
+        that:
+          - demo1_build_verify_caddyfile_stat.stat.isreg
+          - demo1_build_verify_caddyfile_stat.stat.pw_name == 'root'
+          - demo1_build_verify_caddyfile_stat.stat.gr_name == 'root'
+          - demo1_build_verify_caddyfile_stat.stat.mode == '0600'
+        quiet: true
+        fail_msg: The staged Caddyfile is not a regular file of root:root mode 0600.
+
+    - name: Case candidate_staged_root_0600_when_token_present, read the Caddyfile, hidden from the log
+      ansible.builtin.slurp:
+        src: '{{ verify_candidate_dir }}/Caddyfile'
+      register: demo1_build_verify_caddyfile_text
+      no_log: true
+
+    - name: Case candidate_staged_root_0600_when_token_present, assert the one wildcard site and the host matchers
+      ansible.builtin.assert:
+        that:
+          - lines | select('match', '^[^\s#}({]') | list == ['*.site-fixture.invalid {']
+          - text is not search('https://')
+          - lines | select('search', 'site-fixture[.]invalid') | map('trim') | list
+            == ['*.site-fixture.invalid {', '@slot0 host demo-0.site-fixture.invalid', '@slot1 host demo-1.site-fixture.invalid']
+          - text | regex_findall('demo-0[.]site-fixture[.]invalid') | length == 1
+          - text | regex_findall('demo-1[.]site-fixture[.]invalid') | length == 1
+          - lines | select('match', '^\s*handle @slot[0-9]+ [{]$') | map('trim') | list == ['handle @slot0 {', 'handle @slot1 {']
+          - lines | select('match', '^\s*tls(\s|$)') | map('trim') | list == ['tls {']
+          - lines | select('search', 'demo-dns-caddy-demo1-wildcard') | map('trim') | list
+            == ['dns hetzner {file./etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard}']
+          - text is not search('(?i)internal|local_certs')
+        quiet: true
+        fail_msg: >-
+          The staged Caddyfile is not one wildcard site of the fixture base with a host matcher for each of the two
+          occupied slots, the DNS-01 tls block naming the token path once, and no other site, interim certificate
+          or hostname outside a matcher.
+      vars:
+        text: '{{ demo1_build_verify_caddyfile_text.content | b64decode }}'
+        lines: '{{ (demo1_build_verify_caddyfile_text.content | b64decode).splitlines() }}'
+      no_log: true
+
+    # The stand-in token value is the canary prepare placed. The role only looks at the
+    # token file, so the value must be in the staged candidates and in the run's Ansible log
+    # (molecule.yml keeps it in the scenario's scratch directory). The log scan counts only
+    # because its control is found: the notice the stated skips printed.
+    - name: Case secrets_never_logged, read the staged candidates and the Ansible log, hidden from the log
+      ansible.builtin.set_fact:
+        demo1_build_verify_log: "{{ lookup('ansible.builtin.file', lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') ~ '/ansible.log') }}"
+        demo1_build_verify_staged_text: >-
+          {{ demo1_build_verify_caddyfile_text.content | b64decode }}{{ demo1_build_verify_candidate_text.content | b64decode }}
+      no_log: true
+
+    - name: Case secrets_never_logged, assert the stand-in token value is in no candidate and no log
+      ansible.builtin.assert:
+        that:
+          - "'Production candidate NOT staged: ' in demo1_build_verify_log"
+          - "'STAND-IN-DNS-TOKEN' not in demo1_build_verify_log"
+          - "'STAND-IN-DNS-TOKEN' not in demo1_build_verify_staged_text"
+        quiet: true
+        fail_msg: >-
+          The Ansible log does not hold the scan control, or the stand-in token value is in the log or in a staged
+          candidate (ANS-16). Either the scan read nothing, or the role read the token file and printed it.
+      no_log: true
+
+    # What the role must never do. A file named for a Caddyfile anywhere on the host but the
+    # staged candidate is the live edge or a copy of it, and a numbered slot directory under
     # /opt/branchleft is what the wrapper's reset makes. Neither is made here.
     - name: Look for any Caddyfile on the host
       ansible.builtin.find:
@@ -396,11 +515,13 @@
     - name: Assert no live edge was written, no slot was reset and the wrapper was never run
       ansible.builtin.assert:
         that:
-          - demo1_build_verify_caddyfiles.files | length == 0
+          - demo1_build_verify_caddyfiles.files | map(attribute='path') | list == ['/var/lib/branchleft/demo-candidates/Caddyfile']
           - demo1_build_verify_slot_dirs.files | length == 0
           - not demo1_build_verify_wrapper_lock.stat.exists
         quiet: true
-        fail_msg: A Caddyfile exists, a slot directory exists, or the wrapper's lock directory exists. The role must do none of these.
+        fail_msg: >-
+          A Caddyfile other than the staged candidate exists, a slot directory exists, or the wrapper's lock
+          directory exists. The role must do none of these.
 
     # The sudoers grant is broker_deploy's: still root's mode 0440.
     - name: Look at the sudoers grant

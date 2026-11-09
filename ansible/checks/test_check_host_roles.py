@@ -61,7 +61,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # The roles a real playbook applies after the pull roles: host_baseline (this change) and the
 # roles main wired before it (status_page, ci_login, host_inputs, breakglass_mint_host,
 # breakglass_grant_host), then edge1's host_inputs (the loader goes first, R11), egress_nat (the
-# NAT gateway, after host_baseline for its Docker and iptables), deploy_tooling and
+# NAT gateway, after host_baseline for its Docker and iptables), ci_jump (directly after ci_login;
+# it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
@@ -72,7 +73,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
-# last (it asserts the directory control_plane makes), and demo1's two build roles.
+# (it asserts the directory control_plane makes), the node exporter, and ring_controller_host
+# last of all so its failure holds nothing else back, and demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -80,6 +82,8 @@ APPLIED_ON_MAIN = {
         "host_baseline",
         "egress_nat",
         "ci_login",
+        "ci_jump",
+        "deploy_verifier",
         "deploy_tooling",
         "edge_stack",
         "node_exporter",
@@ -91,18 +95,22 @@ APPLIED_ON_MAIN = {
         "host_inputs",
         "host_baseline",
         "breakglass_mint_host",
+        "safety_channel_key",
         "status_page",
+        "deploy_verifier",
         "control_plane",
         "nextcloud_stack",
         "backup_worker",
         "backup_restore",
         "control_plane_db",
         "node_exporter",
+        "ring_controller_host",
     ],
     "app1": [
         "host_inputs",
         "host_baseline",
         "breakglass_grant_host",
+        "deploy_verifier",
         "website_app1",
         "deploy_tooling",
         "deploy_slot_keys",
@@ -111,6 +119,7 @@ APPLIED_ON_MAIN = {
     "db1": [
         "host_inputs",
         "host_baseline",
+        "deploy_verifier",
         "db1_stack",
         "db1_backup_timers",
         "node_exporter",
@@ -271,6 +280,29 @@ class HostRoleLists(unittest.TestCase):
         self._list_file(text.replace("  - status_page\n", "", 1))
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
+    # Safety class: ring_controller_host generates two keys on a host that holds the owner's
+    # calendar data, so it is on ops1's list and on no other host's. The control is the list,
+    # which is the owner's merge. Green first: the real tree passes and the role is on exactly
+    # one list. Red when the role is added to app1's or edge1's list and either host's playbook
+    # applies it (the exactly-one test and the refusal), and red when it is dropped from ops1's
+    # list.
+    def test_ring_controller_host_is_on_ops1_list_and_no_other(self) -> None:
+        self.assertEqual(check(ROOT), [])
+        holders = [host for host, names in self.listed.items() if "ring_controller_host" in names]
+        self.assertEqual(holders, ["ops1"])
+        for host in ("app1", "edge1"):
+            with self.subTest(host=host):
+                self.assertNotIn("ring_controller_host", self.listed[host])
+                self._playbook(host, _entry("ring_controller_host"))
+                self._assert_refused(host, f"role ring_controller_host is not on {host}'s list")
+
+    def test_ring_controller_host_dropped_from_ops1_list_is_refused(self) -> None:
+        path = self.ansible / HOST_ROLES_FILE
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("  - ring_controller_host\n", text, "the sabotage matched nothing")
+        self._list_file(text.replace("  - ring_controller_host\n", "", 1))
+        self._assert_refused("ops1", "role ring_controller_host is not on ops1's list")
+
     # Safety class: db1 is the production database host. It applies the two pull roles, the loader
     # of its private inputs, the host baseline, the stack, the backup timers, the node exporter,
     # then the grants, and none of the other roles on its list, which R9 allows because a playbook
@@ -290,6 +322,7 @@ class HostRoleLists(unittest.TestCase):
                 "pull_trigger",
                 "host_inputs",
                 "host_baseline",
+                "deploy_verifier",
                 "db1_stack",
                 "db1_backup_timers",
                 "node_exporter",
@@ -319,6 +352,8 @@ class HostRoleLists(unittest.TestCase):
                 "host_baseline",
                 "egress_nat",
                 "ci_login",
+                "ci_jump",
+                "deploy_verifier",
                 "deploy_tooling",
                 "edge_stack",
                 "node_exporter",
@@ -327,6 +362,7 @@ class HostRoleLists(unittest.TestCase):
                 "monitoring_stack",
             ],
         )
+        self.assertEqual(names.index("ci_jump"), names.index("ci_login") + 1)
         self.assertLess(names.index("ntfy_pager"), names.index("monitoring_stack"))
         self.assertEqual(names[-1], "monitoring_stack")
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
@@ -357,15 +393,19 @@ class HostRoleLists(unittest.TestCase):
                 "host_inputs",
                 "host_baseline",
                 "breakglass_mint_host",
+                "safety_channel_key",
                 "status_page",
+                "deploy_verifier",
                 "control_plane",
                 "nextcloud_stack",
                 "backup_worker",
                 "backup_restore",
                 "control_plane_db",
                 "node_exporter",
+                "ring_controller_host",
             ],
         )
+        self.assertEqual(names[-1], "ring_controller_host")
         self.assertLess(names.index("backup_worker"), names.index("backup_restore"))
         # The database role asserts the directory the control plane makes, so it follows it.
         self.assertLess(names.index("control_plane"), names.index("control_plane_db"))
@@ -395,6 +435,7 @@ class HostRoleLists(unittest.TestCase):
                 "host_inputs",
                 "host_baseline",
                 "breakglass_grant_host",
+                "deploy_verifier",
                 "website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",

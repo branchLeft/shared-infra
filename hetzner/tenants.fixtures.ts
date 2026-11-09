@@ -24,7 +24,7 @@ const DEPLOY_KEY = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE deploy@test';
 export const BASE_CONFIG: Record<string, string> = {
   'branchleft-hetzner-tenants:image': 'debian-13',
   'branchleft-hetzner-tenants:dbt1ServerType': 'cx23',
-  'branchleft-hetzner-tenants:edgetServerType': 'cpx22',
+  'branchleft-hetzner-tenants:edgetServerType': 'cx23',
   'branchleft-hetzner-tenants:ownerSshKeyNames': '["rob@branchleft.co.uk"]',
   'branchleft-hetzner-tenants:dbt1DeployPublicKey': DEPLOY_KEY,
   'branchleft-hetzner-tenants:edgetDeployPublicKey': DEPLOY_KEY,

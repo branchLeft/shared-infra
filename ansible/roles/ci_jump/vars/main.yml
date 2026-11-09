@@ -1,0 +1,42 @@
+---
+# Not part of the interface: role vars outrank inventory vars, so a caller cannot change these.
+# The module (library/ci_jump_authorized_keys.py) pins the same values for itself as the oracle
+# of its read-back; ansible/checks/test_ci_jump_pins.py holds these copies equal to it. The
+# constants are the same on every jump host: a host differs only by its owner's variables.
+ci_jump_port: 22
+ci_jump_fixed_options: restrict,port-forwarding
+ci_jump_forced_command: /usr/sbin/nologin
+# The root-owned key file and the sshd drop-in. The account's name is held out of this public
+# repository and of every public log, so no path here is made from it: the names carry the role's
+# purpose only. The drop-in sorts ahead of the earlier hand-made one (50-), so while both are on
+# the host sshd already applies the new one, and the read-back proves it before the old one goes.
+ci_jump_key_dir: /etc/ssh/authorized_keys.d
+ci_jump_key_file: /etc/ssh/authorized_keys.d/branchleft-jump
+ci_jump_sshd_config_dir: /etc/ssh/sshd_config.d
+ci_jump_sshd_dropin: /etc/ssh/sshd_config.d/40-branchleft-jump.conf
+ci_jump_sshd_service: ssh
+# Present while a reload of sshd is owed: made before the first file is written and removed after
+# the last read-back, so a pull that dies in between is found by the next run. /run is cleared at
+# boot, and a boot starts sshd afresh.
+ci_jump_reload_marker: /run/branchleft-jump-reload-owed
+
+# The earlier hand-made layout, which the role replaces. Its paths are made from the account's
+# name (the layout of the private jump-host runbook), so they exist only here, in memory, and every
+# task that handles one hides its result. They are removed only after the new files have read back.
+ci_jump_legacy_dir: '/etc/ssh/{{ ci_jump_user }}'
+ci_jump_legacy_key_file: '/etc/ssh/{{ ci_jump_user }}/authorized_keys'
+ci_jump_legacy_dropin: '/etc/ssh/sshd_config.d/50-branchleft-{{ ci_jump_user }}.conf'
+ci_jump_legacy_files:
+  - '{{ ci_jump_legacy_dropin }}'
+  - '{{ ci_jump_legacy_key_file }}'
+
+# One account has one owning role. These are the accounts other roles own, by role, and the jump
+# account may be none of them: two roles writing one account's keys would remove each other's.
+# A role may not call another (ANS-12) nor load its variables (check_enrolment R6), so these are
+# literal copies; the pins test reads ci_login_user and tunnel_account_user from their roles'
+# vars by name and fails when a copy differs. root is owned by no role and belongs to no
+# pipeline.
+ci_jump_owned_accounts:
+  root: root
+  ci_login: ansible-ci
+  tunnel_account: dbtunnel

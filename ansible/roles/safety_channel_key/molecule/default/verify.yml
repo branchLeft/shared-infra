@@ -1,0 +1,277 @@
+---
+# Every task that handles the key's text has no_log and diff: false: the scan at the end reads
+# the log of this play too. The key is read only from the throwaway container of this run.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    # --- The files the role made.
+    - name: Look at the key directory
+      ansible.builtin.stat:
+        path: '{{ scenario_directory }}'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: safety_channel_key_verify_directory
+
+    - name: Look at the key file
+      ansible.builtin.stat:
+        path: '{{ scenario_key }}'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: safety_channel_key_verify_key_stat
+
+    - name: Look at the public file
+      ansible.builtin.stat:
+        path: '{{ scenario_pub }}'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: safety_channel_key_verify_pub_stat
+
+    - name: Require the directory, the key and the public file as the role means them
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_verify_directory.stat.isdir
+          - safety_channel_key_verify_directory.stat.mode == '0700'
+          - safety_channel_key_verify_directory.stat.pw_name == 'root'
+          - safety_channel_key_verify_directory.stat.gr_name == 'root'
+          - safety_channel_key_verify_key_stat.stat.isreg
+          - safety_channel_key_verify_key_stat.stat.mode == '0400'
+          - safety_channel_key_verify_key_stat.stat.pw_name == 'root'
+          - safety_channel_key_verify_key_stat.stat.gr_name == 'root'
+          - safety_channel_key_verify_key_stat.stat.size == 44
+          - safety_channel_key_verify_key_stat.stat.nlink == 1
+          - safety_channel_key_verify_pub_stat.stat.isreg
+          - safety_channel_key_verify_pub_stat.stat.mode == '0444'
+          - safety_channel_key_verify_pub_stat.stat.pw_name == 'root'
+        quiet: true
+
+    - name: List the directory, to require that nothing else is in it
+      ansible.builtin.find:
+        paths: '{{ scenario_directory }}'
+        hidden: true
+        file_type: any
+      register: safety_channel_key_verify_listing
+
+    - name: Require exactly the key and the public file, and no temporary file
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_verify_listing.files | map(attribute='path') | sort == [scenario_key, scenario_pub] | sort
+        quiet: true
+
+    # --- The key's shape. It is read through hidden tasks, held in hidden facts.
+    - name: Read the key
+      ansible.builtin.slurp:
+        src: '{{ scenario_key }}'
+      register: safety_channel_key_verify_key_read
+      no_log: true
+
+    - name: Hold the key text and the form slurp prints it in
+      ansible.builtin.set_fact:
+        safety_channel_key_verify_key_text: '{{ safety_channel_key_verify_key_read.content | b64decode }}'
+        safety_channel_key_verify_key_slurped: '{{ safety_channel_key_verify_key_read.content }}'
+      no_log: true
+      diff: false
+
+    - name: Require the text to be the base64 of exactly 32 bytes, with no newline
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_verify_key_text | length == 44
+          - safety_channel_key_verify_key_text is match('^[A-Za-z0-9+/]{43}=$')
+          - safety_channel_key_verify_key_text | b64decode(encoding='latin-1') | length == 32
+        quiet: true
+      no_log: true
+
+    # --- The public half is the one the apply printed.
+    - name: Read the public file
+      ansible.builtin.slurp:
+        src: '{{ scenario_pub }}'
+      register: safety_channel_key_verify_pub_read
+
+    - name: Hold the public half
+      ansible.builtin.set_fact:
+        safety_channel_key_verify_pub_text: '{{ (safety_channel_key_verify_pub_read.content | b64decode) | trim }}'
+
+    - name: Read the log of the runs so far
+      ansible.builtin.set_fact:
+        safety_channel_key_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+      diff: false
+
+    - name: Require the public half to be 32 bytes and to be the one the apply printed
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_verify_pub_text | b64decode(encoding='latin-1') | length == 32
+          - safety_channel_key_verify_pub_text != safety_channel_key_verify_key_text
+          - "('Channel signing public half (base64): ' ~ safety_channel_key_verify_pub_text) in safety_channel_key_verify_log"
+        quiet: true
+      no_log: true
+
+    # --- An existing key is left alone by a further apply, and by the adopt path.
+    - name: Apply the role again, as a rerun does
+      ansible.builtin.include_role:
+        name: branchleft.safety_channel_key
+
+    - name: Require that the rerun changed nothing and made no key
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_result is not changed
+          - not safety_channel_key_result.created
+          - not safety_channel_key_result.adopted
+          - not safety_channel_key_result.public_changed
+          - safety_channel_key_result.temp_cleaned == 0
+          - safety_channel_key_result.public_key == safety_channel_key_verify_pub_text
+        quiet: true
+      no_log: true
+
+    - name: Adopt the key to another account, which changes the owner and never the bytes
+      ansible.builtin.include_role:
+        name: branchleft.safety_channel_key
+      vars:
+        safety_channel_key_owner: '{{ scenario_other_owner }}'
+        safety_channel_key_group: '{{ scenario_other_group }}'
+
+    - name: Look at the key and directory after the adopt
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_directory }}'
+        - '{{ scenario_key }}'
+      register: safety_channel_key_verify_adopted_stat
+
+    - name: Read the key after the adopt
+      ansible.builtin.slurp:
+        src: '{{ scenario_key }}'
+      register: safety_channel_key_verify_adopted_read
+      no_log: true
+
+    - name: Require the owner to have changed, and the bytes and the public half not to
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_result is changed
+          - safety_channel_key_result.adopted
+          - not safety_channel_key_result.created
+          - safety_channel_key_result.public_key == safety_channel_key_verify_pub_text
+          - safety_channel_key_verify_adopted_stat.results | map(attribute='stat.pw_name') | unique | list == [scenario_other_owner]
+          - safety_channel_key_verify_adopted_stat.results | map(attribute='stat.gr_name') | unique | list == [scenario_other_group]
+          - safety_channel_key_verify_adopted_stat.results[1].stat.mode == '0400'
+          - safety_channel_key_verify_adopted_stat.results[0].stat.mode == '0700'
+          - safety_channel_key_verify_adopted_read.content == safety_channel_key_verify_key_slurped
+        quiet: true
+      no_log: true
+
+    - name: Apply the adopted owner again, which changes nothing
+      ansible.builtin.include_role:
+        name: branchleft.safety_channel_key
+      vars:
+        safety_channel_key_owner: '{{ scenario_other_owner }}'
+        safety_channel_key_group: '{{ scenario_other_group }}'
+
+    - name: Require the second apply of the adopted owner to change nothing
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_result is not changed
+        quiet: true
+
+    # A mode with no group or other bit but not 0400 is the narrower case the role adopts.
+    - name: Set the key's mode to 0600, as a person might have
+      ansible.builtin.file:
+        path: '{{ scenario_key }}'
+        mode: '0600'
+
+    - name: Adopt back to root, which also restores the mode
+      ansible.builtin.include_role:
+        name: branchleft.safety_channel_key
+
+    - name: Look at the key after the adopt back
+      ansible.builtin.stat:
+        path: '{{ scenario_key }}'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: safety_channel_key_verify_restored_stat
+
+    - name: Read the key after the adopt back
+      ansible.builtin.slurp:
+        src: '{{ scenario_key }}'
+      register: safety_channel_key_verify_restored_read
+      no_log: true
+
+    - name: Require root, mode 0400 and the same bytes again
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_result is changed
+          - safety_channel_key_result.adopted
+          - safety_channel_key_verify_restored_stat.stat.pw_name == 'root'
+          - safety_channel_key_verify_restored_stat.stat.mode == '0400'
+          - safety_channel_key_verify_restored_read.content == safety_channel_key_verify_key_slurped
+        quiet: true
+      no_log: true
+
+    # --- The log holds no part of the key, and the scan can find something.
+    - name: Print the scan's control, a key-shaped text that is meant to be in the log
+      ansible.builtin.debug:
+        msg: 'SCENARIO_SCAN_CONTROL {{ scenario_scan_control }}'
+
+    - name: Read the log again, now that the control is in it
+      ansible.builtin.set_fact:
+        safety_channel_key_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+      diff: false
+
+    - name: Require the log to hold the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in safety_channel_key_verify_log"
+          - "'Make the channel signing key if it is absent' in safety_channel_key_verify_log"
+          - "('SCENARIO_SCAN_CONTROL ' ~ scenario_scan_control) in safety_channel_key_verify_log"
+        fail_msg: The log lacks the canary, a role task name or the scan control, so an empty scan would prove nothing.
+        quiet: true
+
+    - name: Require the log to hold neither the key's text nor the form slurp prints it in
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_verify_key_text not in safety_channel_key_verify_log
+          - safety_channel_key_verify_key_slurped not in safety_channel_key_verify_log
+        fail_msg: The key, or its slurp form, is in the Ansible log.
+        quiet: true
+      no_log: true
+
+    - name: Look in every file this run left on the controller for the key
+      delegate_to: localhost
+      ansible.builtin.find:
+        paths: '{{ scenario_ephemeral_dir }}'
+        recurse: true
+        hidden: true
+        # Without this the pattern is matched at the start of each line only, and a key in the
+        # middle of a line would not be found.
+        read_whole_file: true
+        contains: '{{ safety_channel_key_verify_key_text | regex_escape }}'
+      register: safety_channel_key_verify_tree_key
+      no_log: true
+
+    # The control is not a secret, so this task is not hidden: a scan that finds nothing is
+    # shown with the directory it looked in.
+    - name: Look in the same files for the control
+      delegate_to: localhost
+      ansible.builtin.find:
+        paths: '{{ scenario_ephemeral_dir }}'
+        recurse: true
+        hidden: true
+        read_whole_file: true
+        contains: '{{ scenario_scan_control | regex_escape }}'
+      register: safety_channel_key_verify_tree_control
+
+    - name: Require the key in no file on the controller, and the control in some
+      ansible.builtin.assert:
+        that:
+          - safety_channel_key_verify_tree_key.files | length == 0
+          - safety_channel_key_verify_tree_control.files | length > 0
+        fail_msg: The key is in a file on the controller, or the control scan found nothing.
+        quiet: true
+      no_log: true

@@ -19,8 +19,24 @@ second Compose stack beside it, does not create the host, and assumes
 `branchleft-compose@.service`, Docker and `/usr/local/sbin/branchleft-deploy`
 are already installed.
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_IPV4=$(hcloud server ip edge1)
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active branchleft-compose@edge &&
   test -x /usr/bin/python3 &&
@@ -672,7 +688,7 @@ publishes Grafana on `10.20.1.10:3000` only, and `10.20.1.10` does not route
 from the public internet.
 
 ```bash
-EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
+EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o format='{{(index .PrivateNet 0).IP}}')
 ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:"$EDGE1_PRIVATE_IPV4":3000 root@"$EDGE1_IPV4" -N &
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 ```
@@ -680,7 +696,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 Expect `200`, reached only through the tunnel. Confirm the registry side too:
 
 ```bash
-grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/Caddyfile
+grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/caddy/Caddyfile
 ```
 
 Expect no match in either file -- Grafana carries no hostname, no Caddy

@@ -100,12 +100,13 @@ fi
 [ -n "${EDGE_VALIDATED_PIN:-}" ] || fail 74 "no validated pin was given, so nothing was validated in this run"
 [ "$EDGE_VALIDATED_PIN" = "$image" ] || fail 74 "$EDGE_IMAGE_ENV changed since the candidates were validated"
 
-# 1. The Caddyfile, written into the existing file, so the inode the container's
-# single-file bind mount holds is the inode that changes. A rename would leave the
-# container reading the old file. A power cut during the write can leave a torn
+# 1. The Caddyfile, written into the existing file. The container mounts its
+# directory (caddy/), so a rename would also be seen; the write stays in place so a
+# host still on the old single-file mount keeps reading the file that changes until
+# its unit is recreated. A power cut during the write can leave a torn
 # file; the next run's comparison sees it (README, "Named limits").
 if [ "$EDGE_CADDY_WRITE" = 1 ]; then
-  dest=$EDGE_PROJECT_DIR/Caddyfile
+  dest=$EDGE_PROJECT_DIR/caddy/Caddyfile
   if [ -e "$dest" ] || [ -L "$dest" ]; then
     { [ -f "$dest" ] && [ ! -L "$dest" ]; } || fail 66 "$dest is not a regular file"
   else
@@ -158,7 +159,7 @@ fi
 if [ "$EDGE_CADDY_RELOAD" = 1 ]; then
   if is_running caddy; then
     dc exec -T caddy caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile || fail 72 "caddy reload failed"
-    same_inside caddy /etc/caddy/Caddyfile "$EDGE_PROJECT_DIR/Caddyfile" 73
+    same_inside caddy /etc/caddy/Caddyfile "$EDGE_PROJECT_DIR/caddy/Caddyfile" 73
     say caddy-reloaded
   else
     say caddy-not-running
