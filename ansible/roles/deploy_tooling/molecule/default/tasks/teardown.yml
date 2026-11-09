@@ -18,6 +18,21 @@
     enabled: false
   when: deploy_tooling_scenario_teardown_unit.stat.exists
 
+- name: Look at the watch timer file
+  ansible.builtin.stat:
+    path: '{{ deploy_tooling_watch_timer_path }}'
+  register: deploy_tooling_scenario_teardown_watch
+
+- name: Stop and disable the watch timer and its service
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+    state: stopped
+    enabled: false
+  loop:
+    - '{{ deploy_tooling_watch_timer_name }}'
+    - '{{ deploy_tooling_watch_unit_name }}'
+  when: deploy_tooling_scenario_teardown_watch.stat.exists
+
 - name: Remove the unit file and the program
   ansible.builtin.file:
     path: '{{ item }}'
@@ -25,6 +40,10 @@
   loop:
     - '{{ deploy_tooling_policy_unit_path }}'
     - '{{ deploy_tooling_reconciler_path }}'
+    - '{{ deploy_tooling_watch_timer_path }}'
+    - '{{ deploy_tooling_watch_unit_path }}'
+    - '{{ deploy_tooling_watch_program_path }}'
+    - '{{ deploy_tooling_watch_checks_path }}'
     - /etc/molecule-ip-address
 
 - name: Let systemd forget the unit, and any failure it recorded
@@ -40,6 +59,13 @@
   register: deploy_tooling_scenario_reset_failed
   changed_when: false
   failed_when: deploy_tooling_scenario_reset_failed.rc not in [0, 1]
+
+- name: Clear the failed state of the watch service
+  ansible.builtin.command:
+    argv: [systemctl, reset-failed, '{{ deploy_tooling_watch_unit_name }}']
+  register: deploy_tooling_scenario_reset_failed_watch
+  changed_when: false
+  failed_when: deploy_tooling_scenario_reset_failed_watch.rc not in [0, 1]
 
 - name: Reset the chains to what Docker leaves
   ansible.builtin.include_tasks: reset_chains.yml

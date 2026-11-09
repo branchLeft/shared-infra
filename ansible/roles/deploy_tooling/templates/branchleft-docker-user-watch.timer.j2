@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic trigger for branchleft-docker-user-watch.service
+
+[Timer]
+# A few minutes after boot, once Docker and the policy unit have had time to build the
+# chain, then every five minutes from the end of the last run. A failed run does not stop
+# the timer: it fires again, so a chain that stays reopened keeps the unit failed.
+OnBootSec=3min
+OnUnitInactiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

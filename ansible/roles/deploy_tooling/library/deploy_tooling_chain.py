@@ -16,7 +16,12 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Literal
 
-from ansible.module_utils.basic import AnsibleModule
+try:
+    from ansible.module_utils.basic import AnsibleModule
+except ModuleNotFoundError:
+    # A plain Python run on a host with no Ansible: the chain watcher imports the checks
+    # below and never builds a module. main() refuses to run without it.
+    AnsibleModule = None
 
 DOCUMENTATION = r"""
 module: deploy_tooling_chain
@@ -1203,7 +1208,14 @@ def run(values: Mapping[str, object], runner: Runner) -> dict[str, object]:
 
 
 def main() -> None:
-    """Run as an Ansible module."""
+    """Run as an Ansible module.
+
+    Raises:
+        SystemExit: when Ansible cannot be imported, because there is no module to run.
+    """
+    if AnsibleModule is None:
+        message = "deploy_tooling_chain runs as an Ansible module, and Ansible is not importable"
+        raise SystemExit(message)
     module = AnsibleModule(
         argument_spec=ARGUMENT_SPEC, required_if=REQUIRED_IF, supports_check_mode=True
     )

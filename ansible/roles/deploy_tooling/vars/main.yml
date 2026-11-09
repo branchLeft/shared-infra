@@ -76,3 +76,50 @@ deploy_tooling_app_file_targets:
     path: '{{ deploy_tooling_policy_unit_path }}'
     mode: '0644'
     kind: file
+
+# ----- The watch: a timer that reads the firewall chains between runs of the role -----
+
+# Only a host of class app gets these. They are not in the lists above because no hand-run
+# script installs them: the parity check between the role and the scripts reads those lists.
+# The watch program and the checks it runs are the role's own library files, so there is one
+# copy of each in the repository; the service and the timer are templates (the variant is
+# the role's expectation for the host). The program and the checks sit side by side in a
+# directory that exists on every host, because the role checks every directory on the path
+# to a target before it writes anything, so a directory of its own could not be created.
+deploy_tooling_watch_program_path: /usr/local/lib/branchleft_docker_user_watch.py
+deploy_tooling_watch_checks_path: /usr/local/lib/deploy_tooling_chain.py
+deploy_tooling_watch_unit_name: branchleft-docker-user-watch.service
+deploy_tooling_watch_timer_name: branchleft-docker-user-watch.timer
+deploy_tooling_watch_unit_path: /etc/systemd/system/branchleft-docker-user-watch.service
+deploy_tooling_watch_timer_path: /etc/systemd/system/branchleft-docker-user-watch.timer
+
+# Copied byte for byte from the role; source is the file's place under the role's directory.
+deploy_tooling_watch_copied_targets:
+  - label: watch program
+    source: library/branchleft_docker_user_watch.py
+    path: '{{ deploy_tooling_watch_program_path }}'
+    mode: '0755'
+    kind: file
+  - label: watch checks
+    source: library/deploy_tooling_chain.py
+    path: '{{ deploy_tooling_watch_checks_path }}'
+    mode: '0644'
+    kind: file
+
+# Rendered from templates/ (the timer has no variable in it; it is a template only because
+# the checks that bind the role to the hand-run scripts allow no file under files/).
+deploy_tooling_watch_rendered_targets:
+  - label: watch service
+    template: branchleft-docker-user-watch.service.j2
+    path: '{{ deploy_tooling_watch_unit_path }}'
+    mode: '0644'
+    kind: file
+  - label: watch timer
+    template: branchleft-docker-user-watch.timer.j2
+    path: '{{ deploy_tooling_watch_timer_path }}'
+    mode: '0644'
+    kind: file
+
+# Every file the watch puts on a host, for the checks every target gets.
+deploy_tooling_watch_file_targets: >-
+  {{ deploy_tooling_watch_copied_targets + deploy_tooling_watch_rendered_targets }}

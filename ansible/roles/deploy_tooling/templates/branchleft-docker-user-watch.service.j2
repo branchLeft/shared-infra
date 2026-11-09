@@ -1,0 +1,18 @@
+# Installed by the deploy_tooling role on a host of class app. A oneshot that reads the
+# firewall chains and exits non-zero, so the unit is failed, when the DOCKER-USER
+# isolation policy has been reopened (exit 1) or cannot be checked (exit 2). It writes
+# nothing and repairs nothing. The variant is the role's expectation for this host.
+[Unit]
+Description=branchLeft app-host DOCKER-USER isolation policy watch
+After=docker.service branchleft-docker-user-policy.service
+
+[Service]
+Type=oneshot
+SyslogIdentifier=branchleft-docker-user-watch
+ExecStart=/usr/bin/python3 -I {{ deploy_tooling_watch_program_path }} --variant {{ deploy_tooling_policy_variant }} --reconciler {{ deploy_tooling_reconciler_path }}{% for name in deploy_tooling_foreign_chain_allowlist %} --allow {{ name | quote }}{% endfor %}
+
+# Reads the firewall and needs no other privilege. No mount-namespace option (PrivateTmp,
+# ProtectSystem): the program writes nothing, and the test container has no capability to
+# make a mount namespace.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
