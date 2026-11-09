@@ -17,7 +17,7 @@ from check_enrolment import ROOT
 
 PROVISION = ROOT / "hetzner" / "provision"
 ROLE = ROOT / "ansible" / "roles" / "host_baseline"
-HEREDOC_OPEN = 'cat > "$TMP" <<\'EOF\''
+HEREDOC_OPEN = "cat > \"$TMP\" <<'EOF'"
 HEREDOC_CLOSE = "EOF"
 DOCKER_ARCH = "amd64"
 DOCKER_CODENAME = "trixie"
