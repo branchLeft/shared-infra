@@ -465,7 +465,16 @@ class TaskTests(unittest.TestCase):
     def test_the_restart_handler_runs_only_for_a_service_that_is_meant_to_run(self) -> None:
         handlers = cast("list[dict[str, object]]", load(ROLE / "handlers" / "main.yml"))
         restart = next(h for h in handlers if str(h["name"]).startswith("Restart"))
-        self.assertEqual(restart["when"], "safety_service_run | bool")
+        for run, check, restarts in (
+            (False, False, False),
+            (False, True, False),
+            (True, False, True),
+            (True, True, False),
+        ):
+            with self.subTest(run=run, check=check):
+                variables = {"safety_service_run": run, "ansible_check_mode": check}
+                expression = "{{ " + str(restart["when"]) + " }}"
+                self.assertEqual(render(expression, variables), str(restarts))
 
     def test_the_account_is_a_system_account_that_cannot_log_in(self) -> None:
         user = args_of(named("Create the service account"))
