@@ -216,23 +216,34 @@ under `branchLeft/ghost-platform`. The check runs `VERIFIER`, the host copy of
 ghost-platform's `scripts/verify-image-attestation.sh`, always with
 `--bundle-from-oci`, and any non-zero exit refuses the deploy.
 
-It is default deny and it fails closed. An image name that is not on the
-register is refused with a `DeployError` naming the image and the register; the
-verifier is not run for it and nothing is deployed unverified. A missing
-verifier, an unknown digest, an unsigned image and an image signed by another
-workflow are refused too, and each refusal leaves the pin file and the running
-stack as they were. There is no argument, environment variable or stack setting
-that skips it. Adding an image to deploy here is a reviewed change to
-`ATTESTED_IMAGES`, with the workflow that signs it.
+It is default deny and it fails closed. There are two tables, and a name is on
+one of them only:
 
-The register is looked up by registry host and path alone (`attested_name`), as
+- `ATTESTED_IMAGES` names are verified. A missing verifier, an unknown digest,
+  an unsigned image and an image signed by another workflow are all refused, and
+  each refusal leaves the pin file and the running stack as they were. There is
+  no argument, environment variable or stack setting that skips it.
+- `UNATTESTED_ALLOWED` names deploy **without verification**, and each deploy
+  logs `unattested by allowance: <name> (<reason>)` so it shows in the deploy
+  log. Today it holds exactly four images: `ghcr.io/branchleft/edge-caddy`,
+  `ghcr.io/branchleft/website`, `mysql` and `ghcr.io/branchleft/mailgun-shim`.
+- Any other name is refused with a `DeployError` naming the image and both
+  tables. The verifier is not run for it and nothing is deployed.
+
+The four allowed images are **not signed or attested today**. The allowance
+table is the owner-visible list of that gap: each entry is a debt, retired by
+adding an attestation step to the image's publish workflow and moving the name
+to `ATTESTED_IMAGES`. Adding a name to either table is a reviewed owner
+decision, never a side effect of another change.
+
+Both tables are looked up by registry host and path alone (`attested_name`), as
 an exact match. A tag or a registry port on the reference is a spelling, not
 another image: the host pulls the digest, so `name:tag@sha256:...` and
-`host:443/name@sha256:...` are verified exactly as `name@sha256:...` is, and the
-verifier is given the register name and the digest. Nothing else is folded in:
-another registry host for the same path, an extra path component, or a name
-that only starts with a registered one (`ghost-tenant-evil`) is a different
-image, off the register, and refused.
+`host:443/name@sha256:...` are treated exactly as `name@sha256:...` is, and a
+registered image's verifier is given the register name and the digest. Nothing
+else is folded in: another registry host for the same path (`docker.io/library/mysql`
+is not `mysql`), an extra path component, or a name that only starts with a known
+one (`ghost-tenant-evil`) is a different image, on neither table, and refused.
 
 The rollback restore is not re-verified. It returns to the pin that last ran,
 and blocking it could leave the host with nothing running.
@@ -296,8 +307,8 @@ the gh release named in its `vars/main.yml`, with its tarball digest checked at
 download. The role is applied on `edge1`, `app1`, `ops1` and `db1`, before the
 first role that runs this wrapper. A host whose wrapper came from the hand-run
 `30-install-deploy-tooling.sh` and not from a role has no verifier until the
-role runs there. Such a host refuses every registered image, and refuses every
-other image too.
+role runs there. Such a host refuses every registered image, deploys the
+allowed unattested ones as before, and refuses every other name.
 
 ### Live checks, in order, after the apply
 

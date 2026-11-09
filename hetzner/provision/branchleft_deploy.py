@@ -68,14 +68,26 @@ VERIFIER = "/usr/local/sbin/branchleft-verify-image"
 
 ATTESTED_REPO = "branchLeft/ghost-platform"
 
-# The register: each image this host deploys, mapped to the one workflow whose
-# attestation it must carry. Default deny: an image name absent from this table
-# is refused, never deployed unverified. Adding an image is a reviewed diff; an
-# image it lists is refused unless attested by exactly that workflow on
+# The register: each image this host verifies before it deploys, mapped to the
+# one workflow whose attestation it must carry. Default deny: a name on neither
+# this table nor UNATTESTED_ALLOWED is refused. Adding an image is a reviewed
+# diff; an image it lists is refused unless attested by exactly that workflow on
 # refs/heads/main.
 ATTESTED_IMAGES: dict[str, str] = {
     "ghcr.io/branchleft/ghost-tenant": f"{ATTESTED_REPO}/.github/workflows/registry-push.yml",
     "ghcr.io/branchleft/portal-apps": f"{ATTESTED_REPO}/.github/workflows/portal-apps-image.yml",
+}
+
+# The allowance: the images that deploy here today WITHOUT an attestation check,
+# each with the reason. This table is the owner-visible list of that gap: every
+# entry is a debt to retire by adding an attestation step and moving the name to
+# ATTESTED_IMAGES. Adding an entry is a reviewed owner decision. A name is on one
+# table only, matched on the exact name; a name on neither is refused.
+UNATTESTED_ALLOWED: dict[str, str] = {
+    "ghcr.io/branchleft/edge-caddy": "no attestation step in its publish workflow yet",
+    "ghcr.io/branchleft/website": "built in another repo, not attested for this host yet",
+    "mysql": "third-party image",
+    "ghcr.io/branchleft/mailgun-shim": "built in another repo, not attested for this host yet",
 }
 
 
@@ -124,15 +136,16 @@ def attested_name(image: str) -> str:
 
 
 def verify_attestation(image: str, *, run=subprocess.run) -> None:
-    """Verify an image's attestation before anything touches the host.
+    """Decide whether an image may deploy, before anything touches the host.
 
-    Default deny. Raises DeployError for an image name outside the register,
-    without running the verifier, and for a registered image that cannot be
-    verified, for any reason: refused, unknown digest, or the verifier missing.
-    Returns only when a registered image verified. The register is matched on
-    the exact name (`attested_name`), so a name that merely starts with a
-    registered one is outside it. There is no argument, environment variable or
-    stack setting that skips this.
+    Default deny, by exact name (`attested_name`): a name that merely starts
+    with a known one is unknown. A name in ATTESTED_IMAGES is verified, and a
+    refusal, an unknown digest or a missing verifier raises DeployError. A name
+    in UNATTESTED_ALLOWED returns without verification and logs one
+    `unattested by allowance` line with its reason. Any other name raises
+    DeployError naming the image and both tables, without running the verifier.
+    There is no argument, environment variable or stack setting that skips the
+    check for a registered image.
 
     The design is fail-closed. The host holds no GitHub credential and the
     verifier needs none (see branchleft_deploy.md). A gh that still asks for a
@@ -142,11 +155,19 @@ def verify_attestation(image: str, *, run=subprocess.run) -> None:
     name = attested_name(image)
     signer = ATTESTED_IMAGES.get(name)
     if signer is None:
+        reason = UNATTESTED_ALLOWED.get(name)
+        if reason is not None:
+            print(
+                f"branchleft-deploy: unattested by allowance: {name} ({reason})",
+                file=sys.stderr,
+            )
+            return
         raise DeployError(
-            f"{image} is not on the register of images this host deploys "
-            f"({', '.join(sorted(ATTESTED_IMAGES))}); refusing to deploy an image "
-            "that is not attested. Adding an image is a reviewed change to "
-            "ATTESTED_IMAGES"
+            f"{image} is on neither the register of attested images "
+            f"({', '.join(sorted(ATTESTED_IMAGES))}) nor the allowance of "
+            f"unattested ones ({', '.join(sorted(UNATTESTED_ALLOWED))}); refusing "
+            "to deploy it. Adding an image to either table is a reviewed change "
+            "to branchleft_deploy.py"
         )
     # The verifier takes registry/name@digest only, so it is given the register
     # name and the digest, however the image was spelled.

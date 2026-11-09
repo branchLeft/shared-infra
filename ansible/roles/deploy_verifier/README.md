@@ -37,8 +37,8 @@ The role is applied by the playbooks of every host that runs the deploy wrapper:
 wrapper-calling role without applying this one first.
 
 A host that gets the wrapper from the hand-run `30-install-deploy-tooling.sh` and not from a role
-has no verifier until this role runs there. Such a host refuses every registered image, and
-every other image too (default deny).
+has no verifier until this role runs there. Such a host refuses every registered image, deploys
+the allowed unattested ones as before, and refuses every other name (default deny).
 
 ## Check mode
 

@@ -748,30 +748,105 @@ class AttestationTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.env_path()))
         return str(raised.exception)
 
-    def test_an_image_name_off_the_register_is_refused_and_never_deployed(self):
+    def test_an_image_name_on_neither_table_is_refused_and_never_deployed(self):
         for image in (
             f"registry.example:5000/library/mysql:8@sha256:{'d' * 64}",
             f"docker.io/library/mysql@sha256:{'d' * 64}",
-            f"mysql:8.0@sha256:{'d' * 64}",
+            f"ghcr.io/branchleft/new-image@sha256:{DIGEST}",
             VALID_IMAGE,
         ):
             with self.subTest(image=image):
                 self.assert_refused_unregistered(image)
 
-    def test_the_refusal_names_the_image_and_the_register(self):
+    def test_the_refusal_names_the_image_and_both_tables(self):
         image = f"docker.io/library/mysql@sha256:{'d' * 64}"
         message = self.assert_refused_unregistered(image)
         self.assertIn(image, message)
         self.assertIn("register", message)
-        for registered in bd.ATTESTED_IMAGES:
-            self.assertIn(registered, message)
+        self.assertIn("allowance", message)
+        for name in (*bd.ATTESTED_IMAGES, *bd.UNATTESTED_ALLOWED):
+            self.assertIn(name, message)
 
-    def test_verify_attestation_itself_refuses_an_unregistered_name(self):
+    def test_verify_attestation_itself_refuses_an_unknown_name(self):
         def boom(argv, **kwargs):
-            raise AssertionError("the verifier must not run for an unregistered name")
+            raise AssertionError("the verifier must not run for an unknown name")
 
         with self.assertRaises(bd.DeployError):
             bd.verify_attestation(f"ghcr.io/branchleft/example@sha256:{DIGEST}", run=boom)
+
+    def test_the_allowance_table_is_exactly_the_four_live_unattested_names(self):
+        self.assertEqual(
+            sorted(bd.UNATTESTED_ALLOWED),
+            [
+                "ghcr.io/branchleft/edge-caddy",
+                "ghcr.io/branchleft/mailgun-shim",
+                "ghcr.io/branchleft/website",
+                "mysql",
+            ],
+        )
+        for name, reason in bd.UNATTESTED_ALLOWED.items():
+            with self.subTest(name=name):
+                self.assertTrue(reason.strip())
+                self.assertNotIn("\n", reason)
+
+    def test_no_name_is_on_both_tables(self):
+        self.assertEqual(set(bd.ATTESTED_IMAGES) & set(bd.UNATTESTED_ALLOWED), set())
+
+    def deploy_allowed(self, image):
+        run = FakeRun([0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy(image, run)
+        return run, stderr.getvalue()
+
+    def test_each_allowed_name_deploys_without_the_verifier_and_says_so(self):
+        spellings = {
+            "ghcr.io/branchleft/edge-caddy": f"ghcr.io/branchleft/edge-caddy@sha256:{DIGEST}",
+            "ghcr.io/branchleft/website": f"ghcr.io/branchleft/website@sha256:{DIGEST}",
+            "ghcr.io/branchleft/mailgun-shim": (
+                f"ghcr.io/branchleft/mailgun-shim@sha256:{DIGEST}"
+            ),
+            "mysql": f"mysql:8.0.43@sha256:{DIGEST}",
+        }
+        self.assertEqual(sorted(spellings), sorted(bd.UNATTESTED_ALLOWED))
+        for name, image in spellings.items():
+            with self.subTest(name=name):
+                run, log = self.deploy_allowed(image)
+                self.assertEqual(
+                    run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
+                )
+                self.assertEqual(bd.read_current_image(self.env_path()), image)
+                self.assertIn(
+                    f"unattested by allowance: {name} ({bd.UNATTESTED_ALLOWED[name]})",
+                    log,
+                )
+
+    def test_an_allowed_name_with_a_tag_or_port_is_still_that_name(self):
+        image = f"ghcr.io:443/branchleft/website:v1@sha256:{DIGEST}"
+        run, log = self.deploy_allowed(image)
+        self.assertEqual(run.calls, [["systemctl", "restart", "branchleft-compose@edge"]])
+        self.assertIn("unattested by allowance: ghcr.io/branchleft/website (", log)
+
+    def test_a_registered_name_is_not_reported_as_allowed(self):
+        run = FakeRun([0, 0])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.deploy(TENANT, run)
+        self.assertNotIn("unattested by allowance", stderr.getvalue())
+        self.assertEqual(run.calls[0][0], bd.VERIFIER)
+
+    def test_a_name_that_only_starts_with_an_allowed_name_is_refused(self):
+        for image in (
+            f"ghcr.io/branchleft/edge-caddy-evil@sha256:{DIGEST}",
+            f"ghcr.io/branchleft/website/extra@sha256:{DIGEST}",
+            f"ghcr.io/branchleft/mailgun-shim2:v1@sha256:{DIGEST}",
+            f"mysql-evil:8@sha256:{DIGEST}",
+            f"docker.io/branchleft/edge-caddy@sha256:{DIGEST}",
+            f"docker.io/library/mysql:8@sha256:{DIGEST}",
+            f"evil.example/mysql:8@sha256:{DIGEST}",
+        ):
+            with self.subTest(image=image):
+                self.assert_refused_unregistered(image)
 
     def test_a_name_that_only_starts_with_a_registered_name_is_refused(self):
         for image in (

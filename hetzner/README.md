@@ -165,7 +165,7 @@ a host's only route off the subnet is the network's own gateway, and Hetzner
 resolves that against this table. It is unprotected on purpose — deleting it
 detaches nothing and loses no state, and moving the gateway to another host
 has to stay an ordinary apply. The forwarding at the far end is not Pulumi's:
-the `egress_nat` role installs it on edge1 (the reconciler is `provision/branchleft_nat.sh`), and
+the `egress_nat` role installs it on edge1 (the reconciler is `ansible/roles/egress_nat/files/branchleft_nat.py`), and
 `RUNBOOK-provision-host.md` carries the order the two have to happen in.
 
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`
@@ -431,10 +431,11 @@ Hetzner console and rescue system, not a password.
 
 ## Deploys
 
-The wrapper deploys only a registered image (`ghcr.io/branchleft/ghost-tenant`,
-`ghcr.io/branchleft/portal-apps`), and verifies it before it pins it. An image name off the register
-is refused (default deny). The verifier runs with no GitHub credential, and the design is
-fail-closed: a host with no credential refuses every deploy. The verifier and its pinned
+A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`) is
+verified before the wrapper pins it. Four images are not signed or attested today and deploy by an
+explicit allowance, logged on every deploy: `edge-caddy`, `website`, `mysql` and `mailgun-shim`
+(`UNATTESTED_ALLOWED`, the list of that gap). Any other image name is refused (default deny). The verifier runs with no GitHub credential, and the design is
+fail-closed: a host with no credential refuses every registered deploy. The verifier and its pinned
 gh come from the `deploy_verifier` role, applied on `edge1`, `app1`, `ops1` and `db1`. See
 `provision/branchleft_deploy.md`, "The verifier runs with no credential" and "Live checks, in order".
 
