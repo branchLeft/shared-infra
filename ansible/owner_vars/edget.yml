@@ -4,17 +4,20 @@
 # and without naming an account, which accounts hold forwarding options.
 #
 # This is the second hop of the pipeline's route: the runner reaches edge1 first, then edge-t
-# through edge1's jump account (ws#2899). The role is the one edge1 applies, unchanged; only this
-# file differs. It ships inert and the owner fills it in one data change, once the edge-t server
-# exists (ws#2898) and its jump account has been made by the owner (the role never makes it).
+# through edge1's jump account. The role is the one edge1 applies, unchanged; only this file
+# differs. The jump account itself is made by the owner (the role never makes it), and its name is
+# the input ci_jump_user of the host's private inputs file.
 #
 # The destinations are host names or IPv4 addresses with no port, and the role adds port 22: edge-t's
 # own private address (the role refuses a list that lacks it) and the tenants hosts the pipeline
 # reaches through edge-t. The tenants addresses are in hetzner-host/addressPlan.ts
 # (TENANTS_HOST_IPS), their one home; checks/test_ci_jump_hosts.py holds this file's own address to
-# TENANTS_HOST_IPS.edgeT. The keys are public keys, one per entry. The account's name is not a key
-# of this file: it is the input ci_jump_user of the host's private inputs file.
-ci_jump_manage_keys: false
-ci_jump_own_address: ''
-ci_jump_destinations: []
-ci_jump_keys: []
+# TENANTS_HOST_IPS.edgeT and each other destination to a tenants host with an enrolled playbook.
+# The keys are public keys, one per entry.
+ci_jump_manage_keys: true
+ci_jump_own_address: '10.20.1.210'
+ci_jump_destinations:
+  - '10.20.1.210'
+  - '10.20.1.200'
+ci_jump_keys:
+  - key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOXEOya/JF6dWqkYRMusenbM7/5Qzah8JNUs/qtdCCVl'

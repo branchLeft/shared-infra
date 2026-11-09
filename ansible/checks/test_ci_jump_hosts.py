@@ -8,7 +8,9 @@ pipeline's route rests on (the 2 Nov ruling, ws#2894):
 
 * edge1's list may hold edge-t's public address and never a tenants private address, so the runner
   cannot be sent from edge1 straight to a tenants host and must go on through edge-t;
-* edget's own address, once the owner sets it, is the one the address plan gives edge-t.
+* edget's own address is the one the address plan gives edge-t, and each of its other
+  destinations is a tenants address whose host has an enrolled playbook (the logical name is the
+  TENANTS_HOST_IPS name in lower case: dbT1 is dbt1, edgeT is edget).
 
 It holds one more rule, for the hosts the gated run pushes to: a host that takes its
 commit as a pushed bundle (pull_trigger_bundle_hosts, demo1 today) is a leaf of the route, never a
@@ -162,6 +164,30 @@ def _data_findings(root: Path) -> list[str]:
     return found
 
 
+def _second_hop_findings(root: Path) -> list[str]:
+    """Each destination of edget but its own address is a TENANTS_HOST_IPS address, and its host
+    has an enrolled playbook. The logical name is the TENANTS_HOST_IPS name in lower case."""
+    edget = _owner_values(root, "edget")
+    own = str(edget.get(OWN_ADDRESS) or "")
+    names = {ip: name for name, ip in tenants_host_ips(root).items()}
+    found: list[str] = []
+    for address in _text_list(edget.get(DESTINATIONS)):
+        if address == own:
+            continue
+        name = names.get(address)
+        if name is None:
+            found.append(
+                f"owner_vars/edget.yml: {DESTINATIONS} holds {address}, not a TENANTS_HOST_IPS "
+                "address"
+            )
+        elif not (root / PLAYBOOKS / f"{name.lower()}.yml").is_file():
+            found.append(
+                f"owner_vars/edget.yml: {DESTINATIONS} holds {address} ({name}), and "
+                f"playbooks/{name.lower()}.yml is missing"
+            )
+    return found
+
+
 def bundle_hosts(root: Path) -> list[str]:
     """The pull_trigger role's bundle hosts under root. Empty when they cannot be read."""
     return _text_list(_mapping(_document(root / PULL_TRIGGER_VARS)).get(BUNDLE_HOSTS))
@@ -199,6 +225,7 @@ def problems(root: Path, jump_hosts: frozenset[str] = JUMP_HOSTS) -> list[str]:
         found.extend(_playbook_findings(root, host))
     found.extend(_role_findings(root))
     found.extend(_data_findings(root))
+    found.extend(_second_hop_findings(root))
     found.extend(_push_host_findings(root, jump_hosts))
     return found
 
@@ -313,19 +340,28 @@ class Sabotage(unittest.TestCase):
         self._expect("reads inventory_hostname")
 
     def test_a_wrong_own_address_on_edget_is_red(self) -> None:
-        self._edit(f"{OWNER_VARS}/edget.yml", f"{OWN_ADDRESS}: ''", f"{OWN_ADDRESS}: '10.20.9.9'")
+        own = tenants_host_ips(self.root)["edgeT"]
+        self._edit(
+            f"{OWNER_VARS}/edget.yml", f"{OWN_ADDRESS}: '{own}'", f"{OWN_ADDRESS}: '10.20.9.9'"
+        )
         self._expect("want TENANTS_HOST_IPS.edgeT")
 
-    def test_edge_ts_own_address_from_the_plan_is_green(self) -> None:
-        own = tenants_host_ips(self.root)["edgeT"]
-        self._edit(f"{OWNER_VARS}/edget.yml", f"{OWN_ADDRESS}: ''", f"{OWN_ADDRESS}: '{own}'")
-        self.assertEqual([], problems(self.root))
-
     def test_a_list_without_the_hosts_own_address_is_red(self) -> None:
-        self._edit(
-            f"{OWNER_VARS}/edget.yml", f"{DESTINATIONS}: []", f"{DESTINATIONS}: ['192.0.2.9']"
-        )
+        own = tenants_host_ips(self.root)["edgeT"]
+        self._edit(f"{OWNER_VARS}/edget.yml", f"  - '{own}'\n", "  - '192.0.2.9'\n")
         self._expect("does not hold ci_jump_own_address")
+
+    def test_a_destination_outside_the_address_plan_is_red(self) -> None:
+        dbt1 = tenants_host_ips(self.root)["dbT1"]
+        self._edit(
+            f"{OWNER_VARS}/edget.yml", f"  - '{dbt1}'\n", f"  - '{dbt1}'\n  - '192.0.2.9'\n"
+        )
+        self._expect("192.0.2.9, not a TENANTS_HOST_IPS address")
+
+    def test_a_destination_whose_host_has_no_playbook_is_red(self) -> None:
+        # db-t1 is dbt1 in the playbooks: take its playbook away and its address has no host.
+        (self.root / PLAYBOOKS / "dbt1.yml").unlink()
+        self._expect("playbooks/dbt1.yml is missing")
 
     def test_a_pushed_host_in_jump_hosts_is_red(self) -> None:
         # Sabotage: demo1 becomes a hop. The same tree is green with JUMP_HOSTS as it is.

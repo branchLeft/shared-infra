@@ -305,13 +305,13 @@ The same test reads `TENANTS_HOST_IPS` from `hetzner-host/addressPlan.ts`, its o
 refuses a tenants private address in `owner_vars/edge1.yml` and an own address on edget that is not
 edge-t's.
 
-edge-t is wired and ships inert (`owner_vars/edget.yml`: flag false, nothing listed). What is left
-for it is the owner's, in this order: the edge-t server (ws#2898) and its public address from the
-tenants stack; the jump account on it (the role never makes it); `ci_jump_user` in its private
-inputs file (`seed_host_inputs.py --host edget`); its enrolment in `ANSIBLE_HOSTS` and the two-hop
-route (ws#2899, ws#2975); then one data change to `owner_vars/edget.yml` (own address, destinations,
-keys, flag true). Until it is enrolled the wiring changes nothing live, and once it is, its first
-pull stops at `host_inputs[file-missing]` until the file is seeded.
+edge-t's owner values are filled in (`owner_vars/edget.yml`: flag true, its own address, its
+destinations and the second-hop key). What is left is outside the repository, in this order: the
+edge-t server and its public address from the tenants stack; the jump account on it (the role
+never makes it); `ci_jump_user` in its private inputs file (`seed_host_inputs.py --host edget`); and
+its enrolment in `ANSIBLE_HOSTS` for the two-hop route. Until it is enrolled the wiring changes
+nothing live, and once it is, its first pull stops at `host_inputs[file-missing]` until the file is
+seeded.
 
 To give a further host this role, list `ci_jump` in its row of `ansible/checks/host_roles.yml`
 (with `host_inputs` first), apply both roles in its playbook, add the host to `JUMP_HOSTS` in
