@@ -28,15 +28,17 @@
 - name: Refuse a host class the role cannot act on, or an app host with no policy variant
   ansible.builtin.assert:
     that:
-      - deploy_tooling_host_class in ['app', 'gateway']
-      - deploy_tooling_host_class == 'gateway' or deploy_tooling_policy_variant in ['standard', 'protected_no_db']
+      - deploy_tooling_host_class in ['app', 'gateway', 'internal']
+      - deploy_tooling_host_class in ['gateway', 'internal'] or deploy_tooling_policy_variant in ['standard', 'protected_no_db']
     fail_msg: >-
       A host of class app must name its policy variant: deploy_tooling_policy_variant is
       standard or protected_no_db, and is {{ deploy_tooling_policy_variant }} here.
     quiet: true
 
-# The watch (a timer that reads the firewall chains between runs) is installed on a host of
-# class app only; its files are checked here with the rest.
+# Classes gateway and internal get the common targets only: the wrapper, the template
+# unit, the directories and the sudoers read. Only class app gets the policy program and
+# the watch (a timer that reads the firewall chains between runs); its files are checked
+# here with the rest.
 - name: Work out which files this host class gets
   ansible.builtin.set_fact:
     deploy_tooling_file_targets: >-

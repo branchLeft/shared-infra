@@ -18,6 +18,10 @@ what it is is not guessed.
 - **Class `gateway`** (the host that holds the estate's shared address): the two
   directories, the deploy wrapper, the compose template unit, and the sudoers check. The
   policy program refuses to run on the gateway, so this class gets none of it.
+- **Class `internal`** (a host that carries no policy program, and is not the gateway):
+  exactly the gateway's set, the two directories, the deploy wrapper, the compose template
+  unit and the sudoers check. It gets no policy program, no policy unit, no firewall read-back
+  and no variant. Nothing is applied to a host by this class until a playbook names it.
 - **Class `app`** (a host that runs tenants' containers): everything above, and the
   policy program, its unit enabled at boot, the program applied, and the firewall chains
   read back and compared with what the program builds. An app host also names its
@@ -45,10 +49,10 @@ run on the hosts. Until then, do not run either script on a host this role manag
 [`defaults/main.yml`](defaults/main.yml) holds the one default. Ansible checks the
 inputs when the role starts.
 
-| Variable                        | Default          | Meaning                                                                                                                     |
-| ------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `deploy_tooling_host_class`     | none, required   | `app` or `gateway`.                                                                                                         |
-| `deploy_tooling_policy_variant` | `not_applicable` | `standard` or `protected_no_db`. Required for class `app` (the role refuses `not_applicable` there); ignored for `gateway`. |
+| Variable                        | Default          | Meaning                                                                                                                |
+| ------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `deploy_tooling_host_class`     | none, required   | `app`, `gateway` or `internal`.                                                                                        |
+| `deploy_tooling_policy_variant` | `not_applicable` | `standard` or `protected_no_db`. Required for `app` (the role refuses `not_applicable` there); ignored for the others. |
 
 The variant is the role's **expectation**, never an input to the policy program. The
 program decides for itself from the host's own address, and the read-back fails when the
@@ -325,7 +329,7 @@ leaves every step green is not claimed.
 | The drop-in is exactly the one grant                                                  | the whole-file comparison taken out                             | verify, sudoers: `EXPECTED A FAILURE, GOT NONE` for the include directive after the grant                                                                                   |
 | The role never writes the drop-in                                                     | a task that copies the drop-in added                            | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in owner`                                                                                                      |
 | A gateway gets none of the isolation                                                  | the class condition taken off the isolation include             | verify, gateway phase: `Could not find the requested service` for the policy unit                                                                                           |
-| A gateway gets no policy program or unit                                              | the class condition taken off the policy copy                   | verify, gateway phase: `is present on a gateway host`, naming the path                                                                                                      |
+| A gateway gets no policy program or unit                                              | the class condition taken off the policy copy                   | verify, gateway and internal phases: `is present on a host with no policy program`, naming the path                                                                         |
 | A refused policy program fails the run                                                | `failed_when: false` on the restart handler                     | verify, refusal phase: `WRONG FAILURE`, the run failing at the rescue restart and not at the handler                                                                        |
 | The policy unit is restarted only when something changed                              | a restart of the unit on every run                              | idempotence: `changed=1` on the second converge                                                                                                                             |
 | A changed program is applied by the handler                                           | the handler made a `started` instead of a `restarted`           | verify, program changed: `The chain was put right by the read-back's repair`                                                                                                |

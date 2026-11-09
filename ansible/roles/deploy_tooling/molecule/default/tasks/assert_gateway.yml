@@ -1,5 +1,5 @@
 ---
-# What a host of class gateway looks like once the role has been applied: the
+# What a host of class gateway or internal looks like once the role has been applied: the
 # wrapper and the template unit, and none of the isolation.
 - name: Look at the files only an app host gets
   ansible.builtin.stat:
@@ -14,7 +14,7 @@
   ansible.builtin.assert:
     that:
       - not item.stat.exists
-    fail_msg: '{{ item.item.path }} is present on a gateway host'
+    fail_msg: '{{ item.item.path }} is present on a host with no policy program'
     quiet: true
   loop: '{{ deploy_tooling_scenario_app_files.results }}'
   loop_control:
@@ -51,7 +51,7 @@
   ansible.builtin.assert:
     that:
       - deploy_tooling_scenario_rules.stdout_lines | select('match', '^-A ') | list == ['-A FORWARD -j DOCKER-USER', '-A DOCKER-USER -j RETURN']
-    fail_msg: 'The gateway carries firewall rules: {{ deploy_tooling_scenario_rules.stdout_lines | select("match", "^-A ") | list }}'
+    fail_msg: 'The host carries firewall rules: {{ deploy_tooling_scenario_rules.stdout_lines | select("match", "^-A ") | list }}'
     quiet: true
 
 - name: Read whether the policy unit exists
@@ -64,5 +64,5 @@
   ansible.builtin.assert:
     that:
       - deploy_tooling_scenario_policy_load.stdout_lines == ['not-found']
-    fail_msg: 'systemd knows the policy unit on a gateway host: {{ deploy_tooling_scenario_policy_load.stdout_lines }}'
+    fail_msg: 'systemd knows the policy unit on a host with no policy program: {{ deploy_tooling_scenario_policy_load.stdout_lines }}'
     quiet: true
