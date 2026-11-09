@@ -41,11 +41,11 @@
     # root at every boot, so a group- or world-writable copy is a root shell for
     # whoever can write it. backup keeps the file it replaces next to it, and
     # only when the content differs, so a second run writes nothing.
-    # The source is the program in hetzner/provision, read in place: one home, no copy.
-    # role_path is ansible/roles/egress_nat, so three levels up is the repository root.
+    # The source is read in place, one home and no copy: the item's reconciler_src is a
+    # full path (vars/main.yml), in hetzner/provision or in this role's files/.
     - name: Install the reconciler of the unit {{ egress_nat_item.unit_name }}
       ansible.builtin.copy:
-        src: '{{ role_path }}/../../../hetzner/provision/{{ egress_nat_item.reconciler_src }}'
+        src: '{{ egress_nat_item.reconciler_src }}'
         dest: '{{ egress_nat_item.reconciler_dest }}'
         owner: root
         group: root
@@ -56,7 +56,7 @@
     # The reconciler is on disk before the unit that names it.
     - name: Install the unit {{ egress_nat_item.unit_name }}
       ansible.builtin.copy:
-        src: '{{ role_path }}/../../../hetzner/provision/{{ egress_nat_item.unit_src }}'
+        src: '{{ egress_nat_item.unit_src }}'
         dest: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.unit_name }}'
         owner: root
         group: root
@@ -72,7 +72,7 @@
     # for that item the two keys are the same file and the installed bytes do not change.
     - name: Install the timer {{ egress_nat_item.timer_name }}
       ansible.builtin.copy:
-        src: '{{ role_path }}/../../../hetzner/provision/{{ egress_nat_host_egress.timer_src }}'
+        src: '{{ egress_nat_host_egress.timer_src }}'
         dest: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.timer_name }}'
         owner: root
         group: root

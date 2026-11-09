@@ -67,12 +67,19 @@
 
 # The index is refreshed and Docker installed only when any of its packages is
 # missing, after the source above is in place.
+#
+# Skipped in check mode when docker-ce is not installed yet (ANS-10). Check mode
+# writes no source line and does not refresh the index, so apt cannot see
+# docker-ce and cannot simulate its install: a first plan on a new host failed
+# here. The apply that follows installs it, and the plan says so by skipping.
 - name: Refresh the apt index and install Docker CE when any of it is missing
   ansible.builtin.apt:
     name: '{{ host_baseline_docker_packages }}'
     state: present
     update_cache: true
-  when: host_baseline_docker_packages | ansible.builtin.difference(ansible_facts['packages'] | ansible.builtin.list) | ansible.builtin.length > 0
+  when:
+    - host_baseline_docker_packages | ansible.builtin.difference(ansible_facts['packages'] | ansible.builtin.list) | ansible.builtin.length > 0
+    - not ansible_check_mode or 'docker-ce' in ansible_facts['packages']
 
 # Skipped in check mode when Docker is not installed yet, for the reason given
 # at unattended-upgrades (ANS-10).

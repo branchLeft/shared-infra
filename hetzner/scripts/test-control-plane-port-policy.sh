@@ -123,7 +123,7 @@ run_policy
 FIRST="$(on_host "iptables-save" | grep -c ctorigdstport || true)"
 run_policy >/dev/null
 SECOND="$(on_host "iptables-save" | grep -c ctorigdstport || true)"
-if [ "$FIRST" = "$SECOND" ] && [ "$FIRST" -eq 3 ]; then
+if [ "$FIRST" = "$SECOND" ] && [ "$FIRST" -eq 4 ]; then
     pass "a second run leaves the same $FIRST port rules"
 else
     fail "a second run changed the port rule count from $FIRST to $SECOND"

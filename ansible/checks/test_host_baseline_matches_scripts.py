@@ -30,8 +30,13 @@ PAIRS = (
     ("files/01-branchleft-hardening.conf", "00-harden-ssh.sh", 0),
     ("files/20auto-upgrades", "10-harden-updates-fail2ban.sh", 0),
     ("files/51branchleft-unattended-origins", "10-harden-updates-fail2ban.sh", 1),
-    ("files/jail.local", "10-harden-updates-fail2ban.sh", 2),
 )
+
+# The jail is a template now: its ignoreip value is the role input, so the test compares the
+# script's jail heredoc with the template rendered at the role's default input.
+JAIL_SCRIPT = "10-harden-updates-fail2ban.sh"
+JAIL_POSITION = 2
+JAIL_INPUT = "host_baseline_fail2ban_ignoreip"
 
 
 def _heredocs(script: Path) -> list[str]:
@@ -107,6 +112,34 @@ def _rendered_docker_line() -> str:
     return rendered
 
 
+def _role_default(name: str) -> str:
+    """Return the value of a plain `name: value` line in the role's defaults.
+
+    Raises:
+        AssertionError: the defaults do not assign the name.
+    """
+    prefix = f"{name}: "
+    for line in (ROLE / "defaults" / "main.yml").read_text(encoding="utf-8").splitlines():
+        if line.startswith(prefix):
+            return line[len(prefix) :]
+    message = f"defaults/main.yml: no default of {name}"
+    raise AssertionError(message)
+
+
+def _rendered_jail() -> str:
+    """Return the jail the template renders at the role's default ignoreip input.
+
+    Raises:
+        AssertionError: the template holds a placeholder the test does not fill.
+    """
+    text = (ROLE / "templates" / "jail.local.j2").read_text(encoding="utf-8")
+    rendered = text.replace("{{ " + JAIL_INPUT + " }}", _role_default(JAIL_INPUT))
+    if "{{" in rendered:
+        message = "jail.local.j2 holds a placeholder this test does not fill"
+        raise AssertionError(message)
+    return rendered
+
+
 class HostBaselineMatchesScripts(unittest.TestCase):
     def test_each_role_file_is_byte_for_byte_its_script_heredoc(self) -> None:
         for relative, script_name, position in PAIRS:
@@ -124,6 +157,16 @@ class HostBaselineMatchesScripts(unittest.TestCase):
                     expected,
                     f"{relative} differs from heredoc {position} of {script_name}",
                 )
+
+    def test_the_jail_template_renders_to_the_scripts_heredoc_at_the_default_input(self) -> None:
+        bodies = _heredocs(PROVISION / JAIL_SCRIPT)
+        self.assertGreater(len(bodies), JAIL_POSITION)
+        self.assertEqual(
+            _rendered_jail(),
+            bodies[JAIL_POSITION],
+            "templates/jail.local.j2 at the default host_baseline_fail2ban_ignoreip "
+            "differs from the script heredoc",
+        )
 
     def test_the_script_writes_no_heredoc_the_role_does_not_carry(self) -> None:
         # The role carries one file per heredoc of the two scripts, and no other.

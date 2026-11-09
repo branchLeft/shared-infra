@@ -51,7 +51,8 @@ deploy_tooling_directory_targets:
 # directory, three levels below the repository root.
 deploy_tooling_programs_dir: '{{ role_path }}/../../../hetzner/provision'
 
-# The files every host gets. program is the name of the file under that directory.
+# The files every host gets, of every class (gateway, internal and app). program is the
+# name of the file under that directory.
 deploy_tooling_common_file_targets:
   - label: deploy wrapper
     program: branchleft_deploy.py
