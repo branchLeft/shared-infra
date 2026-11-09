@@ -169,16 +169,14 @@
   no_log: true
 
 # The secrets file is hashed on the host without its lines of SNDS_DATA_URL, and
-# only the hash comes back, so no value is read into a variable or a log. It is
-# read-only, so it runs in check mode too. On a fresh host in check mode there is
-# no file yet and the part is absent.
+# only the hash comes back, so no value is read into a variable or a log. The
+# module reads the file line by line and returns the digest alone (see its
+# DOCUMENTATION). It is read-only, so it runs in check mode too. On a fresh host
+# in check mode there is no file yet and the part is absent.
 - name: Hash the monitoring secrets file without the SNDS line
-  ansible.builtin.shell:
-    cmd: >-
-      set -o pipefail;
-      sed '/^{{ monitoring_stack_fingerprint_skipped_key }}=/d' {{ monitoring_stack_env_file | quote }}
-      | sha256sum | cut -d ' ' -f 1
-    executable: /bin/bash
+  monitoring_stack_envfile_digest:
+    path: '{{ monitoring_stack_env_file }}'
+    skip_key: '{{ monitoring_stack_fingerprint_skipped_key }}'
   register: monitoring_stack_env_hash
   changed_when: false
   check_mode: false
@@ -210,7 +208,7 @@
       {%- for result in monitoring_stack_fingerprint_stats.results -%}
       {%- set _ = parts.append(result.item ~ '=' ~ (result.stat.checksum | default('absent'))) -%}
       {%- endfor -%}
-      {%- set _ = parts.append('env=' ~ (monitoring_stack_env_hash.stdout | default('absent'))) -%}
+      {%- set _ = parts.append('env=' ~ (monitoring_stack_env_hash.digest | default('absent'))) -%}
       {{ parts | join(';') | hash('sha256') }}
     monitoring_stack_stamp_value: >-
       {{ (monitoring_stack_stamp.content | b64decode | trim) if monitoring_stack_stamp.content is defined else 'none' }}
