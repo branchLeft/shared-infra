@@ -18,19 +18,25 @@
   hosts: all
   gather_facts: false
   vars:
-    prepare_packages:
+    prepare_base_packages:
       - unattended-upgrades
       - apt-listchanges
       - fail2ban
+    prepare_docker_packages:
       - docker-ce
       - docker-ce-cli
       - containerd.io
       - docker-compose-plugin
-    prepare_units:
+    prepare_base_units:
       - ssh
       - unattended-upgrades
       - fail2ban
-      - docker
+    # The check-fresh scenario's host has no Docker yet: the Docker packages and
+    # unit are left out there, and only there. It is the state a first plan on a
+    # new host meets (molecule/check-fresh/converge.yml says why it is a plan).
+    prepare_fresh_host: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME', default='default') == 'check-fresh' }}"
+    prepare_packages: '{{ prepare_base_packages + ([] if prepare_fresh_host | bool else prepare_docker_packages) }}'
+    prepare_units: "{{ prepare_base_units + ([] if prepare_fresh_host | bool else ['docker']) }}"
   tasks:
     - name: Create a package directory for each placeholder package
       ansible.builtin.file:

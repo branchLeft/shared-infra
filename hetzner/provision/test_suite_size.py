@@ -9,7 +9,7 @@ import unittest
 
 PROVISION = pathlib.Path(__file__).resolve().parent
 
-EXPECTED_TEST_COUNT = 527
+EXPECTED_TEST_COUNT = 530
 
 
 class SuiteSizeTests(unittest.TestCase):

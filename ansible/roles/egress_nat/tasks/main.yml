@@ -1,6 +1,6 @@
 ---
 # The order is the order of the shell scripts this replaces: 05-configure-host-egress.sh
-# runs on every host, ahead of anything that needs apt, and nat-gateway.sh runs
+# runs on every host, ahead of anything that needs apt, and the NAT gateway reconciler runs
 # on the one gateway host only. Each is the same recipe, in _reconciler.yml,
 # given its own constants from vars/main.yml.
 - name: Install the private-host egress reconciler and its unit

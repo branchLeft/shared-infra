@@ -16,12 +16,15 @@ argument_specs:
         choices:
           - app
           - gateway
+          - internal
         description: >-
           What the host is. A host of class app runs containers for tenants, so it
           gets the isolation policy; the gateway holds the estate's shared address
           and the policy program refuses to run on it, so it gets only the deploy
-          wrapper, the template unit and the sudoers check. The role has no default
-          for this: a host that is not told its class is not guessed.
+          wrapper, the template unit and the sudoers check; class internal gets the
+          same files and no policy program, for a host that is not the gateway. The
+          role has no default for this: a host that is not told its class is not
+          guessed.
       deploy_tooling_policy_variant:
         type: str
         default: not_applicable
@@ -37,4 +40,4 @@ argument_specs:
           decides for itself from the host's own address, so this is never an input
           to it; the read-back fails when the host's chain is not the one named
           here. Required for class app (the role refuses not_applicable there) and
-          ignored for class gateway.
+          ignored for classes gateway and internal.

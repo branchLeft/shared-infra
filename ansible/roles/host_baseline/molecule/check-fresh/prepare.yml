@@ -1,0 +1,10 @@
+---
+# The check-fresh scenario: one host with no Docker, which is what a first plan on a
+# new host meets. Its prepare is the default scenario's, with the Docker packages and
+# unit left out (the default prepare reads MOLECULE_SCENARIO_NAME). The scenario is a plan:
+# its converge runs the role in check mode only, because this instance has no network
+# and no apt index that holds docker-ce, so a real run could not install Docker here.
+# The harness runs check-fresh before converge; both must complete, and the default
+# scenario is what applies the role for real.
+- name: Prepare the host as the default scenario does, without Docker
+  ansible.builtin.import_playbook: ../default/prepare.yml
