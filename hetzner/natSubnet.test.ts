@@ -16,12 +16,15 @@ import { internetEgressRoute } from './egress';
  * while every check of the script itself stays green.
  */
 
-const script = readFileSync(join(__dirname, 'provision', 'branchleft_nat.sh'), 'utf8');
+const script = readFileSync(
+  join(__dirname, '..', 'ansible', 'roles', 'egress_nat', 'files', 'branchleft_nat.py'),
+  'utf8'
+);
 
 describe("edge-t's NAT subnet", () => {
   it("is the script's default subnet, which is the plan's SUBNET_CIDR", () => {
-    const match = /^SUBNET="\$\{BRANCHLEFT_NAT_SUBNET:-([^}]+)\}"$/m.exec(script);
-    expect(match, 'the default subnet line of branchleft_nat.sh').not.toBeNull();
+    const match = /^DEFAULT_SUBNET = "([^"]+)"$/m.exec(script);
+    expect(match, 'the default subnet line of branchleft_nat.py').not.toBeNull();
     expect(match?.[1]).toBe(SUBNET_CIDR);
   });
 
