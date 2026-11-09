@@ -312,7 +312,12 @@ class NatGatewayTests(unittest.TestCase):
     def test_reports_a_missing_iptables_rather_than_failing_as_a_broken_unit(self):
         result = self.run_script(drop_iptables=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("iptables is not installed", result.stderr)
+        # Deliberate deviation from the bash original: the message names the role, not the
+        # script being removed. The bash original keeps its old wording until it is removed.
+        self.assertEqual(
+            "branchleft-nat: iptables is not installed: apply the host_baseline role first\n",
+            result.stderr,
+        )
 
     def test_follows_the_uplink_rather_than_assuming_an_interface_name(self):
         result = self.run_script(

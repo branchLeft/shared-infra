@@ -259,7 +259,7 @@ def main() -> None:
     # docker-ce. Named explicitly because the alternative is a failure from inside a
     # systemd oneshot, which reads as a broken unit rather than a missing step.
     if shutil.which("iptables") is None:
-        die("branchleft-nat: iptables is not installed -- run 20-install-docker.sh first")
+        die("branchleft-nat: iptables is not installed: apply the host_baseline role first")
 
     uplink = default_uplink()
     if not uplink:
