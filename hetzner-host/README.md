@@ -126,9 +126,12 @@ one, or an unknown stage throws.
   create-time intent at the provider, so an adopted server gets a
   `FirewallAttachment`, which adds to the firewalls already on it and removes none.
   The owner's own firewall stays until this one is attached and is detached by
-  hand after, so the host is never unfiltered. A private-only host's attachment is
-  declared at `converge` only: until then a leftover public address may still be
-  on it, and the role's firewall allows SSH from anywhere.
+  hand after, so the host is never unfiltered. A private-only host gets no
+  attachment at any stage: a Hetzner Cloud Firewall filters only the public
+  interface, the host has none, and the provider refuses the attachment ("no public
+  network interfaces found, firewall cannot be attached to server"). The host's own
+  Firewall is still declared, and the owner's holding firewall stays on it as an
+  inert second line.
 - **Not covered:** a hand-attached network on a public host (the component attaches
   it; a hand attachment makes that fail), and a network that exists in the project
   but not in the stack's state.
