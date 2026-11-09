@@ -18,7 +18,7 @@ PROVISION = REPO / "hetzner" / "provision"
 
 # The files the role delivers. The host egress pair lives in hetzner/provision; the NAT program and
 # its unit live in the role's files/. The NAT unit's copy in hetzner/provision is read by the
-# hand installer nat-gateway.sh until that installer is removed, and must match the role's copy.
+# NAT hand installer until that installer is removed, and must match the role's copy.
 PROVISION_FILES = (
     "branchleft_host_egress.sh",
     "branchleft-host-egress.service",
@@ -134,7 +134,7 @@ class SourceTests(unittest.TestCase):
         self.assertEqual(host_egress["timer_name"], "branchleft-host-egress.timer")
 
     def test_the_nat_unit_copy_in_provision_is_the_roles_copy(self) -> None:
-        # nat-gateway.sh, a hand installer kept until its removal, installs this copy. Two copies
+        # The NAT hand installer, kept until its removal, installs this copy. Two copies
         # are one home only while they are the same bytes.
         self.assertTrue(
             filecmp.cmp(

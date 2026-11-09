@@ -9,7 +9,7 @@ A private-only host's only route off the subnet is the network's own
 gateway, and Hetzner resolves that against this table. Without an entry
 here such a host cannot run its own provisioning — `apt-get update`, the
 Docker signing key — and, more durably, cannot receive the unattended
-security upgrades `provision/10-harden-updates-fail2ban.sh` enables. The
+security upgrades the fail2ban hardening step enables. The
 gateway is the edge host because it is the only host this estate owns that
 already terminates public traffic; `ansible/roles/egress_nat/files/branchleft_nat.py` is what
 makes the address at the other end actually forward.

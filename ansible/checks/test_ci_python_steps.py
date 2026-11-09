@@ -236,7 +236,8 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         if selector is None:
             self.fail("the role program step has no pyproject.toml selector")
         pattern = re.compile(selector.group("pattern"), re.MULTILINE)
-        text = (ANSIBLE / "roles" / "egress_nat" / "pyproject.toml").read_text(encoding="utf-8")
+        # ci_jump has a pyproject.toml and no files/*.py, so it is a role with no program.
+        text = (ANSIBLE / "roles" / "ci_jump" / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIsNone(pattern.search(text))
 
     def test_the_install_scan_finds_the_commands_it_is_meant_to_find(self) -> None:
