@@ -353,9 +353,7 @@ class Sabotage(unittest.TestCase):
 
     def test_a_destination_outside_the_address_plan_is_red(self) -> None:
         dbt1 = tenants_host_ips(self.root)["dbT1"]
-        self._edit(
-            f"{OWNER_VARS}/edget.yml", f"  - '{dbt1}'\n", f"  - '{dbt1}'\n  - '192.0.2.9'\n"
-        )
+        self._edit(f"{OWNER_VARS}/edget.yml", f"  - '{dbt1}'\n", f"  - '{dbt1}'\n  - '192.0.2.9'\n")
         self._expect("192.0.2.9, not a TENANTS_HOST_IPS address")
 
     def test_a_destination_whose_host_has_no_playbook_is_red(self) -> None:
