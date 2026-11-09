@@ -37,6 +37,7 @@ import sys
 
 if "addr" in sys.argv[1:]:
     sys.stdout.write(os.environ["FAKE_IP_ADDR"] + "\\n")
+sys.exit(int(os.environ.get("FAKE_IP_EXIT", "0")))
 """
 
 # Without FAKE_STATE the fake answers from the environment: a check succeeds for every
@@ -195,9 +196,12 @@ class PolicyCase(unittest.TestCase):
         rule_present: bool = False,
         insert_exit: str = "0",
         ip6_docker_user: bool = True,
+        ip6_docker_user_exit: str | None = None,
+        ip_exit: str = "0",
         extra: Mapping[str, str] | None = None,
     ) -> dict[str, str]:
         """Return the child's environment: PATH with the fakes, and what the fakes are told."""
+        ip6_exit = ip6_docker_user_exit or ("0" if ip6_docker_user else "1")
         env = dict(os.environ)
         for name in [key for key in env if key.startswith(policy.ENVIRONMENT_PREFIX)]:
             del env[name]
@@ -207,7 +211,8 @@ class PolicyCase(unittest.TestCase):
                 "FAKE_IP_ADDR": addresses,
                 "FAKE_IPTABLES_LOG": str(self.iptables_log),
                 "FAKE_IP6TABLES_LOG": str(self.ip6tables_log),
-                "FAKE_IP6TABLES_DOCKER_USER_EXIT": "0" if ip6_docker_user else "1",
+                "FAKE_IP_EXIT": ip_exit,
+                "FAKE_IP6TABLES_DOCKER_USER_EXIT": ip6_exit,
                 "FAKE_IPTABLES_DOCKER_USER_EXIT": "0" if docker_user else "1",
                 "FAKE_IPTABLES_CHECK_EXIT": "0" if rule_present else "1",
                 "FAKE_IPTABLES_INSERT_EXIT": insert_exit,
@@ -230,6 +235,8 @@ class PolicyCase(unittest.TestCase):
         rule_present: bool = False,
         insert_exit: str = "0",
         ip6_docker_user: bool = True,
+        ip6_docker_user_exit: str | None = None,
+        ip_exit: str = "0",
     ) -> subprocess.CompletedProcess[str]:
         """Run the program as a host would, as a separate process."""
         if drop_iptables:
@@ -250,6 +257,8 @@ class PolicyCase(unittest.TestCase):
             rule_present=rule_present,
             insert_exit=insert_exit,
             ip6_docker_user=ip6_docker_user,
+            ip6_docker_user_exit=ip6_docker_user_exit,
+            ip_exit=ip_exit,
             extra=extra,
         )
         return subprocess.run(  # noqa: S603 -- the interpreter and the program are fixed paths
@@ -775,6 +784,65 @@ class NoAnswerTests(PolicyCase):
         self.assertEqual(status, 1)
         self.assertIn("could not learn which addresses it holds", err)
         self.assertEqual(self.iptables_calls(), [])
+
+
+class FailedProbeTests(PolicyCase):
+    """A probe that runs and fails is no answer either: the program stops, not guesses."""
+
+    def test_an_address_probe_that_exits_non_zero_refuses_and_issues_no_rule(self) -> None:
+        # ops1's addresses are what ip would print, but it failed: reading that as "no
+        # addresses" would make ops1 look like an app host and skip its port drops.
+        result = self.run_program(OPS1_ADDRESSES, ip_exit="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("could not learn which addresses it holds", result.stderr)
+        self.assertIn("refusing rather than guess", result.stderr)
+        self.assertEqual(self.iptables_calls(), [])
+        self.assertEqual(self.ip6tables_calls(), [])
+
+    def test_an_address_probe_that_exits_non_zero_with_no_output_refuses(self) -> None:
+        for status in ("1", "2", "255"):
+            with self.subTest(status=status):
+                result = self.run_program("", ip_exit=status)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("exited", result.stderr)
+                self.assertEqual(self.iptables_calls(), [])
+                self.assertEqual(self.ip6tables_calls(), [])
+
+    def test_an_address_probe_that_succeeds_behaves_as_before(self) -> None:
+        result = self.run_program(OPS1_ADDRESSES, ip_exit="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.final_chain_order(), OPS1_CHAIN)
+
+    def test_an_ip6tables_chain_probe_that_fails_for_another_reason_refuses(self) -> None:
+        # Only exit 1, "no such chain", means the chain is absent. Anything else is a probe
+        # that failed, and skipping the forward drop on it would leave IPv6 open.
+        result = self.run_program(ip6_docker_user_exit="4")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("could not learn whether ip6tables has a chain", result.stderr)
+        self.assertNotIn("forward drop skipped", result.stdout)
+        self.assertEqual(self.inserted6(), [])
+
+    def test_an_iptables_spool_chain_probe_that_fails_for_another_reason_refuses(self) -> None:
+        # The spool step probes the chain again after the main step found it: a failure
+        # now must not skip the IPv4 forward drop.
+        calls: list[list[str]] = []
+
+        def fake_run(argv: list[str]) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            return subprocess.CompletedProcess(argv, 4, "", "")
+
+        err = io.StringIO()
+        with (
+            mock.patch.object(policy, "run", fake_run),
+            mock.patch("shutil.which", return_value="/usr/sbin/iptables"),
+            contextlib.redirect_stderr(err),
+            contextlib.redirect_stdout(io.StringIO()),
+            self.assertRaises(SystemExit) as stopped,
+        ):
+            policy.ensure_spool_rules("iptables", 2, "br-mailspool")
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertIn("could not learn whether iptables has a chain", err.getvalue())
 
 
 class ProgramFileTests(unittest.TestCase):

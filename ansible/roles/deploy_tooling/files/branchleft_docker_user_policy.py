@@ -16,8 +16,9 @@ the conntrack accept must be evaluated before any drop, or the replies of
 allowed flows are dropped. The role's README and the unit tests say why.
 
 Every external command runs from an argument list, never through a shell, under
-a timeout. A probe that cannot run or does not finish counts as no answer, and
-the program stops rather than guess.
+a timeout. A probe that cannot run, does not finish, or exits with a status that is
+not one of its documented answers counts as no answer, and the program stops rather
+than guess.
 """
 
 from __future__ import annotations
@@ -61,6 +62,8 @@ DEFAULT_MAIL_SPOOL_BRIDGE = "br-mailspool"
 METADATA_ADDRESS = "169.254.169.254"
 
 COMMAND_TIMEOUT_SECONDS = 30
+# What iptables and ip6tables exit with when asked about a chain that does not exist.
+NO_SUCH_CHAIN_STATUS = 1
 BRIDGE_NAME = re.compile(r"[A-Za-z0-9_.-]{1,15}")
 PORT_NUMBER = re.compile(r"[0-9]{1,5}")
 CONNTRACK_REPLIES = ("-m", "conntrack", "--ctstate", "ESTABLISHED,RELATED", "-j", "ACCEPT")
@@ -201,9 +204,17 @@ def status_of(result: subprocess.CompletedProcess[str] | None) -> int:
 
 def held_addresses() -> list[str]:
     """Return every IPv4 address with global scope that this host holds."""
-    result = learn(
-        ["ip", "-4", "-o", "addr", "show", "scope", "global"], "which addresses it holds"
-    )
+    argv = ["ip", "-4", "-o", "addr", "show", "scope", "global"]
+    result = learn(argv, "which addresses it holds")
+    if result.returncode != 0:
+        # An empty answer from a failed probe would read as a host with no addresses: ops1
+        # would look like an app host and skip its port drops.
+        passthrough(result)
+        die(
+            f"{PREFIX}: could not learn which addresses it holds: {' '.join(argv)} "
+            f"exited {result.returncode}",
+            f"{PREFIX}: refusing rather than guess",
+        )
     found: list[str] = []
     for line in result.stdout.splitlines():
         fields = line.split()
@@ -256,6 +267,14 @@ def ensure_spool_rules(tool: str, forward_position: int, bridge: str) -> None:
     if shutil.which(tool) is None:
         die(f"{PREFIX}: {tool} is not installed")
     chain_exists = learn([tool, "-t", "filter", "-S", "DOCKER-USER"], f"whether {tool} has a chain")
+    if chain_exists.returncode not in (0, NO_SUCH_CHAIN_STATUS):
+        # Only "no such chain" lets the forward drop be skipped; any other failure is no answer.
+        passthrough(chain_exists)
+        die(
+            f"{PREFIX}: could not learn whether {tool} has a chain: it exited "
+            f"{chain_exists.returncode}",
+            f"{PREFIX}: refusing rather than guess",
+        )
     if chain_exists.returncode == 0:
         ensure_rule_at(
             tool, forward_position, "DOCKER-USER", "-i", bridge, "!", "-o", bridge, "-j", "DROP"
