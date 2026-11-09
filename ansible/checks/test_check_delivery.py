@@ -324,6 +324,34 @@ class CallerTests(unittest.TestCase):
 
                 self.assert_names(self.weakened(set_secret), f"secrets.{name} must be")
 
+    def test_a_caller_without_a_second_jump_secret_is_named(self) -> None:
+        for name in ("ssh_jump2_host", "ssh_jump2_key", "ssh_jump2_hosts"):
+
+            def drop_secret(document: dict[str, object], name: str = name) -> None:
+                del section(job_of(document), "secrets")[name]
+
+            self.assert_names(self.weakened(drop_secret), f"secrets.{name} must be")
+
+    def test_a_wrong_second_jump_secret_expression_is_named(self) -> None:
+        # The second hop's key is its own: never the first hop's, the check key or the apply key.
+        wrong = (
+            "",
+            "literal-value",
+            "${{ secrets.SSH_JUMP_KEY }}",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+            "${{ secrets.SSH_APPLY_KEY }}",
+            "${{ secrets.ANSIBLE_HOSTS }}",
+        )
+        for name in ("ssh_jump2_host", "ssh_jump2_key", "ssh_jump2_hosts"):
+            for value in wrong:
+
+                def set_secret(
+                    document: dict[str, object], name: str = name, value: str = value
+                ) -> None:
+                    section(job_of(document), "secrets")[name] = value
+
+                self.assert_names(self.weakened(set_secret), f"secrets.{name} must be")
+
     def test_the_push_list_secret_and_playbook_are_fixed(self) -> None:
         # The control: each line is weakened from the committed caller, which is green. The push
         # list must be the ANSIBLE_PUSH_HOSTS secret, the playbook the one constant, and the

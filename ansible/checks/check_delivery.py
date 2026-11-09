@@ -2,7 +2,7 @@
 
 ``caller`` reads .github/workflows/ansible-delivery.yml and fails on anything that
 would let a pull request, a schedule or a manual run reach a host, float on a moved
-workflow, hand the call any secret but the nine it names, pass a push playbook other than the
+workflow, hand the call any secret but the twelve it names, pass a push playbook other than the
 one fixed here, share an approval with the Pulumi applies, or widen the token. ``environment``
 reads the answers of three read-only GitHub calls and fails unless the deployment environment
 is protected as the reusable workflow assumes, because that workflow cannot read the protection
@@ -82,6 +82,11 @@ SECRETS = {
     # Both or neither: an unset repository secret is empty, and empty means no jump.
     "ssh_jump_host": "${{ secrets.SSH_JUMP_HOST }}",
     "ssh_jump_key": "${{ secrets.SSH_JUMP_KEY }}",
+    # The second hop (edge-t, behind edge1), all three or none: an unset secret is empty, and
+    # empty means no second hop. The list is the subset of ssh_hosts reached through both hops.
+    "ssh_jump2_host": "${{ secrets.SSH_JUMP2_HOST }}",
+    "ssh_jump2_key": "${{ secrets.SSH_JUMP2_KEY }}",
+    "ssh_jump2_hosts": "${{ secrets.ANSIBLE_JUMP2_HOSTS }}",
 }
 APPLY_KEY = "ssh_apply_key"
 # The environment must hold the per-host apply map too. The reusable workflow treats it as
@@ -234,22 +239,23 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
 
 
 def secret_findings(secrets: object) -> list[str]:
-    """Check the call names its nine secrets one by one.
+    """Check the call names its twelve secrets one by one.
 
-    The nine are the keys, the per-host key maps, the push list and the jump pair.
+    The twelve are the keys, the per-host key maps, the push list, the jump pair and the second
+    hop's three.
     """
     if secrets == "inherit":
         return [
-            "secrets: inherit passes every secret of the repository to the call: name the nine "
+            "secrets: inherit passes every secret of the repository to the call: name the twelve "
             "secrets"
         ]
     given = as_mapping(secrets)
     if given is None:
-        return [f"secrets must be a mapping of the nine named secrets, got {secrets!r}"]
+        return [f"secrets must be a mapping of the twelve named secrets, got {secrets!r}"]
     findings = []
     for key in sorted(given):
         if key not in SECRETS:
-            findings.append(f"secrets passes {key}, which is not one of the nine named secrets")
+            findings.append(f"secrets passes {key}, which is not one of the twelve named secrets")
     findings.extend(
         f"secrets.{key} must be {expected}, got {given.get(key)!r}"
         for key, expected in SECRETS.items()
