@@ -78,6 +78,9 @@ mail_reconcilers_not_installed:
   # Runs only in CI, against the runner's own docker; never placed on a host.
   ci_only:
     - check_shim_image_starts.py
+  # Run by the operator from their own checkout against a saved message; never placed on a host.
+  operator_local:
+    - check_dkim_signature_scope.py
   other_roles:
     - 00-harden-ssh.sh
     - 10-harden-updates-fail2ban.sh

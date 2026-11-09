@@ -68,6 +68,63 @@ class BothKeysFailsTests(unittest.TestCase):
         self.assertIn("0 DKIM-Signature headers", line)
 
 
+class DuplicateTagTests(unittest.TestCase):
+    """Two d= tags in one signature: the last would win silently, so the check
+    could read the branchleft.co.uk d= while the other one signs. Must fail."""
+
+    def test_duplicate_d_in_one_signature_fails(self):
+        raw = _message(
+            "DKIM-Signature: v=1; a=rsa-sha256; d=branchleft.co.uk; d=publicpress.co.uk; "
+            "s=bl; h=from; bh=AAAA; b=BBBB\r\n"
+        )
+        ok, line = check.verdict(raw, PUBLICPRESS)
+        self.assertFalse(ok)
+        self.assertIn("duplicate tag d=", line)
+
+    def test_a_repeated_tag_that_is_not_d_also_fails(self):
+        raw = _message(_sig(PUBLICPRESS, "bl").replace("s=bl;", "s=bl; s=other;"))
+        ok, line = check.verdict(raw, PUBLICPRESS)
+        self.assertFalse(ok)
+        self.assertIn("duplicate tag s=", line)
+
+
+class MalformedHeaderTests(unittest.TestCase):
+    """A header line with no colon, or a space before the colon, ends header
+    parsing early in a standard parser, so a later signature would be
+    uncounted. The check must fail on the malformed line instead."""
+
+    def test_a_line_with_no_colon_before_a_branchleft_signature_fails(self):
+        raw = (
+            b"From: noreply@publicpress.co.uk\r\n"
+            b"this line has no colon\r\n"
+            + _sig("branchleft.co.uk", "rsa").encode()
+            + _sig(PUBLICPRESS, "bl").encode()
+            + b"To: rob@example.net\r\n\r\nbody\r\n"
+        )
+        ok, line = check.verdict(raw, PUBLICPRESS)
+        self.assertFalse(ok)
+        self.assertIn("not a header line", line)
+
+    def test_a_space_before_the_colon_fails(self):
+        raw = (
+            b"Subject : test\r\n"
+            + _sig(PUBLICPRESS, "bl").encode()
+            + b"From: noreply@publicpress.co.uk\r\n\r\nbody\r\n"
+        )
+        ok, line = check.verdict(raw, PUBLICPRESS)
+        self.assertFalse(ok)
+        self.assertIn("not a header line", line)
+
+    def test_a_folded_continuation_is_not_malformed(self):
+        raw = (
+            b"Subject: a long\r\n subject\r\n"
+            + _sig(PUBLICPRESS, "bl").encode()
+            + BASE_HEADERS.encode()
+        )
+        ok, _ = check.verdict(raw, PUBLICPRESS)
+        self.assertTrue(ok)
+
+
 class ParseTests(unittest.TestCase):
     def test_tags_are_read_whatever_the_spacing(self):
         tags = check.parse_tags(" v=1;d=publicpress.co.uk ;  s=bl ")
