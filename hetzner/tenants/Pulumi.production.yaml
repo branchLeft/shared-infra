@@ -1,14 +1,12 @@
-# Stack configuration for the tenants project's network and db-t1.
+# Stack configuration for the tenants project's network, edge-t and db-t1.
 #
 # No `encryptionsalt` is committed here. CI appends it from its own repository
 # secret, or an operator appends it from their own copy for a hand-gated
 # operation, and never commits the result. See `estate/Pulumi.production.yaml`.
 #
-# `dbt1DeployPublicKey` is deliberately absent. It is the public half of a key
-# generated for db-t1 at the time of the first apply, and no value for it exists
-# in the repository yet. A preview without it fails on the missing key, which is
-# the intended result: it is set with `pulumi config set` by the operator who
-# generates the key, and the public half is then committed in a follow-up.
+# `dbt1DeployPublicKey` is the public half of the key generated for db-t1 at
+# adoption (`RUNBOOK-adopt-console-servers.md`, step 8). Only the public half is
+# committed; the private half is never in the repository.
 #
 # `location` is not a key here, for the reason `estate/Pulumi.production.yaml`
 # gives: it is `ESTATE_LOCATION` in the address plan.
@@ -29,14 +27,22 @@ config:
   # the owner's ruling of 7 Nov 2026 (it replaces the 2 Nov choice of CPX22), for
   # edge-t, db-t1 and app-t1. Check `Available:` and never `Recommended:`
   # immediately before an apply, and never substitute a type.
-  # `edgetDeployPublicKey` is absent for the reason `dbt1DeployPublicKey` is: it is
-  # the public half of a key generated for edge-t, and a preview without it fails on
-  # the missing key.
-  # `edgetAdopt` and `dbt1Adopt` are absent for the same reason: they hold the live
-  # ids of the servers made by hand, which exist nowhere until the owner reads them
-  # from the console (`RUNBOOK-adopt-console-servers.md`). Absent, the host is
-  # created, which is not what is wanted for these three.
-  # `dbt1Enabled` is absent too, and the program reads absent as false: db-t1 is
-  # declared only after edge-t's route and NAT are live and proven.
-  # app-t1 is declared by the app host stack, not by this one.
+  # edge-t is adopted at stage `converge`: its server and primary IPs are the ones
+  # made by hand in the console, imported by id (`edgetAdopt`). Leave the adopt
+  # config in place for the life of the host.
   branchleft-hetzner-tenants:edgetServerType: cx23
+  # The public half of the key generated for edge-t at adoption.
+  branchleft-hetzner-tenants:edgetDeployPublicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGuJFaVwqz3vf32Pl5yrivf//LjBKA/BJArtQEN5ysrL deploy@edge-t
+  branchleft-hetzner-tenants:edgetAdopt:
+    serverId: 174988976
+    ipv4Id: 160981933
+    ipv6Id: 160981934
+    stage: converge
+  # db-t1 is declared, private-only, and adopted at stage `converge` (`dbt1Adopt`).
+  # It has no public address; see the runbook's step 9.
+  branchleft-hetzner-tenants:dbt1Enabled: "true"
+  branchleft-hetzner-tenants:dbt1DeployPublicKey: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIH/5+g7frwSwWZZgX6y2VMV0p8Y5K3zViFR5aExFW3Nj deploy@db-t1
+  branchleft-hetzner-tenants:dbt1Adopt:
+    serverId: 174988939
+    stage: converge
+  # app-t1 has no stack in this repository yet; see the runbook's app-t1 section.
