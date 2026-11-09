@@ -52,7 +52,7 @@
   deploy_tooling_chain:
     mode: summary
     reconciler_text: >-
-      {{ lookup('ansible.builtin.file', deploy_tooling_programs_dir ~ '/' ~
+      {{ lookup('ansible.builtin.file', deploy_tooling_role_files_dir ~ '/' ~
          (deploy_tooling_app_file_targets
           | selectattr('label', 'equalto', 'policy program')
           | map(attribute='program') | first)) }}
