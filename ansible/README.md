@@ -629,8 +629,8 @@ of each job in that workflow.
   19 October 2026. The container test harness has been measured on 24.04 only:
   it runs on a cgroup v2 runner with `cgroupns_mode: host`.
 - **Exit.** The pin comes off when the harness has a recorded green run on the
-  next image. Run the harness on a 26.04 runner, record the run URL on
-  `branchLeft/workspace#2401`, then either move every `runs-on` line to the
+  next image. Run the harness on a 26.04 runner, record the run URL in the
+  tracking issue for this pin, then either move every `runs-on` line to the
   verified label, or record here what fails on 26.04 and the fix it needs.
 - **Owner.** The workflow file is under `/.github/` in `.github/CODEOWNERS`,
   owned by `@branchLeft/branchleft-admin`, and that team owns changes to the
