@@ -308,6 +308,14 @@ image it cannot see. The rules:
   an escaped key and a complex `? key` are refused. Current hosts take
   `docker-ce` and `docker-compose-plugin` unpinned from Docker's repository
   with unattended upgrades, so image mounts are assumed supported.
+- The mount-type rule and the escaped-key rule apply to every line of the file,
+  `x-*` blocks and other sections included, not only lines under `services:`.
+- An anchor (`&name`) or alias (`*name`) outside a quoted scalar is refused,
+  because a mapping checked where it is written can reach a service from where
+  it is not. The one shape allowed is the one a live stack uses: a column-0 `x-*:`
+  key anchoring a single plain word, and a mapping entry whose whole value is an
+  alias of it. A word cannot be a volume entry. An anchor nobody references is
+  refused too unless it is that shape.
 - `build:`, `extends:` and `provider:` are refused (an image built on the host
   has no digest to attest), as is a service with no `image:` in the base file.
 - A control character, a line-separator character, a byte order mark, a tab

@@ -1479,6 +1479,56 @@ HIDDEN_AT_COLUMN_ZERO = {
     "a next line separator": "x-n: a\x85include: [evil.yml]\n" + compose_of(),
 }
 
+# A mapping anchored where nothing checks it and reached by alias from a
+# service's volumes. Each value is (anchor block at column 0, service fields).
+ANCHORED_IMAGE_MOUNTS = {
+    "a flow anchor and an alias in a volumes list": (
+        "x-m: &m {type: image, source: " + EVIL + ", target: /x}\n",
+        "    volumes:\n      - *m\n",
+    ),
+    "a list anchor and a volumes alias": (
+        "x-v: &v\n  - type: image\n    source: " + EVIL + "\n    target: /x\n",
+        "    volumes: *v\n",
+    ),
+    "a block anchor body and a list alias": (
+        "x-m: &m\n  type: image\n  source: " + EVIL + "\n  target: /x\n",
+        "    volumes:\n      - *m\n",
+    ),
+    "an anchor never referenced": (
+        "x-m: &m {type: image, source: " + EVIL + ", target: /x}\n",
+        "",
+    ),
+    "a merge key combined with an alias": (
+        "x-m: &m\n  source: " + EVIL + "\n  target: /x\n",
+        "    volumes:\n      - <<: *m\n        type: image\n",
+    ),
+    "a flow merge key combined with an alias": (
+        "x-m: &m {source: " + EVIL + ", target: /x}\n",
+        "    volumes:\n      - {<<: *m, type: image}\n",
+    ),
+    "an alias for the type value": (
+        "x-t: &t image\n",
+        "    volumes:\n      - type: *t\n        source: " + EVIL + "\n        target: /x\n",
+    ),
+    "an alias used as a list item": (
+        "x-m: &m word\n",
+        "    volumes:\n      - *m\n",
+    ),
+    "an anchor inside a service": (
+        "",
+        "    environment: &e {A: b}\n",
+    ),
+    "an image mount written in an x- block with no anchor": (
+        "x-m:\n  type: image\n  source: " + EVIL + "\n",
+        "",
+    ),
+    "an escaped type key in an x- block": (
+        'x-m:\n  "typ\\x65": image\n',
+        "",
+    ),
+}
+
+
 def indented(text, spaces):
     return "".join(
         (" " * spaces + line if line.strip() else line) for line in text.splitlines(True)
@@ -1942,6 +1992,36 @@ class ImageVerificationTests(unittest.TestCase):
                 self.assertEqual(run.calls, [])
                 self.assertIn("cannot account for every image", message)
 
+    def test_an_image_mount_reached_through_an_anchor_is_refused(self):
+        for label, (anchors, fields) in ANCHORED_IMAGE_MOUNTS.items():
+            with self.subTest(label + " in compose.yml"):
+                run = FakeRun([0])
+                message = self.assert_refused(
+                    anchors + compose_of(service_block("side", EXPORTER, fields)), run
+                )
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+            with self.subTest(label + " in the override"):
+                run = FakeRun([0])
+                override = anchors + "services:\n  app:\n" + (fields or "    restart: always\n")
+                message = self.assert_refused(compose_of(), run, override=override)
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+
+    def test_the_one_anchor_shape_a_live_stack_uses_still_deploys(self):
+        """A single word anchored on an x- key and aliased as a whole value, as
+        the control-plane stack does for its trusted proxy address."""
+        extra = "    environment:\n      TRUSTED: *addr\n"
+        self.write("x-addr: &addr 10.20.1.10\n" + compose_of(service_block("side", EXPORTER, extra)))
+        self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
+
+    def test_an_anchor_or_alias_inside_a_quoted_scalar_is_not_one(self):
+        extra = "    command: ['sh', '-c', 'echo *x &y']\n    labels:\n      note: \"a *b &c\"\n"
+        self.write(compose_of(service_block("side", EXPORTER, extra)))
+        self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
+
     def test_the_ordinary_mount_types_are_not_refused(self):
         extra = (
             "    volumes:\n      - type: bind\n        source: /a\n        target: /b\n"
@@ -1954,7 +2034,7 @@ class ImageVerificationTests(unittest.TestCase):
 
     def test_the_allowed_top_level_keys_are_read_and_do_not_refuse(self):
         text = (
-            "name: edge\nversion: '3'\nx-shared: &shared\n  a: b\n"
+            "name: edge\nversion: '3'\nx-shared: &shared word\n"
             "networks:\n  n: {}\nvolumes:\n  v: {}\nsecrets:\n  s:\n    file: /x\n"
             "configs:\n  c:\n    file: /x\n" + compose_of()
         )
@@ -2175,6 +2255,78 @@ class ReaderAgainstYamlTests(unittest.TestCase):
                 # spellings, which it reads as something else.
                 if label not in ("a flow entry with an alias type", "a tagged type"):
                     self.assertTrue(has_image_mount(loaded), label)
+
+    def test_the_anchored_shapes_are_real_and_the_reader_refuses_each(self):
+        for label, (anchors, fields) in ANCHORED_IMAGE_MOUNTS.items():
+            text = anchors + compose_of(service_block("side", EXPORTER, fields))
+            with self.subTest(label):
+                self.assertIsNone(reader_outcome(text))
+                self.assertIsNone(yaml_disagreement(text))
+        # Where an alias carries the mount to a service, PyYAML reads it there.
+        for label in (
+            "a flow anchor and an alias in a volumes list",
+            "a list anchor and a volumes alias",
+            "a block anchor body and a list alias",
+            "a merge key combined with an alias",
+            "a flow merge key combined with an alias",
+        ):
+            anchors, fields = ANCHORED_IMAGE_MOUNTS[label]
+            loaded = yaml.safe_load(anchors + compose_of(service_block("side", EXPORTER, fields)))
+            with self.subTest(label):
+                self.assertTrue(has_image_mount(loaded["services"]["side"]), label)
+
+    def test_an_anchor_body_with_a_later_alias_never_splits_the_reader_from_pyyaml(self):
+        """Composes an anchored node with an alias to it, which no single
+        inserted line can: the mapping is checked where it is written, the
+        service reaches it from somewhere else."""
+        bodies = (
+            "x-m: &m {type: image, source: " + EVIL + ", target: /x}",
+            "x-m: &m\n  type: image\n  source: " + EVIL + "\n  target: /x",
+            "x-m: &m\n  source: " + EVIL + "\n  target: /x",
+            "x-m: &m {source: " + EVIL + ", target: /x}",
+            "x-m: &m\n  - type: image\n    source: " + EVIL + "\n    target: /x",
+            "x-m: &m [{type: image, source: x, target: /x}]",
+            "x-m: &m image",
+            "x-m: &m word",
+            "x-m: &m 10.20.1.10",
+            "x-m:\n  type: image",
+        )
+        uses = (
+            "    volumes:\n      - *m",
+            "    volumes: *m",
+            "    volumes:\n      - <<: *m\n        type: image",
+            "    volumes:\n      - {<<: *m, type: image}",
+            "    volumes:\n      - type: *m\n        source: x\n        target: /x",
+            "    volumes:\n      - {type: *m, source: x, target: /x}",
+            "    environment:\n      A: *m",
+            "    environment: *m",
+            "    deploy: *m",
+            "    labels: *m",
+        )
+        rng = random.Random(706)
+        reads_a_mount = refused_with_a_mount = 0
+        for _ in range(1500):
+            body = rng.choice(bodies)
+            use = rng.choice(uses)
+            lines = compose_of(service_block("side", EXPORTER)).splitlines()
+            # After the pin service's header block, inside the second service.
+            lines.insert(len(lines) - 3, use)
+            text = body + "\n" + "\n".join(lines) + "\n"
+            if rng.random() < 0.3:
+                text = "\n".join(lines) + "\n" + body + "\n"
+            self.assertIsNone(yaml_disagreement(text), text)
+            try:
+                loaded = yaml.safe_load(text)
+            except yaml.YAMLError:
+                continue
+            services = loaded.get("services") or {} if isinstance(loaded, dict) else {}
+            if has_image_mount(services):
+                reads_a_mount += 1
+                refused_with_a_mount += reader_outcome(text) is None
+        # PyYAML reads an image mount in many of them, and the reader refuses
+        # every such file; the property is not vacuous.
+        self.assertGreater(reads_a_mount, 100)
+        self.assertEqual(refused_with_a_mount, reads_a_mount)
 
     def test_an_indented_sample_never_splits_the_reader_from_pyyaml(self):
         """Every generated file, shifted right by 1 to 4 spaces as a whole: valid

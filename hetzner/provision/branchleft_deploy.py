@@ -548,6 +548,28 @@ _ESCAPED_KEY = re.compile(r'"(?:[^"\\]|\\.)*\\(?:[^"\\]|\\.)*"\s*:')
 _COMPLEX_KEY = re.compile(r"(?:\A\s*(?:-\s+)*|[{,]\s*)\?(?:\s|\Z)")
 
 
+# An anchor or alias carries a whole node from one place to another, so a mapping
+# checked where it is written can reach a service from where it is not. Both
+# are refused outside a quoted scalar, except the one shape a live stack uses:
+# a column-0 `x-*:` key anchoring a single plain word, and a mapping entry
+# whose whole value is an alias of such a word. A word cannot be a volume entry.
+_QUOTED_SCALAR = re.compile(r"""\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'""")
+_ANCHOR_OR_ALIAS = re.compile(r"(?:\A|[\s\[{,])[&*][A-Za-z0-9_-]")
+_WORD_ANCHOR_LINE = re.compile(r"\Ax-[A-Za-z0-9_.-]+:\s+&[A-Za-z0-9_-]+\s+[A-Za-z0-9_./:@-]+\Z")
+_WORD_ALIAS_LINE = re.compile(r"\A +[A-Za-z0-9_.-]+:\s+\*[A-Za-z0-9_-]+\Z")
+
+
+def _refuse_anchor_or_alias(raw: str) -> None:
+    if not _ANCHOR_OR_ALIAS.search(_QUOTED_SCALAR.sub('""', raw)):
+        return
+    if _WORD_ANCHOR_LINE.match(raw) or _WORD_ALIAS_LINE.match(raw):
+        return
+    raise ComposeParseError(
+        f"{raw!r} uses a YAML anchor or alias; only a single word anchored on an `x-*` "
+        "key, and a mapping entry whose whole value is its alias, are read"
+    )
+
+
 def _refuse_hidden_mount_type(raw: str, service: str) -> None:
     if _ESCAPED_KEY.search(raw) or _COMPLEX_KEY.search(raw):
         raise ComposeParseError(
@@ -585,6 +607,10 @@ def service_images(compose_text: str) -> dict[str, str | None]:
             # A file whose first line is indented is read by YAML with every
             # line at that depth; lines before a column-0 key are not skipped.
             raise ComposeParseError(f"{raw!r} is the first line and does not start at column 0")
+        # Every line of the file, not only those under `services:`: an `x-*` block
+        # or another section can hold a mapping that a service reaches by alias.
+        _refuse_anchor_or_alias(raw)
+        _refuse_hidden_mount_type(raw, current or "(outside services)")
         if not raw.startswith(" "):
             top_level = _ALLOWED_TOP_LEVEL.match(raw)
             if top_level is None:
@@ -626,7 +652,6 @@ def service_images(compose_text: str) -> dict[str, str | None]:
                 f"{_FIELD_INDENT} spaces, so the keys after it cannot be told apart"
             )
         awaiting_first_field = False
-        _refuse_hidden_mount_type(raw, current)
         if indent > _FIELD_INDENT:
             if after_image:
                 raise ComposeParseError(
