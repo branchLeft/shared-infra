@@ -1409,7 +1409,7 @@ describe('the owner console and tenant portal routes', () => {
   it('exposes no other upstream port on ops1 and gives each app its own port', () => {
     const ops1 = sites.filter((entry) => entry.privateUpstream?.host === 'ops1');
     const names = ops1.map((entry) => entry.name).sort();
-    expect(names).toEqual(['identity', 'nextcloud1', 'owner-console', 'tenant-portal']);
+    expect(names).toEqual(['identity', 'nextcloud1', 'owner-console', 'status', 'tenant-portal']);
     const ports = ops1.map((entry) => entry.privateUpstream?.port);
     expect(new Set(ports).size).toBe(ports.length);
   });
@@ -1420,6 +1420,13 @@ describe('the owner console and tenant portal routes', () => {
     expect(block.match(/reverse_proxy/g)).toHaveLength(1);
     expect(block).toContain('max_size 1MiB');
     expect(rendered).not.toContain('id.branchleft.co.uk');
+  });
+
+  it('routes the status hostname to the status page on ops1, port 8303, and no other port', () => {
+    const block = blockOf(rendered, 'status.branchleft.co.uk');
+    expect(block).toContain('reverse_proxy 10.20.1.50:8303');
+    expect(block.match(/reverse_proxy/g)).toHaveLength(1);
+    expect(block).toContain('max_size 64KiB');
   });
 
   it('adds nothing that serves a name beside the registry: one new block, no wildcard', () => {

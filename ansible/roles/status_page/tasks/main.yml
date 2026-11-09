@@ -13,22 +13,23 @@
 # This role is a copy of the compose_stack pattern's recipe (ANS-12: a role does not
 # apply another role), with the status page's own names, its own template and its
 # two configuration files. The first refusal of an address that would expose ops1.
-# The argument specification has already refused any value but 127.0.0.1; this holds
-# if that validation is ever switched off, and it also reads the compose file as
-# rendered, so a published port that does not start with the loopback address is
-# refused whatever put it there. It runs before anything is written to the host.
-- name: Refuse a published port that is not on loopback
+# The argument specification has already refused any value but the two allowed ones;
+# this holds if that validation is ever switched off, and it also reads the compose
+# file as rendered, so a published port that does not start with the listen address
+# is refused whatever put it there. It runs before anything is written to the host.
+- name: Refuse a published port that is not on an allowed listen address
   ansible.builtin.assert:
     that:
-      - status_page_listen_address == '127.0.0.1'
+      - status_page_listen_address in status_page_allowed_listen_addresses
       - status_page_rendered.services is ansible.builtin.mapping
-      - status_page_published | ansible.builtin.reject('ansible.builtin.match', '^127\.0\.0\.1:') | ansible.builtin.list | ansible.builtin.length == 0
+      - status_page_published | ansible.builtin.reject('ansible.builtin.match', '^' ~ (status_page_listen_address | ansible.builtin.regex_escape) ~ ':') | ansible.builtin.list | ansible.builtin.length == 0
       - status_page_published | ansible.builtin.length == 1
     quiet: true
     fail_msg: >-
-      The status page is published on loopback only. Its listen address must be
-      127.0.0.1 and the only published port of the compose file must start with
-      that address; found {{ status_page_listen_address }} and {{ status_page_published }}.
+      The status page is published on an address the role allows only. Its listen address
+      must be one of {{ status_page_allowed_listen_addresses }} and the only published port
+      of the compose file must start with that address; found {{ status_page_listen_address }}
+      and {{ status_page_published }}.
   vars:
     status_page_rendered: '{{ status_page_compose_text | ansible.builtin.from_yaml }}'
     status_page_published: >-

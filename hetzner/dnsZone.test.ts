@@ -157,6 +157,7 @@ const BRANCHLEFT_RESOURCE_NAMES = [
   'mx1-a',
   'mx1-aaaa',
   'ntfy-a',
+  'status-a',
   'v1-ed25519-20260811._domainkey-txt',
   'v1-rsa-20260811._domainkey-txt',
   'www-a',

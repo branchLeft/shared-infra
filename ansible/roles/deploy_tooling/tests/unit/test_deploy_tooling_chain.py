@@ -42,6 +42,10 @@ V4_STANDARD_DELETIONS: Mapping[str, str] = {
 V4_PROTECTED_DELETIONS: Mapping[str, str] = {
     "established accept": V4_STANDARD_DELETIONS["established accept"],
     "spool bridge forward drop": V4_STANDARD_DELETIONS["spool bridge forward drop"],
+    "protected-port drop 8303": (
+        "-A DOCKER-USER ! -s 10.20.1.10/32 -p tcp -m conntrack --ctorigdst 10.20.1.50 "
+        "--ctorigdstport 8303 -j DROP"
+    ),
     "protected-port drop 8302": (
         "-A DOCKER-USER ! -s 10.20.1.10/32 -p tcp -m conntrack --ctorigdst 10.20.1.50 "
         "--ctorigdstport 8302 -j DROP"
@@ -273,7 +277,7 @@ class PassingTests(unittest.TestCase):
 
     def test_the_protected_chain_without_a_database_passes(self) -> None:
         found = check(PROTECTED)
-        self.assertEqual((found.owned_rules, found.foreign_rules), (7 + 2 + 2 + 1, 2))
+        self.assertEqual((found.owned_rules, found.foreign_rules), (8 + 2 + 2 + 1, 2))
 
     def test_a_host_with_no_ipv6_docker_user_chain_passes(self) -> None:
         no_chain = v6_listing(lambda lines: [line for line in lines if "DOCKER-USER" not in line])
@@ -831,7 +835,7 @@ class SummaryTests(unittest.TestCase):
                 self.assertEqual((found.would_refuse, found.at_risk, found.unreadable), (0, 0, 0))
                 self.assertEqual(
                     verdicts(found, "iptables", "DOCKER-USER"),
-                    [(6 if variant == STANDARD else 8, "below-policy")],
+                    [(6 if variant == STANDARD else 9, "below-policy")],
                 )
 
     def test_forward_rule_one_other_than_the_docker_user_jump_is_reported(self) -> None:

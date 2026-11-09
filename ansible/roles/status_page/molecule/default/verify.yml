@@ -178,10 +178,10 @@
         status_code: 200
       changed_when: false
 
-    # The safety-class cases. A listen address that is not loopback is refused
-    # twice: by the argument specification (choices), and, with that validation
-    # switched off, by the role's own assert. Each refusal must leave the
-    # compose file as it was.
+    # The safety-class cases. A listen address outside the two the role allows
+    # (loopback and ops1's private address) is refused twice: by the argument
+    # specification (choices), and, with that validation switched off, by the
+    # role's own assert. Each refusal must leave the compose file as it was.
     - name: Refuse a wide listen address at the argument specification
       ansible.builtin.include_tasks: tasks/refuse_wide_bind.yml
       vars:
@@ -194,7 +194,15 @@
       vars:
         refuse_title: Role assert with the specification off
         refuse_validate: false
-        refuse_expect: published on loopback only
+        refuse_expect: published on an address the role allows only
+
+    - name: Refuse a private address that is not ops1's at the role's own assert
+      ansible.builtin.include_tasks: tasks/refuse_wide_bind.yml
+      vars:
+        refuse_title: Role assert, another private address, specification off
+        refuse_validate: false
+        refuse_address: 10.20.1.99
+        refuse_expect: published on an address the role allows only
 
     - name: Refuse each image reference that is not pinned by digest
       ansible.builtin.include_tasks: tasks/refuse_image.yml
