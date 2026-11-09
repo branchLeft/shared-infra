@@ -61,6 +61,13 @@ db1:
   - tunnel_account
   - host_baseline
   - node_exporter
+# dbt1, the database host db-t1. Three roles after the pull roles, no host_inputs: the host
+# has no private inputs, so the loader has nothing to read (R11 applies only when it is
+# listed). egress_nat is applied bare with its gateway switch unset: this host is no gateway.
+dbt1:
+  - host_baseline
+  - egress_nat
+  - deploy_verifier
 demo1:
   - demo1_build
   - demo1_egress_spool
