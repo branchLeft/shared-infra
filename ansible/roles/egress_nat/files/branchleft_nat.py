@@ -1,4 +1,4 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """Makes this host forward and source-NAT the estate's private subnet out of
 its own public interface, so that hosts created without public networking
 have an outbound internet path at all.
@@ -63,6 +63,22 @@ def run(argv: list[str]) -> subprocess.CompletedProcess[str] | None:
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def learn(argv: list[str], question: str) -> subprocess.CompletedProcess[str]:
+    """Run a probe whose answer decides what is installed, and refuse when no answer comes.
+
+    A probe that times out or cannot run has told us nothing. Reading that as "no" would
+    install rules on a guess, so the program stops with nothing more installed.
+    """
+    result = run(argv)
+    if result is None:
+        die(
+            f"branchleft-nat: could not learn {question}: "
+            f"{' '.join(argv)} did not run to completion",
+            "branchleft-nat: refusing rather than guess",
+        )
+    return result
 
 
 def passthrough(result: subprocess.CompletedProcess[str] | None) -> None:
@@ -190,14 +206,22 @@ def forward_chain() -> str:
     flush, so it is preferred wherever it exists. FORWARD is the fallback on a host
     where Docker is not installed and the policy is still ACCEPT.
     """
-    if succeeded(run(["iptables", "-t", "filter", "-S", "DOCKER-USER"])):
+    if (
+        learn(
+            ["iptables", "-t", "filter", "-S", "DOCKER-USER"], "whether DOCKER-USER exists"
+        ).returncode
+        == 0
+    ):
         return "DOCKER-USER"
     # dockerd creates DOCKER-USER unconditionally at startup under the iptables
     # backend, so its absence with the daemon running means iptables is not what
     # dockerd enforces through. Its nftables firewall backend manages its own tables
     # instead, and a rule written into FORWARD is one Docker's DROP policy never
     # consults.
-    if succeeded(run(["systemctl", "is-active", "--quiet", "docker.service"])):
+    active = learn(
+        ["systemctl", "is-active", "--quiet", "docker.service"], "whether docker.service is active"
+    )
+    if active.returncode == 0:
         die(
             "branchleft-nat: docker.service is active but iptables carries no DOCKER-USER chain -- "
             "Docker is not enforcing through iptables here (its nftables firewall backend, most "
@@ -212,7 +236,11 @@ def ensure_rule(table: str, chain: str, *rule: str) -> None:
     A rule that is already present is left where it is.
     """
     text = " ".join(rule)
-    if succeeded(run(["iptables", "-t", table, "-C", chain, *rule])):
+    check = learn(
+        ["iptables", "-t", table, "-C", chain, *rule],
+        f"whether {table}/{chain} already carries the rule",
+    )
+    if check.returncode == 0:
         print(f"branchleft-nat: {table}/{chain} already carries: {text}")
         return
     inserted = run(["iptables", "-t", table, "-I", chain, "1", *rule])

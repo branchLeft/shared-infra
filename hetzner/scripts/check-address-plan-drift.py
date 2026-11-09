@@ -265,7 +265,7 @@ def check(root: pathlib.Path) -> list[str]:
 
     failures: list[str] = []
     failures += _check_literals(
-        root / "hetzner" / "provision" / "branchleft_nat.sh",
+        root / "ansible" / "roles" / "egress_nat" / "files" / "branchleft_nat.py",
         _CIDR_RE,
         plan.subnet_cidr,
         "SUBNET_CIDR",
