@@ -1,6 +1,7 @@
 ---
 # db1's install half. Every run-time input is read from its root-only file and
-# refused here, before the first change to a file, when it is not the shape the
+# refused here, before the target file, the pin or the unit is written (db1_key has already
+# made the account and key), when it is not the shape the
 # unit needs. No message names a value (ANS-16).
 - name: Generate or keep db1's key
   ansible.builtin.include_tasks: db1_key.yml

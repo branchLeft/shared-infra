@@ -46,7 +46,7 @@ edge_stack_candidate_dir: /var/lib/branchleft/edge.candidate
 
 # The classes. A file in the stack directory that is in none of them is
 # refused. Paths are relative to the stack directory.
-edge_stack_caddy_file: Caddyfile
+edge_stack_caddy_file: caddy/Caddyfile
 edge_stack_compose_file: compose.yml
 edge_stack_crowdsec_files:
   - crowdsec/config.yaml.local
@@ -56,6 +56,7 @@ edge_stack_acquis_dir: crowdsec/acquis.d
 
 # The directories of the stack; the project directory is created before them.
 edge_stack_dirs:
+  - caddy
   - crowdsec
   - crowdsec/acquis.d
 

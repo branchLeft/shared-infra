@@ -1,0 +1,8 @@
+# Facts db1's roles read, as a Debian 13 (trixie) cx23 server reports them.
+# The 192.0.2.0/24 range is reserved for documentation (RFC 5737).
+architecture: x86_64
+distribution_release: trixie
+packages: {}
+all_ipv4_addresses:
+  - 192.0.2.10
+mounts: []

@@ -78,7 +78,24 @@ control_plane_image_pattern: '\A[a-z0-9][^\s@]*@sha256:[0-9a-f]{64}\Z'
 control_plane_stack_files:
   - compose.yml
   - compose.init.yml
-  - pg_hba.conf
+  - postgres/pg_hba.conf
+
+# The subdirectories of the project directory that hold the files above. The role makes
+# them before it copies. The database's access rules sit alone in `postgres`, because the
+# compose file mounts that whole directory into the db container (and not the single file:
+# a delivered file replaces the old one by rename, which a single-file bind mount does not
+# follow), so the container sees that one file and nothing else of the stack.
+control_plane_stack_dirs:
+  - postgres
+
+# Where the access rules were before they moved into `postgres`. The role removes this
+# file once the stack runs on the new mount, so nobody edits a copy that governs nothing.
+control_plane_legacy_hba_file: '{{ control_plane_project_dir }}/pg_hba.conf'
+
+# The database container, as Compose names it: the project, the service and the replica
+# number. A unit test pins it to the project name in compose.yml. The role reloads the
+# server in it after every deploy.
+control_plane_db_container: control-plane-db-1
 
 # The files above whose diff the plan does not show: both set environment variables named
 # like passwords from other variables, which the plan's secret scan would withhold the whole

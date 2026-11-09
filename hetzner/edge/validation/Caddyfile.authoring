@@ -20,7 +20,12 @@
 
 authoring.invalid {
 	log {
-		output file /var/log/caddy/access.log
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -70,7 +75,12 @@ authoring.invalid {
 
 http://edge-probe.invalid:8080 {
 	log {
-		output file /var/log/caddy/probe.log
+		output file /var/log/caddy/probe.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
@@ -113,7 +123,12 @@ http://edge-probe.invalid:8080 {
 
 :8080 {
 	log {
-		output file /var/log/caddy/probe.log
+		output file /var/log/caddy/probe.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
 		format filter {
 			wrap json
 			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"

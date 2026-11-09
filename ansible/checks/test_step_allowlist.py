@@ -17,6 +17,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import re
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -29,6 +30,8 @@ OWNER_FILE = ANSIBLE / "owner_vars" / "ops1.yml"
 PROGRAM = ANSIBLE / "roles" / "pull_trigger" / "files" / "pull_trigger.py"
 ROLE = ANSIBLE / "roles" / "control_plane_db"
 STEPS_KEY = "pull_trigger_steps"
+IMAGE_KEY = "control_plane_db_apps_image"
+APPLICATIONS_IMAGE = "ghcr.io/branchleft/portal-apps"
 NEVER = "never"
 IMPORT_TASKS = frozenset(("ansible.builtin.import_tasks", "import_tasks"))
 SIGNER = "ssh-ed25519 " + "A" * 68
@@ -164,6 +167,46 @@ class RealAllowlist(unittest.TestCase):
             ["control_plane_db_migrate is not on a never-tagged import in the role's tasks"],
             problems,
         )
+
+
+class RealApplicationsImage(unittest.TestCase):
+    """The image the steps run is the owner's value, held to the role's own rules.
+
+    owner_vars/ops1.yml sets control_plane_db_apps_image, which the role's argument spec takes
+    and every step refuses to run without. R10 reads only that it is text. Here the committed
+    value is held to the role's digest pattern (read by its name from the role's constants, not
+    copied), and the pattern is shown to refuse what a pin is not, so a pattern that accepted
+    everything would fail here and not pass for a strict one.
+    """
+
+    def setUp(self) -> None:
+        owner = yaml.safe_load(OWNER_FILE.read_text(encoding="utf-8"))
+        role_vars = yaml.safe_load((ROLE / "vars" / "main.yml").read_text(encoding="utf-8"))
+        self.image = owner[IMAGE_KEY]
+        self.pattern = re.compile(role_vars["control_plane_db_image_pattern"])
+
+    def test_the_committed_image_is_pinned_by_digest(self) -> None:
+        self.assertIsInstance(self.image, str)
+        self.assertRegex(self.image, self.pattern)
+
+    def test_the_committed_image_is_the_applications_image(self) -> None:
+        self.assertTrue(self.image.startswith(APPLICATIONS_IMAGE + "@sha256:"), self.image)
+
+    def test_the_pattern_refuses_what_is_not_a_pin(self) -> None:
+        digest = "a" * 64
+        for bad in (
+            f"{APPLICATIONS_IMAGE}:latest",
+            f"{APPLICATIONS_IMAGE}@sha256:{digest[:-1]}",
+            f"{APPLICATIONS_IMAGE}@sha256:{digest.upper()}",
+            f"{APPLICATIONS_IMAGE}@sha256:{digest}\n",
+            "",
+        ):
+            with self.subTest(value=bad):
+                self.assertIsNone(self.pattern.match(bad))
+
+    def test_the_role_step_variable_is_not_an_owner_value(self) -> None:
+        owner = yaml.safe_load(OWNER_FILE.read_text(encoding="utf-8"))
+        self.assertNotIn("control_plane_db_step", owner)
 
 
 class ProgramRefusesBadLists(unittest.TestCase):

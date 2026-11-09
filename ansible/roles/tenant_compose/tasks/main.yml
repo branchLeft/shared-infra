@@ -154,6 +154,8 @@
     tenant_compose_verdict: '{{ tenant_compose_spool_verdict }}'
   when: tenant_compose_mail_spool_text | length > 0
 
+# The loop item holds the tenant's secrets, and a failed labelled loop prints its whole item,
+# so the include hides it. The included tasks do not inherit this, and each sets its own.
 - name: Deliver each tenant's stack
   ansible.builtin.include_tasks: _stack.yml
   vars:
@@ -163,3 +165,4 @@
   loop_control:
     loop_var: tenant_compose_stack
     label: '{{ tenant_compose_stack.slug }}'
+  no_log: true

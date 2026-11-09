@@ -30,6 +30,15 @@ WORKFLOW_ERE = (
     "(passw(or)?d|passphrase|secret|token|api[_-]?key|private[_-]?key|credential)"
     '[A-Za-z0-9_.-]*"?[[:space:]]*[:=][[:space:]]*"?[^[:space:]"]{4,}'
 )
+# Files whose text on a host still holds a line the scan matches, though the file in the checkout
+# no longer does. The diff of a copy is the old text against the new one, so the removed line is in
+# the plan: the host's text cannot be reworded from here, only hidden for the one apply that
+# replaces it. Each entry is the path in the checkout and the line the host holds. The test fails
+# when the line no longer matches or the checkout still has a match (the entry is not retired
+# text), and when a task shows the diff of an entry's file. Delete the entry, and the file from its
+# role's hidden list, once the apply that rewrites the text is live. Nothing is added here for a
+# line that can be reworded in the checkout.
+RETIRED_MATCHES: dict[str, str] = {}
 COPIERS = frozenset(("copy", "template"))
 INCLUDERS = frozenset(("include_tasks", "import_tasks"))
 SEARCH = {
@@ -255,14 +264,20 @@ def _source_files(role: Path, module: str, text: str) -> list[Path]:
     return []
 
 
-def findings_for(root: Path) -> tuple[list[Finding], list[str]]:
+def findings_for(
+    root: Path, retired: dict[str, str] | None = None
+) -> tuple[list[Finding], list[str]]:
     """Return (findings, scanned): the unsafe tasks, and each source file that was read.
 
     A task that sets diff: false is still resolved and read, so a pass shows the walk reached
     the file. It hides every file it copies, so each of those files must have a matching line: a
     file without one is a finding, and the loop is split into a hidden task and a visible one. A
     task that sets no_log renders a secret and is not held to that (see below).
+
+    ``retired`` (RETIRED_MATCHES when not given) names files whose text on a host matches though
+    the checkout's does not: such a file must have its diff hidden, and may.
     """
+    retired = RETIRED_MATCHES if retired is None else retired
     roles_dir = root / "ansible" / "roles"
     every = {role.name: role_variables(role) for role in sorted(roles_dir.glob("*"))}
     fallback = {k: v for variables in every.values() for k, v in variables.items()}
@@ -299,13 +314,20 @@ def findings_for(root: Path) -> tuple[list[Finding], list[str]]:
                         shown = source.relative_to(root) if source.is_relative_to(root) else source
                         scanned.append(f"{name}:{shown}")
                         lines = matching_lines(source.read_text(encoding="utf-8", errors="replace"))
-                        if lines and not diff_is_off:
+                        old_text = shown.as_posix() in retired
+                        if old_text and not diff_is_off:
+                            message = (
+                                f"copies {shown}, whose text on a host still matches the plan's "
+                                "secret scan (RETIRED_MATCHES), and sets no diff: false"
+                            )
+                            findings.add((*where, message))
+                        elif lines and not diff_is_off:
                             message = (
                                 f"copies {shown}, whose line {lines[0]} matches the plan's "
                                 "secret scan, and sets no diff: false"
                             )
                             findings.add((*where, message))
-                        elif diff_is_off and not lines and not carries_secret:
+                        elif diff_is_off and not lines and not carries_secret and not old_text:
                             message = (
                                 f"sets diff: false but copies {shown}, which has no matching "
                                 "line, so its diff is hidden for nothing: split the loop"
@@ -352,6 +374,21 @@ class RegexCase(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.assertEqual(bool(CREDENTIAL_ASSIGNMENT.search(line)), expected)
 
+    def test_each_retired_match_is_still_a_match_and_gone_from_the_checkout(self) -> None:
+        """An entry is retired text: the scan reads the host's line, and the checkout lost it."""
+        for path, line in RETIRED_MATCHES.items():
+            with self.subTest(path=path):
+                self.assertTrue(
+                    CREDENTIAL_ASSIGNMENT.search(line),
+                    f"{path}: the line no longer matches the scan, so delete the entry",
+                )
+                text = (ROOT / path).read_text(encoding="utf-8", errors="replace")
+                self.assertEqual(
+                    matching_lines(text),
+                    [],
+                    f"{path}: the checkout still has a matching line, so it is not retired text",
+                )
+
     def test_lines_are_split_on_newline_only(self) -> None:
         """A form feed is not a line break to grep, so it does not move a match to a later line."""
         text = "a\nb\x0cpassword: abcd1234\nc\n"
@@ -393,7 +430,7 @@ class TreeCase(unittest.TestCase):
         """Create the tree: a playbook naming role r, which has files/ and a tasks/ directory."""
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        self.root = Path(self._tmp.name)
+        self.root = Path(self._tmp.name).resolve()
         self.role = self.root / "ansible" / "roles" / "r"
         (self.role / "tasks").mkdir(parents=True)
         (self.role / "files").mkdir()
@@ -506,6 +543,21 @@ class TreeCase(unittest.TestCase):
         self.assertIn("files/clean.txt", found[0])
         self.assertIn("split the loop", found[0])
 
+    def test_a_retired_match_must_be_hidden_and_may_be_hidden(self) -> None:
+        """A file whose host text matches is hidden; with no entry that hide is needless."""
+        self.put(self.role / "files" / "clean.txt", "x = 1\n")
+        retired = {"ansible/roles/r/files/clean.txt": "credential: mysqld_exporter v0.20.0 expands"}
+        copy = "- name: a\n  ansible.builtin.copy:\n    src: clean.txt\n    dest: /x\n"
+        self.put(self.role / "tasks" / "main.yml", copy)
+        shown = [m for _f, _n, m in findings_for(self.root, retired)[0]]
+        self.assertEqual(len(shown), 1)
+        self.assertIn("RETIRED_MATCHES", shown[0])
+        self.put(self.role / "tasks" / "main.yml", copy + "  diff: false\n")
+        self.assertEqual(findings_for(self.root, retired)[0], [])
+        needless = [m for _f, _n, m in findings_for(self.root, {})[0]]
+        self.assertEqual(len(needless), 1)
+        self.assertIn("split the loop", needless[0])
+
     def test_a_loop_mixing_matching_and_clean_files_is_a_finding_until_split(self) -> None:
         """One hidden loop over both kinds fails; a hidden loop and a visible one pass."""
         self.put(self.role / "files" / "bad.txt", self.DOCLINE)
@@ -614,12 +666,15 @@ class RealTreeCase(unittest.TestCase):
         self.assertEqual(found, [], "\n".join(found))
         # The walk must have read the files the fix is about, or a pass proves nothing.
         self.assertTrue(any(s.endswith("provision_deploy_slot.py") for s in scanned))
+        # A retired entry whose file the walk never reaches would hide nothing it was meant to.
+        for path in RETIRED_MATCHES:
+            self.assertTrue(any(s.endswith(path) for s in scanned), path)
         self.assertTrue(any(s.endswith("website_app1/files/compose.yml") for s in scanned))
         # The loops that are made while a role runs, or split into a hidden task and a visible
         # one, must be resolved to their files, or the files they copy were never read.
         for tail in (
             "edge_stack:hetzner/edge/stack/crowdsec/config.yaml.local",
-            "control_plane:hetzner/control-plane/stack/pg_hba.conf",
+            "control_plane:hetzner/control-plane/stack/postgres/pg_hba.conf",
             "control_plane:hetzner/control-plane/stack/compose.yml",
             "monitoring_stack:hetzner/monitoring/stack/prometheus/alerts.yml",
             "monitoring_stack:hetzner/monitoring/stack/compose.yml",

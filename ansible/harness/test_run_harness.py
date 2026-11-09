@@ -805,5 +805,38 @@ class LeftOutStepTests(RoleCase):
         self.assertEqual(run_harness.check_scenarios(role), [])
 
 
+class StepTimingTests(unittest.TestCase):
+    """Each step's group header names the seconds it took, and the timing wraps the run."""
+
+    def test_a_step_header_names_its_elapsed_seconds(self) -> None:
+        step = run_harness.Step("ansible-lint", ("lint",), Path("/role"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            status = run_harness.report(step, completed(0, ""), 2.5)
+        self.assertEqual(status, run_harness.OK)
+        self.assertIn("::group::ansible-lint PASS 2.5s\n", out.getvalue())
+
+    def test_a_step_header_without_a_time_is_unchanged(self) -> None:
+        step = run_harness.Step("ansible-lint", ("lint",), Path("/role"))
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            run_harness.report(step, completed(1, ""))
+        self.assertIn("::group::ansible-lint FAIL\n", out.getvalue())
+
+    def test_a_timed_run_returns_the_command_result_and_its_seconds(self) -> None:
+        seen: list[tuple[str, ...]] = []
+
+        def run(
+            argv: Sequence[str], cwd: Path, env: Mapping[str, str]
+        ) -> subprocess.CompletedProcess[str]:
+            seen.append(tuple(argv))
+            return completed(3, "out")
+
+        done, seconds = run_harness.timed_run(run, ("tool", "x"), Path("/role"), {})
+        self.assertEqual(seen, [("tool", "x")])
+        self.assertEqual(done.returncode, 3)
+        self.assertGreaterEqual(seconds, 0.0)
+
+
 if __name__ == "__main__":
     unittest.main()

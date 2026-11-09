@@ -231,14 +231,19 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after 
 approval of its protected environment. A plan job shows the host's diff in check mode
 first; after the approval the host pulls that exact commit of `main` and applies it, and
 a second run must report zero changes. Nothing is applied from a laptop. The role is
-wired into `ansible/playbooks/edge1.yml`, after `host_baseline` (Docker and `iptables`
-come from there) and before `ci_login`, and nowhere else. The live run waits on the gate.
-The switch `egress_nat_gateway_enabled` is set in edge1's play vars, not in an inventory
-(the inventory trees load no group variables), and the enrolment checker pins it to edge1
-in `HOST_PLAY_VARS` (R2) so the role entry stays bare and no other host can become a second
-gateway; `ansible/checks/test_egress_nat_single_gateway.py` holds that. The provisioning
-runbook's gateway step points at this role. The hand steps for a host that is not on the
-gateway list stay: `05-configure-host-egress.sh` is still run by hand there.
+wired into three playbooks, each after `host_baseline` (Docker and `iptables` come from
+there): `ansible/playbooks/edge1.yml` (before `ci_login`), `ansible/playbooks/edget.yml`
+(before `ci_jump`) and `ansible/playbooks/dbt1.yml` (before `deploy_verifier`), and no
+other. The live run waits on the gate.
+edge1 and edget are the two gateways. Their switch `egress_nat_gateway_enabled` is set in
+their play vars, not in an inventory (the inventory trees load no group variables), and the
+enrolment checker pins it to exactly those two hosts in `HOST_PLAY_VARS` (R2), so no other
+host can become a second gateway. dbt1 applies the role bare with the switch unset, which
+installs the host egress half only: the reconciler and unit that give a host with no public
+address its default route and resolver, and nothing that forwards traffic.
+`ansible/checks/test_egress_nat_single_gateway.py` holds all of that. The provisioning
+runbook's gateway step points at this role. The hand step `05-configure-host-egress.sh` stays
+for a host that no playbook applies this role to yet.
 
 ## How to change it safely
 

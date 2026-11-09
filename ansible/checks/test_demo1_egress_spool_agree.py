@@ -49,6 +49,10 @@ EXCLUDED = {
     "broker_deploy": "which would repoint a broker the owner installed by hand",
 }
 ORDER = (BUILD, ROLE)
+# What the role README says about the spool's image reaching the host.
+UNDECIDED = re.compile(r"is not decided yet", re.IGNORECASE)
+ROUTE_HEADING = "How the spool's image gets onto the host"
+ROUTE_NAMES = ("docker load", "spool_image_gate")
 
 
 class SpoolAgreeError(Exception):
@@ -216,9 +220,50 @@ def disagreements(f: dict[str, object]) -> list[str]:
     return found
 
 
+def image_route_problems(readme: str) -> list[str]:
+    """Return one line for each way the role README fails to state how the spool's image arrives.
+
+    The host never pulls, so the README is the one place the route is written. It must not say
+    the route is undecided, and it must name the primitive that loads the image and the tool that
+    gates it, or the route is a sentence nobody can act on.
+    """
+    found: list[str] = []
+    if UNDECIDED.search(readme):
+        found.append("the README still says how the image reaches the host is not decided")
+    if ROUTE_HEADING not in readme:
+        found.append(f"the README has no section called {ROUTE_HEADING!r}")
+    found.extend(
+        f"the README does not name {name!r} in the image route"
+        for name in ROUTE_NAMES
+        if name not in readme
+    )
+    return found
+
+
 class SpoolAgreeTest(unittest.TestCase):
     def test_the_real_tree_agrees(self) -> None:
         self.assertEqual([], disagreements(facts()))
+
+    def test_the_readme_states_the_image_route(self) -> None:
+        readme = (ROLES / ROLE / "README.md").read_text(encoding="utf-8")
+        self.assertEqual([], image_route_problems(readme))
+
+    def test_a_readme_that_leaves_the_image_route_undecided_is_named(self) -> None:
+        old = (
+            "How the image gets onto the host is not decided yet. **Until it is, step 4 "
+            "refuses on a host that does not hold the image**."
+        )
+        found = image_route_problems(old)
+        self.assertTrue(any("not decided" in line for line in found), found)
+        self.assertTrue(any("docker load" in line for line in found), found)
+        self.assertTrue(any("spool_image_gate" in line for line in found), found)
+
+    def test_a_readme_that_drops_the_section_or_a_name_is_named(self) -> None:
+        readme = (ROLES / ROLE / "README.md").read_text(encoding="utf-8")
+        for removed in (ROUTE_HEADING, *ROUTE_NAMES):
+            with self.subTest(removed=removed):
+                found = image_route_problems(readme.replace(removed, "REDACTED"))
+                self.assertTrue(any(removed in line for line in found), found)
 
     def test_a_path_named_by_a_second_role_is_named(self) -> None:
         base = facts()

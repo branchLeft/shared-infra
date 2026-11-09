@@ -276,32 +276,46 @@
             refuse_task: Refuse a compose file whose images are not all pinned by digest
             refuse_phrase: is not pinned by digest
 
-    # ----- G7: no drain token for the shim -----
+    # ----- G7: no secret for the shim's pinned image, or an image the contract table does not list -----
 
-    - name: Case G7_no_drain_token
-      when: "rf_only | length == 0 or 'G7_no_drain_token' in rf_only"
+    - name: Case G7_no_shim_secret
+      when: "rf_only | length == 0 or 'G7_no_shim_secret' in rf_only"
       vars:
         keep_paths: [/root/.stalwart-service-credentials]
       block:
         - name: Keep the credentials file
           ansible.builtin.include_tasks: '{{ rf_tasks }}/keep.yml'
 
-        - name: Take the shim's token out of it
+        - name: Take the secret the shim's pinned image reads out of it
           ansible.builtin.lineinfile:
             path: /root/.stalwart-service-credentials
-            regexp: '^shim-drain-token:'
+            regexp: '^blog-shim-bulk-submission:'
             state: absent
           no_log: true
 
+        # The other contract's label is still there: the role reads only the label its image's
+        # contract names, so a secret for a different image does not stand in for the missing one.
         - name: Refuse it
           ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
           vars:
-            refuse_task: Refuse a host with no drain token for the shim
-            refuse_phrase: holds no entry labelled shim-drain-token
+            refuse_task: Refuse a host with no secret for the shim
+            refuse_phrase: holds no entry labelled blog-shim-bulk-submission
             refuse_allow: [/root/.stalwart-service-credentials]
       always:
         - name: Put the credentials file back
           ansible.builtin.include_tasks: '{{ rf_tasks }}/put_back.yml'
+
+    # An image whose digest is pinned (so G6 accepts it) but which the contract table does not list.
+    # The run stops at the read, before any write, and says which digest, so no environment is guessed.
+    - name: Case G7_unlisted_digest
+      when: "rf_only | length == 0 or 'G7_unlisted_digest' in rf_only"
+      block:
+        - name: Refuse a shim image whose digest the contract table does not list
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            run_shim_compose: "{{ rf_shim_compose | regex_replace('(mailgun-shim)@sha256:[0-9a-f]{64}', '\\1@sha256:' ~ ('e' * 64)) }}"
+            refuse_task: Read whether the credentials file holds the secret the shim's pinned image reads
+            refuse_phrase: has no contract in shim-env-contracts.json
 
     # ----- G8: port 53 held by something other than unbound -----
 
@@ -615,7 +629,7 @@
   vars:
     rf_log_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
     rf_secrets:
-      - '{{ hostvars[groups["all"][0]].scenario_drain_token }}'
+      - '{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
       - value-that-must-not-be-printed
   tasks:
     # The control first: a value the converge printed on purpose. A scan that cannot find it would

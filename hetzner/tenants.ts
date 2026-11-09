@@ -1,4 +1,5 @@
 import {
+  type AdoptArgs,
   ESTATE_LOCATION,
   Host,
   NETWORK_CIDR,
@@ -65,6 +66,14 @@ const config = new pulumi.Config();
 
 const image = config.require('image');
 
+/**
+ * Set for a host the owner made by hand in the console, to adopt it instead of
+ * creating it: the live ids and the stage. Absent, the host is created. Read from
+ * stack config, never defaulted here: `RUNBOOK-adopt-console-servers.md` says when
+ * each key is set and what the preview must show before it is applied.
+ */
+const adoptionOf = (key: string): AdoptArgs | undefined => config.getObject<AdoptArgs>(key);
+
 /** Names of keys registered in the tenants project, not key material. */
 const ownerSshKeyNames = config.requireObject<string[]>('ownerSshKeyNames');
 
@@ -123,6 +132,11 @@ const hostNetworkId = pulumi
  * and its hostname are `edge-t`). It is created with a deploy key and enrolled
  * by the owner's hand bootstrap, as db1, app1 and ops1 were: the component's
  * `enrolment` document is edge1's playbook and would start it here.
+ *
+ * With `edgetAdopt` set it is adopted, not created: the owner made the server in
+ * the console, with a firewall that drops all inbound traffic, and the component
+ * imports it and its two addresses and attaches this firewall beside that one. The
+ * owner detaches theirs after this one is attached, so the host is never unfiltered.
  */
 export const edgeT = new Host(
   {
@@ -140,6 +154,7 @@ export const edgeT = new Host(
     environment: 'production',
     protection: true,
     backups: false,
+    adopt: adoptionOf('edgetAdopt'),
   },
   { transformations: [gateRegistration] }
 );
@@ -176,7 +191,10 @@ export const tenantsEgressRoute = new hcloud.NetworkRoute(
  * db-t1 is declared only when `dbt1Enabled` is true, and it defaults to false.
  * It is private-only and needs edge-t's route and NAT live before its first
  * boot (cloud-init fetches packages), so it is switched on in a later reviewed
- * change, after the NAT path is proven with Docker running on edge-t.
+ * change, after the NAT path is proven with Docker running on edge-t. A host
+ * adopted from the console (`dbt1Adopt`) has already booted, so the route does not
+ * decide its first boot; the order stays because the hand bootstrap fetches packages
+ * through the same NAT path.
  */
 const dbt1Enabled = config.getBoolean('dbt1Enabled') ?? false;
 
@@ -201,6 +219,7 @@ export const dbT1 = dbt1Enabled
         environment: 'production',
         protection: true,
         backups: false,
+        adopt: adoptionOf('dbt1Adopt'),
       },
       { transformations: [gateRegistration], dependsOn: [tenantsEgressRoute] }
     )

@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -469,11 +470,22 @@ def changed_tasks(output: str) -> int:
     return sum(int(count) for count in RECAP_LINE.findall(output))
 
 
-def report(step: Step, done: subprocess.CompletedProcess[str]) -> str:
+def timed_run(
+    run: Runner, argv: Sequence[str], cwd: Path, env: Mapping[str, str]
+) -> tuple[subprocess.CompletedProcess[str], float]:
+    """Run one command and return it with the wall-clock seconds it took."""
+    started = time.monotonic()
+    done = run(argv, cwd, env)
+    return done, time.monotonic() - started
+
+
+def report(step: Step, done: subprocess.CompletedProcess[str], seconds: float | None = None) -> str:
     """Print a step's output and return its status.
 
     A no_changes step fails on a change. A needs_recap step fails when its output has no
     PLAY RECAP line, because a run that played nothing has also changed nothing.
+    The group header names the step's elapsed seconds when they are given, so a slow
+    step shows in the log beside its status.
     """
     output = done.stdout + done.stderr
     status = OK if done.returncode == 0 else FAIL
@@ -481,7 +493,8 @@ def report(step: Step, done: subprocess.CompletedProcess[str]) -> str:
     unplayed = step.needs_recap and RECAP_LINE.search(output) is None
     if status == OK and (changed or unplayed):
         status = FAIL
-    print(f"::group::{step.name} {status}")
+    timing = "" if seconds is None else f" {seconds:.1f}s"
+    print(f"::group::{step.name} {status}{timing}")
     print(output, end="")
     if step.no_changes and changed:
         print(f"{step.name}: {changed} task(s) would change an instance that is already configured")
@@ -503,7 +516,8 @@ def run_molecule(
             if step.skipped or (broken and not step.always):
                 outcomes.append((step.name, SKIP))
                 continue
-            status = report(step, run(step.argv, step.cwd, env))
+            done, seconds = timed_run(run, step.argv, step.cwd, env)
+            status = report(step, done, seconds)
             outcomes.append((step.name, status))
             broken = broken or status == FAIL
         finished = True
@@ -553,7 +567,8 @@ def run_role(
         if name in reasons:
             print(f"{name} FAIL: {reasons[name]}")
     for step in static_steps(role, tools):
-        outcomes.append((step.name, report(step, run(step.argv, step.cwd, env))))
+        done, seconds = timed_run(run, step.argv, step.cwd, env)
+        outcomes.append((step.name, report(step, done, seconds)))
     steps = molecule_steps(role, tools, scenario, base_config)
     if limits:
         outcomes.extend((step.name, SKIP) for step in steps)
@@ -564,8 +579,8 @@ def run_role(
 
 def install_collections(
     tools: Path, run: Runner, env: Mapping[str, str]
-) -> subprocess.CompletedProcess[str]:
-    """Install the pinned collections into the run's own collections path."""
+) -> tuple[subprocess.CompletedProcess[str], float]:
+    """Install the pinned collections into the run's own collections path, timed."""
     argv = [
         str(tools / "ansible-galaxy"),
         "collection",
@@ -575,7 +590,7 @@ def install_collections(
         "-p",
         env["ANSIBLE_COLLECTIONS_PATH"],
     ]
-    return run(argv, ANSIBLE_DIR, env)
+    return timed_run(run, argv, ANSIBLE_DIR, env)
 
 
 def main(
@@ -611,8 +626,8 @@ def main(
     failed = False
     try:
         env = role_environment(environment, work, tools_dir, "collections")
-        done = install_collections(tools_dir, run, env)
-        if report(Step("collections", (), ANSIBLE_DIR), done) == FAIL:
+        done, seconds = install_collections(tools_dir, run, env)
+        if report(Step("collections", (), ANSIBLE_DIR), done, seconds) == FAIL:
             return 1
         base_config = work / CHECK_ONLY_FILE
         base_config.write_text(CHECK_ONLY_CONFIG, encoding="utf-8")

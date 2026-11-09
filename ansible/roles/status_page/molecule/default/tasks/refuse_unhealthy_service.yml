@@ -1,0 +1,43 @@
+---
+# A container that runs but reports unhealthy must stop the role, as the
+# compose_stack pattern does. The stand-in reports the gatus container unhealthy
+# and the page still answers, so only the container check can refuse it. The
+# status file is put back in the always block whatever happens.
+- name: Report the page's container as unhealthy
+  ansible.builtin.copy:
+    content: |
+      {"Name":"stand-in-gatus-1","Service":"gatus","State":"running","Health":"unhealthy","Labels":"","Networks":"default","Publishers":null}
+      {"Name":"stand-in-status-test-target-1","Service":"status-test-target","State":"running","Labels":"","Networks":"default","Publishers":null}
+    dest: /var/lib/status_page_standin/ps.json
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Refuse an unhealthy container
+  block:
+    - name: Apply the role with an unhealthy container
+      ansible.builtin.include_role:
+        name: branchleft.status_page
+
+    - name: Fail because the role accepted an unhealthy container
+      ansible.builtin.fail:
+        msg: The role accepted a container that reports unhealthy.
+  rescue:
+    - name: Assert the container check refused it
+      ansible.builtin.assert:
+        that:
+          - "'Unhealthy or still starting' in ansible_failed_result.msg"
+        quiet: true
+        fail_msg: >-
+          The role did not refuse the unhealthy container with the container check.
+          It stopped with: {{ ansible_failed_result.msg }}
+  always:
+    - name: Report both containers as running and healthy again
+      ansible.builtin.copy:
+        content: |
+          {"Name":"stand-in-gatus-1","Service":"gatus","State":"running","Labels":"","Networks":"default","Publishers":null}
+          {"Name":"stand-in-status-test-target-1","Service":"status-test-target","State":"running","Labels":"","Networks":"default","Publishers":null}
+        dest: /var/lib/status_page_standin/ps.json
+        owner: root
+        group: root
+        mode: '0644'

@@ -1,10 +1,12 @@
 # The steps this scenario's shard leaves out, one per line; a line that starts with # is
 # a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
 #
-# This scenario applies the role once and runs the refusal cases against the configured
-# host (verify.yml, the part named refusals). The steps that plan, and the second apply
-# that checks idempotence, are the default scenario's, which runs all eight steps. Running
-# every case in one verify took about twenty minutes.
+# This scenario applies the role once and runs the refusal cases of the inputs, the
+# downloads and the unmanaged apt source files against the configured host (verify.yml,
+# the part named refusals). The image pin refusals and the second compose file refusals
+# are the refusals_pins and refusals_compose scenarios, so that no shard runs all of them.
+# The steps that plan, and the second apply that checks idempotence, are the default
+# scenario's, which runs all eight steps.
 check-fresh
 idempotence
 molecule-check

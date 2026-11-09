@@ -1,34 +1,7 @@
 #!/usr/bin/env python3
 """Capture a DNS zone from its authoritative servers, and compare two sets of
 authoritative servers against the checked-in zone file record by record.
-
-    zonecheck.py capture --server ns1049.ui-dns.de --out zone.json
-    zonecheck.py compare --left ns1049.ui-dns.de,ns1067.ui-dns.com \\
-                         --right hydrogen.ns.hetzner.com,oxygen.ns.hetzner.com
-
-Every query goes straight to a named server with recursion off, and every
-answer must carry the authoritative-answer flag. Asking a recursive resolver
-instead would answer from whichever provider the registry currently delegates
-to, so both sides of a comparison would silently be the same side.
-
-**The registrar refuses zone transfers**, so no enumeration is exhaustive: a
-name is only captured if it is on the probe list. `probe_names` in the zone
-file is that list, and every name on it is compared on both sides, present or
-absent -- a name present at one provider and NXDOMAIN at the other is a diff
-like any other. The cutover runbook pairs this with a count check against the
-registrar's own record listing, which is the only exhaustive view there is.
-
-**An empty diff is only reported after the check has proved it can fail.**
-Two controls run on every comparison. The apex NS set must differ between the
-two sides -- each provider serves its own -- which proves the two server lists
-really are different servers. And the comparison is re-run once with one
-record in the expected zone deliberately altered, which must be reported as a
-diff; if it is not, the run fails rather than printing an all-clear.
-
-Needs `dig` on PATH and nothing outside the standard library.
-
-Exit codes: 0 no differences, 1 differences, 2 a server did not answer
-authoritatively, 3 a control failed.
+The rationale and the usage are in zonecheck.md, beside this file.
 """
 
 from __future__ import annotations
@@ -165,7 +138,18 @@ def split_server(spec: str) -> tuple[str, int]:
     return spec, 53
 
 
-def query(server: str, name: str, rtype: str, run: Runner = _run_dig) -> Answer:
+DEFAULT_DIG_TIME = 3
+DEFAULT_DIG_TRIES = 2
+
+
+def query(
+    server: str,
+    name: str,
+    rtype: str,
+    run: Runner = _run_dig,
+    dig_time: int = DEFAULT_DIG_TIME,
+    dig_tries: int = DEFAULT_DIG_TRIES,
+) -> Answer:
     host, port = split_server(server)
     argv = [
         "dig",
@@ -173,8 +157,8 @@ def query(server: str, name: str, rtype: str, run: Runner = _run_dig) -> Answer:
         "+noall",
         "+comments",
         "+answer",
-        "+time=3",
-        "+tries=2",
+        f"+time={dig_time}",
+        f"+tries={dig_tries}",
         "-p",
         str(port),
         f"@{host}",
@@ -253,13 +237,20 @@ def zone_to_json(zone: Zone) -> str:
 # --------------------------------------------------------------------------
 
 
-def capture(zone_name: str, server: str, names: Iterable[str], run: Runner = _run_dig) -> Zone:
+def capture(
+    zone_name: str,
+    server: str,
+    names: Iterable[str],
+    run: Runner = _run_dig,
+    dig_time: int = DEFAULT_DIG_TIME,
+    dig_tries: int = DEFAULT_DIG_TRIES,
+) -> Zone:
     rrsets: dict[tuple[str, str], tuple[int, frozenset[str]]] = {}
     for name in names:
         for rtype in PROBE_TYPES:
             if (name, rtype) in PROVIDER_OWNED:
                 continue
-            answer = query(server, fqdn(name, zone_name), rtype, run)
+            answer = query(server, fqdn(name, zone_name), rtype, run, dig_time, dig_tries)
             if not answer.records:
                 continue
             ttls = {ttl for ttl, _ in answer.records}
@@ -306,12 +297,20 @@ def diff_server(zone: Zone, server: str, answers: dict[tuple[str, str], Answer],
     return diffs
 
 
-def fetch(zone: Zone, server: str, run: Runner) -> dict[tuple[str, str], Answer]:
+def fetch(
+    zone: Zone,
+    server: str,
+    run: Runner,
+    dig_time: int = DEFAULT_DIG_TIME,
+    dig_tries: int = DEFAULT_DIG_TRIES,
+) -> dict[tuple[str, str], Answer]:
     keys = [(name, rtype) for name in zone.names() for rtype in PROBE_TYPES]
     # Serially this is several minutes per server; eight in flight stays well
     # inside what an authoritative server answers without rate limiting.
     with ThreadPoolExecutor(max_workers=8) as pool:
-        results = pool.map(lambda key: query(server, fqdn(key[0], zone.name), key[1], run), keys)
+        results = pool.map(
+            lambda key: query(server, fqdn(key[0], zone.name), key[1], run, dig_time, dig_tries), keys
+        )
         return dict(zip(keys, results))
 
 
@@ -336,6 +335,8 @@ def compare(
     right: list[str],
     run: Runner = _run_dig,
     check_ttl: bool = False,
+    dig_time: int = DEFAULT_DIG_TIME,
+    dig_tries: int = DEFAULT_DIG_TRIES,
 ) -> Report:
     """Every server on both sides against the zone file, plus both controls.
 
@@ -345,8 +346,8 @@ def compare(
     """
     control_failures: list[str] = []
     apex = fqdn("@", zone.name)
-    left_ns = {s: query(s, apex, "NS", run).values() for s in left}
-    right_ns = {s: query(s, apex, "NS", run).values() for s in right}
+    left_ns = {s: query(s, apex, "NS", run, dig_time, dig_tries).values() for s in left}
+    right_ns = {s: query(s, apex, "NS", run, dig_time, dig_tries).values() for s in right}
     for l_server, l_ns in left_ns.items():
         for r_server, r_ns in right_ns.items():
             if l_ns == r_ns:
@@ -358,7 +359,7 @@ def compare(
     diffs: list[Diff] = []
     control, control_key = altered_copy(zone)
     for server in [*left, *right]:
-        answers = fetch(zone, server, run)
+        answers = fetch(zone, server, run, dig_time, dig_tries)
         diffs.extend(diff_server(zone, server, answers, check_ttl))
         caught = [d for d in diff_server(control, server, answers, check_ttl) if (d.name, d.rtype) == control_key]
         if not caught:
@@ -367,6 +368,114 @@ def compare(
                 "reported, so an empty diff from this server would mean nothing"
             )
     return Report(diffs, control_failures)
+
+
+# --------------------------------------------------------------------------
+# Transcripts: the raw capture, and the check that the zone file equals it
+# --------------------------------------------------------------------------
+
+# Queried at the apex only, beyond PROBE_TYPES: recorded so the transcript
+# shows the serial and the provider's own records, but never declared.
+TRANSCRIPT_APEX_EXTRA = ("SOA",)
+
+_QUERY_HEADER = re.compile(r"^;;; QUERY (\S+) (\S+) @(\S+)$")
+
+
+class Recorder:
+    """Wraps a Runner and keeps every dig answer verbatim, in query order."""
+
+    def __init__(self, run: Runner):
+        self.run = run
+        self.blocks: list[str] = []
+
+    def __call__(self, argv: list[str]) -> "subprocess.CompletedProcess[str]":
+        result = self.run(argv)
+        host = argv[argv.index("-p") + 2]
+        header = f";;; QUERY {argv[-2]} {argv[-1]} {host}"
+        self.blocks.append(f"{header}\n{result.stdout.rstrip()}\n")
+        return result
+
+    def text(self) -> str:
+        return "\n".join(self.blocks)
+
+
+def parse_transcript(text: str) -> list[tuple[str, str, str]]:
+    """(qname, qtype, raw dig output) for each query block, in file order."""
+    blocks: list[tuple[str, str, list[str]]] = []
+    for line in text.splitlines():
+        header = _QUERY_HEADER.match(line)
+        if header:
+            blocks.append((header.group(1), header.group(2), []))
+        elif blocks:
+            blocks[-1][2].append(line)
+        elif line.strip():
+            raise QueryError("transcript has text before its first query header")
+    return [(qname, qtype, "\n".join(lines)) for qname, qtype, lines in blocks]
+
+
+_TOKEN_TYPE = {token: rtype for rtype, token in _QUERY_TOKEN.items()}
+
+
+def zone_from_transcript(text: str, zone_name: str) -> tuple[Zone, set[tuple[str, str]], dict[str, str]]:
+    """The records a transcript shows, which queries it holds, and each name's rcode."""
+    suffix = "." + zone_name.rstrip(".").lower() + "."
+    rrsets: dict[tuple[str, str], tuple[int, frozenset[str]]] = {}
+    queried: set[tuple[str, str]] = set()
+    rcodes: dict[str, str] = {}
+    for qname, token, output in parse_transcript(text):
+        qtype = _TOKEN_TYPE.get(token, token)
+        lowered = qname.lower()
+        if lowered == zone_name.rstrip(".").lower() + ".":
+            name = "@"
+        elif lowered.endswith(suffix):
+            name = lowered[: -len(suffix)]
+        else:
+            raise QueryError(f"{qname} {qtype}: not inside {zone_name}")
+        rcode, flags, records = parse_dig(output, qname, qtype)
+        if "aa" not in flags:
+            raise QueryError(f"{qname} {qtype}: transcript answer is not authoritative")
+        queried.add((name, qtype))
+        if qtype == PROBE_TYPES[0]:
+            rcodes[name] = rcode
+        if not records or qtype in TRANSCRIPT_APEX_EXTRA or (name, qtype) in PROVIDER_OWNED:
+            continue
+        ttls = {ttl for ttl, _ in records}
+        if len(ttls) != 1:
+            raise QueryError(f"{name} {qtype} is served with mixed TTLs {sorted(ttls)}")
+        rrsets[(name, qtype)] = (ttls.pop(), frozenset(rdata for _, rdata in records))
+    return Zone(zone_name, rrsets, []), queried, rcodes
+
+
+def check_capture(transcript: str, declared: Zone) -> list[str]:
+    """Differences between the zone file and what the transcript shows, both ways.
+
+    The transcript must also hold every query the file's probe list implies,
+    or a record could be dropped from the file and from the transcript at once
+    and the two would still agree.
+    """
+    captured, queried, rcodes = zone_from_transcript(transcript, declared.name)
+    problems: list[str] = []
+    for key in sorted(set(captured.rrsets) | set(declared.rrsets), key=lambda k: (k[0] != "@", k)):
+        got = captured.rrsets.get(key)
+        want = declared.rrsets.get(key)
+        label = f"{key[0]} {key[1]}"
+        if want is None:
+            problems.append(f"{label}: in the transcript, not declared in the zone file: {_describe(got[1])} (ttl {got[0]})")
+        elif got is None:
+            problems.append(f"{label}: declared in the zone file, not in the transcript: {_describe(want[1])} (ttl {want[0]})")
+        elif got != want:
+            problems.append(
+                f"{label}: declared {_describe(want[1])} (ttl {want[0]}), "
+                f"transcript shows {_describe(got[1])} (ttl {got[0]})"
+            )
+    required = {(name, rtype) for name in declared.names() for rtype in PROBE_TYPES}
+    required |= {("@", rtype) for rtype in TRANSCRIPT_APEX_EXTRA}
+    for name, rtype in sorted(required - queried):
+        problems.append(f"{name} {rtype}: probed by the zone file, absent from the transcript")
+    for name in declared.names():
+        if name in rcodes and rcodes[name] != declared.expected_rcode(name):
+            problems.append(f"{name}: rcode {rcodes[name]} in the transcript, {declared.expected_rcode(name)} expected")
+    return problems
 
 
 # --------------------------------------------------------------------------
@@ -381,6 +490,31 @@ def _servers(value: str) -> list[str]:
     return servers
 
 
+def _add_dig_timings(parser: argparse.ArgumentParser) -> None:
+    # Hetzner's servers rate-limit the checker at the defaults, so the cutover runbooks raise these.
+    parser.add_argument("--dig-time", type=int, default=DEFAULT_DIG_TIME,
+                        help="dig +time, seconds per try (default %(default)s)")
+    parser.add_argument("--dig-tries", type=int, default=DEFAULT_DIG_TRIES,
+                        help="dig +tries (default %(default)s)")
+
+
+_MINIMAL_KEEP = re.compile(r"^(;;; QUERY |;; ->>HEADER<<- |;; flags: )")
+_RECORD_LINE = re.compile(r"^[^;\s].*\sIN\s")
+
+
+def strip_transcript(text: str) -> str:
+    """The minimal form of a verbose capture transcript: what check-capture reads.
+
+    Keeps each query header, its status and flags lines, and the answer
+    records. Dig's banners, OPT sections, timings and blank lines are dropped.
+    """
+    return "".join(
+        line + "\n"
+        for line in text.splitlines()
+        if _MINIMAL_KEEP.match(line) or _RECORD_LINE.match(line)
+    )
+
+
 def main(argv: list[str] | None = None, run: Runner = _run_dig) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -390,6 +524,9 @@ def main(argv: list[str] | None = None, run: Runner = _run_dig) -> int:
     cap.add_argument("--zone-file", type=pathlib.Path, default=DEFAULT_ZONE_FILE,
                      help="its zone name and probe_names are reused; its records are not")
     cap.add_argument("--out", type=pathlib.Path, required=True)
+    cap.add_argument("--transcript", type=pathlib.Path,
+                     help="also write every dig answer verbatim, apex SOA and NS included")
+    _add_dig_timings(cap)
 
     cmp_ = sub.add_parser("compare", help="diff two sets of authoritative servers against the zone file")
     cmp_.add_argument("--zone-file", type=pathlib.Path, default=DEFAULT_ZONE_FILE)
@@ -397,17 +534,52 @@ def main(argv: list[str] | None = None, run: Runner = _run_dig) -> int:
     cmp_.add_argument("--right", type=_servers, required=True)
     cmp_.add_argument("--check-ttl", action="store_true",
                       help="also report TTLs that differ from the zone file")
+    _add_dig_timings(cmp_)
+
+    chk = sub.add_parser(
+        "check-capture",
+        help="exit 1 unless the zone file declares exactly what a capture transcript shows (no queries)",
+    )
+    chk.add_argument("--transcript", type=pathlib.Path, required=True)
+    chk.add_argument("--zone-file", type=pathlib.Path, required=True)
+
+    sub.add_parser(
+        "strip-transcript",
+        help="read a verbose capture transcript on stdin, write its minimal form to stdout (no queries)",
+    )
 
     args = parser.parse_args(argv)
+    if args.command == "strip-transcript":
+        sys.stdout.write(strip_transcript(sys.stdin.read()))
+        return 0
     try:
         existing = load_zone(args.zone_file)
+        if args.command == "check-capture":
+            problems = check_capture(args.transcript.read_text(), existing)
+            for problem in problems:
+                print(f"DIFF {problem}")
+            if problems:
+                print(f"{len(problems)} difference(s) between {args.zone_file.name} and {args.transcript.name}")
+                return 1
+            print(
+                f"zone file equals transcript: {len(existing.rrsets)} rrsets, "
+                f"{len(existing.names())} names, {len(PROBE_TYPES)} types"
+            )
+            return 0
         if args.command == "capture":
-            zone = capture(existing.name, args.server, existing.names(), run)
+            recorder = Recorder(run) if args.transcript else None
+            runner = recorder or run
+            zone = capture(existing.name, args.server, existing.names(), runner, args.dig_time, args.dig_tries)
+            if recorder:
+                apex = fqdn("@", existing.name)
+                for rtype in ("NS", *TRANSCRIPT_APEX_EXTRA):
+                    query(args.server, apex, rtype, recorder, args.dig_time, args.dig_tries)
+                args.transcript.write_text(recorder.text())
             zone.extra = existing.extra
             args.out.write_text(zone_to_json(zone))
             print(f"captured {len(zone.rrsets)} rrsets across {len(zone.names())} names from {args.server}")
             return 0
-        report = compare(existing, args.left, args.right, run, args.check_ttl)
+        report = compare(existing, args.left, args.right, run, args.check_ttl, args.dig_time, args.dig_tries)
     except QueryError as error:
         print(f"ERROR {error}", file=sys.stderr)
         return 2

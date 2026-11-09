@@ -191,13 +191,15 @@ run when a part has no scenario directory with a `molecule.yml` and a `verify.ym
 that does not leave the verify step out. So a case cannot be dropped by deleting a
 scenario.
 
-| Scenario     | Runs                                                                                                                                                                                                                                                               | Steps                                                                      |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `default`    | no case of its own: the checks on what the converge left, the source checks and the log scan                                                                                                                                                                       | all eight, so the plan, idempotence and check-mode steps are run here only |
-| `refusals`   | `verify_input_refusals.yml` (password, downloads, key pin, toolchain), `unmanaged_source.yml` (an apt source file the role does not manage that names the repository, in a plan and in an apply) and `verify_refusals.yml` (image pin forms, second compose files) | converge, verify                                                           |
-| `paths`      | `verify_paths.yml`: the directory, the kept directories and the link in the exporter file's place                                                                                                                                                                  | converge, verify                                                           |
-| `rotation`   | `verify_wide_file_and_rotation.yml`: the wide file an earlier release left, and the rotation                                                                                                                                                                       | converge, verify                                                           |
-| `repository` | `verify_repository_files.yml`: a changed repository file makes the role refresh the index                                                                                                                                                                          | converge, verify                                                           |
+| Scenario           | Runs                                                                                                                                                                                                | Steps                                                                      |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `default`          | no case of its own: the checks on what the converge left, the source checks and the log scan                                                                                                        | all eight, so the plan, idempotence and check-mode steps are run here only |
+| `refusals`         | `verify_input_refusals.yml` (password, downloads, key pin, toolchain) and `unmanaged_source.yml` (an apt source file the role does not manage that names the repository, in a plan and in an apply) | converge, verify                                                           |
+| `refusals_pins`    | `verify_refusals.yml`: the forms of the database image pin the deploy program does not write (six cases)                                                                                            | converge, verify                                                           |
+| `refusals_compose` | `verify_compose_names.yml`: a second compose file, an override file or a `.env` beside `compose.yml` (eight cases, one per name)                                                                    | converge, verify                                                           |
+| `paths`            | `verify_paths.yml`: the directory, the kept directories and the link in the exporter file's place                                                                                                   | converge, verify                                                           |
+| `rotation`         | `verify_wide_file_and_rotation.yml`: the wide file an earlier release left, and the rotation                                                                                                        | converge, verify                                                           |
+| `repository`       | `verify_repository_files.yml`: a changed repository file makes the role refresh the index                                                                                                           | converge, verify                                                           |
 
 The checks that read what the converge left, the source checks, the sentinel scan of
 the log (ANS-16) and the scan of the files on the controller run in every scenario,
@@ -244,6 +246,12 @@ time molecule converge -s paths
 time molecule verify -s paths
 ```
 
+To run one group of cases alone, name its scenario in the steps above: `-s refusals_pins`
+runs the six image pin cases and `-s refusals_compose` the eight second compose file cases,
+each after its own create, prepare and converge with the same `-s`. The cases are shared
+out by part (`verify_parts` in `molecule/default/verify.yml`), and
+`ansible/checks/test_db1_stack_verify_parts.py` fails when a part is not run by any scenario.
+
 The log of every play is `$MOLECULE_EPHEMERAL_DIRECTORY/ansible.log` and holds a time
 on each line; the time between two `TASK [` lines is the time of the first.
 
@@ -255,7 +263,7 @@ done about each:
 | Each task was six `docker exec` calls (home directory, temporary directory, copy, mode, run, remove)                      | most of the time of every role application                    | `ANSIBLE_PIPELINING` (one exec per task), as db1_grants, edge_stack, host_inputs and tenant_compose set it                               |
 | The role runs about 60 tasks, and its loop of eight `stat` calls over the second-compose-file names is eight docker execs | about 2.5 s of every application (4 to 6 s before pipelining) | not changed: it is the role's own task. Fewer applications per shard is the lever.                                                       |
 | A failed index refresh: apt waits on each name lookup, and the apt module retries the update five times                   | about 65 s for each of three cases                            | `Acquire::Retries "0"` and a 2 s timeout in the instance (`prepare.yml`): about 30 s, which is the module's own wait between its retries |
-| One verify of every case                                                                                                  | about 20 minutes                                              | the five scenarios above, which CI runs as five shards                                                                                   |
+| One verify of every case                                                                                                  | about 20 minutes                                              | the scenarios above, one CI shard each; the refusals shard is split into refusals_pins and refusals_compose                              |
 
 | What the harness takes, local    | Before (one shard) | After: default | refusals | paths | rotation | repository |
 | -------------------------------- | ------------------ | -------------- | -------- | ----- | -------- | ---------- |

@@ -35,6 +35,13 @@
 # under the host's measured available memory with a margin.
 name: control-plane
 
+# The edge's private address as ops1 sees it (hetzner-host/addressPlan.ts's HOST_IPS.edge1), the
+# one host that proxies to the two applications. They read it as their trusted proxy list
+# (PORTAL_TRUSTED_PROXIES, CONSOLE_TRUSTED_PROXIES), so the client address they log and
+# rate-limit on is the one the edge saw. Written once, taken by alias, and named in each
+# service's `environment:` because the env file only fills ${VAR} references. A test pins it.
+x-edge-private-address: &edge_private_address 10.20.1.10
+
 services:
   db:
     image: docker.io/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -46,6 +53,11 @@ services:
     # 4GB host. shared_buffers is a quarter of this container's limit.
     # hba_file points at the mounted pg_hba.conf, so per-database access is
     # enforced from the first start and cannot be skipped by a runbook step.
+    # The rules are mounted as a directory, not as the single file: a delivered
+    # file replaces the old one by rename (a new inode), which a single-file bind
+    # mount never sees, while a directory mount shows the new file at once. The
+    # control_plane role then reloads the server (reload_hba.sh), so a changed
+    # file takes effect with no container recreate and no hand step.
     command:
       [
         'postgres',
@@ -54,11 +66,11 @@ services:
         '-c',
         'max_connections=60',
         '-c',
-        'hba_file=/etc/postgresql/pg_hba.conf',
+        'hba_file=/etc/postgresql-hba/pg_hba.conf',
       ]
     volumes:
       - db-data:/var/lib/postgresql/data
-      - ./pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./postgres:/etc/postgresql-hba:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d postgres']
       interval: 10s
@@ -158,6 +170,7 @@ services:
       PORTAL_PUBLIC_ORIGIN: https://portal.publicpress.co.uk
       PORTAL_OUTPUTS_FILE: /run/secrets/identity-outputs
       PORTAL_DATABASE_URL_FILE: /run/secrets/portal-database-url
+      PORTAL_TRUSTED_PROXIES: *edge_private_address
       NODE_OPTIONS: --max-old-space-size=192
     secrets:
       - identity-outputs
@@ -198,6 +211,7 @@ services:
       CONSOLE_PUBLIC_ORIGIN: https://console.branchleft.co.uk
       CONSOLE_OUTPUTS_FILE: /run/secrets/identity-outputs
       CONSOLE_DATABASE_URL_FILE: /run/secrets/console-database-url
+      CONSOLE_TRUSTED_PROXIES: *edge_private_address
       NODE_OPTIONS: --max-old-space-size=192
     secrets:
       - identity-outputs

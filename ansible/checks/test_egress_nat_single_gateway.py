@@ -10,6 +10,10 @@ have one. This test holds each playbook, the table, the host's list in `host_rol
 every other file under `ansible/` to that one home per network. A change to one alone fails
 here, a host that names the switch without being a listed gateway is refused by name whichever
 file it is written in, and a second gateway for a network that already has one is refused.
+
+The role itself is not the switch. A host that is not a gateway may apply `egress_nat` as a bare
+role entry with the switch unset: the host egress reconciler alone, which the role installs with
+the switch at its default. db-t1 does this (`dbt1`), and the tests below pin it.
 """
 
 from __future__ import annotations
@@ -138,14 +142,14 @@ class EgressNatSingleGateway(unittest.TestCase):
     ) -> None:
         self.assertEqual(_files_naming_the_switch_outside_its_homes(), [])
 
-    # (c) the role is on the gateways' lists alone, and applied once on each, after host_baseline.
-    def test_the_role_is_on_the_gateways_lists_alone(self) -> None:
+    # (c) the role is listed once on each gateway's list, and at most once on any other host's.
+    def test_the_role_is_listed_once_on_each_gateway_and_at_most_once_elsewhere(self) -> None:
         for host, names in _listed_roles().items():
             with self.subTest(host=host):
                 if host in GATEWAYS:
                     self.assertEqual(names.count(ROLE), 1)
                 else:
-                    self.assertNotIn(ROLE, names)
+                    self.assertLessEqual(names.count(ROLE), 1)
 
     def test_each_gateway_applies_the_role_once_after_host_baseline(self) -> None:
         for host in GATEWAYS:
@@ -158,10 +162,25 @@ class EgressNatSingleGateway(unittest.TestCase):
         names = _role_names("edge1")
         self.assertLess(names.index(ROLE), names.index("ci_login"))
 
-    def test_no_other_playbook_applies_the_role(self) -> None:
+    # A non-gateway that applies the role applies it bare, with no switch in its play vars.
+    def test_a_non_gateway_that_applies_the_role_applies_it_bare_with_no_switch(self) -> None:
         for host in _other_hosts():
             with self.subTest(host=host):
-                self.assertNotIn(ROLE, _role_names(host))
+                if ROLE not in _role_names(host):
+                    continue
+                roles = _play(host).get("roles")
+                role_list = roles if isinstance(roles, list) else []
+                self.assertIn({"role": f"../roles/{ROLE}"}, role_list)
+                self.assertNotIn(SWITCH, _play_vars(host))
+
+    # The positive case: db-t1 applies the host egress half and no gateway half.
+    def test_dbt1_applies_the_role_once_bare_and_sets_no_switch(self) -> None:
+        self.assertEqual(_role_names("dbt1").count(ROLE), 1)
+        roles = _play("dbt1").get("roles")
+        role_list = roles if isinstance(roles, list) else []
+        self.assertIn({"role": f"../roles/{ROLE}"}, role_list)
+        self.assertNotIn(SWITCH, _play_vars("dbt1"))
+        self.assertNotIn("dbt1", HOST_PLAY_VARS)
 
     def test_the_role_entry_is_bare_so_the_switch_cannot_hide_in_it(self) -> None:
         for host in GATEWAYS:

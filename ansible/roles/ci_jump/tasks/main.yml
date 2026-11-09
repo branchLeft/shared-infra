@@ -1,0 +1,33 @@
+---
+# Order matters. The report always runs and only reads, so the plan of a host shows what its key
+# files hold before anything is enabled. With the flag false that is all the role does: it writes
+# nothing, and every task reports no change. With the flag true the inputs and the host are
+# judged first (_guards.yml), then the root-owned key file and the sshd drop-in are written,
+# checked, reloaded and read back (_write.yml, which includes _readback.yml). Both files are
+# made from the one destination list, ci_jump_destinations.
+#
+# The module (library/ci_jump_authorized_keys.py) is the one home of every rule about the key
+# lines and the Match block. Its results carry fingerprints and option names only, never a key
+# body or the account's name, and its refusals carry a code and an entry number, never a value.
+
+- name: Report which accounts carry forwarding options, read only
+  ansible.builtin.import_tasks: _report.yml
+
+# The account's name may be absent while the flag is false (host_inputs lets the file leave it out
+# until the owner has seeded it). The report above needs no name, so the role stays inert and
+# says so in the plan; it never stops here. With the flag true the first guard refuses instead.
+- name: Say that the account's name is not seeded yet, so the role is inert
+  ansible.builtin.debug:
+    msg: >-
+      WARNING ci_jump: the host's private inputs file holds no ci_jump_user, so this role only
+      reports and cannot be turned on. The owner seeds it with seed_host_inputs.py --set
+      ci_jump_user; until then ci_jump_manage_keys must stay false.
+  when: ci_jump_user is not defined
+
+- name: Judge the inputs and the host before anything is written
+  ansible.builtin.import_tasks: _guards.yml
+  when: ci_jump_manage_keys | bool
+
+- name: Write the key file and the sshd drop-in, check them, reload sshd and read them back
+  ansible.builtin.import_tasks: _write.yml
+  when: ci_jump_manage_keys | bool

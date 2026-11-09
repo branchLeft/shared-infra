@@ -19,6 +19,7 @@ SOURCES = (
     "branchleft_host_egress.sh",
     "branchleft_nat.sh",
     "branchleft-host-egress.service",
+    "branchleft-host-egress.timer",
     "branchleft-nat.service",
 )
 
@@ -105,6 +106,17 @@ class SourceTests(unittest.TestCase):
             item = as_dict(constants[key])
             for field in ("reconciler_src", "unit_src"):
                 self.assertIn(item[field], SOURCES)
+        host_egress = as_dict(constants["egress_nat_host_egress"])
+        self.assertIn(host_egress["timer_src"], SOURCES)
+        self.assertEqual(host_egress["timer_name"], "branchleft-host-egress.timer")
+
+    def test_the_timer_triggers_the_unit_the_role_installs(self) -> None:
+        # The timer names the unit it re-runs by its installed name, so the two
+        # files cannot drift apart: a timer for a unit of another name re-runs nothing.
+        item = as_dict(as_dict(load("vars/main.yml"))["egress_nat_host_egress"])
+        timer = (PROVISION / str(item["timer_src"])).read_text(encoding="utf-8")
+        self.assertIn(f"Unit={item['unit_name']}\n", timer)
+        self.assertIn("OnUnitActiveSec=1min\n", timer)
 
 
 class UnitContractTests(unittest.TestCase):
@@ -207,7 +219,8 @@ class GuardTests(unittest.TestCase):
         tasks = [as_dict(task) for task in as_list(load("tasks/_reconciler.yml"))]
         clear = named(tasks, "Clear the copy registers")
         self.assertEqual(as_dict(clear["ansible.builtin.set_fact"]),
-                         {"egress_nat_reconciler_copy": {}, "egress_nat_unit_copy": {}})
+                         {"egress_nat_reconciler_copy": {}, "egress_nat_unit_copy": {},
+                          "egress_nat_timer_copy": {}})
         self.assertEqual(tasks[0], clear)
 
     def test_the_previous_state_is_read_before_the_guard(self) -> None:

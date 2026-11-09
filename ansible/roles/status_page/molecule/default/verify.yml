@@ -275,3 +275,9 @@
 
     - name: Fail the health check on a page that does not answer
       ansible.builtin.include_tasks: tasks/refuse_unhealthy.yml
+
+    - name: Refuse a container that reports unhealthy
+      ansible.builtin.include_tasks: tasks/refuse_unhealthy_service.yml
+
+    - name: Complete with a health delay of zero
+      ansible.builtin.include_tasks: tasks/zero_health_delay.yml

@@ -117,7 +117,7 @@ case $1 in
             ;;
           caddy:caddy)
             [ -e /run/standin.fail.reload ] && exit 1
-            echo "RELOAD caddyfile=$(short_sha "$project/Caddyfile")" >> /var/log/docker-standin.calls
+            echo "RELOAD caddyfile=$(short_sha "$project/caddy/Caddyfile")" >> /var/log/docker-standin.calls
             exit 0
             ;;
           caddy:sha256sum)

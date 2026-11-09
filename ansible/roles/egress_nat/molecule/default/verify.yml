@@ -16,6 +16,9 @@
       - dest: /etc/systemd/system/branchleft-host-egress.service
         source: branchleft-host-egress.service
         mode: '0644'
+      - dest: /etc/systemd/system/branchleft-host-egress.timer
+        source: branchleft-host-egress.timer
+        mode: '0644'
       - dest: /usr/local/sbin/branchleft-nat
         source: branchleft_nat.sh
         mode: '0755'
