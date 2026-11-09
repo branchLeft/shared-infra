@@ -1,4 +1,4 @@
-"""Checks that the deploy_tooling role's class internal gets the gateway's files and no policy program.
+"""Checks that the deploy_tooling role's class internal gets the gateway's files, not the policy.
 
 Class internal is a third host class beside app and gateway. It installs what the hand-run
 deploy-tooling script installs on a host with no DOCKER-USER policy program: the wrapper, the
@@ -11,11 +11,9 @@ the tests run it on the real role (no problems) and on the role with one edit (t
 from __future__ import annotations
 
 import unittest
-from typing import Any
-
-import yaml  # type: ignore[import-untyped]
 
 import deploy_tooling_vars as role_vars
+import yaml  # type: ignore[import-untyped]
 
 MAIN = role_vars.ROLE / "tasks" / "main.yml"
 ARG_SPECS = role_vars.ROLE / "meta" / "argument_specs.yml"
@@ -33,7 +31,7 @@ VARIANT_MESSAGE = "must name its policy variant"
 POLICY_LABELS = frozenset({"policy program", "policy unit"})
 
 
-def _tasks(text: str) -> list[dict[str, Any]]:
+def _tasks(text: str) -> list[dict[str, object]]:
     """Return the tasks of a task file, each a mapping.
 
     Raises:
@@ -43,7 +41,9 @@ def _tasks(text: str) -> list[dict[str, Any]]:
     if not isinstance(doc, list):
         message = "tasks/main.yml is not a list"
         raise TypeError(message)
-    return [task for task in doc if isinstance(task, dict)]
+    return [
+        {str(key): value for key, value in task.items()} for task in doc if isinstance(task, dict)
+    ]
 
 
 def _host_class_choices(specs_text: str) -> list[object]:
@@ -71,7 +71,9 @@ def choices_problems(specs_text: str) -> list[str]:
     """Return a problem unless the argument spec takes exactly the classes the checks know."""
     choices = _host_class_choices(specs_text)
     if sorted(str(c) for c in choices) != sorted(role_vars.HOST_CLASSES):
-        return [f"{CLASS_KEY} choices are {choices}, the checks know {list(role_vars.HOST_CLASSES)}"]
+        return [
+            f"{CLASS_KEY} choices are {choices}, the checks know {list(role_vars.HOST_CLASSES)}"
+        ]
     return []
 
 
@@ -94,7 +96,7 @@ def file_set_problems(variables: dict[str, object]) -> list[str]:
 
 
 def gating_problems(main_text: str) -> list[str]:
-    """Return a problem for each policy file given to a class other than app, or a common one gated."""
+    """Return a problem for each policy file given to a class but app, or a common one gated."""
     problems: list[str] = []
     tasks = _tasks(main_text)
     for task in tasks:
@@ -104,7 +106,9 @@ def gating_problems(main_text: str) -> list[str]:
             # The set_fact that lists the files for this host is gated by its own expression.
             listed_for_app = APP_SET_FACT_GATE in str(task)
             if when != POLICY_GATE and not listed_for_app:
-                problems.append(f"'{name}' gives the policy files to a class other than app: when={when!r}")
+                problems.append(
+                    f"'{name}' gives the policy files to a class other than app: when={when!r}"
+                )
     for common in (DIRECTORY_TASK, COMMON_INSTALL):
         matches = [t for t in tasks if t.get("name") == common]
         if len(matches) != 1:
@@ -136,7 +140,9 @@ def variant_problems(main_text: str) -> list[str]:
             if not isinstance(that, list) or len(that) < 2:
                 return ["the variant assertion has no second condition"]
             if "'internal'" not in str(that[1]):
-                return [f"the variant assertion still requires a variant for class internal: {that[1]}"]
+                return [
+                    f"the variant assertion still requires a variant for class internal: {that[1]}"
+                ]
             return []
     return ["no task asserts that an app host names its variant"]
 
@@ -188,7 +194,8 @@ class TestControls(unittest.TestCase):
         edited = self._edited(
             self.main,
             "include_tasks: _isolation.yml\n  when: deploy_tooling_host_class == 'app'\n",
-            "include_tasks: _isolation.yml\n  when: deploy_tooling_host_class in ['app', 'internal']\n",
+            "include_tasks: _isolation.yml\n"
+            "  when: deploy_tooling_host_class in ['app', 'internal']\n",
         )
         problems = gating_problems(edited)
         self.assertTrue(any("Apply the isolation policy" in p for p in problems), problems)
@@ -198,7 +205,9 @@ class TestControls(unittest.TestCase):
         edited = self._edited(
             self.main,
             "    quiet: true\n\n# ----- The app-host isolation",
-            "    quiet: true\n  when: deploy_tooling_host_class != 'internal'\n\n# ----- The app-host isolation",
+            "    quiet: true\n"
+            "  when: deploy_tooling_host_class != 'internal'\n\n"
+            "# ----- The app-host isolation",
         )
         problems = sudoers_problems(edited)
         self.assertTrue(any("is gated by" in p for p in problems), problems)
@@ -226,8 +235,10 @@ class TestControls(unittest.TestCase):
 
     def test_internal_given_the_policy_files_is_found(self) -> None:
         variables = role_vars.load_vars()
-        common: Any = variables["deploy_tooling_common_file_targets"]
-        app: Any = variables["deploy_tooling_app_file_targets"]
+        common = variables["deploy_tooling_common_file_targets"]
+        app = variables["deploy_tooling_app_file_targets"]
+        if not isinstance(common, list) or not isinstance(app, list):
+            self.fail("the role's file target lists are not lists in vars/main.yml")
         broken = dict(variables)
         broken["deploy_tooling_common_file_targets"] = [*common, *app]
         self.assertTrue(file_set_problems(broken))
