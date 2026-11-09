@@ -299,6 +299,15 @@ image it cannot see. The rules:
   in the override as in the base file. A deeper line is never a service key.
 - An `image:` is one line. A deeper line directly after it, a second `image:`,
   or an `image` key below the service's own keys is refused.
+- The first line of a file must start at column 0. YAML reads a file indented
+  as a whole at that depth, so lines before the first column-0 key are never
+  skipped.
+- A volume entry of `type: image` mounts an image's files with no `image:` key.
+  Every `type:` below a service, in block or flow form, must carry a plain
+  lowercase word other than `image`; an escaped, tagged, aliased or empty value,
+  an escaped key and a complex `? key` are refused. Current hosts take
+  `docker-ce` and `docker-compose-plugin` unpinned from Docker's repository
+  with unattended upgrades, so image mounts are assumed supported.
 - `build:`, `extends:` and `provider:` are refused (an image built on the host
   has no digest to attest), as is a service with no `image:` in the base file.
 - A control character, a line-separator character, a byte order mark, a tab

@@ -535,6 +535,32 @@ _MERGE_KEY = re.compile(r"\A\s*<<\s*:")
 # A service keyed this way gets its image from somewhere this program does not read.
 _UNREAD_SERVICE_KEYS = frozenset({"build", "extends", "provider"})
 
+# A `type:` key anywhere in a service, with the value it carries (plain, or in
+# simple quotes). A volume entry of `type: image` mounts an image's files without
+# an `image:` key, so every `type:` value must be a plain lowercase word, not
+# `image`. An escape, tag, alias or empty value cannot be read as one, so it refuses.
+_TYPE_VALUE = re.compile(r"""(?:\A|[\s{,\[])["']?type["']?\s*:\s*(?P<value>[^\s,}\]]*)""")
+_PLAIN_WORD = re.compile(r"""\A(?P<quote>["']?)(?P<word>[a-z]+)(?P=quote)\Z""")
+
+# A key spelled so that a parser reads another word than the text shows: a
+# double-quoted key holding an escape, or a complex `? key`.
+_ESCAPED_KEY = re.compile(r'"(?:[^"\\]|\\.)*\\(?:[^"\\]|\\.)*"\s*:')
+_COMPLEX_KEY = re.compile(r"(?:\A\s*(?:-\s+)*|[{,]\s*)\?(?:\s|\Z)")
+
+
+def _refuse_hidden_mount_type(raw: str, service: str) -> None:
+    if _ESCAPED_KEY.search(raw) or _COMPLEX_KEY.search(raw):
+        raise ComposeParseError(
+            f"{raw!r} in service {service!r} spells a key in a form this program does not read"
+        )
+    for found in _TYPE_VALUE.finditer(raw):
+        word = _PLAIN_WORD.match(found.group("value"))
+        if word is None or word.group("word") == "image":
+            raise ComposeParseError(
+                f"{raw!r} in service {service!r} has a `type:` that is `image` or cannot be "
+                "read; an image mount runs an image no `image:` line names"
+            )
+
 
 def service_images(compose_text: str) -> dict[str, str | None]:
     """Every service under `services:`, mapped to its raw `image:` value or None.
@@ -555,6 +581,10 @@ def service_images(compose_text: str) -> dict[str, str | None]:
         raw = stripped.rstrip()
         if not raw:
             continue
+        if raw.startswith(" ") and not seen_top_level:
+            # A file whose first line is indented is read by YAML with every
+            # line at that depth; lines before a column-0 key are not skipped.
+            raise ComposeParseError(f"{raw!r} is the first line and does not start at column 0")
         if not raw.startswith(" "):
             top_level = _ALLOWED_TOP_LEVEL.match(raw)
             if top_level is None:
@@ -596,6 +626,7 @@ def service_images(compose_text: str) -> dict[str, str | None]:
                 f"{_FIELD_INDENT} spaces, so the keys after it cannot be told apart"
             )
         awaiting_first_field = False
+        _refuse_hidden_mount_type(raw, current)
         if indent > _FIELD_INDENT:
             if after_image:
                 raise ComposeParseError(

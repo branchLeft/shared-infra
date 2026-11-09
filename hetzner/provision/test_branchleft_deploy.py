@@ -1479,6 +1479,64 @@ HIDDEN_AT_COLUMN_ZERO = {
     "a next line separator": "x-n: a\x85include: [evil.yml]\n" + compose_of(),
 }
 
+def indented(text, spaces):
+    return "".join(
+        (" " * spaces + line if line.strip() else line) for line in text.splitlines(True)
+    )
+
+
+# Valid YAML that Compose reads, with every line indented: the first line is not
+# at column 0, so there is no column-0 key for a reader to anchor on.
+HIDDEN_BY_INDENTING_THE_FILE = {
+    "an indented services file": (
+        " services:\n  web:\n   image: " + EVIL + "\n"
+    ),
+    "an indented include": " include:\n" + INCLUDE_EVIL,
+    "a whole compose file indented by one": indented(compose_of(), 1),
+    "a whole compose file indented by two": indented(compose_of(), 2),
+    "a whole compose file indented by three": indented(compose_of(), 3),
+    "a whole compose file indented by four": indented(compose_of(), 4),
+    "an indented file after a comment": "# c\n\n" + indented(compose_of(), 1),
+}
+
+# A volume entry that mounts an image's files runs an image no `image:` key
+# names, in either spelling of a mapping. Each is the `extra` fields of a service.
+IMAGE_MOUNTS = {
+    "a block volume entry": (
+        "    volumes:\n      - type: image\n        source: " + EVIL + "\n        target: /x\n"
+    ),
+    "a flow volume entry": (
+        "    volumes:\n      - {type: image, source: " + EVIL + ", target: /x}\n"
+    ),
+    "a quoted type": (
+        "    volumes:\n      - type: 'image'\n        source: " + EVIL + "\n        target: /x\n"
+    ),
+    "a double quoted type": (
+        '    volumes:\n      - type: "image"\n        source: ' + EVIL + "\n        target: /x\n"
+    ),
+    "an escaped type value": (
+        '    volumes:\n      - type: "im\\x61ge"\n        source: ' + EVIL + "\n        target: /x\n"
+    ),
+    "an escaped type key": (
+        '    volumes:\n      - "typ\\x65": image\n        source: ' + EVIL + "\n        target: /x\n"
+    ),
+    "a complex type key": (
+        "    volumes:\n      - ? type\n        : image\n        source: " + EVIL + "\n"
+    ),
+    "a tagged type": (
+        "    volumes:\n      - type: !!str image\n        source: " + EVIL + "\n        target: /x\n"
+    ),
+    "a type with its value on the next line": (
+        "    volumes:\n      - type:\n          image\n        source: " + EVIL + "\n"
+    ),
+    "a flow entry with an escaped key": (
+        '    volumes:\n      - {"typ\\x65": image, source: ' + EVIL + ", target: /x}\n"
+    ),
+    "a flow entry with an alias type": (
+        "    volumes:\n      - {type: *t, source: " + EVIL + ", target: /x}\n"
+    ),
+}
+
 # The same idea for the services themselves: a `services:` line that is not
 # alone, and service fields the reader could not classify.
 FLOW_SERVICES = (
@@ -1547,6 +1605,8 @@ class ImageVerificationTests(unittest.TestCase):
     ):
         """Refused with no restart and no pin; returns the message."""
         self.write(text, name)
+        if os.path.exists(self.env_path()):
+            os.unlink(self.env_path())
         override_path = os.path.join(self.stack_dir, "edge", bd.COMPOSE_OVERRIDE)
         if os.path.exists(override_path):
             os.unlink(override_path)
@@ -1851,6 +1911,47 @@ class ImageVerificationTests(unittest.TestCase):
                 self.assertEqual(run.calls, [])
                 self.assertIn("cannot account for every image", message)
 
+    def test_a_file_whose_first_line_is_indented_is_refused(self):
+        """compose.yml alone, and as the override beside an ordinary compose.yml."""
+        for label, text in HIDDEN_BY_INDENTING_THE_FILE.items():
+            with self.subTest(label + " as compose.yml"):
+                run = FakeRun([0])
+                text_with_pin = text if "${IMAGE}" in text else text + "x-pin: ${IMAGE}\n"
+                message = self.assert_refused(text_with_pin, run)
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+            with self.subTest(label + " as the override"):
+                run = FakeRun([0])
+                message = self.assert_refused(compose_of(), run, override=text)
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+
+    def test_an_image_mount_is_refused_in_the_base_file_and_the_override(self):
+        for label, extra in IMAGE_MOUNTS.items():
+            with self.subTest(label + " in compose.yml"):
+                run = FakeRun([0])
+                message = self.assert_refused(
+                    compose_of(service_block("side", EXPORTER, extra)), run
+                )
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+            with self.subTest(label + " in the override"):
+                run = FakeRun([0])
+                override = "services:\n  app:\n" + extra
+                message = self.assert_refused(compose_of(), run, override=override)
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+
+    def test_the_ordinary_mount_types_are_not_refused(self):
+        extra = (
+            "    volumes:\n      - type: bind\n        source: /a\n        target: /b\n"
+            "      - {type: volume, source: v, target: /c}\n"
+            "      - type: tmpfs\n        target: /d\n"
+        )
+        self.write(compose_of(service_block("side", EXPORTER, extra)))
+        self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
+
     def test_the_allowed_top_level_keys_are_read_and_do_not_refuse(self):
         text = (
             "name: edge\nversion: '3'\nx-shared: &shared\n  a: b\n"
@@ -1910,6 +2011,15 @@ YAML_ALLOWED_TOP_LEVEL = frozenset(
 YAML_UNREAD_SERVICE_KEYS = frozenset({"build", "extends", "provider"})
 
 
+def has_image_mount(node):
+    """Whether any mapping below `node` has `type: image`, as a volume entry does."""
+    if isinstance(node, dict):
+        return node.get("type") == "image" or any(has_image_mount(v) for v in node.values())
+    if isinstance(node, list):
+        return any(has_image_mount(v) for v in node)
+    return False
+
+
 def reader_outcome(text):
     try:
         return bd.service_images(text)
@@ -1949,6 +2059,8 @@ def yaml_disagreement(text):
             service = {}
         if not isinstance(service, dict):
             return f"PyYAML reads service {name!r} as a {type(service).__name__}"
+        if has_image_mount(service):
+            return f"PyYAML reads an image mount in {name!r}"
         if YAML_UNREAD_SERVICE_KEYS & set(service):
             return f"PyYAML reads {sorted(YAML_UNREAD_SERVICE_KEYS & set(service))} on {name!r}"
         if "image" in service:
@@ -1991,6 +2103,14 @@ HOSTILE_LINES = (
     "name: x",
     "x-b: 1",
     "﻿include: [evil.yml]",
+    "volumes:",
+    "- type: image",
+    "- {type: image, source: x, target: /x}",
+    "type: image",
+    'type: "im\\x61ge"',
+    "- type: bind",
+    "source: x",
+    "target: /x",
 )
 
 
@@ -2031,6 +2151,54 @@ class ReaderAgainstYamlTests(unittest.TestCase):
             with self.subTest(label):
                 loaded = yaml.safe_load(HIDDEN_IN_SERVICES[label])
                 self.assertIn(key, loaded["services"]["app"])
+
+    def test_the_indented_and_image_mount_shapes_are_real_and_the_reader_refuses_each(self):
+        for label, text in HIDDEN_BY_INDENTING_THE_FILE.items():
+            with self.subTest(label):
+                self.assertIsNone(reader_outcome(text))
+                self.assertIsNone(yaml_disagreement(text))
+        loaded = yaml.safe_load(HIDDEN_BY_INDENTING_THE_FILE["an indented services file"])
+        self.assertEqual(loaded["services"]["web"]["image"], EVIL)
+        loaded = yaml.safe_load(HIDDEN_BY_INDENTING_THE_FILE["an indented include"])
+        self.assertEqual(loaded["include"], ["evil.yml"])
+        for label, extra in IMAGE_MOUNTS.items():
+            text = compose_of(service_block("side", EXPORTER, extra))
+            with self.subTest(label):
+                self.assertIsNone(reader_outcome(text))
+                self.assertIsNone(yaml_disagreement(text))
+                try:
+                    loaded = yaml.safe_load(text)
+                except yaml.YAMLError:
+                    continue
+                # Where PyYAML parses it, it reads an image mount (the guard that
+                # the shape is hostile, not a typo), except the alias and tag
+                # spellings, which it reads as something else.
+                if label not in ("a flow entry with an alias type", "a tagged type"):
+                    self.assertTrue(has_image_mount(loaded), label)
+
+    def test_an_indented_sample_never_splits_the_reader_from_pyyaml(self):
+        """Every generated file, shifted right by 1 to 4 spaces as a whole: valid
+        YAML that Compose reads, with no column-0 key to anchor on."""
+        rng = random.Random(704)
+        base = compose_of(service_block("side", EXPORTER)).splitlines()
+        read_by_pyyaml = 0
+        for _ in range(1500):
+            lines = list(base)
+            for _ in range(rng.randint(0, 3)):
+                snippet = rng.choice(HOSTILE_LINES)
+                indent = " " * rng.choice((0, 0, 2, 2, 4, 4, 6))
+                lines.insert(rng.randrange(len(lines) + 1), indent + snippet)
+            text = indented("\n".join(lines) + "\n", rng.randint(1, 4))
+            self.assertIsNone(yaml_disagreement(text), text)
+            try:
+                loaded = yaml.safe_load(text)
+            except yaml.YAMLError:
+                continue
+            if isinstance(loaded, dict) and "services" in loaded:
+                read_by_pyyaml += 1
+                self.assertIsNone(reader_outcome(text), text)
+        # PyYAML reads a good share of them, so the property is not vacuous.
+        self.assertGreater(read_by_pyyaml, 100)
 
     def test_a_generated_sample_never_splits_the_reader_from_pyyaml(self):
         rng = random.Random(702)
