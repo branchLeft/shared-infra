@@ -1,0 +1,12 @@
+---
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Only when the role means the service to run. A restart of a unit whose conditions are unmet
+# starts nothing, and a unit the role holds stopped is never restarted by a changed file.
+- name: Restart the content-safety service
+  ansible.builtin.systemd_service:
+    name: '{{ safety_service_unit }}'
+    state: restarted
+  when: safety_service_run | bool
