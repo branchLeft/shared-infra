@@ -164,7 +164,8 @@ class HostBaselineMatchesScripts(unittest.TestCase):
         self.assertEqual(
             _rendered_jail(),
             bodies[JAIL_POSITION],
-            "templates/jail.local.j2 at the default host_baseline_fail2ban_ignoreip differs from the script heredoc",
+            "templates/jail.local.j2 at the default host_baseline_fail2ban_ignoreip "
+            "differs from the script heredoc",
         )
 
     def test_the_script_writes_no_heredoc_the_role_does_not_carry(self) -> None:
