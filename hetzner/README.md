@@ -434,7 +434,11 @@ Hetzner console and rescue system, not a password.
 A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`) is
 verified before the wrapper pins it. Four images are not signed or attested today and deploy by an
 explicit allowance, logged on every deploy: `edge-caddy`, `website`, `mysql` and `mailgun-shim`
-(`UNATTESTED_ALLOWED`, the list of that gap). Any other image name is refused (default deny). The verifier runs with no GitHub credential, and the design is
+(`UNATTESTED_ALLOWED`, the list of that gap), and so do the four sidecars the stacks run beside
+them (`mysqld-exporter`, `crowdsec`, `postgres`, `zitadel`). Every image a stack's Compose files
+name is held to this rule, not only the one on the command line. Any other image name is refused
+(default deny), as is an image with no digest, an interpolated one, or a Compose shape the
+deploy program cannot read. The verifier runs with no GitHub credential, and the design is
 fail-closed: a host with no credential refuses every registered deploy. The verifier and its pinned
 gh come from the `deploy_verifier` role, applied on `edge1`, `app1`, `ops1` and `db1`. See
 `provision/branchleft_deploy.md`, "The verifier runs with no credential" and "Live checks, in order".

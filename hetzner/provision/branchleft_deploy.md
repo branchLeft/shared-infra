@@ -225,12 +225,15 @@ one of them only:
   no argument, environment variable or stack setting that skips it.
 - `UNATTESTED_ALLOWED` names deploy **without verification**, and each deploy
   logs `unattested by allowance: <name> (<reason>)` so it shows in the deploy
-  log. Today it holds exactly four images: `ghcr.io/branchleft/edge-caddy`,
-  `ghcr.io/branchleft/website`, `mysql` and `ghcr.io/branchleft/mailgun-shim`.
+  log. Today it holds eight names. Four are deploy images: `ghcr.io/branchleft/edge-caddy`,
+  `ghcr.io/branchleft/website`, `mysql` and `ghcr.io/branchleft/mailgun-shim`. Four are
+  sidecars named in a stack's Compose file (see `verify_compose_images`):
+  `prom/mysqld-exporter` (db), `docker.io/crowdsecurity/crowdsec` (edge),
+  `docker.io/library/postgres` and `ghcr.io/zitadel/zitadel` (control-plane).
 - Any other name is refused with a `DeployError` naming the image and both
   tables. The verifier is not run for it and nothing is deployed.
 
-The four allowed images are **not signed or attested today**. The allowance
+The eight allowed images are **not signed or attested today**. The allowance
 table is the owner-visible list of that gap: each entry is a debt, retired by
 adding an attestation step to the image's publish workflow and moving the name
 to `ATTESTED_IMAGES`. Adding a name to either table is a reviewed owner
@@ -251,6 +254,54 @@ and blocking it could leave the host with nothing running.
 The vendored copy is pinned by sha256 in `test_branchleft_deploy.py`. Change
 the copy and that constant in one change, and take the bytes only from
 ghost-platform's script.
+
+## verify_compose_images
+
+The image on the command line is one of the images a stack runs. A Compose file
+also names sidecars (an exporter, a database next to an app), and before this
+check they deployed unverified: the default deny above covered one reference per
+deploy. `deploy()` now reads the stack's Compose files after the pin is verified
+and holds every other image to the same rule, before the lock, the pin write and
+any restart.
+
+What counts as an image: the `image:` of every service in `compose.yml`, and of
+every service in `compose.override.yml` when it exists, because Compose merges
+that file over the first and the unit passes no `-f`. Profiles do not exempt a
+service: a service behind a profile is still read.
+
+What each `image:` must be, one of:
+
+- the pin, `${IMAGE}` or `${IMAGE:?message}`, quoted or not. It is the image
+  already verified, and at least one service must be the pin;
+- a literal, digest-pinned reference (`name@sha256:...`, a tag may ride along). It
+  goes through `verify_attestation`: verified if registered, logged
+  `unattested by allowance` if allowed, refused if on neither table. A reference
+  named by several services is verified once;
+- nothing else. A tag-only or bare name is refused (an attestation is of a
+  digest). Any other `$` is refused: the unit also loads
+  `/etc/branchleft/<stack>.env` and Compose reads a project `.env`, and
+  reproducing Compose's substitution here would be a second, drifting reader. The
+  committed stacks write sidecar digests as literals for this reason.
+
+Fail closed: the reader is a regex over indentation, like the health reader, but
+where that one warns on a shape it cannot classify, this one refuses, because a
+shape it cannot read is an image it cannot see. It refuses a `build:` or
+`extends:` key (an image built on the host has no digest to attest), a top-level
+`include:`, a YAML merge key, an anchor on a service header, a second document, a
+repeated service or `image:` key, an `image` key below a service's own keys, a
+base service with no `image:`, and an override that cannot be read. It also
+refuses when `compose.yaml` or one of the other override spellings exists beside
+`compose.yml`, since Compose would read a file this program does not. Every file
+is read and every reference checked for shape before the first verifier runs.
+
+A rollback restore is still not re-verified (above). The allowance table is shared
+by deploy images and sidecars on purpose: one owner-visible list of the gap, and the
+go-live check that it is empty covers both. Registering a sidecar later is the same
+move as for a deploy image: attest it where it is built, add it to `ATTESTED_IMAGES`.
+
+Not covered: a `COMPOSE_FILE` or `COMPOSE_PROFILES` set in
+`/etc/branchleft/<stack>.env` (a root-owned file nothing here writes), and what a
+Compose file's image does once running.
 
 ### The verifier runs with no credential
 

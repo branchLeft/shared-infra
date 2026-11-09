@@ -12,6 +12,8 @@ import fcntl
 import hashlib
 import io
 import os
+import pathlib
+import re
 import stat
 import subprocess
 import tempfile
@@ -774,14 +776,18 @@ class AttestationTests(unittest.TestCase):
         with self.assertRaises(bd.DeployError):
             bd.verify_attestation(f"ghcr.io/branchleft/example@sha256:{DIGEST}", run=boom)
 
-    def test_the_allowance_table_is_exactly_the_four_live_unattested_names(self):
+    def test_the_allowance_table_is_exactly_the_live_unattested_names(self):
         self.assertEqual(
             sorted(bd.UNATTESTED_ALLOWED),
             [
+                "docker.io/crowdsecurity/crowdsec",
+                "docker.io/library/postgres",
                 "ghcr.io/branchleft/edge-caddy",
                 "ghcr.io/branchleft/mailgun-shim",
                 "ghcr.io/branchleft/website",
+                "ghcr.io/zitadel/zitadel",
                 "mysql",
+                "prom/mysqld-exporter",
             ],
         )
         for name, reason in bd.UNATTESTED_ALLOWED.items():
@@ -807,6 +813,14 @@ class AttestationTests(unittest.TestCase):
                 f"ghcr.io/branchleft/mailgun-shim@sha256:{DIGEST}"
             ),
             "mysql": f"mysql:8.0.43@sha256:{DIGEST}",
+            "prom/mysqld-exporter": f"prom/mysqld-exporter:v0.20.0@sha256:{DIGEST}",
+            "docker.io/crowdsecurity/crowdsec": (
+                f"docker.io/crowdsecurity/crowdsec:v1.7.8@sha256:{DIGEST}"
+            ),
+            "docker.io/library/postgres": (
+                f"docker.io/library/postgres:17-alpine@sha256:{DIGEST}"
+            ),
+            "ghcr.io/zitadel/zitadel": f"ghcr.io/zitadel/zitadel@sha256:{DIGEST}",
         }
         self.assertEqual(sorted(spellings), sorted(bd.UNATTESTED_ALLOWED))
         for name, image in spellings.items():
@@ -1286,7 +1300,7 @@ class HealthSignalGapsTests(unittest.TestCase):
         text = (
             "services:\n"
             "  probed:\n"
-            "    image: a\n"
+            f"    image: ghcr.io/branchleft/probed@sha256:{'b' * 64}\n"
             "    healthcheck:\n"
             "      test: ['CMD', 'true']\n"
             "  bare:\n"
@@ -1341,7 +1355,7 @@ class DeployHealthSignalTests(unittest.TestCase):
             "edge",
             "services:\n"
             "  probed:\n"
-            "    image: a\n"
+            f"    image: ghcr.io/branchleft/probed@sha256:{'b' * 64}\n"
             "    healthcheck:\n"
             "      test: ['CMD', 'true']\n"
             "  bare:\n"
@@ -1393,14 +1407,19 @@ class DeployHealthSignalTests(unittest.TestCase):
         self.assertEqual(len(run.calls), 1)
         self.assertEqual(stderr.getvalue(), "")
 
-    def test_a_shape_the_parser_cannot_read_warns_and_still_deploys(self):
+    def test_a_shape_the_health_parser_cannot_read_warns_and_still_deploys(self):
         """A parser limitation is not a property of the stack: refusing a
-        deploy over a shape this regex-based reader cannot classify would be
-        an outage the Compose file itself never had."""
-        self.write_compose("edge", "services:\n  app: &app\n    image: ${IMAGE}\n")
+        deploy over a shape the health reader cannot classify would be an
+        outage the Compose file itself never had. The image reader refuses
+        such a shape first (ImageVerificationTests), so this drives the health
+        branch with a stand-in that raises."""
+        self.write_compose("edge", "services:\n  app:\n    image: ${IMAGE}\n")
         run = FakeRun([0])
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
+        unreadable = mock.patch.object(
+            bd, "health_signal_gaps", side_effect=bd.ComposeParseError("unreadable")
+        )
+        with unreadable, contextlib.redirect_stderr(stderr):
             self.deploy("edge", run)
         self.assertEqual(len(run.calls), 1)
         self.assertIn("could not determine", stderr.getvalue())
@@ -1413,6 +1432,382 @@ class DeployHealthSignalTests(unittest.TestCase):
             self.deploy("missing", run)
         self.assertIn("no compose file", str(caught.exception))
         self.assertEqual(run.calls, [])
+
+
+ALLOWED_PIN = f"ghcr.io/branchleft/website@sha256:{DIGEST}"
+EXPORTER = f"prom/mysqld-exporter:v0.20.0@sha256:{'c' * 64}"
+STRAY = f"ghcr.io/branchleft/stray@sha256:{'d' * 64}"
+PORTAL = f"ghcr.io/branchleft/portal-apps@sha256:{'e' * 64}"
+PORTAL_SIGNER = "branchLeft/ghost-platform/.github/workflows/portal-apps-image.yml"
+PROBE = "    healthcheck:\n      test: ['CMD', 'true']\n"
+
+
+def service_block(name, image, extra=""):
+    return f"  {name}:\n    image: {image}\n{extra}{PROBE}"
+
+
+def compose_of(*blocks):
+    return "services:\n" + service_block("app", "${IMAGE}") + "".join(blocks)
+
+
+class ImageVerificationTests(unittest.TestCase):
+    """deploy() holds every image the stack's Compose files name to the same
+    rule as the pin, not only the one passed on the command line.
+
+    The attestation step is real here (never patched). Each refusal must leave
+    the pin file absent and run no restart.
+    """
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.config_dir = os.path.join(self.directory.name, "etc")
+        self.stack_dir = os.path.join(self.directory.name, "opt")
+        os.makedirs(self.config_dir)
+        os.makedirs(os.path.join(self.stack_dir, "edge"))
+
+    def write(self, text, name="compose.yml"):
+        with open(
+            os.path.join(self.stack_dir, "edge", name), "w", encoding="utf-8"
+        ) as handle:
+            handle.write(text)
+
+    def deploy(self, image, run):
+        stderr = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(stderr):
+                bd.deploy(
+                    "edge",
+                    image,
+                    config_dir=self.config_dir,
+                    stack_dir=self.stack_dir,
+                    run=run,
+                )
+        finally:
+            self.log = stderr.getvalue()
+
+    def env_path(self):
+        return bd.image_env_path("edge", self.config_dir)
+
+    def assert_refused(self, text, run=None, image=ALLOWED_PIN, name="compose.yml"):
+        """Refused with no restart and no pin; returns the message."""
+        self.write(text, name)
+        run = run or FakeRun([0])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(image, run)
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertNotIn(["systemctl", "restart", "branchleft-compose@edge"], run.calls)
+        return str(raised.exception)
+
+    def test_a_sidecar_on_neither_table_is_refused_before_any_host_change(self):
+        run = FakeRun([0])
+        message = self.assert_refused(compose_of(service_block("side", STRAY)), run)
+        self.assertEqual(run.calls, [])
+        self.assertIn(STRAY, message)
+        self.assertIn("'side'", message)
+        self.assertIn("allowance", message)
+
+    def test_a_sidecar_on_the_allowance_deploys_and_logs_as_the_pin_does(self):
+        run = FakeRun([0])
+        self.write(compose_of(service_block("side", EXPORTER)))
+        self.deploy(ALLOWED_PIN, run)
+        self.assertEqual(run.calls, [["systemctl", "restart", "branchleft-compose@edge"]])
+        self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
+        self.assertIn("unattested by allowance: ghcr.io/branchleft/website (", self.log)
+        self.assertIn(
+            "unattested by allowance: prom/mysqld-exporter "
+            f"({bd.UNATTESTED_ALLOWED['prom/mysqld-exporter']})",
+            self.log,
+        )
+
+    def test_a_stack_of_only_attested_images_deploys_through_the_verifier(self):
+        run = FakeRun([0, 0, 0])
+        self.write(compose_of(service_block("side", PORTAL)))
+        self.deploy(TENANT, run)
+        self.assertEqual(
+            run.calls,
+            [
+                [bd.VERIFIER, TENANT, bd.ATTESTED_REPO, TENANT_SIGNER, "--bundle-from-oci"],
+                [bd.VERIFIER, PORTAL, bd.ATTESTED_REPO, PORTAL_SIGNER, "--bundle-from-oci"],
+                ["systemctl", "restart", "branchleft-compose@edge"],
+            ],
+        )
+        self.assertEqual(run.kwargs[1]["env"], EXPECTED_VERIFIER_ENV)
+        self.assertIn(f"verified {PORTAL} attested by {PORTAL_SIGNER}", self.log)
+
+    def test_an_attested_sidecar_the_verifier_refuses_stops_the_deploy(self):
+        run = FakeRun([0, 1])
+        message = self.assert_refused(
+            compose_of(service_block("side", PORTAL)), run, image=TENANT
+        )
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER, bd.VERIFIER])
+        self.assertIn("is not attested by", message)
+        self.assertIn(PORTAL, message)
+
+    def test_a_missing_verifier_for_a_sidecar_stops_the_deploy(self):
+        calls = []
+
+        def verifier_gone_after_the_pin(argv, **kwargs):
+            calls.append(argv)
+            if len(calls) == 2:
+                raise FileNotFoundError(argv[0])
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        self.write(compose_of(service_block("side", PORTAL)))
+        with self.assertRaises(bd.DeployError):
+            self.deploy(TENANT, verifier_gone_after_the_pin)
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual(len(calls), 2)
+
+    def test_a_sidecar_without_a_digest_is_refused(self):
+        for reference in (
+            "docker.io/library/postgres:17-alpine",
+            "prom/mysqld-exporter",
+            "prom/mysqld-exporter:latest",
+            f"'prom/mysqld-exporter:v1@sha256:{'c' * 63}'",
+            "",
+        ):
+            with self.subTest(reference=reference):
+                run = FakeRun([0])
+                message = self.assert_refused(
+                    compose_of(service_block("side", reference)), run
+                )
+                self.assertEqual(run.calls, [])
+                self.assertIn("digest-pinned", message)
+                self.assertIn("'side'", message)
+
+    def test_a_digest_shape_error_is_found_before_any_verifier_runs(self):
+        run = FakeRun([0, 0])
+        self.assert_refused(
+            compose_of(service_block("good", PORTAL), service_block("bad", "redis")),
+            run,
+            image=TENANT,
+        )
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER])
+
+    def test_an_interpolated_sidecar_is_refused_not_resolved(self):
+        for reference in (
+            "${SIDECAR_IMAGE}",
+            "$SIDECAR_IMAGE",
+            "${SIDECAR_IMAGE:?set it in /etc/branchleft/edge.env}",
+            "${IMAGE:-prom/mysqld-exporter}",
+            "${IMAGE}-extra",
+            "'${IMAGE}x'",
+            "prom/mysqld-exporter@sha256:${DIGEST}",
+        ):
+            with self.subTest(reference=reference):
+                message = self.assert_refused(compose_of(service_block("side", reference)))
+                self.assertIn("interpolated", message)
+
+    def test_the_pin_in_any_of_its_two_spellings_or_quoted_is_the_pin(self):
+        for reference in ("${IMAGE}", "${IMAGE:?pin the image}", "'${IMAGE}'", '"${IMAGE}"'):
+            with self.subTest(reference=reference):
+                run = FakeRun([0])
+                self.write(compose_of(service_block("second", reference)))
+                self.deploy(ALLOWED_PIN, run)
+                self.assertEqual(
+                    run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
+                )
+                os.unlink(self.env_path())
+
+    def test_a_quoted_sidecar_is_read_as_the_reference_inside_the_quotes(self):
+        for reference in (f"'{EXPORTER}'", f'"{EXPORTER}"'):
+            with self.subTest(reference=reference):
+                self.write(compose_of(service_block("side", reference)))
+                self.deploy(ALLOWED_PIN, FakeRun([0]))
+                self.assertIn("unattested by allowance: prom/mysqld-exporter", self.log)
+                os.unlink(self.env_path())
+
+    def test_a_sidecar_named_twice_is_verified_once(self):
+        run = FakeRun([0, 0, 0, 0])
+        self.write(
+            compose_of(service_block("one", PORTAL), service_block("two", PORTAL))
+        )
+        self.deploy(TENANT, run)
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER, bd.VERIFIER, "systemctl"])
+
+    def test_a_sidecar_in_the_override_file_is_held_to_the_same_rule(self):
+        self.write(compose_of())
+        self.write("services:\n" + service_block("extra", STRAY), "compose.override.yml")
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertIn(STRAY, str(raised.exception))
+        self.assertIn("compose.override.yml", str(raised.exception))
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_an_override_that_adds_an_allowed_sidecar_deploys(self):
+        self.write(compose_of())
+        self.write("services:\n" + service_block("extra", EXPORTER), "compose.override.yml")
+        self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertIn("unattested by allowance: prom/mysqld-exporter", self.log)
+
+    def test_an_override_service_may_omit_an_image_but_a_base_service_may_not(self):
+        self.write(compose_of())
+        self.write("services:\n  app:\n    restart: always\n", "compose.override.yml")
+        self.deploy(ALLOWED_PIN, FakeRun([0]))
+        os.unlink(self.env_path())
+        message = self.assert_refused(compose_of("  bare:\n" + PROBE))
+        self.assertIn("names no `image:`", message)
+
+    def test_an_unreadable_override_file_is_refused(self):
+        self.write(compose_of())
+        os.makedirs(os.path.join(self.stack_dir, "edge", "compose.override.yml"))
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertIn("could not read", str(raised.exception))
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_a_compose_file_this_program_would_not_read_is_refused(self):
+        for name in bd.UNREAD_COMPOSE_FILES:
+            with self.subTest(name=name):
+                self.write(compose_of())
+                self.write("services: {}\n", name)
+                with self.assertRaises(bd.DeployError) as raised:
+                    self.deploy(ALLOWED_PIN, FakeRun([0]))
+                self.assertIn(name, str(raised.exception))
+                self.assertFalse(os.path.exists(self.env_path()))
+                os.unlink(os.path.join(self.stack_dir, "edge", name))
+
+    def test_a_shape_that_could_hide_an_image_is_refused_not_skipped(self):
+        shapes = {
+            "an anchor on a service header": "services:\n  app: &app\n    image: ${IMAGE}\n"
+            + PROBE,
+            "a build context": compose_of("  side:\n    build: ./side\n" + PROBE),
+            "a build context with an image": compose_of(
+                service_block("side", EXPORTER, "    build: ./side\n")
+            ),
+            "an extends": compose_of("  side:\n    extends:\n      service: app\n" + PROBE),
+            "a top level include": "include:\n  - other.yml\n" + compose_of(),
+            "a merge key": compose_of(
+                "  side:\n    <<: *common\n    image: " + EXPORTER + "\n" + PROBE
+            ),
+            "an image below a service key": compose_of(
+                service_block("side", EXPORTER, "    deploy:\n      image: x\n")
+            ),
+            "a second image key": compose_of(
+                service_block("side", EXPORTER, "    image: " + EXPORTER + "\n")
+            ),
+            "a repeated service": compose_of(service_block("app", EXPORTER)),
+            "a second document": compose_of() + "---\nservices: {}\n",
+            "an odd indent": compose_of("  side:\n   image: " + EXPORTER + "\n" + PROBE),
+            "a block scalar image": compose_of(
+                service_block("side", ">\n      " + EXPORTER)
+            ),
+            "an alias image": compose_of(service_block("side", "*common")),
+            "services nested too deep": "services:\n    app:\n        image: ${IMAGE}\n",
+        }
+        reads_but_not_a_digest = ("a block scalar image", "an alias image")
+        for label, text in shapes.items():
+            with self.subTest(label):
+                run = FakeRun([0])
+                message = self.assert_refused(text, run)
+                self.assertEqual(run.calls, [])
+                self.assertIn(
+                    "digest-pinned"
+                    if label in reads_but_not_a_digest
+                    else "cannot account for every image",
+                    message,
+                )
+
+    def test_unreadable_compose_text_is_the_refusal_the_message_names(self):
+        message = self.assert_refused("services:\n  app: &app\n    image: ${IMAGE}\n" + PROBE)
+        self.assertIn("cannot account for every image", message)
+        self.assertIn("refusing to deploy", message)
+
+    def test_a_stack_whose_services_never_take_the_pin_is_refused(self):
+        text = (
+            "services:\n"
+            + service_block("side", EXPORTER, "    environment:\n      A: ${IMAGE}\n")
+        )
+        message = self.assert_refused(text)
+        self.assertIn("no service whose `image:` is the pin", message)
+
+    def test_a_commented_out_image_is_not_read_and_a_trailing_comment_is_cut(self):
+        text = compose_of(
+            "  side:\n    # image: ghcr.io/branchleft/stray:latest\n"
+            f"    image: {EXPORTER} # pinned\n" + PROBE
+        )
+        self.write(text)
+        self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertIn("unattested by allowance: prom/mysqld-exporter", self.log)
+
+    def test_a_same_path_on_another_registry_is_another_image(self):
+        self.assert_refused(
+            compose_of(service_block("side", f"docker.io/library/mysql@sha256:{'d' * 64}"))
+        )
+
+    def test_service_images_maps_each_service_to_its_raw_value(self):
+        text = compose_of(
+            "  bare:\n    restart: always\n",
+            service_block("side", f"'{EXPORTER}'"),
+        )
+        self.assertEqual(
+            bd.service_images(text),
+            {"app": "${IMAGE}", "bare": None, "side": f"'{EXPORTER}'"},
+        )
+
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+# Each committed stack that is deployed through this program, with the sidecar
+# names it runs today. A stack that gains a sidecar changes this table, and so
+# a reviewer sees the new image beside the allowance it needs.
+COMMITTED_SIDECARS = {
+    "edge": ("hetzner/edge/stack/compose.yml", {"docker.io/crowdsecurity/crowdsec"}),
+    "control-plane": (
+        "hetzner/control-plane/stack/compose.yml",
+        {"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"},
+    ),
+    "website": ("ansible/roles/website_app1/files/compose.yml", set()),
+    "db": ("ansible/roles/db1_stack/templates/compose.yml.j2", {"prom/mysqld-exporter"}),
+}
+
+
+def committed_compose_text(relative):
+    text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    if relative.endswith(".j2"):
+        vars_text = (REPO_ROOT / "ansible/roles/db1_stack/vars/main.yml").read_text(
+            encoding="utf-8"
+        )
+        exporter = re.search(r"^db1_stack_exporter_image: (\S+)$", vars_text, re.MULTILINE)
+        assert exporter, "db1_stack_exporter_image is no longer a one-line value"
+        text = text.replace("{{ db1_stack_exporter_image }}", exporter.group(1))
+        text = re.sub(r"\{\{[^}]*\}\}", "x", text)
+    return text
+
+
+class CommittedStackTests(unittest.TestCase):
+    """The stacks this repository commits pass the check as they stand, so the
+    sidecar rule does not refuse a deploy that works today."""
+
+    def test_each_committed_stack_deploys_with_only_its_known_sidecars(self):
+        for stack, (relative, expected) in COMMITTED_SIDECARS.items():
+            with self.subTest(stack=stack):
+                with tempfile.TemporaryDirectory() as directory:
+                    compose = os.path.join(directory, "compose.yml")
+                    text = committed_compose_text(relative)
+                    with open(compose, "w", encoding="utf-8") as handle:
+                        handle.write(text)
+                    stderr = io.StringIO()
+                    run = FakeRun([0])
+                    with contextlib.redirect_stderr(stderr):
+                        bd.verify_compose_images(compose, text, ALLOWED_PIN, run=run)
+                    logged = set(
+                        re.findall(r"unattested by allowance: (\S+) \(", stderr.getvalue())
+                    )
+                self.assertEqual(logged, expected)
+                self.assertEqual(run.calls, [])
+
+    def test_the_committed_stacks_actually_contain_the_sidecars_listed(self):
+        for stack, (relative, expected) in COMMITTED_SIDECARS.items():
+            with self.subTest(stack=stack):
+                images = bd.service_images(committed_compose_text(relative))
+                found = {
+                    bd.attested_name(value)
+                    for value in images.values()
+                    if value and not bd.IMAGE_PIN_REFERENCE.fullmatch(value)
+                }
+                self.assertEqual(found, expected)
 
 
 if __name__ == "__main__":

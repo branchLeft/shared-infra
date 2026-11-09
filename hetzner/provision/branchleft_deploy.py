@@ -88,6 +88,11 @@ UNATTESTED_ALLOWED: dict[str, str] = {
     "ghcr.io/branchleft/website": "built in another repo, not attested for this host yet",
     "mysql": "third-party image",
     "ghcr.io/branchleft/mailgun-shim": "built in another repo, not attested for this host yet",
+    # Sidecars, named in a stack's Compose file and pinned there by digest.
+    "prom/mysqld-exporter": "third-party sidecar of the db stack",
+    "docker.io/crowdsecurity/crowdsec": "third-party sidecar of the edge stack",
+    "docker.io/library/postgres": "third-party sidecar of the control-plane stack",
+    "ghcr.io/zitadel/zitadel": "third-party sidecar of the control-plane stack",
 }
 
 
@@ -474,6 +479,176 @@ def health_signal_gaps(stack: str, compose_text: str) -> tuple[list[str], list[s
     return refused, warned
 
 
+# Every image a stack runs is checked, not only the one passed on the command
+# line. See branchleft_deploy.md, "verify_compose_images".
+
+# Merged over compose.yml by Compose whenever it exists, so it is read as well.
+COMPOSE_OVERRIDE = "compose.override.yml"
+
+# Files Compose would read in place of, or on top of, the two above. Their
+# presence is refused: this program would be reading the wrong file.
+UNREAD_COMPOSE_FILES = (
+    "compose.yaml",
+    "compose.override.yaml",
+    "docker-compose.override.yml",
+    "docker-compose.override.yaml",
+)
+
+_FIELD_INDENT = 4
+
+# A service-level key, with whatever follows it on the same line.
+_SERVICE_FIELD = re.compile(
+    rf"""\A {{{_FIELD_INDENT}}}(?P<quote>["']?)(?P<key>[A-Za-z0-9_.-]+)(?P=quote)\s*:(?P<value>.*)\Z"""
+)
+
+# An `image` key anywhere other than at a service's own level: a nested or inline
+# mapping this reader does not follow, so it cannot vouch that it saw every image.
+_IMAGE_KEY_ELSEWHERE = re.compile(r"""(?:\A|[\s{,\[])["']?image["']?\s*:""")
+
+# A YAML merge key pulls fields, an image included, in from an anchor.
+_MERGE_KEY = re.compile(r"\A\s*<<\s*:")
+
+# A service keyed this way gets its image from somewhere this program does not read.
+_UNREAD_SERVICE_KEYS = frozenset({"build", "extends"})
+
+
+def service_images(compose_text: str) -> dict[str, str | None]:
+    """Every service under `services:`, mapped to its raw `image:` value or None.
+
+    Raises `ComposeParseError` for any shape that could hide an image from this
+    reader. See branchleft_deploy.md, "verify_compose_images".
+    """
+    images: dict[str, str | None] = {}
+    current: str | None = None
+    in_services = False
+    for raw in strip_yaml_comments(compose_text).splitlines():
+        if not raw.strip():
+            continue
+        if raw.startswith(("---", "...")):
+            raise ComposeParseError(f"{raw!r} starts another YAML document")
+        top_level = _TOP_LEVEL_KEY.match(raw)
+        if top_level:
+            if top_level.group("key") == "include":
+                raise ComposeParseError("`include:` brings in files this program does not read")
+            in_services = top_level.group("key") == "services"
+            current = None
+            continue
+        if not in_services:
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if indent <= _SERVICE_INDENT:
+            header = _SERVICE_HEADER.match(raw)
+            if header is None or header.group(1) in images:
+                raise ComposeParseError(
+                    f"cannot read {raw!r} as a new service header: every key directly "
+                    "under `services:` must be a bare, unrepeated `  name:` line"
+                )
+            current = header.group(1)
+            images[current] = None
+            continue
+        if current is None or indent < _FIELD_INDENT or _MERGE_KEY.match(raw):
+            raise ComposeParseError(f"cannot place {raw!r} under a service")
+        if indent > _FIELD_INDENT:
+            if _IMAGE_KEY_ELSEWHERE.search(raw):
+                raise ComposeParseError(f"{raw!r} names an image below a service's own keys")
+            continue
+        field = _SERVICE_FIELD.match(raw)
+        if field is None:
+            raise ComposeParseError(f"cannot read {raw!r} as a key of service {current!r}")
+        key = field.group("key")
+        if key in _UNREAD_SERVICE_KEYS:
+            raise ComposeParseError(
+                f"service {current!r} uses `{key}:`, so its image is not one this "
+                "program can verify"
+            )
+        if key == "image":
+            if images[current] is not None:
+                raise ComposeParseError(f"service {current!r} sets `image:` twice")
+            images[current] = field.group("value").strip()
+    return images
+
+
+def _unquoted(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
+
+
+def verify_compose_images(
+    compose_file: str, compose_text: str, image: str, *, run=subprocess.run
+) -> None:
+    """Hold every image the stack's Compose files name to the attestation rule.
+
+    `image` is the pin, already verified by the caller. A service that takes its
+    image from the pin is that image. Any other service must name a literal,
+    digest-pinned reference, and each is passed through `verify_attestation`, so a
+    sidecar is registered, allowed by the allowance, or refused exactly as the
+    pin is. Anything this cannot account for refuses. Nothing is run until every
+    file has been read and every reference checked for shape.
+    """
+    directory = os.path.dirname(compose_file)
+    for name in UNREAD_COMPOSE_FILES:
+        if os.path.lexists(os.path.join(directory, name)):
+            raise DeployError(
+                f"{os.path.join(directory, name)} exists beside {compose_file}; Compose "
+                "would read it and this program does not, so the images it runs cannot "
+                "be verified. Refusing to deploy"
+            )
+    sources = [(compose_file, compose_text, True)]
+    override = os.path.join(directory, COMPOSE_OVERRIDE)
+    try:
+        with open(override, encoding="utf-8") as handle:
+            sources.append((override, handle.read(), False))
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as error:
+        raise DeployError(f"could not read {override} ({error}); refusing to deploy") from None
+
+    pin_seen = False
+    pending: list[tuple[str, str, str]] = []
+    for path, text, every_service_needs_an_image in sources:
+        try:
+            services = service_images(text)
+        except ComposeParseError as error:
+            raise DeployError(
+                f"{path}: cannot account for every image it runs ({error}); refusing to "
+                "deploy rather than leave one unverified"
+            ) from None
+        for service, value in services.items():
+            if value is None:
+                if every_service_needs_an_image:
+                    raise DeployError(f"{path}: service {service!r} names no `image:`")
+                continue
+            reference = _unquoted(value)
+            if IMAGE_PIN_REFERENCE.fullmatch(reference):
+                pin_seen = True
+            elif "$" in reference:
+                raise DeployError(
+                    f"{path}: service {service!r} image {reference!r} is interpolated, and "
+                    "only ${IMAGE} is resolved here; write the digest-pinned reference"
+                )
+            else:
+                try:
+                    validate_image_ref(reference)
+                except DeployError as error:
+                    raise DeployError(f"{path}: service {service!r}: {error}") from None
+                pending.append((path, service, reference))
+    if not pin_seen:
+        raise DeployError(
+            f"{compose_file} has no service whose `image:` is the pin, so a pin written "
+            "here would not take effect"
+        )
+    verified = {image}
+    for path, service, reference in pending:
+        if reference in verified:
+            continue
+        verified.add(reference)
+        try:
+            verify_attestation(reference, run=run)
+        except DeployError as error:
+            raise DeployError(f"{path}: service {service!r}: {error}") from None
+
+
 def write_image_env(path: str, image: str) -> None:
     """Replace the file atomically.
 
@@ -570,6 +745,10 @@ def deploy(
             f"{compose_file} does not resolve its image from ${{IMAGE}}, "
             "so a pin written here would not take effect"
         )
+
+    # The pin was verified above; every other image the stack runs is verified
+    # here, still before the lock, the pin write and any restart.
+    verify_compose_images(compose_file, compose_text, image, run=run)
 
     # `docker compose up --wait` is a rollback signal only for a service that
     # declares a healthcheck; without one it waits for *running*, which a
