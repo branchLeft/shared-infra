@@ -98,6 +98,40 @@ So the secret is written on the transitions that need it (create, or
 prometheus not yet Enabled as us) and not compared thereafter. Rotating
 it is a deliberate act, not something a reconciler discovers.
 
+## Report delivery schedule
+
+Stalwart's outbound routing is four global expressions (connection, route,
+schedule, tls) that each answer with the name of a strategy object. The
+stock schedule expression answers `report` for a message whose source is
+`report`: DMARC aggregate and failure reports, TLS reports, and DKIM and SPF
+failure reports. Nothing else carries that source. This script does not touch
+the expressions; the stock ones are right.
+
+What was wrong is the object the expression names. The pinned image seeds a
+delivery schedule called `report` with an empty notify list, and the server's
+own validation refuses an empty list (at least one interval), so that one
+write is dropped silently while the other three schedules and all four queues
+are written. The `report` schedule therefore never existed. A report that
+fails once is rescheduled by name, logs `Strategy not found` with
+`id = "report"`, and falls back to Stalwart's built-in default: a five-day
+expiry and a first retry after two minutes, on the `default` queue. A newer
+patch release fixes the seed, but only for a volume with no queues yet, so an
+upgrade would not repair a host that already has them.
+
+The reconciler creates the schedule, and the `report` virtual queue first if
+that is missing, with the seed's values and the stock default for notify. It
+is create-only: an existing schedule is never rewritten.
+
+A report is first queued before its source is set, so it takes the `remote`
+schedule on its first attempt; the `report` schedule applies from the first
+retry onward.
+
+TLS on that retry is unchanged and stated here because it is not obvious. The
+first attempt validates the receiver's certificate. After a TLS failure the
+stock tls expression selects `invalid-tls`, which accepts an untrusted
+certificate, except where the receiver publishes an enforcing MTA-STS policy.
+This applies to all outbound mail, not only reports.
+
 ## Security ban-rate diff
 
 Security has no Create/Destroy method -- unlike Http, the singleton
