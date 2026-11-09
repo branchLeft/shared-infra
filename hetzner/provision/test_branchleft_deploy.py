@@ -13,12 +13,15 @@ import hashlib
 import io
 import os
 import pathlib
+import random
 import re
 import stat
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
+
+import yaml
 
 import branchleft_deploy as bd
 
@@ -1450,6 +1453,56 @@ def compose_of(*blocks):
     return "services:\n" + service_block("app", "${IMAGE}") + "".join(blocks)
 
 
+EVIL = f"evil.example/x@sha256:{'f' * 64}"
+INCLUDE_EVIL = "  - evil.yml\n"
+
+# Shapes for a compose.yml that put an image on the host no verifier sees,
+# through something other than a block `image:` line the reader inspects. Each
+# keeps an ordinary pin service, so only the hidden part can be refused.
+HIDDEN_AT_COLUMN_ZERO = {
+    "an escaped include key": '"inc\\x6cude":\n' + INCLUDE_EVIL + compose_of(),
+    "a complex include key": "? include\n: [evil.yml]\n" + compose_of(),
+    "a byte order mark before include": "\ufeffinclude:\n" + INCLUDE_EVIL + compose_of(),
+    "a byte order mark before services": "\ufeff" + compose_of(),
+    "a root merge key": "x-a: &a\n  include: [evil.yml]\n<<: *a\n" + compose_of(),
+    "a plain include": "include:\n" + INCLUDE_EVIL + compose_of(),
+    "an include after services": compose_of() + "include:\n" + INCLUDE_EVIL,
+    "a top level models key": "models:\n  m:\n    model: evil\n" + compose_of(),
+    "an unknown top level key": "extra:\n  a: b\n" + compose_of(),
+    "a stray list item": "- a\n" + compose_of(),
+    "an anchor on the services line": "services: &s\n" + compose_of().partition("\n")[2],
+    "a JSON document": '{"services": {"web": {"image": "${IMAGE}"}}, "include": ["evil.yml"]}\n',
+    "services twice": compose_of() + compose_of(),
+    "name twice": "name: a\nname: b\n" + compose_of(),
+    "a second document": compose_of() + "---\ninclude: [evil.yml]\n",
+    "a control character": "x-n: a\x0cb\n" + compose_of(),
+    "a next line separator": "x-n: a\x85include: [evil.yml]\n" + compose_of(),
+}
+
+# The same idea for the services themselves: a `services:` line that is not
+# alone, and service fields the reader could not classify.
+FLOW_SERVICES = (
+    "services: {evil: {image: \"" + EVIL + "\"}, web: {image: \"${IMAGE}\"}}\n"
+)
+HIDDEN_IN_SERVICES = {
+    "flow services": FLOW_SERVICES,
+    "flow services with a tail": "services: {}\n",
+    "an escaped image key at indent 6": 'services:\n  app:\n      "im\\x61ge": ' + EVIL + "\n",
+    "extends at indent 6": (
+        "services:\n  app:\n      extends:\n        file: evil.yml\n        service: e\n"
+    ),
+    "build at indent 6": "services:\n  app:\n      build: .\n",
+    "first key at indent 3": "services:\n  app:\n   restart: always\n",
+    "first key at indent 5": "services:\n  app:\n     restart: always\n",
+    "first key at indent 8": "services:\n  app:\n        restart: always\n",
+    "an escaped image key at indent 4": 'services:\n  app:\n    "im\\x61ge": ' + EVIL + "\n",
+    "a complex image key": "services:\n  app:\n    ? image\n    : " + EVIL + "\n",
+    "provider": "services:\n  app:\n    provider:\n      type: x\n",
+    "extends": "services:\n  app:\n    extends:\n      service: web\n",
+    "build": "services:\n  app:\n    build: .\n",
+}
+
+
 class ImageVerificationTests(unittest.TestCase):
     """deploy() holds every image the stack's Compose files name to the same
     rule as the pin, not only the one passed on the command line.
@@ -1489,9 +1542,16 @@ class ImageVerificationTests(unittest.TestCase):
     def env_path(self):
         return bd.image_env_path("edge", self.config_dir)
 
-    def assert_refused(self, text, run=None, image=ALLOWED_PIN, name="compose.yml"):
+    def assert_refused(
+        self, text, run=None, image=ALLOWED_PIN, name="compose.yml", override=None
+    ):
         """Refused with no restart and no pin; returns the message."""
         self.write(text, name)
+        override_path = os.path.join(self.stack_dir, "edge", bd.COMPOSE_OVERRIDE)
+        if os.path.exists(override_path):
+            os.unlink(override_path)
+        if override is not None:
+            self.write(override, bd.COMPOSE_OVERRIDE)
         run = run or FakeRun([0])
         with self.assertRaises(bd.DeployError) as raised:
             self.deploy(image, run)
@@ -1696,7 +1756,7 @@ class ImageVerificationTests(unittest.TestCase):
             "an alias image": compose_of(service_block("side", "*common")),
             "services nested too deep": "services:\n    app:\n        image: ${IMAGE}\n",
         }
-        reads_but_not_a_digest = ("a block scalar image", "an alias image")
+        reads_but_not_a_digest = ("an alias image",)
         for label, text in shapes.items():
             with self.subTest(label):
                 run = FakeRun([0])
@@ -1736,6 +1796,103 @@ class ImageVerificationTests(unittest.TestCase):
             compose_of(service_block("side", f"docker.io/library/mysql@sha256:{'d' * 64}"))
         )
 
+    def test_a_hidden_top_level_key_is_refused_not_skipped(self):
+        """compose.yml alone, ordinary pin service: only the hidden line is wrong."""
+        for label, text in HIDDEN_AT_COLUMN_ZERO.items():
+            with self.subTest(label):
+                run = FakeRun([0])
+                message = self.assert_refused(text, run)
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+
+    def test_a_services_line_that_is_not_alone_is_refused_whatever_the_override_holds(self):
+        """The pin is read from compose.yml itself; a block pin in the override
+        cannot vouch for a flow-style compose.yml."""
+        for label, text in {
+            "flow services": FLOW_SERVICES,
+            "whole JSON": HIDDEN_AT_COLUMN_ZERO["a JSON document"],
+            "a flow tail with a live pin elsewhere": "services: {}\nx-pin: ${IMAGE}\n",
+        }.items():
+            with self.subTest(label):
+                run = FakeRun([0])
+                message = self.assert_refused(text, run, override=compose_of())
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+
+    def test_a_pin_found_only_in_the_override_is_not_a_pin(self):
+        message = self.assert_refused(
+            "services:\n"
+            + service_block("side", EXPORTER, "    environment:\n      A: ${IMAGE}\n"),
+            override=compose_of(),
+        )
+        self.assertIn("no service whose `image:` is the pin", message)
+
+    def test_an_override_service_with_an_unclassifiable_field_is_refused(self):
+        """The override may omit an image, so it is the path that reaches the pin
+        service's own image."""
+        for label, text in HIDDEN_IN_SERVICES.items():
+            with self.subTest(label):
+                run = FakeRun([0])
+                message = self.assert_refused(compose_of(), run, override=text)
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+
+    def test_a_base_service_with_an_unclassifiable_field_is_refused(self):
+        for label, text in HIDDEN_IN_SERVICES.items():
+            with self.subTest(label):
+                run = FakeRun([0])
+                if text.startswith("services: "):
+                    # Keep ${IMAGE} on a live line so the wiring check passes first.
+                    text += "x-pin: ${IMAGE}\n"
+                else:
+                    shape = text.partition("\n")[2].replace("  app:", "  extra:", 1)
+                    text = "services:\n" + service_block("app", "${IMAGE}") + shape
+                message = self.assert_refused(text, run)
+                self.assertEqual(run.calls, [])
+                self.assertIn("cannot account for every image", message)
+
+    def test_the_allowed_top_level_keys_are_read_and_do_not_refuse(self):
+        text = (
+            "name: edge\nversion: '3'\nx-shared: &shared\n  a: b\n"
+            "networks:\n  n: {}\nvolumes:\n  v: {}\nsecrets:\n  s:\n    file: /x\n"
+            "configs:\n  c:\n    file: /x\n" + compose_of()
+        )
+        self.write(text)
+        self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
+
+    def test_a_dot_env_file_beside_the_compose_file_is_refused(self):
+        self.write(compose_of())
+        self.write("COMPOSE_FILE=evil.yml\n", ".env")
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(ALLOWED_PIN, FakeRun([0]))
+        self.assertIn(".env", str(raised.exception))
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_a_port_on_a_dockerhub_namespace_is_another_registry(self):
+        other = f"prom:5000/mysqld-exporter:v0.20.0@sha256:{'c' * 64}"
+        message = self.assert_refused(compose_of(service_block("side", other)))
+        self.assertIn("allowance", message)
+        run = FakeRun([0])
+        self.write(compose_of())
+        with self.assertRaises(bd.DeployError):
+            self.deploy(other, run)
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_a_port_is_a_spelling_only_on_a_registry_host(self):
+        for image, name in {
+            f"ghcr.io:443/branchleft/ghost-tenant:v1@sha256:{DIGEST}": (
+                "ghcr.io/branchleft/ghost-tenant"
+            ),
+            f"localhost:5000/x/y@sha256:{DIGEST}": "localhost/x/y",
+            f"prom:5000/mysqld-exporter@sha256:{DIGEST}": "prom:5000/mysqld-exporter",
+            f"prom/mysqld-exporter:v1@sha256:{DIGEST}": "prom/mysqld-exporter",
+            f"mysql:8.0.43@sha256:{DIGEST}": "mysql",
+        }.items():
+            with self.subTest(image=image):
+                self.assertEqual(bd.attested_name(image), name)
+
     def test_service_images_maps_each_service_to_its_raw_value(self):
         text = compose_of(
             "  bare:\n    restart: always\n",
@@ -1745,6 +1902,159 @@ class ImageVerificationTests(unittest.TestCase):
             bd.service_images(text),
             {"app": "${IMAGE}", "bare": None, "side": f"'{EXPORTER}'"},
         )
+
+
+YAML_ALLOWED_TOP_LEVEL = frozenset(
+    {"services", "networks", "volumes", "secrets", "configs", "name", "version"}
+)
+YAML_UNREAD_SERVICE_KEYS = frozenset({"build", "extends", "provider"})
+
+
+def reader_outcome(text):
+    try:
+        return bd.service_images(text)
+    except bd.ComposeParseError:
+        return None
+
+
+def yaml_disagreement(text):
+    """Why this reader and PyYAML read `text` differently, or None.
+
+    PyYAML stands in for Compose's own parser (YAML 1.1 anchors, merge keys,
+    escapes). The reader may refuse anything. What it may not do is accept text
+    from which PyYAML reads an image, an include, or a service the reader did
+    not report. Text PyYAML cannot parse is skipped: Compose would not start.
+    """
+    seen = reader_outcome(text)
+    if seen is None:
+        return None
+    try:
+        loaded = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+    if loaded is None:
+        loaded = {}
+    if not isinstance(loaded, dict):
+        return f"PyYAML reads a {type(loaded).__name__} at the top level"
+    for key in loaded:
+        if key not in YAML_ALLOWED_TOP_LEVEL and not str(key).startswith("x-"):
+            return f"PyYAML reads the top-level key {key!r}"
+    services = loaded.get("services") or {}
+    if not isinstance(services, dict):
+        return f"PyYAML reads services as a {type(services).__name__}"
+    if set(services) != set(seen):
+        return f"services differ: PyYAML {sorted(map(str, services))}, reader {sorted(seen)}"
+    for name, service in services.items():
+        if service is None:
+            service = {}
+        if not isinstance(service, dict):
+            return f"PyYAML reads service {name!r} as a {type(service).__name__}"
+        if YAML_UNREAD_SERVICE_KEYS & set(service):
+            return f"PyYAML reads {sorted(YAML_UNREAD_SERVICE_KEYS & set(service))} on {name!r}"
+        if "image" in service:
+            wanted = "" if service["image"] is None else str(service["image"])
+        else:
+            wanted = None
+        got = None if seen[name] is None else bd._unquoted(seen[name])
+        if wanted != got:
+            return f"image of {name!r}: PyYAML {wanted!r}, reader {got!r}"
+    return None
+
+
+# Lines a hostile compose file might carry, tried at random positions and
+# indents. Most make the file unparsable or are refused; the property under test
+# is only that the reader never accepts what PyYAML reads differently.
+HOSTILE_LINES = (
+    "include: [evil.yml]",
+    '"inc\\x6cude": [evil.yml]',
+    "? include",
+    ": [evil.yml]",
+    "<<: *a",
+    "x-a: &a",
+    f"image: {EVIL}",
+    f'"im\\x61ge": {EVIL}',
+    f"'image': {EVIL}",
+    "extends:",
+    "  file: evil.yml",
+    "build: .",
+    "provider:",
+    "models:",
+    "services: {web: {image: x}}",
+    "- a",
+    "---",
+    f"{{image: {EVIL}}}",
+    "web: {image: x}",
+    "web:",
+    "image:",
+    f"  {EVIL}",
+    "restart: always",
+    "name: x",
+    "x-b: 1",
+    "﻿include: [evil.yml]",
+)
+
+
+class ReaderAgainstYamlTests(unittest.TestCase):
+    """The hand-written reader is held to a real YAML parser in CI.
+
+    The deploy program itself stays stdlib-only: nothing installs PyYAML for the
+    host's system python3 (ansible-core's copy lives in its own environment), and
+    a deploy gate that failed to import would stop every deploy.
+    """
+
+    def test_the_hidden_shapes_are_real_and_the_reader_refuses_each(self):
+        every = {**HIDDEN_AT_COLUMN_ZERO, **HIDDEN_IN_SERVICES}
+        for label, text in every.items():
+            with self.subTest(label):
+                self.assertIsNone(reader_outcome(text))
+                self.assertIsNone(yaml_disagreement(text))
+
+    def test_pyyaml_really_reads_an_include_or_an_unverified_image_in_those_shapes(self):
+        """Guards the corpus: a typo that made a shape harmless would pass above."""
+        for label in (
+            "an escaped include key",
+            "a complex include key",
+            "a byte order mark before include",
+            "a root merge key",
+            "a plain include",
+        ):
+            with self.subTest(label):
+                loaded = yaml.safe_load(HIDDEN_AT_COLUMN_ZERO[label])
+                self.assertEqual(list(loaded["include"]), ["evil.yml"])
+        flow = yaml.safe_load(FLOW_SERVICES)
+        self.assertEqual(flow["services"]["evil"]["image"], EVIL)
+        for label, key in (
+            ("an escaped image key at indent 6", "image"),
+            ("extends at indent 6", "extends"),
+            ("build at indent 6", "build"),
+        ):
+            with self.subTest(label):
+                loaded = yaml.safe_load(HIDDEN_IN_SERVICES[label])
+                self.assertIn(key, loaded["services"]["app"])
+
+    def test_a_generated_sample_never_splits_the_reader_from_pyyaml(self):
+        rng = random.Random(702)
+        base = compose_of(service_block("side", EXPORTER)).splitlines()
+        parsed_and_accepted = parsed_and_refused = 0
+        for _ in range(4000):
+            lines = list(base)
+            for _ in range(rng.randint(1, 3)):
+                snippet = rng.choice(HOSTILE_LINES)
+                indent = " " * rng.choice((0, 0, 1, 2, 2, 3, 4, 4, 5, 6, 8))
+                lines.insert(rng.randrange(len(lines) + 1), indent + snippet)
+            text = "\n".join(lines) + "\n"
+            self.assertIsNone(yaml_disagreement(text), text)
+            try:
+                yaml.safe_load(text)
+            except yaml.YAMLError:
+                continue
+            if reader_outcome(text) is None:
+                parsed_and_refused += 1
+            else:
+                parsed_and_accepted += 1
+        # Both sides are exercised, so the property is not vacuously true.
+        self.assertGreater(parsed_and_refused, 100)
+        self.assertGreater(parsed_and_accepted, 100)
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]

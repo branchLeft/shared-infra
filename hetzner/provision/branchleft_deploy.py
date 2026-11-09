@@ -137,6 +137,11 @@ def attested_name(image: str) -> str:
     same register entry as `name@sha256:...` and cannot skip verification.
     """
     first, slash, rest = image.partition("@")[0].partition("/")
+    # A port is a spelling only on a registry host (a dotted name or localhost). On
+    # a Docker Hub namespace such as `prom`, `prom:5000/x` is another registry
+    # named `prom`, so the port stays in the name and matches no table entry.
+    if slash and ":" in first and "." not in first and first.partition(":")[0] != "localhost":
+        return first + slash + rest.partition(":")[0]
     return first.partition(":")[0] + slash + rest.partition(":")[0]
 
 
@@ -485,14 +490,33 @@ def health_signal_gaps(stack: str, compose_text: str) -> tuple[list[str], list[s
 # Merged over compose.yml by Compose whenever it exists, so it is read as well.
 COMPOSE_OVERRIDE = "compose.override.yml"
 
-# Files Compose would read in place of, or on top of, the two above. Their
-# presence is refused: this program would be reading the wrong file.
+# Files Compose would read in place of, on top of, or alongside the two above
+# (`.env` can set COMPOSE_FILE and COMPOSE_PROFILES). Their presence is refused:
+# this program would be reading the wrong file.
 UNREAD_COMPOSE_FILES = (
     "compose.yaml",
     "compose.override.yaml",
     "docker-compose.override.yml",
     "docker-compose.override.yaml",
+    ".env",
 )
+
+# The only keys Compose accepts at column 0 that cannot name an image. Anything
+# else at column 0 (`include`, `models`, an escaped or complex spelling, a merge
+# key, a flow or JSON document, a stray list item) is refused, not skipped.
+_ALLOWED_TOP_LEVEL = re.compile(
+    r"\A(?P<key>services|networks|volumes|secrets|configs|name|version"
+    r"|x-[A-Za-z0-9_.-]+):(?:\s.*)?\Z"
+)
+
+# `services:` must end its line: a flow mapping or an anchor on it is a shape
+# this reader does not follow.
+_SERVICES_LINE = re.compile(r"\Aservices:\Z")
+
+# Characters that make this reader and a YAML parser disagree about where a line
+# or a document starts: C0 controls other than tab and the newline pair, the
+# next-line and separator characters YAML counts as breaks, and a byte order mark.
+_UNREADABLE_CHARS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x85  ﻿]")
 
 _FIELD_INDENT = 4
 
@@ -509,33 +533,49 @@ _IMAGE_KEY_ELSEWHERE = re.compile(r"""(?:\A|[\s{,\[])["']?image["']?\s*:""")
 _MERGE_KEY = re.compile(r"\A\s*<<\s*:")
 
 # A service keyed this way gets its image from somewhere this program does not read.
-_UNREAD_SERVICE_KEYS = frozenset({"build", "extends"})
+_UNREAD_SERVICE_KEYS = frozenset({"build", "extends", "provider"})
 
 
 def service_images(compose_text: str) -> dict[str, str | None]:
     """Every service under `services:`, mapped to its raw `image:` value or None.
 
-    Raises `ComposeParseError` for any shape that could hide an image from this
-    reader. See branchleft_deploy.md, "verify_compose_images".
+    A strict line grammar, not a YAML parser: every line is either placed by a
+    rule or refused. Raises `ComposeParseError` for any line it cannot place.
+    See branchleft_deploy.md, "verify_compose_images".
     """
+    if _UNREADABLE_CHARS.search(compose_text):
+        raise ComposeParseError("it holds a control, line-separator or byte-order-mark character")
     images: dict[str, str | None] = {}
+    seen_top_level: set[str] = set()
     current: str | None = None
     in_services = False
-    for raw in strip_yaml_comments(compose_text).splitlines():
-        if not raw.strip():
+    awaiting_first_field = False
+    after_image = False
+    for stripped in strip_yaml_comments(compose_text).splitlines():
+        raw = stripped.rstrip()
+        if not raw:
             continue
-        if raw.startswith(("---", "...")):
-            raise ComposeParseError(f"{raw!r} starts another YAML document")
-        top_level = _TOP_LEVEL_KEY.match(raw)
-        if top_level:
-            if top_level.group("key") == "include":
-                raise ComposeParseError("`include:` brings in files this program does not read")
-            in_services = top_level.group("key") == "services"
+        if not raw.startswith(" "):
+            top_level = _ALLOWED_TOP_LEVEL.match(raw)
+            if top_level is None:
+                raise ComposeParseError(
+                    f"cannot place {raw!r} at column 0: only services, networks, volumes, "
+                    "secrets, configs, name, version and x-* keys may start a line"
+                )
+            key = top_level.group("key")
+            if key in seen_top_level:
+                raise ComposeParseError(f"`{key}:` appears twice at column 0")
+            seen_top_level.add(key)
+            in_services = key == "services"
+            if in_services and not _SERVICES_LINE.match(raw):
+                raise ComposeParseError(f"{raw!r}: `services:` must be alone on its line")
             current = None
             continue
         if not in_services:
             continue
         indent = len(raw) - len(raw.lstrip(" "))
+        if raw.lstrip(" ").startswith("\t"):
+            raise ComposeParseError(f"{raw!r} is indented with a tab")
         if indent <= _SERVICE_INDENT:
             header = _SERVICE_HEADER.match(raw)
             if header is None or header.group(1) in images:
@@ -545,10 +585,23 @@ def service_images(compose_text: str) -> dict[str, str | None]:
                 )
             current = header.group(1)
             images[current] = None
+            awaiting_first_field = True
+            after_image = False
             continue
         if current is None or indent < _FIELD_INDENT or _MERGE_KEY.match(raw):
             raise ComposeParseError(f"cannot place {raw!r} under a service")
+        if awaiting_first_field and indent != _FIELD_INDENT:
+            raise ComposeParseError(
+                f"{raw!r} is the first key of service {current!r} and does not sit at "
+                f"{_FIELD_INDENT} spaces, so the keys after it cannot be told apart"
+            )
+        awaiting_first_field = False
         if indent > _FIELD_INDENT:
+            if after_image:
+                raise ComposeParseError(
+                    f"{raw!r} continues the `image:` of service {current!r}; an image "
+                    "must be a one-line value"
+                )
             if _IMAGE_KEY_ELSEWHERE.search(raw):
                 raise ComposeParseError(f"{raw!r} names an image below a service's own keys")
             continue
@@ -561,7 +614,8 @@ def service_images(compose_text: str) -> dict[str, str | None]:
                 f"service {current!r} uses `{key}:`, so its image is not one this "
                 "program can verify"
             )
-        if key == "image":
+        after_image = key == "image"
+        if after_image:
             if images[current] is not None:
                 raise ComposeParseError(f"service {current!r} sets `image:` twice")
             images[current] = field.group("value").strip()
@@ -606,7 +660,7 @@ def verify_compose_images(
 
     pin_seen = False
     pending: list[tuple[str, str, str]] = []
-    for path, text, every_service_needs_an_image in sources:
+    for path, text, is_base in sources:
         try:
             services = service_images(text)
         except ComposeParseError as error:
@@ -616,12 +670,14 @@ def verify_compose_images(
             ) from None
         for service, value in services.items():
             if value is None:
-                if every_service_needs_an_image:
+                if is_base:
                     raise DeployError(f"{path}: service {service!r} names no `image:`")
                 continue
             reference = _unquoted(value)
             if IMAGE_PIN_REFERENCE.fullmatch(reference):
-                pin_seen = True
+                # Only compose.yml's own pin counts: an override may restate it,
+                # but the file the pin check read must be the one that takes it.
+                pin_seen = pin_seen or is_base
             elif "$" in reference:
                 raise DeployError(
                     f"{path}: service {service!r} image {reference!r} is interpolated, and "

@@ -283,16 +283,47 @@ What each `image:` must be, one of:
   reproducing Compose's substitution here would be a second, drifting reader. The
   committed stacks write sidecar digests as literals for this reason.
 
-Fail closed: the reader is a regex over indentation, like the health reader, but
-where that one warns on a shape it cannot classify, this one refuses, because a
-shape it cannot read is an image it cannot see. It refuses a `build:` or
-`extends:` key (an image built on the host has no digest to attest), a top-level
-`include:`, a YAML merge key, an anchor on a service header, a second document, a
-repeated service or `image:` key, an `image` key below a service's own keys, a
-base service with no `image:`, and an override that cannot be read. It also
-refuses when `compose.yaml` or one of the other override spellings exists beside
-`compose.yml`, since Compose would read a file this program does not. Every file
-is read and every reference checked for shape before the first verifier runs.
+Fail closed: the reader is a strict line grammar, not a YAML parser, and every
+line is either placed by a rule or refused. Where the health reader warns on a
+shape it cannot classify, this one refuses, because a shape it cannot read is an
+image it cannot see. The rules:
+
+- A line at column 0 must start `services`, `networks`, `volumes`, `secrets`,
+  `configs`, `name`, `version` or `x-*`, each once. Anything else is refused,
+  including `include`, `models`, an escaped or complex spelling of a key, a merge
+  key, a list item, a flow or JSON document and a second document.
+- `services:` ends its line. The pin must be a service of `compose.yml` itself;
+  a pin in the override does not count.
+- A service header is a bare two-space `  name:`. Its first key sits at four
+  spaces and every service key is a plain or simply quoted word at four spaces,
+  in the override as in the base file. A deeper line is never a service key.
+- An `image:` is one line. A deeper line directly after it, a second `image:`,
+  or an `image` key below the service's own keys is refused.
+- `build:`, `extends:` and `provider:` are refused (an image built on the host
+  has no digest to attest), as is a service with no `image:` in the base file.
+- A control character, a line-separator character, a byte order mark, a tab
+  indent, an unreadable override, and any of `compose.yaml`, the other override
+  spellings or a `.env` beside `compose.yml` are refused: this program and
+  Compose would otherwise read different files.
+
+Every file is read and every reference checked for shape before the first
+verifier runs.
+
+**Why not a YAML parser.** The program is stdlib-only and runs under the system
+`python3`. Nothing in the repository installs PyYAML for that interpreter:
+ansible-core depends on it, but from its own environment, and the one role that
+assumes it on a host says so as a requirement. A deploy gate that failed to import
+would stop every deploy. So the reader is strict instead, and
+`ReaderAgainstYamlTests` holds it to PyYAML in CI: for the hostile shapes and a
+seeded generated sample, it may refuse anything, but it may not accept text from
+which PyYAML reads a service, an `image`, an `include` or a top-level key the
+reader did not report. PyYAML stands in for Compose's parser; it is not Compose.
+
+**Registry port.** A port is a spelling only on a registry host, a dotted name or
+`localhost`. On a Docker Hub namespace, `prom:5000/mysqld-exporter` is another
+registry named `prom`, so the port stays in the name and matches no table entry.
+The allowance remains keyed by name, not digest, so that it keeps the register's
+table shape and a routine digest bump needs no edit here.
 
 A rollback restore is still not re-verified (above). The allowance table is shared
 by deploy images and sidecars on purpose: one owner-visible list of the gap, and the
@@ -300,8 +331,12 @@ go-live check that it is empty covers both. Registering a sidecar later is the s
 move as for a deploy image: attest it where it is built, add it to `ATTESTED_IMAGES`.
 
 Not covered: a `COMPOSE_FILE` or `COMPOSE_PROFILES` set in
-`/etc/branchleft/<stack>.env` (a root-owned file nothing here writes), and what a
-Compose file's image does once running.
+`/etc/branchleft/<stack>.env` (a root-owned file nothing here writes); what a
+Compose file's image does once running; and the gap between this read and the
+unit's own. The files are read here, and `docker compose up` reads them again at
+start. They are root-owned, so closing the gap needs a second writer. It could
+be closed by having the unit start from the bytes checked (a private copy passed
+with `-f`), which changes the unit and the sudoers surface and so is not done here.
 
 ### The verifier runs with no credential
 
