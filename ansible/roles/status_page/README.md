@@ -128,7 +128,19 @@ that host under the gated pull and after `control_plane`, and in `ansible/checks
 The order is the control: the page is published on the private address, and the DOCKER-USER
 drop that confines that port to the gateway is installed by the last tasks of `control_plane`,
 so a run that stops in `control_plane` never reaches the bind. `tests/unit/test_status_page_order.py`
-fails if the page is moved before it. A merge to `main`
+fails if the page is moved before it.
+
+The order alone is not enough, because `control_plane` restarts the firewall policy only when the
+policy script or its unit changed. After a restart that failed, the next run sees no change, passes
+`control_plane`, and would bind with the drop not loaded. So, when the listen address is the private
+one, the role first reads the live chain with `iptables -w 10 -t filter -C DOCKER-USER` for the exact
+rule the policy script inserts for the page's port (TCP, conntrack original destination, every source
+but the gateway dropped) and stops the play, before it writes anything, if the rule is absent. The
+read changes nothing and reports no change. In a plan the refusal cannot fire (the first plan runs
+before `control_plane` has loaded the rule), so a plan prints that the apply would refuse instead
+(ANS-10). Loopback needs no drop and skips the check. To see it red, remove the refusal task:
+`tests/unit/test_status_page_drop_guard.py` fails, and it also fails if the rule drifts from the
+one in `hetzner/provision/branchleft_docker_user_policy.sh`. A merge to `main`
 queues the gated apply, which waits for the owner's approval. After the apply, the page is
 reached at its public hostname through edge1 (the private bind on ops1 is what edge1 uses),
 and still through an SSH tunnel to the loopback port. The TEST target is stopped and started
