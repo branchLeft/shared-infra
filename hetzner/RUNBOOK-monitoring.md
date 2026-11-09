@@ -785,6 +785,17 @@ On the Healthchecks.io side: the check named in the PR's handover steps
 should show "Last ping" within the last couple of minutes and never move to
 "Late" or "Down" while the stack is healthy.
 
+**Sizing the check.** The ping period is the `repeat_interval` of the Watchdog
+route in the rendered Alertmanager config (`1m` at the time of writing, in
+`render.ts` and `stack/alertmanager/alertmanager.yml.tmpl`; the render tests
+fail above 5 minutes). Set the check's period to that same value. Set its grace
+to a margin above the period: grace must exceed the longest gap between pings
+seen in the check's ping log while the stack is healthy, so read that log
+before fixing the grace. Suggestion, not verified: a grace of 3 times the
+period as the starting point. The ping URL is a secret: it lives only in the
+host's monitoring env file and the rendered `alertmanager.yml`, which is
+gitignored and mode 0600. Never paste it into a ticket, a log or a chat.
+
 ## 12. The proof standard
 
 A `200`/`204` proves an HTTP endpoint answered, not that an alert reaches a
