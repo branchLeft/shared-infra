@@ -19,6 +19,7 @@ from ruamel.yaml.error import YAMLError
 ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = Path("ansible/checks/hand_installers.yml")
 REASONS = ("stays-as-code", "pending-role")
+PENDING_ROLE = "pending-role"
 ROLE = re.compile(r"[a-z][a-z0-9_]*")
 PRUNED = frozenset((".git", "node_modules"))
 
@@ -60,6 +61,19 @@ def check(root: Path) -> list[str]:
     return findings
 
 
+def unknown_roles(root: Path) -> list[str]:
+    """Return one finding per pending-role entry whose role is no directory under ansible/roles."""
+    document = YAML(typ="safe").load((root / ALLOWLIST).read_text(encoding="utf-8")) or {}
+    findings: list[str] = []
+    for name, entry in sorted(document.items()):
+        if not isinstance(entry, dict) or entry.get("reason") != PENDING_ROLE:
+            continue
+        role = entry.get("role")
+        if isinstance(role, str) and not (root / "ansible" / "roles" / role).is_dir():
+            findings.append(f"{name}: role {role} is not a directory in ansible/roles/")
+    return findings
+
+
 def _entry_findings(name: str, entry: object) -> list[str]:
     if not isinstance(entry, dict):
         return [f"{name}: the entry must be a mapping with a reason"]
@@ -79,6 +93,9 @@ def _entry_findings(name: str, entry: object) -> list[str]:
 class RealTree(unittest.TestCase):
     def test_every_hand_installer_is_listed_with_a_reason(self) -> None:
         self.assertEqual(check(ROOT), [])
+
+    def test_every_pending_role_is_a_role_in_the_tree(self) -> None:
+        self.assertEqual(unknown_roles(ROOT), [])
 
     def test_the_scan_reaches_nested_and_mail_scripts(self) -> None:
         found = installers(ROOT)
