@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Unit tests for branchleft_nat.sh.
+"""Unit tests for the NAT gateway reconciler, branchleft_nat.py in the egress_nat role.
+
+The suite was written for the bash program it replaced and is kept as its specification: every
+case runs the program as a subprocess, with the same fakes and the same expectations.
 
 The script writes forwarding rules on the host that terminates public traffic,
 so the return-path rule and the refusal on a private default route are
@@ -12,13 +15,16 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
 from runbook_sections import runbook_section
 
-SCRIPT = os.path.join(os.path.dirname(__file__), "branchleft_nat.sh")
-UNIT = os.path.join(os.path.dirname(__file__), "branchleft-nat.service")
+HERE = os.path.dirname(__file__)
+ROLE_FILES = os.path.normpath(os.path.join(HERE, "..", "..", "ansible", "roles", "egress_nat", "files"))
+SCRIPT = os.path.join(ROLE_FILES, "branchleft_nat.py")
+UNIT = os.path.join(ROLE_FILES, "branchleft-nat.service")
 RUNBOOK = os.path.join(
     os.path.dirname(__file__), "..", "RUNBOOK-provision-host.md"
 )
@@ -120,7 +126,7 @@ class NatGatewayTests(unittest.TestCase):
         if subnet is not None:
             env["BRANCHLEFT_NAT_SUBNET"] = subnet
         return subprocess.run(
-            ["bash", SCRIPT],
+            [sys.executable, SCRIPT],
             env=env,
             capture_output=True,
             text=True,
