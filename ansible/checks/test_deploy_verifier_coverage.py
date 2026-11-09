@@ -191,9 +191,11 @@ class VerifierCoverageTests(unittest.TestCase):
             for path in (ROLES / VERIFIER_ROLE).rglob("branchleft-verify-image*")
         )
         self.assertEqual(copies, ["files/branchleft-verify-image.py"])
-        first_line = (ROLES / VERIFIER_ROLE / "files" / "branchleft-verify-image.py").read_text(
-            encoding="utf-8"
-        ).splitlines()[0]
+        first_line = (
+            (ROLES / VERIFIER_ROLE / "files" / "branchleft-verify-image.py")
+            .read_text(encoding="utf-8")
+            .splitlines()[0]
+        )
         self.assertEqual(first_line, "#!/usr/bin/python3 -I")
 
     def test_the_role_copies_the_verifier_from_its_own_files(self) -> None:
