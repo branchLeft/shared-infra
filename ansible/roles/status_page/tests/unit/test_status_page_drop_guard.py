@@ -3,13 +3,14 @@
 The playbook order puts the role after control_plane, but control_plane restarts the firewall
 policy only when its files changed, so a re-run after a failed restart finds no change and
 reaches the bind with the port's DOCKER-USER drop not loaded. The role therefore reads the live
-chain for the exact rule the policy script inserts and stops, before it writes anything, when
-the rule is absent. These tests read the role's tasks, its constants and the policy script, and
-fail when the guard is removed, weakened, moved after the bind, or drifts from the script's rule.
+chain for the exact rule the host's isolation policy inserts and stops, before it writes
+anything, when the rule is absent. These tests read the role's tasks and its constants, and fail
+when the guard is removed, weakened, moved after the bind, or changes the rule it looks for. The
+rule is pinned here as a literal. That literal is the role's own copy of the contract; the policy
+side compares itself to the role's rule in that policy's own test.
 """
 
 import re
-import shlex
 import unittest
 from pathlib import Path
 from typing import Any
@@ -18,18 +19,27 @@ import yaml
 
 ROLE = Path(__file__).resolve().parents[2]
 TASKS = ROLE / "tasks" / "main.yml"
-POLICY_SCRIPT = ROLE.parent / "control_plane" / "files" / "branchleft_docker_user_policy.sh"
+PINNED_MATCH = [
+    "-p",
+    "tcp",
+    "-m",
+    "conntrack",
+    "--ctorigdst",
+    "10.20.1.50",
+    "--ctorigdstport",
+    "8303",
+    "!",
+    "-s",
+    "10.20.1.10",
+    "-j",
+    "DROP",
+]
 READ_DROP = "Read the live DOCKER-USER chain for the rule that confines the page's port"
 REFUSE_BIND = "Refuse to bind the private address while its DOCKER-USER drop is not loaded"
 REPORT_BIND = "Report in a plan that the private bind would be refused"
 FIRST_WRITE = "Create the project directory"
 BRING_UP = "Bring up the stack"
 LOOPBACK_TEST = "status_page_listen_address != '127.0.0.1'"
-SCRIPT_RULE = re.compile(
-    r"^\s*ensure_rule_at iptables 2 filter DOCKER-USER (-p tcp .*--ctorigdstport .*)$",
-    re.MULTILINE,
-)
-SCRIPT_DEFAULT = r'^{name}="\${{[A-Z_]+:-([^}}]+)}}"$'
 VARIABLE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
 _CASE = unittest.TestCase()
 
@@ -58,33 +68,12 @@ def _constants() -> dict[str, Any]:
     return values
 
 
-def _script_default(name: str) -> str:
-    """The default the policy script gives a variable of that name."""
-    pattern = re.compile(SCRIPT_DEFAULT.format(name=name), re.MULTILINE)
-    found = pattern.findall(POLICY_SCRIPT.read_text(encoding="utf-8"))
-    _CASE.assertEqual(len(found), 1, f"defaults of {name} in the policy script")
-    return str(found[0])
-
-
 def _role_match() -> list[str]:
     """The role's -C arguments after the chain name, with the role's constants filled in."""
     argv = [str(item) for item in _task(READ_DROP)["ansible.builtin.command"]["argv"]]
     values = _constants()
     rendered = [VARIABLE.sub(lambda m: str(values[m.group(1)]), item) for item in argv]
     return rendered[rendered.index("DOCKER-USER") + 1 :]
-
-
-def _script_match() -> list[str]:
-    """The match the policy script inserts for a protected port, with its defaults filled in."""
-    found = SCRIPT_RULE.findall(POLICY_SCRIPT.read_text(encoding="utf-8"))
-    _CASE.assertEqual(len(found), 1, "protected-port rules in the policy script")
-    port = _script_default("PROTECTED_PORTS").split()[-1]
-    substitutions = {
-        "$PROTECTED_ADDRESS": _script_default("PROTECTED_ADDRESS"),
-        "$port": port,
-        "$GATEWAY_PRIVATE_IP": _script_default("GATEWAY_PRIVATE_IP"),
-    }
-    return [substitutions.get(word, word) for word in shlex.split(found[0])]
 
 
 def _conditions(task: dict[str, Any]) -> list[str]:
@@ -110,19 +99,11 @@ class StatusPageDropGuardTest(unittest.TestCase):
         self.assertIn(LOOPBACK_TEST, _conditions(task))
         self.assertEqual(task["register"], "status_page_drop")
 
-    # The rule the guard looks for is the rule the script inserts, word for word: the same
+    # The rule the guard looks for is the rule the host's policy inserts, word for word: the same
     # protocol, the same conntrack original destination and port, the same gateway exception
-    # and the same target. A change to either side alone fails here.
-    def test_the_guard_looks_for_the_exact_rule_the_policy_script_inserts(self) -> None:
-        self.assertEqual(_role_match(), _script_match())
-
-    def test_the_role_constants_equal_the_script_defaults(self) -> None:
-        values = _constants()
-        self.assertEqual(values["status_page_listen_address"], _script_default("PROTECTED_ADDRESS"))
-        self.assertEqual(
-            values["status_page_gateway_address"], _script_default("GATEWAY_PRIVATE_IP")
-        )
-        self.assertIn(str(values["status_page_port"]), _script_default("PROTECTED_PORTS").split())
+    # and the same target. A change to the role's side alone fails here.
+    def test_the_guard_looks_for_the_pinned_rule(self) -> None:
+        self.assertEqual(_role_match(), PINNED_MATCH)
 
     # The refusal fails the play, names what is missing and what to do, and is skipped only for
     # loopback (nothing to guard) and in a plan (reported instead, so the first plan does not fail).

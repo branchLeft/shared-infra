@@ -5,10 +5,10 @@ reach it until the control-plane host's DOCKER-USER policy drops all but the gat
 port. That policy is installed by the last tasks of the control_plane role. The role order of
 ops1's playbook is therefore the control: the page must come after the role that installs the
 drop, so a run that stops part-way never leaves the port bound with no drop. These tests read
-the playbook, the control_plane tasks and the policy script, and fail when that order is lost.
+the playbook and the control_plane tasks, and fail when that order is lost. That the policy
+protects this role's port is held by the policy's own test.
 """
 
-import re
 import unittest
 from pathlib import Path
 from typing import Any
@@ -19,10 +19,8 @@ ROLE = Path(__file__).resolve().parents[2]
 ANSIBLE = ROLE.parents[1]
 PLAYBOOK = ANSIBLE / "playbooks" / "ops1.yml"
 CONTROL_PLANE = ANSIBLE / "roles" / "control_plane"
-POLICY_SCRIPT = CONTROL_PLANE / "files" / "branchleft_docker_user_policy.sh"
 INSTALL_RECONCILER = "Install the DOCKER-USER isolation reconciler"
 APPLY_POLICY = "Apply the isolation policy when its reconciler or its unit changed"
-PORTS_LINE = re.compile(r'^PROTECTED_PORTS="\$\{[A-Z_]+:-([0-9 ]+)\}"$', re.MULTILINE)
 
 
 def _roles() -> list[str]:
@@ -51,13 +49,6 @@ class StatusPageOrderTest(unittest.TestCase):
             "status_page binds its port on the private address; control_plane installs the "
             "DOCKER-USER drop for that port, so it must run first",
         )
-
-    # The order only helps if the role it waits for really installs the drop for this port.
-    def test_the_policy_the_control_plane_installs_protects_the_status_page_port(self) -> None:
-        constants = yaml.safe_load((ROLE / "vars" / "main.yml").read_text(encoding="utf-8"))
-        ports = PORTS_LINE.findall(POLICY_SCRIPT.read_text(encoding="utf-8"))
-        self.assertEqual(len(ports), 1, "the policy script's protected-ports line was not found")
-        self.assertIn(str(constants["status_page_port"]), ports[0].split())
 
     # The role must install the reconciler and restart its unit, in that order: without the
     # restart a changed reconciler is on disk and the rule is not yet loaded.

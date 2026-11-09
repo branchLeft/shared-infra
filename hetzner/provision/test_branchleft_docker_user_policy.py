@@ -8,6 +8,7 @@ matters: the ghost-platform-docs runbooks.
 """
 
 import os
+import re
 import stat
 import subprocess
 import tempfile
@@ -568,6 +569,39 @@ class DockerUserPolicyTests(unittest.TestCase):
             self.assertIn("status_page_port: 8303", handle.read())
         with open(SCRIPT, encoding="utf-8") as handle:
             self.assertIn(":-8300 8301 8302 8303}", handle.read())
+
+    def test_the_status_page_guard_looks_for_the_rule_this_script_inserts(self):
+        # The status_page role refuses to bind its address until the live chain carries
+        # this rule. The argv is read as text, with the role's constants filled in, because
+        # this suite has no YAML library. PORT_8303 is the rule the script is shown to
+        # insert by test_ops1_refuses_every_source_but_the_gateway_on_8300_to_8303.
+        role = os.path.join(os.path.dirname(__file__), "..", "..", "ansible", "roles", "status_page")
+
+        def read(*parts):
+            with open(os.path.join(role, *parts), encoding="utf-8") as handle:
+                return handle.read()
+
+        values = {}
+        for part in ("defaults", "vars"):
+            for name, value in re.findall(
+                r"^(status_page_\w+): (\S+)$", read(part, "main.yml"), re.MULTILINE
+            ):
+                values[name] = value.strip("'\"")
+        tasks = read("tasks", "main.yml")
+        words = []
+        past_chain = False
+        for line in tasks[tasks.index("- name: Read the live DOCKER-USER chain") :].splitlines():
+            item = re.fullmatch(r"\s+- (.+)", line)
+            if item is None:
+                continue
+            word = item.group(1).strip("'\"")
+            if not past_chain:
+                past_chain = word == "DOCKER-USER"
+                continue
+            words.append(re.sub(r"\{\{\s*(\w+)\s*\}\}", lambda m: values[m.group(1)], word))
+            if word == "DROP":
+                break
+        self.assertEqual(" ".join(words), self.PORT_8303)
 
     # -- Trap 4: self-identification, not a one-off env var, must decide it -
 

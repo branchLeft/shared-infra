@@ -127,8 +127,8 @@ export const sites: EdgeSite[] = [
   {
     // The public status page, served by the Gatus stack on ops1 (the
     // status_page role). Port 8303 must match that role's status_page_port
-    // and the DOCKER-USER protected ports in
-    // hetzner/provision/branchleft_docker_user_policy.sh: the three move together.
+    // and the DOCKER-USER protected ports of ops1's isolation policy (the drop
+    // that confines the port to the gateway): the three move together.
     // The DNS record for this hostname must be live before this entry is
     // applied: Caddy requests a certificate as soon as the block renders, and
     // a failed HTTP-01 validation costs the account's failure budget.

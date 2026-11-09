@@ -3,6 +3,12 @@
   hosts: all
   gather_facts: false
   vars:
+    # Every application of the role below is on loopback, as the converge is: the role's
+    # default is ops1's private address, where the role first requires the port's
+    # DOCKER-USER drop, which the container does not have. Without this, each case would stop
+    # at that guard and never reach the check it names, and the stamp would not match the
+    # converge's. The cases that name another address set it themselves, as a task variable.
+    status_page_listen_address: 127.0.0.1
     verify_dir: /opt/branchleft/status
     verify_state: /var/lib/status_page_standin
     verify_role_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}"
