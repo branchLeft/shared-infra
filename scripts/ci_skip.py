@@ -33,6 +33,7 @@ UNITS: dict[str, tuple[str, ...]] = {
     "edge-config-validate": ("hetzner/edge/",),
     "monitoring-config-validate": ("hetzner/monitoring/", "hetzner/RUNBOOK-monitoring.md"),
     "nextcloud1-config-validate": ("hetzner/nextcloud1/",),
+    "shim-image-starts": ("mail/provision/",),
     "control-plane-config-validate": (
         "hetzner/control-plane/",
         "hetzner/provision/stack_keys_check.py",

@@ -19,6 +19,16 @@ up a Python of its own. The base commit is fetched with one anonymous depth-1
 `git fetch` of that sha when the shallow checkout lacks it; the diff is two-point
 (`git diff --name-only -z --no-renames base head`). No credential is involved.
 
+## Which jobs may skip
+
+Seven check jobs are in `UNITS`: `mail-typecheck`, `mail-provision-checks`,
+`shim-image-starts`, `edge-config-validate`, `monitoring-config-validate`,
+`nextcloud1-config-validate` and `control-plane-config-validate`. Each job's
+entry lists every repository path it reads. `shim-image-starts` reads only
+`mail/provision/` (its script renders and starts the image from there), so it sits
+in `UNITS` with `mail/provision/`, not in `ALWAYS_RUN`. Every job reachable on
+`pull_request` or `merge_group` is in exactly one of the two sets.
+
 ## The rules, in order (every error resolves to `run=true`)
 
 1. The event is not `pull_request` or `merge_group` (a push to `main`, anything
@@ -38,7 +48,7 @@ up a Python of its own. The base commit is fetched with one anonymous depth-1
 
 ## What the workflow does with it
 
-Each of the six skippable jobs keeps its place and name, so every required check
+Each of the seven skippable jobs keeps its place and name, so every required check
 still reports and the ruleset is untouched. The step after Checkout is
 `uses: ./.github/actions/ci-skip` with `unit:` set to the job's own key, and every
 later step carries `if: steps.skip.outputs.run != 'false'` (a cleanup step
