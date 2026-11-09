@@ -1,0 +1,28 @@
+---
+# The cases are shared out between scenarios (edge_stack_verify_homes in verify.yml). A case
+# whose home is no scenario would be a case nobody runs, and it would pass silently, so this
+# fails first: the run is itself a home, and each home is a scenario directory beside this
+# one that has a molecule.yml and a verify.yml and does not leave the verify step out. The
+# files are read on the controller.
+- name: Assert this run is the home of some case
+  ansible.builtin.assert:
+    that:
+      - edge_stack_verify_part in edge_stack_verify_homes.values()
+    fail_msg: >-
+      This scenario ({{ edge_stack_verify_part }}) is the home of no case. The homes are
+      {{ edge_stack_verify_homes.values() | unique | list }}, so it would run no case.
+    quiet: true
+
+- name: Assert each home is a scenario that runs verify
+  ansible.builtin.assert:
+    that:
+      - lookup('ansible.builtin.fileglob', edge_stack_verify_scenarios_dir ~ '/' ~ item ~ '/molecule.yml', wantlist=true) | length == 1
+      - lookup('ansible.builtin.fileglob', edge_stack_verify_scenarios_dir ~ '/' ~ item ~ '/verify.yml', wantlist=true) | length == 1
+      - >-
+        not (lookup('ansible.builtin.file', edge_stack_verify_scenarios_dir ~ '/' ~ item ~ '/skip-steps.txt', errors='ignore')
+        | default('', true) | string | regex_search('(?m)^verify\s*$'))
+    fail_msg: 'The home {{ item }} has no molecule/{{ item }}/molecule.yml or verify.yml, or that scenario leaves the verify step out.'
+    quiet: true
+  loop: '{{ edge_stack_verify_homes.values() | unique | list }}'
+  vars:
+    edge_stack_verify_scenarios_dir: '{{ playbook_dir }}/..'
