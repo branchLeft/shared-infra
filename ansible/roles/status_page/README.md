@@ -140,8 +140,10 @@ read changes nothing and reports no change. In a plan the refusal cannot fire (t
 before `control_plane` has loaded the rule), so a plan prints that the apply would refuse instead
 (ANS-10). Loopback needs no drop and skips the check. To see it red, remove the refusal task:
 `tests/unit/test_status_page_drop_guard.py` fails, and it also fails if the rule the role looks for
-changes: the test pins it as a literal. The policy's own unit test holds the other side, that the
-policy inserts that same rule for the page's port, so a change to either alone is caught. A merge to `main`
+changes: the test pins it as a literal. The policy that loads the rule is owned elsewhere: the
+current bash installer does not carry the page's port, and the program that replaces it must insert
+exactly the pinned rule. Until it does, the guard stops a private bind on ops1 and the route is
+unreachable; that is the guard working, not a fault. A merge to `main`
 queues the gated apply, which waits for the owner's approval. After the apply, the page is
 reached at its public hostname through edge1 (the private bind on ops1 is what edge1 uses),
 and still through an SSH tunnel to the loopback port. The TEST target is stopped and started

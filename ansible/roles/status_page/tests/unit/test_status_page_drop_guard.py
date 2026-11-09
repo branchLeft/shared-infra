@@ -6,8 +6,8 @@ reaches the bind with the port's DOCKER-USER drop not loaded. The role therefore
 chain for the exact rule the host's isolation policy inserts and stops, before it writes
 anything, when the rule is absent. These tests read the role's tasks and its constants, and fail
 when the guard is removed, weakened, moved after the bind, or changes the rule it looks for. The
-rule is pinned here as a literal. That literal is the role's own copy of the contract; the policy
-side compares itself to the role's rule in that policy's own test.
+rule is pinned here as a literal. That literal is the role's own copy of the contract; the program
+that loads the rule must insert exactly it.
 """
 
 import re

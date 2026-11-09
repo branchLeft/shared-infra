@@ -6,7 +6,8 @@ port. That policy is installed by the last tasks of the control_plane role. The 
 ops1's playbook is therefore the control: the page must come after the role that installs the
 drop, so a run that stops part-way never leaves the port bound with no drop. These tests read
 the playbook and the control_plane tasks, and fail when that order is lost. That the policy
-protects this role's port is held by the policy's own test.
+protects this role's port is not tested here: the role's drop guard refuses the bind while the
+rule is absent.
 """
 
 import unittest

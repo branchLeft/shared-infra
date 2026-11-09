@@ -19,8 +19,8 @@ status_page_allowed_listen_addresses:
 
 # What the guard on the private bind reads: the DOCKER-USER rule that drops every source
 # but the gateway on the page's port. The gateway address is the isolation policy's default
-# gateway; tests/unit pins the rule as a literal and the policy's own test holds the other
-# side. The wait is in seconds, for the xtables lock that Docker holds while it edits its
+# gateway; tests/unit pins the rule as a literal, and the program that loads it must insert
+# exactly that rule. The wait is in seconds, for the xtables lock that Docker holds while it edits its
 # own rules.
 status_page_iptables: /usr/sbin/iptables
 status_page_gateway_address: 10.20.1.10

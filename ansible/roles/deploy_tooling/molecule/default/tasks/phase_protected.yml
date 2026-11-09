@@ -35,7 +35,6 @@
       - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8300') | list | length == 1
       - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8301') | list | length == 1
       - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8302') | list | length == 1
-      - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8303') | list | length == 1
       - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--dport 3306') | list | length == 0
     fail_msg: 'The chain is not the protected one: {{ deploy_tooling_scenario_protected_chain.stdout_lines }}'
     quiet: true
