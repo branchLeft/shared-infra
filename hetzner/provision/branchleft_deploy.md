@@ -216,18 +216,23 @@ under `branchLeft/ghost-platform`. The check runs `VERIFIER`, the host copy of
 ghost-platform's `scripts/verify-image-attestation.sh`, always with
 `--bundle-from-oci`, and any non-zero exit refuses the deploy.
 
-It fails closed. A missing verifier, an unknown digest, an unsigned image and
-an image signed by another workflow are all refused, and each refusal leaves
-the pin file and the running stack as they were. There is no argument,
-environment variable or stack setting that skips it. An image name outside the
-register is not verified here, so the other images on this host deploy as
-before.
+It is default deny and it fails closed. An image name that is not on the
+register is refused with a `DeployError` naming the image and the register; the
+verifier is not run for it and nothing is deployed unverified. A missing
+verifier, an unknown digest, an unsigned image and an image signed by another
+workflow are refused too, and each refusal leaves the pin file and the running
+stack as they were. There is no argument, environment variable or stack setting
+that skips it. Adding an image to deploy here is a reviewed change to
+`ATTESTED_IMAGES`, with the workflow that signs it.
 
-The register is looked up by registry host and path alone (`attested_name`). A
-tag or a registry port on the reference is a spelling, not another image: the
-host pulls the digest, so `name:tag@sha256:...` and `host:443/name@sha256:...`
-are verified exactly as `name@sha256:...` is, and the verifier is given the
-register name and the digest.
+The register is looked up by registry host and path alone (`attested_name`), as
+an exact match. A tag or a registry port on the reference is a spelling, not
+another image: the host pulls the digest, so `name:tag@sha256:...` and
+`host:443/name@sha256:...` are verified exactly as `name@sha256:...` is, and the
+verifier is given the register name and the digest. Nothing else is folded in:
+another registry host for the same path, an extra path component, or a name
+that only starts with a registered one (`ghost-tenant-evil`) is a different
+image, off the register, and refused.
 
 The rollback restore is not re-verified. It returns to the pin that last ran,
 and blocking it could leave the host with nothing running.
@@ -291,8 +296,8 @@ the gh release named in its `vars/main.yml`, with its tarball digest checked at
 download. The role is applied on `edge1`, `app1`, `ops1` and `db1`, before the
 first role that runs this wrapper. A host whose wrapper came from the hand-run
 `30-install-deploy-tooling.sh` and not from a role has no verifier until the
-role runs there. Such a host refuses every registered image and still deploys
-unregistered ones.
+role runs there. Such a host refuses every registered image, and refuses every
+other image too.
 
 ### Live checks, in order, after the apply
 

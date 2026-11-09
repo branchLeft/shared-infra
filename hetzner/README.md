@@ -431,9 +431,10 @@ Hetzner console and rescue system, not a password.
 
 ## Deploys
 
-A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`) is
-verified before the wrapper pins it. The verifier runs with no GitHub credential, and the design is
-fail-closed: a host with no credential refuses every registered deploy. The verifier and its pinned
+The wrapper deploys only a registered image (`ghcr.io/branchleft/ghost-tenant`,
+`ghcr.io/branchleft/portal-apps`), and verifies it before it pins it. An image name off the register
+is refused (default deny). The verifier runs with no GitHub credential, and the design is
+fail-closed: a host with no credential refuses every deploy. The verifier and its pinned
 gh come from the `deploy_verifier` role, applied on `edge1`, `app1`, `ops1` and `db1`. See
 `provision/branchleft_deploy.md`, "The verifier runs with no credential" and "Live checks, in order".
 

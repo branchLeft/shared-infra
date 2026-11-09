@@ -68,10 +68,11 @@ VERIFIER = "/usr/local/sbin/branchleft-verify-image"
 
 ATTESTED_REPO = "branchLeft/ghost-platform"
 
-# The register: each image this host verifies before it deploys, mapped to the
-# one workflow whose attestation it must carry. An image name absent from this
-# table is not verified here. Adding an image is a reviewed diff; an image it
-# lists is refused unless attested by exactly that workflow on refs/heads/main.
+# The register: each image this host deploys, mapped to the one workflow whose
+# attestation it must carry. Default deny: an image name absent from this table
+# is refused, never deployed unverified. Adding an image is a reviewed diff; an
+# image it lists is refused unless attested by exactly that workflow on
+# refs/heads/main.
 ATTESTED_IMAGES: dict[str, str] = {
     "ghcr.io/branchleft/ghost-tenant": f"{ATTESTED_REPO}/.github/workflows/registry-push.yml",
     "ghcr.io/branchleft/portal-apps": f"{ATTESTED_REPO}/.github/workflows/portal-apps-image.yml",
@@ -122,13 +123,16 @@ def attested_name(image: str) -> str:
     return first.partition(":")[0] + slash + rest.partition(":")[0]
 
 
-def verify_attestation(image: str, *, run=subprocess.run) -> bool:
-    """Verify a registered image's attestation before anything touches the host.
+def verify_attestation(image: str, *, run=subprocess.run) -> None:
+    """Verify an image's attestation before anything touches the host.
 
-    Returns False for an image outside the register, which is not verified here.
-    Raises DeployError when a registered image cannot be verified, for any
-    reason: refused, unknown digest, or the verifier missing. There is no
-    argument, environment variable or stack setting that skips this.
+    Default deny. Raises DeployError for an image name outside the register,
+    without running the verifier, and for a registered image that cannot be
+    verified, for any reason: refused, unknown digest, or the verifier missing.
+    Returns only when a registered image verified. The register is matched on
+    the exact name (`attested_name`), so a name that merely starts with a
+    registered one is outside it. There is no argument, environment variable or
+    stack setting that skips this.
 
     The design is fail-closed. The host holds no GitHub credential and the
     verifier needs none (see branchleft_deploy.md). A gh that still asks for a
@@ -138,7 +142,12 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     name = attested_name(image)
     signer = ATTESTED_IMAGES.get(name)
     if signer is None:
-        return False
+        raise DeployError(
+            f"{image} is not on the register of images this host deploys "
+            f"({', '.join(sorted(ATTESTED_IMAGES))}); refusing to deploy an image "
+            "that is not attested. Adding an image is a reviewed change to "
+            "ATTESTED_IMAGES"
+        )
     # The verifier takes registry/name@digest only, so it is given the register
     # name and the digest, however the image was spelled.
     canonical = f"{name}@{image.partition('@')[2]}"
@@ -168,7 +177,6 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
             "not the digest that was published"
         )
     print(f"branchleft-deploy: verified {image} attested by {signer}", file=sys.stderr)
-    return True
 
 
 def image_env_path(stack: str, config_dir: str = CONFIG_DIR) -> str:

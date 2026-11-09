@@ -55,6 +55,19 @@ class FakeRun:
         return subprocess.CompletedProcess(argv, code, stdout=stdout, stderr=stderr)
 
 
+def attestation_passes(case):
+    """Stand in for a passed attestation for the rest of one test case.
+
+    deploy() refuses every image name off the register, and these cases test
+    what deploy() does after the attestation step (the compose check, the
+    health signal, the lock, the pin and the rollback) with a stand-in image.
+    AttestationTests holds the attestation step itself, unpatched.
+    """
+    patcher = mock.patch.object(bd, "verify_attestation", return_value=None)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 class StackNameTests(unittest.TestCase):
     def test_accepts_plain_names(self):
         for name in ("edge", "ghost-tenant-one", "mon1"):
@@ -333,6 +346,7 @@ class DeployLockTests(unittest.TestCase):
 
 class DeployTests(unittest.TestCase):
     def setUp(self):
+        attestation_passes(self)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.config_dir = os.path.join(self.directory.name, "etc")
@@ -725,21 +739,77 @@ class AttestationTests(unittest.TestCase):
         )
         self.assertEqual(bd.read_current_image(self.env_path()), image)
 
-    def test_a_third_party_image_with_a_tag_or_port_is_never_sent_to_the_verifier(self):
-        mysql = f"registry.example:5000/library/mysql:8@sha256:{'d' * 64}"
-        run = FakeRun([0])
-        self.deploy(mysql, run)
-        self.assertEqual(
-            run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
-        )
+    def assert_refused_unregistered(self, image):
+        """Refused by name, with nothing run: no verifier, no restart, no pin."""
+        run = FakeRun([0, 0])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(image, run)
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(self.env_path()))
+        return str(raised.exception)
 
-    def test_a_third_party_image_is_never_sent_to_the_verifier(self):
-        mysql = f"docker.io/library/mysql@sha256:{'d' * 64}"
-        run = FakeRun([0])
-        self.deploy(mysql, run)
-        self.assertEqual(
-            run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
-        )
+    def test_an_image_name_off_the_register_is_refused_and_never_deployed(self):
+        for image in (
+            f"registry.example:5000/library/mysql:8@sha256:{'d' * 64}",
+            f"docker.io/library/mysql@sha256:{'d' * 64}",
+            f"mysql:8.0@sha256:{'d' * 64}",
+            VALID_IMAGE,
+        ):
+            with self.subTest(image=image):
+                self.assert_refused_unregistered(image)
+
+    def test_the_refusal_names_the_image_and_the_register(self):
+        image = f"docker.io/library/mysql@sha256:{'d' * 64}"
+        message = self.assert_refused_unregistered(image)
+        self.assertIn(image, message)
+        self.assertIn("register", message)
+        for registered in bd.ATTESTED_IMAGES:
+            self.assertIn(registered, message)
+
+    def test_verify_attestation_itself_refuses_an_unregistered_name(self):
+        def boom(argv, **kwargs):
+            raise AssertionError("the verifier must not run for an unregistered name")
+
+        with self.assertRaises(bd.DeployError):
+            bd.verify_attestation(f"ghcr.io/branchleft/example@sha256:{DIGEST}", run=boom)
+
+    def test_a_name_that_only_starts_with_a_registered_name_is_refused(self):
+        for image in (
+            f"ghcr.io/branchleft/ghost-tenant-evil@sha256:{DIGEST}",
+            f"ghcr.io/branchleft/ghost-tenantx:v1@sha256:{DIGEST}",
+            f"ghcr.io/branchleft/portal-apps2@sha256:{DIGEST}",
+            f"ghcr.io/branchleft/ghost-tenant/extra@sha256:{DIGEST}",
+            f"ghcr.io/branchleft/ghost-tenant/ghost-tenant@sha256:{DIGEST}",
+            f"ghcr.io/branchleft/portal-apps/app:v1@sha256:{DIGEST}",
+            f"ghcr.io/evil/branchleft/ghost-tenant@sha256:{DIGEST}",
+            f"evil.example/ghcr.io/branchleft/ghost-tenant@sha256:{DIGEST}",
+        ):
+            with self.subTest(image=image):
+                self.assert_refused_unregistered(image)
+
+    def test_a_registry_alias_of_a_registered_name_is_refused(self):
+        for image in (
+            f"docker.io/branchleft/ghost-tenant@sha256:{DIGEST}",
+            f"index.docker.io/branchleft/ghost-tenant@sha256:{DIGEST}",
+            f"quay.io/branchleft/portal-apps@sha256:{DIGEST}",
+            f"ghcr.io.evil.example/branchleft/ghost-tenant@sha256:{DIGEST}",
+            f"branchleft/ghost-tenant@sha256:{DIGEST}",
+            f"ghost-tenant@sha256:{DIGEST}",
+        ):
+            with self.subTest(image=image):
+                self.assert_refused_unregistered(image)
+
+    def test_a_case_variant_or_nameless_reference_is_refused_before_any_host_change(self):
+        for image in (
+            f"GHCR.IO/branchleft/ghost-tenant@sha256:{DIGEST}",
+            f"ghcr.io/BranchLeft/ghost-tenant@sha256:{DIGEST}",
+            f"ghcr.io/branchleft/Ghost-Tenant@sha256:{DIGEST}",
+            f"@sha256:{DIGEST}",
+            f"sha256:{DIGEST}",
+            "",
+        ):
+            with self.subTest(image=image):
+                self.assert_refused_unregistered(image)
 
     def test_no_environment_variable_switches_verification_off(self):
         run = FakeRun([1])
@@ -923,7 +993,16 @@ class MainTests(unittest.TestCase):
             1,
         )
 
+    def test_an_unregistered_image_exits_one_and_says_so_on_stderr(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = bd.main(["branchleft-deploy", "edge", VALID_IMAGE])
+        self.assertEqual(code, 1)
+        self.assertIn(VALID_IMAGE, stderr.getvalue())
+        self.assertIn("register", stderr.getvalue())
+
     def test_positional_mode_ignores_stdin_entirely(self):
+        attestation_passes(self)
         stdin = io.StringIO("ghcr.io/branchleft/hostile@sha256:" + "b" * 64 + "\n")
         # No compose file exists for this stack, so the failure is the expected
         # one; what matters is that stdin was never consulted to produce it.
@@ -1050,6 +1129,7 @@ class FailOpenImageReferenceTests(unittest.TestCase):
         self.assertFalse(bd.has_fail_open_image_reference("    # image: ${IMAGE:-x}\n"))
 
     def test_deploy_names_the_fail_open_form_specifically(self):
+        attestation_passes(self)
         with tempfile.TemporaryDirectory() as stack_dir:
             os.makedirs(os.path.join(stack_dir, "edge"))
             with open(os.path.join(stack_dir, "edge", "compose.yml"), "w", encoding="utf-8") as f:
@@ -1154,6 +1234,7 @@ class DeployHealthSignalTests(unittest.TestCase):
     reviewed gap, and never crash on a file the parser cannot read."""
 
     def setUp(self):
+        attestation_passes(self)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.config_dir = os.path.join(self.directory.name, "etc")
