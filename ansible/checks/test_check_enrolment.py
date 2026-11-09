@@ -75,9 +75,12 @@ class Sabotage(unittest.TestCase):
 
     def _assert_rule(self, rule: str) -> list[str]:
         findings = check(self.root)
-        # A whole rule token: "R1" must not match "R10 ..." or "R11 ...".
+        # A prefix match that refuses a longer rule number: "R1" must not match "R10 ...".
         self.assertTrue(
-            any(finding == rule or finding.startswith(f"{rule} ") for finding in findings),
+            any(
+                finding.startswith(rule) and not finding[len(rule) : len(rule) + 1].isdigit()
+                for finding in findings
+            ),
             f"expected a {rule} finding, got {findings}",
         )
         return findings

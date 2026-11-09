@@ -9,10 +9,10 @@ allow `[a-z][a-z0-9]*`) is also in `edge`; `playbooks/edget.yml` loads its trust
 file the same way. And `db1`, in the group `db`,
 which has no group variables because its inputs are private and reach the host
 through its delivery channel (the `roles/host_inputs` loader). `playbooks/db1.yml` is under the
-pull and loads its trust file, `trust/db1.yml`, through `vars_files`. `dbt1` (the server db-t1, in the group `db` beside `db1`) is under the pull
-the same way: `playbooks/dbt1.yml` loads only its trust file, `trust/dbt1.yml`, and has no
-owner variables. A role
-applied to a new host adds its host and variables in the same pull request. `ops1`, `app1` and `demo1` have
+pull and loads its trust file, `trust/db1.yml`, through `vars_files`.
+`dbt1` (the server db-t1, in group `db` beside `db1`) is under the pull the same way:
+`playbooks/dbt1.yml` loads only its trust file, `trust/dbt1.yml`, and has no owner
+variables. A role applied to a new host adds its host and variables in the same pull request. `ops1`, `app1` and `demo1` have
 playbooks under the pull route but no inventory entry: an inventory entry does not enrol a host
 (a playbook and its trust file do), so against this inventory `--limit ops1`, `--limit app1` and
 `--limit demo1` match nothing.
