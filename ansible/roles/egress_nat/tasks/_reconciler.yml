@@ -4,7 +4,7 @@
 # egress_nat_item (vars/main.yml). It is the install-and-restart of
 # 05-configure-host-egress.sh and nat-gateway.sh, written once.
 #
-# An item may also name a timer (timer_src, timer_name). The timer re-runs the
+# An item may also name a timer (timer_name). The timer re-runs the
 # reconciler about every minute; it is installed, enabled and reverted the same
 # way as the unit, and an item without one skips every timer task.
 
@@ -66,9 +66,13 @@
       notify: Reload systemd manager
 
     # The timer is on disk before anything enables it, and needs the same reload.
+    # The source is the host-egress item's timer_src, not the loop item's: the NAT gateway
+    # item names no timer, so its timer_src is undefined, and the static check cannot
+    # resolve it. Only an item with timer_name gets here, and only host-egress has one, so
+    # for that item the two keys are the same file and the installed bytes do not change.
     - name: Install the timer {{ egress_nat_item.timer_name }}
       ansible.builtin.copy:
-        src: '{{ role_path }}/../../../hetzner/provision/{{ egress_nat_item.timer_src }}'
+        src: '{{ role_path }}/../../../hetzner/provision/{{ egress_nat_host_egress.timer_src }}'
         dest: '{{ egress_nat_unit_dir }}/{{ egress_nat_item.timer_name }}'
         owner: root
         group: root
