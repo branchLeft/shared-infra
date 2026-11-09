@@ -23,7 +23,5 @@ deploy_verifier_gh_bin: /usr/local/libexec/branchleft-verifier/gh
 deploy_verifier_home_parent: /var/lib/branchleft
 deploy_verifier_home: /var/lib/branchleft/verifier-home
 
-# Where the verifier is read from: hetzner/provision/ of the checkout the playbook runs from,
-# the single home of the program. The role holds no copy of it. role_path is this role's own
-# directory, three levels below the repository root.
-deploy_verifier_programs_dir: '{{ role_path }}/../../../hetzner/provision'
+# The verifier the role installs is files/branchleft-verify-image.py, the single home of the
+# program. The copy task in tasks/main.yml reads it by that name from the role's files/.

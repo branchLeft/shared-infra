@@ -1,18 +1,21 @@
-"""The host verifier's gh token gate, run for real against a stub gh.
+"""The host verifier's gh token gate and refusals, run for real against a stub gh.
 
 branchleft-verify-image is run by the host with no GitHub token. gh refuses to
 start without a non-empty one, so on the --bundle-from-oci path (no API call) the
-script gives gh a fixed constant that is not a credential. These tests run the
-script itself, with a stub gh first on PATH that records the token it was given.
+program gives gh a fixed constant that is not a credential. These tests run the
+program itself, as installed (executed by its shebang, not through a shell or an
+import of its internals), with a stub gh first on PATH that records the token it
+was given.
 """
 
 import os
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-VERIFIER = os.path.join(HERE, "branchleft-verify-image")
+ROLE = Path(__file__).resolve().parents[2]
+VERIFIER = str(ROLE / "files" / "branchleft-verify-image.py")
 
 IMAGE = "ghcr.io/branchleft/ghost-tenant@sha256:" + "a" * 64
 REPO = "branchLeft/ghost-platform"
@@ -53,7 +56,7 @@ class VerifierTokenGateTests(unittest.TestCase):
         }
         base.update(env or {})
         result = subprocess.run(
-            ["sh", VERIFIER, *args],
+            [VERIFIER, *args],
             env=base,
             capture_output=True,
             text=True,
@@ -130,6 +133,68 @@ class VerifierTokenGateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("no valid attestation", result.stderr)
         self.assertNotIn("verified:", result.stdout)
+
+    def test_a_gh_that_cannot_be_started_is_a_refusal_not_a_crash(self):
+        empty = os.path.join(self.dir, "empty")
+        os.mkdir(empty)
+        result = self.run_verifier(IMAGE, REPO, SIGNER, FLAG, env={"PATH": empty})
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no valid attestation", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("verified:", result.stdout)
+
+    def test_the_wrong_number_of_arguments_is_usage_and_exits_2(self):
+        result = self.run_verifier(IMAGE, REPO)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage: ", result.stderr)
+        self.assertFalse(os.path.exists(self.record), "gh must not have been run")
+
+    def test_an_unknown_fourth_argument_is_refused_with_usage(self):
+        result = self.run_verifier(IMAGE, REPO, SIGNER, "--nope")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown option: --nope", result.stderr)
+        self.assertIn("usage: ", result.stderr)
+        self.assertFalse(os.path.exists(self.record), "gh must not have been run")
+
+    def test_every_input_refusal_exits_1_and_runs_no_gh(self):
+        refused = {
+            "a tag, not a digest": "ghcr.io/branchleft/ghost-tenant:latest",
+            "a short digest": "ghcr.io/branchleft/ghost-tenant@sha256:" + "a" * 63,
+            "an upper-case digest": "ghcr.io/branchleft/ghost-tenant@sha256:" + "A" * 64,
+            "a newline inside the reference": IMAGE + "\nextra",
+        }
+        for label, image in refused.items():
+            with self.subTest(label=label):
+                result = self.run_verifier(image, REPO, SIGNER, FLAG)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("refusing", result.stderr)
+                self.assertFalse(os.path.exists(self.record), "gh must not have been run")
+        bad_repo = {"no slash": "branchLeft", "two slashes": "a/b/c"}
+        for label, repo in bad_repo.items():
+            with self.subTest(label=label):
+                result = self.run_verifier(IMAGE, repo, SIGNER, FLAG)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("expected owner/repo", result.stderr)
+                self.assertFalse(os.path.exists(self.record), "gh must not have been run")
+        bad_signer = {
+            "outside the repository": "other/repo/.github/workflows/registry-push.yml",
+            "no workflow file": REPO + "/.github/workflows/",
+            "not in workflows": REPO + "/scripts/registry-push.yml",
+        }
+        for label, signer in bad_signer.items():
+            with self.subTest(label=label):
+                result = self.run_verifier(IMAGE, REPO, signer, FLAG)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("expected", result.stderr)
+                self.assertFalse(os.path.exists(self.record), "gh must not have been run")
+
+    def test_refusals_carry_the_github_annotation_without_plain_errors(self):
+        result = self.run_verifier(
+            "ghcr.io/branchleft/ghost-tenant:latest", REPO, SIGNER, FLAG,
+            env={"VERIFY_PLAIN_ERRORS": ""},
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertTrue(result.stderr.startswith("::error::refusing"), result.stderr)
 
 
 if __name__ == "__main__":
