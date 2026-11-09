@@ -590,10 +590,10 @@ TENANT_DIGEST = "b" * 64
 TENANT = f"ghcr.io/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}"
 TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 
-# sha256 of hetzner/provision/branchleft-verify-image, the host copy of
-# ghost-platform's scripts/verify-image-attestation.sh. Change the copy and this
+# sha256 of the program the deploy_verifier role installs, the Python port of
+# ghost-platform's scripts/verify-image-attestation.sh. Change the program and this
 # constant in the same change, and carry the change to ghost-platform's script.
-VERIFIER_SHA256 = "2342896f33a659a85697a586223b5d970d92082b02f6f3bd7ea2c7637a71cd0d"
+VERIFIER_SHA256 = "ba576f584d99789cdad13bf861ab7d03dddff2a81c8b176a62357245bef4da35"
 
 # The verifier's whole environment, exactly. Nothing is inherited from the host,
 # and no GitHub credential is in it: the host holds none. A change to any value
@@ -798,7 +798,14 @@ class AttestationTests(unittest.TestCase):
 
     def test_the_vendored_verifier_is_pinned_to_its_digest(self):
         path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "branchleft-verify-image"
+            os.path.dirname(os.path.abspath(__file__)),
+            os.pardir,
+            os.pardir,
+            "ansible",
+            "roles",
+            "deploy_verifier",
+            "files",
+            "branchleft-verify-image.py",
         )
         with open(path, "rb") as handle:
             self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), VERIFIER_SHA256)

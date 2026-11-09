@@ -286,7 +286,7 @@ until the first check.
 
 ### Installing the verifier and gh
 
-The `deploy_verifier` role installs the verifier from `hetzner/provision/`, and
+The `deploy_verifier` role installs the verifier from its `files/` (`ansible/roles/deploy_verifier/files/branchleft-verify-image.py`), and
 the gh release named in its `vars/main.yml`, with its tarball digest checked at
 download. The role is applied on `edge1`, `app1`, `ops1` and `db1`, before the
 first role that runs this wrapper. A host whose wrapper came from the hand-run
