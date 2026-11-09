@@ -169,6 +169,7 @@ HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
     "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
     "edget": {"egress_nat_gateway_enabled": True},
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
+    "dbt1": {"deploy_tooling_host_class": "internal"},
 }
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
 HOST_ROLES_FILE = "checks/host_roles.yml"

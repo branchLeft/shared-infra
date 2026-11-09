@@ -1,0 +1,191 @@
+---
+# The image pin, the owner-placed root file, the unit and the one deploy. Included last
+# by tasks/main.yml.
+#
+# The decision in one line: the role deploys when an image is given and the host has no
+# pin yet. A pin that exists and differs from the image is refused, never replaced, and
+# initialised data with no pin is refused. Replacing the image of a database that holds
+# data restarts it for every tenant, which is the owner's step.
+
+# The unit starts at boot and only then. The systemd tasks run only where systemd is
+# the running init, and not in check mode: the unit template is delivered by another
+# role in the same play, so on a fresh host it does not exist yet during a plan. The
+# plan therefore does not show the enablement (named in the README).
+- name: Look for a running systemd
+  ansible.builtin.stat:
+    path: '{{ db_t1_systemd_running_path }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_systemd_running
+
+- name: Enable the stack's unit, without starting it
+  ansible.builtin.systemd_service:
+    name: '{{ db_t1_unit }}'
+    enabled: true
+  when:
+    - db_t1_systemd_running.stat.isdir | default(false)
+    - not ansible_check_mode
+
+# ----- What the host already holds -----
+
+- name: Look at the image pin the deploy program writes
+  ansible.builtin.stat:
+    path: '{{ db_t1_image_env_path }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_pin_stat
+
+# The pin is a reference to a public digest, not a secret. A missing file is read as
+# empty text, so the comparison below needs no second path.
+- name: Read the image pin the deploy program wrote
+  ansible.builtin.slurp:
+    src: '{{ db_t1_image_env_path }}'
+  register: db_t1_pin_raw
+  when: db_t1_pin_stat.stat.isreg | default(false)
+
+- name: Look for an initialised data directory
+  ansible.builtin.stat:
+    path: '{{ db_t1_data_directory }}/mysql'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_data_stat
+
+# Literal keys (a templated mapping given to set_fact sets nothing). The pin is
+# present when the file is a regular file; it matches when it is exactly the one line
+# the deploy program writes for the given image.
+- name: Work out what the pin and the data directory say about this run
+  ansible.builtin.set_fact:
+    db_t1_pin_present: '{{ (db_t1_pin_stat.stat.exists | default(false)) and (db_t1_pin_stat.stat.isreg | default(false)) }}'
+    db_t1_pin_matches: >-
+      {{ (db_t1_pin_stat.stat.exists | default(false))
+      and (db_t1_pin_raw.content | default('') | b64decode) == (db_t1_image_env_prefix ~ db_t1_image ~ db_t1_line_end) }}
+    db_t1_data_initialised: '{{ db_t1_data_stat.stat.isdir | default(false) }}'
+
+- name: Refuse a pin that is not a regular file
+  ansible.builtin.assert:
+    that:
+      - not (db_t1_pin_stat.stat.exists | default(false)) or db_t1_pin_present | bool
+    quiet: true
+    fail_msg: >-
+      {{ db_t1_image_env_path }} exists and is not a regular file. The deploy program
+      writes it; remove the odd entry by hand and run the deploy program again.
+
+# The refusals that protect a database that holds data.
+- name: Refuse to replace the image of a database that was already deployed
+  ansible.builtin.assert:
+    that:
+      - db_t1_image == '' or not (db_t1_pin_present | bool) or (db_t1_pin_matches | bool)
+    quiet: true
+    fail_msg: >-
+      {{ db_t1_image_env_path }} pins a different image from db_t1_image. The role
+      deploys once, on an empty host, and never replaces the image of a database that
+      has run: that restarts it for every tenant and may upgrade data in place. Change
+      the image by hand, with a backup taken, or restore the previous db_t1_image.
+
+- name: Refuse to deploy over a data directory that has no pin
+  ansible.builtin.assert:
+    that:
+      - db_t1_image == '' or (db_t1_pin_present | bool) or not (db_t1_data_initialised | bool)
+    quiet: true
+    fail_msg: >-
+      {{ db_t1_data_directory }} holds an initialised database but {{ db_t1_image_env_path }}
+      does not exist. A deploy now would start whatever image is given over data it did not
+      create. Decide by hand which image that data belongs to and write the pin with the
+      deploy program.
+
+- name: Work out whether the image is to be deployed
+  ansible.builtin.set_fact:
+    db_t1_deploy_needed: '{{ db_t1_image != "" and not (db_t1_pin_present | bool) }}'
+
+# ----- The owner-placed root file, checked only when a deploy is due -----
+
+# The file is the owner's: the role never writes it and never reads its value. These
+# checks read its metadata and, with a module that is forced into check mode, whether
+# its lines have the shape the first start needs. The results hold a count message, not
+# a line, and the tasks hide their output and diff in any case (ANS-16).
+- name: Look at the root file the unit reads
+  ansible.builtin.stat:
+    path: '{{ db_t1_secrets_path }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_secrets_stat
+  when: db_t1_deploy_needed | bool
+
+- name: Refuse a root file that is absent, not a plain file, not root's or not closed
+  ansible.builtin.assert:
+    that:
+      - db_t1_secrets_stat.stat.exists
+      - db_t1_secrets_stat.stat.isreg
+      - db_t1_secrets_stat.stat.uid == 0
+      - db_t1_secrets_stat.stat.gid == 0
+      - db_t1_secrets_stat.stat.mode == db_t1_secret_file_mode
+      - db_t1_secrets_stat.stat.size > 0
+    quiet: true
+    fail_msg: >-
+      {{ db_t1_secrets_path }} must be a plain file owned by root, group root, mode 0600,
+      and not empty. The owner places it before the first deploy; the role does not
+      create it and does not invent its content.
+  when: db_t1_deploy_needed | bool
+
+# state: absent with check_mode: true removes nothing; it reports changed when a line
+# matches. The first task needs a line of the exact shape, the second needs no other
+# non-blank line, so the file cannot override the image pin, and no line can break the
+# first start. Neither prints a line.
+- name: Look for the one expected line in the root file
+  ansible.builtin.lineinfile:
+    path: '{{ db_t1_secrets_path }}'
+    regexp: '{{ db_t1_secret_line_pattern }}'
+    state: absent
+  check_mode: true
+  register: db_t1_secrets_line
+  no_log: true
+  diff: false
+  when: db_t1_deploy_needed | bool
+
+- name: Look for any other non-blank line in the root file
+  ansible.builtin.lineinfile:
+    path: '{{ db_t1_secrets_path }}'
+    regexp: '{{ db_t1_secret_stray_pattern }}'
+    state: absent
+  check_mode: true
+  register: db_t1_secrets_stray
+  no_log: true
+  diff: false
+  when: db_t1_deploy_needed | bool
+
+- name: Refuse a root file whose lines are not the one expected line
+  ansible.builtin.assert:
+    that:
+      - db_t1_secrets_line.changed
+      - not db_t1_secrets_stray.changed
+    quiet: true
+    fail_msg: >-
+      {{ db_t1_secrets_path }} must hold one line, MYSQL_ROOT_PASSWORD= followed by 32 to
+      128 letters and digits, and no other line. A quote, a backslash, a dollar sign or a
+      space breaks the first start and leaves a half-initialised data directory. No value
+      is printed here.
+  when: db_t1_deploy_needed | bool
+
+# ----- The deploy -----
+
+# The deploy program is the only writer of the pin. The deploy tooling role installs it
+# earlier in the same play, and only that role may name its path (a check holds this), so
+# a host without it fails here with the command's own error. It verifies the attestation of the
+# image first and refuses an image that is not registered, then writes the pin and
+# restarts the unit, which waits for the health check. The role runs as root under the
+# pull, so no sudo is involved. An argv list, not a shell: the digest is one argument.
+# In check mode the command module does not run it and, because of changed_when, the plan
+# shows the first deploy as one changed task (ANS-10).
+- name: Pin the image to the stack and start it with the host's deploy program
+  ansible.builtin.command:
+    argv:
+      - '{{ db_t1_deploy_program }}'
+      - '{{ db_t1_stack }}'
+      - '{{ db_t1_image }}'
+  changed_when: true
+  when: db_t1_deploy_needed | bool

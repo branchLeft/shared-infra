@@ -61,13 +61,18 @@ db1:
   - tunnel_account
   - host_baseline
   - node_exporter
-# dbt1, the database host db-t1. Three roles after the pull roles, no host_inputs: the host
+# dbt1, the database host db-t1. Five roles after the pull roles, no host_inputs: the host
 # has no private inputs, so the loader has nothing to read (R11 applies only when it is
 # listed). egress_nat is applied bare with its gateway switch unset: this host is no gateway.
+# deploy_tooling (class internal, no policy program) installs the deploy wrapper and the
+# compose unit, and db_t1 is the first role to run the wrapper on this host, so it follows
+# deploy_verifier and deploy_tooling.
 dbt1:
   - host_baseline
   - egress_nat
   - deploy_verifier
+  - deploy_tooling
+  - db_t1
 demo1:
   - demo1_build
   - demo1_egress_spool

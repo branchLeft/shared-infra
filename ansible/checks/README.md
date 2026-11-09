@@ -96,9 +96,10 @@ applied to a host by a path other than its `roles` list. A listed role is truste
 name: the list does not say what the role does as root, and a role's own edit is still not
 gated here. A playbook is a place a literal can hide as well as a role.
 
-dbt1 (db-t1) has no `HOST_PLAY_VARS` row. It lists `egress_nat` bare, as a non-gateway, and its
-play sets no switch: `test_egress_nat_single_gateway.py` pins the switch to edge1 and edget alone,
-and requires any non-gateway that applies the role to apply it bare.
+dbt1 (db-t1) has a `HOST_PLAY_VARS` row, `deploy_tooling_host_class: internal`, and no gateway
+switch. It lists `egress_nat` bare, as a non-gateway, and its play sets no switch:
+`test_egress_nat_single_gateway.py` pins the switch to edge1 and edget alone, and requires any
+non-gateway that applies the role to apply it bare.
 
 Limits of the loader rule. It reads literal mapping keys. It names the loaders listed in
 `ROLE_LOADERS`, `TASK_FILE_LOADERS` and `INCLUDE_VARS`, in their bare, `ansible.builtin.`
@@ -741,7 +742,7 @@ R1 failure on `main`.
 The deploy wrapper refuses a registered image unless `deploy_verifier` has put the verifier and its
 pinned gh on the host. The test holds three things: the table `WRAPPER_ROLES` names every role that
 names the wrapper's path in its tasks, vars or defaults; every playbook that applies one of those
-roles applies `deploy_verifier` earlier in the same play, and only the four hosts in
+roles applies `deploy_verifier` earlier in the same play, and only the hosts in
 `WRAPPER_PLAYBOOKS` apply one at all; and the paths the wrapper reads, and the pins the role
 installs, agree and sit in `vars/`. A new wrapper role is added to the table in the same change, or
 the test names it.

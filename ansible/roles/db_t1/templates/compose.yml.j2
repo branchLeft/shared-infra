@@ -1,0 +1,66 @@
+# Rendered by the db_t1 role of branchLeft/shared-infra. A change made on the
+# host is overwritten by the next run.
+#
+# mysql takes its image from ${IMAGE}, which branchleft-deploy writes into
+# /etc/branchleft/dbt1.image.env as a digest. The deploy program refuses a
+# compose file that does not read its image from ${IMAGE}, so the image is never
+# written here as a literal.
+#
+# Three environment values are set on purpose, because the image's defaults are
+# wrong for this host. MYSQL_ROOT_HOST defaults to a wildcard in the Percona
+# entrypoint, which would create a root account reachable from any host; localhost
+# keeps root on the socket. PERCONA_TELEMETRY_DISABLE turns off the image's
+# call-home agent, which is on when the variable is unset. The root value comes
+# from the unit's environment file and is read on the first start only.
+#
+# The container uses the host network so that mysqld binds the host's loopback
+# address (see conf.d/branchleft.cnf). No port is published and none is opened.
+# The configuration is mounted as one file, not as a directory, so the image's own
+# option files (skip-name-resolve among them) stay in force.
+name: {{ db_t1_stack }}
+
+services:
+  mysql:
+    image: ${IMAGE}
+    restart: unless-stopped
+    network_mode: host
+    stop_grace_period: 2m
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set MYSQL_ROOT_PASSWORD in /etc/branchleft/dbt1.env}
+      MYSQL_ROOT_HOST: localhost
+      PERCONA_TELEMETRY_DISABLE: '1'
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./conf.d/branchleft.cnf:/etc/my.cnf.d/branchleft.cnf:ro
+      - ./run/mysqld:/var/run/mysqld
+    healthcheck:
+      # A real query on the final server, over the socket, never a ping: the
+      # image's entrypoint first runs a socket-only server with networking off, and
+      # a ping answers on it. The query returns ready only when the server is the
+      # pinned Percona build, networking is on and bound to loopback, and the
+      # replication-relevant settings are in force, so a configuration file that
+      # was not read fails the check. The root value reaches the client through the
+      # container's own environment, never through this file.
+      test:
+        - CMD-SHELL
+        - >-
+          out=$$(MYSQL_PWD="$$MYSQL_ROOT_PASSWORD" mysql --protocol=socket
+          --socket=/var/run/mysqld/mysqld.sock -uroot -N -B -e
+          "SELECT IF(@@global.skip_networking = 0
+          AND @@version = '{{ db_t1_server_version }}'
+          AND @@version_comment LIKE '{{ db_t1_version_comment_prefix }}%'
+          AND @@global.bind_address = '127.0.0.1'
+          AND @@global.server_id = {{ db_t1_server_id }}
+          AND @@global.gtid_mode = 'ON'
+          AND @@global.enforce_gtid_consistency = 'ON'
+          AND @@global.log_bin = 1
+          AND @@global.binlog_format = 'ROW'
+          AND @@global.require_secure_transport = 1,
+          'ready', 'not-ready')") && [ "$$out" = ready ]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 120s
+
+volumes:
+  mysql-data:
