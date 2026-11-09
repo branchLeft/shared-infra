@@ -28,13 +28,11 @@ GH_TIMEOUT_SECONDS = 300
 # The digest is what the attestation is bound to. A tag can move after it is checked, so a
 # tag-form reference verifies nothing about what a host pulls. fullmatch, not a line match: a
 # value with a newline in it is refused whole.
-IMAGE_RE = re.compile(
-    r"[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}"
-)
+IMAGE_RE = re.compile(r"[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}")
 REPO_RE = re.compile(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+")
 
 
-def main(argv):
+def main(argv: list[str]) -> int:
     program = argv[0]
     if os.environ.get("VERIFY_PLAIN_ERRORS", "0") == "1":
         err = "error: "
@@ -111,7 +109,7 @@ def main(argv):
 
     # A gh that cannot be started, or that runs past the timeout, is a refusal like any other.
     try:
-        completed = subprocess.run(
+        completed = subprocess.run(  # noqa: S603 - argv is built here from constants and checked values
             command, env=env, check=False, timeout=GH_TIMEOUT_SECONDS
         )
         verified = completed.returncode == 0
@@ -128,7 +126,7 @@ def main(argv):
     return 0
 
 
-def usage(program):
+def usage(program: str) -> int:
     print(
         f"usage: {program} <registry/name@sha256:64hex> <owner/repo> "
         "<owner/repo/.github/workflows/file.yml> [--bundle-from-oci]",

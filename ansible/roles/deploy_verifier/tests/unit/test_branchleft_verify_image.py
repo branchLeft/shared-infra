@@ -37,7 +37,7 @@ exit "${STUB_EXIT:-0}"
 
 
 class VerifierTokenGateTests(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.dir = tmp.name
@@ -45,9 +45,11 @@ class VerifierTokenGateTests(unittest.TestCase):
         stub = os.path.join(self.dir, "gh")
         with open(stub, "w") as handle:
             handle.write(STUB_GH)
-        os.chmod(stub, 0o755)
+        Path(stub).chmod(0o755)
 
-    def run_verifier(self, *args, env=None, stub_exit=0):
+    def run_verifier(
+        self, *args: str, env: dict[str, str] | None = None, stub_exit: int = 0
+    ) -> subprocess.CompletedProcess[str]:
         base = {
             "PATH": f"{self.dir}:/usr/bin:/bin",
             "STUB_RECORD": self.record,
@@ -55,7 +57,7 @@ class VerifierTokenGateTests(unittest.TestCase):
             "VERIFY_PLAIN_ERRORS": "1",
         }
         base.update(env or {})
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 - fixed argv: this program by path, then the test's own arguments
             [VERIFIER, *args],
             env=base,
             capture_output=True,
@@ -65,46 +67,42 @@ class VerifierTokenGateTests(unittest.TestCase):
         )
         return result
 
-    def seen(self):
+    def seen(self) -> dict[str, str]:
         with open(self.record) as handle:
             return dict(line.rstrip("\n").split("=", 1) for line in handle)
 
-    def assert_never_printed(self, result, value):
+    def assert_never_printed(self, result: subprocess.CompletedProcess[str], value: str) -> None:
         for line in (result.stdout + result.stderr).splitlines():
             self.assertNotIn(value, line)
 
-    def test_flag_and_no_token_gives_gh_the_placeholder(self):
+    def test_flag_and_no_token_gives_gh_the_placeholder(self) -> None:
         result = self.run_verifier(IMAGE, REPO, SIGNER, FLAG)
         self.assertEqual(result.returncode, 0, result.stderr)
         seen = self.seen()
         self.assertEqual(seen["GH_TOKEN"], PLACEHOLDER)
         self.assertIn(FLAG, seen["ARGS"])
 
-    def test_flag_and_empty_tokens_gives_gh_the_placeholder(self):
+    def test_flag_and_empty_tokens_gives_gh_the_placeholder(self) -> None:
         result = self.run_verifier(
             IMAGE, REPO, SIGNER, FLAG, env={"GH_TOKEN": "", "GITHUB_TOKEN": ""}
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.seen()["GH_TOKEN"], PLACEHOLDER)
 
-    def test_flag_and_a_real_gh_token_leaves_it_unchanged(self):
-        result = self.run_verifier(
-            IMAGE, REPO, SIGNER, FLAG, env={"GH_TOKEN": REAL_LOOKING}
-        )
+    def test_flag_and_a_real_gh_token_leaves_it_unchanged(self) -> None:
+        result = self.run_verifier(IMAGE, REPO, SIGNER, FLAG, env={"GH_TOKEN": REAL_LOOKING})
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.seen()["GH_TOKEN"], REAL_LOOKING)
         self.assert_never_printed(result, REAL_LOOKING)
 
-    def test_flag_and_a_real_github_token_sets_no_placeholder(self):
-        result = self.run_verifier(
-            IMAGE, REPO, SIGNER, FLAG, env={"GITHUB_TOKEN": REAL_LOOKING}
-        )
+    def test_flag_and_a_real_github_token_sets_no_placeholder(self) -> None:
+        result = self.run_verifier(IMAGE, REPO, SIGNER, FLAG, env={"GITHUB_TOKEN": REAL_LOOKING})
         self.assertEqual(result.returncode, 0, result.stderr)
         seen = self.seen()
         self.assertEqual(seen["GITHUB_TOKEN"], REAL_LOOKING)
         self.assertEqual(seen["GH_TOKEN"], "UNSET")
 
-    def test_no_flag_and_no_token_refuses_without_a_placeholder(self):
+    def test_no_flag_and_no_token_refuses_without_a_placeholder(self) -> None:
         result = self.run_verifier(IMAGE, REPO, SIGNER)
         self.assertEqual(result.returncode, 1)
         self.assertIn("without --bundle-from-oci", result.stderr)
@@ -112,29 +110,27 @@ class VerifierTokenGateTests(unittest.TestCase):
         self.assertFalse(os.path.exists(self.record), "gh must not have been run")
         self.assert_never_printed(result, PLACEHOLDER)
 
-    def test_no_flag_and_a_real_token_runs_gh_with_that_token(self):
-        result = self.run_verifier(
-            IMAGE, REPO, SIGNER, env={"GH_TOKEN": REAL_LOOKING}
-        )
+    def test_no_flag_and_a_real_token_runs_gh_with_that_token(self) -> None:
+        result = self.run_verifier(IMAGE, REPO, SIGNER, env={"GH_TOKEN": REAL_LOOKING})
         self.assertEqual(result.returncode, 0, result.stderr)
         seen = self.seen()
         self.assertEqual(seen["GH_TOKEN"], REAL_LOOKING)
         self.assertNotIn(FLAG, seen["ARGS"])
 
-    def test_the_placeholder_is_never_printed_on_success_or_refusal(self):
+    def test_the_placeholder_is_never_printed_on_success_or_refusal(self) -> None:
         for stub_exit in (0, 1):
             result = self.run_verifier(IMAGE, REPO, SIGNER, FLAG, stub_exit=stub_exit)
             self.assertEqual(result.returncode, stub_exit)
             self.assertTrue(result.stdout + result.stderr)
             self.assert_never_printed(result, PLACEHOLDER)
 
-    def test_a_gh_refusal_still_fails_closed_with_the_placeholder_set(self):
+    def test_a_gh_refusal_still_fails_closed_with_the_placeholder_set(self) -> None:
         result = self.run_verifier(IMAGE, REPO, SIGNER, FLAG, stub_exit=1)
         self.assertEqual(result.returncode, 1)
         self.assertIn("no valid attestation", result.stderr)
         self.assertNotIn("verified:", result.stdout)
 
-    def test_a_gh_that_cannot_be_started_is_a_refusal_not_a_crash(self):
+    def test_a_gh_that_cannot_be_started_is_a_refusal_not_a_crash(self) -> None:
         empty = os.path.join(self.dir, "empty")
         os.mkdir(empty)
         result = self.run_verifier(IMAGE, REPO, SIGNER, FLAG, env={"PATH": empty})
@@ -143,20 +139,20 @@ class VerifierTokenGateTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
         self.assertNotIn("verified:", result.stdout)
 
-    def test_the_wrong_number_of_arguments_is_usage_and_exits_2(self):
+    def test_the_wrong_number_of_arguments_is_usage_and_exits_2(self) -> None:
         result = self.run_verifier(IMAGE, REPO)
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: ", result.stderr)
         self.assertFalse(os.path.exists(self.record), "gh must not have been run")
 
-    def test_an_unknown_fourth_argument_is_refused_with_usage(self):
+    def test_an_unknown_fourth_argument_is_refused_with_usage(self) -> None:
         result = self.run_verifier(IMAGE, REPO, SIGNER, "--nope")
         self.assertEqual(result.returncode, 2)
         self.assertIn("unknown option: --nope", result.stderr)
         self.assertIn("usage: ", result.stderr)
         self.assertFalse(os.path.exists(self.record), "gh must not have been run")
 
-    def test_every_input_refusal_exits_1_and_runs_no_gh(self):
+    def test_every_input_refusal_exits_1_and_runs_no_gh(self) -> None:
         refused = {
             "a tag, not a digest": "ghcr.io/branchleft/ghost-tenant:latest",
             "a short digest": "ghcr.io/branchleft/ghost-tenant@sha256:" + "a" * 63,
@@ -188,9 +184,12 @@ class VerifierTokenGateTests(unittest.TestCase):
                 self.assertIn("expected", result.stderr)
                 self.assertFalse(os.path.exists(self.record), "gh must not have been run")
 
-    def test_refusals_carry_the_github_annotation_without_plain_errors(self):
+    def test_refusals_carry_the_github_annotation_without_plain_errors(self) -> None:
         result = self.run_verifier(
-            "ghcr.io/branchleft/ghost-tenant:latest", REPO, SIGNER, FLAG,
+            "ghcr.io/branchleft/ghost-tenant:latest",
+            REPO,
+            SIGNER,
+            FLAG,
             env={"VERIFY_PLAIN_ERRORS": ""},
         )
         self.assertEqual(result.returncode, 1)

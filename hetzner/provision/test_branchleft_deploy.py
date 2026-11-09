@@ -593,7 +593,7 @@ TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 # sha256 of the program the deploy_verifier role installs, the Python port of
 # ghost-platform's scripts/verify-image-attestation.sh. Change the program and this
 # constant in the same change, and carry the change to ghost-platform's script.
-VERIFIER_SHA256 = "ba576f584d99789cdad13bf861ab7d03dddff2a81c8b176a62357245bef4da35"
+VERIFIER_SHA256 = "849f30053e29f3b5b70a7a9e1188ac865048e486603a7636a34a422d6b3d1fee"
 
 # The verifier's whole environment, exactly. Nothing is inherited from the host,
 # and no GitHub credential is in it: the host holds none. A change to any value
