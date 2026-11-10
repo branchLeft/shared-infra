@@ -296,7 +296,9 @@ run needs, from the event and the files it changed. The rules, in the order they
   files are not listed, executes every shard. The queue entry's changed files are the diff
   from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
   as it does in a pull request. An entry stacked on another is tested on that one's tree
-  and diffed from it; if the earlier entry leaves the queue, the later one is tested again;
+  and diffed from it; if the earlier entry leaves the queue, the later one is tested again.
+  The selection is still made for a queue entry, but the shard job's condition skips the
+  shards in the queue (the pull request already ran them), so only the lint runs there;
 - a changed file that is part of the harness, the lock, the lint config, or one of the three
   checks files the shards read (`ci_select.py`, `check_pins.py`, `pip-requirements.txt`)
   executes every shard, because it decides what every role is held to;
@@ -346,9 +348,12 @@ These tests hold the CI workflows to what `ci_select.py` assumes:
 - the shard job runs only when discover chose shards, and refuses the entry that stands
   for none;
 - the gate job (the check the ruleset requires) fails unless the quick gate and the full lint
-  both passed, and fails when shards were chosen and did not all pass. The gate's own script
-  is run under bash against a table of outcomes, with a control that cuts the full-lint
-  refusal out and shows the table sees it go;
+  both passed, and fails when shards were chosen and did not all pass. The one exception is
+  the merge queue, where the shard job is skipped by a condition on `github.event_name`
+  and the gate accepts the skip for that event alone; a skipped, failed or cancelled shard job
+  fails it on every other event. The gate's own script is run under bash against a table of
+  outcomes, with a control that cuts the full-lint refusal out and one that widens the queue
+  skip to every event, and shows the table sees each go;
 - the quick gate builds its tool environment with the same steps as the full lint, and the
   full lint keeps every step it had;
 - the merge queue still triggers the workflow, and the weekly sweep is scheduled;
@@ -415,11 +420,14 @@ The `Ansible` workflow watches `ansible/`, `hetzner/` and `mail/provision/` only
 the `mx1_stack` role links and checks the mail host's scripts there), so a change to a runbook
 under `mail/` or at the repository root does not start it; `mail/` is owner-gated by CODEOWNERS.
 
-## merge_group_proof.py: when a delivery may skip its re-test
+## merge_group_proof.py: whether the merge queue ran the Ansible workflow on a commit
 
-`ansible-delivery.yml` has a job, `queue-proof`, that decides whether the delivery of a pushed
-commit may skip the lint and Molecule re-run. It reads the runs of `ansible.yml` for the pushed
-commit and `merge_group_proof.py` answers `tested=true` only for a run that has all of:
+The delivery no longer skips its lint and Molecule re-run for any commit: the merge queue runs
+the lint and the unit tests only, so a queue run proves nothing about the containers, and the
+delivery is the run that tests the merged tree in them. `check_delivery.py` holds the input
+`skip-rerun-after-merge-group` at `false`. The job `queue-proof` of `ansible-delivery.yml` still
+reads the runs of `ansible.yml` for the pushed commit and `merge_group_proof.py` answers
+`tested=true` only for a run that has all of:
 
 - the workflow `.github/workflows/ansible.yml`, the event `merge_group`, the pushed commit as head;
 - a head branch that starts with `gh-readonly-queue/`;
@@ -428,13 +436,12 @@ commit and `merge_group_proof.py` answers `tested=true` only for a run that has 
 The event is judged here and is never narrowed by the API's own `event` filter, because after a
 squash queue main carries a green push run of the same commit under the same check name, from a
 job with no diff. A check name, or any success on the commit, is not proof. A merge that skipped
-the queue has no queue run, so it gets `tested=false` and the delivery re-tests in full. An
-unreadable, truncated or malformed answer is `false` too.
+the queue has no queue run, so it gets `tested=false`. An unreadable, truncated or malformed
+answer is `false` too. The answer is not passed on: the delivery re-tests in full either way.
 
-`check_delivery.py` fixes the shape of the proof job and of the two inputs the delivery passes
-(`skip-rerun-after-merge-group` from the proof's output, and `merge-group-check-name`, the gate
-job's name in `ansible.yml`). The reusable workflow then checks the queue's check run and suite
-itself and refuses the delivery if they disagree, so a skip needs both to agree.
+`check_delivery.py` fixes the shape of the proof job and the two inputs the delivery passes
+(`skip-rerun-after-merge-group`, held at `false`, and `merge-group-check-name`, the gate job's
+name in `ansible.yml`, which the reusable workflow ignores while the skip is off).
 
 `check_delivery.py` also fixes the push route of both callers. The push list is the
 `ANSIBLE_PUSH_HOSTS` repository secret, passed as `ssh_push_hosts` (the owner creates it; an unset

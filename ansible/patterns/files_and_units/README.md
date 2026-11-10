@@ -273,11 +273,12 @@ repository.
 - `check-fresh` skips the enable and start (see (c)), and the harness does not catch
   a silent skip. This section is the review of it.
 - CI runs this scenario. The Ansible workflow (`.github/workflows/ansible.yml`) runs
-  the harness over each role and pattern in its own shard. A pull request or a
-  merge-queue entry runs this shard when its diff changes this pattern or a shared
-  file (the harness, the lock, or the checks that select shards); the weekly sweep runs
-  every shard; a push to `main` runs none, because the merge queue has already tested
-  the tree. [`ansible/checks/README.md`](../../checks/README.md) gives the rules. The
+  the harness over each role and pattern in its own shard. A pull request runs this
+  shard when its diff changes this pattern or a shared file (the harness, the lock, or
+  the checks that select shards); a merge-queue entry runs no shard, because the pull
+  request ran it; the weekly sweep runs every shard; a push to `main` runs none here,
+  because the delivery workflow runs every shard before it applies anything.
+  [`ansible/checks/README.md`](../../checks/README.md) gives the rules. The
   green run on `main` that ran this pattern's shard is
   https://github.com/branchLeft/shared-infra/actions/runs/40191479010 (job
   `Harness: ansible/patterns/files_and_units`, conclusion `success`, commit `7cd0d26`).
