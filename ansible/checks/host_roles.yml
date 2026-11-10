@@ -32,6 +32,7 @@ edget:
 ops1:
   - host_inputs
   - host_baseline
+  - safety_service
   - safety_channel_key
   - breakglass_mint_host
   - status_page
