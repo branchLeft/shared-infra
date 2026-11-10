@@ -310,7 +310,7 @@ drives the `docker` command line and parses what that prints. Its source (the pi
 `docker compose version --format json`, the `up` itself, whose progress it reads as
 JSON lines on standard error, then `docker compose ps --format json --all --no-trunc`
 and `docker compose images --format json`. The test installs a small stand-in for the
-`docker` command in the instance (`molecule/default/files/docker_standin.sh`, installed
+`docker` command in the instance (`molecule/default/files/docker_standin.py`, installed
 by `prepare.yml`): it appends its arguments to a log and prints canned answers in those
 shapes. The module runs against it, and the verify play reads the log.
 
