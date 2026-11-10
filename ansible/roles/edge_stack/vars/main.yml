@@ -60,6 +60,11 @@ edge_stack_dirs:
   - crowdsec
   - crowdsec/acquis.d
 
+# The registry read key's docker config directory, for the script's run of the edge image. A copy
+# of deploy_verifier_registry_docker_dir (a role imports no role): test_registry_key_callers.py
+# holds it.
+edge_stack_registry_docker_config: /etc/branchleft/registry/docker
+
 # Exit codes of the locked script. 75 is the lock's own (flock -E 75): the script
 # never exits with it, so a timeout cannot be taken for a failed action.
 edge_stack_lock_exit_code: 75

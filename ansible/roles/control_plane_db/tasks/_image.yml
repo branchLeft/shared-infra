@@ -10,6 +10,8 @@
       - docker
       - pull
       - '{{ control_plane_db_apps_image }}'
+  environment:
+    DOCKER_CONFIG: '{{ control_plane_db_registry_docker_config }}'
   changed_when: false
   when: not ansible_check_mode
 
@@ -22,6 +24,8 @@
             "console.log(require('fs').readFileSync('dist/provision/provisionPortal.js','utf8').includes('"
             ~ control_plane_db_image_needle ~ "'))"] }}
   register: control_plane_db_image_check
+  environment:
+    DOCKER_CONFIG: '{{ control_plane_db_registry_docker_config }}'
   changed_when: false
   when: not ansible_check_mode
 

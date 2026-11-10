@@ -304,6 +304,7 @@
     chdir: '{{ control_plane_project_dir }}'
   environment:
     IMAGE: '{{ control_plane_effective_image }}'
+    DOCKER_CONFIG: '{{ control_plane_registry_docker_config }}'
   # Compose itself reports the containers it started or left alone, and --wait
   # fails the task when the database is not healthy. The task reports no change
   # so that a second apply of the same commit reports zero changes. no_log: Compose
@@ -340,6 +341,7 @@
     chdir: '{{ control_plane_project_dir }}'
   environment:
     IMAGE: '{{ control_plane_effective_image }}'
+    DOCKER_CONFIG: '{{ control_plane_registry_docker_config }}'
   changed_when: true
   no_log: true
   when:
@@ -373,6 +375,7 @@
     chdir: '{{ control_plane_project_dir }}'
   environment:
     IMAGE: '{{ control_plane_effective_image }}'
+    DOCKER_CONFIG: '{{ control_plane_registry_docker_config }}'
   # As for the database: --wait fails the task when the service is not healthy,
   # and the task reports no change so a second apply reports zero changes.
   changed_when: false

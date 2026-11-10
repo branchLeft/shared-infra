@@ -53,6 +53,8 @@
                     '-e', 'NODE_OPTIONS=--max-old-space-size=192',
                     control_plane_db_apps_image, 'node', 'dist/provision/provisionMain.js', '--migrate-only'] }}
           register: control_plane_db_run
+          environment:
+            DOCKER_CONFIG: '{{ control_plane_db_registry_docker_config }}'
           changed_when: true
           failed_when: false
           # The program redacts what it prints, but its driver errors can quote the

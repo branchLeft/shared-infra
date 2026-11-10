@@ -156,6 +156,12 @@ drill's timer stays refused either way.
 
 - The four unit files in `/etc/systemd/system`, `root:root` `0644`, and one systemd
   reload when any changed.
+- A drop-in for the restore-drill unit, `/etc/systemd/system/branchleft-restore-drill.service.d/10-registry-key.conf`,
+  `root:root` `0644`, that sets `DOCKER_CONFIG` to the registry read key's directory. The drill's
+  images (recovery, MySQL, Ghost, sidecar) are pulled and run by a program from the release, so the
+  directory reaches it through the unit and not through the pinned release files. A directory that
+  is not there is anonymous access. The value is `backup_restore_registry_docker_config`, a copy of
+  `deploy_verifier_registry_docker_dir` held to it by `ansible/checks/test_registry_key_callers.py`.
 - `/etc/branchleft/secrets`, `root:root` `0700`. The role never creates a file in it.
 - `/etc/branchleft/state-copy.env` and, when switched on, `/etc/branchleft/restore-drill.env`,
   each `root:root` `0600`, created empty first and then written, so no moment

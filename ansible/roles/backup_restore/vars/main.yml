@@ -10,6 +10,13 @@
 backup_restore_drill_env_file: /etc/branchleft/restore-drill.env
 backup_restore_state_copy_env_file: /etc/branchleft/state-copy.env
 
+# The registry read key's docker config directory. The drill's images are pulled and run by a program
+# in the release, so the unit gets it from a drop-in, never from the pinned release files. A copy of
+# deploy_verifier_registry_docker_dir (a role imports no role): test_registry_key_callers.py holds it to that.
+backup_restore_registry_docker_config: /etc/branchleft/registry/docker
+backup_restore_drill_dropin_dir: /etc/systemd/system/branchleft-restore-drill.service.d
+backup_restore_drill_dropin_file: '{{ backup_restore_drill_dropin_dir }}/10-registry-key.conf'
+
 # The directory the owner places each secret access key in: root only.
 backup_restore_secrets_dir: /etc/branchleft/secrets
 
