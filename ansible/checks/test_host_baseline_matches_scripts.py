@@ -13,6 +13,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+import jinja2
 from check_enrolment import ROOT
 
 PROVISION = ROOT / "hetzner" / "provision"
@@ -129,15 +130,15 @@ def _role_default(name: str) -> str:
 def _rendered_jail() -> str:
     """Return the jail the template renders at the role's default ignoreip input.
 
-    Raises:
-        AssertionError: the template holds a placeholder the test does not fill.
+    It renders as Ansible's template module does (trim_blocks on, the final newline kept), and
+    a variable the template reads that this test does not fill raises, so it is not skipped.
+    The empty input is covered by test_host_baseline_ignoreip.py.
     """
+    environment = jinja2.Environment(  # noqa: S701
+        trim_blocks=True, keep_trailing_newline=True, undefined=jinja2.StrictUndefined
+    )
     text = (ROLE / "templates" / "jail.local.j2").read_text(encoding="utf-8")
-    rendered = text.replace("{{ " + JAIL_INPUT + " }}", _role_default(JAIL_INPUT))
-    if "{{" in rendered:
-        message = "jail.local.j2 holds a placeholder this test does not fill"
-        raise AssertionError(message)
-    return rendered
+    return environment.from_string(text).render({JAIL_INPUT: _role_default(JAIL_INPUT)})
 
 
 class HostBaselineMatchesScripts(unittest.TestCase):

@@ -92,7 +92,7 @@ class Sabotage(unittest.TestCase):
 
     # R1: an empty enrolled set fails, it does not pass over nothing.
     def test_r1_no_enrolled_playbook(self) -> None:
-        for host in ("edge1", "edget", "ops1", "app1", "db1", "dbt1", "demo1"):
+        for host in ("edge1", "edget", "mx1", "ops1", "app1", "db1", "dbt1", "demo1"):
             (self.ansible / "playbooks" / f"{host}.yml").unlink()
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
@@ -1087,6 +1087,43 @@ class Sabotage(unittest.TestCase):
         self._write("owner_vars/app1.yml", "---\nci_login_keys: []\n")
         self._assert_one("R10 owner_vars/app1.yml: this host has no owner_vars keys")
         self._assert_one("R2 app1.yml: vars_files must be exactly")
+
+    # R10 for mx1: the file holds the jail's ignore list and nothing else. The gated pull's step
+    # allow-list is not a key mx1 may set, so no step of the mail host's roles can be requested.
+    def test_r10_mx1_owner_vars_holds_exactly_the_ignore_list(self) -> None:
+        self.assertEqual(OWNER_VARS_KEYS["mx1"], {"host_baseline_fail2ban_ignoreip"})
+        self.assertEqual(check(self.root), [])
+        for extra in (
+            "pull_trigger_steps: []\n",
+            "ci_login_keys: []\n",
+            "mail_reconcilers_step: configure\n",
+        ):
+            with self.subTest(extra=extra):
+                self._reset()
+                self._edit("owner_vars/mx1.yml", "ignoreip: ''\n", f"ignoreip: ''\n{extra}")
+                self._assert_one("R10 owner_vars/mx1.yml: must hold exactly")
+
+    def test_r10_mx1_owner_vars_lacks_the_ignore_list(self) -> None:
+        self._edit("owner_vars/mx1.yml", "host_baseline_fail2ban_ignoreip: ''\n", "")
+        self._assert_one("R10 owner_vars/mx1.yml: must hold exactly")
+
+    def test_r10_mx1_ignore_list_is_text(self) -> None:
+        for value in ("[]", "5", "false"):
+            with self.subTest(value=value):
+                self._reset()
+                self._edit(
+                    "owner_vars/mx1.yml",
+                    "host_baseline_fail2ban_ignoreip: ''",
+                    f"host_baseline_fail2ban_ignoreip: {value}",
+                )
+                self._assert_one(
+                    "R10 owner_vars/mx1.yml: host_baseline_fail2ban_ignoreip must be text"
+                )
+
+    def test_r10_only_mx1_may_set_the_ignore_list(self) -> None:
+        for host, keys in OWNER_VARS_KEYS.items():
+            if host != "mx1":
+                self.assertNotIn("host_baseline_fail2ban_ignoreip", keys, host)
 
     # R10 for the ci_jump values: each of the four keys is required, and each has a shape.
     def test_r10_owner_vars_lacks_a_ci_jump_key(self) -> None:
