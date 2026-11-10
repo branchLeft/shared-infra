@@ -1,0 +1,8 @@
+---
+# The role's four inputs, none of them a secret. Everything else (paths, project
+# names, stamps, the table of what each container reads) is a constant in
+# vars/main.yml and is not an input.
+mx1_stack_stalwart_health_tries: 30
+mx1_stack_health_interval: 2
+mx1_stack_recursion_tries: 5
+mx1_stack_recursion_interval: 2

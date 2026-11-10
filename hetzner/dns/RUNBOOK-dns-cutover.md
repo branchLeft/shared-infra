@@ -4,6 +4,11 @@ Refs branchLeft/workspace#1164. That issue stays open after this runbook: it
 closes when DNS-01 completes against the zone and a wildcard certificate
 issues, which is follow-up work that needs this move first.
 
+> **Status.** Steps 1-5 are the first-time provisioning of the branchleft.co.uk
+> stack, and that is done. Every later record change goes through CI: merge,
+> read the `dns-plan` summary, approve `production-dns`. The first-time blocks
+> stay below as the record of how the stack was built.
+
 ## Why
 
 The zone is edited by hand in the registrar's panel, and the registrar's DNS
@@ -280,8 +285,9 @@ after step 10.
 **If the comparison instead shows a `DIFF`, stop here — do not go on to phase
 C.** Something changed one side after step 7's comparison. Read which record
 and which side: restore its value at IONOS from `hetzner/dns/zone.json` (the
-committed source of truth) if IONOS drifted, or re-`pulumi up` the stack from
-`main` if Hetzner did — never edit either side freehand to make the diff go
+committed source of truth) if IONOS drifted, or merge a correction to `main`
+and approve its `production-dns` apply if Hetzner did — never edit either side
+freehand to make the diff go
 away. Re-run this step's comparison until it is clean before touching step 10.
 The same applies to any `ERROR` (a server not answering) — resolve the reason
 for the error, don't proceed around it.

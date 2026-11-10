@@ -5,6 +5,8 @@ parts of the role that must not change by accident, from the files alone, so tha
 change to one of them fails in seconds and names the control it broke.
 """
 
+import filecmp
+import os
 import unittest
 from pathlib import Path
 
@@ -14,13 +16,16 @@ ROLE = Path(__file__).resolve().parents[2]
 REPO = ROLE.parents[2]
 PROVISION = REPO / "hetzner" / "provision"
 
-# The four files the role delivers, by their name in hetzner/provision.
-SOURCES = (
+# The files the role delivers. The host egress pair lives in hetzner/provision; the NAT program and
+# its unit live in the role's files/. The NAT unit's copy in hetzner/provision is read by the
+# NAT hand installer until that installer is removed, and must match the role's copy.
+PROVISION_FILES = (
     "branchleft_host_egress.sh",
-    "branchleft_nat.sh",
     "branchleft-host-egress.service",
-    "branchleft-nat.service",
+    "branchleft-host-egress.timer",
 )
+ROLE_FILES = ("branchleft_nat.py", "branchleft-nat.service")
+ROLE_FILES_DIR = ROLE / "files"
 
 SHELL_MODULES = ("ansible.builtin.shell", "ansible.builtin.raw", "ansible.builtin.script")
 
@@ -29,6 +34,12 @@ def load(relative: str) -> object:
     """Parse one YAML file of the role."""
     parsed: object = yaml.safe_load((ROLE / relative).read_text(encoding="utf-8"))
     return parsed
+
+
+def resolve(value: object) -> Path:
+    """The path a copy source names, with the role_path template resolved."""
+    text = str(value).replace("{{ role_path }}", str(ROLE))
+    return Path(os.path.normpath(text))
 
 
 def as_dict(value: object) -> dict[str, object]:
@@ -91,20 +102,55 @@ def position(tasks: list[dict[str, object]], start: str) -> int:
 
 
 class SourceTests(unittest.TestCase):
-    """Every file the role delivers exists in hetzner/provision, under the name the vars give."""
+    """Every file the role delivers exists where the vars say, and the vars name only those."""
 
     def test_the_role_path_reaches_the_repository_provision_directory(self) -> None:
         self.assertEqual((ROLE / "../../../hetzner/provision").resolve(), PROVISION.resolve())
-        for name in SOURCES:
+        for name in PROVISION_FILES:
             with self.subTest(name=name):
-                self.assertTrue((PROVISION / name).is_file(), f"{name} must exist in hetzner/provision")
+                self.assertTrue(
+                    (PROVISION / name).is_file(), f"{name} must exist in hetzner/provision"
+                )
+
+    def test_the_nat_program_and_unit_are_in_the_role_files(self) -> None:
+        for name in ROLE_FILES:
+            with self.subTest(name=name):
+                self.assertTrue((ROLE_FILES_DIR / name).is_file(), f"{name} must exist in files/")
 
     def test_vars_name_only_files_the_role_holds(self) -> None:
         constants = as_dict(load("vars/main.yml"))
-        for key in ("egress_nat_host_egress", "egress_nat_nat_gateway"):
+        expected = {
+            "egress_nat_host_egress": (PROVISION, PROVISION_FILES),
+            "egress_nat_nat_gateway": (ROLE_FILES_DIR, ROLE_FILES),
+        }
+        for key, (directory, names) in expected.items():
             item = as_dict(constants[key])
             for field in ("reconciler_src", "unit_src"):
-                self.assertIn(item[field], SOURCES)
+                with self.subTest(item=key, field=field):
+                    self.assertIn(resolve(item[field]).name, names)
+                    self.assertEqual(resolve(item[field]).parent, directory.resolve())
+        host_egress = as_dict(constants["egress_nat_host_egress"])
+        self.assertEqual(resolve(host_egress["timer_src"]).name, "branchleft-host-egress.timer")
+        self.assertEqual(host_egress["timer_name"], "branchleft-host-egress.timer")
+
+    def test_the_nat_unit_copy_in_provision_is_the_roles_copy(self) -> None:
+        # The NAT hand installer, kept until its removal, installs this copy. Two copies
+        # are one home only while they are the same bytes.
+        self.assertTrue(
+            filecmp.cmp(
+                PROVISION / "branchleft-nat.service",
+                ROLE_FILES_DIR / "branchleft-nat.service",
+                shallow=False,
+            )
+        )
+
+    def test_the_timer_triggers_the_unit_the_role_installs(self) -> None:
+        # The timer names the unit it re-runs by its installed name, so the two
+        # files cannot drift apart: a timer for a unit of another name re-runs nothing.
+        item = as_dict(as_dict(load("vars/main.yml"))["egress_nat_host_egress"])
+        timer = resolve(item["timer_src"]).read_text(encoding="utf-8")
+        self.assertIn(f"Unit={item['unit_name']}\n", timer)
+        self.assertIn("OnUnitActiveSec=1min\n", timer)
 
 
 class UnitContractTests(unittest.TestCase):
@@ -114,7 +160,7 @@ class UnitContractTests(unittest.TestCase):
         constants = as_dict(load("vars/main.yml"))
         for key in ("egress_nat_host_egress", "egress_nat_nat_gateway"):
             item = as_dict(constants[key])
-            unit = (PROVISION / str(item["unit_src"])).read_text(encoding="utf-8")
+            unit = resolve(item["unit_src"]).read_text(encoding="utf-8")
             with self.subTest(unit=item["unit_name"]):
                 self.assertIn(f"ExecStart={item['reconciler_dest']}\n", unit)
 
@@ -206,8 +252,14 @@ class GuardTests(unittest.TestCase):
     def test_each_include_clears_the_copy_registers_first(self) -> None:
         tasks = [as_dict(task) for task in as_list(load("tasks/_reconciler.yml"))]
         clear = named(tasks, "Clear the copy registers")
-        self.assertEqual(as_dict(clear["ansible.builtin.set_fact"]),
-                         {"egress_nat_reconciler_copy": {}, "egress_nat_unit_copy": {}})
+        self.assertEqual(
+            as_dict(clear["ansible.builtin.set_fact"]),
+            {
+                "egress_nat_reconciler_copy": {},
+                "egress_nat_unit_copy": {},
+                "egress_nat_timer_copy": {},
+            },
+        )
         self.assertEqual(tasks[0], clear)
 
     def test_the_previous_state_is_read_before_the_guard(self) -> None:

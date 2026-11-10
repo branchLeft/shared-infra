@@ -854,6 +854,42 @@
           - tunnel_account_verify_gone.rc == 2
         quiet: true
 
+    # The main entry, which a pulled playbook runs, is db1's half and only that. The host is bare here (teardown above), so what main leaves is what
+    # main wrote. It must have written the account's key, the known hosts file,
+    # the target file and the unit, and none of the replica half's files.
+    - name: Run the main entry alone on the bare host
+      ansible.builtin.include_role:
+        name: branchleft.tunnel_account
+
+    - name: Read what the main entry wrote
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /etc/branchleft/db-tunnel/id_ed25519
+        - /etc/branchleft/db-tunnel/id_ed25519.pub
+        - /etc/branchleft/db-tunnel/known_hosts
+        - /etc/branchleft/db-tunnel/target.env
+        - /etc/systemd/system/branchleft-db-tunnel.service
+        - /etc/ssh/sshd_config.d/50-branchleft-db-tunnel.conf
+        - /etc/ssh/branchleft-db-tunnel/authorized_keys
+      register: tunnel_account_verify_main
+
+    - name: Assert the main entry wrote exactly db1's half
+      ansible.builtin.assert:
+        that:
+          - tunnel_account_verify_main.results[0:5] | selectattr('stat.exists') | list | length == 5
+          - tunnel_account_verify_main.results[5:7] | selectattr('stat.exists') | list | length == 0
+        quiet: true
+        fail_msg: The main entry did not write exactly db1's half (the key, the known hosts file, the target file and the unit, and no replica file).
+
+    - name: Run teardown with confirmation after the main case
+      ansible.builtin.include_role:
+        name: branchleft.tunnel_account
+        tasks_from: teardown
+      vars:
+        tunnel_account_teardown_confirm: true
+
     # Control 2: an account that already has a login shell is refused, not
     # silently changed. The account is made by hand here, as an operator might.
     - name: Case, an existing tunnel account with a login shell is refused (control 2)
@@ -893,15 +929,9 @@
             name: dbtunnel
             state: absent
 
-    - name: Run db1's key stage again to put the configuration back
+    - name: Run db1's half through the main entry again to put the configuration back
       ansible.builtin.include_role:
         name: branchleft.tunnel_account
-        tasks_from: db1_key
-
-    - name: Run db1's install again
-      ansible.builtin.include_role:
-        name: branchleft.tunnel_account
-        tasks_from: db1
 
     - name: Run the replica half again
       ansible.builtin.include_role:
@@ -937,8 +967,6 @@
           needle: ' : Pin the replica host key'
         - what: the name of a task that writes the authorized key
           needle: ' : Write the authorized key for db1 with from= and the restrictions'
-        - what: the stat result of an input file, the kind that carries a checksum unless told not to
-          needle: '"isreg": true'
         - what: a result censored by no_log
           needle: '(censored due to no_log)'
         - what: a diff header from the check run
@@ -949,6 +977,34 @@
           needle: 'db1 public key for the replica run: ssh-ed25519 '
       loop_control:
         label: '{{ item.what }}'
+
+    # The scan must read the stat of each input file itself, the kind of result
+    # that carries a checksum unless told not to. A stat of any other regular
+    # file (db1's key, read above) also prints "isreg": true, so that line alone
+    # would let the scan pass with every input stat gone from the log. Ansible
+    # prints a result's keys in sorted order, so inside one stat result "isreg"
+    # comes before "path", and [^}] keeps the match inside that one result.
+    # replica_host is left out on purpose: the refusal cases above stat that file
+    # themselves, so its stat is in the log whatever the role does, and naming it
+    # here would prove nothing (seen when the role's two input tasks were hidden
+    # with no_log: the other four went red and this one stayed green).
+    - name: Assert the log holds the stat of each input file, as a regular file
+      ansible.builtin.assert:
+        that:
+          - >-
+            tunnel_account_verify_log is search(
+              '"isreg": true[^}]*"path": "'
+              ~ ('/etc/branchleft/db-tunnel/inputs/' ~ item) | regex_escape
+              ~ '"')
+        fail_msg: >-
+          The log lacks the stat of the input file {{ item }}, so a scan that
+          finds nothing would prove nothing about the inputs.
+        quiet: true
+      loop:
+        - replica_host_key
+        - db1_subnet_prefix
+        - from_address
+        - db1_public_key
 
     - name: Work out which private inputs the log holds
       ansible.builtin.set_fact:

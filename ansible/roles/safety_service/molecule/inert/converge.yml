@@ -1,0 +1,8 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with its inputs at their defaults
+      ansible.builtin.include_role:
+        name: branchleft.safety_service

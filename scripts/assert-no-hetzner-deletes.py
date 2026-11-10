@@ -2,12 +2,8 @@
 """Fail if a `pulumi preview --json` plan would destroy a Hetzner resource.
 
 Run as a preflight inside a CI deploy job, against the same stack state
-`pulumi up` is about to act on, seconds earlier and with the same credentials.
-One script serves all three Hetzner stacks (`branchleft-mail`,
-`branchleft-hetzner-network`, `branchleft-hetzner-estate`) because they share
-one provider and one failure mode. The GCP edge stack had its own equivalent
-guard, `assert-no-edge-deletes.py`, removed with that program in the GCP
-wind-down (branchLeft/workspace#1000).
+`pulumi up` is about to act on. One script serves all four Hetzner stacks
+(mail, hetzner-network, hetzner-estate, hetzner-dns).
 
 Usage:
     assert-no-hetzner-deletes.py <preview-json-file>
@@ -17,32 +13,11 @@ Usage:
 Exit status 0 if clean, 1 if a protected resource would be destroyed (or if
 any input could not be read or understood), 2 on usage error.
 
-Protection is by resource type, not by logical id. Every stack this guard
-fronts declares a handful of resources whose loss is an outage (mx1, its
-firewall, the network, its subnet, edge1), and hcloud resource names carry no
-tenant identity that would force a name list. Every instance of a protected
-type is covered, including the children a component like
-`@branchleft/hetzner-host`'s `Host` creates under its own URN parent chain --
-which a name list would miss, because the component derives its children's
-names.
-
-`hcloud:index/networkRoute:NetworkRoute` is deliberately unprotected:
-network.ts gives the egress route `protect: false` on purpose, because
-deleting it detaches nothing, loses no state, and moving the gateway to
-another host has to stay an ordinary apply.
-
-What this cannot prove, both limits real:
-
-1. `pulumi preview` compares the program to Pulumi *state*, never to live
-   Hetzner. A resource already deleted out of band still reads as unchanged.
-   This gate answers "will this apply destroy something", not "is the estate
-   intact".
-
-2. A resource that migrates out of a program dir -- say mail's server moving
-   behind the `Host` component -- leaves the plan check intact but makes the
-   coverage map here stale. `--verify-coverage` fails until the map is
-   updated consciously, so the move is a reviewed edit rather than a silent
-   erosion.
+Protection is by resource type, not by logical id, so a component's children
+are covered too. NetworkRoute and ZoneRrset are deliberately unprotected.
+Two limits: preview compares to Pulumi state, never to live Hetzner; and a
+resource that migrates out of a program dir leaves the coverage map stale.
+Narrative and reasons: scripts/assert-no-hetzner-deletes.md.
 """
 
 import contextlib
@@ -73,6 +48,11 @@ PROTECTED_TYPES = {
     # a refactor can surface them as first-class resources at any time, and
     # the day that happens is not the day anyone re-reads this list.
     "hcloud:index/primaryIp:PrimaryIp",
+    # Deleting or replacing a DNS zone takes the website, the edge and mail
+    # down together. Its records (`hcloud:index/zoneRrset:ZoneRrset`) are
+    # deliberately NOT protected: removing a record must stay an ordinary
+    # apply, the same reasoning as the egress route below.
+    "hcloud:index/zone:Zone",
 }
 
 # What `--verify-coverage` expects to find declared in each program directory,
@@ -86,8 +66,10 @@ COVERAGE_BY_DIR = {
     "mail": {"hcloud.Server", "hcloud.Firewall"},
     # hetzner/network.ts declares the network and subnet; hetzner/estate.ts
     # (same directory -- the estate project's `main` points at ../estate.ts)
-    # declares edge1 through the Host component.
-    "hetzner": {"hcloud.Network", "hcloud.NetworkSubnet", "Host"},
+    # declares edge1 through the Host component; hetzner/dns.ts (same
+    # directory -- the dns project's `main` points at ../dns.ts) declares the
+    # zones.
+    "hetzner": {"hcloud.Network", "hcloud.NetworkSubnet", "Host", "hcloud.Zone"},
 }
 
 # Any Pulumi step op containing either word destroys, or schedules the
@@ -215,6 +197,9 @@ _ESTATE_STACK = "urn:pulumi:production::branchleft-hetzner-estate::"
 _URN_EDGE1 = (
     f"{_ESTATE_STACK}branchleft:hetznerHost:Host$hcloud:index/server:Server::edge1-server"
 )
+_DNS_STACK = "urn:pulumi:production::branchleft-hetzner-dns::"
+_URN_ZONE = f"{_DNS_STACK}hcloud:index/zone:Zone::branchleft-co-uk"
+_URN_RRSET = f"{_DNS_STACK}hcloud:index/zoneRrset:ZoneRrset::branchleft-co-uk-www-a"
 
 
 def _plan(*steps: tuple[str, str]) -> dict:
@@ -258,6 +243,7 @@ _HETZNER_SOURCE = (
     "export const network = new hcloud.Network('platform', {});\n"
     "export const subnet = new hcloud.NetworkSubnet('platform-eu-central', {});\n"
     "export const edge1 = new Host({ name: 'edge1' });\n"
+    "export const zone = new hcloud.Zone('branchleft-co-uk', {});\n"
 )
 
 
@@ -277,6 +263,12 @@ def _coverage_self_test() -> int:
         ("hetzner", "hetzner, everything declared", _HETZNER_SOURCE, 0),
         ("mail", "mail, server refactored away but still mentioned", refactored, 1),
         ("hetzner", "hetzner, Host no longer constructed", _HETZNER_SOURCE.replace("new Host(", "new Ghost(", 1), 1),
+        (
+            "hetzner",
+            "hetzner, Zone no longer constructed",
+            _HETZNER_SOURCE.replace("new hcloud.Zone(", "new somethingElse(", 1),
+            1,
+        ),
     ]
 
     failed = False
@@ -346,6 +338,17 @@ def self_test() -> int:
                 ("delete", _URN_FIREWALL),
             ),
             [("mail-firewall", "delete")],
+        ),
+        ("outright delete of the DNS zone", _plan(("delete", _URN_ZONE)), [("branchleft-co-uk", "delete")]),
+        (
+            "replacement of the DNS zone",
+            _plan(("replace", _URN_ZONE)),
+            [("branchleft-co-uk", "replace")],
+        ),
+        (
+            "a record delete is deliberately an ordinary apply",
+            _plan(("delete", _URN_RRSET), ("update", _URN_RRSET)),
+            [],
         ),
         ("empty plan", _plan(), []),
     ]

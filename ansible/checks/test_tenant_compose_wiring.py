@@ -26,6 +26,7 @@ HOST = "app1"
 TOOLING = "deploy_tooling"
 PROGRAM_ASSIGNMENT = re.compile(r'^VOLUME_PROGRAM: Final = "([^"]+)"$', re.MULTILINE)
 ROLE_LINE = "    - role: ../roles/tenant_compose # noqa: role-name[path]\n"
+TOOLING_LINE = "    - role: ../roles/deploy_tooling # noqa: role-name[path]\n"
 
 
 def _read(path: Path) -> object:
@@ -90,6 +91,11 @@ class RealTree(unittest.TestCase):
         self.assertIn("website_app1", applied)
         self.assertGreater(applied.index(ROLE), applied.index("website_app1"))
 
+    def test_app1_applies_the_role_after_the_deploy_tooling(self) -> None:
+        applied = _roles_of(ROOT / "ansible" / "playbooks" / f"{HOST}.yml")
+        self.assertIn(TOOLING, applied)
+        self.assertGreater(applied.index(ROLE), applied.index(TOOLING))
+
 
 class Mutations(unittest.TestCase):
     def setUp(self) -> None:
@@ -142,20 +148,9 @@ class Mutations(unittest.TestCase):
         self._expect("as its last role")
 
     def test_the_role_applied_before_the_deploy_tooling_is_found(self) -> None:
-        self._edit(
-            f"playbooks/{HOST}.yml",
-            ROLE_LINE,
-            ROLE_LINE + "    - role: ../roles/deploy_tooling # noqa: role-name[path]\n",
-        )
+        self._edit(f"playbooks/{HOST}.yml", TOOLING_LINE, "")
+        self._edit(f"playbooks/{HOST}.yml", ROLE_LINE, ROLE_LINE + TOOLING_LINE)
         self._expect(f"{ROLE} is applied before {TOOLING}")
-
-    def test_the_role_applied_after_the_deploy_tooling_passes(self) -> None:
-        self._edit(
-            f"playbooks/{HOST}.yml",
-            ROLE_LINE,
-            "    - role: ../roles/deploy_tooling # noqa: role-name[path]\n" + ROLE_LINE,
-        )
-        self.assertEqual(problems(self.ansible), [])
 
     def test_a_volume_program_path_the_role_does_not_use_is_found(self) -> None:
         self._edit(

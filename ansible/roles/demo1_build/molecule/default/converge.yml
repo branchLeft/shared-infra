@@ -1,8 +1,47 @@
 ---
+# The stated skips of the production candidate. They run first, on a host where nothing is
+# staged yet, so that "nothing staged" is a fact about the skip and not about an earlier
+# apply. The token file the second case names is not placed; the first case's is.
+- name: Case base_unset_is_a_stated_skip, an empty wildcard base stages nothing and says why
+  ansible.builtin.import_playbook: stated_skip.yml
+  vars:
+    converge_case:
+      base: ''
+      token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+      expect: 'the wildcard base (demo1_build_wildcard_base) is not set'
+
+- name: Case token_missing_is_a_stated_skip, a token file that is not placed stages nothing and says why
+  ansible.builtin.import_playbook: stated_skip.yml
+  vars:
+    converge_case:
+      base: site-fixture.invalid
+      token_file: /etc/branchleft/secrets/demo-dns-not-placed
+      expect: 'no DNS token file is placed at /etc/branchleft/secrets/demo-dns-not-placed'
+
+- name: Case caddy_image_unset_is_a_stated_skip, no Caddy image to judge the candidate with stages nothing and says why
+  ansible.builtin.import_playbook: stated_skip.yml
+  vars:
+    converge_case:
+      base: site-fixture.invalid
+      token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+      caddy_image: ''
+      expect: 'no Caddy image (demo1_build_caddy_image) is set to judge the candidate with'
+
+- name: Case caddy_image_not_loaded_is_a_stated_skip, a Caddy image that is not on the host stages nothing and says why
+  ansible.builtin.import_playbook: stated_skip.yml
+  vars:
+    converge_case:
+      base: site-fixture.invalid
+      token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+      caddy_image: 'demo-edge-test@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'
+      expect: 'is not loaded on this host'
+
 - name: Converge
   hosts: all
   gather_facts: false
   vars:
+    demo1_build_wildcard_base: site-fixture.invalid
+    demo1_build_caddy_image: 'demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
     converge_sudoers_path: /etc/sudoers.d/branchleft-slot
     converge_slots_dir: /var/lib/branchleft/broker-slots
     converge_flag: /var/lib/branchleft-broker/drain-flags/0-a.drain
@@ -42,6 +81,41 @@
     - name: Apply the role
       ansible.builtin.include_role:
         name: branchleft.demo1_build
+
+    # The site candidates. The prepare step gives slots 0 and 1 an edge input and no other
+    # slot one, so the role must print one NOT rendered line for each of the five others,
+    # and no more, and no notice that the production candidate was not staged (the base is
+    # set, the token file is placed and the renderer is staged). A silent skip would read
+    # as a configured host. The lines are read from the role's register, which holds what
+    # each debug task printed.
+    - name: Assert the role named each of the five slots with no edge input as NOT rendered
+      ansible.builtin.assert:
+        that:
+          - demo1_build_site_not_rendered == ['2', '3', '4', '5', '6']
+          - demo1_build_site_notices.results | map(attribute='msg') | select('search', 'NOT rendered') | list | length == 5
+          - demo1_build_site_unstaged_notices.results | default([]) | selectattr('skipped', 'undefined') | list | length == 0
+          - demo1_build_candidate_notice.skipped | default(false)
+        quiet: true
+        fail_msg: >-
+          The site candidates are not the five slots with no edge input, a slot with no input was not named as
+          NOT rendered, or the production candidate was reported as not staged. A silent skip would pass as a
+          configured host.
+      when: not ansible_check_mode
+
+    # The role looks at the DNS token file and never opens it: the stat result that stays in
+    # the run's facts holds no checksum, no mime type and no content, each of which opens the
+    # file. The value itself is the stand-in prepare placed; verify scans the log and the
+    # staged candidate for it.
+    - name: Case secrets_never_logged, the role's look at the token file did not open it
+      ansible.builtin.assert:
+        that:
+          - demo1_build_dns_token_stat.stat.exists
+          - demo1_build_dns_token_stat.stat | dict2items | map(attribute='key') | intersect(['checksum', 'mimetype', 'charset', 'content']) | length == 0
+        quiet: true
+        fail_msg: >-
+          The role's stat of the DNS token file read it (a checksum, a mime type or its content). The role must
+          only look at the file.
+      when: not ansible_check_mode
 
     # The control for the second writer: the sudoers grant belongs to
     # broker_deploy, and the role must leave the file exactly as it found it,
@@ -205,19 +279,13 @@
       changed_when: false
       when: not ansible_check_mode
 
-# The one control that needs the whole role: a refusal by the grant check must
-# stop the run before the install. The grant is valid and whole; only the path the
-# role is asked to install the wrapper at differs from the one every rule names.
-# The probe path does not exist, so a role that installed before it checked would
-# leave a file there, and the play reads the path after the refusal. A role that
-# only fails does not prove the order: it can fail after the install and leave the
-# wrapper live under a refused grant. The second case is a dotted spelling of a
-# system binary, refused by the input check before anything runs.
+# The one control that needs the whole role: a refusal by the grant check must stop
+# the run before the install. The probe path does not exist, so an install that ran
+# first would leave a file the play reads after the refusal. The dotted path case is
+# refused by the input check before anything runs.
 #
-# Every other refusal case lives in the refusals scenario, where the role is not
-# applied again for each case (the default scenario's shard has to stay under its
-# time limit). That scenario cannot see an install, because it runs the check
-# alone, so the order control stays here.
+# Other refusal cases live in the refusals scenario, which runs one check alone and so
+# cannot see an install.
 - name: Refuse a wrapper path the grant does not name, a probe path
   ansible.builtin.import_playbook: refused_wrapper_path.yml
   vars:

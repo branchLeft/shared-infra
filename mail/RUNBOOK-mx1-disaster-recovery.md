@@ -182,8 +182,24 @@ restore procedure for any host.
    surface for backup restore has changed shape before.
 3. Once the host is reachable by SSH, confirm the containers came back:
 
+   **Select the hcloud project first.** The lookups below ask hcloud, so its active context
+   must be the one for the project that holds the server. Which of your contexts that is
+   is not recorded here. List them, read the name, then select it, each as its own paste:
+
    ```bash
-   MX1_IPV4=$(hcloud server describe mx1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+   hcloud context list
+   ```
+
+   ```bash
+   read -r HCLOUD_CONTEXT
+   ```
+
+   ```bash
+   hcloud context use "${HCLOUD_CONTEXT}"
+   ```
+
+   ```bash
+   MX1_IPV4=$(hcloud server ip mx1)
    ssh -i ~/.ssh/id_ed25519_hetzner -o StrictHostKeyChecking=accept-new root@"$MX1_IPV4" 'docker ps'
    ```
 
@@ -240,7 +256,7 @@ first-time provisioning — is called out explicitly below.
    the shim's own deploy step fails partway through. See step 5 below.
 
    ```bash
-   MX1_IPV4=$(hcloud server describe mx1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+   MX1_IPV4=$(hcloud server ip mx1)
    scp -r -i ~/.ssh/id_ed25519_hetzner mail/provision/. root@"$MX1_IPV4":/root/mail-provision
    ssh -i ~/.ssh/id_ed25519_hetzner root@"$MX1_IPV4" 'chmod +x /root/mail-provision/*.sh /root/mail-provision/*.py && /root/mail-provision/run-all.sh'
    ```

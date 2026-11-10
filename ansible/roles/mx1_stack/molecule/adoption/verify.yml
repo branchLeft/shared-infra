@@ -1,0 +1,5 @@
+---
+# The cases for a host with no stamp are in the lifecycle scenario's verify.yml, which runs the
+# group named by the scenario it is run from. Imported, not copied, so the cases have one home.
+- name: Verify as the lifecycle scenario does
+  ansible.builtin.import_playbook: ../lifecycle/verify.yml

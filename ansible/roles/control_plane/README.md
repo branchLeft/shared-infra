@@ -34,9 +34,12 @@ It does these, in order:
    and mode of both files back to the values in `control_plane_secret_files`
    (`vars/main.yml`), so a file widened by hand is corrected. It never changes
    the content of either file.
-3. Copies `compose.yml`, `compose.init.yml` and `pg_hba.conf` from
+3. Makes the `postgres` subdirectory of `/opt/branchleft/control-plane`, then copies
+   `compose.yml`, `compose.init.yml` and `postgres/pg_hba.conf` from
    `hetzner/control-plane/stack/` into `/opt/branchleft/control-plane`, as
-   `root:root` mode `0644` in a `0755` directory.
+   `root:root` mode `0644` in `0755` directories. The database's access rules sit alone
+   in `postgres/` because the compose file mounts that directory (not the single file)
+   into the `db` container.
 4. Only where the stack is not yet deployed: starts the database alone and
    waits until it is healthy.
 5. Only where the stack is not yet deployed: runs the sign-in service's init
@@ -47,13 +50,49 @@ It does these, in order:
    waits until it is healthy.
 7. Enables `branchleft-compose@control-plane.service`, runs the deploy wrapper
    with the pinned image, and fails if the unit is not `active` afterwards.
-8. Installs the DOCKER-USER isolation reconciler and its unit byte for byte from
-   `hetzner/provision/`, enables the unit, and restarts it only when the
-   reconciler or the unit changed.
+   Then, on every apply, reloads the database (`files/reload_hba.sh`, run in the `db`
+   container) so the delivered `pg_hba.conf` is the one in force, and removes the old
+   `/opt/branchleft/control-plane/pg_hba.conf`. See "How a changed pg_hba.conf reaches the
+   running database".
+8. Installs the DOCKER-USER isolation reconciler (a Python program) and its unit byte for
+   byte, through links in `files/` to the `deploy_tooling` role's own copies (the one home
+   of each), enables the unit, and restarts it only when the reconciler or the unit changed.
 
-The role never removes a volume, a file, an environment file, a master key or a
-container. The sign-in service's data lives in a Docker volume, and
-`docker compose down -v` is not run by any task.
+The role never removes a volume, an environment file, a master key or a container, and
+removes one file only: the access rules at their old place, once the stack runs on the
+new one. The sign-in service's data lives in a Docker volume, and `docker compose down -v`
+is not run by any task (a unit test fails on `down`, `rm`, `-v`, `--volumes` and
+`--force-recreate` in any command of the role).
+
+### How a changed pg_hba.conf reaches the running database
+
+A merged change to `postgres/pg_hba.conf` takes effect on the next gated apply, with no
+hand step:
+
+1. The role copies the file into `/opt/branchleft/control-plane/postgres/`. Ansible
+   replaces a file by rename, which gives it a new inode. The `db` container mounts the
+   directory, so it sees the new file at once. (A single-file bind mount keeps the old
+   inode on a Linux engine and would never see it. That was the previous shape, and why a
+   hand recreate of the container was needed.)
+2. The deploy wrapper restarts the stack's unit. Compose recreates a service only when its
+   configuration changed, so on a steady state it recreates nothing.
+3. `files/reload_hba.sh` runs in the container as `docker exec -i ... sh -s`. It refuses a
+   file that does not parse (`pg_hba_file_rules`, any row with an `error`), sends
+   `SELECT pg_reload_conf()`, waits until `pg_conf_load_time()` has moved, and checks the
+   file once more. A reload drops no connection and restarts nothing. The administrator's
+   password is read from the container's own environment, so the role holds no secret and
+   no value is in an argument. A file that does not parse fails the apply and the server
+   keeps the rules it holds.
+
+The reload runs on every apply, not only when the file changed, so a run interrupted after
+the copy is finished by the next one.
+
+**The first apply after the directory mount ships** is the one that recreates the `db`
+container: the compose file's mount line changed, so Compose recreates it once, on the new
+mount, with its `db-data` volume untouched. Compose may recreate the services that depend
+on the database (the sign-in service, the portal and the console) in the same step, which
+is a brief sign-in, portal and console interruption. The owner chooses the apply window
+when approving the gate. Every apply after that only reloads.
 
 ### What the role does not do
 
@@ -68,9 +107,53 @@ container. The sign-in service's data lives in a Docker volume, and
   `branchleft-compose@.service`, or the Docker engine. Those are the deploy
   tooling and host baseline roles. The role calls the wrapper and enables the
   unit; it does not provide either.
-- It does not delete a file that was removed from the stack directory. The
-  runbook's rsync used `--delete`; this role copies, and a removed file stays on
-  the host until someone removes it by hand.
+- It does not delete a file that was removed from the stack directory, except the
+  access rules at their old path (`/opt/branchleft/control-plane/pg_hba.conf`). The
+  runbook's rsync used `--delete`; this role copies, and any other removed file stays
+  on the host until someone removes it by hand.
+
+### The preflight on a host Nextcloud shares
+
+`ops1` runs Nextcloud beside the control plane, has no swap, and holds the only copy of
+Nextcloud's data. The role's first tasks and its last task use the module
+`library/control_plane_preflight.py`, which only reads, so check mode runs it too and a plan
+shows a refusal:
+
+1. **Collisions, first of all, on every run.** The run is refused, before any task that reads or
+   writes the host, if a Compose project name or a volume name the deploy is configured with is
+   Nextcloud's: the role's `control_plane_project_name`, the project directory's name, the unit's
+   instance, the `name:` of either Compose file, and every volume the Compose files would create
+   (a volume's `name:` if it has one, else the project name, an underscore and its key; an
+   external volume by its key). Project names are compared without regard to case. A name that
+   holds `$` is filled in when Compose runs, so it cannot be shown to differ and is refused. The
+   refusal codes are `project-collision`, `volume-collision` and `unverifiable-name`.
+2. **Room, then the first record.** Where the role would start or change containers
+   (`control_plane_bring_up` or `control_plane_start_units`), the run is refused if the memory
+   available is under the floor, or the free space on `/` or on Docker's data root is under the
+   floor (`memory-low`, `disk-low`), and the record is taken: memory, swap, free disk, how many
+   containers the stack has, and Nextcloud's containers (id, name, creation and start time,
+   state, restart count, image, Compose project, configuration hash, project directory, health),
+   volumes (name, creation time, mount point, project) and Compose project. A figure the module
+   cannot read is a refusal (`memory-unreadable`, `disk-unreadable`, `docker-unreadable`), never
+   a pass.
+3. **The comparison, last of all.** The record is taken again and the run fails
+   (`nextcloud-changed`) if any container or volume of Nextcloud's is gone, new or differs in any
+   field above except health, or if its containers' Compose project differs. Health is recorded
+   and not compared: it moves with load and a restart shows in the start time and the count. Both
+   records are printed.
+
+The floors are constants in `vars/main.yml`, so an inventory or play variable cannot lower them:
+memory 2664 MiB available while the stack has no container (the four hard limits, 1664 MiB, plus
+a margin of 1000 MiB), 1000 MiB once it has one (its memory is then already in use, and 2664
+would refuse an ordinary re-apply on a host that has run it), and 5120 MiB free disk on each of
+the two file systems. They are the figures of the delivery runbook, in the units `free -m` and
+`df -BM` print.
+
+Nextcloud's project name and its two volume names are constants of the module. A unit test
+holds them equal to `hetzner/nextcloud1/stack/compose.yml`, so renaming them there fails a test.
+The module reads Docker with five fixed commands (`info`, `ps --all`, `inspect`, `volume ls`,
+`volume inspect`) and a format that names fields, never a container's environment, because
+Nextcloud's containers hold credentials there.
 
 ## Interface
 
@@ -120,6 +203,16 @@ would recreate the database, so the role leaves a running stack to the unit. A f
 still uses the direct commands, because the unit cannot start the applications before the
 database and the sign-in service exist.
 
+A change to a service's block in `compose.yml` is a changed config for that service alone, and
+the next deploy wrapper run recreates just that service. The two applications carry their
+trusted proxy list (`PORTAL_TRUSTED_PROXIES` and `CONSOLE_TRUSTED_PROXIES`, the edge's private
+address, written once in the file and taken by alias) in their own `environment:` block, because
+the environment file reaches the containers only through `${VAR}` references in the compose
+file. Delivering that change recreates `portal` and `console` once, on the image the wrapper
+last pinned, and leaves `db` and `zitadel` as they are. It does not move the image: the role
+keeps the running image unless `control_plane_app_image` is given, and the deploy wrapper run
+by the owner is what moves it.
+
 ## Requirements
 
 - ansible-core at the version pinned in `ansible/requirements.txt`; the role's
@@ -137,13 +230,18 @@ database and the sign-in service exist.
 
 ## What it changes on a host
 
+- Nothing, by the preflight: it reads memory, disk and Docker and writes nothing.
 - `/etc/branchleft` (`0755`), `/etc/branchleft/control-plane` (`0750`),
   `/var/lib/branchleft/control-plane/zitadel-state` (`0700`, owned `1000:1000`).
 - `/etc/branchleft/control-plane.env` (`0600`, root) and
   `/etc/branchleft/control-plane/zitadel-masterkey` (`0400`, `1000:1000`), each
   created once, with their content written once. On every run their owner, group
   and mode are set back to these values, and their content is not changed.
-- `/opt/branchleft/control-plane` (`0755`) and its three files (`0644`).
+- `/opt/branchleft/control-plane` (`0755`), its `postgres` subdirectory (`0755`) and its
+  three files (`0644`), one of them `postgres/pg_hba.conf`. The old
+  `/opt/branchleft/control-plane/pg_hba.conf` is removed after the deploy wrapper.
+- The running database's configuration is reloaded on every apply (no restart, no
+  dropped connection).
 - Containers: on a fresh host only, the database and the sign-in service are started
   and healthy and the init phase runs once. On a host where the stack runs, the role
   starts no container itself.
@@ -232,13 +330,28 @@ converge is the idempotence step. `verify.yml` checks:
   with a running image that is a tag it stops with `control_plane[image-not-pinned]`;
 - that no throwaway value, from any apply, appears in the run's log.
 
+The module's tests run from the role's directory with the module on the path:
+`PYTHONPATH=library python -m unittest discover -s tests/unit -p 'test_control_plane_preflight.py'`.
+They use a fake Docker that answers from tables, files for memory and a function for disk, and
+they run the real role under `ansible-playbook` in check mode to show that Nextcloud's project
+name, or a volume of Nextcloud's in the Compose files, stops the run before its second task.
+Each refusal is proven by sabotage (the test names the line to break).
+
 `tests/unit/` reads `tasks/main.yml` and holds the structure the safety depends on:
 every input refusal is before the first write, every task that runs Compose directly
 is gated on a stack that is not yet deployed, the two reads of the running stack run in
 check mode and change nothing, and no task uses the image as given.
 
-The container does not run Docker, so the bring-up tasks, the stack's health and
-the isolation policy's effect on the firewall are not proven by this scenario.
+The container does not run Docker, so the bring-up tasks, the stack's health, the
+reload and the isolation policy's effect on the firewall are not proven by this scenario.
+The reload is proven elsewhere, against a real server:
+`hetzner/provision/test_control_plane_hba_server.py` delivers the repository's
+`pg_hba.conf` by temporary file and rename, as `copy` does, runs `files/reload_hba.sh` in a
+real PostgreSQL at the stack's pinned image, and requires the server's answer for every
+login and database to equal the one table. It is red with no reload, and on a Linux engine
+with the old single-file mount. `tests/unit/` pins the task's place (after the wrapper,
+after the delivery), its gate (`control_plane_start_units` and nothing else) and that no
+command of the role can remove a container or a volume.
 
 ## Named limits
 
@@ -246,6 +359,12 @@ the isolation policy's effect on the firewall are not proven by this scenario.
   in the test, and the reads of the running stack are answered by a stand-in, so
   the real output of `docker inspect` is not seen. The first live run through the
   gated pull is the proof.
+- **Check mode does not run the reload.** It is a `command` task, skipped like the others.
+  A plan shows the copy of a changed `postgres/pg_hba.conf` and the removal of the old file,
+  and not the reload that follows.
+- **The single-file mount's stale inode only reproduces on a Linux engine.** Docker
+  Desktop (macOS) showed the single-file mount updating, so the real-server test's
+  old-shape control case runs on Linux (CI) and is skipped, with its reason, elsewhere.
 - **Check mode does not run the deploy.** The compose commands and the deploy
   wrapper are `command` tasks that check mode skips; it shows the owner, group and mode
   corrections, the stack files and the isolation files only.
@@ -266,3 +385,13 @@ the isolation policy's effect on the firewall are not proven by this scenario.
   on them being present, as the runbook did.
 - **Compose's state is not read back by Ansible.** `--wait` is the check; no task
   reads the container list after it.
+- **The host reads of the preflight are not exercised against a real Docker.** The tests use a
+  fake that answers the five commands; the real output of `docker inspect` with the module's
+  format is first seen on the host. The container scenario runs with the bring-up off, so it
+  runs the collision check and skips the host reads.
+- **The comparison does not run if an earlier task failed.** A failed run has ended already, and
+  its failure is the signal; Nextcloud's state after a failed run is read by hand.
+- **The record is in the run's log, not on the host.** Nothing is written for it.
+- **A memory refusal can stop every later role of the host.** Roles after this one in the play do
+  not run when it fails. The running-stack floor is the margin for that, and the floors are
+  constants in `vars/main.yml`, changed by a reviewed commit and not by a variable.

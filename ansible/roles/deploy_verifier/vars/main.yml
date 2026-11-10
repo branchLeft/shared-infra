@@ -1,0 +1,29 @@
+---
+# Fixed by the role, not by inventory, host or play vars: a role variable outranks every value
+# a caller passes, so the pins below cannot be moved by anything outside this file. Nothing here
+# is a secret.
+
+# ----- The pin: the gh release the verifier runs -----
+
+# The release, its tarball digest and the URL it comes from name one release. get_url checks
+# the digest before anything is extracted; test_deploy_verifier_coverage.py holds the three to
+# one another and holds them here, out of defaults. The digest is the one GitHub publishes for
+# this tarball on the release API.
+deploy_verifier_gh_version: '2.103.3'
+deploy_verifier_gh_sha256: 'sha256:4c806978ffce1cec70853302a56d70ac6da4f19bae7adca4e1a8ab00633dd91d'
+deploy_verifier_gh_download_url: 'https://github.com/cli/cli/releases/download/v2.103.3/gh_2.103.3_linux_amd64.tar.gz'
+
+# ----- The paths the wrapper reads -----
+
+# branchleft_deploy.py names these in VERIFIER, VERIFIER_GH_DIR and VERIFIER_HOME. The coverage
+# test reads both files and fails when they disagree, so the wrapper and this role cannot drift.
+deploy_verifier_verifier_path: /usr/local/sbin/branchleft-verify-image
+deploy_verifier_gh_dir: /usr/local/libexec/branchleft-verifier
+deploy_verifier_gh_bin: /usr/local/libexec/branchleft-verifier/gh
+deploy_verifier_home_parent: /var/lib/branchleft
+deploy_verifier_home: /var/lib/branchleft/verifier-home
+
+# Where the verifier is read from: hetzner/provision/ of the checkout the playbook runs from,
+# the single home of the program. The role holds no copy of it. role_path is this role's own
+# directory, three levels below the repository root.
+deploy_verifier_programs_dir: '{{ role_path }}/../../../hetzner/provision'

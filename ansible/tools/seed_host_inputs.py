@@ -45,8 +45,14 @@ WHOLE: Final = "whole"
 RECIPIENTS: Final = "recipients"
 STACKS: Final = "stacks"
 STACKS_KEY: Final = "tenant_compose_stacks"
+# Typed only: the slots have no live file, so the hand install never held them.
+SLOTS: Final = "slots"
+# Typed only: a value that exists nowhere on the host, such as the CI jump account's name, which is
+# held out of the repository. It is asked for hidden and written like any typed input.
+TYPED: Final = "typed"
+SLOT_ADOPT: Final = "adopt"
 
-type Value = str | Sequence[Mapping[str, str | int]]
+type Value = str | Sequence[Mapping[str, str | int | bool]]
 
 
 @dataclass(frozen=True)
@@ -77,7 +83,9 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "ntfy_pager_watcher_token",
         "ntfy_pager_owner_password_hash",
         "ntfy_pager_machine_password_hash",
+        "ci_jump_user",
     ),
+    "edget": ("ci_jump_user",),
     "ops1": (
         "backup_worker_db_host",
         "backup_worker_db_user",
@@ -106,6 +114,7 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "website_app1_smtp_user",
         "website_app1_smtp_password",
         "tenant_compose_stacks",
+        "deploy_slot_keys_slots",
     ),
 }
 
@@ -187,11 +196,13 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     # Not a file: the tenants the volume program lists, each with the three files its stack
     # has on the host. The source's filename is the program, for the notes.
     STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
+    "deploy_slot_keys_slots": (Source(SLOTS, ""),),
+    "ci_jump_user": (Source(TYPED, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
 MESSAGES: Final[dict[str, str]] = {
-    "unknown-host": "this tool seeds edge1, ops1 or app1 only",
+    "unknown-host": "this tool seeds edge1, edget, ops1 or app1 only",
     "not-root": "must run as root",
     "directory": "a directory above the file is not a real directory owned by root and closed",
     "exists": "the inputs file appeared meanwhile and was not overwritten",
@@ -238,6 +249,9 @@ class Context:
     err: TextIO
     stack_root: Path
     list_claims: Callable[[], str]
+    # Discards input typed ahead but not yet read, so the rest of a paste that was refused
+    # cannot reach the shell. Production flushes the terminal; the default does nothing.
+    flush_input: Callable[[], None] = lambda: None
 
 
 # The one process this tool starts: the volume program, by its fixed path, with one fixed
@@ -263,6 +277,17 @@ def run_volume_program() -> str:
         raise SeedError("claims") from None
 
 
+def flush_terminal_input() -> None:
+    """Throws away what was typed or pasted ahead of the prompt, if input is a terminal."""
+    try:
+        import termios
+    except ImportError:
+        return
+    # termios.error is not an OSError: a stdin that is not a terminal raises it from tcflush.
+    with suppress(OSError, ValueError, termios.error):
+        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+
+
 def production_context() -> Context:
     return Context(
         config_dir=Path(CONFIG_DIR),
@@ -272,6 +297,7 @@ def production_context() -> Context:
         root_gid=ROOT_GID,
         ask_secret=getpass.getpass,
         ask_path=input,
+        flush_input=flush_terminal_input,
         out=sys.stdout,
         err=sys.stderr,
         stack_root=Path(STACK_ROOT),
@@ -535,11 +561,68 @@ def ask_tenants(ctx: Context, key: str) -> Value | None:
             return None
         if not line.strip():
             return tenants or None
+        if PRIVATE_KEY_MARK in line:
+            ctx.flush_input()
+            print(
+                "that line looks like a private key; nothing is written; run again.",
+                file=ctx.err,
+            )
+            return None
         tenant = parse_tenant_line(line.strip())
         if tenant is None:
             print("that line is not 'slug recipient'; try again", file=ctx.err)
         else:
             tenants.append(tenant)
+
+
+SLOT_KEY_TYPE: Final = "ssh-ed25519"
+SLOT_KEY_BLOB: Final = re.compile(r"[A-Za-z0-9+/]{20,}={0,2}")
+PRIVATE_KEY_MARK: Final = "PRIVATE KEY"
+
+
+def parse_slot_line(line: str) -> dict[str, str | bool] | None:
+    """A stack, an ed25519 public key (type, then base64), an optional comment, then the literal
+    word adopt if the stack is already run.
+
+    The comment is dropped, as the role drops it. A comment that is exactly the word adopt cannot
+    be told from the flag and is read as the flag. The role still checks the key and the stack on
+    the host; this refuses a line that cannot be one at the prompt.
+    """
+    words = line.split()
+    if len(words) < 3 or words[1] != SLOT_KEY_TYPE or not SLOT_KEY_BLOB.fullmatch(words[2]):
+        return None
+    adopt = len(words) > 3 and words[-1] == SLOT_ADOPT
+    return {
+        "stack": words[0],
+        "public_key": f"{words[1]} {words[2]}",
+        "adopt_existing": adopt,
+    }
+
+
+def ask_slots(ctx: Context, key: str) -> Value | None:
+    """Slot lines until an empty one. A malformed line, a stack or key given twice, or a pasted
+    private key refuses the whole list: nothing is written, pending input is discarded, and the
+    line is never echoed."""
+    slots: list[dict[str, str | bool]] = []
+    while True:
+        prompt = f"{key}: slot as 'stack public_key [adopt]' ({len(slots)} so far), "
+        try:
+            line = ctx.ask_secret(prompt + "empty line to end: ")
+        except (EOFError, OSError):
+            return None
+        if not line.strip():
+            return slots or None
+        slot = None if PRIVATE_KEY_MARK in line else parse_slot_line(line.strip())
+        repeats = slot is not None and any(
+            kept["stack"] == slot["stack"] or kept["public_key"] == slot["public_key"]
+            for kept in slots
+        )
+        if slot is None or repeats:
+            ctx.flush_input()
+            print("that line is not 'stack public_key [adopt]', or repeats one.", file=ctx.err)
+            print("nothing is written; run again.", file=ctx.err)
+            return None
+        slots.append(slot)
 
 
 def ask_for(ctx: Context, key: str) -> Value | None:
@@ -550,6 +633,8 @@ def ask_for(ctx: Context, key: str) -> Value | None:
         return ask_tenants(ctx, key)
     if kind == STACKS:
         return None
+    if kind == SLOTS:
+        return ask_slots(ctx, key)
     try:
         answer = ctx.ask_secret(f"{key}: ")
     except (EOFError, OSError):
@@ -577,6 +662,8 @@ def collect(ctx: Context, host: str) -> Collected:
     pending: list[str] = []
     for key in HOSTS[host]:
         for source in SOURCES[key]:
+            if source.kind in (SLOTS, TYPED):
+                break
             state, value = live.lookup(source)
             if state == "found" and value is not None:
                 found[key] = value
@@ -795,7 +882,7 @@ class QuietParser(argparse.ArgumentParser):
 
 def parse_args(argv: Sequence[str] | None, stream: TextIO) -> argparse.Namespace:
     parser = QuietParser(stream)
-    parser.add_argument("--host", required=True, help="edge1, ops1 or app1")
+    parser.add_argument("--host", required=True, help="edge1, edget, ops1 or app1")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--replace", action="store_true", help="replace an existing file")
     mode.add_argument("--set", dest="set_key", metavar="KEY", help="change one key, asked hidden")

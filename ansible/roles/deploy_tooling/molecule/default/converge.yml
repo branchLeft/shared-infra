@@ -26,3 +26,34 @@
     - name: Check mode against a configured host with a rule missing
       ansible.builtin.include_tasks: tasks/check_mode_flushed.yml
       when: ansible_check_mode and deploy_tooling_scenario_program.stat.exists
+
+    # Under --check only, on a host that does not hold the policy program yet: the
+    # harness's check-fresh step, the one place the apply is pending under the real
+    # flag (the check_mode keyword does not set ansible_check_mode, so the cases that
+    # run the role from a verify task cannot reach this). The role has to have
+    # summarised the chains the apply will see: the chains prepare.yml makes are
+    # Docker's own (a return in each DOCKER-USER, the jump to it first in FORWARD), so
+    # nothing would be refused and nothing is at risk. The module's own output is
+    # asserted on, and it holds no rule text: the registered result's invocation holds
+    # the policy program's text, which is the public file, so it is left out.
+    - name: Assert that the plan summarised the firewall chains
+      ansible.builtin.assert:
+        that:
+          - deploy_tooling_chain_summary is defined
+          - deploy_tooling_chain_summary.chains | length == 4
+          - deploy_tooling_chain_summary.would_refuse == 0
+          - deploy_tooling_chain_summary.at_risk == 0
+          - deploy_tooling_chain_summary.unreadable == 0
+          - deploy_tooling_chain_summary.forward | map(attribute='first') | list == ['jump-to-DOCKER-USER', 'jump-to-DOCKER-USER']
+          - "deploy_tooling_chain_summary.summary_lines | select('search', 'FORWARD: first rule is jump-to-DOCKER-USER') | list | length == 2"
+          - deploy_tooling_scenario_summary_text is not search('-A ')
+          - deploy_tooling_scenario_summary_text is not regex('[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+')
+        fail_msg: >-
+          The check-mode plan did not summarise the firewall chains the apply will see, or its
+          summary held a rule's text
+        quiet: true
+      vars:
+        deploy_tooling_scenario_summary_text: >-
+          {{ [deploy_tooling_chain_summary.summary_lines, deploy_tooling_chain_summary.chains,
+          deploy_tooling_chain_summary.forward] | to_json }}
+      when: ansible_check_mode and not deploy_tooling_scenario_program.stat.exists

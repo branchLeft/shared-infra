@@ -1,0 +1,11 @@
+---
+# All five inputs are public data and all default to empty. Empty means inert: the units are
+# installed and the timer is held disabled and stopped, and nothing is fetched. The owner sets
+# them in ansible/owner_vars/ops1.yml, so a routine change of the bundle digest touches that
+# one file and never the role. The inputs are named, with the shapes they must have, in
+# meta/argument_specs.yml and in the patterns of vars/main.yml.
+ring_controller_host_bundle_sha256: ''
+ring_controller_host_bundle_url: ''
+ring_controller_host_ledger_url: ''
+ring_controller_host_ledger_push_remote: ''
+ring_controller_host_push_known_hosts: ''

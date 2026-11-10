@@ -42,17 +42,50 @@ def selector_pattern() -> re.Pattern[str]:
 def roles_shipping_a_program(roles: Path) -> set[str]:
     """Return the roles with a Python file directly in files/: the code a host runs as root.
 
-    Fixtures under molecule/ are not a role's program and are not counted.
+    Fixtures under molecule/ are not a role's program and are not counted. A link in files/ is
+    not the role's own program: the file it reaches is held, and checked, by the role that
+    owns it.
     """
-    return {role.name for role in roles.iterdir() if any((role / "files").glob("*.py"))}
+    return {
+        role.name
+        for role in roles.iterdir()
+        if any(not path.is_symlink() for path in (role / "files").glob("*.py"))
+    }
 
 
-def unselected_roles(roles: Path, pattern: re.Pattern[str]) -> set[str]:
-    """Return the roles that ship a program and that the workflow's step does not check.
+LIBRARY_STEP = "- name: Check each role's own library modules"
 
-    The step visits a role only when it has tests/unit/, and skips it when it has a library/
-    or when its pyproject.toml has no line that matches the selector, so each of those is
-    a way for a program to get no mypy, ruff or unit tests in silence.
+
+def library_step_checks_files(workflow: str) -> bool:
+    """Return whether the library step also type-checks, lints and format-checks files/.
+
+    A role with a library/ is visited by that step and skipped by the role program step, so a
+    program in the files/ of such a role is checked only if the library step names files/ in
+    all three commands. The step is read from its name to the next step.
+    """
+    start = workflow.find(LIBRARY_STEP)
+    if start < 0:
+        return False
+    end = workflow.find("\n      - name:", start + 1)
+    step = workflow[start : end if end > 0 else len(workflow)]
+    return (
+        "checked_dirs+=(files)" in step
+        and 'mypy" --strict "${checked_dirs[@]}" tests/unit' in step
+        and 'ruff" check "${checked_dirs[@]}" tests' in step
+        and 'ruff" format --check "${checked_dirs[@]}" tests' in step
+    )
+
+
+def unselected_roles(
+    roles: Path, pattern: re.Pattern[str], *, library_step_covers_files: bool = True
+) -> set[str]:
+    """Return the roles that ship a program and that the workflow's steps do not check.
+
+    The role program step visits a role only when it has tests/unit/, and skips it when it has
+    a library/ or when its pyproject.toml has no line that matches the selector. A role with a
+    library/ is visited by the library step instead, which checks its files/ too when
+    ``library_step_covers_files`` is true. Each other case is a way for a program to get no
+    mypy, ruff or unit tests in silence.
     """
     skipped: set[str] = set()
     for name in roles_shipping_a_program(roles):
@@ -60,7 +93,7 @@ def unselected_roles(roles: Path, pattern: re.Pattern[str]) -> set[str]:
         pyproject = role / "pyproject.toml"
         selected = (
             (role / "tests" / "unit").is_dir()
-            and not (role / "library").is_dir()
+            and (library_step_covers_files or not (role / "library").is_dir())
             and pyproject.is_file()
             and pattern.search(pyproject.read_text(encoding="utf-8")) is not None
         )
@@ -100,11 +133,11 @@ WHEELS_ONLY = "--only-binary=:all:"
 HASHES = "--require-hashes"
 README = ANSIBLE / "README.md"
 # The lock and the pip that the parity oracle asks, as the workflow and the recipe name them. The
-# pin is installed first, in both tool jobs and in the recipe, so no environment runs the pip
+# pin is installed first, in every tool job and in the recipe, so no environment runs the pip
 # that the runner image happens to bundle.
 LOCK_PATH = "ansible/requirements.txt"
 PIN_PATH = "ansible/checks/pip-requirements.txt"
-TOOL_JOBS = ("lint", "shard")
+TOOL_JOBS = ("quick-lint", "lint", "shard")
 JOB_HEADER = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
 
 
@@ -213,7 +246,43 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         self.assertLessEqual({"ansible_runtime", "pull_trigger"}, roles_shipping_a_program(ROOTS))
 
     def test_the_role_program_step_selects_every_role_that_ships_a_program(self) -> None:
-        self.assertEqual(set(), unselected_roles(ROOTS, selector_pattern()))
+        self.assertEqual(
+            set(),
+            unselected_roles(
+                ROOTS,
+                selector_pattern(),
+                library_step_covers_files=library_step_checks_files(WORKFLOW),
+            ),
+        )
+
+    def test_a_role_with_a_library_and_a_program_is_checked_by_the_library_step(self) -> None:
+        self.assertIn("deploy_tooling", roles_shipping_a_program(ROOTS))
+        self.assertTrue((ROOTS / "deploy_tooling" / "library").is_dir())
+        self.assertTrue(library_step_checks_files(WORKFLOW))
+
+    def test_a_link_to_a_program_is_not_a_program_the_role_ships(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            roles = Path(directory)
+            make_role(roles, "holder", pyproject=GOOD_PYPROJECT, tests=True)
+            make_role(roles, "linker", pyproject=None, tests=False, program=False)
+            (roles / "linker" / "files" / "link.py").symlink_to(
+                roles / "holder" / "files" / "program.py"
+            )
+            make_role(roles, "copier", pyproject=None, tests=False, program=True)
+            self.assertEqual({"holder", "copier"}, roles_shipping_a_program(roles))
+
+    def test_a_library_step_that_does_not_check_files_is_found(self) -> None:
+        # The control of the test above: take files/ out of each of the four places.
+        for needle in (
+            "checked_dirs+=(files)",
+            'mypy" --strict "${checked_dirs[@]}" tests/unit',
+            'ruff" check "${checked_dirs[@]}" tests',
+            'ruff" format --check "${checked_dirs[@]}" tests',
+        ):
+            with self.subTest(needle=needle):
+                self.assertIn(needle, WORKFLOW)
+                self.assertFalse(library_step_checks_files(WORKFLOW.replace(needle, "true")))
+        self.assertFalse(library_step_checks_files(""))
 
     def test_a_role_that_ships_a_program_and_is_not_selected_is_found(self) -> None:
         # The controls of the test above: each way a role can be skipped, and one that is not.
@@ -225,10 +294,15 @@ class WorkflowPythonStepsTest(unittest.TestCase):
             make_role(roles, "no_pyproject", pyproject=None, tests=True)
             make_role(roles, "no_tests", pyproject=GOOD_PYPROJECT, tests=False)
             make_role(roles, "has_library", pyproject=GOOD_PYPROJECT, tests=True, library=True)
+            make_role(roles, "library_no_line", pyproject="[project]\n", tests=True, library=True)
             make_role(roles, "no_program", pyproject=None, tests=False, program=False)
             self.assertEqual(
-                {"no_pyproject_line", "no_pyproject", "no_tests", "has_library"},
+                {"no_pyproject_line", "no_pyproject", "no_tests", "library_no_line"},
                 unselected_roles(roles, pattern),
+            )
+            self.assertEqual(
+                {"no_pyproject_line", "no_pyproject", "no_tests", "library_no_line", "has_library"},
+                unselected_roles(roles, pattern, library_step_covers_files=False),
             )
 
     def test_the_role_program_step_does_not_select_a_role_with_no_program(self) -> None:
@@ -236,14 +310,15 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         if selector is None:
             self.fail("the role program step has no pyproject.toml selector")
         pattern = re.compile(selector.group("pattern"), re.MULTILINE)
-        text = (ANSIBLE / "roles" / "egress_nat" / "pyproject.toml").read_text(encoding="utf-8")
+        # ci_jump has a pyproject.toml and no files/*.py, so it is a role with no program.
+        text = (ANSIBLE / "roles" / "ci_jump" / "pyproject.toml").read_text(encoding="utf-8")
         self.assertIsNone(pattern.search(text))
 
     def test_the_install_scan_finds_the_commands_it_is_meant_to_find(self) -> None:
-        # A control: a scan that matched nothing would make the next two tests pass. Four: the
-        # pinned pip and the lock, each installed in both tool environments. In the recipe, eight:
-        # the same two lines in each of its four places (install, download, offline install).
-        self.assertEqual(4, len(lock_installs(WORKFLOW)))
+        # A control: a scan that matched nothing would make the next two tests pass. Six: the
+        # pinned pip and the lock, each installed in the three tool environments. In the recipe,
+        # eight: the same two lines in each of its four places (install, download, offline install).
+        self.assertEqual(6, len(lock_installs(WORKFLOW)))
         self.assertLessEqual(8, len(lock_installs(README.read_text("utf-8"))))
 
     def test_every_workflow_install_of_the_lock_is_wheels_only(self) -> None:
@@ -256,7 +331,7 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         # A control: an empty split would make the next test pass, and a third job that
         # installs the lock would be a tool environment this guard never looked at.
         jobs = workflow_jobs(WORKFLOW)
-        self.assertLessEqual({"discover", "lint", "shard", "roles"}, jobs.keys())
+        self.assertLessEqual({"discover", "quick-lint", "lint", "shard", "roles"}, jobs.keys())
         self.assertEqual(set(TOOL_JOBS), {name for name, job in jobs.items() if lock_installs(job)})
 
     def test_each_tool_job_installs_the_pinned_pip_and_then_the_lock(self) -> None:

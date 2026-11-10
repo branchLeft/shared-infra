@@ -45,6 +45,9 @@ host_inputs_required_by_host:
     - ntfy_pager_watcher_token
     - ntfy_pager_owner_password_hash
     - ntfy_pager_machine_password_hash
+    - ci_jump_user
+  edget:
+    - ci_jump_user
   ops1:
     - backup_worker_db_host
     - backup_worker_db_user
@@ -76,6 +79,22 @@ host_inputs_required_by_host:
     - website_app1_smtp_user
     - website_app1_smtp_password
     - tenant_compose_stacks
+    - deploy_slot_keys_slots
+
+# The inputs of a row that the file may leave out. Each is a name from the same host's row above
+# (checks/test_host_inputs_registry.py), and each feeds a role that does nothing with it until the
+# owner turns that role on: the role refuses by itself when its switch is on and the input is
+# absent, so an absent input is never a role running without it. The reason for the list is
+# delivery order. The tool that writes the file reaches a host only with the commit that holds
+# it, and a gated plan runs this loader first: an input that was required the moment its role
+# landed stopped the plan, so the commit that carries the tool could never be applied.
+# Left out of the file the input is simply not set; present, it must hold a usable value like
+# any other, and a name outside the row is refused as ever.
+host_inputs_optional_by_host:
+  edge1:
+    - ci_jump_user
+  edget:
+    - ci_jump_user
 
 # A value that is only white space counts as empty. Matched from the start, so
 # \s*\Z holds for the empty string and for blanks and nothing else.

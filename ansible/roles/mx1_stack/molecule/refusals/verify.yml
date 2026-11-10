@@ -1,0 +1,663 @@
+---
+# The role's guards, G1 to G12. Each case puts the host the first converge built into one bad state,
+# applies the role, and asserts that it stopped at the guard's own task with the guard's own words
+# and, for the guards that read before anything is written, that nothing the role writes moved, no
+# container was touched and no call to compose up was made. The state is undone after every case.
+#
+# Every group starts with a control: the same role on the host as the converge left it must finish
+# and move nothing. Without it, a role that refused everything would pass every case.
+#
+# A guard is proved by sabotage: with its mechanism broken, its case fails (red); with it restored,
+# the case passes (green). The README records each pair. The environment variable MX1_CASES, a
+# comma-separated list of case names, runs those cases alone; unset, every case runs.
+- name: Refusal cases
+  hosts: all
+  gather_facts: false
+  vars:
+    rf_tasks: '{{ playbook_dir }}/../default/tasks'
+    rf_nl: "\n"
+    rf_only: "{{ lookup('ansible.builtin.env', 'MX1_CASES') | split(',') | select | list }}"
+    rf_files: '{{ playbook_dir }}/../../files'
+    rf_caddyfile: "{{ lookup('ansible.builtin.file', rf_files ~ '/shim.Caddyfile', rstrip=false) }}"
+    rf_caddyfile_next: "{{ lookup('ansible.builtin.file', rf_files ~ '/shim.Caddyfile', rstrip=false) }}# a rule the next commit adds\n"
+    rf_dropin: "{{ lookup('ansible.builtin.file', rf_files ~ '/10-branchleft-local-recursive.conf', rstrip=false) }}"
+    rf_dropin_next: "{{ lookup('ansible.builtin.file', rf_files ~ '/10-branchleft-local-recursive.conf', rstrip=false) }}# a line the next commit adds\n"
+    rf_shim_compose: "{{ lookup('ansible.builtin.file', rf_files ~ '/shim-compose.yml', rstrip=false) }}"
+    rf_stalwart_compose: "{{ lookup('ansible.builtin.file', rf_files ~ '/docker-compose.yml', rstrip=false) }}"
+    rf_dropin_path: /etc/unbound/unbound.conf.d/10-branchleft-local-recursive.conf
+    rf_resolver_stamp: /var/lib/branchleft/mx1.resolver.applied
+    rf_shim_stamp: /var/lib/branchleft/mx1.shim.applied
+  tasks:
+    # ----- Start from the baseline, whatever an earlier run of this play left -----
+
+    - name: Look for switches, unit files and listeners an earlier run left
+      ansible.builtin.find:
+        paths:
+          - /var/lib/standin-docker/flags
+          - /etc/systemd/system/unbound.service.d
+        file_type: any
+      register: mx1_stack_rf_left
+
+    - name: Remove them
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        state: absent
+      loop: '{{ mx1_stack_rf_left.files }}'
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Stop a listener on port 53 an earlier run left
+      ansible.builtin.command:
+        argv: [pkill, -f, 'socket.SOCK_DGRAM.*127[.]0[.]0[.]2']
+      register: mx1_stack_rf_pkill
+      changed_when: mx1_stack_rf_pkill.rc == 0
+      failed_when: mx1_stack_rf_pkill.rc > 1
+
+    - name: Apply the role, so a stamp or a file an earlier run moved is put right
+      ansible.builtin.include_tasks: '{{ rf_tasks }}/run_role.yml'
+
+    - name: Assert the baseline applied
+      ansible.builtin.assert:
+        that: not mx1_stack_run.failed
+        quiet: true
+        fail_msg: 'The baseline did not apply: {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+    - name: Record the baseline
+      ansible.builtin.include_tasks: '{{ rf_tasks }}/snapshot.yml'
+      vars:
+        snap_label: base
+
+    # ----- The control -----
+
+    - name: Case control_accepts
+      when: "rf_only | length == 0 or 'control_accepts' in rf_only"
+      block:
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/snapshot.yml'
+          vars:
+            snap_label: control_before
+
+        - name: Apply the role to the converged host
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/snapshot.yml'
+          vars:
+            snap_label: control_after
+
+        - name: Assert the role finished and moved nothing
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role refused the converged host: {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Assert nothing moved
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/untouched.yml'
+          vars:
+            snap_before: control_before
+            snap_after: control_after
+            reason: a converged host
+
+    # ----- G1: a second compose file beside either compose file -----
+
+    - name: Case G1_second_compose_file
+      when: "rf_only | length == 0 or 'G1_second_compose_file' in rf_only"
+      block:
+        - name: Put a second compose file beside Stalwart's
+          ansible.builtin.copy:
+            content: "services: {}\n"
+            dest: /opt/stalwart/compose.yml
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a second compose file beside either compose file
+            refuse_phrase: "['/opt/stalwart/compose.yml']"
+
+        - name: Take it away, and put one beside the shim's
+          ansible.builtin.shell:
+            cmd: >-
+              rm -f /opt/stalwart/compose.yml && printf 'services: {}\n' > /etc/mailgun-shim/docker-compose.yml
+          changed_when: true
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a second compose file beside either compose file
+            refuse_phrase: "['/etc/mailgun-shim/docker-compose.yml']"
+      always:
+        - name: Take the files away
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /opt/stalwart/compose.yml
+            - /etc/mailgun-shim/docker-compose.yml
+
+    # ----- G2: an override file -----
+
+    - name: Case G2_override_file
+      when: "rf_only | length == 0 or 'G2_override_file' in rf_only"
+      block:
+        - name: Put an override file beside Stalwart's compose file
+          ansible.builtin.copy:
+            content: "services: {}\n"
+            dest: /opt/stalwart/docker-compose.override.yml
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse an override file beside either compose file
+            refuse_phrase: "['/opt/stalwart/docker-compose.override.yml']"
+
+        - name: Take it away, and put one beside the shim's
+          ansible.builtin.shell:
+            cmd: >-
+              rm -f /opt/stalwart/docker-compose.override.yml && printf 'services: {}\n' > /etc/mailgun-shim/compose.override.yaml
+          changed_when: true
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse an override file beside either compose file
+            refuse_phrase: "['/etc/mailgun-shim/compose.override.yaml']"
+      always:
+        - name: Take the files away
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /opt/stalwart/docker-compose.override.yml
+            - /etc/mailgun-shim/compose.override.yaml
+
+    # ----- G3: a .env beside the shim's compose file -----
+
+    - name: Case G3_shim_dotenv
+      when: "rf_only | length == 0 or 'G3_shim_dotenv' in rf_only"
+      block:
+        - name: Put a .env beside the shim's compose file
+          ansible.builtin.copy:
+            content: "COMPOSE_PROFILES=other\n"
+            dest: /etc/mailgun-shim/.env
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a .env beside the shim's compose file
+            refuse_phrase: reads no .env
+      always:
+        - name: Take it away
+          ansible.builtin.file:
+            path: /etc/mailgun-shim/.env
+            state: absent
+
+    # ----- G4: a COMPOSE_ key in Stalwart's .env: its name is printed, its value never -----
+
+    - name: Case G4_compose_key
+      when: "rf_only | length == 0 or 'G4_compose_key' in rf_only"
+      vars:
+        keep_paths: [/opt/stalwart/.env]
+      block:
+        - name: Keep Stalwart's .env
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/keep.yml'
+
+        - name: Add a COMPOSE_ line to it
+          ansible.builtin.lineinfile:
+            path: /opt/stalwart/.env
+            line: COMPOSE_FILE=value-that-must-not-be-printed.yml
+            insertafter: EOF
+          no_log: true
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a COMPOSE_ key in Stalwart's .env
+            refuse_phrase: COMPOSE_FILE
+            refuse_absent: [value-that-must-not-be-printed]
+            refuse_allow: [/opt/stalwart/.env]
+      always:
+        - name: Put Stalwart's .env back
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/put_back.yml'
+
+    # ----- G5: a .env that is not a regular file owned by root with mode 0600 -----
+
+    - name: Case G5_dotenv_mode
+      when: "rf_only | length == 0 or 'G5_dotenv_mode' in rf_only"
+      block:
+        - name: Let the group read Stalwart's .env
+          ansible.builtin.file:
+            path: /opt/stalwart/.env
+            mode: '0640'
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a Stalwart .env that is not a regular file owned by root with mode 0600
+            refuse_phrase: is not a regular file owned by root:root with mode 0600
+            refuse_allow: [/opt/stalwart/.env]
+      always:
+        - name: Put the mode back
+          ansible.builtin.file:
+            path: /opt/stalwart/.env
+            mode: '0600'
+
+    # ----- G6: an image not pinned by digest, or a placeholder where the digest belongs -----
+
+    - name: Case G6_unpinned_image
+      when: "rf_only | length == 0 or 'G6_unpinned_image' in rf_only"
+      block:
+        - name: Refuse a tag in place of Caddy's digest
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            run_shim_compose: "{{ rf_shim_compose | regex_replace('(caddy:2-alpine)@sha256:[0-9a-f]{64}', '\\1') }}"
+            refuse_task: Refuse a compose file whose images are not all pinned by digest
+            refuse_phrase: is not pinned by digest
+
+        - name: Refuse a placeholder in place of the shim's digest
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            run_shim_compose: "{{ rf_shim_compose | regex_replace('(mailgun-shim)@sha256:[0-9a-f]{64}', '\\1@sha256:PLACEHOLDER') }}"
+            refuse_task: Refuse a compose file whose images are not all pinned by digest
+            refuse_phrase: is not pinned by digest
+
+        - name: Refuse Stalwart's tag without its digest
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            run_stalwart_compose: "{{ rf_stalwart_compose | regex_replace('(stalwart:v[0-9.]+)@sha256:[0-9a-f]{64}', '\\1') }}"
+            refuse_task: Refuse a compose file whose images are not all pinned by digest
+            refuse_phrase: is not pinned by digest
+
+    # ----- G7: no secret for the shim's pinned image, or an image the contract table does not list -----
+
+    - name: Case G7_no_shim_secret
+      when: "rf_only | length == 0 or 'G7_no_shim_secret' in rf_only"
+      vars:
+        keep_paths: [/root/.stalwart-service-credentials]
+      block:
+        - name: Keep the credentials file
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/keep.yml'
+
+        - name: Take the secret the shim's pinned image reads out of it
+          ansible.builtin.lineinfile:
+            path: /root/.stalwart-service-credentials
+            regexp: '^blog-shim-bulk-submission:'
+            state: absent
+          no_log: true
+
+        # The other contract's label is still there: the role reads only the label its image's
+        # contract names, so a secret for a different image does not stand in for the missing one.
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a host with no secret for the shim
+            refuse_phrase: holds no entry labelled blog-shim-bulk-submission
+            refuse_allow: [/root/.stalwart-service-credentials]
+      always:
+        - name: Put the credentials file back
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/put_back.yml'
+
+    # An image whose digest is pinned (so G6 accepts it) but which the contract table does not list.
+    # The run stops at the read, before any write, and says which digest, so no environment is guessed.
+    - name: Case G7_unlisted_digest
+      when: "rf_only | length == 0 or 'G7_unlisted_digest' in rf_only"
+      block:
+        - name: Refuse a shim image whose digest the contract table does not list
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            run_shim_compose: "{{ rf_shim_compose | regex_replace('(mailgun-shim)@sha256:[0-9a-f]{64}', '\\1@sha256:' ~ ('e' * 64)) }}"
+            refuse_task: Read whether the credentials file holds the secret the shim's pinned image reads
+            refuse_phrase: has no contract in shim-env-contracts.json
+
+    # ----- G8: port 53 held by something other than unbound -----
+
+    - name: Case G8_port53
+      when: "rf_only | length == 0 or 'G8_port53' in rf_only"
+      block:
+        - name: Hold port 53 on another loopback address with a program that is not unbound
+          ansible.builtin.shell:
+            cmd: >-
+              setsid --fork python3 -c
+              "import socket, time; s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.2', 53)); time.sleep(900)"
+              >/dev/null 2>&1 </dev/null
+          changed_when: true
+
+        - name: Wait until it holds the port
+          ansible.builtin.wait_for:
+            host: 127.0.0.2
+            port: 53
+            state: started
+            timeout: 5
+          failed_when: false
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a host where port 53 is held by something other than unbound
+            refuse_phrase: Port 53 is held by ['python3'] on ['127.0.0.2']
+      always:
+        - name: Stop the listener
+          ansible.builtin.command:
+            argv: [pkill, -f, 'socket.SOCK_DGRAM.*127[.]0[.]0[.]2']
+          register: mx1_stack_rf_pkill
+          changed_when: mx1_stack_rf_pkill.rc == 0
+          failed_when: mx1_stack_rf_pkill.rc > 1
+
+    # ----- G9: unbound rejects the new drop-in: the previous bytes are put back, unbound is not restarted -----
+
+    - name: Case G9_checkconf_rejects
+      when: "rf_only | length == 0 or 'G9_checkconf_rejects' in rf_only"
+      block:
+        - name: Read when unbound last started
+          ansible.builtin.command:
+            argv: [systemctl, show, unbound, --property=ActiveEnterTimestampMonotonic, --value]
+          register: mx1_stack_rf_started_before
+          changed_when: false
+
+        - name: Have unbound-checkconf reject whatever it is given
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/checkconf_rejects
+            state: touch
+            mode: '0644'
+
+        - name: Refuse a drop-in unbound rejects
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            run_dropin: '{{ rf_dropin_next }}'
+            refuse_task: Stop, with the drop-in put back
+            refuse_phrase: the previous drop-in was put back
+            refuse_allow: ['{{ rf_dropin_path }}', '{{ rf_resolver_stamp }}']
+
+        - name: Look at the drop-in, at what is beside it and when unbound last started
+          ansible.builtin.stat:
+            path: '{{ rf_dropin_path }}'
+            checksum_algorithm: sha256
+          register: mx1_stack_rf_dropin
+
+        - name: Look for a backup of the drop-in
+          ansible.builtin.find:
+            paths: /etc/unbound/unbound.conf.d
+            patterns: '10-branchleft-local-recursive.conf.*'
+          register: mx1_stack_rf_backups
+
+        - name: Read when unbound last started
+          ansible.builtin.command:
+            argv: [systemctl, show, unbound, --property=ActiveEnterTimestampMonotonic, --value]
+          register: mx1_stack_rf_started_after
+          changed_when: false
+
+        - name: Assert the previous bytes are back, no backup is left, unbound was not restarted and the stamp says pending
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_rf_dropin.stat.checksum == (rf_dropin | hash('sha256'))
+              - mx1_stack_rf_backups.files | length == 0
+              - mx1_stack_rf_started_after.stdout == mx1_stack_rf_started_before.stdout
+              - mx1_stack_snaps.refuse_after.stamps.resolver == 'pending' ~ rf_nl
+            quiet: true
+            fail_msg: The previous drop-in was not put back, a backup is left, unbound was restarted, or the stamp does not say pending.
+      always:
+        - name: Let unbound-checkconf accept again
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/checkconf_rejects
+            state: absent
+
+        - name: Apply the role, so the next run's work is done and the stamp is recorded
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+        - name: Assert the run after the refusal recorded the resolver's stamp
+          ansible.builtin.assert:
+            that:
+              - not mx1_stack_run.failed
+              - mx1_stack_snaps.base.stamps.resolver != 'pending' ~ rf_nl
+            quiet: true
+            fail_msg: The run after the refusal did not act again and record the stamp.
+
+    # ----- G10: the system resolver file changed while unbound was restarted -----
+
+    - name: Case G10_resolv_conf_changed
+      when: "rf_only | length == 0 or 'G10_resolv_conf_changed' in rf_only"
+      vars:
+        keep_paths: [/etc/resolv.conf]
+      block:
+        - name: Keep /etc/resolv.conf
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/keep.yml'
+
+        - name: Make the directory of the unit's drop-ins
+          ansible.builtin.file:
+            path: /etc/systemd/system/unbound.service.d
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Make starting unbound append to /etc/resolv.conf, as the package's resolvconf unit would
+          ansible.builtin.copy:
+            content: |
+              [Service]
+              ExecStartPost=/bin/sh -c 'if [ -e /var/lib/standin-docker/flags/touch_resolv ]; then echo "# changed by a unit" >> /etc/resolv.conf; fi'
+            dest: /etc/systemd/system/unbound.service.d/standin-resolv.conf
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Make systemd read it
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Set the switch that makes it append
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/touch_resolv
+            state: touch
+            mode: '0644'
+
+        - name: Refuse a restart that changes the file
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            run_dropin: '{{ rf_dropin_next }}'
+            refuse_task: Refuse a run that changed the system resolver file
+            refuse_phrase: changed while unbound was installed or restarted
+            refuse_allow: ['{{ rf_dropin_path }}', '{{ rf_resolver_stamp }}']
+
+        - name: Assert the stamp says pending
+          ansible.builtin.assert:
+            that: mx1_stack_snaps.refuse_after.stamps.resolver == 'pending' ~ rf_nl
+            quiet: true
+            fail_msg: The stamp does not say pending after a run that changed the resolver file.
+      always:
+        - name: Remove the unit's drop-in and the switch
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /etc/systemd/system/unbound.service.d/standin-resolv.conf
+            - /var/lib/standin-docker/flags/touch_resolv
+
+        - name: Make systemd read that
+          ansible.builtin.systemd_service:
+            daemon_reload: true
+
+        - name: Put /etc/resolv.conf back
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/put_back.yml'
+
+        - name: Apply the role, so the next run's work is done and the stamp is recorded
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+        - name: Assert the run after the refusal recorded the resolver's stamp
+          ansible.builtin.assert:
+            that:
+              - not mx1_stack_run.failed
+              - mx1_stack_snaps.base.stamps.resolver != 'pending' ~ rf_nl
+            quiet: true
+            fail_msg: The run after the refusal did not act again and record the stamp.
+
+    # ----- G11: a stamp that cannot be read -----
+
+    - name: Case G11_unreadable_stamp
+      when: "rf_only | length == 0 or 'G11_unreadable_stamp' in rf_only"
+      vars:
+        keep_paths: ['{{ rf_shim_stamp }}']
+      block:
+        - name: Keep the shim's stamp
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/keep.yml'
+
+        - name: Make the stamp a line that is no input of the class
+          ansible.builtin.copy:
+            content: "not a stamp line\n"
+            dest: '{{ rf_shim_stamp }}'
+            owner: root
+            group: root
+            mode: '0600'
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a stamp that cannot be read
+            refuse_phrase: of the stamp is malformed
+            refuse_allow: ['{{ rf_shim_stamp }}']
+
+        - name: Put the stamp back, and let others read it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/put_back.yml'
+
+        - name: Let the group read the stamp
+          ansible.builtin.file:
+            path: '{{ rf_shim_stamp }}'
+            mode: '0644'
+
+        - name: Refuse it
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            refuse_task: Refuse a stamp that cannot be read
+            refuse_phrase: readable by someone other than its owner
+            refuse_allow: ['{{ rf_shim_stamp }}']
+      always:
+        - name: Put the stamp back
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/put_back.yml'
+
+    # ----- G12: a container still lacks a file it reads after the recreate -----
+    # Compose is told to ignore the force: the Caddyfile is placed, `up` leaves Caddy as it was, and
+    # the forced recreate does nothing. The role must read the container back, find it stale, stop
+    # before the stamp and say so.
+
+    - name: Case G12_stale_after_readback
+      when: "rf_only | length == 0 or 'G12_stale_after_readback' in rf_only"
+      block:
+        - name: Have compose ignore --force-recreate
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/ignore_force_recreate
+            state: touch
+            mode: '0644'
+
+        - name: Apply the role with a Caddyfile that has one more rule
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/refuse.yml'
+          vars:
+            run_caddyfile: '{{ rf_caddyfile_next }}'
+            refuse_task: Refuse a project whose container still lacks the content of a file it reads
+            refuse_phrase: still lack the current content of
+            refuse_unmoved: false
+
+        - name: Assert the stamp says pending and Caddy was not created again
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_snaps.refuse_after.stamps.shim == 'pending' ~ rf_nl
+              - mx1_stack_snaps.refuse_after.containers['mailgun-shim-caddy'] == mx1_stack_snaps.base.containers['mailgun-shim-caddy']
+            quiet: true
+            fail_msg: The stamp does not say pending, or Caddy was created again though the recreate was ignored.
+      always:
+        - name: Have compose obey --force-recreate again
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/ignore_force_recreate
+            state: absent
+
+        - name: Apply the role, so Caddy is created again and the stamp is recorded
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ rf_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+        - name: Assert the run after the refusal finished and recorded the shim's stamp
+          ansible.builtin.assert:
+            that:
+              - not mx1_stack_run.failed
+              - mx1_stack_snaps.base.stamps.shim != 'pending' ~ rf_nl
+            quiet: true
+            fail_msg: The run after the refusal did not act again and record the stamp.
+
+    # ----- The end: the host is the baseline, and no secret reached the log -----
+
+    - name: Apply the role last
+      ansible.builtin.include_tasks: '{{ rf_tasks }}/run_role.yml'
+
+    - name: Record the host
+      ansible.builtin.include_tasks: '{{ rf_tasks }}/snapshot.yml'
+      vars:
+        snap_label: end
+
+    - name: Assert the host ends as a converged one, and the role did not stop
+      ansible.builtin.assert:
+        that:
+          - not mx1_stack_run.failed
+          - mx1_stack_snaps.end.stamps.stalwart != 'pending' ~ rf_nl
+          - mx1_stack_snaps.end.stamps.shim != 'pending' ~ rf_nl
+          - mx1_stack_snaps.end.stamps.resolver != 'pending' ~ rf_nl
+          - mx1_stack_snaps.end.containers | dict2items | map(attribute='value.status') | unique | list == ['running']
+        quiet: true
+        fail_msg: The host does not end converged.
+
+- name: Verify the run's log on the machine that runs the test
+  hosts: localhost
+  gather_facts: false
+  vars:
+    rf_log_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    rf_secrets:
+      - '{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
+      - value-that-must-not-be-printed
+  tasks:
+    # The control first: a value the converge printed on purpose. A scan that cannot find it would
+    # find nothing for a secret either.
+    - name: Look for the control value in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ rf_log_dir }}'
+        patterns: ansible.log
+        contains: LOG-SCAN-CONTROL-VALUE
+        read_whole_file: true
+      register: mx1_stack_rf_control
+
+    - name: Look for each secret in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ rf_log_dir }}'
+        patterns: ansible.log
+        contains: '{{ item }}'
+        read_whole_file: true
+      loop: '{{ rf_secrets }}'
+      register: mx1_stack_rf_leaks
+      no_log: true
+
+    - name: Assert the scan works and no secret is in the log
+      ansible.builtin.assert:
+        that:
+          - mx1_stack_rf_control.matched == 1
+          - mx1_stack_rf_leaks.results | map(attribute='matched') | select | list | length == 0
+        quiet: true
+        fail_msg: >-
+          Either the log scan cannot see a printed value (control found in
+          {{ mx1_stack_rf_control.matched }} file(s), expected 1) or a secret reached the log.

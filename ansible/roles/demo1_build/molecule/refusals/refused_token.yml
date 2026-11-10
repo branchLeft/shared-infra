@@ -1,0 +1,142 @@
+---
+# One case of the DNS token file check, imported by converge.yml. The role refuses a
+# token file that is a link, a directory, not root's, open to group or others, or empty,
+# and names the path, never a value. The play runs the site step alone, with the
+# wildcard base set, against the file the case plants at the token path.
+#
+# converge_case.plant is one of: link, directory, owner, mode or empty. converge_case.expect
+# is the text the refusal must name. Each case removes what it planted and puts back the
+# token file prepare placed, so a later case is not refused for this one's file.
+- name: Refuse or accept a DNS token file
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    demo1_build_wildcard_base: site-fixture.invalid
+    demo1_build_caddy_image: 'demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+    converge_token: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+    converge_candidate: /var/lib/branchleft/demo-candidates/Caddyfile
+    converge_target: /var/tmp/demo1-token-target
+    converge_token_value: "STAND-IN-DNS-TOKEN-NOT-A-CREDENTIAL\n"
+  tasks:
+    - name: Plant the token file the case says and run the role's site step on its own
+      when: not ansible_check_mode
+      block:
+        - name: Keep the token file prepare placed, to put back
+          ansible.builtin.slurp:
+            src: '{{ converge_token }}'
+          register: demo1_build_converge_token_fixture
+          no_log: true
+
+        - name: Make the candidate directory the role declares
+          ansible.builtin.file:
+            path: /var/lib/branchleft/demo-candidates
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+          changed_when: false
+
+        - name: Remove the token file, so the case plants its own
+          ansible.builtin.file:
+            path: '{{ converge_token }}'
+            state: absent
+          changed_when: false
+
+        - name: Plant the root file a link will point at
+          ansible.builtin.copy:
+            content: '{{ converge_token_value }}'
+            dest: '{{ converge_target }}'
+            owner: root
+            group: root
+            mode: '0600'
+          changed_when: false
+          no_log: true
+          diff: false
+          when: converge_case.plant == 'link'
+
+        - name: Plant a link where the token file is
+          ansible.builtin.file:
+            src: '{{ converge_target }}'
+            dest: '{{ converge_token }}'
+            state: link
+          changed_when: false
+          when: converge_case.plant == 'link'
+
+        - name: Plant a directory where the token file is
+          ansible.builtin.file:
+            path: '{{ converge_token }}'
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+          changed_when: false
+          when: converge_case.plant == 'directory'
+
+        - name: Plant the token file the case says
+          ansible.builtin.copy:
+            content: "{{ '' if converge_case.plant == 'empty' else converge_token_value }}"
+            dest: '{{ converge_token }}'
+            owner: '{{ converge_case.owner | default("root") }}'
+            group: root
+            mode: '{{ converge_case.mode | default("0600") }}'
+          changed_when: false
+          no_log: true
+          diff: false
+          when: converge_case.plant in ['owner', 'mode', 'empty']
+
+        - name: Run the role's site step on its own
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _site_candidates.yml
+
+        - name: Fail if a token file the case must refuse was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a DNS token file it must refuse.
+
+      rescue:
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.assert:
+            that:
+              - converge_case.expect in (ansible_failed_result.msg | default(''))
+              - converge_token in (ansible_failed_result.msg | default(''))
+              - "'STAND-IN-DNS-TOKEN' not in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: 'The role failed for a reason other than the one this case is for: {{ ansible_failed_result.msg | default("") }}'
+
+        - name: Look for a Caddyfile the refusal left behind
+          ansible.builtin.stat:
+            path: '{{ converge_candidate }}'
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_token_candidate
+
+        - name: Assert the refusal staged nothing
+          ansible.builtin.assert:
+            that:
+              - not demo1_build_converge_token_candidate.stat.exists
+            quiet: true
+            fail_msg: The role staged a candidate for a DNS token file it refused.
+
+      always:
+        - name: Remove the planted token file and target
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - '{{ converge_token }}'
+            - '{{ converge_target }}'
+          changed_when: false
+          when: not ansible_check_mode
+
+        - name: Put back the token file prepare placed
+          ansible.builtin.copy:
+            content: '{{ demo1_build_converge_token_fixture.content | b64decode }}'
+            dest: '{{ converge_token }}'
+            owner: root
+            group: root
+            mode: '0600'
+          changed_when: false
+          no_log: true
+          diff: false
+          when: not ansible_check_mode

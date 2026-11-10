@@ -1,0 +1,227 @@
+---
+# The role installs the content-safety service on ops1 as a container unit. It makes the account
+# the service runs as, two directories, the configuration and the environment file of public
+# values, and the unit; it starts the unit only when the hash source's origin and at least one
+# host are set. It never writes the signing key (safety_channel_key does) and never the hash-source
+# credential (the owner places it): both are files the unit's conditions wait for.
+#
+# It touches only its own paths (vars/main.yml). Which host may apply it is the owner's list
+# (checks/host_roles.yml, R9); an in-role host test would be no control, because under the pull
+# inventory_hostname is localhost.
+
+# --- Inputs first, refused before any task changes anything. No message names a value (ANS-16).
+# The argument spec coerces a wrong type rather than rejecting it, so these reject it too.
+- name: Refuse an image that is not the service's image pinned by digest
+  ansible.builtin.assert:
+    that:
+      - safety_service_image is string
+      - safety_service_image is match(safety_service_image_pattern)
+    quiet: true
+    fail_msg: safety_service_image must be ghcr.io/branchleft/content-safety@sha256 and 64 lowercase hex digits.
+
+- name: Refuse a hash-source origin that is set and is not an https origin
+  ansible.builtin.assert:
+    that:
+      - safety_service_arachnid_base_url is string
+      - safety_service_arachnid_base_url | length == 0 or safety_service_arachnid_base_url is match(safety_service_origin_pattern)
+    quiet: true
+    fail_msg: safety_service_arachnid_base_url must be empty or an https origin with no path, credential, query or fragment.
+
+- name: Refuse a host list that is not a list of hosts
+  ansible.builtin.assert:
+    that:
+      - safety_service_hosts is sequence
+      - safety_service_hosts is not string
+      - safety_service_hosts is not mapping
+      - safety_service_hosts | select('mapping') | list | length == safety_service_hosts | length
+    quiet: true
+    fail_msg: safety_service_hosts must be a list of hosts.
+
+- name: Refuse a host with a key other than id, kind and endpoint, or one of them missing
+  ansible.builtin.assert:
+    that: item.keys() | sort | list == safety_service_host_keys
+    quiet: true
+    fail_msg: Each safety_service_hosts entry must hold exactly endpoint, id and kind.
+  loop: '{{ safety_service_hosts }}'
+  loop_control:
+    label: host {{ ansible_loop.index }}
+    extended: true
+
+- name: Refuse a host whose id, kind or endpoint has the wrong shape
+  ansible.builtin.assert:
+    that:
+      - item.id is string
+      - item.id is match(safety_service_host_id_pattern)
+      - item.kind in safety_service_host_kinds
+      - item.endpoint is string
+      - item.endpoint is match(safety_service_origin_pattern)
+    quiet: true
+    fail_msg: A safety_service_hosts entry has an id, kind or endpoint of the wrong shape (an https origin with no path is required).
+  loop: '{{ safety_service_hosts }}'
+  loop_control:
+    label: host {{ ansible_loop.index }}
+    extended: true
+
+- name: Refuse two hosts with the same id
+  ansible.builtin.assert:
+    that: safety_service_hosts | map(attribute='id') | unique | list | length == safety_service_hosts | length
+    quiet: true
+    fail_msg: Two safety_service_hosts entries have the same id.
+
+# The service runs only when it has somewhere to ask and someone to answer. Either empty keeps it
+# off, so a half-set pair is inert and not a service that cannot start.
+- name: Note whether the service is meant to run
+  ansible.builtin.set_fact:
+    safety_service_run: '{{ safety_service_arachnid_base_url | length > 0 and safety_service_hosts | length > 0 }}'
+
+# --- What the role stands on. It asserts these and never makes or changes them.
+- name: Look at docker and the parent directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ [safety_service_docker] + safety_service_parents }}'
+  register: safety_service_stats
+  loop_control:
+    label: '{{ item }}'
+
+- name: Require docker to be a root-owned regular file that only root can change
+  ansible.builtin.assert:
+    that:
+      - safety_service_stats.results[0].stat.exists
+      - safety_service_stats.results[0].stat.isreg
+      - safety_service_stats.results[0].stat.uid == 0
+      - not safety_service_stats.results[0].stat.wgrp
+      - not safety_service_stats.results[0].stat.woth
+    quiet: true
+    fail_msg: The docker client is missing, is not a regular file, is not root's or can be changed by others. The role does not install it.
+
+- name: Require each parent to be a root-owned directory that only root can change
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.uid == 0
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it.
+  loop: '{{ safety_service_stats.results[1:] }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# --- The account. System, no login, no home: it owns the state directory and, once the playbook
+# says so, the signing key, and nothing else.
+- name: Create the service group
+  ansible.builtin.group:
+    name: '{{ safety_service_account }}'
+    system: true
+
+- name: Create the service account
+  ansible.builtin.user:
+    name: '{{ safety_service_account }}'
+    group: '{{ safety_service_account }}'
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+# Read-only. A fresh host in check mode has no account yet, and a task that names its id would
+# fail there, so the tasks that need it run when it exists. On an apply it always does.
+- name: Look for the service account
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ safety_service_account }}'
+    fail_key: false
+
+- name: Note whether the service account exists, and its numeric ids
+  ansible.builtin.set_fact:
+    safety_service_account_present: '{{ getent_passwd[safety_service_account] is not none }}'
+    safety_service_uid: "{{ getent_passwd[safety_service_account][1] if getent_passwd[safety_service_account] is not none else '' }}"
+    safety_service_gid: "{{ getent_passwd[safety_service_account][2] if getent_passwd[safety_service_account] is not none else '' }}"
+
+# --- Directories. The configuration directory is root's and world-readable: it holds public text.
+# The state directory is the account's alone.
+- name: Make the configuration directory
+  ansible.builtin.file:
+    path: '{{ safety_service_config_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Make the state directory, owned by the service account and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ safety_service_state_dir }}'
+    state: directory
+    owner: '{{ safety_service_account }}'
+    group: '{{ safety_service_account }}'
+    mode: '0700'
+  when: safety_service_account_present
+
+# --- The configuration and the environment. Public values only, written whole.
+- name: Write the configuration when the service is meant to run
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: '{{ safety_service_config_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: safety_service_run | bool
+  notify: Restart the content-safety service
+
+- name: Remove the configuration when the service is not meant to run
+  ansible.builtin.file:
+    path: '{{ safety_service_config_file }}'
+    state: absent
+  when: not safety_service_run | bool
+
+- name: Write the environment file of public values
+  ansible.builtin.template:
+    src: service.env.j2
+    dest: '{{ safety_service_env_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: safety_service_account_present
+  notify: Restart the content-safety service
+
+# --- The unit, a static file.
+- name: Install the service unit
+  ansible.builtin.copy:
+    src: '{{ safety_service_unit }}'
+    dest: '{{ safety_service_unit_dir }}/{{ safety_service_unit }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd manager
+    - Restart the content-safety service
+
+# Without this the handler runs at the end of the play, and the task below would meet a unit
+# systemd has not read.
+- name: Load the unit before it is handled
+  ansible.builtin.meta: flush_handlers
+
+- name: Look at the installed unit
+  ansible.builtin.stat:
+    path: '{{ safety_service_unit_dir }}/{{ safety_service_unit }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: safety_service_unit_stat
+
+# The role owns this unit, so it converges it either way: on when both inputs are set, off when
+# either is empty. A unit whose key or credential is not yet on the host stays inactive on a
+# condition, and the next apply starts it once they are. A fresh host in check mode has no unit
+# file yet and is skipped.
+- name: Hold the service to the state the inputs ask for
+  ansible.builtin.systemd_service:
+    name: '{{ safety_service_unit }}'
+    enabled: '{{ safety_service_run | bool }}'
+    state: "{{ 'started' if safety_service_run | bool else 'stopped' }}"
+  when:
+    - safety_service_unit_stat.stat.exists
+    - safety_service_account_present

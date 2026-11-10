@@ -10,7 +10,10 @@ tunnel until a public route is chosen, and that route is not this role's work.
 It writes two Gatus configuration files and one Compose file into a project directory,
 brings the stack up when the content it delivers is not the content last recorded as
 healthy, and records the content only after the page answers `200` on `/health` from the
-host itself. A run that fails part-way is followed by a run that tries again.
+host itself. Before that, every service must have a container that runs, and a container that
+reports `unhealthy` or `starting` stops the run. The Gatus image declares no healthcheck, so that
+term does not bite today; it judges a healthcheck if one is ever declared. A run that fails
+part-way is followed by a run that tries again.
 
 The stack has two services, both from the one pinned image. `gatus` is the page. The
 `status-test-target` service is a second Gatus that answers `/health`, and the page probes
@@ -46,10 +49,17 @@ why the health check runs from the host.
 ## Where its recipe comes from
 
 The tasks are a copy of the `compose_stack` pattern's recipe in `ansible/patterns/compose_stack`
-with this page's names, its template, its two configuration files and its endpoint check. A role
-may not apply another role (ANS-12), so a change to the recipe is carried here by hand, and the
-pattern's widened contract (named configuration files, the optional endpoint check) is what this
-copy uses. The stamp covers the compose file and both configuration files with their modes, so
+with this page's names, its template and its two configuration files. A role may not apply
+another role (ANS-12), so a change to the recipe is carried here by hand. The parts that differ
+on purpose are:
+
+- The endpoint check is always on, and its URL is fixed to the page's `/health` on loopback. The
+  pattern's check is optional and is skipped when its URL is empty.
+- Its delay is the role's constant, floored at one second, so a delay of 0 retries without a
+  division by zero. The pattern's `compose_stack_http_check_delay` has no floor.
+- There are no secret files and no list of services to recreate: the page has neither.
+
+The container check is the pattern's, including its `unhealthy` and `starting` term. The stamp covers the compose file and both configuration files with their modes, so
 the first apply after a change to this copy brings the stack up once, recreating its two
 containers; the `status-data` volume is kept.
 
@@ -97,8 +107,9 @@ The test needs Docker, and the machine that runs it must not be a production hos
 scenario in `molecule/default/` replaces `docker` with a stand-in that records its calls and
 runs no container, and replaces the page with a small web server that answers `/health`. It
 proves the files, the arguments of every Compose call, that nothing removes data, the
-refusal of a wide bind, a digest-less image and an override file, and that a page which does
-not answer leaves no stamp. It does not prove that Gatus accepts the configuration or
+refusal of a wide bind, a digest-less image and an override file, that a page which does not
+answer leaves no stamp, that a container reporting `unhealthy` is refused, and that a health delay
+of 0 completes. It does not prove that Gatus accepts the configuration or
 probes anything; the first live apply does.
 
 The listen-address refusal is the safety-class case. To see it red, remove the `choices` from

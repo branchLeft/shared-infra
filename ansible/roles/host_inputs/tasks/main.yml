@@ -126,6 +126,7 @@
 - name: Work out which keys the file holds (no value is shown)
   ansible.builtin.set_fact:
     host_inputs_required: '{{ host_inputs_required_by_host[enrolled_host] }}'
+    host_inputs_optional: '{{ host_inputs_optional_by_host[enrolled_host] | default([]) }}'
     host_inputs_keys: '{{ (host_inputs_doc | list) if host_inputs_doc is mapping else [] }}'
   no_log: true
   diff: false
@@ -136,7 +137,7 @@
       is_mapping: '{{ host_inputs_doc is mapping }}'
       unknown_count: '{{ host_inputs_keys | difference(host_inputs_required) | length }}'
       incomplete: >-
-        {{ ((host_inputs_required | difference(host_inputs_keys))
+        {{ ((host_inputs_required | difference(host_inputs_optional) | difference(host_inputs_keys))
         + ((host_inputs_doc | dict2items | selectattr('key', 'in', host_inputs_required) | rejectattr('value')
         | map(attribute='key') | list) if host_inputs_doc is mapping else [])
         + ((host_inputs_doc | dict2items | selectattr('key', 'in', host_inputs_required) | selectattr('value', 'string')
@@ -191,6 +192,7 @@
     ntfy_pager_watcher_token: "{{ host_inputs_doc['ntfy_pager_watcher_token'] | default(omit) }}"
     ntfy_pager_owner_password_hash: "{{ host_inputs_doc['ntfy_pager_owner_password_hash'] | default(omit) }}"
     ntfy_pager_machine_password_hash: "{{ host_inputs_doc['ntfy_pager_machine_password_hash'] | default(omit) }}"
+    ci_jump_user: "{{ host_inputs_doc['ci_jump_user'] | default(omit) }}"
     backup_worker_db_host: "{{ host_inputs_doc['backup_worker_db_host'] | default(omit) }}"
     backup_worker_db_user: "{{ host_inputs_doc['backup_worker_db_user'] | default(omit) }}"
     backup_worker_db_password: "{{ host_inputs_doc['backup_worker_db_password'] | default(omit) }}"
@@ -219,6 +221,7 @@
     website_app1_smtp_user: "{{ host_inputs_doc['website_app1_smtp_user'] | default(omit) }}"
     website_app1_smtp_password: "{{ host_inputs_doc['website_app1_smtp_password'] | default(omit) }}"
     tenant_compose_stacks: "{{ host_inputs_doc['tenant_compose_stacks'] | default(omit) }}"
+    deploy_slot_keys_slots: "{{ host_inputs_doc['deploy_slot_keys_slots'] | default(omit) }}"
   no_log: true
   diff: false
 
@@ -227,6 +230,7 @@
     host_inputs_raw: {}
     host_inputs_doc: {}
     host_inputs_keys: []
+    host_inputs_optional: []
     host_inputs_report: {}
   no_log: true
   diff: false

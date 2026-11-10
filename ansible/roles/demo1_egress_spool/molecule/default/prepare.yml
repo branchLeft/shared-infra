@@ -9,12 +9,11 @@
   hosts: all
   gather_facts: false
   tasks:
-    - name: Install iptables, which loads the policy, iproute2, which lists listeners, and the certificates the downloads need
+    - name: Install iptables, which loads the policy, and iproute2, which lists listeners
       ansible.builtin.apt:
         name:
           - iptables
           - iproute2
-          - ca-certificates
         state: present
         update_cache: true
         cache_valid_time: 3600

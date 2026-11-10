@@ -1,0 +1,36 @@
+# One tick of the ring controller: a single release step, then exit. Installed by the
+# ring_controller_host role as a static file, never templated, and never started by the role.
+# The timer starts it, and the timer is held off until the role is given a bundle digest.
+#
+# A plain unit with no instance name, so systemd runs at most one copy of it. The controller's own
+# process lock is a socket in the abstract namespace of the network namespace, so this unit
+# must not set PrivateNetwork: a private namespace would hide the lock from a copy started by hand.
+#
+# The environment is the one file named below, which holds public values only, and a fixed PATH.
+# Nothing here names a model key or an agent binary; the controller refuses to run with one in
+# its environment, and that refusal lives with the controller, not in this file.
+[Unit]
+Description=Ring controller, one release step per tick
+After=network-online.target
+Wants=network-online.target
+# A manual start with no bundle installed does nothing.
+ConditionPathExists=/opt/branchleft/ring-controller/current/bin/ring-controller
+
+[Service]
+Type=oneshot
+User=ring-controller
+Group=ring-controller
+EnvironmentFile=/etc/branchleft/ring-controller/ring-controller.env
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+ExecStart=/opt/branchleft/ring-controller/current/bin/ring-controller
+TimeoutStartSec=1800
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+ReadWritePaths=/var/lib/branchleft/ring-controller

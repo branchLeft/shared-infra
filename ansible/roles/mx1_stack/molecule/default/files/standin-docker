@@ -1,0 +1,502 @@
+#!/usr/bin/env python3
+"""TEST STAND-IN, not docker. It runs no container and proves nothing about the real engine.
+
+prepare.yml installs it as `docker` in the test instance (the test has no container engine, and
+ANS-15 forbids reaching one). It models, as observed on a real Docker, the part of Compose that
+the role's gap lay in, and answers the calls the role, its probe and the community.docker module
+make, in the shapes the module's source parses.
+
+What it models:
+  * `compose up` creates a container that does not exist; recreates one whose configuration hash
+    differs from the compose file's; starts one that is stopped; and leaves the others. The hash
+    is over the service as the compose file defines it, after ${VAR} interpolation from the
+    project's .env, and over the NAMES of its env_file files. It is never over the content of a
+    bind-mounted file, which is the Compose behaviour the role must not rely on. The content of
+    an env_file is not hashed either, unless the switch `hash_env_file_content` is set.
+  * A container holds the file it was created with. For a mounted single file the stand-in keeps
+    the inode and the content the file had at creation; `docker exec NAME sha256sum PATH` answers
+    with the current content only while the host file is still that inode. A file replaced by a
+    rename (what Ansible's copy and a package manager do) is a new inode, so the container keeps
+    the old content, as on Linux.
+  * `up --force-recreate SERVICE` creates the container again: a new Created time, a new snapshot.
+    The switch `ignore_force_recreate` makes the flag do nothing, for the case where a recreate
+    does not give the container the file.
+  * `${VAR:?message}` in the compose file refuses a project whose .env lacks the variable.
+  * `--wait` fails, as Compose does, for a container whose health is `unhealthy`.
+
+What it does not model: images, networks, ports, volumes, logs, restarts, timing, or any other
+part of Docker. Its state is in /var/lib/standin-docker; its switches are files in
+/var/lib/standin-docker/flags:
+  fail_up                 `up` fails at once, before it changes anything
+  ignore_force_recreate   --force-recreate is accepted and ignored
+  hash_env_file_content   an env_file's content joins the configuration hash
+  unhealthy.NAME          the container NAME reports unhealthy
+Control calls, not part of Docker: `docker standin stop NAME`, `docker standin retag NAME IMAGE`
+and `docker standin dump`.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shlex
+import sys
+import time
+
+import yaml
+
+STATE = "/var/lib/standin-docker"
+FLAGS = os.path.join(STATE, "flags")
+CONTAINERS = os.path.join(STATE, "containers")
+
+# The one format the role's probe asks docker inspect for. It names five fields and not
+# Config.Env, so the stand-in refuses any other format: a probe that began to read the
+# environment would fail here.
+INSPECT_FORMAT = (
+    "{{.Created}}|{{.State.StartedAt}}|{{.State.Status}}|"
+    "{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}|{{.Config.Image}}"
+)
+INTERPOLATION = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-?])([^}]*))?\}")
+
+# The project directories the role may name, and the compose file it names in each.
+KNOWN_PROJECTS = {
+    "/opt/stalwart": ("stalwart", "docker-compose.yml"),
+    "/etc/mailgun-shim": ("mailgun-shim", "shim-compose.yml"),
+}
+
+
+class StandinError(Exception):
+    """A call the stand-in refuses; the text goes to stderr and the exit status is 2."""
+
+
+def log(name: str, argv: list[str]) -> None:
+    """Append the call to one of the stand-in's logs."""
+    os.makedirs(STATE, exist_ok=True)
+    with open(os.path.join(STATE, name), "a", encoding="utf-8") as handle:
+        handle.write(shlex.join(argv) + "\n")
+
+
+def flag(name: str) -> bool:
+    """Return whether a switch is set."""
+    return os.path.exists(os.path.join(FLAGS, name))
+
+
+def sha256_file(path: str) -> str:
+    """Return the SHA-256 of a file's bytes."""
+    with open(path, "rb") as handle:
+        return hashlib.sha256(handle.read()).hexdigest()
+
+
+def stamp(nanoseconds: int) -> str:
+    """Return a time as Docker prints it: RFC 3339, UTC, nine digits."""
+    seconds, fraction = divmod(nanoseconds, 1_000_000_000)
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(seconds)) + f".{fraction:09d}Z"
+
+
+def load(name: str) -> dict[str, object] | None:
+    """Return a container's state, or None."""
+    path = os.path.join(CONTAINERS, name + ".json")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def save(container: dict[str, object]) -> None:
+    """Write a container's state."""
+    os.makedirs(CONTAINERS, exist_ok=True)
+    with open(os.path.join(CONTAINERS, f"{container['name']}.json"), "w", encoding="utf-8") as handle:
+        json.dump(container, handle, indent=1, sort_keys=True)
+
+
+def all_containers() -> list[dict[str, object]]:
+    """Return every container the stand-in holds, by name."""
+    if not os.path.isdir(CONTAINERS):
+        return []
+    found = []
+    for entry in sorted(os.listdir(CONTAINERS)):
+        with open(os.path.join(CONTAINERS, entry), encoding="utf-8") as handle:
+            found.append(json.load(handle))
+    return found
+
+
+def dotenv(path: str) -> dict[str, str]:
+    """Return the variables of a .env file."""
+    values: dict[str, str] = {}
+    if not os.path.exists(path):
+        return values
+    with open(path, encoding="utf-8") as handle:
+        for raw in handle.read().splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                values[key.strip()] = value.strip()
+    return values
+
+
+def interpolate(node: object, variables: dict[str, str]) -> object:
+    """Return the compose document with ${VAR}, ${VAR:-d} and ${VAR:?m} resolved."""
+    if isinstance(node, str):
+        def replace(found: re.Match[str]) -> str:
+            name, operator, argument = found.group(1), found.group(2), found.group(3)
+            value = variables.get(name, "")
+            if operator == ":?" and value == "":
+                raise StandinError(f"required variable {name} is missing a value: {argument}")
+            if operator == ":-" and value == "":
+                return argument or ""
+            return value
+
+        return INTERPOLATION.sub(replace, node)
+    if isinstance(node, dict):
+        return {key: interpolate(value, variables) for key, value in node.items()}
+    if isinstance(node, list):
+        return [interpolate(value, variables) for value in node]
+    return node
+
+
+def configuration_hash(service: dict[str, object]) -> str:
+    """Return Compose's configuration hash of a service, as modelled here."""
+    env_file = service.get("env_file")
+    names = [env_file] if isinstance(env_file, str) else list(env_file or [])
+    payload: dict[str, object] = {"service": service, "env_file_names": names}
+    if flag("hash_env_file_content"):
+        payload["env_file_content"] = [sha256_file(name) for name in names if os.path.exists(name)]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def snapshot_mounts(service: dict[str, object]) -> list[dict[str, object]]:
+    """Return what a container holds of each host path it mounts, taken at its creation."""
+    mounts: list[dict[str, object]] = []
+    for entry in service.get("volumes", []) or []:
+        source, _, rest = str(entry).partition(":")
+        if not source.startswith("/"):
+            continue
+        target = rest.split(":")[0]
+        if os.path.isfile(source):
+            mounts.append(
+                {
+                    "container_path": target,
+                    "host_path": source,
+                    "inode": os.stat(source).st_ino,
+                    "sha256": sha256_file(source),
+                }
+            )
+        elif os.path.isdir(source):
+            mounts.append({"container_path": target, "host_path": source, "directory": True})
+        else:
+            raise StandinError(f"bind source path does not exist: {source}")
+    return mounts
+
+
+def env_file_names(service: dict[str, object]) -> list[str]:
+    """Return the env_file names of a service."""
+    env_file = service.get("env_file")
+    return [env_file] if isinstance(env_file, str) else list(env_file or [])
+
+
+def event(identifier: str, status: str, text: str) -> None:
+    """Print one progress event the way Compose prints it with --progress json."""
+    print(json.dumps({"id": identifier, "status": status, "text": text}), file=sys.stderr)
+
+
+def fail_event(message: str) -> None:
+    """Print one error event."""
+    print(json.dumps({"error": True, "message": message}), file=sys.stderr)
+
+
+def wanted_services(document: dict[str, object], names: list[str], no_deps: bool) -> list[str]:
+    """Return the services an `up` acts on, dependencies first."""
+    services = document["services"]
+    assert isinstance(services, dict)
+    chosen = names or list(services)
+    ordered: list[str] = []
+
+    def add(name: str) -> None:
+        if name not in services:
+            raise StandinError(f"no such service: {name}")
+        if not no_deps:
+            depends = services[name].get("depends_on") or []
+            for dependency in (depends if isinstance(depends, list) else list(depends)):
+                add(dependency)
+        if name not in ordered:
+            ordered.append(name)
+
+    for name in chosen:
+        add(name)
+    return ordered
+
+
+def compose_up(options: dict[str, object], services_asked: list[str]) -> int:
+    """Run `docker compose up` as modelled."""
+    project_dir = str(options["project_directory"])
+    if project_dir not in KNOWN_PROJECTS:
+        raise StandinError(f"compose was called with --project-directory {project_dir}")
+    project, file_name = KNOWN_PROJECTS[project_dir]
+    if options["project_name"] != project:
+        raise StandinError(f"compose was called with project name {options['project_name']}, not {project}")
+    if options["files"] != [file_name]:
+        raise StandinError(f"compose was called with files {options['files']}, not [{file_name}]")
+    if options["env_files"] or options["profiles"]:
+        raise StandinError("compose was called with --env-file or --profile")
+    up = options["up"]
+    assert isinstance(up, dict)
+    for refused in ("--remove-orphans", "--renew-anon-volumes", "--build", "--pull"):
+        if refused in up:
+            raise StandinError(f"the role must not pass {refused}")
+    if "--no-start" in up:
+        raise StandinError("the role must not pass --no-start")
+    if flag("fail_up") and "--dry-run" not in up:
+        fail_event("stand-in: up was told to fail")
+        return 1
+    dotenv_path = os.path.join(project_dir, ".env")
+    with open(os.path.join(project_dir, file_name), encoding="utf-8") as handle:
+        document = interpolate(yaml.safe_load(handle), dotenv(dotenv_path))
+    assert isinstance(document, dict)
+    dry = "--dry-run" in up
+    force = "--force-recreate" in up and not flag("ignore_force_recreate")
+    keep = "--no-recreate" in up
+    all_services = document["services"]
+    assert isinstance(all_services, dict)
+    waited: list[str] = []
+    for name in wanted_services(document, services_asked, "--no-deps" in up):
+        service = all_services[name]
+        container_name = service.get("container_name") or f"{project}-{name}-1"
+        identifier = f"Container {container_name}"
+        want = configuration_hash(service)
+        have = load(container_name)
+        if have is None:
+            action = "create"
+        elif force:
+            action = "recreate"
+        elif keep:
+            action = "keep"
+        elif have["config_hash"] != want:
+            action = "recreate"
+        elif have["status"] != "running":
+            action = "start"
+        else:
+            action = "running"
+        if action in ("create", "recreate"):
+            event(identifier, "Working", "Recreate" if action == "recreate" else "Creating")
+            if not dry:
+                now = time.time_ns()
+                save(
+                    {
+                        "name": container_name,
+                        "project": project,
+                        "service": name,
+                        "image": service["image"],
+                        "config_hash": want,
+                        "created_ns": now,
+                        "started_ns": now,
+                        "status": "running",
+                        "has_healthcheck": "healthcheck" in service,
+                        "mounts": snapshot_mounts(service),
+                        "env_files": {path: sha256_file(path) for path in env_file_names(service) if os.path.exists(path)},
+                        "dotenv_sha256": sha256_file(dotenv_path) if os.path.exists(dotenv_path) else "",
+                        "generation": (have["generation"] + 1) if have else 1,
+                    }
+                )
+            event(identifier, "Done", "Recreated" if action == "recreate" else "Created")
+            event(identifier, "Done", "Started")
+        elif action == "start":
+            event(identifier, "Working", "Starting")
+            if not dry:
+                have["status"] = "running"
+                have["started_ns"] = time.time_ns()
+                save(have)
+            event(identifier, "Done", "Started")
+        else:
+            event(identifier, "Done", "Running")
+        waited.append(container_name)
+    if "--wait" in up and not dry:
+        for container_name in waited:
+            held = load(container_name)
+            if held and held["has_healthcheck"] and flag("unhealthy." + container_name):
+                fail_event(f"container {container_name} is unhealthy")
+                return 1
+    return 0
+
+
+def health_of(container: dict[str, object]) -> str:
+    """Return a container's health as inspect prints it."""
+    if not container["has_healthcheck"]:
+        return "none"
+    return "unhealthy" if flag("unhealthy." + str(container["name"])) else "healthy"
+
+
+def parse_compose(args: list[str]) -> int:
+    """Parse the global options and the sub-command of `docker compose`, and run it."""
+    options: dict[str, object] = {
+        "project_directory": None,
+        "project_name": None,
+        "files": [],
+        "env_files": [],
+        "profiles": [],
+    }
+    index = 0
+    while index < len(args) and args[index].startswith("--") and args[index] != "--":
+        name = args[index]
+        if name in ("--ansi", "--progress"):
+            index += 2
+        elif name == "--project-directory":
+            options["project_directory"] = args[index + 1]
+            index += 2
+        elif name == "--project-name":
+            options["project_name"] = args[index + 1]
+            index += 2
+        elif name == "--file":
+            options["files"].append(args[index + 1])  # type: ignore[attr-defined]
+            index += 2
+        elif name == "--env-file":
+            options["env_files"].append(args[index + 1])  # type: ignore[attr-defined]
+            index += 2
+        elif name == "--profile":
+            options["profiles"].append(args[index + 1])  # type: ignore[attr-defined]
+            index += 2
+        else:
+            break
+    if index >= len(args):
+        raise StandinError("compose was called without a sub-command")
+    sub, rest = args[index], args[index + 1 :]
+    if sub == "version":
+        print('{"version":"v2.40.3"}')
+        return 0
+    if sub == "config":
+        return 0
+    if sub == "images":
+        print("[]")
+        return 0
+    if sub == "ps":
+        project = KNOWN_PROJECTS.get(str(options["project_directory"]), ("", ""))[0]
+        for container in all_containers():
+            if container["project"] == project:
+                print(
+                    json.dumps(
+                        {
+                            "Name": container["name"],
+                            "Service": container["service"],
+                            "State": container["status"],
+                            "Health": health_of(container) if container["has_healthcheck"] else "",
+                            "Labels": "",
+                            "Networks": "default",
+                            "Publishers": None,
+                        }
+                    )
+                )
+        return 0
+    if sub == "up":
+        up: dict[str, object] = {}
+        asked: list[str] = []
+        position = 0
+        while position < len(rest):
+            token = rest[position]
+            if token == "--":
+                asked = rest[position + 1 :]
+                break
+            up[token] = True
+            if token in ("--timeout", "--wait-timeout", "--pull", "--scale"):
+                position += 1
+            position += 1
+        options["up"] = up
+        return compose_up(options, asked)
+    raise StandinError(f"compose {sub} is not a call the role makes")
+
+
+def inspect(args: list[str]) -> int:
+    """Run `docker inspect --format F NAME`."""
+    if len(args) != 3 or args[0] != "--format":
+        raise StandinError("inspect was called other than as inspect --format FORMAT NAME")
+    if args[1] != INSPECT_FORMAT:
+        raise StandinError("inspect was given a format other than the probe's five fields")
+    container = load(args[2])
+    if container is None:
+        print(f"Error: No such object: {args[2]}", file=sys.stderr)
+        return 1
+    print(
+        "|".join(
+            [
+                stamp(int(container["created_ns"])),
+                stamp(int(container["started_ns"])),
+                str(container["status"]),
+                health_of(container),
+                str(container["image"]),
+            ]
+        )
+    )
+    return 0
+
+
+def exec_sha256(args: list[str]) -> int:
+    """Run `docker exec NAME sha256sum PATH`: the file as the container reads it."""
+    if len(args) != 3 or args[1] != "sha256sum":
+        raise StandinError("exec was called other than as exec NAME sha256sum PATH")
+    container = load(args[0])
+    if container is None or container["status"] != "running":
+        print(f"Error response from daemon: container {args[0]} is not running", file=sys.stderr)
+        return 1
+    for mount in container["mounts"]:
+        if mount["container_path"] == args[2] and not mount.get("directory"):
+            current = os.stat(mount["host_path"]).st_ino == mount["inode"]
+            digest = sha256_file(mount["host_path"]) if current else mount["sha256"]
+            print(f"{digest}  {args[2]}")
+            return 0
+    print(f"sha256sum: {args[2]}: No such file or directory", file=sys.stderr)
+    return 1
+
+
+def control(args: list[str]) -> int:
+    """Run a control call that sets up or reads the stand-in; it is no part of Docker."""
+    verb = args[0]
+    if verb == "stop":
+        container = load(args[1])
+        if container is None:
+            return 1
+        container["status"] = "exited"
+        save(container)
+        return 0
+    if verb == "retag":
+        container = load(args[1])
+        if container is None:
+            return 1
+        container["image"] = args[2]
+        container["config_hash"] = "retagged"
+        save(container)
+        return 0
+    if verb == "dump":
+        print(json.dumps(all_containers(), indent=1, sort_keys=True))
+        return 0
+    raise StandinError(f"no control call {verb}")
+
+
+def main(argv: list[str]) -> int:
+    """Log the call and answer it."""
+    args = argv[1:]
+    log("dryrun.log" if "--dry-run" in args else "argv.log", args)
+    # The compose module names the engine's socket in front of every call. There is no engine.
+    while len(args) > 1 and args[0] in ("--host", "-H"):
+        args = args[2:]
+    if not args:
+        raise StandinError("docker was called with no arguments")
+    if args[0] == "version":
+        print('{"Client":{"Version":"28.0.0"}}')
+        return 0
+    if args[0] == "compose":
+        return parse_compose(args[1:])
+    if args[0] == "inspect":
+        return inspect(args[1:])
+    if args[0] == "exec":
+        return exec_sha256(args[1:])
+    if args[0] == "standin":
+        return control(args[1:])
+    raise StandinError(f"{args[0]} is not a call the role makes")
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv))
+    except StandinError as error:
+        print(f"stand-in: {error}", file=sys.stderr)
+        sys.exit(2 if not str(error).startswith("required variable") else 1)

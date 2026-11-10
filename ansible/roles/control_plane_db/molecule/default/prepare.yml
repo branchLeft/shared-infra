@@ -34,6 +34,30 @@
         group: '1000'
         mode: '0600'
 
+    - name: Create the stack directory the control_plane role delivers into
+      ansible.builtin.file:
+        path: /opt/branchleft/control-plane
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the subdirectory the control_plane role delivers the access rules into
+      ansible.builtin.file:
+        path: /opt/branchleft/control-plane/postgres
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Deliver the stack's access rules as the control_plane role does
+      ansible.builtin.copy:
+        src: '{{ scenario_hba_source }}'
+        dest: /opt/branchleft/control-plane/postgres/pg_hba.conf
+        owner: root
+        group: root
+        mode: '0644'
+
     - name: Install the stand-in docker command
       ansible.builtin.copy:
         src: fake_docker.py

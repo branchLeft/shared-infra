@@ -54,6 +54,24 @@ starts with a code, so that a test can tell one from another:
 | `host_inputs[unknown-key]`  | the file holds a key outside the host's row (the key is not shown)     |
 | `host_inputs[missing-key]`  | an input of the row is missing or has no value (its name is given)     |
 
+### Optional inputs
+
+`host_inputs_optional_by_host` (in `vars/main.yml`) names inputs of a host's row that the
+file may leave out. Today that is `ci_jump_user`, on edge1 and edget, and nothing else. An
+absent optional input is not set, which leaves its role's argument unset, and the play goes
+on. One that is in the file must still hold a usable value (an empty string, null or white
+space is `host_inputs[missing-key]`), and a key outside the row is refused as ever.
+
+Why it exists: the tool that writes the file (`seed_host_inputs.py`) reaches a host only
+inside a commit that a gated apply has delivered, and the gated plan runs this loader first.
+An input that was required the moment its role landed stopped the plan of that very commit, so
+the tool could never be delivered and the input never seeded (edge1's plan failed as exit 30,
+`playbook-failed`). An input may be optional only if its role is inert without it and
+refuses by itself when it is switched on without it (`ci_jump`: `ci_jump[user-missing]`). The
+registry test (`checks/test_host_inputs_registry.py`) holds an optional name to be in the host's
+row and declared, and not required, by a role on the host's list; the pins test of `ci_jump`
+holds that role's guard and its warning.
+
 ## Interface
 
 The role has no argument of its own ([`meta/argument_specs.yml`](meta/argument_specs.yml)
@@ -76,8 +94,9 @@ The file is one JSON object, for db1:
 JSON, not YAML, so that no value is coerced to another type and the file is written with
 `json.dumps`, never from a value typed into a command line. For app1
 the file is one JSON object of four strings, the port included (`"587"`, not `587`,
-because the website role's argument is a string), and the list of tenant stacks
-that `tenant_compose` delivers:
+because the website role's argument is a string), the list of tenant stacks
+that `tenant_compose` delivers, and the list of deploy slots the
+`deploy_slot_keys` role makes the host hold:
 
 ```text
 {
@@ -93,6 +112,9 @@ that `tenant_compose` delivers:
       "secrets_env_text": "<the stack's GHOST_ environment file, byte for byte>",
       "image_env_text": "<the stack's IMAGE=name@sha256:digest line>"
     }
+  ],
+  "deploy_slot_keys_slots": [
+    {"stack": "<stack name>", "public_key": "<one OpenSSH public key>", "adopt_existing": false}
   ]
 }
 ```
@@ -103,9 +125,21 @@ is as private as `/etc/branchleft/<slug>.env` itself (root:root, `0600`, same ho
 loader sets it with `no_log` and never templates it again. An empty list counts as no value and
 stops the run with `host_inputs[missing-key]`: the file is not valid until it names the tenants.
 
-For edge1 the file is one JSON object of eleven keys, each the name of a required argument
-of `monitoring_stack` (seven) or `ntfy_pager` (four). The values must equal what is live on
-the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env` with others:
+`deploy_slot_keys_slots` must hold at least one slot, because this loader counts an empty
+list as no value (`host_inputs[missing-key]`) and stops the whole pull, the website role
+included. The role's own rule that an empty list means "not declared" never comes into play on
+this route. A slot is exactly the argument spec of `deploy_slot_keys`: `stack` and `public_key`
+are required, and `adopt_existing` is a JSON boolean that must be `true` only for a stack the
+host already runs.
+
+For edge1 the file is one JSON object of twelve keys, each the name of a required argument
+of `monitoring_stack` (seven), `ntfy_pager` (four) or `ci_jump` (one, `ci_jump_user`, the CI
+jump account's name, which is held out of the repository and every log). The values must equal
+what is live on the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env`
+with others. `ci_jump_user` is not read from a live file: the owner types it once, hidden, with
+`seed_host_inputs.py --host edge1 --set ci_jump_user` (see `ansible/tools/README.md`). It is an
+optional input (above): until it is seeded the file holds eleven keys, the plan and the apply
+go on, and the `ci_jump` role stays inert and says so. Seeded, the file is:
 
 ```text
 {
@@ -119,7 +153,8 @@ the host now, or the first apply rewrites `monitoring.env` and `ntfy-pager.env` 
   "ntfy_pager_pager_token": "<string>",
   "ntfy_pager_watcher_token": "<string>",
   "ntfy_pager_owner_password_hash": "<string>",
-  "ntfy_pager_machine_password_hash": "<string>"
+  "ntfy_pager_machine_password_hash": "<string>",
+  "ci_jump_user": "<string>"
 }
 ```
 
@@ -194,7 +229,8 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. Today the playbooks of edge1, ops1, db1 and app1 apply it. On edge1 the loader is
+nothing else. Today the playbooks of edge1, edget, ops1, db1 and app1 apply it. On edget (edge-t)
+its one input is `ci_jump_user`, for the `ci_jump` role. On edge1 the loader is
 followed by the roles up to `edge_stack` and then the monitoring roles, and on ops1 by the roles
 up to `control_plane` and then the backup roles; on both, the first run after this change stops
 here with `host_inputs[file-missing]`, before anything else is applied, until the owner has placed
@@ -204,10 +240,14 @@ the database roles depend on it. db1 also needs its signer in `ansible/trust/db1
 before any pull runs. On app1 the loader is followed by `website_app1`, and the same holds:
 the first app1 run after this change stops here with `host_inputs[file-missing]`, before
 the website role starts, until the owner has placed `/etc/branchleft/host-inputs.json` on
-app1 (root:root, `0600`, the five keys above). The tool places it: `seed_host_inputs.py --host
-app1` reads the four SMTP keys from the `website.env` that the website role's env file holds (the
-same four `CONTACT_SMTP_*` lines), and `tenant_compose_stacks` from the tenants themselves, so the
-values equal what is live.
+app1 (root:root, `0600`, the four SMTP keys above and, since the deploy slot keys were wired
+to app1, `deploy_slot_keys_slots` with at least one slot, and `tenant_compose_stacks`: until each
+is there the same stop happens, as `host_inputs[missing-key]`). The tool places it:
+`seed_host_inputs.py --host app1` reads the four keys from the `website.env` that the website
+role's env file holds (the same four `CONTACT_SMTP_*` lines), so the values equal what is live,
+and `tenant_compose_stacks` from the tenants themselves. It takes the slots at a hidden prompt,
+one line each (`stack public_key [adopt]`), so the public keys are never typed into a command
+line or committed.
 
 `tenant_compose` is applied last on app1, after the website role, and its stacks arrive only
 through this file. An app1 whose file already holds the four SMTP keys and not
@@ -223,8 +263,8 @@ exists, a new site needs the file edited by the owner.
 
 The owner places the file once, on the host, as root: one JSON object whose keys are exactly
 the names in the host's row in `vars/main.yml`, owned by root:root with mode `0600`, in
-directories only root can write. The role never writes it. For edge1, ops1 and app1 the writer is
-`ansible/tools/seed_host_inputs.py --host edge1` (or `ops1`, or `app1`), which:
+directories only root can write. The role never writes it. For edge1, edget, ops1 and app1 the writer is
+`ansible/tools/seed_host_inputs.py --host edge1` (or `edget`, `ops1`, or `app1`), which:
 
 - takes each key's value from the live file the hand install wrote (its one table of
   key-to-file is held by a test to this row and to the roles that write those files), so the
@@ -266,7 +306,9 @@ proves the file is in place before the roles that need it run.
 1. A new host, or a new input for a host, is one edit to its row in `vars/main.yml`, one
    line in the literal keys of the "Set each input" task, and the host's entries in
    `checks/host_roles.yml` and its playbook. The registry test fails when they disagree.
-   The name must be a required argument of a role on the host's list with no default.
+   The name must be a required argument of a role on the host's list with no default, unless it
+   is listed in `host_inputs_optional_by_host` (see "Optional inputs"): then the role must declare
+   it, must not require it, and must refuse by itself when its switch is on and it is absent.
 2. Never template a key, never loop the task that sets the inputs, and never add a `when`,
    `ignore_errors` or `failed_when` to any task: a templated key is refused by
    `check_enrolment` R6, set_fact of a whole templated mapping sets nothing and does not

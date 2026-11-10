@@ -1,0 +1,35 @@
+---
+# Asserts which containers the stand-in docker created again between two snapshots (snapshot.yml):
+# exactly the ones named, each with a later Created time and one more generation, and every other
+# container with the Created time and generation it had. expect_recreated lists container names.
+- name: Assert exactly the named containers were created again
+  vars:
+    mx1_stack_before: '{{ mx1_stack_snaps[snap_before].containers }}'
+    mx1_stack_after: '{{ mx1_stack_snaps[snap_after].containers }}'
+    mx1_stack_changed: >-
+      {% set out = [] %}
+      {% for name in mx1_stack_before %}
+      {% if mx1_stack_after[name].generation != mx1_stack_before[name].generation
+      or mx1_stack_after[name].created_ns != mx1_stack_before[name].created_ns %}
+      {% set _ = out.append(name) %}
+      {% endif %}
+      {% endfor %}
+      {{ out | sort }}
+    mx1_stack_later: >-
+      {% set out = [] %}
+      {% for name in expect_recreated %}
+      {% if mx1_stack_after[name].generation == mx1_stack_before[name].generation + 1
+      and mx1_stack_after[name].created_ns > mx1_stack_before[name].created_ns %}
+      {% set _ = out.append(name) %}
+      {% endif %}
+      {% endfor %}
+      {{ out | sort }}
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_after.keys() | sort | list == mx1_stack_before.keys() | sort | list
+      - mx1_stack_changed | ansible.builtin.from_yaml == expect_recreated | sort
+      - mx1_stack_later | ansible.builtin.from_yaml == expect_recreated | sort
+    quiet: true
+    fail_msg: >-
+      Containers created again: {{ mx1_stack_changed }}; expected exactly {{ expect_recreated | sort }}
+      (each with one more generation and a later Created time: {{ mx1_stack_later }}).

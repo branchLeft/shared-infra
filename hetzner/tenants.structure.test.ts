@@ -3,29 +3,32 @@ import { join } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { type ReasonCode, scanTenantsSource } from './tenants.structure.scan';
+import { EXPECTED_HOST_COUNT, type ReasonCode, scanTenantsSource } from './tenants.structure.scan';
 
 /**
  * The gate covers the resources the program declares. A provider resource
  * added outside the Host, and not wired to the verified value, would register
  * under a wrong-project token. This test reads the source and fails on any
  * provider resource declared directly, so the gap is a red test, not a review
- * finding. The two declared directly are gated in their own inputs.
+ * finding. The three declared directly (network, subnet, route) are gated in
+ * their own inputs.
  */
 
 const source = readFileSync(join(__dirname, 'tenants.ts'), 'utf8');
 
 describe('tenants program declarations', () => {
-  it('declares directly only the network and subnet, both gated', () => {
+  it('declares directly only the network, subnet and route, all gated', () => {
     const direct = [...source.matchAll(/new hcloud\.(\w+)\(/g)].map((match) => match[1]);
-    expect(direct).toEqual(['Network', 'NetworkSubnet']);
+    expect(direct).toEqual(['Network', 'NetworkSubnet', 'NetworkRoute']);
     expect(source).toMatch(/name: verified\('tenants'\)/);
-    expect(source).toMatch(/networkId: verified\(tenantsNetwork\.id\)/);
+    expect(source.match(/networkId: verified\(tenantsNetwork\.id\)/g)).toHaveLength(2);
   });
 
-  it('declares the Host once, with the gate transformation', () => {
-    expect([...source.matchAll(/new Host\(/g)].length).toBe(1);
-    expect([...source.matchAll(/transformations: \[gateRegistration\]/g)]).toHaveLength(1);
+  it('declares the Hosts, edge-t and db-t1, each with the gate transformation', () => {
+    expect([...source.matchAll(/new Host\(/g)].length).toBe(EXPECTED_HOST_COUNT);
+    expect([...source.matchAll(/transformations: \[gateRegistration\]/g)]).toHaveLength(
+      EXPECTED_HOST_COUNT
+    );
   });
 
   it('gates the firewall, server and PrimaryIp through the transformation', () => {
@@ -38,6 +41,8 @@ describe('tenants program declarations', () => {
 interface FixtureOptions {
   extra?: string;
   hostArgs?: string;
+  edgeHostArgs?: string;
+  soloHost?: boolean;
   hostFirstArgument?: string;
   hostImport?: string;
   hostPrefix?: string;
@@ -55,11 +60,15 @@ interface ControlRow extends FixtureOptions {
 
 const DEFAULT_HOST_ARGS = ', { transformations: [gateRegistration] }';
 const HOST_IMPORT = "import { Host } from '@branchleft/hetzner-host';";
+const GATED_ROUTE =
+  "export const r = new hcloud.NetworkRoute('r', { networkId: verified(net.id).apply((id) => Number(id)), gateway: 'g' });";
 
 function buildProgram(options: FixtureOptions): string {
   const {
     extra = '',
     hostArgs = DEFAULT_HOST_ARGS,
+    edgeHostArgs = DEFAULT_HOST_ARGS,
+    soloHost = false,
     hostFirstArgument = 'args',
     hostImport = HOST_IMPORT,
     hostPrefix = '',
@@ -70,11 +79,13 @@ function buildProgram(options: FixtureOptions): string {
     "import * as pulumi from '@pulumi/pulumi';",
     hostImport,
     'export const gateRegistration = () => undefined;',
+    'const verified = (value: unknown) => value;',
     'const config = new pulumi.Config();',
     'const args = {};',
     "export const net = new hcloud.Network('n', {});",
     "export const sub = new hcloud.NetworkSubnet('s', {});",
     `${hostPrefix}export const db = new ${hostConstructor}(${hostFirstArgument}${hostArgs});`,
+    soloHost ? '' : `export const edge = new Host(args${edgeHostArgs});`,
     extra,
   ].join('\n');
 }
@@ -148,7 +159,12 @@ const VIOLATION_ROWS: ViolationRow[] = [
   { id: 'L2-global', extra: 'export const d = new Date();', code: 'unresolved-constructor' },
   {
     id: 'L3-other-pulumi-member',
-    extra: "export const r = new pulumi.StackReference('x');",
+    extra: "export const r = new pulumi.ComponentResource('t', 'x');",
+    code: 'forbidden-constructor',
+  },
+  {
+    id: 'L4-other-hcloud-member-next-to-route',
+    extra: "export const f = new hcloud.Firewall('f', {}); " + GATED_ROUTE,
     code: 'forbidden-constructor',
   },
   {
@@ -180,9 +196,79 @@ const VIOLATION_ROWS: ViolationRow[] = [
     code: 'host-gate',
   },
   {
-    id: 'H6-second-host-gated',
-    extra: 'export const h2 = new Host(args, { transformations: [gateRegistration] });',
+    id: 'H6-third-host-gated',
+    extra: 'export const h3 = new Host(args, { transformations: [gateRegistration] });',
     code: 'host-count',
+  },
+  { id: 'H6b-only-one-host', soloHost: true, code: 'host-count' },
+  {
+    id: 'H6c-edge-host-ungated',
+    edgeHostArgs: ', { transformations: [] }',
+    code: 'host-gate',
+  },
+  { id: 'H6d-edge-host-no-options', edgeHostArgs: '', code: 'host-gate' },
+  {
+    id: 'R1-route-network-id-ungated',
+    extra:
+      "export const r = new hcloud.NetworkRoute('r', { networkId: net.id.apply((id) => Number(id)), gateway: 'g' });",
+    code: 'route-gate',
+  },
+  {
+    id: 'R2-route-no-props',
+    extra: "export const r = new hcloud.NetworkRoute('r');",
+    code: 'route-gate',
+  },
+  {
+    id: 'R3-route-verified-on-another-key',
+    extra:
+      "export const r = new hcloud.NetworkRoute('r', { networkId: net.id, gateway: verified('g') });",
+    code: 'route-gate',
+  },
+  {
+    id: 'R4-route-spread-after-network-id',
+    extra:
+      "export const r = new hcloud.NetworkRoute('r', { networkId: verified(net.id), ...other });",
+    code: 'route-gate',
+  },
+  {
+    id: 'R5-route-verified-shadowed',
+    extra: `export function f(verified: unknown) { return verified; } ${GATED_ROUTE}`,
+    code: 'route-gate',
+  },
+  {
+    id: 'R6-route-verified-only-inside-apply',
+    extra:
+      "export const r = new hcloud.NetworkRoute('r', { networkId: net.id.apply(() => verified(1)), gateway: 'g' });",
+    code: 'route-gate',
+  },
+  {
+    id: 'R7-route-computed-key',
+    extra:
+      "export const r = new hcloud.NetworkRoute('r', { networkId: verified(net.id), [key]: 1 });",
+    code: 'route-gate',
+  },
+  {
+    id: 'R8-route-two-network-ids',
+    extra:
+      "export const r = new hcloud.NetworkRoute('r', { networkId: verified(net.id), networkId: net.id });",
+    code: 'route-gate',
+  },
+  {
+    id: 'R9-route-shorthand-network-id',
+    extra:
+      "const networkId = verified(net.id); export const r = new hcloud.NetworkRoute('r', { networkId });",
+    code: 'route-gate',
+  },
+  {
+    id: 'R10-route-through-alias-ungated',
+    extra:
+      "const R = hcloud.NetworkRoute; export const r = new R('r', { networkId: net.id, gateway: 'g' });",
+    code: 'route-gate',
+  },
+  {
+    id: 'R11-route-spread-argument',
+    extra: 'export const r = new hcloud.NetworkRoute(...routeArgs);',
+    code: 'route-gate',
   },
   {
     id: 'H7-shadowed-gate',
@@ -303,6 +389,21 @@ const CONTROL_ROWS: ControlRow[] = [
     id: 'C5-host-alias-gated',
     hostPrefix: 'const H = Host; ',
     hostConstructor: 'H',
+  },
+  { id: 'C6-gated-route', extra: GATED_ROUTE },
+  {
+    id: 'C7-gated-route-with-spread-before-network-id',
+    extra:
+      "export const r = new hcloud.NetworkRoute('r', { ...internetEgressRoute('g'), networkId: verified(net.id) });",
+  },
+  {
+    id: 'C8-gated-route-through-alias',
+    extra:
+      "const R = hcloud.NetworkRoute; export const r = new R('r', { networkId: verified(net.id), gateway: 'g' });",
+  },
+  {
+    id: 'C9-stack-reference-reads-outputs-only',
+    extra: "export const s = new pulumi.StackReference('organization/p/production');",
   },
 ];
 

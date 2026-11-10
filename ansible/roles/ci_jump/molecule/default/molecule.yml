@@ -1,0 +1,84 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, the release every production host runs,
+    # trusted by digest. The digest is the pin; the tag is informational and may since have
+    # moved on. The role reloads sshd through systemd (it writes a drop-in and must make sshd
+    # read it), so the platform runs systemd as PID 1, a platform the author justifies here,
+    # per ANS-15. The scenario installs the real OpenSSH server and starts it as ssh.service.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # Destroy removes the container's anonymous volumes. This scenario's cgroup bind mount
+    # means none is created; the key guards against one if the mount is ever dropped.
+    keep_volumes: false
+    # No privileged mode and no added capabilities. The mounts, the cgroup namespace and the
+    # command below are the whole set this image needs to run systemd (measured by the
+    # files_and_units pattern, which this block copies). The host cgroup namespace is a stated
+    # exception (ANS-15): on a cgroup v2 host such as a native Linux runner, a private namespace
+    # over the read-write cgroup mount below makes systemd exit at once. The host namespace is
+    # the least privilege that works. It shares the host's cgroup view and, with the read-write
+    # mount, write access to the host cgroup tree, which is why the test image is trusted by
+    # digest and the job holds no credentials.
+    cgroupns_mode: host
+    # The cgroup tree systemd manages, mounted read-write: without it the container exits at start.
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    # systemd's runtime and lock directories are tmpfs in a real boot: without them the
+    # container exits at start.
+    tmpfs:
+      - /run
+      - /run/lock
+    # Start systemd as the init process, the image's own CMD.
+    command: /lib/systemd/systemd
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 1 prints each task's result
+    # with the arguments it was given, so a task that handles the keys and lacks
+    # no_log shows them in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '1'
+    # The verify play calls the role's own module outside the role's tasks, to
+    # make the refusals it checks, so the role's library is on the module path.
+    ANSIBLE_LIBRARY: '${MOLECULE_PROJECT_DIRECTORY}/library'
+  inventory:
+    # The values the scenario runs with, read by the prepare, converge and verify
+    # plays. Placeholders only. The key pairs are made by prepare.yml inside the
+    # container, for this run only.
+    group_vars:
+      all:
+        scenario_key_dir: /root/jump-test-keys
+        scenario_record_dir: /var/lib/jump-test
+        scenario_ssh_port: 2222
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        # The jump account the role is told about, and the accounts other roles own.
+        scenario_jump_user: gate-hopper
+        # Loopback addresses stand for the hosts: one is on the list, one is a live listener that
+        # is not, one is the jump host's own address, and the test sshd listens on all of them
+        # (port 22) and on 127.0.0.1:2222, where the jump connections arrive.
+        scenario_listed: 127.0.0.2
+        scenario_unlisted: 127.0.0.3
+        # The jump host's own address. The runner reaches the jump host itself through the jump,
+        # so the destination list must hold it; the test sshd listens on it too, port 22.
+        scenario_own: 127.0.0.4
+        # The port a remote-forward attempt asks the jump host to open on its own loopback.
+        scenario_remote_port: 18080
+        scenario_other_user: someoneelse
+        # The account behind the jump, on the host a ProxyJump ends at, as the pushed host's own CI
+        # account is. It has a shell and its own key; the jump host holds neither.
+        scenario_target_user: pushtarget
+verifier:
+  name: ansible

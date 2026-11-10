@@ -1,0 +1,66 @@
+---
+# What must be on the host is read from the repository's own files, not from the role,
+# so a copy that differs from its source fails here.
+- name: Verify the exporter
+  hosts: all
+  gather_facts: true
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../../../..'
+    verify_node_unit_src: '{{ verify_repo }}/hetzner/provision/node-exporter.service'
+  tasks:
+    - name: Read each installed file on the instance
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - /usr/local/bin/node_exporter
+        - /etc/default/node-exporter
+        - /etc/systemd/system/node_exporter.service
+        - /var/lib/branchleft/backup-worker-exporter
+      register: node_exporter_verify_installed
+
+    - name: Read the unit in the repository, on the machine that runs the test
+      ansible.builtin.stat:
+        path: '{{ verify_node_unit_src }}'
+        checksum_algorithm: sha256
+      register: node_exporter_verify_source
+      delegate_to: localhost
+
+    - name: Assert the binary is root-owned with mode 0755, and the unit is byte for byte its source
+      ansible.builtin.assert:
+        that:
+          - node_exporter_verify_installed.results[0].stat.exists
+          - node_exporter_verify_installed.results[0].stat.pw_name == 'root'
+          - node_exporter_verify_installed.results[0].stat.mode == '0755'
+          - node_exporter_verify_installed.results[2].stat.checksum == node_exporter_verify_source.stat.checksum
+          - node_exporter_verify_installed.results[2].stat.mode == '0644'
+        quiet: true
+        fail_msg: The binary or the unit is missing, not owned as the role owns it, or differs from its source in the repository.
+
+    - name: Read the exporter's environment file
+      ansible.builtin.slurp:
+        src: /etc/default/node-exporter
+      register: node_exporter_verify_env
+
+    - name: Assert the exporter listens on the container's own bridge address, and its unit names the textfile directory
+      ansible.builtin.assert:
+        that:
+          - >-
+            (node_exporter_verify_env.content | b64decode | trim)
+            == 'NODE_EXPORTER_LISTEN_ADDRESS=' ~ (ansible_all_ipv4_addresses | select('match', '^172[.]') | first)
+          - "'--collector.textfile.directory=/var/lib/branchleft/backup-worker-exporter' in lookup('ansible.builtin.file', verify_node_unit_src)"
+        quiet: true
+        fail_msg: The exporter is not bound to the container's own address, or its unit does not name the textfile directory.
+
+    - name: Ask systemd for the exporter service
+      ansible.builtin.systemd_service:
+        name: node_exporter.service
+      register: node_exporter_verify_unit
+
+    - name: Assert the exporter is active and enabled
+      ansible.builtin.assert:
+        that:
+          - node_exporter_verify_unit.status.ActiveState == 'active'
+          - node_exporter_verify_unit.status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: The node_exporter service is not active and enabled.

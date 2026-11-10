@@ -19,8 +19,24 @@ second Compose stack beside it, does not create the host, and assumes
 `branchleft-compose@.service`, Docker and `/usr/local/sbin/branchleft-deploy`
 are already installed.
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_IPV4=$(hcloud server ip edge1)
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active branchleft-compose@edge &&
   test -x /usr/bin/python3 &&
@@ -288,9 +304,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 `absent` means there is nothing to lose. Anything else: edit the file in
 place rather than overwriting it.
 
-The values are written by the `monitoring_stack` Ansible role: the role is the
-target, and the shell blocks in this step are interim hand paths, named below,
-for the time until a playbook runs the role. The role creates `/etc/branchleft`
+The values are written by the `monitoring_stack` Ansible role, which the edge1
+playbook runs on each gated apply. The role creates `/etc/branchleft`
 and `/etc/branchleft/monitoring.env` if they are absent, closes the file to
 `root:root 0600` before any value is written, and writes these keys, each on
 its own line, leaving the other keys in place:
@@ -332,54 +347,12 @@ secrets file except its `SNDS_DATA_URL` line) changes the hashed file, so the
 first role run after it restarts the stack once, even when the role's own inputs
 are unchanged. The role's README, "Restart", has the detail.
 
-**The role does not yet run on a host, so these hand paths stay the runnable
-ones until the first gated converge.** No playbook in this repository runs
-either role yet. Each interim hand block in steps 3, 4, 5 and 13 is marked with
-an `interim-hand-block` comment and listed in
-`hetzner/provision/test_runbook_monitoring_hand_blocks.py`, which fails on a hand
-block that is not listed. They are retired together, after the first gated
-converge has run on a host. On a host where the file is absent, the block below
-writes the six keys in one go, with a guard that refuses to overwrite a file
-that exists. Read each value from the password manager into the shell; it
-reaches the host on stdin, not on a command line. Run it only when the file is
-absent (the check above printed `absent`).
-
-<!-- interim-hand-block: s3-value-block -->
-
-```bash
-read -rs SMTP_USERNAME && export SMTP_USERNAME
-read -rs SMTP_PASSWORD && export SMTP_PASSWORD
-read -rs HEALTHCHECKS_PING_URL && export HEALTHCHECKS_PING_URL
-read -rs ALERT_RECIPIENT_EMAIL && export ALERT_RECIPIENT_EMAIL
-read -rs MAILHOST_PING_URL && export MAILHOST_PING_URL
-read -rs GRAFANA_ADMIN_PASSWORD && export GRAFANA_ADMIN_PASSWORD
-{ printf 'SMTP_USERNAME=%s\n' "$SMTP_USERNAME";
-  printf 'SMTP_PASSWORD=%s\n' "$SMTP_PASSWORD";
-  printf 'HEALTHCHECKS_PING_URL=%s\n' "$HEALTHCHECKS_PING_URL";
-  printf 'ALERT_RECIPIENT_EMAIL=%s\n' "$ALERT_RECIPIENT_EMAIL";
-  printf 'MAILHOST_PING_URL=%s\n' "$MAILHOST_PING_URL";
-  printf 'GRAFANA_ADMIN_PASSWORD=%s\n' "$GRAFANA_ADMIN_PASSWORD"; } |
-  ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
-    test ! -e /etc/branchleft/monitoring.env || { echo "FAILED: monitoring.env exists; not overwriting it" >&2; exit 1; }
-    install -d -m 0755 -o root -g root /etc/branchleft &&
-    umask 077 &&
-    cat > /etc/branchleft/monitoring.env &&
-    chmod 0600 /etc/branchleft/monitoring.env &&
-    ls -l /etc/branchleft/monitoring.env && grep -c . /etc/branchleft/monitoring.env'
-unset SMTP_USERNAME SMTP_PASSWORD HEALTHCHECKS_PING_URL ALERT_RECIPIENT_EMAIL MAILHOST_PING_URL GRAFANA_ADMIN_PASSWORD
-```
-
-Expect `-rw------- 1 root root` and `6`. Anything else: stop and read the error.
-Do not print the file.
-
-**Gap: rotating one of the six keys above has no runnable path yet.** The block
-refuses when the file exists, because a rewrite would overwrite the `NTFY_` and
-`STALWART_` lines, and the `STALWART_PROMETHEUS_SECRET` block below replaces only
-its own key. The role is not wired to any host, so until the first gated converge
-no hand command replaces `SMTP_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` or another of
-the six in place. A single-key rotation path is its own ticket in the backlog; once
-the role runs on a host, changing the key's input and running the role is that
-path. Until then, a rotation of one of them waits.
+**The role runs on edge1.** The edge1 playbook wires `monitoring_stack` (PR #544,
+merged 2026-10-31), and the gated apply of commit c3ef323 converged the host on
+2026-11-01. The role writes the six keys above from the host's inputs on each
+gated apply, so rotating one of them is a change to its input followed by that
+apply. No hand block writes them any more. The `STALWART_PROMETHEUS_SECRET` block
+below is the one hand path left in this step.
 
 Check the file's shape without printing it:
 
@@ -431,23 +404,11 @@ reads the new value on its next restart (step 7b).
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering here independently.
 
-**The `monitoring_stack` role covers this copy, and this rsync stays the runnable
-path until the first gated converge.** The role delivers the same files with the
-same modes, from the same directory. It never deletes, so the `--delete` below
-has no counterpart in the role: a file removed from the repository stays on a host
-the role has converged, and must be removed by hand. Once the role runs on a host,
-retire this command for that host. Sections 3, 4, 5 and 14 keep their hand paths
-until then.
-
-<!-- interim-hand-block: s4-rsync -->
-
-```bash
-rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
-  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'chown -R root:root /opt/branchleft/monitoring/'
-```
+**The `monitoring_stack` role makes this copy on each gated apply.** It delivers
+the same files with the same modes, from the same directory. It never deletes, unlike
+the `rsync --delete` this step used to run, so a file removed from the repository
+stays on a host the role has converged, and must be removed by hand. No command in
+this step is typed by hand.
 
 **This copy alone changes nothing in the running stack.** Prometheus and
 Alertmanager both read their config only from what is on disk when their
@@ -455,29 +416,19 @@ container starts. Prometheus's reload endpoint is disabled outright -- this
 stack does not pass `--web.enable-lifecycle`, so `POST /-/reload` is refused
 and there is no way to make it pick up a new file short of restarting it.
 Alertmanager's own reload mechanism does not help either: the file it would
-reload is `alertmanager/alertmanager.yml`, which this same rsync deletes (see
-below) and only a restart's `ExecStartPre` regenerates -- there is nothing on
-disk to reload until that has run. All three mounts -- `prometheus.yml`,
-`alerts.yml`, `alertmanager.yml` -- are `:ro`, so the bytes on disk change the
-instant `rsync` finishes while the running containers go on serving whatever
-they last read. The change is not deployed until `systemctl restart
+reload is `alertmanager/alertmanager.yml`, which only a restart's `ExecStartPre`
+writes -- there is nothing on disk to reload until that has run. All three
+mounts -- `prometheus.yml`, `alerts.yml`, `alertmanager.yml` -- are `:ro`, so the
+bytes on disk change the instant the copy finishes while the running containers
+go on serving whatever they last read. The change is not deployed until `systemctl restart
 branchleft-compose@monitoring` runs, in step 7 below -- first-time bring-up
 starts it there for the first time; every later update to this directory
 restarts it the same way, in step 7's "Updating an already-running stack".
 
-`--delete` matters here specifically: `render_alertmanager_config.py` writes
-`alertmanager/alertmanager.yml` on the host, which does not exist in the
-committed tree, so every copy deletes the previous render. That restart is
-what puts it back: step 7's `ExecStartPre` runs
-`render_alertmanager_config.py` before every start, first or otherwise. **A
-copy that is not followed by that restart leaves the host with no
-`alertmanager.yml` on disk at all.** Nothing looks wrong -- the running
-Alertmanager container holds its own file open and keeps serving it -- so the
-gap is invisible until the container is next recreated for any unrelated
-reason and fails to start against a missing file. The `chown` here corrects
-ownership on whatever `--delete` left behind; it never touches
-`alertmanager.yml`, because `--delete` has already removed it by the time
-`chown` runs.
+`render_alertmanager_config.py` writes `alertmanager/alertmanager.yml` on the
+host, which does not exist in the committed tree, and the copy does not touch it.
+Step 7's `ExecStartPre` runs `render_alertmanager_config.py` before every start,
+first or otherwise, so the restart in step 7 is what writes it.
 
 **Note: `alertmanager/alertmanager.yml` must remain owned by uid 65534.** See
 `render_alertmanager_config.py` — Alertmanager runs as `nobody` and a bind mount
@@ -488,29 +439,17 @@ is read as the container-side user, so a root-owned file becomes unreadable.
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering here independently.
 
-The `monitoring_stack` role installs both drop-ins: `monitoring.override.conf`
-into `branchleft-compose@monitoring.service.d/` and `edge.override.conf` into
-`branchleft-compose@edge.service.d/`, each as `override.conf`, `root:root` mode
-`0644`, and it reloads systemd when either changed. The role is not yet wired
-to a host (step 3), so until the first gated converge this script is the
-runnable path, and it installs the same two files:
-
-<!-- interim-hand-block: s5-script-call -->
-
-```bash
-hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
-```
+The `monitoring_stack` role installs `monitoring.override.conf` into
+`branchleft-compose@monitoring.service.d/` as `override.conf`, `root:root` mode
+`0644`, and it reloads systemd when that file changed. The `edge_stack` role
+installs the edge drop-in, `edge.override.conf`, the same way. The edge1 playbook
+runs both roles on each gated apply, so no command in this step is typed by hand.
 
 The role does not restart `edge`, and it does not start `monitoring`.
 
 Neither drop-in takes effect until the affected unit next starts or
 restarts -- step 6 does that for `edge`, and step 7's first-ever start does
 it for `monitoring`.
-
-`hetzner/provision/install-systemd-drop-ins.sh` still exists and still installs
-the same two files for the host-provision path (`RUNBOOK-provision-host.md`).
-It is retired in a follow-up PR, after the first gated run of the role has
-converged on a host.
 
 ## 6. Restart the edge stack
 
@@ -749,7 +688,7 @@ publishes Grafana on `10.20.1.10:3000` only, and `10.20.1.10` does not route
 from the public internet.
 
 ```bash
-EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
+EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o format='{{(index .PrivateNet 0).IP}}')
 ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:"$EDGE1_PRIVATE_IPV4":3000 root@"$EDGE1_IPV4" -N &
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 ```
@@ -757,7 +696,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 Expect `200`, reached only through the tunnel. Confirm the registry side too:
 
 ```bash
-grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/Caddyfile
+grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/caddy/Caddyfile
 ```
 
 Expect no match in either file -- Grafana carries no hostname, no Caddy
@@ -880,33 +819,20 @@ re-copy, restart. `$EDGE1_IPV4` is set under "What has to be true first"
 above; re-set it first if you are entering here independently -- this is
 the section most likely to be entered mid-incident, days after the deploy.
 
-Once the `monitoring_stack` role runs on a host, a rollback is the checkout
-below followed by a gated run, which copies the same files and restarts the
-unit by fingerprint (step 3), and the copy and restart in this block are
-retired with the other interim hand blocks. Until then this block is the
-runnable path.
+A rollback is a revert that restores `hetzner/monitoring/stack` to
+`<PREVIOUS_MERGED_SHA>`, merged to `main` the usual way, followed by the gated
+apply of edge1. That apply copies the same files and restarts the unit by
+fingerprint (step 3). No hand command is part of it.
 
-<!-- interim-hand-block: s13-rollback -->
-
-```bash
-git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
-rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
-  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'chown -R root:root /opt/branchleft/monitoring/ &&
-   systemctl restart branchleft-compose@monitoring'
-```
-
-Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation. If
-the rollback also needs to undo an edge-side change (the metrics endpoints
-or the cgroup containment), the same pattern applies to
-`hetzner/edge/stack`, followed by `systemctl restart branchleft-compose@edge`.
+If the rollback also needs to undo an edge-side change (the metrics endpoints
+or the cgroup containment), revert `hetzner/edge/stack` the same way: the gated
+apply delivers it, and `systemctl restart branchleft-compose@edge` (step 6) makes
+it take effect.
 
 ## 14. Deploy the SNDS complaint-rate collector
 
-`snds/collect_snds_metrics.py` is copied to the host as part of step 4's
-`hetzner/monitoring/stack/` rsync (it lives under that directory). This
+`snds/collect_snds_metrics.py` is copied to the host as part of step 4's copy of
+`hetzner/monitoring/stack/` (it lives under that directory). This
 section is everything specific to it on top of that: the automated-access
 URL, node-exporter's textfile-collector mount, and the systemd timer that
 actually runs it.
@@ -1001,9 +927,8 @@ URL changed, restarts its own 30-day clock, and `SNDSAccessLinkExpiringSoon`
 clears on the next scrape. It tracks this by storing a SHA-256 of the URL --
 never the URL -- in `snds-link-state.json` beside the textfile output.
 
-**Then install the timer.** Not covered by step 5's
-`install-systemd-drop-ins.sh` -- that script only installs `*.override.conf`
-drop-ins for units this stack's template already defines, and
+**Then install the timer.** Not covered by step 5: step 5 installs only
+`*.override.conf` drop-ins for units this stack's template already defines, and
 `snds-collector.service`/`.timer` are standalone units of their own.
 
 ```bash
@@ -1103,25 +1028,19 @@ exact ordering mistake branchLeft/workspace#1149 exists to prevent.
 Same shape as "5. Provision a host that has no public address" above, reached
 through the `edge1` jump host — `$EDGE1_IPV4` is set there; re-set it first if
 entering here independently. **Native binary, not a Compose service**:
-`40-install-node-exporter.sh`'s own header explains why — ops1 runs
-`app-host-isolation.sh`'s `DOCKER-USER` policy, which drops every forwarded
-packet to the subnet with no carve-out for this host, and a published
-container port is forwarded traffic. A process bound to the host's own
-private address and reached over `INPUT` is not.
+The native install is the `node_exporter` role (`ansible/roles/node_exporter`),
+applied by ops1's gated pull, not a hand copy. The role's own README explains why
+the exporter is native: ops1 runs `app-host-isolation.sh`'s `DOCKER-USER` policy,
+which drops every forwarded packet to the subnet with no carve-out for this host,
+and a published container port is forwarded traffic. A process bound to the
+host's own private address and reached over `INPUT` is not.
 
-```bash
-cd ~/branchLeft/shared-infra
-HOST_PRIVATE_IP=10.20.1.50   # ops1 -- HOST_IPS.ops1, unchanged in value by the host rename, only in key name
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@"$HOST_PRIVATE_IP":/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/40-install-node-exporter.sh'
-```
-
-Expect the script's own closing line, `40-install-node-exporter: done,
-listening on 10.20.1.50:9100`. If it instead prints `no address in
-10.20.1.0/24 found on this host`, stop — that means this ran against the
-wrong host or the private network is not attached, not a problem the script
-can reconcile around.
+There is no command to run by hand here. The step is the owner's gate approval of
+the ops1 pull once the role is on `main`. After that apply, read the result on
+ops1: `systemctl is-active node_exporter.service` prints `active`, and the
+exporter listens on `10.20.1.50:9100`. If the role refuses with `no address in
+10.20.1.0/24` or with a mount at or above 70 percent, stop and fix the host;
+the role does not reconcile either of those.
 
 ### 15b. The firewall rule this does not need, stated rather than left silent
 

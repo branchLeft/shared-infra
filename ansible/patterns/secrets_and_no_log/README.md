@@ -6,9 +6,11 @@ token in an environment file, or a copy of a root-only file into the directory
 the service reads. It delivers placeholder secrets named `EXAMPLE_…` to one
 placeholder account. Copy the shape, not the names.
 
-The role does not decide where a secret comes from. That is the owner's decision
-(see "What the role decides, and what it does not"), and the recipe works with
-either of the two ways a secret can arrive.
+On a host that pulls its commit from `main`, a secret reaches the role through the
+`host_inputs` loader: the owner keeps each value in one root-only file on the host,
+and the loader sets it as a fact that the play passes on (see "What the role decides,
+and what it does not"). The role does not decide where a secret comes from, and the
+recipe works with either of the two ways a secret can arrive.
 
 ## What it does, and what it does not
 
@@ -35,12 +37,22 @@ The role takes the secret in one of two forms and accepts both:
   by root, with no group or other permission. The role copies it on the host, so
   the text never passes through a variable at all.
 
-Which store the value comes from, and how it reaches a host that pulls its
-commit from `main`, is not the role's decision and not this pattern's. It is the
-owner's (PRIN-6: a sensitive-data boundary is the owner's to cross). Until the
-owner has chosen, a service role built from this pattern has no source for its
-secrets and must not invent one. No variable in this role has a default that
-carries a secret, and no file in this directory holds one.
+The source is decided for a host that pulls its commit from `main`: the owner writes
+one root-only file per host, `/etc/branchleft/host-inputs.json`, places it once, and
+rotates a value by editing it by hand. The `host_inputs` role reads that file at run
+time and sets each input as a fact under the name of the argument it feeds. The file's
+rules and the bootstrap are in the README of that role, not repeated here (PRIN-6: a
+sensitive-data boundary is the owner's to cross). A service role built from this
+pattern takes its value from one of those facts. The pattern itself does not change:
+it still takes `value` or `source_file`, and a fact the loader set is a `value`. No
+variable in this role has a default that carries a secret, and no file in this
+directory holds one.
+
+**HELD HERE.** A fact the loader sets stays in memory for the rest of the run. Every
+later task that touches one needs its own `no_log: true` and `diff: false`, in the
+task that passes it on and in every task that names it after that. The check
+`ansible/checks/check_secret_no_log.py` (rule R1) enforces this for every role that
+declares a secret option, and follows a value through the role's variables.
 
 ## What an agent may and may not do with a secret
 
@@ -328,6 +340,11 @@ always section emptied them.
 
 ## Rotation as a re-run
 
+On a pulled host a rotation is an edit and a re-run: the owner changes the value in the
+root-only file, as root, and the gated apply runs the role again. The `host_inputs`
+README, "Bootstrap and rotation", is the procedure. The rest of this section is what
+the role does on that second run.
+
 Rotation is the role run again with a new value. Nothing else is needed: the file
 is replaced, the old value is gone, and a run with the same value changes nothing.
 The scenario starts from a host where an earlier release left an old value in a
@@ -389,18 +406,55 @@ option, and the test of the three probes tells a maintainer when a newer
 ansible-core changes any of this: they assert that the value is printed, so they
 fail when it stops being printed and the README needs to change.
 
+## The secret options of the roles
+
+Every option of a role or pattern that declares `no_log: true`, with the source it
+takes on a pulled host. A source is `host_inputs:` and the hosts whose row of the
+loader feeds the option (`ansible/roles/host_inputs/vars/main.yml`), or `none` when no
+row feeds it, so the value comes from a lookup or a caller in the play, as the role's
+own README says. `ansible/checks/check_secret_no_log.py` derives this table from the
+argument specs and the rows, and fails (R3) when a row is missing, extra, or has the
+wrong source. To add a secret option, add its row here.
+
+| Role               | Option                                    | Source on a pulled host   |
+| ------------------ | ----------------------------------------- | ------------------------- |
+| `backup_worker`    | `backup_worker_db_password`               | host_inputs: ops1         |
+| `backup_worker`    | `backup_worker_s3_access_key_id`          | host_inputs: ops1         |
+| `backup_worker`    | `backup_worker_s3_secret_access_key`      | host_inputs: ops1         |
+| `ci_jump`          | `ci_jump_user`                            | host_inputs: edge1, edget |
+| `control_plane`    | `control_plane_env_content`               | none                      |
+| `control_plane`    | `control_plane_masterkey`                 | none                      |
+| `db1_stack`        | `db1_stack_exporter_password`             | host_inputs: db1          |
+| `monitoring_stack` | `monitoring_stack_alert_recipient_email`  | host_inputs: edge1        |
+| `monitoring_stack` | `monitoring_stack_grafana_admin_password` | host_inputs: edge1        |
+| `monitoring_stack` | `monitoring_stack_healthchecks_ping_url`  | host_inputs: edge1        |
+| `monitoring_stack` | `monitoring_stack_mailhost_ping_url`      | host_inputs: edge1        |
+| `monitoring_stack` | `monitoring_stack_smtp_password`          | host_inputs: edge1        |
+| `monitoring_stack` | `monitoring_stack_smtp_username`          | host_inputs: edge1        |
+| `monitoring_stack` | `monitoring_stack_snds_data_url`          | host_inputs: edge1        |
+| `ntfy_pager`       | `ntfy_pager_machine_password_hash`        | host_inputs: edge1        |
+| `ntfy_pager`       | `ntfy_pager_owner_password_hash`          | host_inputs: edge1        |
+| `ntfy_pager`       | `ntfy_pager_pager_token`                  | host_inputs: edge1        |
+| `ntfy_pager`       | `ntfy_pager_watcher_token`                | host_inputs: edge1        |
+| `typed_module`     | `typed_module_token`                      | none                      |
+| `website_app1`     | `website_app1_smtp_password`              | host_inputs: app1         |
+
 ## The secret names the services will need
 
 Names only, taken by reading the scripts, compose files and runbooks under
 `hetzner/` and `mail/` for the variables that hold a credential. A name here means
 a file under those directories reads a variable of that name; it is not a check
 that the service needs it today. There are no values, no store entry names and no
-account identifiers in this list.
+account identifiers in this list. These are the script-side names: rule R3 checks
+that each name is read by some file under `hetzner/`, `mail/` or a root
+`RUNBOOK*.md`. The reverse direction, that every name a script reads is listed here,
+is reviewed by hand.
 
 | Name                                         | Read under                | How it is made today                                      |
 | -------------------------------------------- | ------------------------- | --------------------------------------------------------- |
 | `STALWART_PROMETHEUS_SECRET`                 | `mail/provision`          | Minted on the host by the deploy script                   |
-| `SHIM_DRAIN_TOKEN`                           | `mail/provision`          | Minted on the host by the render script                   |
+| `SMTP_PASS`                                  | `mail/provision`          | Rendered by `smtp-delivery`; made by script 62            |
+| `SHIM_DRAIN_TOKEN`                           | `mail/provision`          | Rendered by `drain`; minted on first use                  |
 | `CROWDSEC_BOUNCER_KEY`                       | `hetzner/edge`            | Generated on the host by a runbook command                |
 | `NEXTCLOUD_DB_PASSWORD`                      | `hetzner/nextcloud1`      | Generated on the host by a runbook command                |
 | `NEXTCLOUD_REDIS_PASSWORD`                   | `hetzner/nextcloud1`      | Not read                                                  |
@@ -418,9 +472,9 @@ Every name in this table is a secret, and so is its value.
 
 "Not read" means the creation step was not examined for this list. Under this
 pattern the owner creates the last two rows: a provider's console issues them, and
-the runbooks read them into the shell with `read -rs`. Whether any other row stays
-generated on the host or becomes an entry the owner creates is the source decision
-this pattern leaves to the owner. The last two rows are credentials of the people
+the runbooks read them into the shell with `read -rs`. Which of these reach a
+pulled host, and how, is the decision recorded in the table of the secret options
+above and in the `host_inputs` README; this list only names what the scripts read. The last two rows are credentials of the people
 and pipelines that provision, not of a running service, and may not belong on a
 host at all; that is the owner's call too.
 
@@ -501,12 +555,12 @@ unedited fresh role were green too.
 
 ### Named limits
 
-- **The source of a secret is the owner's decision.** The role takes a value at run
-  time or the path of a root-only file already on the host. It does not fetch, store
-  or generate a secret, and it does not know where the value came from. How the
-  value of an approved store entry reaches a host that pulls its commit from `main`
-  is not decided here (PRIN-6); until it is, a service role built from this pattern
-  has no source and must not invent one.
+- **The source of a secret is decided for a pulled host only.** On a host that pulls
+  its commit from `main`, the source is the `host_inputs` loader (see above). The role
+  takes a value at run time or the path of a root-only file already on the host. It
+  does not fetch, store or generate a secret, and it does not know where the value
+  came from. A service role built from this pattern on a host that does not pull has
+  no decided source and must not invent one.
 - **The file is not `0600` at every instant.** Ansible moves the new file into place
   and sets the owner and mode afterwards, so a new file has the mode the umask
   allows (`0644`) until the second step. The control is the directory, created
@@ -589,7 +643,7 @@ reusable workflow are separate work.
 
 The plan job's diff is the reason `diff: false` is in the recipe: a job summary is
 read by everyone who can see the run. How the value reaches the play on a host that
-pulls its commit is the source decision above.
+pulls its commit is the `host_inputs` loader's, described above.
 
 ## How a service role copies it
 

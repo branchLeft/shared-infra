@@ -1,0 +1,3 @@
+# Facts demo1's roles read: only the results of getent, which no template uses.
+getent_group: {}
+getent_passwd: {}

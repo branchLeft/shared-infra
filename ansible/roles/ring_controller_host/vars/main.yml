@@ -1,0 +1,58 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. A path, a name or a mode the
+# controller depends on must not be moved by a play variable (ansible/README.md, variable
+# precedence). The role touches only the paths below and its two unit files.
+#
+# The service account owns the two private keys and the state directory, and nothing else on
+# the host. The controller is not run as root: ops1 holds other roles' root-only files and the
+# owner's calendar data, and a non-root account cannot read them.
+ring_controller_host_account: ring-controller
+
+# The parents the role asserts and never makes or changes. /etc/branchleft is made by
+# host_inputs (R11); the other two are made by roles that run before this one on ops1.
+ring_controller_host_parents:
+  - /etc/branchleft
+  - /opt/branchleft
+  - /var/lib/branchleft
+
+ring_controller_host_config_dir: /etc/branchleft/ring-controller
+ring_controller_host_keys_directory: /etc/branchleft/ring-controller/keys
+ring_controller_host_env_file: /etc/branchleft/ring-controller/ring-controller.env
+ring_controller_host_known_hosts_file: /etc/branchleft/ring-controller/known_hosts
+ring_controller_host_state_dir: /var/lib/branchleft/ring-controller
+ring_controller_host_base_dir: /opt/branchleft/ring-controller
+ring_controller_host_releases_dir: /opt/branchleft/ring-controller/releases
+ring_controller_host_current_link: /opt/branchleft/ring-controller/current
+ring_controller_host_release_dir: '{{ ring_controller_host_releases_dir }}/{{ ring_controller_host_bundle_sha256 }}'
+ring_controller_host_bundle_file: '{{ ring_controller_host_release_dir }}/bundle.tar.gz'
+# The contract with the bundle: a regular executable file at this path inside it.
+ring_controller_host_binary_relative: bin/ring-controller
+
+# The key names and modes live in the module, which writes them. These are the same values,
+# held equal to the module's by tests/unit/test_ring_controller_host_keys.py. The private keys
+# are 0600 and the account's; the directory is 0700 and the account's.
+ring_controller_host_ledger_key_name: ledger-signing
+ring_controller_host_push_key_name: push
+ring_controller_host_keys_directory_mode: '0700'
+ring_controller_host_key_mode: '0600'
+ring_controller_host_public_mode: '0644'
+ring_controller_host_ssh_keygen: /usr/bin/ssh-keygen
+
+ring_controller_host_unit_dir: /etc/systemd/system
+ring_controller_host_service_unit: ring-controller.service
+ring_controller_host_timer_unit: ring-controller.timer
+ring_controller_host_units:
+  - '{{ ring_controller_host_service_unit }}'
+  - '{{ ring_controller_host_timer_unit }}'
+# The PATH of the unit, fixed in files/ring-controller.service and held equal to it by a test.
+# It names no directory an agent binary could be put in by this role.
+ring_controller_host_unit_path: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+
+# The shapes the inputs must have when set. They end in \Z, not $, so a trailing line break does
+# not pass. None admits a space, a quote, a backslash, a dollar sign or a hash, so a value is one
+# plain word in the environment file. A URL carries no user name, password, query or fragment.
+ring_controller_host_sha256_pattern: '^[0-9a-f]{64}\Z'
+ring_controller_host_bundle_url_pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/+-]*)?\Z'
+ring_controller_host_ledger_url_pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/+-]*)?\Z'
+ring_controller_host_push_remote_pattern: '^ssh://git@[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\.git\Z'
+ring_controller_host_known_hosts_pattern: '^[A-Za-z0-9.:,*\[\]-]+ (ssh-ed25519|ssh-rsa|ecdsa-sha2-nistp256) [A-Za-z0-9+/]+={0,2}\Z'

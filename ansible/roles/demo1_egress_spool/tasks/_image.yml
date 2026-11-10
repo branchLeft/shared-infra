@@ -1,0 +1,154 @@
+---
+# Internal to the role. The demo host has no route to a registry and the override sets
+# pull_policy never, so the host never pulls the spool's image: the image the pin file
+# names must already be on it. This reads, and writes nothing. In a real run it refuses
+# when the image is not there, before the volume is made or the unit is started, with
+# the reason in its message; in a plan it says so in a visible line, so a plan that
+# would fail the apply does not read as a pass (ANS-10). The role does not put the
+# image there. The owner carries it once and the role checks what arrived by digest
+# (README, "How the spool's image gets onto the host"). The name alone is not enough:
+# a different image under the same name would pass a check of the name, so this reads
+# what docker lists for the pinned reference and wants the pinned digest in it.
+
+# The pin file is the one source of the image the spool runs, so it is read first. It
+# is created once from the Compose file earlier in _spool.yml; a plan on a host that has
+# neither has no image to look for yet.
+- name: Look at the image pin file
+  ansible.builtin.stat:
+    path: '{{ demo1_egress_spool_image_env_path }}'
+    follow: false
+  register: demo1_egress_spool_image_env_stat
+
+- name: Read the image pin file
+  ansible.builtin.slurp:
+    src: '{{ demo1_egress_spool_image_env_path }}'
+  register: demo1_egress_spool_image_env_text
+  when: demo1_egress_spool_image_env_stat.stat.exists
+
+- name: Refuse an image pin file that is not one IMAGE line holding a digest-pinned image
+  ansible.builtin.assert:
+    that:
+      - (demo1_egress_spool_image_env_text.content | b64decode).splitlines() | length == 1
+      - (demo1_egress_spool_image_env_text.content | b64decode).splitlines() | first is match(demo1_egress_spool_image_env_pattern)
+    quiet: true
+    fail_msg: >-
+      {{ demo1_egress_spool_image_env_path }} is not exactly one IMAGE=<name>@sha256:<64 hex digits> line.
+      The shared Compose unit reads it, and the deploy wrapper rewrites it.
+  when: demo1_egress_spool_image_env_stat.stat.exists
+
+- name: Name the image the spool would start
+  ansible.builtin.set_fact:
+    demo1_egress_spool_wanted_image: ''
+
+- name: Take the image from the pin file where it is there
+  ansible.builtin.set_fact:
+    demo1_egress_spool_wanted_image: >-
+      {{ (demo1_egress_spool_image_env_text.content | b64decode).splitlines() | first | regex_replace('^IMAGE=', '') }}
+  when: demo1_egress_spool_image_env_stat.stat.exists
+
+- name: Take the image from the Compose file where there is no pin file yet
+  ansible.builtin.set_fact:
+    demo1_egress_spool_wanted_image: '{{ demo1_egress_spool_compose_doc.services[demo1_egress_spool_service].image }}'
+  when: not demo1_egress_spool_image_env_stat.stat.exists and demo1_egress_spool_compose_now.stat.exists
+
+# Reads only, so it runs in check mode too. A name that begins with a letter or digit
+# cannot be taken for an option (the pattern above holds the pin file to that).
+- name: Look for the image on the host
+  ansible.builtin.command:
+    argv:
+      ['{{ demo1_egress_spool_docker }}', image, inspect, '{{ demo1_egress_spool_wanted_image }}']
+  register: demo1_egress_spool_image_inspect
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: demo1_egress_spool_wanted_image | length > 0
+
+# Reset first (a register or fact set earlier in a run outlives its task), so a case or a
+# second pass never reads the last one's answer.
+- name: Forget what an earlier pass read of the image
+  ansible.builtin.set_fact:
+    demo1_egress_spool_image_listed: []
+    demo1_egress_spool_image_unreadable: false
+
+# docker prints a JSON list, one object per image, with the digests it knows the image by
+# in RepoDigests. Output that is not JSON is not guessed at: it counts as unreadable and
+# the digest check below refuses it.
+- name: Read what docker lists for the image
+  when: demo1_egress_spool_wanted_image | length > 0 and demo1_egress_spool_image_inspect.rc | default(1) == 0
+  block:
+    - name: Parse the listing
+      ansible.builtin.set_fact:
+        demo1_egress_spool_image_listed: '{{ demo1_egress_spool_image_inspect.stdout | from_json }}'
+  rescue:
+    - name: Note that the listing was not JSON
+      ansible.builtin.set_fact:
+        demo1_egress_spool_image_unreadable: true
+
+# True only when docker returned exactly one image and its RepoDigests hold the digest of
+# the pinned reference. Anything else (no image, two, a listing of another shape, another
+# digest) is false. The tests short-circuit, so a shape that is not a list of one mapping
+# is never indexed.
+- name: Name the digest the listing must hold
+  ansible.builtin.set_fact:
+    demo1_egress_spool_wanted_digest: "{{ demo1_egress_spool_wanted_image | regex_replace('^.*@', '') }}"
+    demo1_egress_spool_image_count: >-
+      {{ demo1_egress_spool_image_listed | length
+      if demo1_egress_spool_image_listed is sequence and demo1_egress_spool_image_listed is not string
+      else 0 }}
+
+- name: Work out whether the image listed is the pinned one
+  ansible.builtin.set_fact:
+    demo1_egress_spool_image_verified: >-
+      {{
+        not demo1_egress_spool_image_unreadable
+        and demo1_egress_spool_image_listed is sequence
+        and demo1_egress_spool_image_listed is not string
+        and demo1_egress_spool_image_listed is not mapping
+        and demo1_egress_spool_image_listed | length == 1
+        and demo1_egress_spool_image_listed[0] is mapping
+        and demo1_egress_spool_image_listed[0].RepoDigests is defined
+        and demo1_egress_spool_image_listed[0].RepoDigests is sequence
+        and demo1_egress_spool_image_listed[0].RepoDigests is not string
+        and (demo1_egress_spool_image_listed[0].RepoDigests | select('string')
+             | select('match', '^[^@]+@' ~ demo1_egress_spool_wanted_digest ~ '\Z')
+             | list | length) > 0
+      }}
+
+- name: Say the spool image is not on the host, in a plan
+  ansible.builtin.debug:
+    msg: >-
+      Spool image NOT on host: this plan cannot show that the image the spool starts is there
+      (image: {{ demo1_egress_spool_wanted_image | default('none named yet, no pin file or Compose file on the host', true) }}).
+      The host never pulls an image, so an apply refuses to start the spool until it is.
+  when: >-
+    ansible_check_mode and (demo1_egress_spool_wanted_image | length == 0
+    or demo1_egress_spool_image_inspect.rc | default(1) != 0
+    or not demo1_egress_spool_image_verified | bool)
+
+- name: Refuse to start the spool when its image is not on the host
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_image_inspect.rc | default(1) == 0
+    quiet: true
+    fail_msg: >-
+      The image {{ demo1_egress_spool_wanted_image }} is not on this host. The host has no route to a
+      registry and never pulls an image (the Compose override sets pull_policy never), so the image the
+      pin file {{ demo1_egress_spool_image_env_path }} names must already be on it. The owner carries it
+      once, over the edge1 jump (README, "How the spool's image gets onto the host"). The spool was not started.
+  when: not ansible_check_mode
+
+# A name can be loaded with the wrong content. docker finds an image by the digest in the
+# reference, but this reads the answer rather than trusting the exit code alone.
+- name: Refuse to start the spool on an image that is not the pinned one
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_image_verified | bool
+    quiet: true
+    fail_msg: >-
+      The host holds something under {{ demo1_egress_spool_wanted_image }} that is not the pinned image.
+      docker must list exactly one image for that reference, and its RepoDigests must hold the pinned digest
+      {{ demo1_egress_spool_wanted_digest }}.
+      {{ 'The listing was not JSON.' if demo1_egress_spool_image_unreadable
+      else 'It listed ' ~ demo1_egress_spool_image_count ~ ' image(s).' }}
+      The spool was not started. Load the image again from the pinned digest (README, "How the spool's image gets onto the host").
+  when: not ansible_check_mode

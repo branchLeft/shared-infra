@@ -5,6 +5,34 @@
 # sign-in service (only on a host where the stack is not yet deployed), the stack's
 # unit and the deploy wrapper, and last the DOCKER-USER isolation policy.
 
+# ----- The host the stack shares with Nextcloud, settled before anything is written -----
+# Nextcloud's data is not rebuildable from configuration, and this host is its only copy. So
+# the run first refuses a configuration that names Nextcloud's project or volumes, then
+# refuses a host without room, and records what Nextcloud looks like. The module only reads,
+# so these run in check mode as well and a plan shows a refusal. The record is printed, and
+# holds no environment variable and no secret.
+- name: Refuse a deploy configured with Nextcloud's project name or one of its volume names
+  control_plane_preflight:
+    action: collisions
+    default_project: '{{ control_plane_project_name }}'
+    project_names: '{{ control_plane_project_names }}'
+    compose_documents: '{{ control_plane_compose_documents }}'
+
+- name: Refuse a host short of free memory or free disk and record Nextcloud before the deploy
+  control_plane_preflight:
+    action: snapshot
+    stack_project: '{{ control_plane_project_name }}'
+    min_available_memory_fresh_mib: '{{ control_plane_min_available_memory_fresh_mib }}'
+    min_available_memory_running_mib: '{{ control_plane_min_available_memory_running_mib }}'
+    min_free_disk_mib: '{{ control_plane_min_free_disk_mib }}'
+  register: control_plane_preflight_before
+  when: control_plane_preflight_reads_host | ansible.builtin.bool
+
+- name: Show the record taken before the deploy
+  ansible.builtin.debug:
+    var: control_plane_preflight_before.record
+  when: control_plane_preflight_reads_host | ansible.builtin.bool
+
 # ----- What the run needs, settled before anything is written -----
 # The two secrets are write-once, so a file that already holds a value never needs its
 # content given. A file that is absent or empty does, and without it the run stops here,
@@ -245,17 +273,40 @@
     group: root
     mode: '0755'
 
+- name: Create the subdirectories of the stack
+  ansible.builtin.file:
+    path: '{{ control_plane_project_dir }}/{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ control_plane_stack_dirs }}'
+
 # Copied with explicit modes, not rsync. The runbook's rsync used --delete, so a
 # file removed from the repository was removed from the host; this does not
 # delete, and a file dropped from the list stays on the host until removed by hand.
-- name: Deliver the stack's files
+# The diff is not shown (ANS-16): the compose files
+# set environment variables named like passwords from other variables, and the plan's secret
+# scan would withhold the whole plan of the host over them. They hold no secret value. The
+# other files go by the next task, which shows its diff.
+- name: Deliver the stack's compose files
   ansible.builtin.copy:
     src: 'stack/{{ item }}'
     dest: '{{ control_plane_project_dir }}/{{ item }}'
     owner: root
     group: root
     mode: '0644'
-  loop: '{{ control_plane_stack_files }}'
+  loop: '{{ control_plane_stack_files | intersect(control_plane_stack_files_hidden) }}'
+  diff: false
+
+- name: Deliver the stack's other files
+  ansible.builtin.copy:
+    src: 'stack/{{ item }}'
+    dest: '{{ control_plane_project_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ control_plane_stack_files | difference(control_plane_stack_files_hidden) }}'
 
 # The next four tasks (the database start, the init phase and its stamp, the sign-in
 # service start) are for a host where the stack is not yet deployed: they start the database
@@ -390,14 +441,48 @@
     fail_msg: 'The stack unit is {{ control_plane_stack_unit_state.status.ActiveState }}, not active, after the deploy wrapper ran.'
   when: control_plane_start_units | ansible.builtin.bool
 
-# The reconciler and its unit are stay-as-code programs: the role installs them
-# byte for byte from the repository and does not rewrite them. The installer the
+# The database reads pg_hba.conf only when told to. The file reaches the container through
+# a directory mount, so a delivered file is visible at once, but the server still holds the
+# rules it read last. This reload makes the delivered file the rules in force, on EVERY
+# apply and not only when the file changed: a run that was interrupted after the copy would
+# otherwise leave the file delivered and never loaded, and the next run would see no change
+# to act on. A reload drops no connection and restarts nothing, and no volume is touched.
+# The script (the one home of this logic, also run by the real-server test) takes the
+# administrator's password from the container's own environment, so this role holds no
+# secret and no value is in an argument. It fails the apply, with the old rules still in
+# force, when the delivered file does not parse. The task reports no change so that a second
+# apply of one commit reports zero. It is skipped in check mode like every command, and
+# with the units switched off, as the database is then not necessarily running.
+- name: Reload the database so the delivered access rules are the ones in force
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - --interactive
+      - '{{ control_plane_db_container }}'
+      - sh
+      - -s
+    stdin: "{{ lookup('ansible.builtin.file', 'reload_hba.sh') }}"
+  changed_when: false
+  when: control_plane_start_units | ansible.builtin.bool
+
+# After the wrapper, never before: until the stack has been brought up on the new mount, a
+# restart of the old container (a rollback, an interrupted run) still needs this file.
+# Left behind it would be a file that looks live and governs nothing.
+- name: Remove the access rules file from its old place
+  ansible.builtin.file:
+    path: '{{ control_plane_legacy_hba_file }}'
+    state: absent
+  when: control_plane_start_units | ansible.builtin.bool
+
+# The reconciler and its unit are programs the deploy_tooling role holds: this role installs
+# them byte for byte through links in its files/ and does not rewrite them. The installer the
 # runbook ran restarted the unit on every run; here the restart happens only
 # when the reconciler or its unit changed. The unit runs at every boot and is
 # PartOf docker.service, so it is reasserted after a Docker restart either way.
 - name: Install the DOCKER-USER isolation reconciler
   ansible.builtin.copy:
-    src: branchleft_docker_user_policy.sh
+    src: branchleft_docker_user_policy.py
     dest: '{{ control_plane_isolation_reconciler }}'
     owner: root
     group: root
@@ -430,3 +515,20 @@
   when:
     - control_plane_start_units | ansible.builtin.bool
     - control_plane_reconciler is ansible.builtin.changed or control_plane_isolation_unit_file is ansible.builtin.changed
+
+# ----- Nextcloud after the deploy -----
+# Last of all, so that everything the role did is inside the comparison. It fails the run when a
+# container, a volume or the Compose project of Nextcloud's differs from the record taken first.
+# If an earlier task failed the run has ended already and this one does not run.
+- name: Record Nextcloud after the deploy and fail if it changed
+  control_plane_preflight:
+    action: compare
+    stack_project: '{{ control_plane_project_name }}'
+    before: '{{ control_plane_preflight_before.record }}'
+  register: control_plane_preflight_after
+  when: control_plane_preflight_reads_host | ansible.builtin.bool
+
+- name: Show the records taken before and after the deploy
+  ansible.builtin.debug:
+    var: control_plane_preflight_after.record
+  when: control_plane_preflight_reads_host | ansible.builtin.bool

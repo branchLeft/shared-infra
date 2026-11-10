@@ -49,10 +49,22 @@ db1_stack_mysql_checked_packages:
 
 # Files the hand-run installer left. They name the same repository with another
 # key file, and apt refuses two entries for one repository that disagree about
-# the key, so they are removed when the role takes the repository over.
+# the key, so they are removed when the role takes the repository over. Two
+# installers left a source list: mysql-community.list and mysql.list (found on
+# db1 on 1 Nov 2026, after the plan had passed because the index refresh is
+# skipped in check mode). The refusal below keeps a third from going unseen.
 db1_stack_legacy_files:
   - /etc/apt/sources.list.d/mysql-community.list
+  - /etc/apt/sources.list.d/mysql.list
   - /usr/share/keyrings/mysql.gpg
+
+# The one repository source the role delivers (tasks/main.yml), and the pattern
+# of a file that names the repository. A file that matches the pattern and is not
+# this one or a legacy file is refused before the host changes, in check mode too:
+# two entries for one repository that disagree about the key stop every apt
+# command on the host, and nothing else in the role would notice before then.
+db1_stack_mysql_source_path: /etc/apt/sources.list.d/mysql-community.sources
+db1_stack_mysql_host_pattern: '(?i)repo[.]mysql[.]com'
 
 # Where the pinned downloads are kept between runs, so a second run finds the
 # file with the right digest and downloads nothing.

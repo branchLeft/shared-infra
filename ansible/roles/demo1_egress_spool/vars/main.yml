@@ -13,6 +13,11 @@ demo1_egress_spool_config_dir: /etc/branchleft
 demo1_egress_spool_opt_dir: /opt/branchleft
 demo1_egress_spool_sbin_dir: /usr/local/sbin
 
+# Where the role's copies of the pinned files are, on the machine that runs the role.
+# The paths under it are the paths in the ghost-platform repository, the paths below.
+# Nothing is read from the network.
+demo1_egress_spool_vendored_root: '{{ role_path }}/files/ghost-platform'
+
 # What is pinned (paths from the root of the ghost-platform commit).
 demo1_egress_spool_egress_script_src: demo-host/provision/branchleft_demo_egress.sh
 demo1_egress_spool_egress_unit_src: demo-host/provision/branchleft-demo-egress.service
@@ -21,11 +26,6 @@ demo1_egress_spool_required_paths:
   - demo-host/provision/branchleft_demo_egress.sh
   - demo-host/provision/branchleft-demo-egress.service
   - render-core/test/golden/mail-spool-compose.demo1.yml
-
-# The sha256 of each pinned file, taken from the input list by path.
-demo1_egress_spool_egress_script_sha: "{{ (demo1_egress_spool_files | selectattr('path', 'equalto', demo1_egress_spool_egress_script_src) | first).sha256 }}"
-demo1_egress_spool_egress_unit_sha: "{{ (demo1_egress_spool_files | selectattr('path', 'equalto', demo1_egress_spool_egress_unit_src) | first).sha256 }}"
-demo1_egress_spool_compose_sha: "{{ (demo1_egress_spool_files | selectattr('path', 'equalto', demo1_egress_spool_compose_src) | first).sha256 }}"
 
 # The egress policy. The program and the unit are the only things the egress
 # half installs; the chains are what the program builds.
@@ -56,12 +56,16 @@ demo1_egress_spool_service: mail-spool
 # pin file; this override, which Compose merges over it, makes the running
 # container take the image from the pin file (the shared unit loads that file as
 # environment). The read-back holds the file to exactly this text, so the
-# override cannot add a port or a network.
+# override cannot add a port or a network, or take away pull_policy: never. The host
+# has no route to a registry, and the shared unit runs `docker compose pull` on every
+# start; with pull_policy never Compose skips that pull and starts the image that is
+# already on the host, and fails if it is not (_image.yml says so first).
 demo1_egress_spool_override_dest: /opt/branchleft/mail-spool/compose.override.yml
 demo1_egress_spool_override_content: |
   services:
     mail-spool:
       image: ${IMAGE:?the image pin file /etc/branchleft/mail-spool.image.env names no image}
+      pull_policy: never
 
 # The spool must not run before the egress policy is loaded and must stop with
 # it, so its unit is ordered after, and bound to, the egress unit by a drop-in
@@ -95,7 +99,6 @@ demo1_egress_spool_slot_networks:
 # Shapes. \Z, not $, so a trailing newline does not pass.
 demo1_egress_spool_sha_pattern: '^[0-9a-f]{40}\Z'
 demo1_egress_spool_checksum_pattern: '^[0-9a-f]{64}\Z'
-demo1_egress_spool_base_url_pattern: '^https://[A-Za-z0-9.-]+(/[A-Za-z0-9._~/-]*)?\Z'
 demo1_egress_spool_image_pattern: '^[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}\Z'
 demo1_egress_spool_image_env_pattern: '^IMAGE=[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}\Z'
 demo1_egress_spool_volume_path_pattern: '^/var/lib/docker/volumes/branchleft-mail-spool-data/_data\Z'

@@ -1,0 +1,30 @@
+---
+# Guarded step configure: reconcile Stalwart's settings through its API. The program
+# restarts Stalwart when it changes anything. It takes its own bootstrap path when the
+# administrator credential file is absent, so the preconditions refuse that first.
+
+- name: Check the install directory and the credential files before configure
+  ansible.builtin.import_tasks: _preconditions.yml
+
+# No check-mode run: the program writes settings and restarts a service, and has no
+# preview. A check-mode request shows the checks above and nothing else.
+- name: Run configure
+  ansible.builtin.command:
+    argv:
+      - '{{ mail_reconcilers_install_dir }}/{{ mail_reconcilers_wrappers.configure }}'
+  environment: '{{ mail_reconcilers_program_environment }}'
+  register: mail_reconcilers_run
+  changed_when: true
+  failed_when: false
+  no_log: true
+  when: not ansible_check_mode
+
+- name: Refuse a configure that did not end clean
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_run.rc == 0
+    quiet: true
+    fail_msg: >-
+      REFUSED: configure did not end clean (exit {{ mail_reconcilers_run.rc }}). The
+      program's output is withheld; its refusal lines: {{ mail_reconcilers_shown_lines }}
+  when: not ansible_check_mode

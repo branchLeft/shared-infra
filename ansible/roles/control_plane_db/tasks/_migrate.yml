@@ -1,7 +1,9 @@
 ---
 # Guarded step migrate: apply the pending migrations to the portal database with
-# the image's own program, which creates no role and sets no password. Its inputs
-# are the administrator URL file alone. The marker is keyed by the image digest.
+# the image's own program, which creates no role and sets no password. It connects as
+# the migration login, which is not a superuser, so its one input is the migrator URL
+# file the owner places for this request; the administrator's credential is neither
+# checked, mounted nor named here. The marker is keyed by the image digest.
 
 - name: Name the step and its marker
   ansible.builtin.set_fact:
@@ -11,16 +13,16 @@
 - name: Check the request, the image and the marker of migrate
   ansible.builtin.import_tasks: _guard.yml
 
-- name: Run migrate, then take the administrator URL file off the disk
+- name: Run migrate, then take the migrator URL file off the disk
   block:
     - name: Run migrate unless its marker exists
       when: not control_plane_db_marker_stat.stat.exists
       block:
-        - name: Check the administrator URL file
+        - name: Check the migrator URL file
           ansible.builtin.import_tasks: _inputs.yml
           vars:
             control_plane_db_input_files:
-              - '{{ control_plane_db_admin_url_file }}'
+              - '{{ control_plane_db_migrator_url_file }}'
 
         - name: Look for the stack network
           ansible.builtin.command:
@@ -32,10 +34,12 @@
           changed_when: false
           when: not ansible_check_mode
 
-        - name: Check the image carries the migrate-only flag
+        # The needle is the variable only an image that connects as the migrator reads, so an
+        # image that predates the login fails here, and not at the program's own refusal.
+        - name: Check the image carries the migrator login
           ansible.builtin.import_tasks: _image.yml
           vars:
-            control_plane_db_image_needle: '--migrate-only'
+            control_plane_db_image_needle: PORTAL_MIGRATOR_URL_FILE
 
         - name: Apply the pending migrations
           ansible.builtin.command:
@@ -44,15 +48,15 @@
                   '--network', control_plane_db_network]
                  + control_plane_db_container_limits
                  + ['-w', '/app/portal/data',
-                    '-v', control_plane_db_admin_url_file ~ ':/provision/' ~ control_plane_db_admin_url_name ~ ':ro',
-                    '-e', 'PORTAL_ADMIN_URL_FILE=/provision/' ~ control_plane_db_admin_url_name,
+                    '-v', control_plane_db_migrator_url_file ~ ':/provision/' ~ control_plane_db_migrator_url_name ~ ':ro',
+                    '-e', 'PORTAL_MIGRATOR_URL_FILE=/provision/' ~ control_plane_db_migrator_url_name,
                     '-e', 'NODE_OPTIONS=--max-old-space-size=192',
                     control_plane_db_apps_image, 'node', 'dist/provision/provisionMain.js', '--migrate-only'] }}
           register: control_plane_db_run
           changed_when: true
           failed_when: false
           # The program redacts what it prints, but its driver errors can quote the
-          # administrator URL. The next task shows only its own refusal lines.
+          # migrator URL. The next task shows only its own refusal lines.
           no_log: true
           when: not ansible_check_mode
 
@@ -72,7 +76,7 @@
         - name: Record that migrate ran for this image
           ansible.builtin.import_tasks: _marker.yml
   always:
-    - name: Remove the administrator URL file on every way out
+    - name: Remove the migrator URL file on every way out
       ansible.builtin.file:
-        path: '{{ control_plane_db_admin_url_file }}'
+        path: '{{ control_plane_db_migrator_url_file }}'
         state: absent

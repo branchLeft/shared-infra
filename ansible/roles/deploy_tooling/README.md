@@ -18,6 +18,10 @@ what it is is not guessed.
 - **Class `gateway`** (the host that holds the estate's shared address): the two
   directories, the deploy wrapper, the compose template unit, and the sudoers check. The
   policy program refuses to run on the gateway, so this class gets none of it.
+- **Class `internal`** (a host that carries no policy program, and is not the gateway):
+  exactly the gateway's set, the two directories, the deploy wrapper, the compose template
+  unit and the sudoers check. It gets no policy program, no policy unit, no firewall read-back
+  and no variant. Nothing is applied to a host by this class until a playbook names it.
 - **Class `app`** (a host that runs tenants' containers): everything above, and the
   policy program, its unit enabled at boot, the program applied, and the firewall chains
   read back and compared with what the program builds. An app host also names its
@@ -45,10 +49,10 @@ run on the hosts. Until then, do not run either script on a host this role manag
 [`defaults/main.yml`](defaults/main.yml) holds the one default. Ansible checks the
 inputs when the role starts.
 
-| Variable                        | Default          | Meaning                                                                                                                     |
-| ------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| `deploy_tooling_host_class`     | none, required   | `app` or `gateway`.                                                                                                         |
-| `deploy_tooling_policy_variant` | `not_applicable` | `standard` or `protected_no_db`. Required for class `app` (the role refuses `not_applicable` there); ignored for `gateway`. |
+| Variable                        | Default          | Meaning                                                                                                                |
+| ------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `deploy_tooling_host_class`     | none, required   | `app`, `gateway` or `internal`.                                                                                        |
+| `deploy_tooling_policy_variant` | `not_applicable` | `standard` or `protected_no_db`. Required for `app` (the role refuses `not_applicable` there); ignored for the others. |
 
 The variant is the role's **expectation**, never an input to the policy program. The
 program decides for itself from the host's own address, and the read-back fails when the
@@ -106,12 +110,31 @@ fresh `debian:13`, `debian:12` or `ubuntu:24.04` has `/usr/local/sbin` at `root:
 and no such marker file. These reads come first, before the role writes a
 file, so a run that is refused has written nothing into the directory it refused.
 
-The four files are read from `hetzner/provision/` of the checkout the playbook runs from,
-which stays their single home: the role holds no copy of them and no link to them (a link
-under the role would be a second path to the same bytes, and a check that reads it would
-treat the role as the author of a program it does not write). This differs from the note
-that asked for a download at a pinned commit: no other repository holds these programs, so
-a download would have meant a second copy in the repository that is downloaded from.
+The wrapper and the template unit are read from `hetzner/provision/` of the checkout the
+playbook runs from, which stays their single home: the role holds no copy of them and no
+link to them (a link under the role would be a second path to the same bytes, and a check
+that reads it would treat the role as the author of a program it does not write). This
+differs from the note that asked for a download at a pinned commit: no other repository
+holds these programs, so a download would have meant a second copy in the repository that
+is downloaded from.
+
+The policy program and its unit are held in this role's own `files/`, which is their one
+home. The program is a typed Python program (`files/branchleft_docker_user_policy.py`,
+installed under the name `branchleft-docker-user-policy`) with its unit tests in
+`tests/unit/test_branchleft_docker_user_policy.py`, checked by `mypy --strict` and `ruff`
+with the module in `library/`. It has no configuration file: it reads the host's own
+addresses, and the estate values it restates (the subnet, the gateway, the database host
+and port, the protected address and its ports, the spool bridge) are constants at the top
+of the file. The module reads the same constants to know what chain to expect, so a change
+to one changes what the read-back expects. The hand installer still installs an older
+shell copy of the program from `hetzner/provision/` until that installer is removed; the
+two differ, and the role's copy is the one a gated apply installs.
+
+The program refuses what it does not understand. It takes no arguments. An environment
+value with the name prefix `BRANCHLEFT_DOCKER_USER_POLICY_` (the tests set them; nothing on
+a host does) is refused unless it is an address, a subnet with its prefix length, a port
+number or a bridge name, as its name needs. A command it runs that does not finish in 30
+seconds is no answer, and the program stops with nothing more inserted rather than guess.
 
 ## How to run its test
 
@@ -145,10 +168,13 @@ Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode
 approval of the protected environment, a pull of that exact commit on the host, and a
 second run that must report zero changes. Nothing in this repository applies the role by
 hand, and an author's local run is the container test. The gateway host plays the role as
-class gateway, named in that host's play vars and pinned by the enrolment check. No app
-host plays it yet: listing it with the app class and variant is a follow-up, and
-capturing the real `iptables -S INPUT` and `iptables -S DOCKER-USER` (and the IPv6 pair)
-from a real app host is a precondition of it (see "Named limits").
+class gateway, named in that host's play vars and pinned by the enrolment check. The first
+app host plays it as class app with the standard variant, named in its play vars and pinned
+the same way, after the website role and before `deploy_slot_keys`. The first apply there
+re-applies the Docker firewall policy on a live app host: installing the policy program and its unit notifies
+the "Restart the policy unit" handler. The owner reads the plan job before approving. The real `iptables -S INPUT` and
+`iptables -S DOCKER-USER` (and the IPv6 pair) have still not been captured from a real app
+host (see "Named limits").
 
 ## How to change it safely
 
@@ -228,6 +254,23 @@ from a real app host is a precondition of it (see "Named limits").
   yet be what the new program would build, and a read-back would fail every first plan of
   a host. When none of them would change, the read-back runs, and fails, because a host
   whose files are right and whose chains are wrong is drift the plan has to show.
+  While the read-back is skipped, the plan prints a **firewall summary** instead: the
+  module in `mode: summary` lists the chains as they are now and says, for each rule the
+  policy did not put there, its place, its target's name and a verdict. `would-refuse` is
+  exactly what the apply's read-back would fail on (the same test, one function, used by
+  both), given the foreign-chain allow-list as it stands; `ok` cannot let a packet past;
+  `below-policy` sits under the policy's last drop and is not checked; `at-risk` is a rule
+  on a chain with no drop of the policy in it yet: the policy goes in at the top of the
+  chain, so it would sit below the policy, but a tool that put such a rule back above it
+  (a brute-force blocker re-inserting its jump) would fail the nightly drift check.
+  The first rule of `FORWARD` is reported in each family where `DOCKER-USER` exists, and
+  anything but the plain jump to it is `would-refuse`. A `DOCKER-USER` that the policy
+  needs and the host lacks is `would-refuse` too. A family the tool cannot list is
+  `unreadable`, with the tool's exit status and nothing else. The summary is the state
+  _before_ the restart: a restart cannot be simulated, and it does not report a missing,
+  misplaced or forbidden rule of the policy itself. It is evidence for the approver of
+  what the apply would refuse, not a promise of the apply. A would-refuse row fails the
+  apply _after_ the policy unit has restarted, which has already changed the live chain.
 - **The sudoers drop-in is compared whole.** After the owner, group, mode and `visudo`
   checks, the drop-in must be exactly the one grant and a final newline. A line that
   includes another directory, continues onto a second line, hides a wider grant in a
@@ -235,7 +278,14 @@ from a real app host is a precondition of it (see "Named limits").
   though `visudo` accepts each of them.
 - **Nothing printed is secret.** The plan log carries the `stat` results, the drop-in line
   (a root-owned grant that names the wrapper) and the read-back's first mismatch, so the
-  approver reads them before approving.
+  approver reads them before approving. The firewall summary prints positions, counts and
+  target names, and never a rule's text, address, port, interface or comment: the raw
+  listing stays inside the module, which hands back no text of it, and a target is named
+  only if it is a chain name or a built-in target (anything else prints as `none or
+unreadable`). **The chain and target names it prints are published**, because this
+  repository's plan log is public: a name such as a brute-force blocker's chain tells a
+  reader which tool the host runs. The names are what the allow-list needs, and they are
+  the only thing of the host's rules the log carries.
 
 ## What the test proves
 
@@ -258,7 +308,7 @@ leaves every step green is not claimed.
 | The drop-in is exactly the one grant                                                  | the whole-file comparison taken out                             | verify, sudoers: `EXPECTED A FAILURE, GOT NONE` for the include directive after the grant                                                                                   |
 | The role never writes the drop-in                                                     | a task that copies the drop-in added                            | verify, sudoers: `EXPECTED A FAILURE, GOT NONE: sudoers drop-in owner`                                                                                                      |
 | A gateway gets none of the isolation                                                  | the class condition taken off the isolation include             | verify, gateway phase: `Could not find the requested service` for the policy unit                                                                                           |
-| A gateway gets no policy program or unit                                              | the class condition taken off the policy copy                   | verify, gateway phase: `is present on a gateway host`, naming the path                                                                                                      |
+| A gateway gets no policy program or unit                                              | the class condition taken off the policy copy                   | verify, gateway and internal phases: `is present on a host with no policy program`, naming the path                                                                         |
 | A refused policy program fails the run                                                | `failed_when: false` on the restart handler                     | verify, refusal phase: `WRONG FAILURE`, the run failing at the rescue restart and not at the handler                                                                        |
 | The policy unit is restarted only when something changed                              | a restart of the unit on every run                              | idempotence: `changed=1` on the second converge                                                                                                                             |
 | A changed program is applied by the handler                                           | the handler made a `started` instead of a `restarted`           | verify, program changed: `The chain was put right by the read-back's repair`                                                                                                |
@@ -268,6 +318,9 @@ leaves every step green is not claimed.
 | The firewall chains are read back                                                     | the read-back task replaced by a no-op                          | verify, chain: `The role did not notice that the chains had been flushed`                                                                                                   |
 | A flushed chain is repaired once                                                      | the restart in the rescue taken out                             | verify, chain: the second read-back fails with the module's `established accept is missing`                                                                                 |
 | The read-back waits only for a pending apply                                          | the skip condition taken off the read-back                      | check-fresh: `cannot read the policy program`, because the fresh host has none                                                                                              |
+| A pending apply prints the firewall summary                                           | the summary task taken out of the role                          | check-fresh: `The check-mode plan did not summarise the firewall chains`                                                                                                    |
+| The summary prints no text of a rule                                                  | a rule's text put into a summary line                           | the module's unit tests: `test_the_summary_prints_names_positions_and_counts_never_rule_text`                                                                               |
+| The summary marks what the read-back would refuse                                     | the verdict made to say `ok` for every rule                     | the module's unit tests: `test_the_summary_marks_exactly_the_rules_the_apply_would_refuse`                                                                                  |
 | The read-back runs in check mode on a configured host                                 | `not ansible_check_mode` added to the read-back's condition     | check-configured: `EXPECTED A FAILURE, GOT NONE: check mode on a configured host with a rule missing`                                                                       |
 | The variant is the role's expectation, read from its input                            | the variant written into the read-back                          | verify, protected phase: `the database accept is missing`                                                                                                                   |
 | An app host must name its variant                                                     | the variant assertion taken out                                 | verify, interface: `WRONG FAILURE for app host with no variant`, failing at the read-back                                                                                   |
@@ -320,6 +373,10 @@ stayed clean; the harness run that follows them is the green.
   Capturing the real `iptables -S INPUT` and `iptables -S DOCKER-USER` (and the IPv6
   pair) from an app host with the policy applied is a precondition of wiring the app
   hosts; until then a jump to any other chain above the policy's drops is refused.
+  The firewall summary of a first plan (see "Check mode") is that capture, as names:
+  it shows the target of every other rule in each chain and its place. The allow-list
+  is not filled from it here, because the real names are known only after the owner has
+  read the first plan on a real app host; filling it is a follow-up.
   Two things about the list are known and are not fixed here, because they need a real
   chain to be right. A jump is accepted only when it has no match module beyond conntrack,
   tcp and udp, so a brute-force blocker's `-p tcp -m multiport --dports ... -j <chain>`
@@ -372,12 +429,14 @@ stayed clean; the harness run that follows them is the green.
   address that makes a host the gateway, or the control-plane host, is a file the test
   writes.
 - **The role has not been applied to a host.** The gateway's apply is waiting on the gated
-  workflow being available for this repository, and no app host is wired. The ticket is
-  unfinished on both halves until each has run live and a second run of the same commit has
-  reported no change.
+  workflow being available for this repository, and the first app host's playbook now
+  applies it but no gated run has applied it yet. The ticket is unfinished on both halves until each has run
+  live and a second run of the same commit has reported no change.
 - **The unit tests of the module read the real program.** They parse
-  `hetzner/provision/branchleft_docker_user_policy.sh` itself, so a change to a literal in
-  the program changes what the module expects; they do not pin a copy of it.
+  `files/branchleft_docker_user_policy.py` itself, so a change to a constant in the program
+  changes what the module expects; they do not pin a copy of it. The module reads a
+  constant only when it is assigned at the top level of the file, exactly once, to a
+  non-empty string.
 
 ## Clauses this role exercises
 

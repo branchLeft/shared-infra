@@ -16,8 +16,24 @@ unit instance, the env file and `/opt/branchleft/nextcloud1` follow the stack.
 shape as `db1`. `RUNBOOK-provision-host.md` must have been run against it
 first (base provisioning, then `app-host-isolation.sh`) — confirm:
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_IPV4=$(hcloud server ip edge1)
 HOST_PRIVATE_IP=10.20.1.50
 JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
@@ -34,7 +50,7 @@ Expect `active`, then `enabled`, then `provisioned`.
 branchLeft/shared-infra#215's deploy. Confirm with a curl from the
 workstation, not through the jump — a `502` with an empty body here means
 routing is correct and nothing is listening yet, which is the expected state
-until this runbook's own step 5:
+until section 5 below starts the stack:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
@@ -42,43 +58,19 @@ curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
 
 ## 1. Write the stack's secrets on the host
 
-`/etc/branchleft/nextcloud1.env` is what `branchleft-compose@nextcloud1`
-loads (`EnvironmentFile=-/etc/branchleft/%i.env` in the shared unit
-template) and what `stack/compose.yml` reads via `${VAR:?...}`.
+The `nextcloud_stack` role does this step, applied to `ops1` by
+`ansible/playbooks/ops1.yml`. It generates `NEXTCLOUD_DB_PASSWORD`,
+`NEXTCLOUD_REDIS_PASSWORD` and `NEXTCLOUD_ADMIN_PASSWORD` into
+`/etc/branchleft/nextcloud1.env` only when that file is absent, with mode
+`0600`, owner and group `root`. It prints none of them. Nothing here is run by
+hand. The role's procedure is in
+[`ansible/roles/nextcloud_stack/README.md`](../ansible/roles/nextcloud_stack/README.md).
 
-| Variable                   | Used by        | Where the value comes from                                                                                                                                                               |
-| -------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NEXTCLOUD_DB_PASSWORD`    | `app`, `db`    | Generated fresh — a new internal credential, not one the platform owner picks                                                                                                            |
-| `NEXTCLOUD_REDIS_PASSWORD` | `app`, `redis` | Generated fresh, same reasoning                                                                                                                                                          |
-| `NEXTCLOUD_ADMIN_PASSWORD` | `app`          | Generated fresh. Consumed by the entrypoint's install script only on a genuinely empty `/var/www/html` — changing it after first install has no effect on the account it already created |
+An existing env file is edited in place by a person, never overwritten.
 
-All three generated the same way Grafana's admin password is in
-`RUNBOOK-monitoring.md` §3 — nothing here is chosen or typed.
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
-  test -f /etc/branchleft/nextcloud1.env && grep -c . /etc/branchleft/nextcloud1.env || echo "absent"'
-```
-
-`absent` means there is nothing to lose. Anything else: edit the file in
-place rather than overwriting it.
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
-  install -d -m 0755 -o root -g root /etc/branchleft &&
-  umask 077 &&
-  { printf "NEXTCLOUD_DB_PASSWORD=%s\n" "$(openssl rand -base64 24)";
-    printf "NEXTCLOUD_REDIS_PASSWORD=%s\n" "$(openssl rand -base64 24)";
-    printf "NEXTCLOUD_ADMIN_PASSWORD=%s\n" "$(openssl rand -base64 24)"; } \
-    > /etc/branchleft/nextcloud1.env &&
-  chmod 0600 /etc/branchleft/nextcloud1.env &&
-  ls -l /etc/branchleft/nextcloud1.env'
-```
-
-Expect `-rw------- 1 root root`. Do not print the file. The admin password
-needs to reach the password manager separately (`openssl rand` output is
-never echoed to a terminal here) — read it back once, deliberately, after
-step 6 confirms the stack is healthy:
+The admin password still has to reach the password manager. Read it back once,
+deliberately, after section 6 confirms the stack is healthy. This prints the
+value to the terminal:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
@@ -87,112 +79,57 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 
 ## 2. Copy the stack directory onto the host
 
-```bash
-cd ~/branchLeft/shared-infra
-rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
-  -e "ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand=\"$JUMP\"" \
-  hetzner/nextcloud1/stack/ root@"$HOST_PRIVATE_IP":/opt/branchleft/nextcloud1/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
-  'chown -R root:root /opt/branchleft/nextcloud1/'
-```
+The role copies `compose.yml` into `/opt/branchleft/nextcloud1`, mode `0644`,
+owner and group `root`. It does not carry the old `rsync --delete`: a file
+removed from the repository stays on the host, as it does for `monitoring_stack`.
 
 ## 3. Install the systemd instance override
 
-`hetzner/nextcloud1/systemd/nextcloud1.override.conf` resets the mandatory
-image-pin assert and file this stack doesn't use (all three images are
-pinned inline) and switches `ExecStart` to `--force-recreate`, matching
-`monitoring`'s pattern — see that file's own comments for the full
-reasoning.
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
-  'install -d -m 0755 /etc/systemd/system/branchleft-compose@nextcloud1.service.d'
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" \
-  hetzner/nextcloud1/systemd/nextcloud1.override.conf \
-  root@"$HOST_PRIVATE_IP":/etc/systemd/system/branchleft-compose@nextcloud1.service.d/override.conf
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
-  'systemctl daemon-reload'
-```
+The role installs `hetzner/nextcloud1/systemd/nextcloud1.override.conf` as the
+drop-in `/etc/systemd/system/branchleft-compose@nextcloud1.service.d/override.conf`,
+and reloads systemd when it changed. The drop-in resets the mandatory image-pin
+assert and the file this stack does not use, and switches `ExecStart` to
+`--force-recreate`, matching `monitoring`'s pattern. That file's own comments give
+the reasoning. Section 9.3 relies on the flag.
 
 ## 4. Enable the unit
 
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
-  'systemctl enable branchleft-compose@nextcloud1'
-```
+The role enables `branchleft-compose@nextcloud1.service`.
 
 ## 5. Start the stack
 
-First bring-up, so `start`, not `restart` — the unit is a `RemainAfterExit`
-oneshot with no prior successful run to restart.
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
-  'systemctl start branchleft-compose@nextcloud1'
-```
-
-`--wait` in the unit's `ExecStart` blocks until all three services report
-healthy or `TimeoutStartSec` (600s) is reached. A cold pull of three images
-plus Postgres's own first-init can take a couple of minutes — this command
-does not return instantly, and that is not a hang.
+The role starts the unit. First bring-up is `start`, not `restart`: the unit is a
+`RemainAfterExit` oneshot with no prior successful run. `--wait` in its
+`ExecStart` blocks until all three services report healthy or `TimeoutStartSec`
+(600s) is reached. A cold pull plus Postgres's first init can take a couple of
+minutes, and that is not a hang. Section 9.4 relies on this.
 
 ## 6. Verify the stack is up
 
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" \
-  'systemctl is-active branchleft-compose@nextcloud1'
-```
+The role asserts that the unit is `active` with the drop-in loaded, that `app`,
+`db` and `redis` each have one healthy container, and that the app answers
+`status.php` with `"installed":true`.
 
-Expect `active`. That alone is real evidence, not a formality: `ExecStart`
-is `docker compose up -d --wait`, and `--wait` only reports success once
-every service with a `healthcheck:` is actually healthy — an active unit
-means the deploy already succeeded, sourced through `EnvironmentFile=` the
-way `systemd` does it.
+**Do not verify with `docker compose ps` or `docker compose exec` over a fresh SSH
+session.** Compose re-parses and re-interpolates `compose.yml`, and an interactive
+shell carries none of the `EnvironmentFile=` variables systemd sourced for
+`ExecStart`. Every `${VAR:?...}` then fails with "required variable ... is missing a
+value", even when the unit is healthy. Use plain `docker` with label filters, as
+the role's checks do. Sections 9.5 and 9.6 use the same pattern.
 
-**Do not follow this with `docker compose -f .../compose.yml ps` or
-`exec` over a fresh SSH session.** Found live on the first real deploy: an
-ad-hoc `docker compose` invocation re-parses and re-interpolates the whole
-Compose file itself, and a plain interactive shell over SSH carries none of
-the `EnvironmentFile=` variables systemd sourced for `ExecStart` — every
-`${VAR:?...}` in `stack/compose.yml` fails with "required variable ... is
-missing a value", which reads exactly like a broken deploy when the unit
-is in fact already healthy. Use plain `docker` with label filters instead,
-which never re-reads the Compose file at all — the same pattern
-`RUNBOOK-edge.md`'s throttle-derivation section already uses for the same
-reason:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" '
-  docker ps --filter label=com.docker.compose.project=nextcloud1 --format "{{.Names}}\t{{.Status}}"
-  docker exec $(docker ps -q --filter label=com.docker.compose.project=nextcloud1 --filter label=com.docker.compose.service=app) curl -fsS http://localhost/status.php
-'
-```
-
-Expect three containers `Up ... (healthy)`, and the `curl` printing a JSON
-blob with `"installed":true`. **This is also the first live confirmation
-that curl exists in the `nextcloud:31-apache` image** — `stack/compose.yml`'s
-healthcheck assumes it; if this command itself fails with "curl: not found"
-rather than a connection or HTTP error, the healthcheck needs a different
-probe and this runbook needs updating before relying on `--wait` again.
-
-Then, from the workstation, the same check this runbook opened with:
+From the workstation, the public check this runbook opened with should return
+`302`, not `502`:
 
 ```bash
 curl -s -o /dev/null -w "%{http_code}\n" https://cloud.branchleft.co.uk/
 ```
-
-Expect `302`, not `502` — a healthy, unauthenticated `/` redirects to
-`/login`, observed live on this instance's first deploy. `curl -sI ... |
-grep -i ^location` confirms the target is `https://cloud.branchleft.co.uk/login`;
-anything else is worth a closer look. `302` here means the whole chain
-(DNS, Caddy, this stack) is live, not that anything is wrong.
 
 ## 7. What this runbook does not cover
 
 Nextcloud's own first-run app configuration — enabling Calendar and Talk,
 setting up the Appointments booking page, TURN/STUN for Talk — is a separate
 piece of work through the admin web UI, not a provisioning step this runbook
-scripts. Do it once step 6 above is green.
+scripts. Do it once section 6 above passes.
 
 ## 8. Closing the admin-panel warnings
 

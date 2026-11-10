@@ -3,8 +3,17 @@
 # A new one fails the test in test_no_new_hand_installers.py until it is listed here.
 # Reasons: stays-as-code (the script is code, not a hand path) or pending-role (it is
 # to be replaced by the named role). A role name is read, not checked against
-# ansible/roles/, so a role may be listed before its directory merges (as host_roles.yml).
+# ansible/roles/ (RealTree checks it), so a role is named only once its directory exists.
 # An entry whose script is gone fails the test too.
+# The first is a vendored copy of a ghost-platform file, byte for byte and held to its
+# sha256 by the role that installs it (demo1_egress_spool), so it is code the role
+# places and not a hand path.
+# A script listed pending-role is due for removal (the script-removal programme). Nothing may
+# add a caller to it, first-run bootstrap included; new host paths are Ansible roles.
+# test_no_new_script_dependents.py holds the callers to a baseline that only shrinks.
+# Edit that baseline by hand, in the change that removes a caller.
+ansible/roles/demo1_egress_spool/files/ghost-platform/demo-host/provision/branchleft_demo_egress.sh:
+  reason: stays-as-code
 hetzner/provision/00-harden-ssh.sh:
   reason: pending-role
   role: host_baseline
@@ -16,31 +25,25 @@ hetzner/provision/10-harden-updates-fail2ban.sh:
   role: host_baseline
 hetzner/provision/20-install-docker.sh:
   reason: pending-role
-  role: docker_host
+  role: host_baseline
 hetzner/provision/30-install-deploy-tooling.sh:
   reason: pending-role
   role: deploy_tooling
-hetzner/provision/40-install-node-exporter.sh:
-  reason: pending-role
-  role: exporters_and_collectors
 hetzner/provision/45-install-db-tunnel.sh:
   reason: pending-role
-  role: db_tunnel
+  role: tunnel_account
 hetzner/provision/app-host-isolation.sh:
   reason: pending-role
-  role: app_host_isolation
+  role: deploy_tooling
 hetzner/provision/branchleft_docker_user_policy.sh:
   reason: pending-role
-  role: app_host_isolation
+  role: deploy_tooling
 hetzner/provision/branchleft_host_egress.sh:
   reason: pending-role
   role: egress_nat
 hetzner/provision/branchleft_nat.sh:
   reason: pending-role
   role: egress_nat
-hetzner/provision/install-systemd-drop-ins.sh:
-  reason: pending-role
-  role: host_baseline
 hetzner/provision/nat-gateway.sh:
   reason: pending-role
   role: egress_nat
@@ -61,46 +64,46 @@ mail/provision/10-harden-updates-fail2ban.sh:
   role: host_baseline
 mail/provision/20-install-docker.sh:
   reason: pending-role
-  role: docker_host
+  role: host_baseline
 mail/provision/30-deploy-stalwart.sh:
   reason: pending-role
-  role: mail_stalwart
+  role: mx1_stack
 mail/provision/40-configure-stalwart.sh:
   reason: pending-role
-  role: mail_stalwart
+  role: mail_reconcilers
 mail/provision/50-provision-mailboxes.sh:
   reason: pending-role
-  role: mail_stalwart
+  role: mail_reconcilers
 mail/provision/60-provision-website-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/61-provision-blog-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/62-provision-shim-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/63-deploy-mailgun-shim.sh:
   reason: pending-role
-  role: mailgun_shim
+  role: mx1_stack
 mail/provision/64-provision-alerting-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/65-install-local-resolver.sh:
   reason: pending-role
-  role: mail_resolver
+  role: mx1_stack
 mail/provision/66-provision-nextcloud-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/67-provision-collector-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/68-provision-zitadel-submission-credential.sh:
   reason: pending-role
-  role: mail_submission_credentials
+  role: mail_reconcilers
 mail/provision/70-schedule-dnsbl-check.sh:
   reason: pending-role
-  role: mail_dnsbl_check
+  role: mx1_stack
 mail/provision/run-all.sh:
   reason: pending-role
-  role: mail_stalwart
+  role: mx1_stack

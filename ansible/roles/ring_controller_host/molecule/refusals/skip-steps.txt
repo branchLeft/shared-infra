@@ -1,0 +1,10 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# The default scenario runs the plan and the idempotence checks over the delivered host. Here the
+# role is applied once and every other play puts the host in a bad state and puts it back, so
+# the steps that run a check would prove nothing and the cases are not meant to repeat.
+check-fresh
+check-configured
+molecule-check
+idempotence

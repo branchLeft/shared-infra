@@ -22,6 +22,12 @@ host_inputs_test_smtp_port: '587'
 host_inputs_test_smtp_user: test-smtp-user
 host_inputs_test_smtp_password: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-smtp chars=ascii_letters,digits length=40') }}"
 
+# app1's deploy slots: one made-up slot. The stack name is invented and the key is a sentinel in
+# the shape of an OpenSSH public key, never a real one, so that the log scan can look for it.
+host_inputs_test_slot_stack: loader-test-slot
+host_inputs_test_slot_blob: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-slot chars=ascii_letters,digits length=40') }}"
+host_inputs_test_slot_key: 'ssh-ed25519 {{ host_inputs_test_slot_blob }} loader-test'
+
 # What the owner would place for db1: exactly the row's three names.
 host_inputs_test_doc:
   db1_stack_exporter_password: '{{ host_inputs_test_password }}'
@@ -64,6 +70,26 @@ host_inputs_test_app1_doc:
   website_app1_smtp_user: '{{ host_inputs_test_smtp_user }}'
   website_app1_smtp_password: '{{ host_inputs_test_smtp_password }}'
   tenant_compose_stacks: '{{ host_inputs_test_stacks }}'
+  deploy_slot_keys_slots:
+    - stack: '{{ host_inputs_test_slot_stack }}'
+      public_key: '{{ host_inputs_test_slot_key }}'
+      adopt_existing: false
+
+# edge1's eleven required inputs, and the jump account's name, its one optional input. The name is
+# a sentinel of letters, not a real account, so the log scan can look for it.
+host_inputs_test_jump_name: "{{ lookup('ansible.builtin.password', '/dev/null seed=host-inputs-jump chars=ascii_lowercase length=16') }}"
+host_inputs_test_edge1_required_doc:
+  monitoring_stack_smtp_username: '{{ host_inputs_test_smtp_user }}'
+  monitoring_stack_smtp_password: '{{ host_inputs_test_smtp_password }}'
+  monitoring_stack_healthchecks_ping_url: https://ping.example.test/one
+  monitoring_stack_alert_recipient_email: alerts@example.test
+  monitoring_stack_mailhost_ping_url: https://ping.example.test/two
+  monitoring_stack_grafana_admin_password: '{{ host_inputs_test_password }}'
+  monitoring_stack_snds_data_url: https://snds.example.test/data
+  ntfy_pager_pager_token: '{{ host_inputs_test_password }}'
+  ntfy_pager_watcher_token: '{{ host_inputs_test_password }}'
+  ntfy_pager_owner_password_hash: '{{ host_inputs_test_password }}'
+  ntfy_pager_machine_password_hash: '{{ host_inputs_test_password }}'
 
 # Template syntax in a value must reach the role that uses it as the characters the
 # owner typed, and not be evaluated a second time on the host.
