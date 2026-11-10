@@ -2,8 +2,7 @@
 # Every host-state bash installer under a provision/ directory, and under hetzner/scripts.
 # A new one fails the test in test_no_new_hand_installers.py until it is listed here.
 # Reasons: stays-as-code (the script is code, not a hand path) or pending-role (it is
-# to be replaced by the named role). A role name is read, not checked against
-# ansible/roles/, so a role may be listed before its directory merges (as host_roles.yml).
+# to be replaced by the named role). A pending-role must name a directory under ansible/roles/.
 # An entry whose script is gone fails the test too.
 # The first is a vendored copy of a ghost-platform file, byte for byte and held to its
 # sha256 by the role that installs it (demo1_egress_spool), so it is code the role
@@ -25,19 +24,19 @@ hetzner/provision/10-harden-updates-fail2ban.sh:
   role: host_baseline
 hetzner/provision/20-install-docker.sh:
   reason: pending-role
-  role: docker_host
+  role: host_baseline
 hetzner/provision/30-install-deploy-tooling.sh:
   reason: pending-role
   role: deploy_tooling
 hetzner/provision/45-install-db-tunnel.sh:
   reason: pending-role
-  role: db_tunnel
+  role: tunnel_account
 hetzner/provision/app-host-isolation.sh:
   reason: pending-role
-  role: app_host_isolation
+  role: deploy_tooling
 hetzner/provision/branchleft_docker_user_policy.sh:
   reason: pending-role
-  role: app_host_isolation
+  role: deploy_tooling
 hetzner/provision/branchleft_host_egress.sh:
   reason: pending-role
   role: egress_nat
@@ -64,7 +63,7 @@ mail/provision/10-harden-updates-fail2ban.sh:
   role: host_baseline
 mail/provision/20-install-docker.sh:
   reason: pending-role
-  role: docker_host
+  role: host_baseline
 mail/provision/30-deploy-stalwart.sh:
   reason: pending-role
   role: mx1_stack
@@ -106,4 +105,4 @@ mail/provision/70-schedule-dnsbl-check.sh:
   role: mx1_stack
 mail/provision/run-all.sh:
   reason: pending-role
-  role: mail_stalwart
+  role: mx1_stack

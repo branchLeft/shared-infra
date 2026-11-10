@@ -391,7 +391,7 @@ Each one is listed in `hand_installers.yml` with a reason: `stays-as-code`, or `
 naming the role that will replace it. The test walks the tree and fails on a script that is not
 listed, and on an entry whose script is gone. The list is the baseline as it stood when the guard
 was added, so a new installer needs a reviewed entry, which is an owner merge under CODEOWNERS.
-The test reads the role name and does not check that the role exists, as `host_roles.yml` does.
+A `pending-role` must name a directory under `ansible/roles/`; a name with no role is a finding.
 
 ## test_no_new_script_dependents.py: no new caller of a pending-role script
 

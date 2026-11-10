@@ -18,6 +18,7 @@ from ruamel.yaml.error import YAMLError
 
 ROOT = Path(__file__).resolve().parents[2]
 ALLOWLIST = Path("ansible/checks/hand_installers.yml")
+ROLES = Path("ansible/roles")
 REASONS = ("stays-as-code", "pending-role")
 ROLE = re.compile(r"[a-z][a-z0-9_]*")
 PRUNED = frozenset((".git", "node_modules"))
@@ -38,6 +39,14 @@ def installers(root: Path) -> set[str]:
     return found
 
 
+def roles(root: Path) -> set[str]:
+    """Return the name of every directory under ``ansible/roles`` in ``root``."""
+    base = root / ROLES
+    if not base.is_dir():
+        return set()
+    return {path.name for path in base.iterdir() if path.is_dir()}
+
+
 def check(root: Path) -> list[str]:
     """Return one finding per unlisted installer, per stale entry and per malformed entry."""
     try:
@@ -49,8 +58,9 @@ def check(root: Path) -> list[str]:
     if not isinstance(document, dict):
         return [f"{ALLOWLIST} must map each script path to its entry"]
     findings: list[str] = []
+    known = roles(root)
     for name, entry in document.items():
-        findings.extend(_entry_findings(str(name), entry))
+        findings.extend(_entry_findings(str(name), entry, known))
     listed = {str(name) for name in document}
     found = installers(root)
     for name in sorted(found - listed):
@@ -60,7 +70,7 @@ def check(root: Path) -> list[str]:
     return findings
 
 
-def _entry_findings(name: str, entry: object) -> list[str]:
+def _entry_findings(name: str, entry: object, known: set[str]) -> list[str]:
     if not isinstance(entry, dict):
         return [f"{name}: the entry must be a mapping with a reason"]
     findings = [f"{name}: unknown key {key}" for key in entry if key not in ("reason", "role")]
@@ -71,6 +81,8 @@ def _entry_findings(name: str, entry: object) -> list[str]:
         role = entry.get("role")
         if not isinstance(role, str) or not ROLE.fullmatch(role):
             findings.append(f"{name}: pending-role must name its role, [a-z][a-z0-9_]*")
+        elif role not in known:
+            findings.append(f"{name}: pending-role names {role}, which is not a role under {ROLES}")
     elif "role" in entry:
         findings.append(f"{name}: stays-as-code takes no role")
     return findings
@@ -92,6 +104,7 @@ class Tree(unittest.TestCase):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
+        (self.root / ROLES / "host_baseline").mkdir(parents=True)
 
     def _write(self, relative: str, text: str = "echo\n") -> None:
         path = self.root / relative
@@ -100,6 +113,22 @@ class Tree(unittest.TestCase):
 
     def _list(self, *entries: str) -> None:
         self._write(str(ALLOWLIST), "".join(entries))
+
+    def test_a_pending_role_naming_an_existing_role_passes(self) -> None:
+        self._write("hetzner/provision/a.sh")
+        self._list("hetzner/provision/a.sh:\n  reason: pending-role\n  role: host_baseline\n")
+        self.assertEqual(check(self.root), [])
+
+    def test_a_pending_role_naming_no_role_directory_fails(self) -> None:
+        self._write("hetzner/provision/a.sh")
+        self._list("hetzner/provision/a.sh:\n  reason: pending-role\n  role: docker_host\n")
+        self.assertEqual(
+            check(self.root),
+            [
+                "hetzner/provision/a.sh: pending-role names docker_host, "
+                "which is not a role under ansible/roles"
+            ],
+        )
 
     def test_a_listed_script_passes(self) -> None:
         self._write("hetzner/provision/a.sh")
@@ -123,7 +152,7 @@ class Tree(unittest.TestCase):
         self.assertIn("new-installer.sh", check(self.root)[0])
         self._list(
             "hetzner/provision/a.sh:\n  reason: pending-role\n  role: host_baseline\n",
-            "hetzner/provision/new-installer.sh:\n  reason: pending-role\n  role: docker_host\n",
+            "hetzner/provision/new-installer.sh:\n  reason: pending-role\n  role: host_baseline\n",
         )
         self.assertEqual(check(self.root), [])
 
