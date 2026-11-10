@@ -290,6 +290,30 @@ second role or a second session. An interrupt (Ctrl-C) runs `destroy` before
 the harness exits. A run that is killed outright cannot, and its container can
 be found and removed by that label.
 
+## The CI runner image pin
+
+Every Ansible workflow job runs on the `ubuntu-24.04` runner image, not
+`ubuntu-latest`: `ansible.yml`, `ansible-offline.yml`, `ansible-delivery.yml` and
+`ansible-environment-probe.yml`. The comment above the harness jobs' `runs-on`
+lines says "Pinned until the harness is verified on the next Ubuntu LTS image".
+
+- **Why.** GitHub is moving `ubuntu-latest` to Ubuntu 26.04, rolling out from
+  19 October 2026 to 19 November 2026
+  (<https://github.com/actions/runner-images/issues/14748>). The container harness was measured on `ubuntu-24.04` only (cgroup v2
+  runner, `cgroupns_mode: host`, recorded in
+  `patterns/files_and_units/README.md`), so a silent move of the label could turn the
+  required check red with nothing changed in the repository.
+- **Who holds it.** The repository owner. The pin is a line in `.github/workflows/`, so
+  only a pull request the owner merges changes it.
+- **When it comes off.** Run the harness once on `ubuntu-26.04`: a branch whose
+  workflow sets that `runs-on`, with every shard selected. If every shard is green,
+  one pull request moves all four files to the verified label and cites the run URL in
+  its description. If a shard is red, the pull request records what fails and the fix
+  it needs, here and in the workflow comment, and the pin stays.
+- **When to look.** At each GitHub runner-images notice that retires `ubuntu-24.04`,
+  and whenever a pull request touches a harness `runs-on` line.
+- **Status.** No run on `ubuntu-26.04` is recorded yet. The pin stays until one is.
+
 ## Pins, the lock and the update route
 
 ANS-4 pins the toolchain. The pins are in one hash-locked file, the collections
