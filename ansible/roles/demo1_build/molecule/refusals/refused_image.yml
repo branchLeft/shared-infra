@@ -6,7 +6,7 @@
 # anything, and must say so with the reason. The control lists the pinned digest and stages
 # the candidate.
 #
-# docker is a stand-in (molecule/default/files/standin-docker.sh). It answers
+# docker is a stand-in (molecule/default/files/standin-docker). It answers
 # `docker image inspect` from the state directory, and tests/unit/test_caddy_judge.py ties its
 # answers to a real Docker on both image stores.
 #
