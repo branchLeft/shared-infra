@@ -83,14 +83,6 @@
       ]
     },
     {
-      "name": "_mta-sts",
-      "type": "TXT",
-      "ttl": 3600,
-      "values": [
-        "\"v=STSv1; id=76349e397ff4245c\""
-      ]
-    },
-    {
       "name": "_smtp._tls",
       "type": "TXT",
       "ttl": 3600,
