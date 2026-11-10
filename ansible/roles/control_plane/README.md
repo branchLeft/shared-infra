@@ -54,9 +54,9 @@ It does these, in order:
    container) so the delivered `pg_hba.conf` is the one in force, and removes the old
    `/opt/branchleft/control-plane/pg_hba.conf`. See "How a changed pg_hba.conf reaches the
    running database".
-8. Installs the DOCKER-USER isolation reconciler and its unit byte for byte from
-   `hetzner/provision/`, enables the unit, and restarts it only when the
-   reconciler or the unit changed.
+8. Installs the DOCKER-USER isolation reconciler (a Python program) and its unit byte for
+   byte, through links in `files/` to the `deploy_tooling` role's own copies (the one home
+   of each), enables the unit, and restarts it only when the reconciler or the unit changed.
 
 The role never removes a volume, an environment file, a master key or a container, and
 removes one file only: the access rules at their old place, once the stack runs on the

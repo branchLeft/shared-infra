@@ -381,8 +381,9 @@ jobs:
       # with nothing under them would pass in silence. The step covers every such role and
       # has no list to edit. The tests of these programs are run by the step "Run every role's
       # unit tests" below, from the same directory with files/ on the path, so this step runs
-      # only the type check and the lint. A role with a library/ is checked by the step below; a
-      # role whose pyproject.toml names no files/ path is covered by neither.
+      # only the type check and the lint. A role with a library/ is checked by the step below,
+      # together with any program in its files/; a role whose pyproject.toml names no files/
+      # path is covered by neither.
       - name: Check each role's own program in files/
         run: |
           set -euo pipefail
@@ -436,11 +437,17 @@ jobs:
               echo "$role has a library/ and no tests/unit/, so its module is not tested."
               exit 1
             fi
+            # A role that also ships a program in files/ is checked with its module: its
+            # pyproject.toml names both directories as the mypy_path.
+            checked_dirs=(library)
+            if compgen -G "$role/files/*.py" > /dev/null; then
+              checked_dirs+=(files)
+            fi
             (
               cd "$role"
-              "$bin/mypy" --strict library tests/unit
-              "$bin/ruff" check library tests
-              "$bin/ruff" format --check library tests
+              "$bin/mypy" --strict "${checked_dirs[@]}" tests/unit
+              "$bin/ruff" check "${checked_dirs[@]}" tests
+              "$bin/ruff" format --check "${checked_dirs[@]}" tests
             )
             echo "::endgroup::"
             checked=$((checked + 1))
