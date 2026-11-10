@@ -1041,7 +1041,7 @@ other unit tests of `ansible/harness`.
   reload, so the file is read at the next reload from any source (another role, a
   boot). Every file is written atomically, so none is ever half-written.
 - The Python unit tests in `tests/unit` run in the Ansible workflow's lint job
-  (`ansible/checks/run_role_unit_tests.sh`), and need Docker (real Caddy, and the
+  (`ansible/checks/run_role_unit_tests.py`), and need Docker (real Caddy, and the
   throwaway daemons of the image check). The Molecule scenarios carry the controls that
   need the role applied.
 - CI runs both scenarios: the Ansible workflow runs one job per scenario of every

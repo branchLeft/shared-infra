@@ -1,7 +1,7 @@
 """Unit tests for mx1_stack_probe: each action, and that no environment or raw output escapes.
 
 Run from the role's directory with library/ on PYTHONPATH, the way
-``ansible/checks/run_role_unit_tests.sh`` does. Every marker here is a throwaway made for the test.
+``ansible/checks/run_role_unit_tests.py`` does. Every marker here is a throwaway made for the test.
 """
 
 import json

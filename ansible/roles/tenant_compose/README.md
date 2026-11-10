@@ -185,7 +185,7 @@ lint, yamllint, the interface checks and the container test:
 ```
 
 The module's unit tests, type check and lint run from the role's directory and need no container;
-CI runs them (`ansible/checks/run_role_unit_tests.sh` and the module lint step):
+CI runs them (`ansible/checks/run_role_unit_tests.py` and the module lint step):
 
 ```text
 PYTHONPATH=library ../../../.venv/bin/python -m unittest discover -b -s tests/unit -p "test_*.py"

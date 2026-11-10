@@ -193,7 +193,7 @@ class MergeGroupTriggerTests(unittest.TestCase):
         # the job would let a failing role test pass the gate, so neither may appear.
         run_lines = [line for line in steps[0].splitlines() if line.strip().startswith("run:")]
         self.assertEqual(
-            ["        run: 'PYTHON=\"$RUNNER_TEMP/ansible-venv/bin/python\" ansible/checks/run_role_unit_tests.sh ansible'"],
+            ["        run: 'PYTHON=\"$RUNNER_TEMP/ansible-venv/bin/python\" python3 ansible/checks/run_role_unit_tests.py ansible'"],
             run_lines,
         )
         self.assertNotIn("continue-on-error", steps[0])
