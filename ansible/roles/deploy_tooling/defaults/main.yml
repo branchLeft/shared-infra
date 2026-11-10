@@ -6,3 +6,7 @@
 # Only a host of class app names a variant, and the role refuses this value
 # there. A host of class gateway has none to name.
 deploy_tooling_policy_variant: not_applicable
+
+# Only a host of class app enables tenant instances. Empty means every tenant in the host's
+# tenant list; a name given here must be in that list.
+deploy_tooling_tenant_units: []

@@ -20,8 +20,8 @@ standard sets for a role README (ANS-14).
    authority for the slug rules, the reserved names and the UID range; the role only types
    the two inputs.
 
-It does not enable the tenant's compose unit. That step is an owner step for now (see the
-open decision under "Named limits"). It does not create a database account, a database, a
+It does not enable the tenant's compose unit. The `deploy_tooling` role does that, once the
+tenant is in the host's tenant list (see "Named limits"). It does not create a database account, a database, a
 media bucket or a credential, and it writes no secret. It does not write the tenant's
 environment file, `compose.yml`, the deploy slot keys, the edge site block or the
 `pull_trigger` step list; those are owner steps or other roles, named in the owner steps.
@@ -171,34 +171,24 @@ run them and writes no marker for them. Each is written with placeholders in cap
    for the tenant's slot, then set `APP_HOST_DEPLOY_KEY` from the new public key. _Done when:_ a
    deploy as the slot key is accepted and any other command is refused.
 
-8. **Enable the tenant's compose unit without starting it.** As root, on the application host:
-
-   ```text
-   systemctl enable branchleft-compose@EXAMPLE_TENANT.service
-   ```
-
-   Do not pass `--now`: the unit has no image pin until the tenant's first deploy. _Done when:_
-   `systemctl is-enabled branchleft-compose@EXAMPLE_TENANT.service` prints `enabled` and
-   `systemctl is-active branchleft-compose@EXAMPLE_TENANT.service` prints `inactive`.
-
-9. **Register the edge site block.** Add the tenant's entry to the edge registry, as the edge
+8. **Register the edge site block.** Add the tenant's entry to the edge registry, as the edge
    runbook describes. _Done when:_ the tenant's hostname resolves through the edge.
 
-10. **Merge the handover pull request.** The owner merges it. _Done when:_ the tenant's stack is
-    in `main` and the gated apply has run.
+9. **Merge the handover pull request.** The owner merges it. _Done when:_ the tenant's stack is
+   in `main` and the gated apply has run.
 
-11. **Teardown order.** To remove a tenant, reverse the steps: stop and disable the unit, remove
+10. **Teardown order.** To remove a tenant, reverse the steps: stop and disable the unit, remove
     the edge block, revoke the slot key, then remove the volumes and the claim only after the
     owner has the data. The program never frees a UID by itself. _Done when:_ no line of
     `--list-claims` names the tenant and its volumes are gone.
 
 ## Named limits
 
-- **The enable step is not in this role (open decision).** The plan put enabling the compose
-  unit here. The repository's single-owner check reads any reference to a unit that the
-  deployment tooling role installs as a second owner. The owner rules who enables the unit:
-  either an exemption for this role on the check's owner-held allow-list, or moving the step to
-  the role that installs the unit. Until then the enable is owner step 8.
+- **The enable step is not in this role.** The `deploy_tooling` role, which installs the compose
+  template unit and is its single owner, enables one instance for each tenant in the host's
+  tenant list (the `tenant_compose_stacks` host input) and starts none. A tenant therefore gets
+  its unit enabled by the gated apply that carries its stack, and there is no owner step for it.
+  Removing a tenant is not undone by that role: the teardown step below still disables the unit.
 - **Ownership drift is repaired by a re-run and is not reported as a change.** The program sets
   each volume's owner and mode on every run. A re-run that repairs drift reports no change, so a
   drifted tenant shows as unchanged.

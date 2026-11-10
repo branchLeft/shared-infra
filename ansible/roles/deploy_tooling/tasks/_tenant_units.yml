@@ -1,0 +1,36 @@
+---
+# Included from main.yml for a host of class app only, after the isolation policy has been
+# applied and the handlers have run, so the template unit is installed and loaded. It enables
+# one instance of the template unit for each tenant the host's tenant list names, and starts
+# none: a start of an instance redeploys a tenant's stack, and only the deploy wrapper and the
+# tenant stack role do that. This role stays the single owner of the template unit; the
+# instances are only named from it.
+#
+# The tenant list is secret-bearing (each item holds the tenant's secrets file), so the one
+# task that reads it keeps only the names and hides its output (ANS-16). The names go into
+# the module as plain data, so its refusals stay visible and carry positions, never names. The
+# enable loop hides its items, because a tenant's name is not for the plan log.
+
+- name: Keep the names of the host's tenants and nothing else of the list
+  ansible.builtin.set_fact:
+    deploy_tooling_tenant_names: "{{ tenant_compose_stacks | default([]) | map(attribute='slug') | list }}"
+  no_log: true
+
+# Reads and changes nothing, so it runs in check mode too. It refuses a requested name that
+# is not one of the host's tenants, and any name the tenant stack role would refuse, before
+# anything below is enabled.
+- name: Name the tenant instances to enable, refusing any that is not a tenant of this host
+  deploy_tooling_tenant_unit_names:
+    known: '{{ deploy_tooling_tenant_names }}'
+    requested: '{{ deploy_tooling_tenant_units }}'
+    unit_prefix: '{{ deploy_tooling_compose_unit_prefix }}'
+
+# Skipped in check mode with a stated reason (ANS-10) while the template unit would be
+# written in this run: check mode did not write it, so systemd has no such unit to enable.
+- name: Enable each tenant's instance of the compose unit without starting it
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+    enabled: true
+  loop: '{{ deploy_tooling_tenant_unit_list }}'
+  no_log: true
+  when: not (ansible_check_mode and deploy_tooling_common_files_written.changed)
