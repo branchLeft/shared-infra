@@ -10,12 +10,14 @@
 #   ii    teardown
 #   iii   class gateway: the wrapper and the template only
 #   iv    teardown
-#   v     class app, protected_no_db variant, the ip stand-in printing the
-#         control-plane host's address
+#   v     class internal: the same files as the gateway, no isolation
 #   vi    teardown
-#   vii   class app, the ip stand-in printing the gateway's address: the policy
+#   vii   class app, protected_no_db variant, the ip stand-in printing the
+#         control-plane host's address
+#   viii  teardown
+#   ix    class app, the ip stand-in printing the gateway's address: the policy
 #         program refuses and the role fails
-#   viii  teardown, then class app, standard variant, ordinary ip
+#   x     teardown, then class app, standard variant, ordinary ip
 - name: Verify
   hosts: all
   gather_facts: false
@@ -36,14 +38,20 @@
     - name: Phase iv, teardown
       ansible.builtin.include_tasks: tasks/teardown.yml
 
-    - name: Phase v, the control-plane host's variant
-      ansible.builtin.include_tasks: tasks/phase_protected.yml
+    - name: Phase v, a host of class internal
+      ansible.builtin.include_tasks: tasks/phase_internal.yml
 
     - name: Phase vi, teardown
       ansible.builtin.include_tasks: tasks/teardown.yml
 
-    - name: Phase vii, a host that holds the gateway's address
+    - name: Phase vii, the control-plane host's variant
+      ansible.builtin.include_tasks: tasks/phase_protected.yml
+
+    - name: Phase viii, teardown
+      ansible.builtin.include_tasks: tasks/teardown.yml
+
+    - name: Phase ix, a host that holds the gateway's address
       ansible.builtin.include_tasks: tasks/phase_refusal.yml
 
-    - name: Phase viii, teardown and the final state
+    - name: Phase x, teardown and the final state
       ansible.builtin.include_tasks: tasks/phase_final.yml

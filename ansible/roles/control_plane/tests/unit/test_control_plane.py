@@ -12,10 +12,10 @@ import re
 import sys
 import tempfile
 import unittest
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any
 
-import yaml
+from ruamel.yaml import YAML
 
 ROLE = Path(__file__).resolve().parents[2]
 TASKS = ROLE / "tasks" / "main.yml"
@@ -43,17 +43,47 @@ DOCKER_READS = (
 )
 
 
-def _tasks() -> list[dict[str, Any]]:
-    """Return every task of tasks/main.yml, parsed."""
-    return list(yaml.safe_load(TASKS.read_text(encoding="utf-8")))
+def _load(path: Path) -> object:
+    """Return a YAML file, parsed."""
+    loaded: object = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+    return loaded
 
 
-def _argv(task: dict[str, Any]) -> list[str]:
+def _tasks() -> list[dict[str, object]]:
+    """Return every task of tasks/main.yml, parsed.
+
+    Raises:
+        TypeError: the file is not a list.
+    """
+    loaded = _load(TASKS)
+    if not isinstance(loaded, list):
+        message = "tasks/main.yml is not a list of tasks"
+        raise TypeError(message)
+    return [task for task in loaded if isinstance(task, dict)]
+
+
+def _section(task: Mapping[str, object], key: str) -> Mapping[str, object]:
+    """Return the arguments of a task's module, which the test has just found there.
+
+    Raises:
+        TypeError: the task has no such mapping.
+    """
+    section = task.get(key)
+    if not isinstance(section, Mapping):
+        message = f"{key} is not a mapping in {task.get('name')!r}"
+        raise TypeError(message)
+    return section
+
+
+def _argv(task: Mapping[str, object]) -> list[str]:
     command = task.get("ansible.builtin.command")
-    return [str(word) for word in command["argv"]] if isinstance(command, dict) else []
+    if not isinstance(command, Mapping):
+        return []
+    argv = command["argv"]
+    return [str(word) for word in argv] if isinstance(argv, list) else []
 
 
-def _conditions(task: dict[str, Any]) -> list[str]:
+def _conditions(task: Mapping[str, object]) -> list[str]:
     when = task.get("when", [])
     return [str(item) for item in (when if isinstance(when, list) else [when])]
 
@@ -114,11 +144,12 @@ class InputTests(unittest.TestCase):
         for name, needle in zip(INPUT_REFUSALS, REFUSAL_CODES, strict=True):
             task = by_name[name]
             self.assertIn(
-                f"control_plane[{needle}]", str(task["ansible.builtin.assert"]["fail_msg"])
+                f"control_plane[{needle}]",
+                str(_section(task, "ansible.builtin.assert")["fail_msg"]),
             )
             self.assertNotIn("no_log", task, f"{name!r} hides its own message")
         for name in INPUT_REFUSALS[:2]:
-            message = str(by_name[name]["ansible.builtin.assert"]["fail_msg"])
+            message = str(_section(by_name[name], "ansible.builtin.assert")["fail_msg"])
             self.assertNotIn("control_plane_env_content }}", message)
             self.assertNotIn("control_plane_masterkey }}", message)
 
@@ -176,8 +207,14 @@ DESTRUCTIVE_WORDS = frozenset(
 )
 
 
-def _vars() -> dict[str, Any]:
-    return dict(yaml.safe_load((ROLE / "vars" / "main.yml").read_text(encoding="utf-8")))
+def _vars() -> dict[str, object]:
+    loaded = _load(ROLE / "vars" / "main.yml")
+    return {str(key): value for key, value in loaded.items()} if isinstance(loaded, dict) else {}
+
+
+def _vars_list(name: str) -> list[str]:
+    value = _vars()[name]
+    return [str(item) for item in value] if isinstance(value, list) else []
 
 
 class HbaDeliveryTests(unittest.TestCase):
@@ -197,10 +234,14 @@ class HbaDeliveryTests(unittest.TestCase):
         self.assertEqual(self.names.count(name), 1, f"{name!r} must appear exactly once")
         return self.names.index(name)
 
-    def test_the_reload_comes_after_the_wrapper_and_after_the_stack_files_are_delivered(self) -> None:
+    def test_the_reload_comes_after_the_wrapper_and_after_the_stack_files_are_delivered(
+        self,
+    ) -> None:
         reload_at = self._position(RELOAD)
         for earlier in (WRAPPER, UNIT_ACTIVE, DELIVER_OTHER, DELIVER_COMPOSE, MAKE_SUBDIRECTORIES):
-            self.assertLess(self._position(earlier), reload_at, f"the reload comes before {earlier!r}")
+            self.assertLess(
+                self._position(earlier), reload_at, f"the reload comes before {earlier!r}"
+            )
 
     def test_the_reload_runs_the_one_script_in_the_db_container_on_every_apply(self) -> None:
         task = self.by_name[RELOAD]
@@ -209,7 +250,7 @@ class HbaDeliveryTests(unittest.TestCase):
             ["docker", "exec", "--interactive", "{{ control_plane_db_container }}", "sh", "-s"],
         )
         self.assertEqual(
-            task["ansible.builtin.command"]["stdin"],
+            _section(task, "ansible.builtin.command")["stdin"],
             "{{ lookup('ansible.builtin.file', 'reload_hba.sh') }}",
         )
         self.assertTrue((ROLE / "files" / "reload_hba.sh").is_file())
@@ -220,7 +261,9 @@ class HbaDeliveryTests(unittest.TestCase):
         self.assertEqual(_conditions(task), ["control_plane_start_units | ansible.builtin.bool"])
         self.assertNotIn("register", task)
 
-    def test_the_reload_script_takes_the_password_from_the_container_and_checks_the_reload(self) -> None:
+    def test_the_reload_script_takes_the_password_from_the_container_and_checks_the_reload(
+        self,
+    ) -> None:
         text = (ROLE / "files" / "reload_hba.sh").read_text(encoding="utf-8")
         self.assertIn('PGPASSWORD="${POSTGRES_PASSWORD:?', text)
         self.assertIn("pg_reload_conf()", text)
@@ -242,23 +285,28 @@ class HbaDeliveryTests(unittest.TestCase):
     def test_the_legacy_file_is_removed_only_after_the_wrapper(self) -> None:
         self.assertGreater(self._position(REMOVE_LEGACY), self._position(WRAPPER))
         task = self.by_name[REMOVE_LEGACY]
-        file_module = task["ansible.builtin.file"]
+        file_module = _section(task, "ansible.builtin.file")
         self.assertEqual(file_module["state"], "absent")
         self.assertEqual(file_module["path"], "{{ control_plane_legacy_hba_file }}")
         self.assertEqual(_conditions(task), ["control_plane_start_units | ansible.builtin.bool"])
         variables = _vars()
-        self.assertEqual(variables["control_plane_legacy_hba_file"], "{{ control_plane_project_dir }}/pg_hba.conf")
+        self.assertEqual(
+            variables["control_plane_legacy_hba_file"],
+            "{{ control_plane_project_dir }}/pg_hba.conf",
+        )
         # The legacy path is not a path the role still delivers.
-        self.assertNotIn("pg_hba.conf", variables["control_plane_stack_files"])
+        self.assertNotIn("pg_hba.conf", _vars_list("control_plane_stack_files"))
 
     def test_the_rules_are_delivered_into_a_subdirectory_the_role_makes_first(self) -> None:
         variables = _vars()
-        self.assertIn("postgres/pg_hba.conf", variables["control_plane_stack_files"])
+        self.assertIn("postgres/pg_hba.conf", _vars_list("control_plane_stack_files"))
         self.assertEqual(variables["control_plane_stack_dirs"], ["postgres"])
         self.assertLess(self._position(MAKE_SUBDIRECTORIES), self._position(DELIVER_OTHER))
         self.assertLess(self._position(MAKE_SUBDIRECTORIES), self._position(DELIVER_COMPOSE))
-        for relative in variables["control_plane_stack_files"]:
-            self.assertTrue((STACK / relative).is_file(), f"{relative} is not in the repository's stack")
+        for relative in _vars_list("control_plane_stack_files"):
+            self.assertTrue(
+                (STACK / relative).is_file(), f"{relative} is not in the repository's stack"
+            )
 
     def test_no_task_removes_a_container_or_a_volume(self) -> None:
         # The data lives in the db-data volume. Nothing the role runs may take it away.
@@ -288,7 +336,7 @@ class WrapperRecordTests(unittest.TestCase):
         spec.loader.exec_module(self.wrapper)
 
     def test_the_role_reads_the_file_the_wrapper_writes(self) -> None:
-        variables = yaml.safe_load((ROLE / "vars" / "main.yml").read_text(encoding="utf-8"))
+        variables = _vars()
         self.assertEqual(
             variables["control_plane_image_record"], self.wrapper.image_env_path("control-plane")
         )

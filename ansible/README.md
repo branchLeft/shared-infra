@@ -142,10 +142,15 @@ with the reason beneath each failed interface or scenario check:
 11. `check-configured`: the converge playbook under `--check --diff` against
     the configured container. It fails if any task would change, because an
     already configured host must show no drift.
-12. `molecule-check`: Molecule's own `check` action, which ANS-15 requires. It
-    recreates the container, converges for real and then runs the check-mode
-    play, so it covers the configured state again and not the fresh one. The
-    fresh state is covered by step 7 alone.
+12. `molecule-check`: Molecule's own `check` action, which ANS-15 requires. The
+    harness runs it alone, on the container already configured by step 8: it
+    passes Molecule a base configuration (`-c`) that narrows `check_sequence` to
+    `check`, because Molecule's default sequence destroys, recreates and
+    converges the container for real before its one check-mode pass. The pass is
+    counted like step 11 (it fails if any task would change), and it fails if its
+    output has no `PLAY RECAP`, so a narrowing that ran nothing cannot pass. It
+    covers the configured state again and not the fresh one. The fresh state is
+    covered by step 7 alone.
 13. `destroy`: always runs, after a failure and after an interrupt too.
 
 The static steps do not depend on each other or on the container steps. A
@@ -306,6 +311,30 @@ scenario, so one run cannot remove another run's container, whether it is a
 second role or a second session. An interrupt (Ctrl-C) runs `destroy` before
 the harness exits. A run that is killed outright cannot, and its container can
 be found and removed by that label.
+
+## The CI runner image pin
+
+Every Ansible workflow job runs on the `ubuntu-24.04` runner image, not
+`ubuntu-latest`: `ansible.yml`, `ansible-offline.yml`, `ansible-delivery.yml` and
+`ansible-environment-probe.yml`. The comment above the harness jobs' `runs-on`
+lines says "Pinned until the harness is verified on the next Ubuntu LTS image".
+
+- **Why.** GitHub is moving `ubuntu-latest` to Ubuntu 26.04, rolling out from
+  19 October 2026 to 19 November 2026
+  (<https://github.com/actions/runner-images/issues/14748>). The container harness was measured on `ubuntu-24.04` only (cgroup v2
+  runner, `cgroupns_mode: host`, recorded in
+  `patterns/files_and_units/README.md`), so a silent move of the label could turn the
+  required check red with nothing changed in the repository.
+- **Who holds it.** The repository owner. The pin is a line in `.github/workflows/`, so
+  only a pull request the owner merges changes it.
+- **When it comes off.** Run the harness once on `ubuntu-26.04`: a branch whose
+  workflow sets that `runs-on`, with every shard selected. If every shard is green,
+  one pull request moves all four files to the verified label and cites the run URL in
+  its description. If a shard is red, the pull request records what fails and the fix
+  it needs, here and in the workflow comment, and the pin stays.
+- **When to look.** At each GitHub runner-images notice that retires `ubuntu-24.04`,
+  and whenever a pull request touches a harness `runs-on` line.
+- **Status.** No run on `ubuntu-26.04` is recorded yet. The pin stays until one is.
 
 ## Pins, the lock and the update route
 
@@ -579,6 +608,11 @@ is.
   passes, and ansible-lint at the production profile does not refuse it when the
   command uses shell features. ANS-3 forbids `shell`, `raw` and `script` in a
   role, but its check is not scripted here, so review is what closes it.
+- **A pristine, never-checked converge is no longer run a second time.** Molecule's
+  own `check` used to rebuild the container and converge it for real before its
+  check-mode pass; it no longer does. The first converge on a fresh container is
+  still preceded by `check-fresh`, and a real apply is always preceded by a
+  check-mode plan (ANS-17, CI-13), so the dropped pass is not a production state.
 - **A silent skip under check mode passes.** A task wrapped in
   `when: not ansible_check_mode` runs in neither check step, and nothing fails.
   ANS-10 asks for a stated reason on every such skip; review is what checks it.

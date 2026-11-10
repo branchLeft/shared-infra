@@ -87,6 +87,16 @@ SKIPPABLE_STEPS = (
 )
 
 
+# Molecule's own `check` action rebuilds the instance and converges it for real
+# before its one check-mode pass (its default check_sequence is dependency,
+# cleanup, destroy, create, prepare, converge, check, cleanup, destroy). The
+# harness has already built, converged and checked the instance by then, so it
+# hands Molecule this base configuration, which narrows the sequence to the
+# check action alone: the one pass that ANS-15 requires, with no second build.
+CHECK_ONLY_CONFIG = "---\nscenario:\n  check_sequence:\n    - check\n"
+CHECK_ONLY_FILE = "molecule-check-only.yml"
+
+
 @dataclass(frozen=True)
 class Step:
     """One command the harness runs, and whether it runs after a failure."""
@@ -97,6 +107,7 @@ class Step:
     always: bool = False
     no_changes: bool = False
     skipped: bool = False
+    needs_recap: bool = False
 
 
 Runner = Callable[[Sequence[str], Path, Mapping[str, str]], "subprocess.CompletedProcess[str]"]
@@ -383,7 +394,12 @@ def static_steps(role: Path, tools: Path) -> list[Step]:
     ]
 
 
-def molecule_steps(role: Path, tools: Path, scenario: str = DEFAULT_SCENARIO) -> list[Step]:
+def molecule_steps(
+    role: Path,
+    tools: Path,
+    scenario: str = DEFAULT_SCENARIO,
+    base_config: Path | None = None,
+) -> list[Step]:
     """Return the Molecule steps for one scenario of a role, in the order they run.
 
     Every command names the scenario with ``-s``: Molecule runs ``default`` when it is
@@ -392,11 +408,18 @@ def molecule_steps(role: Path, tools: Path, scenario: str = DEFAULT_SCENARIO) ->
     ``molecule-check`` is Molecule's own action; ``destroy`` names the scenario too.
     A step the scenario's ``skip-steps.txt`` leaves out stays in the list, marked skipped,
     so the summary shows it as SKIP and not as missing.
+
+    Given ``base_config`` (a file holding ``CHECK_ONLY_CONFIG``), ``molecule-check`` runs
+    only Molecule's check action on the instance already configured, instead of
+    Molecule's default sequence that destroys, recreates and converges it first. That
+    pass is then counted like ``check-configured``, and it must print a PLAY RECAP, so
+    a narrowing that ran nothing cannot pass. Without it, the full default sequence runs.
     """
     molecule = str(tools / "molecule")
     left_out = read_skips(role / "molecule" / scenario)[0]
     named = ("-s", scenario)
     in_check_mode = ("converge", *named, "--", "--check", "--diff")
+    narrowed = ("-c", str(base_config)) if base_config is not None else ()
     commands: list[tuple[str, tuple[str, ...]]] = [
         ("create", ("create", *named)),
         ("prepare", ("prepare", *named)),
@@ -405,15 +428,17 @@ def molecule_steps(role: Path, tools: Path, scenario: str = DEFAULT_SCENARIO) ->
         ("idempotence", ("idempotence", *named)),
         ("verify", ("verify", *named)),
         ("check-configured", in_check_mode),
-        ("molecule-check", ("check", *named)),
+        ("molecule-check", (*narrowed, "check", *named)),
     ]
     steps = [
         Step(
             name,
             (molecule, *args),
             role,
-            no_changes=name == "check-configured",
+            no_changes=name == "check-configured"
+            or (name == "molecule-check" and base_config is not None),
             skipped=name in left_out,
+            needs_recap=name == "molecule-check" and base_config is not None,
         )
         for name, args in commands
     ]
@@ -437,10 +462,12 @@ def role_environment(
     return env
 
 
+RECAP_LINE = re.compile(r"^\S+\s*:\s+ok=\d+\s+changed=(\d+)", re.MULTILINE)
+
+
 def changed_tasks(output: str) -> int:
     """Return the number of changed tasks in the PLAY RECAP lines of ``output``."""
-    recap = re.findall(r"^\S+\s*:\s+ok=\d+\s+changed=(\d+)", output, re.MULTILINE)
-    return sum(int(count) for count in recap)
+    return sum(int(count) for count in RECAP_LINE.findall(output))
 
 
 def timed_run(
@@ -453,21 +480,26 @@ def timed_run(
 
 
 def report(step: Step, done: subprocess.CompletedProcess[str], seconds: float | None = None) -> str:
-    """Print a step's output and return its status; a no_changes step fails on a change.
+    """Print a step's output and return its status.
 
+    A no_changes step fails on a change. A needs_recap step fails when its output has no
+    PLAY RECAP line, because a run that played nothing has also changed nothing.
     The group header names the step's elapsed seconds when they are given, so a slow
     step shows in the log beside its status.
     """
     output = done.stdout + done.stderr
     status = OK if done.returncode == 0 else FAIL
     changed = changed_tasks(output) if step.no_changes else 0
-    if status == OK and changed:
+    unplayed = step.needs_recap and RECAP_LINE.search(output) is None
+    if status == OK and (changed or unplayed):
         status = FAIL
     timing = "" if seconds is None else f" {seconds:.1f}s"
     print(f"::group::{step.name} {status}{timing}")
     print(output, end="")
     if step.no_changes and changed:
         print(f"{step.name}: {changed} task(s) would change an instance that is already configured")
+    if status == FAIL and unplayed and done.returncode == 0:
+        print(f"{step.name}: no PLAY RECAP in the output, so nothing was checked")
     print("::endgroup::")
     return status
 
@@ -504,11 +536,13 @@ def run_role(
     env: Mapping[str, str],
     reasons: dict[str, str] | None = None,
     scenario: str = DEFAULT_SCENARIO,
+    base_config: Path | None = None,
 ) -> list[tuple[str, str]]:
     """Run every step for one scenario of a role.
 
     ``reasons`` receives why each failed check failed. The static checks read the whole
     role and run in every scenario's run; the Molecule steps run the one scenario.
+    ``base_config`` narrows ``molecule-check`` (see ``molecule_steps``).
     """
     outcomes: list[tuple[str, str]] = []
     reasons = {} if reasons is None else reasons
@@ -535,7 +569,7 @@ def run_role(
     for step in static_steps(role, tools):
         done, seconds = timed_run(run, step.argv, step.cwd, env)
         outcomes.append((step.name, report(step, done, seconds)))
-    steps = molecule_steps(role, tools, scenario)
+    steps = molecule_steps(role, tools, scenario, base_config)
     if limits:
         outcomes.extend((step.name, SKIP) for step in steps)
     else:
@@ -595,10 +629,12 @@ def main(
         done, seconds = install_collections(tools_dir, run, env)
         if report(Step("collections", (), ANSIBLE_DIR), done, seconds) == FAIL:
             return 1
+        base_config = work / CHECK_ONLY_FILE
+        base_config.write_text(CHECK_ONLY_CONFIG, encoding="utf-8")
         for role in roles:
             run_env = role_environment(environment, work, tools_dir, uuid.uuid4().hex[:12])
             reasons: dict[str, str] = {}
-            outcomes = run_role(role, tools_dir, run, run_env, reasons, args.scenario)
+            outcomes = run_role(role, tools_dir, run, run_env, reasons, args.scenario, base_config)
             print(f"== {role.name} ({args.scenario}) ==")
             for name, status in outcomes:
                 print(f"{status} {name}")

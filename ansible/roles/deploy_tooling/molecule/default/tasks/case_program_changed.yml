@@ -12,10 +12,13 @@
     jump: ACCEPT
     state: absent
 
+# The program is Python, and the established-traffic rule is the one statement that inserts
+# the conntrack accept into DOCKER-USER at the front. Taking that statement out leaves a
+# program that still parses, which the read-back needs in order to read its literals.
 - name: Take the same rule out of the installed program
   ansible.builtin.lineinfile:
     path: '{{ deploy_tooling_reconciler_path }}'
-    regexp: '^ensure_rule filter DOCKER-USER -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT$'
+    regexp: '^    insert\(1, \*CONNTRACK_REPLIES\)$'
     state: absent
   register: deploy_tooling_scenario_program_edit
 
