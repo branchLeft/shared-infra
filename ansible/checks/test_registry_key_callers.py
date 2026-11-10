@@ -37,8 +37,6 @@ ENV_KEY = "DOCKER_CONFIG"
 TREES = ("roles", "patterns")
 TASK_DIRECTORIES = ("tasks", "handlers")
 PROVISION = Path("hetzner/provision")
-# The hand installer is frozen and gets no new caller; nothing in it pulls an image.
-PROVISION_SKIPPED = frozenset({"30-install-deploy-tooling.sh"})
 PROVISION_SUFFIXES = frozenset({".py", ".sh", ".service"})
 
 BLOCK_KEYS = ("block", "rescue", "always")
@@ -252,7 +250,7 @@ def program_findings(root: Path, value: str) -> list[str]:
     """Return one finding per program under hetzner/provision that pulls and lacks the key."""
     found = []
     for path in sorted((root / PROVISION).glob("*")):
-        if path.suffix not in PROVISION_SUFFIXES or path.name in PROVISION_SKIPPED:
+        if path.suffix not in PROVISION_SUFFIXES:
             continue
         if path.name.startswith("test_"):
             continue

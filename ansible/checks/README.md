@@ -751,8 +751,7 @@ Each caller must set `DOCKER_CONFIG` in its `environment` (or its block's) to
 no task file may hold the path as a literal. A role whose templates name `*_IMAGE=` lines for a
 program to run (the restore drill) must carry a unit drop-in with the same `Environment=` line.
 Programs under `hetzner/provision` that pull (`branchleft-compose@.service`) must name the
-constant's value in an `Environment=` line. The hand installer `30-install-deploy-tooling.sh` is
-skipped: it is frozen and pulls nothing. A `docker compose up` in a `systemd` drop-in under
+constant's value in an `Environment=` line. A `docker compose up` in a `systemd` drop-in under
 `hetzner/*/systemd` inherits the unit's `Environment=` and is not scanned.
 
 The test is shown red on a synthetic tree for each rule, and red on the real tree with a pulling
