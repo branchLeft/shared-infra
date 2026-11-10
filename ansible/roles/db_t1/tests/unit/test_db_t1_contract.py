@@ -242,8 +242,11 @@ class ComposeContract(unittest.TestCase):
             "@@global.log_bin = 1",
             "@@global.binlog_format = 'ROW'",
             "@@global.require_secure_transport = 1",
+            # The X protocol listens on every address, so the check reads it back as off.
+            "NOT EXISTS (SELECT 1 FROM information_schema.PLUGINS WHERE PLUGIN_NAME = 'mysqlx'"
+            " AND PLUGIN_STATUS = 'ACTIVE')",
         ):
-            self.assertIn(needle, command)
+            self.assertIn(needle, " ".join(command.split()))
 
     def test_the_health_check_never_carries_the_root_value_in_the_file(self) -> None:
         health = mapping(mysql_service()["healthcheck"])
@@ -445,11 +448,13 @@ class TaskContract(unittest.TestCase):
         for word in ("ansible.builtin.shell", "docker compose", "sudo", "become"):
             self.assertNotIn(word, text)
 
-    def test_the_only_command_is_the_deploy_and_it_reports_a_change_in_check_mode(self) -> None:
+    def test_the_only_commands_are_the_check_mode_report_and_the_deploy(self) -> None:
         commands = [task for task in all_tasks() if module_of(task) == "ansible.builtin.command"]
-        self.assertEqual(len(commands), 1)
-        (deploy,) = commands
-        self.assertIs(deploy["changed_when"], True)
+        self.assertEqual(len(commands), 2)
+        report, deploy = commands
+        self.assertEqual(report["ansible.builtin.command"], {"argv": ["true"]})
+        self.assertIs(report["check_mode"], False)
+        self.assertEqual(report["when"], ["ansible_check_mode", "db_t1_deploy_needed | bool"])
         self.assertNotIn("check_mode", deploy)
         self.assertEqual(
             deploy["ansible.builtin.command"],
@@ -543,12 +548,13 @@ class TaskContract(unittest.TestCase):
         that = sequence(arguments_of(task)["that"])
         for condition in (
             "db_t1_secrets_stat.stat.isreg",
-            "db_t1_secrets_stat.stat.uid == 0",
-            "db_t1_secrets_stat.stat.gid == 0",
+            "db_t1_secrets_stat.stat.uid == db_t1_root_user_id",
+            "db_t1_secrets_stat.stat.gid == db_t1_root_group_id",
             "db_t1_secrets_stat.stat.mode == db_t1_secret_file_mode",
         ):
             self.assertIn(condition, that)
         self.assertEqual(VARS["db_t1_secret_file_mode"], "0600")
+        self.assertEqual((VARS["db_t1_root_user_id"], VARS["db_t1_root_group_id"]), (0, 0))
 
     def test_the_compose_file_is_rendered_with_its_diff_hidden(self) -> None:
         task = task_named("Render the compose file the deploy program reads")
@@ -576,7 +582,9 @@ class TaskContract(unittest.TestCase):
 
     def test_the_image_input_is_checked_before_anything_changes(self) -> None:
         first = all_tasks()[0]
-        self.assertIn("db_t1_image_pattern", str(first))
+        self.assertEqual(first["ansible.builtin.include_tasks"], "_inputs.yml")
+        refusal = task_files()["_inputs.yml"][0]
+        self.assertIn("db_t1_image_pattern", str(refusal))
 
 
 if __name__ == "__main__":

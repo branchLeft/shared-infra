@@ -11,14 +11,7 @@
 # ----- The input -----
 
 - name: Refuse an image that is not pinned by digest in the organisation's registry
-  ansible.builtin.assert:
-    that:
-      - db_t1_image == '' or db_t1_image is match(db_t1_image_pattern)
-    quiet: true
-    fail_msg: >-
-      The image must be empty (no deploy) or ghcr.io/branchleft/NAME@sha256: followed
-      by 64 lower-case hex digits. A tag can move, and another registry is not
-      attested.
+  ansible.builtin.include_tasks: _inputs.yml
 
 # ----- A second compose file would replace or extend the checked one -----
 

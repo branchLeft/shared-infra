@@ -100,3 +100,8 @@ db_t1_secret_line_pattern: '^MYSQL_ROOT_PASSWORD=[A-Za-z0-9]{32,128}$'
 # nothing else. A test holds this pattern to the one above.
 db_t1_secret_stray_pattern: '^(?!MYSQL_ROOT_PASSWORD=[A-Za-z0-9]{32,128}$)\s*\S'
 db_t1_secret_file_mode: '0600'
+# The numeric owner and group the root file must have. Root is 0 and 0 on every host;
+# only the role's behaviour tests move them, with an extra variable, so that the same
+# tasks can run as an ordinary user in a scratch tree.
+db_t1_root_user_id: 0
+db_t1_root_group_id: 0

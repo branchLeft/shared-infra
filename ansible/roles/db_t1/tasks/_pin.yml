@@ -121,8 +121,8 @@
     that:
       - db_t1_secrets_stat.stat.exists
       - db_t1_secrets_stat.stat.isreg
-      - db_t1_secrets_stat.stat.uid == 0
-      - db_t1_secrets_stat.stat.gid == 0
+      - db_t1_secrets_stat.stat.uid == db_t1_root_user_id
+      - db_t1_secrets_stat.stat.gid == db_t1_root_group_id
       - db_t1_secrets_stat.stat.mode == db_t1_secret_file_mode
       - db_t1_secrets_stat.stat.size > 0
     quiet: true
@@ -173,14 +173,26 @@
 
 # ----- The deploy -----
 
+# In check mode the deploy below is skipped, and a skipped command reports no change, so
+# a plan would show nothing for a first deploy. This task runs true, which changes
+# nothing, and reports changed, so the plan the owner approves from names the deploy
+# (ANS-10). A behaviour test holds it: a plan changes when a deploy is due and not otherwise.
+- name: Report in check mode that the image would be pinned and the stack started
+  ansible.builtin.command:
+    argv:
+      - 'true'
+  changed_when: true
+  check_mode: false
+  when:
+    - ansible_check_mode
+    - db_t1_deploy_needed | bool
+
 # The deploy program is the only writer of the pin. The deploy tooling role installs it
 # earlier in the same play, and only that role may name its path (a check holds this), so
-# a host without it fails here with the command's own error. It verifies the attestation of the
-# image first and refuses an image that is not registered, then writes the pin and
+# a host without it fails here with the command's own error. It verifies the attestation
+# of the image first and refuses an image that is not registered, then writes the pin and
 # restarts the unit, which waits for the health check. The role runs as root under the
 # pull, so no sudo is involved. An argv list, not a shell: the digest is one argument.
-# In check mode the command module does not run it and, because of changed_when, the plan
-# shows the first deploy as one changed task (ANS-10).
 - name: Pin the image to the stack and start it with the host's deploy program
   ansible.builtin.command:
     argv:

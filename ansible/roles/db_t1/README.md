@@ -140,8 +140,23 @@ enables the unit, and starts nothing.
 Check mode shows less than an apply, and the gaps are named: on a fresh host the unit
 template does not exist during a plan, so the plan does not show the unit's enablement,
 and the directories the plan does not create gate the file tasks (they appear in the
-second plan). A first deploy is reported as one changed task. The plan reads the owner's
-root file and fails if it is not in place when an image is given, which is intended.
+second plan). A skipped command reports no change, so the deploy itself would be invisible
+in a plan: a separate task, `Report in check mode that the image would be pinned and the
+stack started`, runs `true` in check mode only and reports changed when a deploy is due. A
+plan with the pin in place, or with no image, reports no change. The role's behaviour tests
+run both plans for real. The plan reads the owner's root file and fails if it is not in
+place when an image is given, which is intended.
+
+What the first apply of the host's play puts on db-t1, besides this role's files: the
+deploy tooling role (before this role in the play) installs the deploy wrapper and the
+compose template unit, and tells systemd to reload. That role does not write the sudoers
+drop-in; the host's first-boot configuration did, and the role refuses a host without it.
+The grant it checks is `deploy ALL=(root) NOPASSWD: /usr/local/sbin/branchleft-deploy`. So
+adding the role to this host's play makes the host depend on that grant, and whoever holds
+the `deploy` account's key on db-t1 can run `sudo branchleft-deploy dbt1 <image>` at any
+time, outside this role's never-replace guard. The wrapper accepts only an image in its
+attested register, and a failed health check on a replaced image rolls the pin back, so the
+cost of misuse is downtime, not data. Only two images are registered today.
 
 The order of the first deploy: the owner places the root file; the image is built, scanned
 and registered with the deploy program; a change then sets `db_t1_image`; the apply deploys
@@ -164,6 +179,15 @@ it. The owner steps are in the change that introduced the role.
 
 ## Named limits
 
+- **A half-finished first start can leave root without a password.** The container's
+  restart policy brings the server back after a crash before the image's start-up script
+  has set the root password. The role cannot see this. Afterwards it refuses on its own:
+  the data directory exists and the pin was deleted by the failed first start, so a retry
+  stops at "holds an initialised database". Every retry must be preceded by
+  `docker compose -p dbt1 down` (no `-v`), so that nothing keeps serving a server with an
+  empty root password. The role keeps refusing until the owner has looked at the volume
+  `dbt1_mysql-data` and decided by hand whether the half-made data is removed. This
+  follows the public build files of the image and is not proven on the pinned image.
 - The role cannot check that the digest is Percona Server 8.0.46-37. The container's health
   check does, on every start.
 - The data-directory refusal looks at Docker's default data root. A moved data root makes it

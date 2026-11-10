@@ -55,7 +55,9 @@ services:
           AND @@global.enforce_gtid_consistency = 'ON'
           AND @@global.log_bin = 1
           AND @@global.binlog_format = 'ROW'
-          AND @@global.require_secure_transport = 1,
+          AND @@global.require_secure_transport = 1
+          AND NOT EXISTS (SELECT 1 FROM information_schema.PLUGINS
+          WHERE PLUGIN_NAME = 'mysqlx' AND PLUGIN_STATUS = 'ACTIVE'),
           'ready', 'not-ready')") && [ "$$out" = ready ]
       interval: 10s
       timeout: 10s
