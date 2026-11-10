@@ -23,6 +23,13 @@ one's); each role's Sieve script is left alone if a script of the same name
 already holds the same content and is active, otherwise corrected. A second
 run against fully-reconciled state makes only GET calls.
 
+`--domain D --only L` (both, or neither) creates only L@D instead of the
+fixed list; D must be in ALLOWED_DOMAINS and L must match
+ONLY_LOCALPART_PATTERN, else exit 2 before any credential is read. Such a
+mailbox always gets the copy-forward to rob@ on MAIL_DOMAIN, and its secret
+is recorded under the full address (recorded_secret_key). See
+mail/RUNBOOK-mx1-provision.md#mailbox-provisioning.
+
 Mailbox passwords are persisted at MAILBOX_CREDENTIALS_PATH (mode 600,
 root-owned, on-box only) *before* the create call that sets them, not after
 -- see resolve_mailbox_secret and _reconcile_accounts for why. Never
@@ -31,9 +38,11 @@ mail/RUNBOOK-mx1-provision.md.
 """
 from __future__ import annotations
 
+import argparse
 import base64
 import json
 import os
+import re
 import secrets
 import sys
 import urllib.error
@@ -73,6 +82,16 @@ MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "
 ROLE_ADDRESSES = ("contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply", "psl")
 
 FORWARD_TARGET = f"rob@{MAIL_DOMAIN}"
+
+# `--domain D --only L` creates exactly L@D and nothing else. Both flags are
+# required together; with neither, the script behaves exactly as it always
+# has. D must be one of these domains (a closed set, not a pattern: a typo or
+# a hostile argument can never mint an account on a domain nobody listed), and
+# L must match ONLY_LOCALPART_PATTERN. A domain is added here in the change
+# that needs it, never taken from the command line.
+ALLOWED_DOMAINS = ("branchleft.co.uk", "blog.branchleft.co.uk")
+# \Z, not $: `$` also matches before a trailing newline.
+ONLY_LOCALPART_PATTERN = re.compile(r"[a-z][a-z0-9]{0,31}\Z")
 SIEVE_SCRIPT_NAME = "forward-copy-to-rob"
 SIEVE_CAPABILITIES = ["urn:ietf:params:jmap:core", "urn:ietf:params:jmap:sieve"]
 SIEVE_SCRIPT_SET = "SieveScript/set"
@@ -85,6 +104,61 @@ def sieve_script_contents(forward_target: str) -> str:
     so tests don't hardcode a live email address twice.
     """
     return f'require ["copy"];\nredirect :copy "{forward_target}";\n'
+
+
+def validate_target(domain: str | None, only: str | None) -> str | None:
+    """Pure check of the `--domain` / `--only` pair. Returns None when the
+    pair is usable (both absent, or both present and valid), else the reason
+    it is refused. Nothing is read or written before this passes.
+    """
+    if domain is None and only is None:
+        return None
+    if domain is None or only is None:
+        return "--domain and --only must be given together"
+    if domain not in ALLOWED_DOMAINS:
+        return f"domain {domain!r} is not one of {', '.join(ALLOWED_DOMAINS)}"
+    if ONLY_LOCALPART_PATTERN.match(only) is None:
+        return f"local part {only!r} does not match {ONLY_LOCALPART_PATTERN.pattern}"
+    return None
+
+
+def parse_args(argv: list[str]) -> tuple[str, str] | None:
+    """Returns (domain, local) for a targeted run, or None for the default
+    run. A refused pair exits 2 before any credential is read.
+    """
+    parser = argparse.ArgumentParser(
+        prog="provision_mailboxes.py",
+        description="With no flags, provisions branchLeft's own mailboxes. "
+        "With --domain and --only, creates only that one mailbox.",
+    )
+    parser.add_argument("--domain", help="one of: " + ", ".join(ALLOWED_DOMAINS))
+    parser.add_argument("--only", metavar="LOCALPART", help="the one local part to create")
+    args = parser.parse_args(argv)
+    reason = validate_target(args.domain, args.only)
+    if reason is not None:
+        print(f"provision_mailboxes: refused, nothing written: {reason}", file=sys.stderr)
+        raise SystemExit(2)
+    if args.domain is None:
+        return None
+    return args.domain, args.only
+
+
+def recorded_secret_key(local: str, domain: str) -> str:
+    """The key a mailbox's secret is recorded under in MAILBOX_CREDENTIALS_PATH.
+    The main domain keeps the bare local part (the file's existing format);
+    any other domain uses the full address, so hello@blog.branchleft.co.uk and
+    a later hello@branchleft.co.uk can never share or reuse one secret.
+    """
+    return local if domain == MAIL_DOMAIN else f"{local}@{domain}"
+
+
+def forwards_to_rob(local: str, domain: str) -> bool:
+    """Whether the mailbox gets the copy-forward to rob@. On the main domain
+    that is exactly ROLE_ADDRESSES, as it always was; on any other domain
+    every mailbox the script is asked to create does (rob@ lives only on the
+    main domain, so there is no loop).
+    """
+    return local in ROLE_ADDRESSES if domain == MAIL_DOMAIN else True
 
 
 def missing_mailboxes(mailboxes: tuple[str, ...], existing_names: set[str]) -> list[str]:
@@ -297,9 +371,15 @@ def _activate_sieve_script(auth: tuple[str, str], account_id: str, script_id: st
         raise RuntimeError(f"{SIEVE_SCRIPT_SET} did not activate {script_id!r}: {result.get('notUpdated')}")
 
 
-def _reconcile_accounts(auth: tuple[str, str], domain_id: str) -> dict[str, str]:
-    """Returns {local_part: account_id} for all of MAILBOXES, creating
-    whichever don't exist yet.
+def _reconcile_accounts(
+    auth: tuple[str, str],
+    domain_id: str,
+    mailboxes: tuple[str, ...] | None = None,
+    domain: str | None = None,
+) -> dict[str, str]:
+    """Returns {local_part: account_id} for all of MAILBOXES (or, for a
+    targeted run, the `mailboxes` given on `domain`), creating whichever
+    don't exist yet.
 
     Ordering matters here: the secret is resolved and persisted to disk
     *before* the x:Account/set call that uses it, not after. If that call's
@@ -313,19 +393,22 @@ def _reconcile_accounts(auth: tuple[str, str], domain_id: str) -> dict[str, str]
     reached disk and no way to recover it short of a manual admin-console
     reset.
     """
+    mailboxes = MAILBOXES if mailboxes is None else mailboxes
+    domain = MAIL_DOMAIN if domain is None else domain
     existing = _get_existing_account_names(auth, domain_id)
-    missing = missing_mailboxes(MAILBOXES, set(existing))
+    missing = missing_mailboxes(mailboxes, set(existing))
     recorded_secrets = _load_recorded_secrets()
 
     account_ids = dict(existing)
     for local in missing:
-        secret = resolve_mailbox_secret(local, recorded_secrets, lambda: secrets.token_urlsafe(32))
-        if local not in recorded_secrets:
-            _record_mailbox_secret(local, secret)
+        key = recorded_secret_key(local, domain)
+        secret = resolve_mailbox_secret(key, recorded_secrets, lambda: secrets.token_urlsafe(32))
+        if key not in recorded_secrets:
+            _record_mailbox_secret(key, secret)
         create_args = build_account_create_args(local, domain_id, secret)
         account_id = _create_account(auth, local, create_args)
         account_ids[local] = account_id
-        print(f"provision_mailboxes: created mailbox {local}@{MAIL_DOMAIN} (id {account_id})")
+        print(f"provision_mailboxes: created mailbox {local}@{domain} (id {account_id})")
 
     if not missing:
         print("provision_mailboxes: all mailboxes already exist, no-op")
@@ -333,7 +416,10 @@ def _reconcile_accounts(auth: tuple[str, str], domain_id: str) -> dict[str, str]
     return account_ids
 
 
-def _reconcile_role_sieve_script(auth: tuple[str, str], local: str, account_id: str) -> bool:
+def _reconcile_role_sieve_script(
+    auth: tuple[str, str], local: str, account_id: str, domain: str | None = None
+) -> bool:
+    domain = MAIL_DOMAIN if domain is None else domain
     target_contents = sieve_script_contents(FORWARD_TARGET)
     script = _get_sieve_script(auth, account_id, SIEVE_SCRIPT_NAME)
 
@@ -345,19 +431,24 @@ def _reconcile_role_sieve_script(auth: tuple[str, str], local: str, account_id: 
     action = plan_sieve_action(existing, target_contents)
     if action == "create":
         _create_sieve_script(auth, account_id, SIEVE_SCRIPT_NAME, target_contents)
-        print(f"provision_mailboxes: created and activated the forwarding script for {local}@{MAIL_DOMAIN}")
+        print(f"provision_mailboxes: created and activated the forwarding script for {local}@{domain}")
     elif action == "update":
         _update_sieve_script(auth, account_id, existing["id"], target_contents)
-        print(f"provision_mailboxes: corrected the forwarding script's content for {local}@{MAIL_DOMAIN}")
+        print(f"provision_mailboxes: corrected the forwarding script's content for {local}@{domain}")
     elif action == "activate":
         _activate_sieve_script(auth, account_id, existing["id"])
-        print(f"provision_mailboxes: reactivated the forwarding script for {local}@{MAIL_DOMAIN}")
+        print(f"provision_mailboxes: reactivated the forwarding script for {local}@{domain}")
     else:
-        print(f"provision_mailboxes: forwarding script for {local}@{MAIL_DOMAIN} already up to date, no-op")
+        print(f"provision_mailboxes: forwarding script for {local}@{domain} already up to date, no-op")
     return action != "none"
 
 
-def main() -> int:
+def main(target: tuple[str, str] | None = None) -> int:
+    """`target` is (domain, local) for a targeted run (already validated by
+    parse_args), None for the default run over MAILBOXES.
+    """
+    if target is not None:
+        return _main_targeted(*target)
     auth = _load_admin_credentials()
     domain_id = _get_domain_id(auth, MAIL_DOMAIN)
 
@@ -373,9 +464,28 @@ def main() -> int:
     return 0
 
 
+def _main_targeted(domain: str, local: str) -> int:
+    # Re-checked here so no caller can reach the Stalwart API with an
+    # unvalidated pair, whatever it passed in.
+    reason = validate_target(domain, local)
+    if reason is not None:
+        print(f"provision_mailboxes: refused, nothing written: {reason}", file=sys.stderr)
+        return 2
+    auth = _load_admin_credentials()
+    domain_id = _get_domain_id(auth, domain)
+    account_ids = _reconcile_accounts(auth, domain_id, (local,), domain)
+    changed = False
+    if forwards_to_rob(local, domain):
+        changed = _reconcile_role_sieve_script(auth, local, account_ids[local], domain)
+    if not changed:
+        print("provision_mailboxes: nothing left to reconcile")
+    return 0
+
+
 if __name__ == "__main__":
+    target = parse_args(sys.argv[1:])
     try:
-        sys.exit(main())
+        sys.exit(main(target))
     except urllib.error.HTTPError as exc:
         # Must come before URLError -- HTTPError is a URLError subclass.
         print(f"provision_mailboxes: HTTP {exc.code} from the Stalwart API: {exc.read().decode(errors='replace')}", file=sys.stderr)
