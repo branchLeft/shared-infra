@@ -1,0 +1,165 @@
+---
+# One case per refusal, run against the configured host. Each case applies the role with
+# one input changed and expects it to stop with the message of the rule it names; the
+# control case changes nothing but the deploy program (/bin/true) and expects the role to
+# go through, so a refusal cannot pass merely because the setup was wrong. The cases that
+# are about the deploy path point the role at a scratch directory on the tmpfs, so the real
+# pin, the real root file and the stand-in's log are never at risk, and are asserted
+# unchanged at the end.
+- name: Verify the refusals
+  hosts: all
+  gather_facts: false
+  vars:
+    db_t1_scratch: /run/db_t1_refusal
+    db_t1_line_end: "\n"
+    db_t1_real_pin: /etc/branchleft/dbt1.image.env
+    db_t1_good_line: MYSQL_ROOT_PASSWORD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+    db_t1_other_line: IMAGE=ghcr.io/branchleft/x@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+    # Files made in the scratch directory: name, content, mode.
+    db_t1_scratch_files:
+      - name: good.env
+        content: '{{ db_t1_good_line }}'
+        mode: '0600'
+      - name: loose.env
+        content: '{{ db_t1_good_line }}'
+        mode: '0644'
+      - name: quote.env
+        content: "MYSQL_ROOT_PASSWORD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'a"
+        mode: '0600'
+      - name: short.env
+        content: 'MYSQL_ROOT_PASSWORD=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        mode: '0600'
+      - name: stray.env
+        content: "{{ db_t1_good_line }}\n{{ db_t1_other_line }}"
+        mode: '0600'
+      - name: spaced.env
+        content: "{{ db_t1_good_line }}\n {{ db_t1_other_line }}"
+        mode: '0600'
+      - name: empty.env
+        content: ''
+        mode: '0600'
+    # name, the text the refusal must contain (empty: the role must go through), and the
+    # inputs it changes. The defaults are in tasks/case.yml.
+    db_t1_cases:
+      - name: control
+        fragment: ''
+      - name: a tag instead of a digest
+        fragment: 'must be empty'
+        image: 'ghcr.io/branchleft/percona-server:8.0'
+      - name: another registry
+        fragment: 'must be empty'
+        image: 'docker.io/percona/percona-server@sha256:{{ scenario_image_other[-64:] }}'
+      - name: a pin that differs
+        fragment: 'pins a different image'
+        pin: '{{ db_t1_real_pin }}'
+      - name: a pin that is a directory
+        fragment: 'not a regular file'
+        pin: '{{ db_t1_scratch }}/pin-dir'
+      - name: data with no pin
+        fragment: 'holds an initialised database'
+        data: '{{ db_t1_scratch }}/data'
+      - name: no root file
+        fragment: 'must be a plain file owned by root'
+        root_file: '{{ db_t1_scratch }}/absent.env'
+      - name: a root file that is open to others
+        fragment: 'must be a plain file owned by root'
+        root_file: '{{ db_t1_scratch }}/loose.env'
+      - name: a root file that is a link
+        fragment: 'must be a plain file owned by root'
+        root_file: '{{ db_t1_scratch }}/link.env'
+      - name: an empty root file
+        fragment: 'must be a plain file owned by root'
+        root_file: '{{ db_t1_scratch }}/empty.env'
+      - name: a value with a quote
+        fragment: 'must hold one line'
+        root_file: '{{ db_t1_scratch }}/quote.env'
+      - name: a value that is too short
+        fragment: 'must hold one line'
+        root_file: '{{ db_t1_scratch }}/short.env'
+      - name: a second line that sets the image
+        fragment: 'must hold one line'
+        root_file: '{{ db_t1_scratch }}/stray.env'
+      - name: a second line led by a space
+        fragment: 'must hold one line'
+        root_file: '{{ db_t1_scratch }}/spaced.env'
+  tasks:
+    - name: Reset the case result
+      ansible.builtin.set_fact:
+        db_t1_case_accepted: false
+        db_t1_case_message: ''
+
+    - name: Make the scratch directory and what the cases point at
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - { path: '{{ db_t1_scratch }}' }
+        - { path: '{{ db_t1_scratch }}/pin-dir' }
+        - { path: '{{ db_t1_scratch }}/data/mysql' }
+        - { path: '{{ db_t1_scratch }}/empty-data' }
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Make the root files the cases read
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ db_t1_scratch }}/{{ item.name }}'
+        owner: root
+        group: root
+        mode: '{{ item.mode }}'
+      loop: '{{ db_t1_scratch_files }}'
+      loop_control:
+        label: '{{ item.name }}'
+
+    - name: Make a link in place of a root file
+      ansible.builtin.file:
+        src: '{{ db_t1_scratch }}/good.env'
+        dest: '{{ db_t1_scratch }}/link.env'
+        state: link
+
+    - name: Run every case
+      ansible.builtin.include_tasks: tasks/case.yml
+      loop: '{{ db_t1_cases }}'
+      loop_control:
+        loop_var: db_t1_case
+        label: '{{ db_t1_case.name }}'
+
+    # A second compose file in the project directory is refused whatever else is true.
+    - name: Put a compose override file in the project directory
+      ansible.builtin.copy:
+        content: "services: {}\n"
+        dest: /opt/branchleft/dbt1/compose.override.yml
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Run the case for the override file
+      ansible.builtin.include_tasks: tasks/case.yml
+      vars:
+        db_t1_case:
+          { name: a compose override file, fragment: 'holds a compose file or environment file' }
+
+    - name: Remove the compose override file
+      ansible.builtin.file:
+        path: /opt/branchleft/dbt1/compose.override.yml
+        state: absent
+
+    # Nothing above may have touched the real deploy or the real pin.
+    - name: Read the real pin and the stand-in's log
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ db_t1_real_pin }}'
+        - '{{ scenario_deploy_log }}'
+      register: db_t1_after
+
+    - name: Assert the real pin and the single recorded deploy are as the converge left them
+      ansible.builtin.assert:
+        that:
+          - (db_t1_after.results[0].content | b64decode) == ('IMAGE=' ~ scenario_image ~ db_t1_line_end)
+          - (db_t1_after.results[1].content | b64decode) == ('dbt1 ' ~ scenario_image ~ db_t1_line_end)
+        quiet: true
+        fail_msg: A refusal case changed the real pin or called the real deploy program.

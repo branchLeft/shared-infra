@@ -207,6 +207,15 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "because the scan reads the path as a stack name. No `*/stack/compose.yml` "
         "exists for it."
     ),
+    "dbt1": (
+        "An instance of the template on the tenant database host, started through "
+        "branchleft-deploy. Its Compose text is rendered from a Jinja template by the "
+        "ansible/roles/db_t1 role of branchLeft/shared-infra and is never committed as "
+        "a Compose file, and the scan reads only `*/stack/compose.yml`, so it cannot "
+        "read this one. Its health signal, a real query that pins the server version, "
+        "is held by that role's unit tests, and the deploy wrapper refuses a Compose "
+        "file with a service that declares none."
+    ),
 }
 
 # The stack-name rule the deploy wrapper actually applies, reused rather than
