@@ -325,7 +325,10 @@ does not change the live Grafana password. The four `NTFY_` keys are written by
 the `ntfy_pager` role, which runs before `monitoring_stack`, into their own file,
 `/etc/branchleft/ntfy-pager.env` (one path has one writer; the unit's drop-in
 loads that file after `monitoring.env`, and a `NTFY_` line in both takes the
-value from the later one), and
+value from the later one). Once that file holds a value for all four keys,
+`monitoring_stack` removes any `NTFY_` line from `monitoring.env`, and it writes
+the `branchleft_pager_route_configured` gauge (0 when the pager file is missing or
+lacks a key), which the `NtfyPagerDisabled` alert fires on. And
 `STALWART_PROMETHEUS_SECRET` is not written by either role: it keeps its own
 hand step below. The gated run that applies the role is an owner step, not a
 command an agent runs.
@@ -1176,8 +1179,8 @@ release watcher can only write to it. The phone subscribes at
 `ntfy.branchleft.co.uk` through the edge. `upstream-base-url` is unset on
 purpose, so no message is relayed to a third-party server.
 
-The secrets reach the host the way the other receivers' do: four variables in
-`/etc/branchleft/monitoring.env` (`NTFY_PAGER_TOKEN`, `NTFY_WATCHER_TOKEN`,
+The secrets reach the host in a file of their own, `/etc/branchleft/ntfy-pager.env`,
+written by the `ntfy_pager` role: four variables (`NTFY_PAGER_TOKEN`, `NTFY_WATCHER_TOKEN`,
 `NTFY_OWNER_PASSWORD_HASH`, `NTFY_MACHINE_PASSWORD_HASH`), substituted by
 `render_alertmanager_config.py` into `alertmanager.yml` and `ntfy/server.yml`.
 **They are optional to the stack, not to the pager.** If any is missing or

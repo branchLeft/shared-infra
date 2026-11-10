@@ -635,6 +635,49 @@ tests:
         alertname: AlertEmailDeliveryFailing
         exp_alerts: []
 
+  # NtfyPagerDisabled: the monitoring_stack role writes
+  # branchleft_pager_route_configured as 0 when the pager's secrets file is missing
+  # or lacks a key, and the renderer then switches the pager off with only a journal
+  # line. A gauge that stays 0 past the `for` fires, with the owner_action label
+  # that sends it to the off-host receiver.
+  - interval: 1m
+    input_series:
+      - series: 'branchleft_pager_route_configured{job="node", instance="node-exporter:9100", host="edge1", expected_up="true"}'
+        values: '0x60'
+    promql_expr_test:
+      - expr: ALERTS{alertname="NtfyPagerDisabled", alertstate="firing"}
+        eval_time: 45m
+        exp_samples:
+          - labels: 'ALERTS{alertname="NtfyPagerDisabled", alertstate="firing", severity="warning", owner_action="true", job="node", instance="node-exporter:9100", host="edge1", expected_up="true"}'
+            value: 1
+
+  # The `for: 30m`: a run in which ntfy_pager and the monitoring_stack role were
+  # applied apart leaves the gauge at 0 for a short while and must not alert.
+  - interval: 1m
+    input_series:
+      - series: 'branchleft_pager_route_configured{job="node", instance="node-exporter:9100", host="edge1", expected_up="true"}'
+        values: '0x20 1x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: NtfyPagerDisabled
+        exp_alerts: []
+      - eval_time: 55m
+        alertname: NtfyPagerDisabled
+        exp_alerts: []
+
+  # A configured pager stays silent, and so does a host that has no gauge at
+  # all: the signal is the role's 0, not the absence of a series.
+  - interval: 1m
+    input_series:
+      - series: 'branchleft_pager_route_configured{job="node", instance="node-exporter:9100", host="edge1", expected_up="true"}'
+        values: '1x60'
+      - series: 'up{job="node", instance="node-exporter:9100", host="edge1", expected_up="true"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: NtfyPagerDisabled
+        exp_alerts: []
+
   # The trap this rule is written around, reproduced. Stalwart has never
   # incremented `delivery.rcpt-to-rejected` on mx1 -- nothing has bounced -- so
   # the counter is absent from the exposition entirely rather than exported as
