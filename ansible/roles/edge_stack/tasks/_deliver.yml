@@ -94,6 +94,7 @@
         EDGE_IMAGE_PATTERN: '{{ edge_stack_image_pin_pattern }}'
         EDGE_CADDY_CANDIDATE: "{{ edge_stack_candidate_dir ~ '/Caddyfile' if edge_stack_caddy_drift | bool else '' }}"
         EDGE_COMPOSE_CANDIDATE: "{{ edge_stack_candidate_dir ~ '/compose.yml' if edge_stack_compose_drift | bool else '' }}"
+        DOCKER_CONFIG: '{{ edge_stack_registry_docker_config }}'
       register: edge_stack_validate
       changed_when: false
       failed_when: false
@@ -288,6 +289,7 @@
         EDGE_CADDY_WRITE: "{{ '1' if edge_stack_caddy_drift | bool else '0' }}"
         EDGE_CADDY_RELOAD: "{{ '1' if edge_stack_caddy_due | bool else '0' }}"
         EDGE_COMPOSE_RESTART: "{{ '1' if edge_stack_compose_due | bool else '0' }}"
+        DOCKER_CONFIG: '{{ edge_stack_registry_docker_config }}'
         EDGE_CROWDSEC_RESTART: "{{ '1' if edge_stack_crowdsec_due | bool else '0' }}"
         EDGE_WAIT_TRIES: '{{ edge_stack_crowdsec_wait_tries }}'
         EDGE_WAIT_INTERVAL: '{{ edge_stack_crowdsec_wait_interval }}'

@@ -1,0 +1,5 @@
+---
+# The registry read key's docker config directory, for the pull of a private image. A constant, so
+# it lives here and not in defaults/. A copy of deploy_verifier_registry_docker_dir (a role imports
+# no role): test_registry_key_callers.py holds it.
+compose_stack_registry_docker_config: /etc/branchleft/registry/docker

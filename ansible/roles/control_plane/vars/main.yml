@@ -112,3 +112,8 @@ control_plane_deploy_wrapper: /usr/local/sbin/branchleft-deploy
 control_plane_isolation_reconciler: /usr/local/sbin/branchleft-docker-user-policy
 control_plane_isolation_unit_name: branchleft-docker-user-policy.service
 control_plane_isolation_unit: /etc/systemd/system/branchleft-docker-user-policy.service
+
+# The registry read key's docker config directory, for the pulls of the database, the sign-in
+# service and the applications image. A copy of deploy_verifier_registry_docker_dir (a role imports
+# no role): test_registry_key_callers.py holds it.
+control_plane_registry_docker_config: /etc/branchleft/registry/docker

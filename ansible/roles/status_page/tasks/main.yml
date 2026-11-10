@@ -196,6 +196,8 @@
     wait_timeout: '{{ status_page_wait_timeout }}'
     remove_orphans: false
     renew_anon_volumes: false
+  environment:
+    DOCKER_CONFIG: '{{ status_page_registry_docker_config }}'
   when:
     - status_page_compose_file_stat.stat.exists
     - status_page_up_needed | ansible.builtin.bool
@@ -214,6 +216,8 @@
     remove_orphans: false
     renew_anon_volumes: false
   register: status_page_state
+  environment:
+    DOCKER_CONFIG: '{{ status_page_registry_docker_config }}'
   check_mode: true
   changed_when: false
   when: status_page_compose_file_stat.stat.exists

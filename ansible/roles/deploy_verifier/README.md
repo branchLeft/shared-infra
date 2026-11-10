@@ -51,6 +51,11 @@ The role is applied on every host that runs the wrapper, so all five (`app1`, `d
 `ops1`) are checked. `app1` pulls no private image yet, so for it the check is harmless and an
 absent key stays anonymous.
 
+The directory is one constant here, `deploy_verifier_registry_docker_dir`. Every other task or
+program that pulls or runs an image directly takes it too, from its own pinned copy, and
+`ansible/checks/test_registry_key_callers.py` finds each caller by scanning and fails when one lacks
+it or its copy differs.
+
 ## Where it runs
 
 The role is applied by the playbooks of every host that runs the deploy wrapper: `edge1` and `app1`

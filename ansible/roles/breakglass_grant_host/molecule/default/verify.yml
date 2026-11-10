@@ -32,6 +32,9 @@
       - ansible.builtin.meta
       - ansible.builtin.stat
       - ansible.builtin.systemd_service
+      # A task keyword the guard does not list with its own: the pull sets DOCKER_CONFIG to the
+      # registry read key's directory. It runs no module, and the shapes below still hold the argv.
+      - environment
     # The raw text of every file of the role that Ansible evaluates, held to the
     # controller-side scan by the role guard below.
     verify_role_texts:

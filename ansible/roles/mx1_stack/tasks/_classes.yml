@@ -102,6 +102,8 @@
     remove_orphans: false
     renew_anon_volumes: false
   register: mx1_stack_up
+  environment:
+    DOCKER_CONFIG: '{{ mx1_stack_registry_docker_config }}'
   when:
     - mx1_stack_decision.due
     - not ansible_check_mode
@@ -140,6 +142,8 @@
   loop_control:
     loop_var: mx1_stack_service
   register: mx1_stack_recreated
+  environment:
+    DOCKER_CONFIG: '{{ mx1_stack_registry_docker_config }}'
   when:
     - mx1_stack_decision.due
     - not ansible_check_mode

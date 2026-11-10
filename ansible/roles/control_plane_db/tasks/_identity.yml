@@ -102,6 +102,8 @@
                     '-e', 'ZITADEL_TOKEN_FILE=/state/reconciler.pat',
                     control_plane_db_apps_image, 'node', 'dist/cli.js', '/work/config.json', '/work/outputs.json'] }}
           register: control_plane_db_run
+          environment:
+            DOCKER_CONFIG: '{{ control_plane_db_registry_docker_config }}'
           changed_when: true
           failed_when: false
           no_log: true
