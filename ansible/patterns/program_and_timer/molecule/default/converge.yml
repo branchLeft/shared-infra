@@ -213,7 +213,7 @@
           ansible.builtin.include_role:
             name: branchleft.program_and_timer
           vars:
-            program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_bad.sh'
+            program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_bad.py'
       rescue:
         - name: Record that the failing program was refused by the validator
           ansible.builtin.set_fact:
@@ -279,4 +279,4 @@
       ansible.builtin.include_role:
         name: branchleft.program_and_timer
       vars:
-        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.py'
