@@ -58,7 +58,9 @@ provisioner:
         scenario_state_dir: /var/lib/branchleft/safety-service
         scenario_secrets_dir: /etc/branchleft/content-safety
         scenario_key_file: /etc/branchleft/content-safety/channel-signing.key
-        scenario_credential_file: /etc/branchleft/content-safety/arachnid-credential
+        scenario_credential_dir: /etc/branchleft/arachnid
+        scenario_username_file: /etc/branchleft/arachnid/username
+        scenario_password_file: /etc/branchleft/arachnid/password
         scenario_unit: /etc/systemd/system/content-safety.service
         scenario_docker_args_file: /run/standin-docker-args
         # Test values, never real: an origin that resolves nowhere and one host.
