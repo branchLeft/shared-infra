@@ -1,40 +1,27 @@
 #!/usr/bin/env python3
-"""Provisions branchLeft's own mailboxes on Stalwart:
-real mailbox accounts for every local part in MAILBOXES, plus a per-mailbox
-Sieve script on each address in ROLE_ADDRESSES that copies inbound mail to
-rob@ (`redirect :copy`, RFC 3894).
+"""Provisions branchLeft's own mailboxes on Stalwart: a real account for every
+local part in MAILBOXES, and a per-mailbox Sieve script on each address in
+ROLE_ADDRESSES that copies inbound mail to rob@ (`redirect :copy`, RFC 3894).
 
-Mailbox accounts use the same "x:<Type>/get" / "x:<Type>/set" registry API
-family configure_stalwart.py already uses for listeners/domains
-(`x:Account/set`), but the per-mailbox Sieve script does not: despite the
-name, `x:SieveUserScript` is an admin-managed *global* script (includable by
-name via Sieve's `:global`, RFC 6609), not a per-mailbox filter. The actual
-per-mailbox mechanism is the standard JMAP Sieve capability
-(`urn:ietf:params:jmap:sieve`, `SieveScript/set`) via blob upload + activate.
-See mail/RUNBOOK-mx1-provision.md#mailbox-provisioning for how this was
-verified and the live request/response evidence.
+Accounts use the "x:Account/set" registry API. The Sieve scripts use the JMAP
+Sieve capability (SieveScript/set, blob upload then activate), not
+"x:SieveUserScript", which is an admin-global script. List-typed registry
+fields serialize as objects keyed "0", "1", ... not arrays.
 
-Also note: `List<T>`-typed registry fields (`credentials`, `aliases`)
-serialize as a JSON object keyed "0", "1", ... not a JSON array.
+Idempotent: existing mailboxes are left alone, and a password once set is
+never rewritten. A Sieve script already active under the same name with the
+same content is left alone, else corrected. A fully reconciled re-run makes
+only GET calls.
 
-Idempotent: existing mailboxes are left alone (this script never rewrites a
-password once set -- that is rotate_admin_credential.py's model, not this
-one's); each role's Sieve script is left alone if a script of the same name
-already holds the same content and is active, otherwise corrected. A second
-run against fully-reconciled state makes only GET calls.
+`--domain D --only L` (both or neither) creates only L@D. D must be in
+ALLOWED_DOMAINS and L must match ONLY_LOCALPART_PATTERN, else exit 2 before any
+credential is read.
 
-`--domain D --only L` (both, or neither) creates only L@D instead of the
-fixed list; D must be in ALLOWED_DOMAINS and L must match
-ONLY_LOCALPART_PATTERN, else exit 2 before any credential is read. Such a
-mailbox always gets the copy-forward to rob@ on MAIL_DOMAIN, and its secret
-is recorded under the full address (recorded_secret_key). See
-mail/RUNBOOK-mx1-provision.md#mailbox-provisioning.
+Passwords are persisted to MAILBOX_CREDENTIALS_PATH (mode 600, on-box only)
+before the create call that sets them. Never printed, logged or returned.
 
-Mailbox passwords are persisted at MAILBOX_CREDENTIALS_PATH (mode 600,
-root-owned, on-box only) *before* the create call that sets them, not after
--- see resolve_mailbox_secret and _reconcile_accounts for why. Never
-printed, never logged, never returned to the caller. See "Secrets" in
-mail/RUNBOOK-mx1-provision.md.
+Details, live evidence and the flag runbook: mail/RUNBOOK-mx1-provision.md
+(#mailbox-provisioning, "Secrets").
 """
 from __future__ import annotations
 
