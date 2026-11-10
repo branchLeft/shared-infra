@@ -358,9 +358,10 @@ a limit.
   here, for the reason above. The pattern's own README says to copy its shape,
   not to call it, and `website_app1` made the same decision for the same reason.
   The role checks the one digest that is pinned inline instead: the exporter's.
-- The exporter image is `prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e`.
-  That is the line `db/stack/compose.yml` in `ghost-platform` carries on
-  `origin/main` at commit `5e52f78`, read on 21 October. Nothing else writes it.
+- The exporter image is `prom/mysqld-exporter:v0.21.0@sha256:afad0c59a154fea24ca5ea0e6f95f2b0b168601b111266963dc8a347715b5318`,
+  read from the registry on 10 November. It was `v0.20.0` (`abed8dac…`) until
+  this change. The `db/stack/compose.yml` in `ghost-platform` still carries the
+  v0.20.0 line and moves in its own change there. Nothing else writes it.
 - The mysql healthcheck and the exporter healthcheck are the ones the source file
   has. The exporter's gate is `grep -qx "mysql_up 1"`, not a process check and not
   an HTTP 200: an exporter that cannot authenticate serves `/metrics` and reports
