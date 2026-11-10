@@ -298,8 +298,8 @@ run needs, from the event and the files it changed. The rules, in the order they
   from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
   as it does in a pull request. An entry stacked on another is tested on that one's tree
   and diffed from it; if the earlier entry leaves the queue, the later one is tested again.
-  The selection is still made for a queue entry, but the shard job's condition skips the
-  shards in the queue (the pull request already ran them), so only the lint runs there;
+  The selection is still made for a queue entry, and `queue_skip.py` then drops each shard
+  the pull request already passed on the same tree (see its section below); the rest run;
 - a changed file that is part of the harness, the lock, the lint config, or one of the three
   checks files the shards read (`ci_select.py`, `check_pins.py`, `pip-requirements.txt`)
   executes every shard, because it decides what every role is held to;
@@ -350,11 +350,10 @@ These tests hold the CI workflows to what `ci_select.py` assumes:
   for none;
 - the gate job (the check the ruleset requires) fails unless the quick gate and the full lint
   both passed, and fails when shards were chosen and did not all pass. The one exception is
-  the merge queue, where the shard job is skipped by a condition on `github.event_name`
-  and the gate accepts the skip for that event alone; a skipped, failed or cancelled shard job
-  fails it on every other event. The gate's own script is run under bash against a table of
-  outcomes, with a control that cuts the full-lint refusal out and one that widens the queue
-  skip to every event, and shows the table sees each go;
+  the merge queue too: a chosen shard that is skipped, failed or cancelled fails it on every
+  event, and the only skip is the one discover settles before this job. The gate's own script is
+  run under bash against a table of outcomes, with a control that cuts the full-lint refusal out
+  and one that accepts a skipped shard on any event, and shows the table sees each go;
 - the quick gate builds its tool environment with the same steps as the full lint, and the
   full lint keeps every step it had;
 - the merge queue still triggers the workflow, and the weekly sweep is scheduled;
@@ -421,11 +420,39 @@ The `Ansible` workflow watches `ansible/`, `hetzner/` and `mail/provision/` only
 the `mx1_stack` role links and checks the mail host's scripts there), so a change to a runbook
 under `mail/` or at the repository root does not start it; `mail/` is owner-gated by CODEOWNERS.
 
+## queue_skip.py: which shards the merge queue drops
+
+The merge queue runs a container shard again unless the pull request already passed it on the
+same tree. `queue_skip.py` is the one place that decides, and it runs in `discover` after
+`ci_select.py`. A shard is dropped only when all of these hold, and any one that does not keeps
+every shard it was given:
+
+- the event is `merge_group`, and the checkout is the queued commit (`git rev-parse HEAD`);
+- the queue branch names a pull request, and that pull request is open, with a head commit;
+- the queued commit's tree (`HEAD^{tree}`) equals the pull request head's tree, read from the
+  API, so a queue entry behind another one, whose tree differs, runs its shards;
+- the pull request has a run of `ansible.yml` on its head, of the `pull_request` event, and the
+  check runs of that run's check suites are read in full, with a truncated read an error;
+- every check run named `Harness: <shard>` from those suites, and from the `github-actions`
+  app, finished with `success`, and there is at least one. A failed, cancelled, running or
+  missing check run keeps the shard.
+
+Every other event (a pull request, the weekly run, a manual run, a push) gets its selection
+back unchanged and reads nothing. A read that fails, or an answer of an unexpected shape, keeps
+every shard, and the reason goes to standard error. So does a checkout git cannot read or a runner
+without a repository name. The tests are `test_queue_skip.py`: the
+decision, each doubt, the other events, the outputs, and the paging of the check runs. A control
+removes the tree check and one removes the conclusion check; each turns the tests red.
+
+The read scopes (`actions`, `checks`, `pull-requests`, each read-only) are granted to `discover`
+only, and `test_ci_gate_order.py` pins them.
+
 ## merge_group_proof.py: whether the merge queue ran the Ansible workflow on a commit
 
-The delivery no longer skips its lint and Molecule re-run for any commit: the merge queue runs
-the lint and the unit tests only, so a queue run proves nothing about the containers, and the
-delivery is the run that tests the merged tree in them. `check_delivery.py` holds the input
+The delivery no longer skips its lint and Molecule re-run for any commit. A queue run may carry
+some container proof now (the shards `queue_skip.py` did not drop ran on the queued tree), but
+the delivery does not read it as proof for its own shards, and the delivery is the run that
+tests the merged tree in them. `check_delivery.py` holds the input
 `skip-rerun-after-merge-group` at `false`. The job `queue-proof` of `ansible-delivery.yml` still
 reads the runs of `ansible.yml` for the pushed commit and `merge_group_proof.py` answers
 `tested=true` only for a run that has all of:

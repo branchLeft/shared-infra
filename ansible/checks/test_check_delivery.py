@@ -534,14 +534,15 @@ class CallerTests(unittest.TestCase):
 
             self.assert_names(self.weakened(add_input), f"with has {key}")
 
-    def test_the_delivery_retests_because_the_queue_does_not_run_the_container_shards(self) -> None:
-        # The merge queue's required check passes on the lint alone, as the shard job of ansible.yml
-        # is skipped there by its condition. A queue run therefore proves nothing about the
-        # containers, so the delivery must not take it as a reason to skip its own shards.
+    def test_the_delivery_retests_although_the_queue_may_skip_shards_it_proved(self) -> None:
+        # The merge queue skips a container shard only when the pull request passed it on the same
+        # tree (queue_skip.py), so a queue run can carry some container proof. The delivery still
+        # does not take it as a reason to skip its own shards: the shard job's condition names no
+        # event, and the delivery keeps its re-run.
         ansible, problem = load_yaml(WORKFLOWS / "ansible.yml")
         self.assertIsNone(problem)
         shard = mutable(mutable(mutable(ansible)["jobs"])["shard"])
-        self.assertIn("github.event_name != 'merge_group'", str(shard["if"]))
+        self.assertNotIn("merge_group", str(shard["if"]))
         given = section(job_of(committed()), "with")
         self.assertIs(False, given[check_delivery.SKIP_INPUT])
 
