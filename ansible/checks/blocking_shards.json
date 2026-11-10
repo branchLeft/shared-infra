@@ -6,6 +6,7 @@
     "ansible/roles/deploy_tooling",
     "ansible/roles/egress_nat",
     "ansible/roles/host_baseline",
+    "ansible/roles/host_baseline (check-fresh)",
     "ansible/roles/pull_trigger",
     "ansible/roles/pull_trigger (push)",
     "ansible/roles/tunnel_account"
