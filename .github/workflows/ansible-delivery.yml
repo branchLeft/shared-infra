@@ -81,7 +81,7 @@ jobs:
 
   delivery:
     needs: [queue-proof]
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.23
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.1.0
     with:
       environment: ansible-hosts
       push-playbook: ansible/playbooks/demo1.yml
