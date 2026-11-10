@@ -151,7 +151,7 @@ What the role does, in the order of `tasks/main.yml`:
 | `render_demo_site.py`                           | RUN, stdout only         | One call for every slot with an input, staged as the one Caddyfile. Never run with `--gate-env-out`, which writes. |
 | `demo_go_live.py`                               | STAGED, NOT ROLE         | The owner's go-live. The role never runs it.                                                                       |
 | `provision_socket_dirs.py`, `drain_flag_dir.py` | NOT FETCHED              | Their jobs are declared with `file` tasks, so a plan shows each one.                                               |
-| `branchleft_demo_egress.sh`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                                                                  |
+| `branchleft_demo_egress.py`                     | NOT ROLE                 | The egress ruleset; see the gaps.                                                                                  |
 
 "RUN, stdout only" means the renderer is run with no output flag: it prints to
 standard output and writes nothing, so running it is a read and is the one
@@ -1084,7 +1084,7 @@ other unit tests of `ansible/harness`.
 - **The slot directories `/opt/branchleft/demo-<n>`** are made by the wrapper's
   `reset`, which this role never runs. They do not exist after the role.
 - **The egress interaction is unverified.** The demo host's egress ruleset
-  (`branchleft_demo_egress.sh`, ghost-platform) is not applied here, and the merged
+  (`branchleft_demo_egress.py`, ghost-platform) is not applied here, and the merged
   `egress_nat` role inserts NAT rules on the forward chain. Their interaction has
   not been checked, so the first converge of demo1 waits for that check.
 - **The uid register has no lock** against a concurrent tenant allocation.
