@@ -181,6 +181,9 @@ jobs:
       - name: Python unit tests
         run: python3 -m unittest discover -s mail/provision -p 'test_*.py' -v
 
+      - name: Python unit tests (mail/mta-sts)
+        run: python3 -m unittest discover -s mail/mta-sts -p 'test_*.py' -v
+
   shim-image-starts:
     name: Shim image starts (mail/provision)
     runs-on: ubuntu-latest

@@ -65,6 +65,13 @@ def _policy_id() -> str:
 
 
 class MtaStsRecordsTest(unittest.TestCase):
+    def test_policy_uses_lf_line_endings_only(self) -> None:
+        # RFC 8461 allows CRLF, but this file is served byte for byte and the
+        # id is the hash of those bytes, so one ending only: LF.
+        raw = POLICY.read_bytes()
+        self.assertNotIn(b"\r", raw)
+        self.assertTrue(raw.endswith(b"\n"))
+
     def test_policy_is_testing_stsv1_with_expected_max_age(self) -> None:
         fields = dict(_policy_fields())
         self.assertEqual(fields.get("version"), "STSv1")
