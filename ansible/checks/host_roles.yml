@@ -36,6 +36,7 @@ ops1:
   - breakglass_mint_host
   - status_page
   - deploy_verifier
+  - deploy_tooling
   - control_plane
   - nextcloud_stack
   - backup_worker
@@ -55,19 +56,22 @@ app1:
 db1:
   - host_inputs
   - deploy_verifier
+  - deploy_tooling
   - db1_stack
   - db1_backup_timers
   - db1_grants
   - tunnel_account
   - host_baseline
   - node_exporter
-# dbt1, the database host db-t1. Three roles after the pull roles, no host_inputs: the host
+# dbt1, the database host db-t1. Four roles after the pull roles, no host_inputs: the host
 # has no private inputs, so the loader has nothing to read (R11 applies only when it is
 # listed). egress_nat is applied bare with its gateway switch unset: this host is no gateway.
+# deploy_tooling runs as class internal (no tenant containers, so no isolation policy).
 dbt1:
   - host_baseline
   - egress_nat
   - deploy_verifier
+  - deploy_tooling
 demo1:
   - demo1_build
   - demo1_egress_spool

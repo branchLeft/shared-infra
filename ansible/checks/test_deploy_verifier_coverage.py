@@ -8,7 +8,7 @@ wrapper. This file holds that to three things:
   * the table of wrapper roles is complete: any other role that names the wrapper's path in its
     tasks, vars or defaults fails here until it is added to the table;
   * every playbook that applies a wrapper role applies deploy_verifier earlier in the same play, and
-    exactly the four wrapper hosts apply a wrapper role at all;
+    exactly the five wrapper hosts apply a wrapper role at all;
   * the paths the wrapper reads and the pins the role installs agree, and the pins sit in vars/
     where no caller can override them.
 
@@ -36,9 +36,10 @@ VERIFIER_ROLE = "deploy_verifier"
 # names the path and is not here fails test_every_role_naming_the_wrapper_is_in_the_table.
 WRAPPER_ROLES = frozenset({"deploy_tooling", "control_plane", "db1_stack", "website_app1"})
 
-# The four hosts that run the wrapper, one playbook each. A fifth host that applies a wrapper role
-# fails test_only_the_four_wrapper_hosts_apply_a_wrapper_role until it is listed here.
-WRAPPER_PLAYBOOKS = frozenset({"edge1", "app1", "ops1", "db1"})
+# The five hosts that run the wrapper, one playbook each (dbt1 installs it with deploy_tooling). A
+# sixth host that applies a wrapper role fails
+# test_only_the_five_wrapper_hosts_apply_a_wrapper_role until it is listed here.
+WRAPPER_PLAYBOOKS = frozenset({"edge1", "app1", "ops1", "db1", "dbt1"})
 
 PINS = (
     "deploy_verifier_gh_version",
@@ -124,7 +125,7 @@ class VerifierCoverageTests(unittest.TestCase):
             "WRAPPER_ROLES, so the verifier is not required before them",
         )
 
-    def test_only_the_four_wrapper_hosts_apply_a_wrapper_role(self) -> None:
+    def test_only_the_five_wrapper_hosts_apply_a_wrapper_role(self) -> None:
         applying = set()
         for path in sorted(PLAYBOOKS.glob("*.yml")):
             for names in playbook_roles(path):

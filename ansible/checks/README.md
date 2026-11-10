@@ -79,7 +79,7 @@ deploy approval of the gated apply, which is not yet wired. Which files the revi
 may merge alone is not yet decided by the owner.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
-host in `HOST_PLAY_VARS` in `check_enrolment.py` (today three rows: edge1's `deploy_tooling_host_class`
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (today six rows: ops1's, db1's and dbt1's are each `deploy_tooling_host_class: internal` alone; edge1's `deploy_tooling_host_class`
 with `egress_nat_gateway_enabled: true`, the one switch that makes a host a NAT gateway; edget's
 `egress_nat_gateway_enabled: true` alone (edget is the server edge-t, the tenants network's gateway:
 a network does not span hcloud projects, so there is one gateway per network, edge1 for the estate's
