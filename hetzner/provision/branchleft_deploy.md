@@ -260,81 +260,94 @@ ghost-platform's script.
 The image on the command line is one of the images a stack runs. A Compose file
 also names sidecars (an exporter, a database next to an app), and before this
 check they deployed unverified: the default deny above covered one reference per
-deploy. `deploy()` now reads the stack's Compose files after the pin is verified
-and holds every other image to the same rule, before the lock, the pin write and
-any restart.
+deploy. `deploy()` now asks Compose for the stack's model after the pin is
+verified and holds every other image to the same rule, before the lock, the pin
+write and any restart.
 
-What counts as an image: the `image:` of every service in `compose.yml`, and of
-every service in `compose.override.yml` when it exists, because Compose merges
-that file over the first and the unit passes no `-f`. Profiles do not exempt a
-service: a service behind a profile is still read.
+**Compose reads the files, not this program.** `render_compose` runs, in the
+stack directory and as the unit does (no `-f`, so Compose finds `compose.yml`,
+`compose.override.yml` and a project `.env` itself):
 
-What each `image:` must be, one of:
+```
+/usr/bin/docker compose --profile '*' config --format json --no-interpolate
+```
 
-- the pin, `${IMAGE}` or `${IMAGE:?message}`, quoted or not. It is the image
-  already verified, and at least one service must be the pin;
+and parses the JSON it prints. An earlier version of this check read the YAML
+with a hand-written line reader. Four review cycles found seven bypasses of it
+(a hidden `include`, a pin counted across files, an indented override, an image
+mount through an anchor, an alias hidden by quote mispairing), each a new shape
+of YAML that Compose reads one way and a line grammar another. YAML is not a
+language to re-implement, so the reader was deleted rather than patched a
+seventh time. Options weighed, in order:
+
+- **Compose's own render (used).** It resolves `include`, `extends`, anchors, merge
+  keys, overrides and the project `.env` with the parser that will start the
+  stack, so the check and the stack cannot read different files. It needs
+  neither the daemon nor the network, and runs in under a second.
+- **A pinned PyYAML.** Rejected: it would still be a second YAML reader that is
+  not Compose (it does not follow `include`, and differs from Compose's YAML
+  library on edge cases), it would have to be installed for the system
+  `python3` on every host, and a deploy gate that failed to import would stop
+  every deploy. CI uses PyYAML only to stand in for the render in unit tests.
+- **Keeping the hand reader.** Rejected: no stated reason outweighed the above.
+
+`--no-interpolate` leaves `${...}` as written. Nothing is substituted, so no
+secret from the stack environment is read, printed or needed, and a variable
+that is unset does not stop the render. `--profile '*'` includes services behind
+a profile (some Compose versions leave them out of `config`). The process gets a
+fixed environment (`PATH`, `HOME`, `LC_ALL`) and no stdin, so a `COMPOSE_FILE` or
+`COMPOSE_PROFILES` in the caller's environment cannot change what is read; a
+project `.env` in the stack directory still is, as it is for the unit. A 60
+second timeout bounds it.
+
+Its output is parsed in memory and never written, logged or put in a message:
+the model can hold inline values. A refusal says only that Compose failed, its
+exit code and to run it by hand.
+
+What counts as an image: the `image:` of every service in the rendered model.
+What each must be, one of:
+
+- the pin, `${IMAGE}` or `${IMAGE:?message}` as `--no-interpolate` leaves it, or
+  the pin's own reference. It is the image already verified, and at least one
+  service must be the pin;
 - a literal, digest-pinned reference (`name@sha256:...`, a tag may ride along). It
   goes through `verify_attestation`: verified if registered, logged
   `unattested by allowance` if allowed, refused if on neither table. A reference
   named by several services is verified once;
 - nothing else. A tag-only or bare name is refused (an attestation is of a
-  digest). Any other `$` is refused: the unit also loads
-  `/etc/branchleft/<stack>.env` and Compose reads a project `.env`, and
-  reproducing Compose's substitution here would be a second, drifting reader. The
-  committed stacks write sidecar digests as literals for this reason.
+  digest). Any other `$` is refused: reproducing Compose's substitution here would
+  be a second, drifting reader. The committed stacks write sidecar digests as
+  literals for this reason.
 
-Fail closed: the reader is a strict line grammar, not a YAML parser, and every
-line is either placed by a rule or refused. Where the health reader warns on a
-shape it cannot classify, this one refuses, because a shape it cannot read is an
-image it cannot see. The rules:
+Fail closed. The walker (`model_images`) refuses what it cannot account for:
 
-- A line at column 0 must start `services`, `networks`, `volumes`, `secrets`,
-  `configs`, `name`, `version` or `x-*`, each once. Anything else is refused,
-  including `include`, `models`, an escaped or complex spelling of a key, a merge
-  key, a list item, a flow or JSON document and a second document.
-- `services:` ends its line. The pin must be a service of `compose.yml` itself;
-  a pin in the override does not count.
-- A service header is a bare two-space `  name:`. Its first key sits at four
-  spaces and every service key is a plain or simply quoted word at four spaces,
-  in the override as in the base file. A deeper line is never a service key.
-- An `image:` is one line. A deeper line directly after it, a second `image:`,
-  or an `image` key below the service's own keys is refused.
-- The first line of a file must start at column 0. YAML reads a file indented
-  as a whole at that depth, so lines before the first column-0 key are never
-  skipped.
-- A volume entry of `type: image` mounts an image's files with no `image:` key.
-  Every `type:` below a service, in block or flow form, must carry a plain
-  lowercase word other than `image`; an escaped, tagged, aliased or empty value,
-  an escaped key and a complex `? key` are refused. Current hosts take
-  `docker-ce` and `docker-compose-plugin` unpinned from Docker's repository
-  with unattended upgrades, so image mounts are assumed supported.
-- The mount-type rule and the escaped-key rule apply to every line of the file,
-  `x-*` blocks and other sections included, not only lines under `services:`.
-- An anchor (`&name`) or alias (`*name`) outside a quoted scalar is refused,
-  because a mapping checked where it is written can reach a service from where
-  it is not. The one shape allowed is the one a live stack uses: a column-0 `x-*:`
-  key anchoring a single plain word, and a mapping entry whose whole value is an
-  alias of it. A word cannot be a volume entry. An anchor nobody references is
-  refused too unless it is that shape.
-- `build:`, `extends:` and `provider:` are refused (an image built on the host
-  has no digest to attest), as is a service with no `image:` in the base file.
-- A control character, a line-separator character, a byte order mark, a tab
-  indent, an unreadable override, and any of `compose.yaml`, the other override
-  spellings or a `.env` beside `compose.yml` are refused: this program and
-  Compose would otherwise read different files.
+- a failed or timed-out Compose, a missing `docker`, output that is not one
+  JSON object;
+- a top-level key other than `name`, `services`, `networks`, `volumes`,
+  `secrets`, `configs` or `x-*`. `models` and any key a newer Compose adds pull
+  artifacts this program does not know to look for, so they refuse until a
+  reviewer teaches the walker. (`x-*` is data Compose never runs; an alias from
+  one into a service is already resolved into `services`.)
+- a service with `build`, `extends`, `provider` or `models` (an image built on the
+  host has no digest to attest), or with no `image:`;
+- a mapping with `type: image` anywhere inside a service: a volume entry of that
+  type mounts an image's files, which runs an image no `image:` key names. Current
+  hosts take `docker-ce` and `docker-compose-plugin` unpinned from Docker's
+  repository with unattended upgrades, so image mounts are assumed supported.
 
-Every file is read and every reference checked for shape before the first
-verifier runs.
+Every reference is checked for shape before the first verifier runs.
 
-**Why not a YAML parser.** The program is stdlib-only and runs under the system
-`python3`. Nothing in the repository installs PyYAML for that interpreter:
-ansible-core depends on it, but from its own environment, and the one role that
-assumes it on a host says so as a requirement. A deploy gate that failed to import
-would stop every deploy. So the reader is strict instead, and
-`ReaderAgainstYamlTests` holds it to PyYAML in CI: for the hostile shapes and a
-seeded generated sample, it may refuse anything, but it may not accept text from
-which PyYAML reads a service, an `image`, an `include` or a top-level key the
-reader did not report. PyYAML stands in for Compose's parser; it is not Compose.
+The `${IMAGE}` wiring text check on `compose.yml` itself (`resolves_image_from_env`)
+is unchanged and still runs first, so a pin that only an override supplies is
+refused as before.
+
+**Tests.** `RealComposeTests` runs every hostile shape the old reader was
+bypassed by through the real `docker compose` (skipped where it is absent): each
+must be rejected by Compose, refused by the walker, or harmless, and none may be
+accepted with an unverified image or an image mount in `services`. Every other
+`deploy()` test uses a PyYAML stand-in for the render. `CommittedStackTests`
+runs the committed stacks both ways. The pinned argv, environment and
+fail-closed paths of `render_compose` are tested with a fake `run`.
 
 **Registry port.** A port is a spelling only on a registry host, a dotted name or
 `localhost`. On a Docker Hub namespace, `prom:5000/mysqld-exporter` is another

@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import fcntl
+import json
 import os
 import re
 import subprocess
@@ -485,280 +486,165 @@ def health_signal_gaps(stack: str, compose_text: str) -> tuple[list[str], list[s
 
 
 # Every image a stack runs is checked, not only the one passed on the command
-# line. See branchleft_deploy.md, "verify_compose_images".
+# line. The images are read from Docker Compose's own rendering of the stack, not
+# from a reader of this program's own. See branchleft_deploy.md,
+# "verify_compose_images".
 
-# Merged over compose.yml by Compose whenever it exists, so it is read as well.
-COMPOSE_OVERRIDE = "compose.override.yml"
+DOCKER = "/usr/bin/docker"
 
-# Files Compose would read in place of, on top of, or alongside the two above
-# (`.env` can set COMPOSE_FILE and COMPOSE_PROFILES). Their presence is refused:
-# this program would be reading the wrong file.
-UNREAD_COMPOSE_FILES = (
-    "compose.yaml",
-    "compose.override.yaml",
-    "docker-compose.override.yml",
-    "docker-compose.override.yaml",
-    ".env",
+# The same invocation the unit makes (`docker compose` in the stack directory, so
+# Compose finds its files itself), asking for the model as JSON. `--profile '*'`
+# keeps services behind a profile in it, which some Compose versions leave out of
+# `config` and `up --profile` would start. `--no-interpolate` leaves `${IMAGE}` as
+# written and never needs the stack's secrets environment: nothing is substituted,
+# so no secret is read or printed, and no variable has to be set for it to render.
+COMPOSE_RENDER_ARGV = (
+    "compose", "--profile", "*", "config", "--format", "json", "--no-interpolate",
 )
 
-# The only keys Compose accepts at column 0 that cannot name an image. Anything
-# else at column 0 (`include`, `models`, an escaped or complex spelling, a merge
-# key, a flow or JSON document, a stray list item) is refused, not skipped.
-_ALLOWED_TOP_LEVEL = re.compile(
-    r"\A(?P<key>services|networks|volumes|secrets|configs|name|version"
-    r"|x-[A-Za-z0-9_.-]+):(?:\s.*)?\Z"
-)
+# Nothing is inherited. No COMPOSE_* variable of the caller can change which file
+# is read, and Compose needs neither the daemon nor the network to render.
+COMPOSE_RENDER_ENV = {"PATH": "/usr/bin:/bin", "HOME": "/root", "LC_ALL": "C"}
+COMPOSE_RENDER_TIMEOUT = 60.0
 
-# `services:` must end its line: a flow mapping or an anchor on it is a shape
-# this reader does not follow.
-_SERVICES_LINE = re.compile(r"\Aservices:\Z")
+# What the rendered model may carry at its top level. `models` and anything new
+# pull artifacts this program does not know to look at, so they refuse.
+MODEL_TOP_LEVEL_KEYS = frozenset({"name", "services", "networks", "volumes", "secrets", "configs"})
 
-# Characters that make this reader and a YAML parser disagree about where a line
-# or a document starts: C0 controls other than tab and the newline pair, the
-# next-line and separator characters YAML counts as breaks, and a byte order mark.
-_UNREADABLE_CHARS = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\x85  ﻿]")
-
-_FIELD_INDENT = 4
-
-# A service-level key, with whatever follows it on the same line.
-_SERVICE_FIELD = re.compile(
-    rf"""\A {{{_FIELD_INDENT}}}(?P<quote>["']?)(?P<key>[A-Za-z0-9_.-]+)(?P=quote)\s*:(?P<value>.*)\Z"""
-)
-
-# An `image` key anywhere other than at a service's own level: a nested or inline
-# mapping this reader does not follow, so it cannot vouch that it saw every image.
-_IMAGE_KEY_ELSEWHERE = re.compile(r"""(?:\A|[\s{,\[])["']?image["']?\s*:""")
-
-# A YAML merge key pulls fields, an image included, in from an anchor.
-_MERGE_KEY = re.compile(r"\A\s*<<\s*:")
-
-# A service keyed this way gets its image from somewhere this program does not read.
-_UNREAD_SERVICE_KEYS = frozenset({"build", "extends", "provider"})
-
-# A `type:` key anywhere in a service, with the value it carries (plain, or in
-# simple quotes). A volume entry of `type: image` mounts an image's files without
-# an `image:` key, so every `type:` value must be a plain lowercase word, not
-# `image`. An escape, tag, alias or empty value cannot be read as one, so it refuses.
-_TYPE_VALUE = re.compile(r"""(?:\A|[\s{,\[])["']?type["']?\s*:\s*(?P<value>[^\s,}\]]*)""")
-_PLAIN_WORD = re.compile(r"""\A(?P<quote>["']?)(?P<word>[a-z]+)(?P=quote)\Z""")
-
-# A key spelled so that a parser reads another word than the text shows: a
-# double-quoted key holding an escape, or a complex `? key`.
-_ESCAPED_KEY = re.compile(r'"(?:[^"\\]|\\.)*\\(?:[^"\\]|\\.)*"\s*:')
-_COMPLEX_KEY = re.compile(r"(?:\A\s*(?:-\s+)*|[{,]\s*)\?(?:\s|\Z)")
+# A service key that gets its runnable content from somewhere other than `image:`.
+MODEL_REFUSED_SERVICE_KEYS = frozenset({"build", "extends", "provider", "models"})
 
 
-# An anchor or alias carries a whole node from one place to another, so a mapping
-# checked where it is written can reach a service from where it is not. Both
-# are refused outside a quoted scalar, except the one shape a live stack uses:
-# a column-0 `x-*:` key anchoring a single plain word, and a mapping entry
-# whose whole value is an alias of such a word. A word cannot be a volume entry.
-_QUOTED_SCALAR = re.compile(r"""\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*'""")
-_ANCHOR_OR_ALIAS = re.compile(r"(?:\A|[\s\[{,])[&*][A-Za-z0-9_-]")
-_WORD_ANCHOR_LINE = re.compile(r"\Ax-[A-Za-z0-9_.-]+:\s+&[A-Za-z0-9_-]+\s+[A-Za-z0-9_./:@-]+\Z")
-_WORD_ALIAS_LINE = re.compile(r"\A +[A-Za-z0-9_.-]+:\s+\*[A-Za-z0-9_-]+\Z")
+def render_compose(
+    directory: str, *, run=subprocess.run, docker: str = DOCKER, env=None
+) -> dict:
+    """The stack's Compose model, as Compose itself reads it, parsed in memory.
 
-
-def _refuse_anchor_or_alias(raw: str) -> None:
-    if not _ANCHOR_OR_ALIAS.search(_QUOTED_SCALAR.sub('""', raw)):
-        return
-    if _WORD_ANCHOR_LINE.match(raw) or _WORD_ALIAS_LINE.match(raw):
-        return
-    raise ComposeParseError(
-        f"{raw!r} uses a YAML anchor or alias; only a single word anchored on an `x-*` "
-        "key, and a mapping entry whose whole value is its alias, are read"
-    )
-
-
-def _refuse_hidden_mount_type(raw: str, service: str) -> None:
-    if _ESCAPED_KEY.search(raw) or _COMPLEX_KEY.search(raw):
-        raise ComposeParseError(
-            f"{raw!r} in service {service!r} spells a key in a form this program does not read"
-        )
-    for found in _TYPE_VALUE.finditer(raw):
-        word = _PLAIN_WORD.match(found.group("value"))
-        if word is None or word.group("word") == "image":
-            raise ComposeParseError(
-                f"{raw!r} in service {service!r} has a `type:` that is `image` or cannot be "
-                "read; an image mount runs an image no `image:` line names"
-            )
-
-
-def service_images(compose_text: str) -> dict[str, str | None]:
-    """Every service under `services:`, mapped to its raw `image:` value or None.
-
-    A strict line grammar, not a YAML parser: every line is either placed by a
-    rule or refused. Raises `ComposeParseError` for any line it cannot place.
-    See branchleft_deploy.md, "verify_compose_images".
+    Refuses the deploy on any failure. Nothing the process prints is put in a
+    message, written to disk or logged: the model can hold inline values.
     """
-    if _UNREADABLE_CHARS.search(compose_text):
-        raise ComposeParseError("it holds a control, line-separator or byte-order-mark character")
-    images: dict[str, str | None] = {}
-    seen_top_level: set[str] = set()
-    current: str | None = None
-    in_services = False
-    awaiting_first_field = False
-    after_image = False
-    for stripped in strip_yaml_comments(compose_text).splitlines():
-        raw = stripped.rstrip()
-        if not raw:
-            continue
-        if raw.startswith(" ") and not seen_top_level:
-            # A file whose first line is indented is read by YAML with every
-            # line at that depth; lines before a column-0 key are not skipped.
-            raise ComposeParseError(f"{raw!r} is the first line and does not start at column 0")
-        # Every line of the file, not only those under `services:`: an `x-*` block
-        # or another section can hold a mapping that a service reaches by alias.
-        _refuse_anchor_or_alias(raw)
-        _refuse_hidden_mount_type(raw, current or "(outside services)")
-        if not raw.startswith(" "):
-            top_level = _ALLOWED_TOP_LEVEL.match(raw)
-            if top_level is None:
-                raise ComposeParseError(
-                    f"cannot place {raw!r} at column 0: only services, networks, volumes, "
-                    "secrets, configs, name, version and x-* keys may start a line"
-                )
-            key = top_level.group("key")
-            if key in seen_top_level:
-                raise ComposeParseError(f"`{key}:` appears twice at column 0")
-            seen_top_level.add(key)
-            in_services = key == "services"
-            if in_services and not _SERVICES_LINE.match(raw):
-                raise ComposeParseError(f"{raw!r}: `services:` must be alone on its line")
-            current = None
-            continue
-        if not in_services:
-            continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        if raw.lstrip(" ").startswith("\t"):
-            raise ComposeParseError(f"{raw!r} is indented with a tab")
-        if indent <= _SERVICE_INDENT:
-            header = _SERVICE_HEADER.match(raw)
-            if header is None or header.group(1) in images:
-                raise ComposeParseError(
-                    f"cannot read {raw!r} as a new service header: every key directly "
-                    "under `services:` must be a bare, unrepeated `  name:` line"
-                )
-            current = header.group(1)
-            images[current] = None
-            awaiting_first_field = True
-            after_image = False
-            continue
-        if current is None or indent < _FIELD_INDENT or _MERGE_KEY.match(raw):
-            raise ComposeParseError(f"cannot place {raw!r} under a service")
-        if awaiting_first_field and indent != _FIELD_INDENT:
-            raise ComposeParseError(
-                f"{raw!r} is the first key of service {current!r} and does not sit at "
-                f"{_FIELD_INDENT} spaces, so the keys after it cannot be told apart"
-            )
-        awaiting_first_field = False
-        if indent > _FIELD_INDENT:
-            if after_image:
-                raise ComposeParseError(
-                    f"{raw!r} continues the `image:` of service {current!r}; an image "
-                    "must be a one-line value"
-                )
-            if _IMAGE_KEY_ELSEWHERE.search(raw):
-                raise ComposeParseError(f"{raw!r} names an image below a service's own keys")
-            continue
-        field = _SERVICE_FIELD.match(raw)
-        if field is None:
-            raise ComposeParseError(f"cannot read {raw!r} as a key of service {current!r}")
-        key = field.group("key")
-        if key in _UNREAD_SERVICE_KEYS:
-            raise ComposeParseError(
-                f"service {current!r} uses `{key}:`, so its image is not one this "
-                "program can verify"
-            )
-        after_image = key == "image"
-        if after_image:
-            if images[current] is not None:
-                raise ComposeParseError(f"service {current!r} sets `image:` twice")
-            images[current] = field.group("value").strip()
-    return images
+    try:
+        result = run(
+            [docker, *COMPOSE_RENDER_ARGV],
+            cwd=directory,
+            env=COMPOSE_RENDER_ENV if env is None else env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMPOSE_RENDER_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DeployError(
+            f"could not run `docker compose config` in {directory} ({type(error).__name__}); "
+            "refusing to deploy images it could not list"
+        ) from None
+    if result.returncode != 0:
+        raise DeployError(
+            f"`docker compose config` failed in {directory} (exit {result.returncode}); "
+            "refusing to deploy images it could not list. Run it there by hand to read why"
+        )
+    try:
+        model = json.loads(result.stdout)
+    except ValueError:
+        model = None
+    if not isinstance(model, dict):
+        raise DeployError(
+            f"`docker compose config` in {directory} did not print a JSON object; "
+            "refusing to deploy"
+        )
+    return model
 
 
-def _unquoted(value: str) -> str:
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        return value[1:-1]
-    return value
+def _holds_image_mount(node) -> bool:
+    if isinstance(node, dict):
+        kind = node.get("type")
+        if isinstance(kind, str) and kind.strip().lower() == "image":
+            return True
+        return any(_holds_image_mount(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_holds_image_mount(value) for value in node)
+    return False
+
+
+def model_images(model: dict, image: str) -> tuple[bool, list[tuple[str, str]]]:
+    """`(pin_seen, [(service, literal reference)])` for a rendered Compose model.
+
+    Raises `DeployError` for anything that runs content no `image:` names, or
+    that this cannot account for. `image` is the pin already verified.
+    """
+    for key in model:
+        if key not in MODEL_TOP_LEVEL_KEYS and not str(key).startswith("x-"):
+            raise DeployError(
+                f"the Compose model has a top-level `{key}`, which this program does not "
+                "know to look for images in; refusing to deploy"
+            )
+    services = model.get("services")
+    if not isinstance(services, dict):
+        raise DeployError("the Compose model has no services; refusing to deploy")
+    pin_seen = False
+    literals: list[tuple[str, str]] = []
+    for name, service in services.items():
+        if not isinstance(service, dict):
+            raise DeployError(f"service {name!r} is not a mapping in the Compose model")
+        refused = MODEL_REFUSED_SERVICE_KEYS & set(service)
+        if refused:
+            raise DeployError(
+                f"service {name!r} uses `{sorted(refused)[0]}`, so what it runs is not an "
+                "image this program can verify; refusing to deploy"
+            )
+        if _holds_image_mount(service):
+            raise DeployError(
+                f"service {name!r} mounts an image (`type: image`), which runs an image no "
+                "`image:` line names; refusing to deploy"
+            )
+        reference = service.get("image")
+        if not isinstance(reference, str) or not reference.strip():
+            raise DeployError(f"service {name!r} names no `image:` in the Compose model")
+        if IMAGE_PIN_REFERENCE.fullmatch(reference) or reference == image:
+            pin_seen = True
+        elif "$" in reference:
+            raise DeployError(
+                f"service {name!r} image {reference!r} is interpolated, and only ${{IMAGE}} "
+                "is resolved here; write the digest-pinned reference"
+            )
+        else:
+            try:
+                validate_image_ref(reference)
+            except DeployError as error:
+                raise DeployError(f"service {name!r}: {error}") from None
+            literals.append((name, reference))
+    return pin_seen, literals
 
 
 def verify_compose_images(
-    compose_file: str, compose_text: str, image: str, *, run=subprocess.run
+    directory: str, image: str, *, run=subprocess.run, render=None
 ) -> None:
-    """Hold every image the stack's Compose files name to the attestation rule.
+    """Hold every image the stack runs to the attestation rule.
 
     `image` is the pin, already verified by the caller. A service that takes its
     image from the pin is that image. Any other service must name a literal,
     digest-pinned reference, and each is passed through `verify_attestation`, so a
     sidecar is registered, allowed by the allowance, or refused exactly as the
-    pin is. Anything this cannot account for refuses. Nothing is run until every
-    file has been read and every reference checked for shape.
+    pin is. Anything this cannot account for refuses. Nothing is verified until
+    the whole model has been read and every reference checked for shape.
     """
-    directory = os.path.dirname(compose_file)
-    for name in UNREAD_COMPOSE_FILES:
-        if os.path.lexists(os.path.join(directory, name)):
-            raise DeployError(
-                f"{os.path.join(directory, name)} exists beside {compose_file}; Compose "
-                "would read it and this program does not, so the images it runs cannot "
-                "be verified. Refusing to deploy"
-            )
-    sources = [(compose_file, compose_text, True)]
-    override = os.path.join(directory, COMPOSE_OVERRIDE)
-    try:
-        with open(override, encoding="utf-8") as handle:
-            sources.append((override, handle.read(), False))
-    except FileNotFoundError:
-        pass
-    except (OSError, ValueError) as error:
-        raise DeployError(f"could not read {override} ({error}); refusing to deploy") from None
-
-    pin_seen = False
-    pending: list[tuple[str, str, str]] = []
-    for path, text, is_base in sources:
-        try:
-            services = service_images(text)
-        except ComposeParseError as error:
-            raise DeployError(
-                f"{path}: cannot account for every image it runs ({error}); refusing to "
-                "deploy rather than leave one unverified"
-            ) from None
-        for service, value in services.items():
-            if value is None:
-                if is_base:
-                    raise DeployError(f"{path}: service {service!r} names no `image:`")
-                continue
-            reference = _unquoted(value)
-            if IMAGE_PIN_REFERENCE.fullmatch(reference):
-                # Only compose.yml's own pin counts: an override may restate it,
-                # but the file the pin check read must be the one that takes it.
-                pin_seen = pin_seen or is_base
-            elif "$" in reference:
-                raise DeployError(
-                    f"{path}: service {service!r} image {reference!r} is interpolated, and "
-                    "only ${IMAGE} is resolved here; write the digest-pinned reference"
-                )
-            else:
-                try:
-                    validate_image_ref(reference)
-                except DeployError as error:
-                    raise DeployError(f"{path}: service {service!r}: {error}") from None
-                pending.append((path, service, reference))
+    model = (render or render_compose)(directory)
+    pin_seen, literals = model_images(model, image)
     if not pin_seen:
         raise DeployError(
-            f"{compose_file} has no service whose `image:` is the pin, so a pin written "
+            f"no service in {directory} takes its image from the pin, so a pin written "
             "here would not take effect"
         )
     verified = {image}
-    for path, service, reference in pending:
+    for service, reference in literals:
         if reference in verified:
             continue
         verified.add(reference)
         try:
             verify_attestation(reference, run=run)
         except DeployError as error:
-            raise DeployError(f"{path}: service {service!r}: {error}") from None
+            raise DeployError(f"service {service!r}: {error}") from None
 
 
 def write_image_env(path: str, image: str) -> None:
@@ -829,6 +715,7 @@ def deploy(
     run=subprocess.run,
     lock_timeout: float = DEPLOY_LOCK_TIMEOUT,
     lock_poll_interval: float = DEPLOY_LOCK_POLL_INTERVAL,
+    render=None,
 ) -> None:
     validate_stack_name(stack)
     validate_image_ref(image)
@@ -860,7 +747,7 @@ def deploy(
 
     # The pin was verified above; every other image the stack runs is verified
     # here, still before the lock, the pin write and any restart.
-    verify_compose_images(compose_file, compose_text, image, run=run)
+    verify_compose_images(os.path.dirname(compose_file), image, run=run, render=render)
 
     # `docker compose up --wait` is a rollback signal only for a service that
     # declares a healthcheck; without one it waits for *running*, which a

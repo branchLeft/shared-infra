@@ -11,10 +11,11 @@ import contextlib
 import fcntl
 import hashlib
 import io
+import json
 import os
 import pathlib
-import random
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -1611,8 +1612,58 @@ HIDDEN_IN_SERVICES = {
 }
 
 
+OVERRIDE = "compose.override.yml"
+REAL_RENDER_COMPOSE = bd.render_compose
+
+
+def yaml_render(directory):
+    """A stand-in for Compose's render, used by every deploy() test below.
+
+    PyYAML reads compose.yml and merges compose.override.yml service by service,
+    resolving anchors and merge keys as Compose does. It does not resolve
+    `include`, which is why the hostile shapes are also run through the real
+    `docker compose` in RealComposeTests, where it is available.
+    """
+
+    def load(name):
+        path = os.path.join(directory, name)
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
+
+    model = load("compose.yml") or {}
+    override = load(OVERRIDE)
+    if override:
+        services = model.setdefault("services", {})
+        for name, service in (override.get("services") or {}).items():
+            merged = dict(services.get(name) or {})
+            merged.update(service or {})
+            services[name] = merged
+        for key, value in override.items():
+            if key != "services":
+                model[key] = value
+    return model
+
+
+def setUpModule():
+    """No deploy() test in this module starts `docker`: the renderer is the
+    PyYAML stand-in unless a test passes another."""
+    patcher = mock.patch.object(bd, "render_compose", yaml_render)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
+def model_of(*services):
+    """A rendered model: the pin service plus `(name, image, extra)` services."""
+    built = {"app": {"image": "${IMAGE}"}}
+    for name, image, extra in services:
+        built[name] = {"image": image, **extra}
+    return {"services": built}
+
+
 class ImageVerificationTests(unittest.TestCase):
-    """deploy() holds every image the stack's Compose files name to the same
+    """deploy() holds every image the stack's Compose model names to the same
     rule as the pin, not only the one passed on the command line.
 
     The attestation step is real here (never patched). Each refusal must leave
@@ -1633,7 +1684,7 @@ class ImageVerificationTests(unittest.TestCase):
         ) as handle:
             handle.write(text)
 
-    def deploy(self, image, run):
+    def deploy(self, image, run, render=None):
         stderr = io.StringIO()
         try:
             with contextlib.redirect_stderr(stderr):
@@ -1643,6 +1694,7 @@ class ImageVerificationTests(unittest.TestCase):
                     config_dir=self.config_dir,
                     stack_dir=self.stack_dir,
                     run=run,
+                    render=render,
                 )
         finally:
             self.log = stderr.getvalue()
@@ -1650,18 +1702,16 @@ class ImageVerificationTests(unittest.TestCase):
     def env_path(self):
         return bd.image_env_path("edge", self.config_dir)
 
-    def assert_refused(
-        self, text, run=None, image=ALLOWED_PIN, name="compose.yml", override=None
-    ):
+    def assert_refused(self, text, run=None, image=ALLOWED_PIN, override=None):
         """Refused with no restart and no pin; returns the message."""
-        self.write(text, name)
+        self.write(text)
         if os.path.exists(self.env_path()):
             os.unlink(self.env_path())
-        override_path = os.path.join(self.stack_dir, "edge", bd.COMPOSE_OVERRIDE)
+        override_path = os.path.join(self.stack_dir, "edge", OVERRIDE)
         if os.path.exists(override_path):
             os.unlink(override_path)
         if override is not None:
-            self.write(override, bd.COMPOSE_OVERRIDE)
+            self.write(override, OVERRIDE)
         run = run or FakeRun([0])
         with self.assertRaises(bd.DeployError) as raised:
             self.deploy(image, run)
@@ -1735,7 +1785,6 @@ class ImageVerificationTests(unittest.TestCase):
             "prom/mysqld-exporter",
             "prom/mysqld-exporter:latest",
             f"'prom/mysqld-exporter:v1@sha256:{'c' * 63}'",
-            "",
         ):
             with self.subTest(reference=reference):
                 run = FakeRun([0])
@@ -1745,6 +1794,14 @@ class ImageVerificationTests(unittest.TestCase):
                 self.assertEqual(run.calls, [])
                 self.assertIn("digest-pinned", message)
                 self.assertIn("'side'", message)
+
+    def test_a_service_with_an_empty_or_missing_image_is_refused(self):
+        run = FakeRun([0])
+        message = self.assert_refused(compose_of(service_block("side", "")), run)
+        self.assertIn("names no `image:`", message)
+        message = self.assert_refused(compose_of("  bare:\n" + PROBE), run)
+        self.assertIn("names no `image:`", message)
+        self.assertEqual(run.calls, [])
 
     def test_a_digest_shape_error_is_found_before_any_verifier_runs(self):
         run = FakeRun([0, 0])
@@ -1798,91 +1855,25 @@ class ImageVerificationTests(unittest.TestCase):
 
     def test_a_sidecar_in_the_override_file_is_held_to_the_same_rule(self):
         self.write(compose_of())
-        self.write("services:\n" + service_block("extra", STRAY), "compose.override.yml")
+        self.write("services:\n" + service_block("extra", STRAY), OVERRIDE)
         with self.assertRaises(bd.DeployError) as raised:
             self.deploy(ALLOWED_PIN, FakeRun([0]))
         self.assertIn(STRAY, str(raised.exception))
-        self.assertIn("compose.override.yml", str(raised.exception))
         self.assertFalse(os.path.exists(self.env_path()))
 
     def test_an_override_that_adds_an_allowed_sidecar_deploys(self):
         self.write(compose_of())
-        self.write("services:\n" + service_block("extra", EXPORTER), "compose.override.yml")
+        self.write("services:\n" + service_block("extra", EXPORTER), OVERRIDE)
         self.deploy(ALLOWED_PIN, FakeRun([0]))
         self.assertIn("unattested by allowance: prom/mysqld-exporter", self.log)
 
     def test_an_override_service_may_omit_an_image_but_a_base_service_may_not(self):
         self.write(compose_of())
-        self.write("services:\n  app:\n    restart: always\n", "compose.override.yml")
+        self.write("services:\n  app:\n    restart: always\n", OVERRIDE)
         self.deploy(ALLOWED_PIN, FakeRun([0]))
         os.unlink(self.env_path())
         message = self.assert_refused(compose_of("  bare:\n" + PROBE))
         self.assertIn("names no `image:`", message)
-
-    def test_an_unreadable_override_file_is_refused(self):
-        self.write(compose_of())
-        os.makedirs(os.path.join(self.stack_dir, "edge", "compose.override.yml"))
-        with self.assertRaises(bd.DeployError) as raised:
-            self.deploy(ALLOWED_PIN, FakeRun([0]))
-        self.assertIn("could not read", str(raised.exception))
-        self.assertFalse(os.path.exists(self.env_path()))
-
-    def test_a_compose_file_this_program_would_not_read_is_refused(self):
-        for name in bd.UNREAD_COMPOSE_FILES:
-            with self.subTest(name=name):
-                self.write(compose_of())
-                self.write("services: {}\n", name)
-                with self.assertRaises(bd.DeployError) as raised:
-                    self.deploy(ALLOWED_PIN, FakeRun([0]))
-                self.assertIn(name, str(raised.exception))
-                self.assertFalse(os.path.exists(self.env_path()))
-                os.unlink(os.path.join(self.stack_dir, "edge", name))
-
-    def test_a_shape_that_could_hide_an_image_is_refused_not_skipped(self):
-        shapes = {
-            "an anchor on a service header": "services:\n  app: &app\n    image: ${IMAGE}\n"
-            + PROBE,
-            "a build context": compose_of("  side:\n    build: ./side\n" + PROBE),
-            "a build context with an image": compose_of(
-                service_block("side", EXPORTER, "    build: ./side\n")
-            ),
-            "an extends": compose_of("  side:\n    extends:\n      service: app\n" + PROBE),
-            "a top level include": "include:\n  - other.yml\n" + compose_of(),
-            "a merge key": compose_of(
-                "  side:\n    <<: *common\n    image: " + EXPORTER + "\n" + PROBE
-            ),
-            "an image below a service key": compose_of(
-                service_block("side", EXPORTER, "    deploy:\n      image: x\n")
-            ),
-            "a second image key": compose_of(
-                service_block("side", EXPORTER, "    image: " + EXPORTER + "\n")
-            ),
-            "a repeated service": compose_of(service_block("app", EXPORTER)),
-            "a second document": compose_of() + "---\nservices: {}\n",
-            "an odd indent": compose_of("  side:\n   image: " + EXPORTER + "\n" + PROBE),
-            "a block scalar image": compose_of(
-                service_block("side", ">\n      " + EXPORTER)
-            ),
-            "an alias image": compose_of(service_block("side", "*common")),
-            "services nested too deep": "services:\n    app:\n        image: ${IMAGE}\n",
-        }
-        reads_but_not_a_digest = ("an alias image",)
-        for label, text in shapes.items():
-            with self.subTest(label):
-                run = FakeRun([0])
-                message = self.assert_refused(text, run)
-                self.assertEqual(run.calls, [])
-                self.assertIn(
-                    "digest-pinned"
-                    if label in reads_but_not_a_digest
-                    else "cannot account for every image",
-                    message,
-                )
-
-    def test_unreadable_compose_text_is_the_refusal_the_message_names(self):
-        message = self.assert_refused("services:\n  app: &app\n    image: ${IMAGE}\n" + PROBE)
-        self.assertIn("cannot account for every image", message)
-        self.assertIn("refusing to deploy", message)
 
     def test_a_stack_whose_services_never_take_the_pin_is_refused(self):
         text = (
@@ -1890,137 +1881,21 @@ class ImageVerificationTests(unittest.TestCase):
             + service_block("side", EXPORTER, "    environment:\n      A: ${IMAGE}\n")
         )
         message = self.assert_refused(text)
-        self.assertIn("no service whose `image:` is the pin", message)
+        self.assertIn("takes its image from the pin", message)
 
-    def test_a_commented_out_image_is_not_read_and_a_trailing_comment_is_cut(self):
-        text = compose_of(
-            "  side:\n    # image: ghcr.io/branchleft/stray:latest\n"
-            f"    image: {EXPORTER} # pinned\n" + PROBE
+    def test_a_pin_found_only_in_the_override_is_not_a_pin_in_the_base_file(self):
+        """The wiring check reads compose.yml itself, so a pin that only the
+        override supplies leaves the base file with no `${IMAGE}`."""
+        message = self.assert_refused(
+            "services:\n" + service_block("side", EXPORTER),
+            override=compose_of(),
         )
-        self.write(text)
-        self.deploy(ALLOWED_PIN, FakeRun([0]))
-        self.assertIn("unattested by allowance: prom/mysqld-exporter", self.log)
+        self.assertIn("does not resolve its image from ${IMAGE}", message)
 
     def test_a_same_path_on_another_registry_is_another_image(self):
         self.assert_refused(
             compose_of(service_block("side", f"docker.io/library/mysql@sha256:{'d' * 64}"))
         )
-
-    def test_a_hidden_top_level_key_is_refused_not_skipped(self):
-        """compose.yml alone, ordinary pin service: only the hidden line is wrong."""
-        for label, text in HIDDEN_AT_COLUMN_ZERO.items():
-            with self.subTest(label):
-                run = FakeRun([0])
-                message = self.assert_refused(text, run)
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-
-    def test_a_services_line_that_is_not_alone_is_refused_whatever_the_override_holds(self):
-        """The pin is read from compose.yml itself; a block pin in the override
-        cannot vouch for a flow-style compose.yml."""
-        for label, text in {
-            "flow services": FLOW_SERVICES,
-            "whole JSON": HIDDEN_AT_COLUMN_ZERO["a JSON document"],
-            "a flow tail with a live pin elsewhere": "services: {}\nx-pin: ${IMAGE}\n",
-        }.items():
-            with self.subTest(label):
-                run = FakeRun([0])
-                message = self.assert_refused(text, run, override=compose_of())
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-
-    def test_a_pin_found_only_in_the_override_is_not_a_pin(self):
-        message = self.assert_refused(
-            "services:\n"
-            + service_block("side", EXPORTER, "    environment:\n      A: ${IMAGE}\n"),
-            override=compose_of(),
-        )
-        self.assertIn("no service whose `image:` is the pin", message)
-
-    def test_an_override_service_with_an_unclassifiable_field_is_refused(self):
-        """The override may omit an image, so it is the path that reaches the pin
-        service's own image."""
-        for label, text in HIDDEN_IN_SERVICES.items():
-            with self.subTest(label):
-                run = FakeRun([0])
-                message = self.assert_refused(compose_of(), run, override=text)
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-
-    def test_a_base_service_with_an_unclassifiable_field_is_refused(self):
-        for label, text in HIDDEN_IN_SERVICES.items():
-            with self.subTest(label):
-                run = FakeRun([0])
-                if text.startswith("services: "):
-                    # Keep ${IMAGE} on a live line so the wiring check passes first.
-                    text += "x-pin: ${IMAGE}\n"
-                else:
-                    shape = text.partition("\n")[2].replace("  app:", "  extra:", 1)
-                    text = "services:\n" + service_block("app", "${IMAGE}") + shape
-                message = self.assert_refused(text, run)
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-
-    def test_a_file_whose_first_line_is_indented_is_refused(self):
-        """compose.yml alone, and as the override beside an ordinary compose.yml."""
-        for label, text in HIDDEN_BY_INDENTING_THE_FILE.items():
-            with self.subTest(label + " as compose.yml"):
-                run = FakeRun([0])
-                text_with_pin = text if "${IMAGE}" in text else text + "x-pin: ${IMAGE}\n"
-                message = self.assert_refused(text_with_pin, run)
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-            with self.subTest(label + " as the override"):
-                run = FakeRun([0])
-                message = self.assert_refused(compose_of(), run, override=text)
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-
-    def test_an_image_mount_is_refused_in_the_base_file_and_the_override(self):
-        for label, extra in IMAGE_MOUNTS.items():
-            with self.subTest(label + " in compose.yml"):
-                run = FakeRun([0])
-                message = self.assert_refused(
-                    compose_of(service_block("side", EXPORTER, extra)), run
-                )
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-            with self.subTest(label + " in the override"):
-                run = FakeRun([0])
-                override = "services:\n  app:\n" + extra
-                message = self.assert_refused(compose_of(), run, override=override)
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-
-    def test_an_image_mount_reached_through_an_anchor_is_refused(self):
-        for label, (anchors, fields) in ANCHORED_IMAGE_MOUNTS.items():
-            with self.subTest(label + " in compose.yml"):
-                run = FakeRun([0])
-                message = self.assert_refused(
-                    anchors + compose_of(service_block("side", EXPORTER, fields)), run
-                )
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-            with self.subTest(label + " in the override"):
-                run = FakeRun([0])
-                override = anchors + "services:\n  app:\n" + (fields or "    restart: always\n")
-                message = self.assert_refused(compose_of(), run, override=override)
-                self.assertEqual(run.calls, [])
-                self.assertIn("cannot account for every image", message)
-
-    def test_the_one_anchor_shape_a_live_stack_uses_still_deploys(self):
-        """A single word anchored on an x- key and aliased as a whole value, as
-        the control-plane stack does for its trusted proxy address."""
-        extra = "    environment:\n      TRUSTED: *addr\n"
-        self.write("x-addr: &addr 10.20.1.10\n" + compose_of(service_block("side", EXPORTER, extra)))
-        self.deploy(ALLOWED_PIN, FakeRun([0]))
-        self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
-
-    def test_an_anchor_or_alias_inside_a_quoted_scalar_is_not_one(self):
-        extra = "    command: ['sh', '-c', 'echo *x &y']\n    labels:\n      note: \"a *b &c\"\n"
-        self.write(compose_of(service_block("side", EXPORTER, extra)))
-        self.deploy(ALLOWED_PIN, FakeRun([0]))
-        self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
 
     def test_the_ordinary_mount_types_are_not_refused(self):
         extra = (
@@ -2032,9 +1907,21 @@ class ImageVerificationTests(unittest.TestCase):
         self.deploy(ALLOWED_PIN, FakeRun([0]))
         self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
 
-    def test_the_allowed_top_level_keys_are_read_and_do_not_refuse(self):
+    def test_an_image_mount_in_the_model_is_refused(self):
+        for label, extra in IMAGE_MOUNTS.items():
+            if label.startswith(("a flow entry with an alias", "a tagged", "a complex")):
+                continue  # Not a mapping PyYAML reads as `type: image`.
+            with self.subTest(label):
+                run = FakeRun([0])
+                message = self.assert_refused(
+                    compose_of(service_block("side", EXPORTER, extra)), run
+                )
+                self.assertEqual(run.calls, [])
+                self.assertIn("mounts an image", message)
+
+    def test_the_allowed_top_level_keys_do_not_refuse(self):
         text = (
-            "name: edge\nversion: '3'\nx-shared: &shared word\n"
+            "name: edge\nx-shared: &shared word\n"
             "networks:\n  n: {}\nvolumes:\n  v: {}\nsecrets:\n  s:\n    file: /x\n"
             "configs:\n  c:\n    file: /x\n" + compose_of()
         )
@@ -2042,13 +1929,31 @@ class ImageVerificationTests(unittest.TestCase):
         self.deploy(ALLOWED_PIN, FakeRun([0]))
         self.assertEqual(bd.read_current_image(self.env_path()), ALLOWED_PIN)
 
-    def test_a_dot_env_file_beside_the_compose_file_is_refused(self):
-        self.write(compose_of())
-        self.write("COMPOSE_FILE=evil.yml\n", ".env")
-        with self.assertRaises(bd.DeployError) as raised:
-            self.deploy(ALLOWED_PIN, FakeRun([0]))
-        self.assertIn(".env", str(raised.exception))
-        self.assertFalse(os.path.exists(self.env_path()))
+    def test_a_top_level_key_the_program_cannot_look_inside_is_refused(self):
+        for text in (
+            "include:\n  - evil.yml\n" + compose_of(),
+            "models:\n  m:\n    model: evil\n" + compose_of(),
+            "extra:\n  a: b\n" + compose_of(),
+        ):
+            with self.subTest(text.partition("\n")[0]):
+                run = FakeRun([0])
+                message = self.assert_refused(text, run)
+                self.assertEqual(run.calls, [])
+                self.assertIn("top-level", message)
+
+    def test_a_service_key_that_runs_something_no_image_names_is_refused(self):
+        for key, fields in {
+            "build": "    build: ./side\n",
+            "extends": "    extends:\n      service: app\n",
+            "provider": "    provider:\n      type: x\n",
+        }.items():
+            with self.subTest(key):
+                run = FakeRun([0])
+                message = self.assert_refused(
+                    compose_of(service_block("side", EXPORTER, fields)), run
+                )
+                self.assertEqual(run.calls, [])
+                self.assertIn(f"`{key}`", message)
 
     def test_a_port_on_a_dockerhub_namespace_is_another_registry(self):
         other = f"prom:5000/mysqld-exporter:v0.20.0@sha256:{'c' * 64}"
@@ -2074,307 +1979,418 @@ class ImageVerificationTests(unittest.TestCase):
             with self.subTest(image=image):
                 self.assertEqual(bd.attested_name(image), name)
 
-    def test_service_images_maps_each_service_to_its_raw_value(self):
-        text = compose_of(
-            "  bare:\n    restart: always\n",
-            service_block("side", f"'{EXPORTER}'"),
+    def test_a_render_that_fails_refuses_the_deploy_before_any_host_change(self):
+        def broken(directory):
+            raise bd.DeployError("`docker compose config` failed in somewhere (exit 1)")
+
+        run = FakeRun([0])
+        self.write(compose_of())
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(ALLOWED_PIN, run, render=broken)
+        self.assertIn("docker compose config", str(raised.exception))
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual(run.calls, [])
+
+    def test_the_render_is_asked_for_the_stack_directory(self):
+        seen = []
+
+        def record(directory):
+            seen.append(directory)
+            return model_of()
+
+        self.write(compose_of())
+        self.deploy(ALLOWED_PIN, FakeRun([0]), render=record)
+        self.assertEqual(seen, [os.path.join(self.stack_dir, "edge")])
+
+
+class ModelImagesTests(unittest.TestCase):
+    """The walker over a rendered Compose model, with models written out whole."""
+
+    def refused(self, model, fragment):
+        with self.assertRaises(bd.DeployError) as raised:
+            bd.model_images(model, ALLOWED_PIN)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_it_reports_the_pin_and_each_literal_reference(self):
+        pin_seen, literals = bd.model_images(
+            model_of(("side", EXPORTER, {}), ("two", STRAY, {})), ALLOWED_PIN
         )
+        self.assertTrue(pin_seen)
+        self.assertEqual(literals, [("side", EXPORTER), ("two", STRAY)])
+
+    def test_a_service_naming_the_pin_literally_is_the_pin(self):
+        pin_seen, literals = bd.model_images(
+            {"services": {"app": {"image": ALLOWED_PIN}}}, ALLOWED_PIN
+        )
+        self.assertTrue(pin_seen)
+        self.assertEqual(literals, [])
+
+    def test_a_model_with_no_pin_service_reports_it_unseen(self):
+        pin_seen, _ = bd.model_images(
+            {"services": {"s": {"image": EXPORTER}}}, ALLOWED_PIN
+        )
+        self.assertFalse(pin_seen)
+
+    def test_the_top_level_keys_compose_documents_are_accepted(self):
+        model = model_of()
+        model.update(
+            {"name": "x", "networks": {}, "volumes": {}, "secrets": {}, "configs": {}}
+        )
+        model["x-anything"] = {"type": "image"}
+        bd.model_images(model, ALLOWED_PIN)
+
+    def test_an_unknown_top_level_key_is_refused(self):
+        for key in ("include", "models", "version", "extra"):
+            with self.subTest(key):
+                self.refused({**model_of(), key: {}}, "top-level")
+
+    def test_a_model_without_services_is_refused(self):
+        for model in ({}, {"services": None}, {"services": []}, {"services": "x"}):
+            with self.subTest(model=model):
+                self.refused(model, "no services")
+
+    def test_a_service_that_is_not_a_mapping_is_refused(self):
+        for service in (None, "x", [], 3):
+            with self.subTest(service=service):
+                self.refused({"services": {"app": service}}, "not a mapping")
+
+    def test_a_service_key_that_runs_something_no_image_names_is_refused(self):
+        for key in ("build", "extends", "provider", "models"):
+            with self.subTest(key):
+                self.refused(model_of(("s", EXPORTER, {key: {}})), f"`{key}`")
+
+    def test_an_image_mount_is_refused_wherever_it_sits_in_a_service(self):
+        for extra in (
+            {"volumes": [{"type": "image", "source": EVIL, "target": "/x"}]},
+            {"volumes": [{"type": " Image ", "source": EVIL}]},
+            {"deploy": {"x": [[{"type": "image"}]]}},
+            {"labels": {"a": {"type": "image"}}},
+        ):
+            with self.subTest(extra=extra):
+                self.refused(model_of(("s", EXPORTER, extra)), "mounts an image")
+
+    def test_the_other_mount_types_and_other_type_keys_are_not_image_mounts(self):
+        extra = {
+            "volumes": [
+                {"type": "bind", "source": "/a", "target": "/b"},
+                {"type": "volume", "source": "v", "target": "/c"},
+                {"type": "tmpfs", "target": "/d"},
+            ],
+            "environment": {"type": "image-ish", "n": 3},
+        }
+        bd.model_images(model_of(("s", EXPORTER, extra)), ALLOWED_PIN)
+
+    def test_a_service_without_a_usable_image_is_refused(self):
+        for image in (None, "", "  ", 3, ["x"], {"a": "b"}):
+            with self.subTest(image=image):
+                self.refused({"services": {"s": {"image": image}}}, "names no `image:`")
+        self.refused({"services": {"s": {}}}, "names no `image:`")
+
+    def test_an_interpolated_reference_other_than_the_pin_is_refused(self):
+        for image in ("${OTHER}", "$IMAGE", "${IMAGE:-x}", "a/b@sha256:${D}", "${IMAGE}x"):
+            with self.subTest(image=image):
+                self.refused(model_of(("s", image, {})), "interpolated")
+
+    def test_a_literal_that_is_not_digest_pinned_names_its_service(self):
+        for image in ("redis", "redis:7", f"redis@sha256:{'1' * 63}", "A/B@sha256:" + "1" * 64):
+            with self.subTest(image=image):
+                self.refused(model_of(("cache", image, {})), "service 'cache'")
+
+
+class RenderComposeTests(unittest.TestCase):
+    """The one subprocess this part of the program starts."""
+
+    GOOD = '{"name": "edge", "services": {"app": {"image": "${IMAGE}"}}}'
+
+    def render(self, response, **kwargs):
+        run = FakeRun([response])
+        return run, REAL_RENDER_COMPOSE("/opt/branchleft/edge", run=run, **kwargs)
+
+    def test_it_asks_compose_for_the_json_model_without_interpolating(self):
+        run, model = self.render((0, self.GOOD))
+        self.assertEqual(model["services"]["app"]["image"], "${IMAGE}")
         self.assertEqual(
-            bd.service_images(text),
-            {"app": "${IMAGE}", "bare": None, "side": f"'{EXPORTER}'"},
+            run.calls,
+            [
+                [
+                    "/usr/bin/docker", "compose", "--profile", "*", "config",
+                    "--format", "json", "--no-interpolate",
+                ]
+            ],
         )
 
+    def test_it_runs_in_the_stack_directory_with_no_stdin_and_a_timeout(self):
+        run, _ = self.render((0, self.GOOD))
+        kwargs = run.kwargs[0]
+        self.assertEqual(kwargs["cwd"], "/opt/branchleft/edge")
+        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["timeout"], bd.COMPOSE_RENDER_TIMEOUT)
 
-YAML_ALLOWED_TOP_LEVEL = frozenset(
-    {"services", "networks", "volumes", "secrets", "configs", "name", "version"}
-)
-YAML_UNREAD_SERVICE_KEYS = frozenset({"build", "extends", "provider"})
+    def test_it_inherits_nothing_from_the_callers_environment(self):
+        with mock.patch.dict(
+            os.environ,
+            {"COMPOSE_FILE": "/elsewhere.yml", "COMPOSE_PROFILES": "p", "TOKEN": "t"},
+        ):
+            run, _ = self.render((0, self.GOOD))
+        self.assertEqual(run.kwargs[0]["env"], bd.COMPOSE_RENDER_ENV)
+        self.assertEqual(set(bd.COMPOSE_RENDER_ENV), {"PATH", "HOME", "LC_ALL"})
+
+    def test_a_failed_render_refuses_and_leaks_no_output(self):
+        for response in ((1, "", "secret-in-stderr"), (15, "secret-in-stdout", "")):
+            with self.subTest(response=response):
+                with self.assertRaises(bd.DeployError) as raised:
+                    self.render(response)
+                self.assertIn("exit", str(raised.exception))
+                self.assertNotIn("secret", str(raised.exception))
+
+    def test_a_docker_that_cannot_start_or_times_out_refuses(self):
+        for error in (
+            FileNotFoundError("/usr/bin/docker"),
+            PermissionError("x"),
+            subprocess.TimeoutExpired(["docker"], 60.0),
+        ):
+            with self.subTest(error=type(error).__name__):
+
+                def broken(argv, **kwargs):
+                    raise error
+
+                with self.assertRaises(bd.DeployError) as raised:
+                    REAL_RENDER_COMPOSE("/d", run=broken)
+                self.assertIn(type(error).__name__, str(raised.exception))
+
+    def test_output_that_is_not_a_json_object_refuses(self):
+        for stdout in ("", "services:\n  a: {}\n", "[1]", '"x"', "null", "{", "3"):
+            with self.subTest(stdout=stdout):
+                with self.assertRaises(bd.DeployError) as raised:
+                    self.render((0, stdout))
+                self.assertIn("JSON object", str(raised.exception))
+
+    def test_the_output_is_never_written_to_disk_or_logged(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.render((0, self.GOOD))
+        self.assertEqual(stderr.getvalue(), "")
 
 
-def has_image_mount(node):
-    """Whether any mapping below `node` has `type: image`, as a volume entry does."""
-    if isinstance(node, dict):
-        return node.get("type") == "image" or any(has_image_mount(v) for v in node.values())
-    if isinstance(node, list):
-        return any(has_image_mount(v) for v in node)
-    return False
-
-
-def reader_outcome(text):
+def _usable_docker_compose():
+    docker = shutil.which("docker")
+    if docker is None:
+        return None
     try:
-        return bd.service_images(text)
-    except bd.ComposeParseError:
+        result = subprocess.run(
+            [docker, "compose", "version"],
+            env=REAL_COMPOSE_ENV,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
         return None
+    return docker if result.returncode == 0 else None
 
 
-def yaml_disagreement(text):
-    """Why this reader and PyYAML read `text` differently, or None.
-
-    PyYAML stands in for Compose's own parser (YAML 1.1 anchors, merge keys,
-    escapes). The reader may refuse anything. What it may not do is accept text
-    from which PyYAML reads an image, an include, or a service the reader did
-    not report. Text PyYAML cannot parse is skipped: Compose would not start.
-    """
-    seen = reader_outcome(text)
-    if seen is None:
-        return None
-    try:
-        loaded = yaml.safe_load(text)
-    except yaml.YAMLError:
-        return None
-    if loaded is None:
-        loaded = {}
-    if not isinstance(loaded, dict):
-        return f"PyYAML reads a {type(loaded).__name__} at the top level"
-    for key in loaded:
-        if key not in YAML_ALLOWED_TOP_LEVEL and not str(key).startswith("x-"):
-            return f"PyYAML reads the top-level key {key!r}"
-    services = loaded.get("services") or {}
-    if not isinstance(services, dict):
-        return f"PyYAML reads services as a {type(services).__name__}"
-    if set(services) != set(seen):
-        return f"services differ: PyYAML {sorted(map(str, services))}, reader {sorted(seen)}"
-    for name, service in services.items():
-        if service is None:
-            service = {}
-        if not isinstance(service, dict):
-            return f"PyYAML reads service {name!r} as a {type(service).__name__}"
-        if has_image_mount(service):
-            return f"PyYAML reads an image mount in {name!r}"
-        if YAML_UNREAD_SERVICE_KEYS & set(service):
-            return f"PyYAML reads {sorted(YAML_UNREAD_SERVICE_KEYS & set(service))} on {name!r}"
-        if "image" in service:
-            wanted = "" if service["image"] is None else str(service["image"])
-        else:
-            wanted = None
-        got = None if seen[name] is None else bd._unquoted(seen[name])
-        if wanted != got:
-            return f"image of {name!r}: PyYAML {wanted!r}, reader {got!r}"
-    return None
+# A real HOME is kept (Compose finds its CLI plugin there when the package puts it
+# in the user's directory). A daemon that cannot be reached shows that rendering
+# does not need one.
+REAL_COMPOSE_ENV = {
+    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    "HOME": os.environ.get("HOME", "/root"),
+    "LC_ALL": "C",
+    "DOCKER_HOST": "unix:///nonexistent.sock",
+}
+REAL_DOCKER = _usable_docker_compose()
+EVIL_YML = "services:\n  evilsvc:\n    image: " + EVIL + "\n"
+EVIL_HOST = "evil.example"
 
 
-# Lines a hostile compose file might carry, tried at random positions and
-# indents. Most make the file unparsable or are refused; the property under test
-# is only that the reader never accepts what PyYAML reads differently.
-HOSTILE_LINES = (
-    "include: [evil.yml]",
-    '"inc\\x6cude": [evil.yml]',
-    "? include",
-    ": [evil.yml]",
-    "<<: *a",
-    "x-a: &a",
-    f"image: {EVIL}",
-    f'"im\\x61ge": {EVIL}',
-    f"'image': {EVIL}",
-    "extends:",
-    "  file: evil.yml",
-    "build: .",
-    "provider:",
-    "models:",
-    "services: {web: {image: x}}",
-    "- a",
-    "---",
-    f"{{image: {EVIL}}}",
-    "web: {image: x}",
-    "web:",
-    "image:",
-    f"  {EVIL}",
-    "restart: always",
-    "name: x",
-    "x-b: 1",
-    "﻿include: [evil.yml]",
-    "volumes:",
-    "- type: image",
-    "- {type: image, source: x, target: /x}",
-    "type: image",
-    'type: "im\\x61ge"',
-    "- type: bind",
-    "source: x",
-    "target: /x",
-)
+def real_render(directory):
+    return REAL_RENDER_COMPOSE(directory, docker=REAL_DOCKER, env=REAL_COMPOSE_ENV)
 
 
-class ReaderAgainstYamlTests(unittest.TestCase):
-    """The hand-written reader is held to a real YAML parser in CI.
+@unittest.skipUnless(REAL_DOCKER, "needs `docker compose` on PATH")
+class RealComposeTests(unittest.TestCase):
+    """The hostile shapes that defeated the hand-written reader, run through the
+    real `docker compose config`.
 
-    The deploy program itself stays stdlib-only: nothing installs PyYAML for the
-    host's system python3 (ansible-core's copy lives in its own environment), and
-    a deploy gate that failed to import would stop every deploy.
+    The property: whatever Compose renders, if an image the verifier never saw
+    is in the model, verify_compose_images refuses; or Compose itself rejects the
+    file. Neither outcome may be an acceptance with the evil image in it.
     """
 
-    def test_the_hidden_shapes_are_real_and_the_reader_refuses_each(self):
-        every = {**HIDDEN_AT_COLUMN_ZERO, **HIDDEN_IN_SERVICES}
-        for label, text in every.items():
-            with self.subTest(label):
-                self.assertIsNone(reader_outcome(text))
-                self.assertIsNone(yaml_disagreement(text))
+    def stack(self, files):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        files = {"evil.yml": EVIL_YML, **files}
+        for name, text in files.items():
+            with open(os.path.join(directory.name, name), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        return directory.name
 
-    def test_pyyaml_really_reads_an_include_or_an_unverified_image_in_those_shapes(self):
-        """Guards the corpus: a typo that made a shape harmless would pass above."""
-        for label in (
-            "an escaped include key",
-            "a complex include key",
-            "a byte order mark before include",
-            "a root merge key",
-            "a plain include",
-        ):
-            with self.subTest(label):
-                loaded = yaml.safe_load(HIDDEN_AT_COLUMN_ZERO[label])
-                self.assertEqual(list(loaded["include"]), ["evil.yml"])
-        flow = yaml.safe_load(FLOW_SERVICES)
-        self.assertEqual(flow["services"]["evil"]["image"], EVIL)
-        for label, key in (
-            ("an escaped image key at indent 6", "image"),
-            ("extends at indent 6", "extends"),
-            ("build at indent 6", "build"),
-        ):
-            with self.subTest(label):
-                loaded = yaml.safe_load(HIDDEN_IN_SERVICES[label])
-                self.assertIn(key, loaded["services"]["app"])
+    def outcome(self, files):
+        """`rejected` (Compose or the walker refuses), or `accepted`; asserts an
+        accepted model holds no evil reference or image mount."""
+        directory = self.stack(files)
+        try:
+            bd.verify_compose_images(
+                directory, ALLOWED_PIN, run=FakeRun([0]), render=real_render
+            )
+        except bd.DeployError as error:
+            return "rejected", str(error)
+        # An `x-` extension is data Compose never runs; an alias that reaches a
+        # service has already been resolved into `services`, so that is where the
+        # evil reference or mount would be.
+        services = real_render(directory)["services"]
+        self.assertNotIn(EVIL_HOST, json.dumps(services), files)
+        self.assertFalse(bd._holds_image_mount(services), files)
+        return "accepted", ""
 
-    def test_the_indented_and_image_mount_shapes_are_real_and_the_reader_refuses_each(self):
+    def test_the_real_compose_is_what_the_deploy_program_asks_for(self):
+        directory = self.stack({"compose.yml": compose_of(service_block("side", EXPORTER))})
+        model = real_render(directory)
+        self.assertEqual(model["services"]["app"]["image"], "${IMAGE}")
+        self.assertEqual(model["services"]["side"]["image"], EXPORTER)
+
+    def test_a_service_behind_a_profile_is_in_the_model(self):
+        text = compose_of(
+            service_block("gated", STRAY, "    profiles: [debug]\n")
+        )
+        directory = self.stack({"compose.yml": text})
+        self.assertEqual(real_render(directory)["services"]["gated"]["image"], STRAY)
+        with self.assertRaises(bd.DeployError) as raised:
+            bd.verify_compose_images(
+                directory, ALLOWED_PIN, run=FakeRun([0]), render=real_render
+            )
+        self.assertIn(STRAY, str(raised.exception))
+
+    def test_an_unset_variable_does_not_stop_the_render_or_get_resolved(self):
+        text = compose_of(
+            service_block("side", EXPORTER, "    environment:\n      A: ${NEVER_SET:?must be set}\n")
+        )
+        model = real_render(self.stack({"compose.yml": text}))
+        self.assertEqual(model["services"]["side"]["environment"]["A"], "${NEVER_SET:?must be set}")
+
+    def test_every_hidden_top_level_shape_is_rejected_or_harmless(self):
+        refused = 0
+        for label, text in HIDDEN_AT_COLUMN_ZERO.items():
+            with self.subTest(label):
+                refused += self.outcome({"compose.yml": text})[0] == "rejected"
+        self.assertGreater(refused, 10)
+
+    def test_a_real_include_is_followed_by_compose_and_refused_by_the_walker(self):
+        directory = self.stack({"compose.yml": "include:\n  - evil.yml\n" + compose_of()})
+        self.assertIn(EVIL_HOST, json.dumps(real_render(directory)))
+        with self.assertRaises(bd.DeployError):
+            bd.verify_compose_images(
+                directory, ALLOWED_PIN, run=FakeRun([0]), render=real_render
+            )
+
+    def test_every_service_level_shape_is_rejected_or_harmless_in_either_file(self):
+        for label, text in HIDDEN_IN_SERVICES.items():
+            with self.subTest(label + " as compose.yml"):
+                body = text if text.startswith("services: ") else None
+                if body:
+                    body += "x-pin: ${IMAGE}\n"
+                else:
+                    shape = text.partition("\n")[2].replace("  app:", "  extra:", 1)
+                    body = "services:\n" + service_block("app", "${IMAGE}") + shape
+                self.outcome({"compose.yml": body})
+            with self.subTest(label + " as the override"):
+                self.outcome({"compose.yml": compose_of(), OVERRIDE: text})
+
+    def test_an_indented_file_is_rejected_or_harmless_in_either_file(self):
         for label, text in HIDDEN_BY_INDENTING_THE_FILE.items():
-            with self.subTest(label):
-                self.assertIsNone(reader_outcome(text))
-                self.assertIsNone(yaml_disagreement(text))
-        loaded = yaml.safe_load(HIDDEN_BY_INDENTING_THE_FILE["an indented services file"])
-        self.assertEqual(loaded["services"]["web"]["image"], EVIL)
-        loaded = yaml.safe_load(HIDDEN_BY_INDENTING_THE_FILE["an indented include"])
-        self.assertEqual(loaded["include"], ["evil.yml"])
+            with self.subTest(label + " as compose.yml"):
+                with_pin = text if "${IMAGE}" in text else text + "x-pin: ${IMAGE}\n"
+                self.outcome({"compose.yml": with_pin})
+            with self.subTest(label + " as the override"):
+                self.outcome({"compose.yml": compose_of(), OVERRIDE: text})
+
+    def test_every_image_mount_is_refused_or_rejected_in_either_file(self):
         for label, extra in IMAGE_MOUNTS.items():
-            text = compose_of(service_block("side", EXPORTER, extra))
-            with self.subTest(label):
-                self.assertIsNone(reader_outcome(text))
-                self.assertIsNone(yaml_disagreement(text))
-                try:
-                    loaded = yaml.safe_load(text)
-                except yaml.YAMLError:
-                    continue
-                # Where PyYAML parses it, it reads an image mount (the guard that
-                # the shape is hostile, not a typo), except the alias and tag
-                # spellings, which it reads as something else.
-                if label not in ("a flow entry with an alias type", "a tagged type"):
-                    self.assertTrue(has_image_mount(loaded), label)
+            with self.subTest(label + " in compose.yml"):
+                state, _ = self.outcome(
+                    {"compose.yml": compose_of(service_block("side", EXPORTER, extra))}
+                )
+                self.assertEqual(state, "rejected")
+            with self.subTest(label + " in the override"):
+                state, _ = self.outcome(
+                    {
+                        "compose.yml": compose_of(),
+                        OVERRIDE: "services:\n  app:\n" + extra,
+                    }
+                )
+                self.assertEqual(state, "rejected")
 
-    def test_the_anchored_shapes_are_real_and_the_reader_refuses_each(self):
+    def test_every_anchored_image_mount_is_rejected_or_harmless(self):
+        mounts_refused = 0
         for label, (anchors, fields) in ANCHORED_IMAGE_MOUNTS.items():
-            text = anchors + compose_of(service_block("side", EXPORTER, fields))
-            with self.subTest(label):
-                self.assertIsNone(reader_outcome(text))
-                self.assertIsNone(yaml_disagreement(text))
-        # Where an alias carries the mount to a service, PyYAML reads it there.
-        for label in (
-            "a flow anchor and an alias in a volumes list",
-            "a list anchor and a volumes alias",
-            "a block anchor body and a list alias",
-            "a merge key combined with an alias",
-            "a flow merge key combined with an alias",
-        ):
-            anchors, fields = ANCHORED_IMAGE_MOUNTS[label]
-            loaded = yaml.safe_load(anchors + compose_of(service_block("side", EXPORTER, fields)))
-            with self.subTest(label):
-                self.assertTrue(has_image_mount(loaded["services"]["side"]), label)
+            with self.subTest(label + " in compose.yml"):
+                state, message = self.outcome(
+                    {
+                        "compose.yml": anchors
+                        + compose_of(service_block("side", EXPORTER, fields))
+                    }
+                )
+                mounts_refused += "mounts an image" in message
+            with self.subTest(label + " in the override"):
+                self.outcome(
+                    {
+                        "compose.yml": compose_of(),
+                        OVERRIDE: anchors + "services:\n  app:\n" + (fields or "    restart: always\n"),
+                    }
+                )
+        self.assertGreater(mounts_refused, 3)
 
-    def test_an_anchor_body_with_a_later_alias_never_splits_the_reader_from_pyyaml(self):
-        """Composes an anchored node with an alias to it, which no single
-        inserted line can: the mapping is checked where it is written, the
-        service reaches it from somewhere else."""
-        bodies = (
-            "x-m: &m {type: image, source: " + EVIL + ", target: /x}",
-            "x-m: &m\n  type: image\n  source: " + EVIL + "\n  target: /x",
-            "x-m: &m\n  source: " + EVIL + "\n  target: /x",
-            "x-m: &m {source: " + EVIL + ", target: /x}",
-            "x-m: &m\n  - type: image\n    source: " + EVIL + "\n    target: /x",
-            "x-m: &m [{type: image, source: x, target: /x}]",
-            "x-m: &m image",
-            "x-m: &m word",
-            "x-m: &m 10.20.1.10",
-            "x-m:\n  type: image",
+    def test_the_alias_hidden_by_quote_mispairing_is_rejected_or_harmless(self):
+        text = "x-k: &k type\n" + compose_of(
+            service_block(
+                "side",
+                EXPORTER,
+                "    volumes:\n      - {source: " + EVIL
+                + ", target: /x, a: it's, *k : image, b: 'z'}\n",
+            )
         )
-        uses = (
-            "    volumes:\n      - *m",
-            "    volumes: *m",
-            "    volumes:\n      - <<: *m\n        type: image",
-            "    volumes:\n      - {<<: *m, type: image}",
-            "    volumes:\n      - type: *m\n        source: x\n        target: /x",
-            "    volumes:\n      - {type: *m, source: x, target: /x}",
-            "    environment:\n      A: *m",
-            "    environment: *m",
-            "    deploy: *m",
-            "    labels: *m",
+        self.outcome({"compose.yml": text})
+
+    def test_files_compose_reads_beside_compose_yml_cannot_hide_an_image(self):
+        for name, text in {
+            "compose.yaml": EVIL_YML + "\n",
+            "compose.override.yaml": EVIL_YML,
+            "docker-compose.override.yml": EVIL_YML,
+            ".env": "COMPOSE_FILE=evil.yml\n",
+            "evil.env": "COMPOSE_FILE=evil.yml\n",
+        }.items():
+            with self.subTest(name):
+                self.outcome({"compose.yml": compose_of(), name: text})
+
+    def test_a_dot_env_that_names_another_file_is_followed_as_the_unit_follows_it(self):
+        """The unit reads the same `.env` through Compose. Whatever it makes
+        Compose render is what is verified."""
+        directory = self.stack(
+            {"compose.yml": compose_of(), ".env": "COMPOSE_FILE=compose.yml:evil.yml\n"}
         )
-        rng = random.Random(706)
-        reads_a_mount = refused_with_a_mount = 0
-        for _ in range(1500):
-            body = rng.choice(bodies)
-            use = rng.choice(uses)
-            lines = compose_of(service_block("side", EXPORTER)).splitlines()
-            # After the pin service's header block, inside the second service.
-            lines.insert(len(lines) - 3, use)
-            text = body + "\n" + "\n".join(lines) + "\n"
-            if rng.random() < 0.3:
-                text = "\n".join(lines) + "\n" + body + "\n"
-            self.assertIsNone(yaml_disagreement(text), text)
-            try:
-                loaded = yaml.safe_load(text)
-            except yaml.YAMLError:
-                continue
-            services = loaded.get("services") or {} if isinstance(loaded, dict) else {}
-            if has_image_mount(services):
-                reads_a_mount += 1
-                refused_with_a_mount += reader_outcome(text) is None
-        # PyYAML reads an image mount in many of them, and the reader refuses
-        # every such file; the property is not vacuous.
-        self.assertGreater(reads_a_mount, 100)
-        self.assertEqual(refused_with_a_mount, reads_a_mount)
+        self.assertIn(EVIL_HOST, json.dumps(real_render(directory)))
+        with self.assertRaises(bd.DeployError):
+            bd.verify_compose_images(
+                directory, ALLOWED_PIN, run=FakeRun([0]), render=real_render
+            )
 
-    def test_an_indented_sample_never_splits_the_reader_from_pyyaml(self):
-        """Every generated file, shifted right by 1 to 4 spaces as a whole: valid
-        YAML that Compose reads, with no column-0 key to anchor on."""
-        rng = random.Random(704)
-        base = compose_of(service_block("side", EXPORTER)).splitlines()
-        read_by_pyyaml = 0
-        for _ in range(1500):
-            lines = list(base)
-            for _ in range(rng.randint(0, 3)):
-                snippet = rng.choice(HOSTILE_LINES)
-                indent = " " * rng.choice((0, 0, 2, 2, 4, 4, 6))
-                lines.insert(rng.randrange(len(lines) + 1), indent + snippet)
-            text = indented("\n".join(lines) + "\n", rng.randint(1, 4))
-            self.assertIsNone(yaml_disagreement(text), text)
-            try:
-                loaded = yaml.safe_load(text)
-            except yaml.YAMLError:
-                continue
-            if isinstance(loaded, dict) and "services" in loaded:
-                read_by_pyyaml += 1
-                self.assertIsNone(reader_outcome(text), text)
-        # PyYAML reads a good share of them, so the property is not vacuous.
-        self.assertGreater(read_by_pyyaml, 100)
+    def test_an_override_that_adds_an_unregistered_sidecar_is_refused(self):
+        directory = self.stack(
+            {"compose.yml": compose_of(), OVERRIDE: "services:\n" + service_block("x", STRAY)}
+        )
+        with self.assertRaises(bd.DeployError) as raised:
+            bd.verify_compose_images(
+                directory, ALLOWED_PIN, run=FakeRun([0]), render=real_render
+            )
+        self.assertIn(STRAY, str(raised.exception))
 
-    def test_a_generated_sample_never_splits_the_reader_from_pyyaml(self):
-        rng = random.Random(702)
-        base = compose_of(service_block("side", EXPORTER)).splitlines()
-        parsed_and_accepted = parsed_and_refused = 0
-        for _ in range(4000):
-            lines = list(base)
-            for _ in range(rng.randint(1, 3)):
-                snippet = rng.choice(HOSTILE_LINES)
-                indent = " " * rng.choice((0, 0, 1, 2, 2, 3, 4, 4, 5, 6, 8))
-                lines.insert(rng.randrange(len(lines) + 1), indent + snippet)
-            text = "\n".join(lines) + "\n"
-            self.assertIsNone(yaml_disagreement(text), text)
-            try:
-                yaml.safe_load(text)
-            except yaml.YAMLError:
-                continue
-            if reader_outcome(text) is None:
-                parsed_and_refused += 1
-            else:
-                parsed_and_accepted += 1
-        # Both sides are exercised, so the property is not vacuously true.
-        self.assertGreater(parsed_and_refused, 100)
-        self.assertGreater(parsed_and_accepted, 100)
+    def test_a_file_compose_cannot_parse_is_rejected(self):
+        for text in ("services: [", "\tservices:\n", "services:\n  a: &x\n  b: *y\n"):
+            with self.subTest(text):
+                directory = self.stack({"compose.yml": text})
+                with self.assertRaises(bd.DeployError):
+                    real_render(directory)
 
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -2408,36 +2424,31 @@ def committed_compose_text(relative):
 
 class CommittedStackTests(unittest.TestCase):
     """The stacks this repository commits pass the check as they stand, so the
-    sidecar rule does not refuse a deploy that works today."""
+    sidecar rule does not refuse a deploy that works today. Run once with the
+    PyYAML stand-in always, and once with the real Compose where it is present."""
+
+    render = staticmethod(yaml_render)
+
+    def logged_sidecars(self, relative):
+        with tempfile.TemporaryDirectory() as directory:
+            with open(os.path.join(directory, "compose.yml"), "w", encoding="utf-8") as handle:
+                handle.write(committed_compose_text(relative))
+            stderr = io.StringIO()
+            run = FakeRun([0])
+            with contextlib.redirect_stderr(stderr):
+                bd.verify_compose_images(directory, ALLOWED_PIN, run=run, render=self.render)
+            self.assertEqual(run.calls, [])
+            return set(re.findall(r"unattested by allowance: (\S+) \(", stderr.getvalue()))
 
     def test_each_committed_stack_deploys_with_only_its_known_sidecars(self):
         for stack, (relative, expected) in COMMITTED_SIDECARS.items():
             with self.subTest(stack=stack):
-                with tempfile.TemporaryDirectory() as directory:
-                    compose = os.path.join(directory, "compose.yml")
-                    text = committed_compose_text(relative)
-                    with open(compose, "w", encoding="utf-8") as handle:
-                        handle.write(text)
-                    stderr = io.StringIO()
-                    run = FakeRun([0])
-                    with contextlib.redirect_stderr(stderr):
-                        bd.verify_compose_images(compose, text, ALLOWED_PIN, run=run)
-                    logged = set(
-                        re.findall(r"unattested by allowance: (\S+) \(", stderr.getvalue())
-                    )
-                self.assertEqual(logged, expected)
-                self.assertEqual(run.calls, [])
+                self.assertEqual(self.logged_sidecars(relative), expected)
 
-    def test_the_committed_stacks_actually_contain_the_sidecars_listed(self):
-        for stack, (relative, expected) in COMMITTED_SIDECARS.items():
-            with self.subTest(stack=stack):
-                images = bd.service_images(committed_compose_text(relative))
-                found = {
-                    bd.attested_name(value)
-                    for value in images.values()
-                    if value and not bd.IMAGE_PIN_REFERENCE.fullmatch(value)
-                }
-                self.assertEqual(found, expected)
+
+@unittest.skipUnless(REAL_DOCKER, "needs `docker compose` on PATH")
+class RealCommittedStackTests(CommittedStackTests):
+    render = staticmethod(real_render)
 
 
 if __name__ == "__main__":
