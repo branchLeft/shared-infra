@@ -861,7 +861,7 @@ jobs:
       # The no-op gate's contract is checked by the shared action, which reads
       # only this workflow file, so this repo keeps no test of its own for it.
       - name: Check the no-op gate contract
-        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           workflow: .github/workflows/ci.yml
           pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply hetzner-dns-plan:hetzner-dns-apply
@@ -1230,7 +1230,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1538,7 +1538,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1583,7 +1583,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1744,7 +1744,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1954,7 +1954,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -1995,7 +1995,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -2146,7 +2146,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -2350,7 +2350,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@1ca434e627c4ba8cb646f359de21adbaa6487611 # v1.0.21
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
