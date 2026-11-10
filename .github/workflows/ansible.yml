@@ -30,11 +30,11 @@ name: Ansible
 #     does a change to one of the three checks files the shards read (ci_select.py,
 #     check_pins.py, pip-requirements.txt). Any other file under ansible/checks/ runs the
 #     lint job only;
-#   - the merge queue: the cheap checks only, made from the queue entry's own diff
-#     (base_sha..head_sha of the merge_group event): the lint, with the unit tests of the
-#     roles and the checks. The container shards do not run there: the pull request ran
-#     them on its own head and they passed. The gate job accepts the skipped shard job
-#     for that event alone, and for no other;
+#   - the merge queue: the lint, made from the queue entry's own diff (base_sha..head_sha
+#     of the merge_group event). A container shard runs there unless queue_skip.py finds
+#     that the pull request's own run of that shard finished with success on a head whose
+#     tree is the queued commit's tree; any doubt runs it. The gate job accepts no skipped
+#     shard that discover chose;
 #   - the weekly schedule (and a manual run): lint and every shard, whatever changed. It
 #     is what catches drift in the external images and collections that no diff shows,
 #     and it saves the tool environment's cache on `main`, where every other run can
@@ -60,7 +60,8 @@ on:
   # supports none, and this workflow has none). Under it the first job diffs the
   # entry's base_sha against its head_sha, and the lint runs when an Ansible input
   # changed. A base or head the runner cannot resolve runs the lint. The shard job
-  # is skipped for this event (its condition names it), whatever ci_select.py keeps.
+  # runs the shards that queue_skip.py keeps for this event: every shard, unless the
+  # pull request already passed it on the same tree.
   merge_group:
     types: [checks_requested]
   # The full sweep. Nothing in a diff shows an external image or a collection that
@@ -87,10 +88,17 @@ jobs:
     name: Discover the Ansible shards
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    # The merge queue check (queue_skip.py) reads the pull request, its runs and its check runs.
+    # Each is a read; discover writes nothing.
+    permissions:
+      contents: read
+      actions: read
+      checks: read
+      pull-requests: read
     outputs:
       ansible: ${{ steps.changes.outputs.ansible }}
-      shards: ${{ steps.shards.outputs.shards }}
-      matrix: ${{ steps.shards.outputs.matrix }}
+      shards: ${{ steps.settle.outputs.shards }}
+      matrix: ${{ steps.settle.outputs.matrix }}
     steps:
       # Full history, so the base commit of the diff below exists on the runner.
       - name: Checkout
@@ -214,7 +222,23 @@ jobs:
           if [ -n "$CHANGED_FILES" ]; then
             args+=(--changed-file "$CHANGED_FILES")
           fi
-          python3 ansible/checks/ci_select.py "${args[@]}" >> "$GITHUB_OUTPUT"
+          python3 ansible/checks/ci_select.py "${args[@]}" > "$RUNNER_TEMP/selected.txt"
+
+      # Every event keeps the shards ci_select.py chose, except that on the merge queue a shard
+      # the pull request already passed on the same tree is dropped (queue_skip.py). Any doubt
+      # keeps it, and a pull request, the weekly run and a manual run keep the choice unchanged.
+      - name: Settle which shards this run executes
+        id: settle
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.event.merge_group.head_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          args=(--event "$EVENT_NAME" --selected "$RUNNER_TEMP/selected.txt")
+          args+=(--queue-ref "$QUEUE_REF" --queue-sha "$QUEUE_SHA")
+          python3 ansible/checks/queue_skip.py "${args[@]}" >> "$GITHUB_OUTPUT"
 
   # The quick gate: the two checks that are cheap and that a malformed change breaks first,
   # yamllint over ansible/ and the tests of the shard selection. The shards wait for this job
@@ -474,13 +498,12 @@ jobs:
     # waited for here; the gate job still fails unless it succeeded. A failed or skipped quick
     # gate skips every shard, and the gate job fails on that result too.
     needs: [discover, quick-lint]
-    # The merge queue does not run the shards: the pull request ran them on its own head and
-    # they passed, and a queue re-run repeated them. The event name decides, never a
-    # result, and the gate job below accepts the skip for that event alone.
+    # The shards discover settled: on the merge queue, queue_skip.py has already dropped every
+    # shard the pull request passed on the same tree, so this job runs only what is left. No
+    # event name and no result decides a skip here.
     if: >-
       needs.discover.outputs.ansible == 'true' &&
-      needs.discover.outputs.shards == 'true' &&
-      github.event_name != 'merge_group'
+      needs.discover.outputs.shards == 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
@@ -580,8 +603,9 @@ jobs:
   # gate passes. When it found inputs but no shard to run (a
   # pull request or queue entry that changed only files no shard reads), the quick gate and the full
   # lint must pass and the shard job is skipped on purpose. A shard job that is skipped when discover
-  # chose shards, because the quick gate failed or for any other reason, fails the gate, except in
-  # the merge queue, where the shard job is skipped by its condition and the event name says so.
+  # chose shards, because the quick gate failed or for any other reason, fails the gate on every
+  # event. The merge queue's skip is decided before this job, by queue_skip.py, and leaves discover
+  # choosing no shard, which passes above; it is never a skipped shard that the gate accepts.
   roles:
     name: Lint and test the Ansible roles
     needs: [discover, quick-lint, lint, shard]
@@ -629,11 +653,6 @@ jobs:
           if [ "$SHARDS" != "true" ]; then
             echo "The discover job did not report whether shards are needed: '$SHARDS'"
             exit 1
-          fi
-          if [ "$EVENT" = "merge_group" ] && [ "$SHARD" = "skipped" ]; then
-            echo "The merge queue does not run the container shards: the pull request ran them and they passed."
-            echo "The lint and the quick gate succeeded, which is all the queue asks."
-            exit 0
           fi
           if [ "$SHARD" != "success" ]; then
             echo "The shard job reported: $SHARD"
