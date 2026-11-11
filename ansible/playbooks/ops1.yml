@@ -26,6 +26,10 @@
 # account it makes as the key's owner and the account exists when the key role runs. It stays off
 # until the owner sets its inputs.
 #
+# The mail collector role is near the end, so that its failure holds back only the ring controller's
+# role. It stays off until the owner sets its image and sending target, and its unit starts only when
+# the owner has placed the credentials file and a descriptor names a host.
+#
 # The refusal is not a host control: under the trigger inventory_hostname is
 # localhost. The root-owned pull config is the host control.
 - name: Bring ops1 under the pull
@@ -62,4 +66,5 @@
     - role: ../roles/backup_restore # noqa: role-name[path]
     - role: ../roles/control_plane_db # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]
+    - role: ../roles/mail_collector # noqa: role-name[path]
     - role: ../roles/ring_controller_host # noqa: role-name[path]

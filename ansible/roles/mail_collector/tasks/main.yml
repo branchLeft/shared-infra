@@ -1,0 +1,420 @@
+---
+# The role installs the mail collector on ops1 as a container unit. It makes the account the
+# collector runs as, its directories, the two public environment files and the unit, and starts
+# the unit only when the image is a real digest and a sending target is set. It never writes the
+# credentials file (the owner places it). It writes one descriptor for each host in
+# mail_collector_hosts and removes only a descriptor it wrote itself, so the list is the drain list
+# and a file put there by hand is never deleted.
+#
+# It touches only its own paths (vars/main.yml). Which host may apply it is the owner's list
+# (checks/host_roles.yml, R9); an in-role host test would be no control, because under the pull
+# inventory_hostname is localhost.
+
+# --- Inputs first, refused before any task changes anything. No message names a value (ANS-16).
+# The argument spec coerces a wrong type rather than rejecting it, so these reject it too.
+- name: Refuse an image that is not the collector's image pinned by digest
+  ansible.builtin.assert:
+    that:
+      - mail_collector_image is string
+      - mail_collector_image is match(mail_collector_image_pattern)
+    quiet: true
+    fail_msg: mail_collector_image must be ghcr.io/branchleft/mail-collector@sha256 and 64 lowercase hex digits.
+
+- name: Refuse a sending host that is set and is not a plain host name
+  ansible.builtin.assert:
+    that:
+      - mail_collector_smtp_host is string
+      - mail_collector_smtp_host | length == 0 or mail_collector_smtp_host is match(mail_collector_smtp_host_pattern)
+    quiet: true
+    fail_msg: mail_collector_smtp_host must be empty or a plain host name.
+
+- name: Refuse a demo mail domain that is set and is not a bare domain
+  ansible.builtin.assert:
+    that:
+      - mail_collector_demo_mail_domain is string
+      - mail_collector_demo_mail_domain | length <= 253
+      - mail_collector_demo_mail_domain | length == 0 or mail_collector_demo_mail_domain is match(mail_collector_demo_mail_domain_pattern)
+    quiet: true
+    fail_msg: mail_collector_demo_mail_domain must be empty or a bare domain, with no scheme, no at sign and no space.
+
+# The drain list. Each entry is judged before anything is written, so a bad entry leaves the
+# directory as it was. A message names the entry by its place in the list, never by a value.
+- name: Refuse a host list that is not a list
+  ansible.builtin.assert:
+    that:
+      - mail_collector_hosts is sequence
+      - mail_collector_hosts is not string
+      - mail_collector_hosts is not mapping
+    quiet: true
+    fail_msg: mail_collector_hosts must be a list.
+
+- name: Refuse a host entry that is malformed
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | sort | list == mail_collector_host_keys
+      - item.slug is string
+      - item.slug is match(mail_collector_slug_pattern)
+      - item.kind is string
+      - item.kind in mail_collector_host_kinds
+      - item.app_host_ip is string
+      - item.app_host_ip is match(mail_collector_private_ipv4_pattern)
+    quiet: true
+    fail_msg: >-
+      A mail_collector_hosts entry must hold exactly slug, kind and app_host_ip, a slug of
+      lowercase letters, digits and hyphens, a kind of demo or tenant, and a private IPv4 address.
+  loop: '{{ mail_collector_hosts }}'
+  loop_control:
+    label: host {{ ansible_loop.index }}
+    extended: true
+
+- name: Refuse two hosts with one slug
+  ansible.builtin.assert:
+    that:
+      - mail_collector_hosts | map(attribute='slug') | list | unique | list | length == mail_collector_hosts | length
+    quiet: true
+    fail_msg: Two mail_collector_hosts entries share a slug, and the collector refuses a duplicate.
+
+# Empty holds demo mail unsent and unacked. That is the safe state while no demo host is named,
+# and the silent failure once one is: a demo host in the list with no domain set would look live
+# and send nothing.
+- name: Refuse a demo host in the list when no demo mail domain is set
+  ansible.builtin.assert:
+    that:
+      - mail_collector_hosts | selectattr('kind', 'equalto', 'demo') | list | length == 0 or mail_collector_demo_mail_domain | length > 0
+    quiet: true
+    fail_msg: A mail_collector_hosts entry is a demo host, so mail_collector_demo_mail_domain must be set.
+
+- name: Refuse a port that is not a whole number from 1 to 65535
+  ansible.builtin.assert:
+    that:
+      - item is integer
+      - item is not boolean
+      - item >= 1
+      - item <= 65535
+    quiet: true
+    fail_msg: A mail_collector port must be a whole number from 1 to 65535.
+  loop:
+    - '{{ mail_collector_smtp_port }}'
+    - '{{ mail_collector_shim_port }}'
+  loop_control:
+    label: port {{ ansible_loop.index }}
+    extended: true
+
+- name: Refuse a secure flag that is not a boolean, and a scheme that is not http or https
+  ansible.builtin.assert:
+    that:
+      - mail_collector_smtp_secure is boolean
+      - mail_collector_shim_scheme is string
+      - mail_collector_shim_scheme in mail_collector_shim_schemes
+    quiet: true
+    fail_msg: mail_collector_smtp_secure must be true or false, and mail_collector_shim_scheme http or https.
+
+# The three places the collector keeps state across a restart (pins, the record of submitted
+# messages, the Sweego usage counters) must each be set and sit under the one persistent volume the
+# unit mounts. Anything else leaves that state in memory, and a restart forgets pins, dedupe and
+# the usage counters without a sign. Refused here, before anything changes, whatever the cause: an
+# empty value, a path elsewhere, a path that climbs out with two dots.
+- name: Refuse a state path that is empty or not under the persistent state directory
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | length > 0
+      - item is match('^' ~ mail_collector_container_state_dir ~ mail_collector_state_path_tail_pattern)
+      - "'..' not in item"
+    quiet: true
+    fail_msg: A mail_collector state path is empty or is not under the persistent state directory.
+  loop:
+    - '{{ mail_collector_container_dedupe_file }}'
+    - '{{ mail_collector_container_pin_dir }}'
+    - '{{ mail_collector_container_sweego_usage_file }}'
+  loop_control:
+    label: state path {{ ansible_loop.index }}
+    extended: true
+
+# The collector runs only with a real image and a sending target. Either missing keeps it off, so
+# a half-set pair is inert and not a service that cannot start. The default image is the
+# placeholder: it has the shape of a pin and points at nothing, so it never counts as set.
+- name: Note whether the collector is meant to run
+  ansible.builtin.set_fact:
+    mail_collector_run: '{{ mail_collector_image != mail_collector_image_placeholder and mail_collector_smtp_host | length > 0 }}'
+
+# --- What the role stands on. It asserts these and never makes or changes them.
+- name: Look at docker and the parent directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ [mail_collector_docker] + mail_collector_parents }}'
+  register: mail_collector_stats
+  loop_control:
+    label: '{{ item }}'
+
+- name: Require docker to be a root-owned regular file that only root can change
+  ansible.builtin.assert:
+    that:
+      - mail_collector_stats.results[0].stat.exists
+      - mail_collector_stats.results[0].stat.isreg
+      - mail_collector_stats.results[0].stat.uid == 0
+      - not mail_collector_stats.results[0].stat.wgrp
+      - not mail_collector_stats.results[0].stat.woth
+    quiet: true
+    fail_msg: The docker client is missing, is not a regular file, is not root's or can be changed by others. The role does not install it.
+
+- name: Require each parent to be a root-owned directory that only root can change
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.uid == 0
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it.
+  loop: '{{ mail_collector_stats.results[1:] }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# --- The credentials file, if the owner has placed it. Only its owner and mode are read, never its
+# content, and never a checksum of it. A file anyone else can read stops the run before the unit
+# can use it.
+- name: Look at the credentials file the owner places
+  ansible.builtin.stat:
+    path: '{{ mail_collector_credentials_file }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: mail_collector_credentials_stat
+
+- name: Require a placed credentials file to be a regular file, root's and closed to everyone else
+  ansible.builtin.assert:
+    that:
+      - mail_collector_credentials_stat.stat.isreg
+      - mail_collector_credentials_stat.stat.uid == 0
+      - mail_collector_credentials_stat.stat.mode == mail_collector_credentials_mode
+    quiet: true
+    fail_msg: The credentials file is not a regular file, is not root's or is not mode 0600. The role does not change it.
+  when: mail_collector_credentials_stat.stat.exists
+
+# --- The account. System, no login, no home: it owns the state directory and nothing else.
+- name: Create the collector group
+  ansible.builtin.group:
+    name: '{{ mail_collector_account }}'
+    system: true
+
+- name: Create the collector account
+  ansible.builtin.user:
+    name: '{{ mail_collector_account }}'
+    group: '{{ mail_collector_account }}'
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+# Read-only. A fresh host in check mode has no account yet, and a task that names its id would
+# fail there, so the tasks that need it run when it exists. On an apply it always does.
+- name: Look for the collector account
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ mail_collector_account }}'
+    fail_key: false
+
+- name: Note whether the collector account exists, and its numeric ids
+  ansible.builtin.set_fact:
+    mail_collector_account_present: '{{ getent_passwd[mail_collector_account] is not none }}'
+    mail_collector_uid: "{{ getent_passwd[mail_collector_account][1] if getent_passwd[mail_collector_account] is not none else '' }}"
+    mail_collector_gid: "{{ getent_passwd[mail_collector_account][2] if getent_passwd[mail_collector_account] is not none else '' }}"
+
+# --- Directories. The configuration and descriptor directories are root's and world-readable: they
+# hold public text, and the container's account must be able to read a descriptor. The state
+# directory is the account's alone.
+- name: Make the configuration directory
+  ansible.builtin.file:
+    path: '{{ mail_collector_config_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Make the descriptor directory
+  ansible.builtin.file:
+    path: '{{ mail_collector_descriptor_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# --- The record of what the role wrote. One empty file in a directory of its own for each
+# descriptor the role has written, named for it. The role removes a descriptor only if the record
+# names it, so a file placed by hand is never deleted, whatever it is called. The record sits
+# outside the descriptor directory because the collector reads every .json name in that one.
+- name: Make the record directory
+  ansible.builtin.file:
+    path: '{{ mail_collector_descriptor_record_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Note the descriptor file names the listed hosts ask for
+  ansible.builtin.set_fact:
+    mail_collector_desired_files: >-
+      {{ mail_collector_hosts | map(attribute='slug') | product([mail_collector_descriptor_suffix]) | map('join') | sort | list }}
+
+# Read-only, so it also runs in check mode. A directory not yet made lists nothing.
+- name: Look for the record of the descriptors the role has written
+  ansible.builtin.find:
+    paths: '{{ mail_collector_descriptor_record_dir }}'
+    file_type: any
+    hidden: true
+    recurse: false
+    follow: false
+  register: mail_collector_record_found
+
+- name: Note which descriptor files the role has written
+  ansible.builtin.set_fact:
+    mail_collector_recorded_files: >-
+      {{ mail_collector_record_found.files | selectattr('isreg') | map(attribute='path') | map('basename')
+      | select('match', mail_collector_descriptor_name_pattern) | sort | list }}
+
+# --- The descriptors. The record names each host's file BEFORE the file is written, so a run that
+# dies after a write still leaves a record that covers it. A record that names a file not yet
+# written is harmless: the removal below only acts on a file that is there. The record is trimmed
+# LAST, after the removal, so a run that dies earlier forgets nothing it wrote.
+- name: Record each listed host's descriptor before writing it
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ mail_collector_descriptor_record_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ mail_collector_desired_files }}'
+
+# No handler: the collector re-reads the directory on its own refresh and is never restarted.
+- name: Write each listed host's descriptor
+  ansible.builtin.template:
+    src: descriptor.json.j2
+    dest: '{{ mail_collector_descriptor_dir }}/{{ item.slug }}{{ mail_collector_descriptor_suffix }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ mail_collector_hosts }}'
+  loop_control:
+    label: '{{ item.slug }}'
+
+# Read-only, so it also runs in check mode. A directory not yet made is reported as skipped, not
+# as a failure, and lists nothing.
+- name: Look for descriptor files in the directory
+  ansible.builtin.find:
+    paths: '{{ mail_collector_descriptor_dir }}'
+    patterns: '*{{ mail_collector_descriptor_suffix }}'
+    file_type: any
+    hidden: true
+    recurse: false
+    follow: false
+  register: mail_collector_descriptor_found
+
+# A file that is not in the record is never listed here. A directory that bears a recorded name is
+# left alone, and a link is unlinked and its target kept.
+- name: Remove every descriptor file the role wrote that no listed host names
+  ansible.builtin.file:
+    path: '{{ mail_collector_descriptor_dir }}/{{ item }}'
+    state: absent
+  loop: >-
+    {{ mail_collector_descriptor_found.files | rejectattr('isdir') | map(attribute='path') | map('basename')
+    | intersect(mail_collector_recorded_files) | difference(mail_collector_desired_files) | sort | list }}
+
+- name: Forget each recorded descriptor that no listed host names
+  ansible.builtin.file:
+    path: '{{ mail_collector_descriptor_record_dir }}/{{ item }}'
+    state: absent
+  loop: '{{ mail_collector_recorded_files | difference(mail_collector_desired_files) | sort | list }}'
+
+- name: Make the state directory, owned by the collector account and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ mail_collector_state_dir }}'
+    state: directory
+    owner: '{{ mail_collector_account }}'
+    group: '{{ mail_collector_account }}'
+    mode: '0700'
+  when: mail_collector_account_present
+
+# The pins live in a directory of their own inside the state directory. The collector would make
+# it on its first write; making it here gives it the account and mode the role means, and a plan
+# that shows it.
+- name: Make the pin directory, owned by the collector account and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ mail_collector_host_pin_dir }}'
+    state: directory
+    owner: '{{ mail_collector_account }}'
+    group: '{{ mail_collector_account }}'
+    mode: '0700'
+  when: mail_collector_account_present
+
+# --- The environment files. Public values only, written whole.
+- name: Write the collector's settings when the collector is meant to run
+  ansible.builtin.template:
+    src: collector.env.j2
+    dest: '{{ mail_collector_env_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: mail_collector_run | bool
+  notify: Restart the mail collector
+
+- name: Remove the collector's settings when the collector is not meant to run
+  ansible.builtin.file:
+    path: '{{ mail_collector_env_file }}'
+    state: absent
+  when: not mail_collector_run | bool
+
+- name: Write the unit's environment file of public values
+  ansible.builtin.template:
+    src: unit.env.j2
+    dest: '{{ mail_collector_unit_env_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: mail_collector_account_present
+  notify: Restart the mail collector
+
+# --- The unit, a static file.
+- name: Install the collector unit
+  ansible.builtin.copy:
+    src: '{{ mail_collector_unit }}'
+    dest: '{{ mail_collector_unit_dir }}/{{ mail_collector_unit }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd manager
+    - Restart the mail collector
+
+# Without this the handler runs at the end of the play, and the task below would meet a unit
+# systemd has not read.
+- name: Load the unit before it is handled
+  ansible.builtin.meta: flush_handlers
+
+- name: Look at the installed unit
+  ansible.builtin.stat:
+    path: '{{ mail_collector_unit_dir }}/{{ mail_collector_unit }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: mail_collector_unit_stat
+
+# The role owns this unit, so it converges it either way: on when the image and the sending target
+# are set, off when either is not. A unit whose settings, descriptors or credentials are not yet on
+# the host stays inactive on a condition, and the next apply starts it once they are. A fresh host
+# in check mode has no unit file yet and is skipped.
+- name: Hold the collector to the state the inputs ask for
+  ansible.builtin.systemd_service:
+    name: '{{ mail_collector_unit }}'
+    enabled: '{{ mail_collector_run | bool }}'
+    state: "{{ 'started' if mail_collector_run | bool else 'stopped' }}"
+  when:
+    - mail_collector_unit_stat.stat.exists
+    - mail_collector_account_present

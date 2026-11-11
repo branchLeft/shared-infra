@@ -51,3 +51,19 @@ overrides:
   sweego_receiver_drain_port:
     type: int
     value: 18081
+  # The numeric ids of the collector account, read from the host's account database while the
+  # role runs. Throwaway ids; getent gives them as text.
+  mail_collector_uid:
+    type: str
+    value: '991'
+  mail_collector_gid:
+    type: str
+    value: '991'
+  # One throwaway host for the descriptor template to render. A tenant entry, because a demo
+  # entry needs the demo mail domain, which this render does not set. The address is in 10/8.
+  mail_collector_hosts:
+    type: list
+    value:
+      - slug: offline-dummy
+        kind: tenant
+        app_host_ip: 10.0.0.40
