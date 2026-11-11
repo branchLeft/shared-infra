@@ -18,12 +18,32 @@ import {
   STATUS_TEST_TARGET_COMPONENT,
   TEST_TARGET_SERVICE,
 } from './render';
+import {
+  PRETTIER_CONFIG_PACKAGE,
+  prettierConfigResolves,
+  shouldSkipPrettierConfigTests,
+} from './prettierConfigSkip';
 
 /**
  * `stack/` is what the `status_page` role copies onto ops1, so the committed
  * files are the deployment. `npm run render` rewrites them; `npm test` fails
  * if they drift, and if Prettier would rewrite them.
  */
+
+/**
+ * Prettier resolves the root package.json's `prettier` field, which names the
+ * private package. A worktree without it skips the two tests that need it; CI
+ * has it and runs them, and fails them if it is missing.
+ */
+const skipPrettierConfigTests = shouldSkipPrettierConfigTests({
+  resolves: prettierConfigResolves(path.resolve(__dirname, '../..')),
+  ci: process.env.CI,
+});
+if (skipPrettierConfigTests) {
+  console.warn(
+    `skipped: ${PRETTIER_CONFIG_PACKAGE} is not installed and CI is unset; run pnpm install at the repo root to run the two Prettier-config tests`
+  );
+}
 
 const site = (overrides: Partial<EdgeSite> = {}): EdgeSite => ({
   name: 'example',
@@ -137,15 +157,21 @@ describe('committed output', () => {
     parser: 'yaml' as const,
   });
 
-  it('leaves the page config as Prettier would have it', async () => {
-    const text = renderStatusConfig(sites);
-    expect(await prettier.format(text, await prettierOptions('stack/config.yaml'))).toBe(text);
-  });
+  it.skipIf(skipPrettierConfigTests)(
+    'leaves the page config as Prettier would have it',
+    async () => {
+      const text = renderStatusConfig(sites);
+      expect(await prettier.format(text, await prettierOptions('stack/config.yaml'))).toBe(text);
+    }
+  );
 
-  it('leaves the target config as Prettier would have it', async () => {
-    const text = renderTargetConfig();
-    expect(await prettier.format(text, await prettierOptions('stack/target.yaml'))).toBe(text);
-  });
+  it.skipIf(skipPrettierConfigTests)(
+    'leaves the target config as Prettier would have it',
+    async () => {
+      const text = renderTargetConfig();
+      expect(await prettier.format(text, await prettierOptions('stack/target.yaml'))).toBe(text);
+    }
+  );
 
   it('keeps stack/config.yaml equal to the renderer output', async () => {
     await expect(renderStatusConfig(sites)).toMatchFileSnapshot('./stack/config.yaml');
