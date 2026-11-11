@@ -9,6 +9,23 @@ status_page_image: ghcr.io/twin/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56
 # The host port the page is published on, on status_page_listen_address.
 status_page_port: 8303
 
+# The only addresses the page may be published on: loopback, and ops1's private
+# address (hetzner-host/addressPlan.ts HOST_IPS.ops1), which the edge proxies to over
+# the private network. The DOCKER-USER policy refuses every source but edge1 on that
+# address and this port. Restated here because a role may not read the address plan.
+status_page_allowed_listen_addresses:
+  - 127.0.0.1
+  - 10.20.1.50
+
+# What the guard on the private bind reads: the DOCKER-USER rule that drops every source
+# but the gateway on the page's port. The gateway address is the isolation policy's default
+# gateway; tests/unit pins the rule as a literal, and the program that loads it must insert
+# exactly that rule. The wait is in seconds, for the xtables lock that Docker holds while it edits its
+# own rules.
+status_page_iptables: /usr/sbin/iptables
+status_page_gateway_address: 10.20.1.10
+status_page_firewall_wait: 10
+
 status_page_project_dir: /opt/branchleft/status
 status_page_project_name: status
 
