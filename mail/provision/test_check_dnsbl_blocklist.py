@@ -331,6 +331,33 @@ class DomainBlocklistTests(unittest.TestCase):
         self.assertTrue(any("NEW LISTING" in a and "listed.example" in a for a in alerts))
         self.assertFalse(any("clean.example" in a for a in alerts))
 
+    def test_a_list_that_is_only_separators_fails_loudly_rather_than_checking_nothing(self):
+        for empty in (",", " , ,", ",,,"):
+            with self.subTest(configured=empty), self.assertRaises(ValueError):
+                resolve_sending_domains(empty)
+
+    def test_a_sentinel_answer_other_than_exactly_127_0_1_2_is_no_self_test(self):
+        def wrong_sentinel_answer(hostname: str, timeout: int) -> ResolutionOutcome:
+            if hostname == f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}":
+                return ResolutionOutcome(ok=True, addresses=("127.0.1.3",))
+            return ResolutionOutcome(ok=True, addresses=())
+
+        _, _, results = run_domain_checks(("clean.example",), wrong_sentinel_answer, {})
+        self.assertEqual(results[0].verdict, Verdict.ZONE_UNRESPONSIVE)
+
+    def test_the_sentinel_is_queried_once_per_run_not_once_per_domain(self):
+        calls: list[str] = []
+
+        def fake_resolver(hostname: str, timeout: int) -> ResolutionOutcome:
+            calls.append(hostname)
+            if hostname == f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}":
+                return ResolutionOutcome(ok=True, addresses=("127.0.1.2",))
+            return ResolutionOutcome(ok=True, addresses=())
+
+        run_domain_checks(("a.example", "b.example", "c.example"), fake_resolver, {})
+        sentinel_name = f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}"
+        self.assertEqual(calls.count(sentinel_name), 1)
+
     def test_a_clean_run_over_the_default_domains_produces_no_alerts(self):
         def fake_resolver(hostname: str, timeout: int) -> ResolutionOutcome:
             if hostname == f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}":

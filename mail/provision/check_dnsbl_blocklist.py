@@ -123,6 +123,7 @@ DNSBLS: tuple[DnsblSpec, ...] = (
 # DOMAIN_SENTINEL is Spamhaus's documented DBL test point, listed by design.
 DOMAIN_DBL_ZONE = "dbl.spamhaus.org"
 DOMAIN_SENTINEL = "dbltest.com"
+DOMAIN_SENTINEL_ANSWER = "127.0.1.2"
 DOMAIN_DBL_DELISTING_URL = "https://check.spamhaus.org/"
 SENDING_DOMAINS_VARIABLE = "DNSBL_SENDING_DOMAINS"
 # Config point: a tenant's sending domain is not checked until it is listed
@@ -295,7 +296,22 @@ def resolve_sending_domains(raw: str | None) -> tuple[str, ...]:
     where each one is queried, so a malformed entry fails the run loudly."""
     if raw is None or not raw.strip():
         return DEFAULT_SENDING_DOMAINS
-    return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+    domains = tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+    if not domains:
+        # Separators only: checking nothing would stay quiet, so refuse the run.
+        raise ValueError(f"{SENDING_DOMAINS_VARIABLE} names no domain: {raw!r}")
+    return domains
+
+
+def _dbl_self_test(outcome: ResolutionOutcome) -> ResolutionOutcome:
+    """Pure: the sentinel counts as a self-test only when it answers exactly
+    DOMAIN_SENTINEL_ANSWER. Any other answer, or a failed lookup, is handed on
+    as not-listed (or failed), so every domain reads ZONE_UNRESPONSIVE."""
+    if outcome.ok and outcome.addresses == (DOMAIN_SENTINEL_ANSWER,):
+        return outcome
+    return ResolutionOutcome(
+        ok=outcome.ok, addresses=(), error=outcome.error or "sentinel did not answer 127.0.1.2"
+    )
 
 
 def run_domain_checks(
@@ -306,10 +322,11 @@ def run_domain_checks(
     """Each sending domain against the DBL, with the DBL's test point as the
     self-test. The same zone-trust rule as the IP check applies: a zone that
     does not list the test point is never read as a clean domain."""
+    sentinel_query = build_domain_query_name(DOMAIN_SENTINEL)
+    sentinel_outcome = _dbl_self_test(resolver(sentinel_query, RESOLVE_TIMEOUT_SECONDS))
     results = []
     for domain in domains:
         spec = domain_dnsbl_spec(domain)
-        sentinel_outcome = resolver(build_domain_query_name(DOMAIN_SENTINEL), RESOLVE_TIMEOUT_SECONDS)
         target_outcome = resolver(build_domain_query_name(domain), RESOLVE_TIMEOUT_SECONDS)
         results.append(
             evaluate_dnsbl(spec, sentinel_outcome, target_outcome, sentinel_label=DOMAIN_SENTINEL)
