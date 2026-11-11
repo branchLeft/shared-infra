@@ -1,0 +1,31 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log.
+    #
+    # The first apply is on a host with no image pin: the role delivers the rule, the
+    # compose file and the drop-in, says plainly that the receiver is not started, and
+    # does not fail.
+    - name: Apply the role on a host with no image pin
+      ansible.builtin.include_role:
+        name: branchleft.sweego_receiver
+
+    # The deploy wrapper writes the pin after the role has placed the compose file. Written
+    # with the same content on every run, so a second converge changes nothing. A plan
+    # makes no change.
+    - name: Write the image pin the way the deploy wrapper does
+      ansible.builtin.copy:
+        content: "IMAGE={{ standin_image }}\n"
+        dest: /etc/branchleft/sweego-receiver.image.env
+        owner: root
+        group: root
+        mode: '0600'
+      when: not ansible_check_mode
+
+    - name: Apply the role over the pin
+      ansible.builtin.include_role:
+        name: branchleft.sweego_receiver
+      when: not ansible_check_mode

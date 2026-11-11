@@ -1,0 +1,188 @@
+---
+# What the applied role must leave, read independently of the role's own read-back: the
+# firewall is asked with -C and -S, which do not share the role's reading, and the expected
+# values are written out here, not read from the role, so a role that left a different state
+# is a failure and not a test that agrees with it.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at what the role places
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - /usr/local/sbin/branchleft-sweego-drain-rule
+        - /etc/systemd/system/branchleft-sweego-drain-rule.service
+        - /opt/branchleft/sweego-receiver/compose.yml
+        - /etc/systemd/system/branchleft-compose@sweego-receiver.service.d/10-drain-rule-first.conf
+        - /etc/branchleft/sweego-receiver-signing-secret
+        - /etc/branchleft/sweego-receiver-drain-token
+        - /var/lib/branchleft/sweego-receiver
+      register: sweego_receiver_verify_files
+
+    - name: Assert each is owned as the role sets it
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.uid == [0, 0, 0, 0, 0, 0, 31100][ansible_loop.index0]
+          - item.stat.mode == ['0755', '0644', '0644', '0644', '0440', '0440', '0750'][ansible_loop.index0]
+        quiet: true
+        fail_msg: '{{ item.item }} is not owned by the expected account with the expected mode.'
+      loop: '{{ sweego_receiver_verify_files.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+        extended: true
+
+    - name: Assert the secret files are exactly as the owner placed them
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_verify_files.results[4].stat.checksum == ("test-sentinel-signing-secret-0001\n" | hash('sha256'))
+          - sweego_receiver_verify_files.results[5].stat.checksum == ("test-sentinel-drain-token-0002\n" | hash('sha256'))
+          - sweego_receiver_verify_files.results[4].stat.gid == 31100
+        quiet: true
+        fail_msg: The role changed a secret file. The owner is its only writer.
+
+    # A search of every place the role writes, for the two sentinels. A match is a failure.
+    - name: Search the places the role writes for a secret value
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -rlF
+          - -e
+          - test-sentinel-signing-secret-0001
+          - -e
+          - test-sentinel-drain-token-0002
+          - /opt/branchleft
+          - /etc/systemd/system
+          - /usr/local/sbin
+          - /var/lib/branchleft
+          - /var/log/docker-standin.calls
+      register: sweego_receiver_verify_leak
+      changed_when: false
+      failed_when: sweego_receiver_verify_leak.rc != 1
+
+    # The rule, asked with -C so the match is the firewall's own, and as the first rule of
+    # the chain by -S. The values are written out here.
+    - name: Ask the firewall whether the drain-port rule is present
+      ansible.builtin.command:
+        argv:
+          - iptables
+          - -t
+          - filter
+          - -C
+          - DOCKER-USER
+          - -p
+          - tcp
+          - -m
+          - conntrack
+          - --ctorigdst
+          - 10.20.1.10
+          - --ctorigdstport
+          - '18081'
+          - --ctdir
+          - ORIGINAL
+          - '!'
+          - -s
+          - 10.20.1.50
+          - -j
+          - DROP
+      changed_when: false
+
+    - name: Read the chain
+      ansible.builtin.command:
+        argv: [iptables, -t, filter, -S, DOCKER-USER]
+      register: sweego_receiver_verify_chain
+      changed_when: false
+
+    - name: Assert the rule is the first of the chain, once, and that no rule admits the port
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_verify_chain.stdout_lines[1] is search('-j DROP$')
+          - sweego_receiver_verify_chain.stdout_lines[1] is search('! -s 10.20.1.50')
+          - sweego_receiver_verify_chain.stdout_lines[1] is search('--ctorigdstport 18081')
+          - sweego_receiver_verify_chain.stdout_lines | select('search', '--ctorigdstport 18081') | list | length == 1
+          - sweego_receiver_verify_chain.stdout_lines | select('search', '-j ACCEPT') | list | length == 0
+          - sweego_receiver_verify_chain.stdout_lines | last == '-A DOCKER-USER -j RETURN'
+        quiet: true
+        fail_msg: 'DOCKER-USER is not what the role must leave: {{ sweego_receiver_verify_chain.stdout_lines }}'
+
+    - name: Ask systemd for the rule's unit
+      ansible.builtin.systemd_service:
+        name: branchleft-sweego-drain-rule.service
+      register: sweego_receiver_verify_rule_unit
+
+    - name: Assert the rule's unit is enabled and has loaded the rule
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_verify_rule_unit.status.ActiveState == 'active'
+          - sweego_receiver_verify_rule_unit.status.UnitFileState == 'enabled'
+        quiet: true
+
+    - name: Ask systemd for the receiver's unit
+      ansible.builtin.systemd_service:
+        name: branchleft-compose@sweego-receiver.service
+      register: sweego_receiver_verify_unit
+
+    - name: Assert the receiver's unit is active, enabled, and ordered after the rule's
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_verify_unit.status.ActiveState == 'active'
+          - sweego_receiver_verify_unit.status.UnitFileState == 'enabled'
+          - "'branchleft-sweego-drain-rule.service' in sweego_receiver_verify_unit.status.After.split()"
+          - "'branchleft-sweego-drain-rule.service' in sweego_receiver_verify_unit.status.Requires.split()"
+        quiet: true
+
+    - name: Read the listeners
+      ansible.builtin.command:
+        argv: [ss, -H, -ltn]
+      register: sweego_receiver_verify_listeners
+      changed_when: false
+
+    - name: Assert both ports listen on the private address and on no other
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_found | sort | list == ['10.20.1.10:18080', '10.20.1.10:18081']
+        quiet: true
+        fail_msg: '{{ sweego_receiver_verify_listeners.stdout }}'
+      vars:
+        sweego_receiver_found: >-
+          {{ sweego_receiver_verify_listeners.stdout | regex_findall('(?m)^LISTEN\s+\d+\s+\d+\s+(\S+)\s')
+          | select('search', ':1808[01]$') | list }}
+
+    - name: Call the drain endpoint with no token
+      ansible.builtin.uri:
+        url: http://10.20.1.10:18081/drain
+        status_code: 401
+        use_proxy: false
+
+    - name: Read the compose file
+      ansible.builtin.slurp:
+        src: /opt/branchleft/sweego-receiver/compose.yml
+      register: sweego_receiver_verify_compose
+
+    - name: Assert the compose file is hardened and on the private address, from the file itself
+      ansible.builtin.assert:
+        that:
+          - (sweego_receiver_verify_compose.content | b64decode | from_yaml).services.receiver.read_only is sameas true
+          - (sweego_receiver_verify_compose.content | b64decode | from_yaml).services.receiver.cap_drop == ['ALL']
+          - (sweego_receiver_verify_compose.content | b64decode | from_yaml).services.receiver.user == '31100:31100'
+          - (sweego_receiver_verify_compose.content | b64decode | from_yaml).services.receiver.ports == ['10.20.1.10:18080:8080', '10.20.1.10:18081:8081']
+          - "'docker.sock' not in (sweego_receiver_verify_compose.content | b64decode)"
+        quiet: true
+
+    - name: Read the log of the stand-in docker's calls
+      ansible.builtin.slurp:
+        src: /var/log/docker-standin.calls
+      register: sweego_receiver_verify_calls
+
+    # The first apply had no pin and started nothing; the second started the receiver once;
+    # the idempotence run changed nothing, so it started nothing. A restart of an unchanged
+    # stack is a failure of the role's change detection.
+    - name: Assert the receiver was started once
+      ansible.builtin.assert:
+        that:
+          - (sweego_receiver_verify_calls.content | b64decode).splitlines() | select('search', '^docker compose up') | list | length == 1
+        quiet: true
+        fail_msg: '{{ sweego_receiver_verify_calls.content | b64decode }}'

@@ -1,0 +1,160 @@
+---
+# The refusal cases of the role. Each is one bad state on the host, or one bad input, and the
+# step of the role that reads it must refuse it with its own message. They live in their own
+# scenario so that the default scenario applies the role only a few times (its shard is bound
+# by the time limit). A plan makes no change, so a check run skips every case.
+#
+# The first case runs on the host as prepared, before the role has written anything: the
+# owner has not yet placed the drain token, and the role must stop with the host untouched.
+# Then the role is applied once with everything in place, and every group after that starts
+# with a control: the same apply on the host as it was left must succeed. Without it, a step
+# that refused everything would pass every case.
+- name: Refuse a missing secret before anything is written
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Run the case
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/case.yml'
+      vars:
+        case:
+          name: the drain token is missing on a fresh host
+          break:
+            - [mv, /etc/branchleft/sweego-receiver-drain-token, /root/drain-token.held]
+          expect: '/etc/branchleft/sweego-receiver-drain-token is missing'
+          fix:
+            - [mv, /root/drain-token.held, /etc/branchleft/sweego-receiver-drain-token]
+      when: not ansible_check_mode
+
+    # The refusal above must have left no trace of the role on the host.
+    - name: Look for anything the role writes
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /usr/local/sbin/branchleft-sweego-drain-rule
+        - /etc/systemd/system/branchleft-sweego-drain-rule.service
+        - /opt/branchleft/sweego-receiver
+        - /var/lib/branchleft/sweego-receiver
+      register: sweego_receiver_refusals_traces
+      when: not ansible_check_mode
+
+    - name: Ask the firewall for the chain
+      ansible.builtin.command:
+        argv: [iptables, -t, filter, -S, DOCKER-USER]
+      register: sweego_receiver_refusals_chain
+      changed_when: false
+      when: not ansible_check_mode
+
+    - name: Assert the refused run wrote nothing
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_refusals_traces.results | map(attribute='stat.exists') | select | list | length == 0
+          - sweego_receiver_refusals_chain.stdout_lines | length == 2
+          - sweego_receiver_refusals_chain.stdout_lines | select('search', 'ctorigdstport') | list | length == 0
+        quiet: true
+        fail_msg: A run refused for a missing secret still wrote to the host.
+      when: not ansible_check_mode
+
+- name: Apply the role once, so the cases have a delivered host to make bad
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.sweego_receiver
+      when: not ansible_check_mode
+
+    - name: Write the image pin the way the deploy wrapper does
+      ansible.builtin.copy:
+        content: "IMAGE={{ standin_image }}\n"
+        dest: /etc/branchleft/sweego-receiver.image.env
+        owner: root
+        group: root
+        mode: '0600'
+      when: not ansible_check_mode
+
+    - name: Apply the role over the pin
+      ansible.builtin.include_role:
+        name: branchleft.sweego_receiver
+      when: not ansible_check_mode
+
+    - name: Accept the host as delivered
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/case.yml'
+      vars:
+        case:
+          name: the host as delivered
+      when: not ansible_check_mode
+
+- name: Refuse a secret file that is not as the role requires
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Run each case
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/case.yml'
+      loop:
+        - name: the signing secret is missing
+          break: [[mv, /etc/branchleft/sweego-receiver-signing-secret, /root/signing-secret.held]]
+          expect: '/etc/branchleft/sweego-receiver-signing-secret is missing'
+          fix: [[mv, /root/signing-secret.held, /etc/branchleft/sweego-receiver-signing-secret]]
+        - name: the drain token is readable by everyone
+          break: [[chmod, '0644', /etc/branchleft/sweego-receiver-drain-token]]
+          expect: '/etc/branchleft/sweego-receiver-drain-token is missing'
+          fix: [[chmod, '0440', /etc/branchleft/sweego-receiver-drain-token]]
+        - name: the drain token is root's group, which the container cannot read
+          break: [[chgrp, root, /etc/branchleft/sweego-receiver-drain-token]]
+          expect: '/etc/branchleft/sweego-receiver-drain-token is missing'
+          fix: [[chgrp, '31100', /etc/branchleft/sweego-receiver-drain-token]]
+        - name: the drain token is owned by the container's account, which could replace it
+          break: [[chown, '31100:31100', /etc/branchleft/sweego-receiver-drain-token]]
+          expect: '/etc/branchleft/sweego-receiver-drain-token is missing'
+          fix: [[chown, 'root:31100', /etc/branchleft/sweego-receiver-drain-token]]
+        - name: the signing secret is a link to another file
+          break:
+            - [mv, /etc/branchleft/sweego-receiver-signing-secret, /root/signing-secret.held]
+            - [ln, -s, sweego-receiver-drain-token, /etc/branchleft/sweego-receiver-signing-secret]
+          expect: '/etc/branchleft/sweego-receiver-signing-secret is missing'
+          fix:
+            - [rm, -f, /etc/branchleft/sweego-receiver-signing-secret]
+            - [mv, /root/signing-secret.held, /etc/branchleft/sweego-receiver-signing-secret]
+        - name: the drain token is empty
+          break:
+            - [cp, -p, /etc/branchleft/sweego-receiver-drain-token, /root/drain-token.held]
+            - [truncate, -s, '0', /etc/branchleft/sweego-receiver-drain-token]
+          expect: '/etc/branchleft/sweego-receiver-drain-token is missing'
+          fix: [[cp, -p, /root/drain-token.held, /etc/branchleft/sweego-receiver-drain-token]]
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+      when: not ansible_check_mode
+
+- name: Refuse a bad input or a bad pin
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Run each case
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/case.yml'
+      loop:
+        - name: the two ports are the same
+          drain_port: 18080
+          expect: they must differ
+        - name: the drain port is a privileged port
+          drain_port: 81
+          expect: from 1024 to 65535
+        - name: the signing secret path has a colon in it
+          signing_secret_file: '/etc/branchleft/a:b'
+          expect: one name directly under /etc/branchleft
+        - name: the signing secret path climbs out of the directory
+          signing_secret_file: '/etc/branchleft/../shadow'
+          expect: one name directly under /etc/branchleft
+        - name: the drain token and the signing secret are one file
+          drain_token_file: /etc/branchleft/sweego-receiver-signing-secret
+          expect: must be different files
+        - name: the image pin names a tag, which can move
+          break:
+            - [cp, -p, /etc/branchleft/sweego-receiver.image.env, /root/pin.held]
+            - [sed, -i, 's/@sha256:.*/:latest/', /etc/branchleft/sweego-receiver.image.env]
+          expect: is not exactly one IMAGE=
+          fix: [[cp, -p, /root/pin.held, /etc/branchleft/sweego-receiver.image.env]]
+      loop_control:
+        loop_var: case
+        label: '{{ case.name }}'
+      when: not ansible_check_mode

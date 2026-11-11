@@ -1,0 +1,30 @@
+---
+# The order is the order the host needs. The inputs, the host and the two secret files the
+# owner placed are checked before anything is written. The drain-port rule is installed and
+# read back before the receiver is delivered, because a receiver must never run on a host
+# whose rule is not loaded. The running container is read back last.
+#
+# Each step is its own internal tasks file, named for what it does. The role applies nothing
+# outside the receiver and its one rule: it does not install Docker or the shared compose
+# template unit, write a secret, a token or the image pin, route a hostname, open a port in
+# any provider firewall, or reboot the host.
+- name: Check the inputs
+  ansible.builtin.include_tasks: _inputs.yml
+
+- name: Render the compose file and hold it to the posture the host depends on
+  ansible.builtin.include_tasks: _compose_check.yml
+
+- name: Check the host and what the role relies on and does not own
+  ansible.builtin.include_tasks: _preconditions.yml
+
+- name: Check the secret files the owner placed
+  ansible.builtin.include_tasks: _secrets.yml
+
+- name: Install the drain-port rule, load it and read it back
+  ansible.builtin.include_tasks: _rule.yml
+
+- name: Deliver the receiver's compose project and its unit
+  ansible.builtin.include_tasks: _stack.yml
+
+- name: Read the running receiver back
+  ansible.builtin.include_tasks: _readback.yml
