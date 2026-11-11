@@ -46,7 +46,7 @@ RULED_ALWAYS_RUN = {"scripts-tests", "pulumi-inventory-audit"}
 # For each path, the only jobs that read it (the rest must skip when it alone changed).
 READERS = {
     "mail/index.ts": {"mail-typecheck", "mail-provision-checks"},
-    "mail/provision/run-all.sh": {"mail-typecheck", "mail-provision-checks", "shim-image-starts"},
+    "mail/provision/check_shim_image_starts.py": {"mail-typecheck", "mail-provision-checks", "shim-image-starts"},
     "hetzner/edge/render.ts": {"edge-config-validate"},
     "hetzner/edge/stack/Caddyfile": {"edge-config-validate"},
     "hetzner/monitoring/render.ts": {"monitoring-config-validate"},
