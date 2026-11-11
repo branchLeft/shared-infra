@@ -181,6 +181,16 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "template, and nothing here sees whether that repository declares a "
         "health signal for it."
     ),
+    "control-plane-backup": (
+        "Not an instance of the template: `/opt/branchleft/control-plane-backup` is "
+        "the directory the ansible/roles/control_plane_backup role of "
+        "branchLeft/shared-infra installs its backup program into, which a systemd "
+        "oneshot service and timer of that role run. It never starts through "
+        "branchleft-compose@ or branchleft-deploy; it reads the `control-plane` "
+        "instance's database container, whose health signal is pinned above. It is "
+        "registered because the scan reads the path as a stack name. No Compose "
+        "file exists for it anywhere."
+    ),
     "ntfy-pager": (
         "Not an instance of the template: `/etc/branchleft/ntfy-pager.env` is the "
         "secrets file of the ntfy pager, written by the ansible/roles/ntfy_pager "
