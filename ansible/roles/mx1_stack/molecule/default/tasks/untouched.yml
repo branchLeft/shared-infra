@@ -1,0 +1,32 @@
+---
+# Asserts that nothing moved between two snapshots (snapshot.yml): no container created,
+# recreated, started or stopped; no `compose up` and no certificate check; no file the role
+# writes touched (modification time and checksum). allow_paths names the files a case expects to
+# have moved, and reason says why, for the failure message.
+- name: Assert nothing the role may change has moved
+  vars:
+    mx1_stack_before: '{{ mx1_stack_snaps[snap_before] }}'
+    mx1_stack_after: '{{ mx1_stack_snaps[snap_after] }}'
+    mx1_stack_allowed: '{{ allow_paths | ansible.builtin.default([]) }}'
+    mx1_stack_moved: >-
+      {% set moved = [] %}
+      {% for path in mx1_stack_before.mtimes %}
+      {% if path not in mx1_stack_allowed and (mx1_stack_before.mtimes[path] != mx1_stack_after.mtimes[path]
+      or mx1_stack_before.sums[path] != mx1_stack_after.sums[path]) %}
+      {% set _ = moved.append(path) %}
+      {% endif %}
+      {% endfor %}
+      {{ moved }}
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_before.containers == mx1_stack_after.containers
+      - mx1_stack_before.ups == mx1_stack_after.ups
+      - mx1_stack_before.openssl == mx1_stack_after.openssl
+      - mx1_stack_moved | ansible.builtin.from_yaml == []
+    quiet: true
+    fail_msg: >-
+      Something moved between {{ snap_before }} and {{ snap_after }} that should not have
+      ({{ reason | ansible.builtin.default('nothing is expected to move') }}). Files: {{ mx1_stack_moved }}.
+      Containers equal: {{ mx1_stack_before.containers == mx1_stack_after.containers }}.
+      Calls to up: {{ mx1_stack_after.ups | length - mx1_stack_before.ups | length }} more.
+      Certificate checks: {{ mx1_stack_after.openssl | length - mx1_stack_before.openssl | length }} more.

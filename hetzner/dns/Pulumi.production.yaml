@@ -1,5 +1,6 @@
 # This stack declares no configuration of its own: every record comes from
-# `zone.json`, read by the program.
+# `zone.json` (branchleft.co.uk) and `publicpress.co.uk.json`, read by the
+# program (`../dnsZone.ts`'s `ZONE_FILES`).
 #
 # `encryptionsalt` and the `hcloud:token` ciphertext are deliberately absent
 # from this committed file, for the same reason as

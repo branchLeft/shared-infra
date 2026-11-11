@@ -1,0 +1,64 @@
+---
+# One case of unmanaged_source.yml, in unmanaged_case. A link case writes the
+# text to unmanaged_case.link_target and links unmanaged_case.path to it; the
+# others write the text to the path.
+- name: Write the file that names the repository
+  ansible.builtin.copy:
+    content: '{{ unmanaged_case.text }}'
+    dest: '{{ unmanaged_case.link_target | default("", true) or unmanaged_case.path }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Link the path to that file
+  ansible.builtin.file:
+    src: '{{ unmanaged_case.link_target }}'
+    dest: '{{ unmanaged_case.path }}'
+    state: link
+  when: unmanaged_case.link_target | length > 0
+
+- name: Plan the role while another file names the repository
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an apt source file the role does not manage that names the MySQL repository
+    refused_check_mode: true
+
+- name: Assert the plan's refusal carries the code and names the file
+  ansible.builtin.assert:
+    that:
+      - "'db1_stack[unmanaged-mysql-source]: ' ~ unmanaged_case.path in db1_stack_refused_item_messages | join(' ')"
+    fail_msg: 'The plan was refused for the {{ unmanaged_case.name }} case, but the message does not carry the code and the path.'
+    quiet: true
+
+- name: Apply the role while another file names the repository
+  ansible.builtin.include_tasks: refused.yml
+  vars:
+    refused_task: Refuse an apt source file the role does not manage that names the MySQL repository
+
+- name: Assert the apply's refusal carries the code and names the file
+  ansible.builtin.assert:
+    that:
+      - "'db1_stack[unmanaged-mysql-source]: ' ~ unmanaged_case.path in db1_stack_refused_item_messages | join(' ')"
+    fail_msg: 'The apply was refused for the {{ unmanaged_case.name }} case, but the message does not carry the code and the path.'
+    quiet: true
+
+# The refusal came before anything changed the host, so the host is still as the
+# converge left it.
+- name: Assert the host is as declared after the refusals
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'
+
+- name: Remove the file that names the repository, and the file it linked to
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop: '{{ [unmanaged_case.path] + ([unmanaged_case.link_target] if unmanaged_case.link_target | length > 0 else []) }}'
+
+- name: Apply the role again
+  ansible.builtin.include_tasks: apply.yml
+
+- name: Assert the host is as declared
+  ansible.builtin.include_tasks: assert_state.yml
+  vars:
+    state_password: '{{ verify_password }}'

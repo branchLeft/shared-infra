@@ -10,6 +10,10 @@
     group: root
     mode: '0755'
 
+# The diff is not shown (ANS-16): the program has
+# a constant named like a token list and four local variables named token, which the plan's
+# secret scan would withhold the whole plan of the host over. They are real identifiers and
+# are not renamed. The program holds no secret value.
 - name: Install the collector program
   ansible.builtin.copy:
     src: 'snds/{{ exporters_and_collectors_snds_program }}'
@@ -17,6 +21,7 @@
     owner: root
     group: root
     mode: '0644'
+  diff: false
 
 - name: Create the textfile directory the collector writes its metrics to
   ansible.builtin.file:

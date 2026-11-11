@@ -11,6 +11,7 @@ references are not allowed (ANS-12), so each copy stays and this test keeps them
 from __future__ import annotations
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
 from typing import NoReturn, cast
@@ -26,6 +27,8 @@ PLAYBOOK = ROOT / "ansible" / "playbooks" / "demo1.yml"
 # test them or to explain them, which writes nothing.
 HOST_DIRS = ("defaults", "vars", "tasks", "handlers", "templates", "files", "meta")
 HOST_SUFFIXES = (".yml", ".yaml", ".j2", ".service", ".sh", ".py", ".conf", ".timer")
+# Where a role keeps its copy of files taken from ghost-platform, under files/.
+VENDORED = ("files", "ghost-platform")
 SLOT_NAMES = re.compile(r"default\(\[([^\]]*)\]\)")
 OWNED = (
     "demo1_egress_spool_egress_script_dest",
@@ -46,6 +49,10 @@ EXCLUDED = {
     "broker_deploy": "which would repoint a broker the owner installed by hand",
 }
 ORDER = (BUILD, ROLE)
+# What the role README says about the spool's image reaching the host.
+UNDECIDED = re.compile(r"is not decided yet", re.IGNORECASE)
+ROUTE_HEADING = "How the spool's image gets onto the host"
+ROUTE_NAMES = ("docker load", "spool_image_gate")
 
 
 class SpoolAgreeError(Exception):
@@ -84,8 +91,17 @@ def mapping_of(value: object) -> dict[str, object]:
     return cast("dict[str, object]", value)
 
 
+def is_vendored(path: Path, role: Path) -> bool:
+    """Return whether a path is under the role's copy of files taken from ghost-platform."""
+    return path.relative_to(role).parts[: len(VENDORED)] == VENDORED
+
+
 def host_text(role: Path) -> str:
-    """Return the text of every file of a role that runs on a host, in a fixed order."""
+    """Return the text of every file of a role that runs on a host, in a fixed order.
+
+    The role's vendored copies of ghost-platform's files are left out: they are upstream's
+    text, held to their pins, and not the role's own statement of what it owns.
+    """
     parts: list[str] = []
     for name in HOST_DIRS:
         base = role / name
@@ -93,7 +109,7 @@ def host_text(role: Path) -> str:
             parts.extend(
                 path.read_text(encoding="utf-8")
                 for path in sorted(base.rglob("*"))
-                if path.is_file() and path.suffix in HOST_SUFFIXES
+                if path.is_file() and path.suffix in HOST_SUFFIXES and not is_vendored(path, role)
             )
     return "\n".join(parts)
 
@@ -204,9 +220,50 @@ def disagreements(f: dict[str, object]) -> list[str]:
     return found
 
 
+def image_route_problems(readme: str) -> list[str]:
+    """Return one line for each way the role README fails to state how the spool's image arrives.
+
+    The host never pulls, so the README is the one place the route is written. It must not say
+    the route is undecided, and it must name the primitive that loads the image and the tool that
+    gates it, or the route is a sentence nobody can act on.
+    """
+    found: list[str] = []
+    if UNDECIDED.search(readme):
+        found.append("the README still says how the image reaches the host is not decided")
+    if ROUTE_HEADING not in readme:
+        found.append(f"the README has no section called {ROUTE_HEADING!r}")
+    found.extend(
+        f"the README does not name {name!r} in the image route"
+        for name in ROUTE_NAMES
+        if name not in readme
+    )
+    return found
+
+
 class SpoolAgreeTest(unittest.TestCase):
     def test_the_real_tree_agrees(self) -> None:
         self.assertEqual([], disagreements(facts()))
+
+    def test_the_readme_states_the_image_route(self) -> None:
+        readme = (ROLES / ROLE / "README.md").read_text(encoding="utf-8")
+        self.assertEqual([], image_route_problems(readme))
+
+    def test_a_readme_that_leaves_the_image_route_undecided_is_named(self) -> None:
+        old = (
+            "How the image gets onto the host is not decided yet. **Until it is, step 4 "
+            "refuses on a host that does not hold the image**."
+        )
+        found = image_route_problems(old)
+        self.assertTrue(any("not decided" in line for line in found), found)
+        self.assertTrue(any("docker load" in line for line in found), found)
+        self.assertTrue(any("spool_image_gate" in line for line in found), found)
+
+    def test_a_readme_that_drops_the_section_or_a_name_is_named(self) -> None:
+        readme = (ROLES / ROLE / "README.md").read_text(encoding="utf-8")
+        for removed in (ROUTE_HEADING, *ROUTE_NAMES):
+            with self.subTest(removed=removed):
+                found = image_route_problems(readme.replace(removed, "REDACTED"))
+                self.assertTrue(any(removed in line for line in found), found)
 
     def test_a_path_named_by_a_second_role_is_named(self) -> None:
         base = facts()
@@ -268,6 +325,18 @@ class SpoolAgreeTest(unittest.TestCase):
             with self.subTest(roles=roles):
                 found = disagreements(dict(base, playbook_roles=roles))
                 self.assertTrue(found)
+
+    def test_a_vendored_file_is_not_the_roles_own_statement(self) -> None:
+        owned = cast("dict[str, str]", facts()["owned"])
+        path = next(iter(owned.values()))
+        with tempfile.TemporaryDirectory() as tmp:
+            role = Path(tmp)
+            (role / "files" / "ghost-platform").mkdir(parents=True)
+            (role / "tasks").mkdir()
+            (role / "files" / "ghost-platform" / "upstream.sh").write_text(f"dest: {path}\n")
+            self.assertNotIn(path, host_text(role))
+            (role / "tasks" / "main.yml").write_text(f"dest: {path}\n")
+            self.assertIn(path, host_text(role))
 
     def test_the_slot_table_is_seven_slots_from_30001(self) -> None:
         base = facts()

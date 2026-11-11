@@ -1,0 +1,146 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    ring_controller_host_ledger_url: '{{ scenario_ledger_url }}'
+    ring_controller_host_ledger_push_remote: '{{ scenario_push_remote }}'
+    ring_controller_host_push_known_hosts: '{{ scenario_known_hosts_line }}'
+  tasks:
+    - name: Look at the good bundle
+      ansible.builtin.stat:
+        path: '{{ scenario_fixture_dir }}/bundle-good.tar.gz'
+        checksum_algorithm: sha256
+      register: ring_controller_host_v_good_stat
+
+    - name: Hold the good digest and the paths it names
+      ansible.builtin.set_fact:
+        ring_controller_host_v_digest: '{{ ring_controller_host_v_good_stat.stat.checksum }}'
+        ring_controller_host_v_release: '{{ scenario_releases }}/{{ ring_controller_host_v_good_stat.stat.checksum }}'
+
+    # --- A good digest gives a release, a link to it and a root-owned executable program.
+    - name: Look at the link, the program and the downloaded bundle
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_current }}'
+        - '{{ ring_controller_host_v_release }}/bin/ring-controller'
+        - '{{ ring_controller_host_v_release }}/bundle.tar.gz'
+      register: ring_controller_host_v_stats
+
+    - name: Require the link to point at the good release and the files to be root's
+      ansible.builtin.assert:
+        that:
+          - ring_controller_host_v_stats.results[0].stat.islnk
+          - ring_controller_host_v_stats.results[0].stat.lnk_source == ring_controller_host_v_release
+          - ring_controller_host_v_stats.results[1].stat.isreg
+          - ring_controller_host_v_stats.results[1].stat.pw_name == 'root'
+          - ring_controller_host_v_stats.results[1].stat.xusr
+          - not ring_controller_host_v_stats.results[1].stat.wgrp
+          - not ring_controller_host_v_stats.results[1].stat.woth
+          - ring_controller_host_v_stats.results[2].stat.pw_name == 'root'
+          - ring_controller_host_v_stats.results[2].stat.mode == '0644'
+        quiet: true
+
+    # --- The refused digests changed nothing: the link still points at the good release, and a
+    # digest the download did not have left no bundle and no program in its directory.
+    - name: Look for anything the wrong digest left
+      ansible.builtin.find:
+        paths: '{{ scenario_releases }}/{{ scenario_wrong_digest }}'
+        recurse: true
+        hidden: true
+        file_type: any
+      register: ring_controller_host_v_wrong
+
+    - name: Require the wrong digest to have left nothing
+      ansible.builtin.assert:
+        that:
+          - ring_controller_host_v_wrong.files | length == 0
+        quiet: true
+        fail_msg: A bundle with the wrong digest left files behind.
+
+    # --- The environment file and the known-hosts file carry exactly the inputs.
+    - name: Read the environment file and the known-hosts file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ scenario_env_file }}'
+        - '{{ scenario_known_hosts }}'
+      register: ring_controller_host_v_reads
+
+    - name: Require the files to hold the inputs and nothing else
+      ansible.builtin.assert:
+        that:
+          - "('RING_CONTROLLER_LEDGER_URL=' ~ scenario_ledger_url) in (ring_controller_host_v_reads.results[0].content | b64decode).splitlines()"
+          - "('RING_CONTROLLER_LEDGER_PUSH_REMOTE=' ~ scenario_push_remote) in (ring_controller_host_v_reads.results[0].content | b64decode).splitlines()"
+          - ring_controller_host_v_reads.results[1].content | b64decode == scenario_known_hosts_line ~ '\n'
+        quiet: true
+
+    # --- With a digest the timer is on. Without one it is held off again, and a digest again
+    # turns it back on: the role owns the unit, so the digest is the one switch.
+    - name: Ask systemd for the timer
+      ansible.builtin.systemd_service:
+        name: ring-controller.timer
+      register: ring_controller_host_v_on
+
+    - name: Require the timer to be enabled and running
+      ansible.builtin.assert:
+        that:
+          - ring_controller_host_v_on.status.UnitFileState == 'enabled'
+          - ring_controller_host_v_on.status.ActiveState == 'active'
+        quiet: true
+        fail_msg: The timer is not on although a digest is set.
+
+    - name: Apply the role with the digest cleared
+      ansible.builtin.include_role:
+        name: branchleft.ring_controller_host
+      vars:
+        ring_controller_host_bundle_sha256: ''
+        ring_controller_host_bundle_url: ''
+
+    - name: Ask systemd for the timer after the digest is cleared
+      ansible.builtin.systemd_service:
+        name: ring-controller.timer
+      register: ring_controller_host_v_off
+
+    - name: Look at the link after the digest is cleared
+      ansible.builtin.stat:
+        path: '{{ scenario_current }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: ring_controller_host_v_link_after_clear
+
+    - name: Require the timer to be off and the release the role installed to stay in place
+      ansible.builtin.assert:
+        that:
+          - ring_controller_host_v_off.status.UnitFileState == 'disabled'
+          - ring_controller_host_v_off.status.ActiveState == 'inactive'
+          - ring_controller_host_v_link_after_clear.stat.lnk_source == ring_controller_host_v_release
+        quiet: true
+        fail_msg: Clearing the digest did not hold the timer off, or removed the release.
+
+    - name: Apply the role with the digest set again
+      ansible.builtin.include_role:
+        name: branchleft.ring_controller_host
+      vars:
+        ring_controller_host_bundle_sha256: '{{ ring_controller_host_v_digest }}'
+        ring_controller_host_bundle_url: '{{ scenario_good_url }}'
+        ring_controller_host_bundle_url_pattern: '{{ scenario_url_pattern }}'
+
+    - name: Ask systemd for the timer after the digest is set again
+      ansible.builtin.systemd_service:
+        name: ring-controller.timer
+      register: ring_controller_host_v_on_again
+
+    - name: Require the timer to be on again
+      ansible.builtin.assert:
+        that:
+          - ring_controller_host_v_on_again.status.UnitFileState == 'enabled'
+          - ring_controller_host_v_on_again.status.ActiveState == 'active'
+        quiet: true

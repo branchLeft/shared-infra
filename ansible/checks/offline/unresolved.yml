@@ -1,0 +1,4 @@
+# The ratchet: a template that cannot be rendered offline because a task assigns one of its
+# variables while the role runs. A pair outside this list fails the run, and a listed pair that
+# renders fails it too, so the list only shrinks. Fix one with an override in dummies.yml.
+allowed: []

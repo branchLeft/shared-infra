@@ -12,13 +12,16 @@ import io
 import json
 import re
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import ci_select
 
 ROOT = Path(__file__).resolve().parents[2]
+CI_SELECT = Path(ci_select.__file__).resolve()
 LIST_SHARDS = ROOT / "ansible" / "harness" / "list_shards.py"
 # A file of the checks folder, as the shard job names it in a line of its own script.
 CHECKS_FILE = re.compile(r"ansible/checks/[A-Za-z0-9_.-]+")
@@ -313,6 +316,14 @@ class SelectionTest(unittest.TestCase):
         self.assertIn("hetzner/control-plane/stack", reads)
         self.assertIn("ansible/roles/egress_nat", reads["hetzner/provision/branchleft-nat.service"])
 
+    def test_a_mail_script_the_mx1_stack_role_reads_runs_that_role(self) -> None:
+        # A control on the real tree: the role links the compose file and the Caddyfile.
+        reads = ci_select.reads_by_path(ROOT)
+        for path in ("mail/provision/Caddyfile", "mail/provision/docker-compose.yml"):
+            with self.subTest(path=path):
+                self.assertIn("ansible/roles/mx1_stack", reads.get(path, set()))
+                self.assertIn("ansible/roles/mx1_stack", paths_of(self.pull_request(path)))
+
     def test_a_file_outside_ansible_that_no_role_reads_runs_no_shard(self) -> None:
         for path in ("hetzner/RUNBOOK-edge.md", "hetzner/dns/zone.json", "mail/README.md"):
             with self.subTest(path=path):
@@ -374,6 +385,26 @@ class TreeFixtureTest(unittest.TestCase):
         link.parent.mkdir(parents=True)
         link.symlink_to("../../../../hetzner/x/z.conf")
         self.assertEqual(["loner"], self.names("hetzner/x/z.conf"))
+
+    def test_a_literal_mail_path_and_a_link_into_mail_count_as_reads(self) -> None:
+        self.write("ansible/roles/mailer/molecule/default/verify.yml", "src: mail/provision/x.sh\n")
+        self.write("mail/provision/x.sh", "x\n")
+        self.write("mail/provision/Caddyfile", "x\n")
+        self.write("mail/README.md", "x\n")
+        self.shards.append(
+            {
+                "name": "mailer",
+                "path": "ansible/roles/mailer",
+                "scenario": "default",
+                "kind": "role",
+            }
+        )
+        link = self.root / "ansible/roles/mailer/files/Caddyfile"
+        link.parent.mkdir(parents=True)
+        link.symlink_to("../../../../mail/provision/Caddyfile")
+        self.assertEqual(["mailer"], self.names("mail/provision/x.sh"))
+        self.assertEqual(["mailer"], self.names("mail/provision/Caddyfile"))
+        self.assertEqual([], self.names("mail/README.md"))
 
     def test_a_deleted_role_selects_nothing_for_itself(self) -> None:
         self.assertEqual([], self.names("ansible/roles/gone/tasks/main.yml"))
@@ -466,6 +497,565 @@ class CommandTest(unittest.TestCase):
     def test_the_real_listing_parses(self) -> None:
         listing = json.dumps({"include": real_shards()})
         self.assertIsNotNone(ci_select.parse_matrix(listing))
+
+
+@dataclass(frozen=True)
+class Case:
+    """A small tree, the files a pull request changes, and the shards it must run.
+
+    ``expected`` is a list of unit names, or ``None`` for every shard.
+    """
+
+    files: dict[str, str]
+    changed: tuple[str, ...]
+    expected: list[str] | None
+    links: dict[str, str] = field(default_factory=dict)
+
+
+def tree_of(case: Case, root: Path) -> list[dict[str, str]]:
+    """Write ``case`` under ``root`` and return one shard per role and pattern in it."""
+    for name, text in case.files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    for name, target in case.links.items():
+        link = root / name
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(target)
+    shards = []
+    for group in ci_select.GROUPS:
+        base = root / "ansible" / group
+        for unit in sorted(base.iterdir()) if base.is_dir() else []:
+            shards.append(
+                {
+                    "name": unit.name,
+                    "path": f"ansible/{group}/{unit.name}",
+                    "scenario": "default",
+                    "kind": "role",
+                }
+            )
+    return shards
+
+
+def chosen_by(module: types.ModuleType, case: Case) -> list[str]:
+    """Return the unit names ``module.select`` runs for ``case``, in the order of the shards."""
+    with tempfile.TemporaryDirectory() as directory:
+        root = Path(directory)
+        shards = tree_of(case, root)
+        chosen = module.select("pull_request", list(case.changed), shards, root)
+        return [shard["name"] for shard in chosen]
+
+
+def expected_names(case: Case) -> list[str]:
+    """Return the names ``case`` expects, with every shard of its tree for ``None``."""
+    if case.expected is not None:
+        return case.expected
+    with tempfile.TemporaryDirectory() as directory:
+        return [shard["name"] for shard in tree_of(case, Path(directory))]
+
+
+def role_file(unit: str, name: str = "tasks/main.yml", group: str = "roles") -> str:
+    """Return the repository path of a file in a unit of the small trees."""
+    return f"ansible/{group}/{unit}/{name}"
+
+
+QUIET = "- name: nothing\n  ansible.builtin.debug:\n    msg: nothing\n"
+PLAIN = {role_file("a"): QUIET, role_file("c"): QUIET}
+
+
+def calls(unit_text: str) -> Case:
+    """Return a tree where role b holds ``unit_text`` as its tasks, and role a changes."""
+    return Case({**PLAIN, role_file("b"): unit_text}, (role_file("a"),), ["a", "b"])
+
+
+INCLUDE = "- ansible.builtin.include_role:\n    name: %s\n"
+INCLUDE_BLOCK = "- name: run a\n  ansible.builtin.include_role:\n    name: a\n    public: true\n"
+# A role called by a bare name, which nothing the textual scan looks for names.
+BARE_CALLS = {
+    "a block include_role": INCLUDE_BLOCK,
+    "a block import_role": "- ansible.builtin.import_role:\n    name: a\n",
+    "an include_role with no namespace": "- include_role:\n    name: 'a'\n",
+    "an inline mapping": "- ansible.builtin.include_role: {name: a, public: true}\n",
+    "key=value arguments": "- ansible.builtin.include_role: name=a public=true\n",
+    "a name behind a parameter": "- ansible.builtin.include_role:\n    public: true\n    name: a\n",
+    "a path": "- ansible.builtin.include_role:\n    name: ../roles/a\n",
+}
+# A play's roles, or a role's dependencies, by a bare name.
+LIST_CALLS = {
+    "a bare roles entry": "- hosts: all\n  roles:\n    - a\n",
+    "a roles entry at the key's depth": "- hosts: all\n  roles:\n  - a\n",
+    "a role: entry": "- hosts: all\n  roles:\n    - role: a\n      vars:\n        x: 1\n",
+    "a role: entry after another key": "- hosts: all\n  roles:\n    - tags: [x]\n      role: a\n",
+    "a name: entry": "- hosts: all\n  roles:\n    - name: a\n",
+    "an inline mapping entry": "- hosts: all\n  roles:\n    - { role: a, tags: x }\n",
+    "an inline list": "- hosts: all\n  roles: [a]\n",
+    "a quoted entry": "- hosts: all\n  roles:\n    - 'a'\n",
+    "a role entry on its own line": "- hosts: all\n  roles:\n    -\n      role: a\n",
+}
+
+
+class StructuredScanTest(unittest.TestCase):
+    """The structured scan, on small trees where the right answer is known."""
+
+    def selected(self, case: Case) -> list[str]:
+        return chosen_by(ci_select, case)
+
+    def scan(
+        self, files: dict[str, str], links: dict[str, str] | None = None
+    ) -> ci_select.RoleScan:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        tree_of(Case(files, (), None, links or {}), Path(directory.name))
+        return ci_select.scan_references(Path(directory.name))
+
+    def test_a_role_called_by_a_bare_name_runs_with_the_role_it_calls(self) -> None:
+        for label, text in BARE_CALLS.items():
+            with self.subTest(call=label):
+                case = calls(text)
+                self.assertEqual(case.expected, self.selected(case))
+
+    def test_a_role_listed_in_roles_or_dependencies_runs_with_the_role_it_lists(self) -> None:
+        for label, text in LIST_CALLS.items():
+            with self.subTest(call=label):
+                case = calls(text)
+                self.assertEqual(case.expected, self.selected(case))
+        meta = Case(
+            {**PLAIN, role_file("b", "meta/main.yml"): "dependencies:\n  - role: a\n"},
+            (role_file("a"),),
+            ["a", "b"],
+        )
+        self.assertEqual(meta.expected, self.selected(meta))
+
+    def test_a_role_that_calls_nothing_runs_alone(self) -> None:
+        # The control of the two tests above: the same tree with no call narrows to the role.
+        case = Case({**PLAIN, role_file("b"): QUIET}, (role_file("a"),), ["a"])
+        self.assertEqual(case.expected, self.selected(case))
+
+    def test_every_recognised_form_resolves_with_nothing_left_over(self) -> None:
+        for label, text in {**BARE_CALLS, **LIST_CALLS}.items():
+            with self.subTest(call=label):
+                scan = self.scan({**PLAIN, role_file("b"): text})
+                self.assertEqual([], scan.unresolved)
+                self.assertEqual({"ansible/roles/b"}, scan.edges["ansible/roles/a"])
+
+    def test_dependencies_that_are_not_a_list_name_no_role(self) -> None:
+        # mx1_stack passes ``dependencies: false`` to a module; it is not a role list.
+        for value in ("false", "[]", "null"):
+            with self.subTest(value=value):
+                scan = self.scan({**PLAIN, role_file("b"): f"- x:\n    dependencies: {value}\n"})
+                self.assertEqual([], scan.unresolved)
+
+    def test_a_role_name_the_scan_cannot_map_is_unresolved(self) -> None:
+        for label, text in {
+            "a collection role": "- ansible.builtin.include_role:\n    name: community.general.x\n",
+            "a role that is not here": "- ansible.builtin.include_role:\n    name: nothing_here\n",
+            "a name with a template tail": INCLUDE % "'a{{ x }}'",
+            "a variable nothing defines": INCLUDE % "'{{ who }}'",
+            "an include with no name": "- ansible.builtin.include_role:\n    public: true\n",
+            "a bare roles entry that is not here": "- hosts: all\n  roles:\n    - elsewhere\n",
+            "a roles entry with no role": "- hosts: all\n  roles:\n    - tags: x\n",
+            "a templated roles list": "- hosts: all\n  roles: '{{ the_roles }}'\n",
+        }.items():
+            with self.subTest(call=label):
+                scan = self.scan({**PLAIN, role_file("b"): text})
+                self.assertEqual(1, len(scan.unresolved), scan.unresolved)
+                self.assertTrue(scan.unresolved[0][0].startswith("ansible/roles/b/tasks/main.yml:"))
+
+    def assert_runs_every_shard(self, text: str) -> None:
+        """Assert that ``text`` in role b is unresolved, so a change to role a runs every shard."""
+        case = Case({**PLAIN, role_file("b"): text}, (role_file("a"),), None)
+        scan = self.scan(case.files)
+        self.assertEqual(1, len(scan.unresolved), scan.unresolved)
+        self.assertEqual(expected_names(case), self.selected(case))
+
+    def test_a_flow_style_include_role_task_that_cannot_be_read_runs_every_shard(self) -> None:
+        self.assert_runs_every_shard("- {include_role: {name: a}}\n")
+
+    def test_an_action_include_role_with_key_value_arguments_runs_every_shard(self) -> None:
+        self.assert_runs_every_shard("- action: include_role name=a\n")
+
+    def test_a_quoted_include_role_key_that_cannot_be_read_runs_every_shard(self) -> None:
+        self.assert_runs_every_shard('- "include_role": {name: a}\n')
+
+    def test_a_name_through_a_variable_resolves_when_every_definition_does(self) -> None:
+        files = {
+            **PLAIN,
+            role_file(
+                "b"
+            ): "- vars:\n    who: a\n  ansible.builtin.include_role:\n    name: '{{ who }}'\n",
+        }
+        scan = self.scan(files)
+        self.assertEqual([], scan.unresolved)
+        self.assertEqual({"ansible/roles/b"}, scan.edges["ansible/roles/a"])
+        # One definition that cannot be read is enough to leave the name unresolved.
+        files[role_file("b", "vars/main.yml")] = "who: '{{ somewhere_else }}'\n"
+        self.assertEqual(1, len(self.scan(files).unresolved))
+
+    def test_a_variable_that_names_another_variable_resolves_to_a_limited_depth(self) -> None:
+        def chain(length: int) -> dict[str, str]:
+            lines = [f"v{n}: '{{{{ v{n + 1} }}}}'" for n in range(length)]
+            body = "\n".join([*lines, f"v{length}: a", ""])
+            call = "- ansible.builtin.include_role:\n    name: '{{ v0 }}'\n"
+            return {**PLAIN, role_file("b"): call, role_file("b", "vars/main.yml"): body}
+
+        self.assertEqual([], self.scan(chain(2)).unresolved)
+        # A chain deeper than the limit is left unresolved: a loop must end somewhere.
+        self.assertEqual(1, len(self.scan(chain(ci_select.VARIABLE_DEPTH + 1)).unresolved))
+        loop = {
+            **PLAIN,
+            role_file(
+                "b"
+            ): "x: '{{ y }}'\ny: '{{ x }}'\n- ansible.builtin.include_role:\n    name: '{{ x }}'\n",
+        }
+        self.assertEqual(1, len(self.scan(loop).unresolved))
+
+    def test_a_playbook_dir_path_resolves_from_the_file_or_any_directory_above_it(self) -> None:
+        call = "- ansible.builtin.include_role:\n    name: '{{ playbook_dir }}/%s'\n"
+        for label, tail, edge in (
+            ("a sibling role", "../../../a", True),
+            ("the role itself", "../..", False),
+            ("a sibling from a higher playbook", "../../a", True),
+        ):
+            with self.subTest(path=label):
+                files = {**PLAIN, role_file("b", "molecule/default/converge.yml"): call % tail}
+                scan = self.scan(files)
+                self.assertEqual([], scan.unresolved)
+                self.assertEqual(
+                    {"ansible/roles/b"} if edge else set(), scan.edges["ansible/roles/a"]
+                )
+        nowhere = {**PLAIN, role_file("b", "molecule/default/converge.yml"): call % "../../../gone"}
+        self.assertEqual(1, len(self.scan(nowhere).unresolved))
+
+    def test_a_name_built_with_a_trailing_unit_name_resolves_to_that_unit(self) -> None:
+        call = (
+            "- vars:\n    where: '{{ scratch.path ~ \"/%s\" }}'\n"
+            "  ansible.builtin.include_role:\n    name: '{{ where }}'\n"
+        )
+        scan = self.scan({**PLAIN, role_file("b"): call % "a"})
+        self.assertEqual([], scan.unresolved)
+        self.assertEqual({"ansible/roles/b"}, scan.edges["ansible/roles/a"])
+        self.assertEqual(1, len(self.scan({**PLAIN, role_file("b"): call % "gone"}).unresolved))
+
+    def test_a_playbook_imported_from_another_unit_is_an_edge(self) -> None:
+        files = {**PLAIN, role_file("a", "molecule/default/prepare.yml"): "- hosts: all\n"}
+        imported = "- ansible.builtin.import_playbook: ../../../a/molecule/default/prepare.yml\n"
+        scan = self.scan({**files, role_file("b", "molecule/default/converge.yml"): imported})
+        self.assertEqual([], scan.unresolved)
+        self.assertEqual({"ansible/roles/b"}, scan.edges["ansible/roles/a"])
+
+    def test_a_playbook_imported_from_the_same_unit_is_no_edge(self) -> None:
+        files = {
+            **PLAIN,
+            role_file("b", "molecule/default/prepare.yml"): "- hosts: all\n",
+            role_file(
+                "b", "molecule/refusals/converge.yml"
+            ): "- import_playbook: ../default/prepare.yml\n",
+        }
+        scan = self.scan(files)
+        self.assertEqual([], scan.unresolved)
+        self.assertEqual(set(), scan.edges["ansible/roles/b"])
+
+    def test_a_playbook_the_scan_cannot_place_is_unresolved(self) -> None:
+        for label, value in {
+            "a file that is not there": "missing.yml",
+            "a file outside any unit": "../../../../README.md",
+            "an absolute path": "/etc/play.yml",
+            "a templated path": "'{{ where }}/play.yml'",
+        }.items():
+            with self.subTest(playbook=label):
+                files = {
+                    **PLAIN,
+                    "README.md": "x\n",
+                    role_file("b"): f"- import_playbook: {value}\n",
+                }
+                self.assertEqual(1, len(self.scan(files).unresolved))
+
+    def test_a_handler_only_another_unit_defines_makes_the_notifier_run_with_it(self) -> None:
+        for label, handler in {
+            "a handler name": "- name: Restart alpha\n  ansible.builtin.debug:\n",
+            "a listen name": "- name: Other\n  listen: Restart alpha\n  ansible.builtin.debug:\n",
+            "a listen list": (
+                "- name: Other\n  listen:\n    - Restart alpha\n  ansible.builtin.debug:\n"
+            ),
+        }.items():
+            for notify in (
+                "notify: Restart alpha",
+                "notify:\n    - Restart alpha",
+                "notify: [Restart alpha]",
+            ):
+                with self.subTest(handler=label, notify=notify):
+                    text = f"- name: change\n  ansible.builtin.debug:\n  {notify}\n"
+                    files = {
+                        **PLAIN,
+                        role_file("a", "handlers/main.yml"): handler,
+                        role_file("b"): text,
+                    }
+                    case = Case(files, (role_file("a", "handlers/main.yml"),), ["a", "b"])
+                    self.assertEqual(case.expected, self.selected(case))
+                    self.assertEqual([], self.scan(files).unresolved)
+
+    def test_a_handler_the_notifier_defines_itself_is_no_edge(self) -> None:
+        own = "- name: change\n  ansible.builtin.debug:\n  notify: Restart alpha\n"
+        files = {
+            **PLAIN,
+            role_file(
+                "a", "handlers/main.yml"
+            ): "- name: Restart alpha\n  ansible.builtin.debug:\n",
+            role_file("b"): own,
+            role_file(
+                "b", "handlers/main.yml"
+            ): "- name: Restart alpha\n  ansible.builtin.debug:\n",
+        }
+        case = Case(files, (role_file("a"),), ["a"])
+        self.assertEqual(case.expected, self.selected(case))
+        self.assertEqual([], self.scan(files).unresolved)
+
+    def test_a_handler_in_a_handlers_block_of_a_playbook_counts_as_defined(self) -> None:
+        play = (
+            "- hosts: all\n  handlers:\n    - name: Restart alpha\n      ansible.builtin.debug:\n"
+        )
+        use = "- name: change\n  ansible.builtin.debug:\n  notify: Restart alpha\n"
+        files = {
+            **PLAIN,
+            role_file("b", "molecule/default/converge.yml"): play,
+            role_file("b"): use,
+        }
+        scan = self.scan(files)
+        self.assertEqual([], scan.unresolved)
+        self.assertEqual(set(), scan.edges["ansible/roles/a"])
+
+    def test_a_handler_nothing_defines_or_a_templated_one_is_unresolved(self) -> None:
+        for label, notify in {
+            "a handler nothing defines": "notify: Restart gone",
+            "a templated handler": "notify: 'Restart {{ which }}'",
+            "an inline list left open": "notify: [Restart a",
+        }.items():
+            with self.subTest(notify=label):
+                text = f"- name: change\n  ansible.builtin.debug:\n  {notify}\n"
+                scan = self.scan({**PLAIN, role_file("b"): text})
+                self.assertEqual(1, len(scan.unresolved), scan.unresolved)
+
+    def test_a_link_into_another_unit_is_an_edge(self) -> None:
+        files = {**PLAIN, role_file("a", "files/x"): "x\n"}
+        links = {role_file("b", "files/x"): "../../a/files/x"}
+        case = Case(files, (role_file("a", "files/x"),), ["a", "b"], links)
+        self.assertEqual(case.expected, self.selected(case))
+        self.assertEqual([], self.scan(files, links).unresolved)
+
+    def test_a_link_inside_the_unit_or_to_a_file_that_runs_every_shard_is_no_edge(self) -> None:
+        files = {**PLAIN, role_file("b", "files/x"): "x\n", "ansible/harness/h.py": "x\n"}
+        links = {
+            role_file("b", "files/y"): "x",
+            role_file("b", "files/h.py"): "../../../harness/h.py",
+        }
+        scan = self.scan(files, links)
+        self.assertEqual([], scan.unresolved)
+        self.assertEqual(set(), scan.edges["ansible/roles/a"])
+
+    def test_a_link_to_a_file_that_is_missing_or_that_no_rule_names_is_unresolved(self) -> None:
+        for label, target, extra in (
+            ("a missing file", "../../a/files/gone", {}),
+            ("a lint-only file", "../../../tools/x.py", {"ansible/tools/x.py": "x\n"}),
+            ("a file out of the repository", "../../../../../outside", {}),
+        ):
+            with self.subTest(link=label):
+                scan = self.scan({**PLAIN, **extra}, {role_file("b", "files/x"): target})
+                self.assertEqual(1, len(scan.unresolved), scan.unresolved)
+
+    def test_a_link_to_a_file_outside_ansible_is_left_to_the_outside_reads(self) -> None:
+        files = {**PLAIN, "hetzner/x/y.conf": "x\n"}
+        links = {role_file("b", "files/y.conf"): "../../../../hetzner/x/y.conf"}
+        self.assertEqual([], self.scan(files, links).unresolved)
+        case = Case(files, ("hetzner/x/y.conf",), ["b"], links)
+        self.assertEqual(case.expected, self.selected(case))
+
+    def test_an_unresolved_reference_makes_a_role_change_run_every_shard(self) -> None:
+        unresolved = "- ansible.builtin.include_role:\n    name: '{{ who }}'\n"
+        case = Case({**PLAIN, role_file("b"): unresolved}, (role_file("a"),), None)
+        self.assertEqual(["a", "b", "c"], expected_names(case))
+        self.assertEqual(expected_names(case), self.selected(case))
+
+    def test_an_unresolved_reference_does_not_widen_a_change_that_runs_no_shard(self) -> None:
+        unresolved = "- ansible.builtin.include_role:\n    name: '{{ who }}'\n"
+        files = {
+            **PLAIN,
+            role_file("b"): unresolved,
+            "README.md": "x\n",
+            "ansible/README.md": "x\n",
+        }
+        for changed in (("README.md",), ("ansible/README.md",), ()):
+            with self.subTest(changed=changed):
+                self.assertEqual([], self.selected(Case(files, changed, [])))
+
+    def test_a_file_that_cannot_be_read_is_unresolved(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        tree_of(Case(PLAIN, (), None), root)
+        unreadable = root / role_file("a", "tasks/other.yml")
+        unreadable.write_text("x\n", encoding="utf-8")
+        unreadable.chmod(0)
+        self.addCleanup(unreadable.chmod, 0o644)
+        if _readable(unreadable):
+            self.skipTest("this account reads a file whatever its mode")
+        self.assertEqual(1, len(ci_select.unresolved_references(root)))
+
+    def test_a_note_names_the_references_that_forced_every_shard(self) -> None:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        unresolved = "- ansible.builtin.include_role:\n    name: '{{ who }}'\n"
+        shards = tree_of(Case({**PLAIN, role_file("b"): unresolved}, (), None), root)
+        matrix = root / "matrix.json"
+        matrix.write_text(json.dumps({"include": shards}), encoding="utf-8")
+        changed = root / "changed.z"
+        changed.write_text(role_file("a") + "\0", encoding="utf-8")
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            status = ci_select.main(
+                [
+                    "--event",
+                    "pull_request",
+                    "--matrix-file",
+                    str(matrix),
+                    "--changed-file",
+                    str(changed),
+                    "--root",
+                    str(root),
+                ]
+            )
+        self.assertEqual(0, status)
+        self.assertEqual(3, len(json.loads(out.getvalue().split("matrix=")[1])["include"]))
+        self.assertIn("ansible/roles/b/tasks/main.yml:1", err.getvalue())
+        self.assertIn("1 role reference(s) cannot be mapped", err.getvalue())
+
+
+def _readable(path: Path) -> bool:
+    """Return whether this account can read ``path`` (it can, as root, whatever the mode)."""
+    try:
+        path.read_bytes()
+    except OSError:
+        return False
+    return True
+
+
+class RealTreeScanTest(unittest.TestCase):
+    """The structured scan on this repository, where one new templated name must not slip by."""
+
+    def test_no_role_reference_in_the_tree_is_unresolved(self) -> None:
+        # One reference the scan cannot place sends every pull request to every shard, which
+        # would erase the saving this selection exists for. To fix a failure here, make the
+        # name literal, or name it through a variable of the same role with a literal value.
+        unresolved = ci_select.unresolved_references(ROOT)
+        listing = "\n".join(f"  {where}: {text}" for where, text in unresolved)
+        self.assertEqual([], unresolved, "\n" + listing)
+
+    def test_the_scan_reads_the_sites_it_is_meant_to_read(self) -> None:
+        # A control: an empty scan would make the test above pass for nothing. The tree holds
+        # more than 245 role calls by collection name, and the scan counts those and more.
+        scan = ci_select.scan_references(ROOT)
+        self.assertGreater(scan.sites, 245)
+        call = re.compile(r"include_role|import_role")
+        found = sum(
+            len(call.findall(path.read_text(encoding="utf-8", errors="ignore")))
+            for unit in ci_select.units(ROOT)
+            for path in unit.rglob("*.yml")
+            if path.is_file()
+        )
+        self.assertGreater(found, 245)
+
+    def test_the_scan_places_the_templated_names_the_tree_holds(self) -> None:
+        # The names written as a variable or a playbook_dir path in two roles' tests.
+        edges = ci_select.scan_references(ROOT).edges
+        self.assertIn("ansible/roles/monitoring_stack", edges["ansible/roles/ntfy_pager"])
+        self.assertIn("ansible/roles/backup_restore", edges["ansible/roles/backup_worker"])
+
+    def test_the_graph_of_the_tree_holds_every_textual_edge(self) -> None:
+        text = ci_select.text_references(ROOT)
+        joined = ci_select.references(ROOT)
+        self.assertTrue(any(text.values()), "the textual scan found no edge")
+        for target, named in text.items():
+            with self.subTest(target=target):
+                self.assertLessEqual(named, joined[target])
+
+    def test_a_handler_change_runs_its_role_and_every_role_that_names_it(self) -> None:
+        shards = real_shards()
+        changed = "ansible/roles/node_exporter/handlers/main.yml"
+        chosen = paths_of(ci_select.select("pull_request", [changed], shards, ROOT))
+        expected = {"ansible/roles/node_exporter"} | ci_select.references(ROOT)[
+            "ansible/roles/node_exporter"
+        ]
+        self.assertEqual(expected, chosen)
+
+
+def load_variant(source: str) -> types.ModuleType:
+    """Return ci_select with ``source`` as its text, run as a module of its own."""
+    module = types.ModuleType("ci_select_variant")
+    module.__file__ = str(CI_SELECT)
+    exec(compile(source, str(CI_SELECT), "exec"), module.__dict__)  # noqa: S102
+    return module
+
+
+UNRESOLVED_CASE = Case(
+    {**PLAIN, role_file("b"): "- ansible.builtin.include_role:\n    name: '{{ who }}'\n"},
+    (role_file("a"),),
+    None,
+)
+HANDLER_CASE = Case(
+    {
+        **PLAIN,
+        role_file("a", "handlers/main.yml"): "- name: Restart alpha\n  ansible.builtin.debug:\n",
+        role_file("b"): "- name: change\n  ansible.builtin.debug:\n  notify: Restart alpha\n",
+    },
+    (role_file("a", "handlers/main.yml"),),
+    ["a", "b"],
+)
+DEPENDENCY_CASE = Case(
+    {**PLAIN, role_file("b", "meta/main.yml"): "dependencies:\n  - a\n"},
+    (role_file("a"),),
+    ["a", "b"],
+)
+LINK_CASE = Case(
+    {**PLAIN, role_file("a", "files/x"): "x\n"},
+    (role_file("a", "files/x"),),
+    ["a", "b"],
+    {role_file("b", "files/x"): "../../a/files/x"},
+)
+
+
+class SabotageTest(unittest.TestCase):
+    """Each rule of the structured scan, broken in the source, turns its own case red.
+
+    A selection that wrongly skips a shard is a gate that passes without running, so each rule
+    is shown to be the thing that keeps its case right: the real source selects what the case
+    expects, and the source with that one rule removed does not.
+    """
+
+    def prove(self, marker: str, replacement: str, case: Case, mutant_chooses: list[str]) -> None:
+        source = CI_SELECT.read_text(encoding="utf-8")
+        # A marker that matched nothing, or twice, would make the mutation a no-op or a mess.
+        self.assertEqual(1, source.count(marker), marker)
+        self.assertEqual(expected_names(case), chosen_by(load_variant(source), case))
+        mutant = load_variant(source.replace(marker, replacement))
+        self.assertEqual(mutant_chooses, chosen_by(mutant, case))
+        self.assertNotEqual(expected_names(case), chosen_by(mutant, case))
+
+    def test_dropping_the_fail_open_for_an_unresolved_reference_narrows_the_case(self) -> None:
+        marker = "        if unresolved_references(root):\n            return None\n"
+        self.prove(marker, "", UNRESOLVED_CASE, ["a"])
+
+    def test_dropping_the_handler_edge_narrows_the_case(self) -> None:
+        self.prove(
+            "        return elsewhere or None\n", "        return {unit}\n", HANDLER_CASE, ["a"]
+        )
+
+    def test_dropping_the_roles_and_dependencies_edge_narrows_the_case(self) -> None:
+        marker = "        return [self.entry_role(unit, file, entry) for entry in entries]\n"
+        self.prove(marker, "        return [{unit} for _ in entries]\n", DEPENDENCY_CASE, ["a"])
+
+    def test_dropping_the_symlink_edge_narrows_the_case(self) -> None:
+        marker = "            self.reach(unit, {owner}, relative, inside_root)\n"
+        self.prove(marker, "            pass\n", LINK_CASE, ["a"])
 
 
 if __name__ == "__main__":

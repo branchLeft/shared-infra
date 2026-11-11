@@ -1,0 +1,135 @@
+---
+# One case, included by verify.yml with ring_controller_host_refusals_case set. It puts the host in
+# one bad state, lists the role's paths, runs the role, and requires the exact message (or
+# acceptance, for a control), no change to those paths and no key in the message. The host is put
+# back in every outcome.
+- name: Reset what an earlier case left behind
+  ansible.builtin.set_fact:
+    ring_controller_host_refusals_outcome: ''
+
+- name: Make the bad state, run the role against it and judge what happened
+  block:
+    - name: Run the commands that make the bad state
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop: '{{ ring_controller_host_refusals_case.commands | default([]) }}'
+      loop_control:
+        label: '{{ item | join(" ") }}'
+      changed_when: true
+
+    - name: Put the files the case needs in place
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ item.path }}'
+        owner: root
+        group: root
+        mode: '{{ item.mode }}'
+      loop: '{{ ring_controller_host_refusals_case.files | default([]) }}'
+      loop_control:
+        label: '{{ item.path }}'
+
+    # Names, types, modes, owners, inodes, times and sizes, never a content: nothing here can hold
+    # a key. Sorted so that the order the host returns them in does not matter.
+    - name: List the role's paths before the role runs
+      ansible.builtin.command:
+        argv: "{{ ['find'] + scenario_snapshot_roots + ['-printf', '%p %y %m %u %g %i %T@ %s\\n'] }}"
+      register: ring_controller_host_refusals_before
+      changed_when: false
+
+    - name: Apply the role and note whether it accepted
+      block:
+        - name: Apply the role
+          ansible.builtin.include_role:
+            name: branchleft.ring_controller_host
+          vars:
+            ring_controller_host_bundle_sha256: "{{ ring_controller_host_refusals_case.digest | default('') }}"
+            ring_controller_host_bundle_url: "{{ ring_controller_host_refusals_case.url | default('') }}"
+            ring_controller_host_ledger_url: "{{ ring_controller_host_refusals_case.ledger | default('') }}"
+            ring_controller_host_ledger_push_remote: "{{ ring_controller_host_refusals_case.remote | default('') }}"
+            ring_controller_host_push_known_hosts: "{{ ring_controller_host_refusals_case.hosts | default('') }}"
+
+        - name: Note that the role accepted
+          ansible.builtin.set_fact:
+            ring_controller_host_refusals_outcome: accepted
+      rescue:
+        # A refusal inside a loop reports "One or more items failed" at the top and the message in
+        # the failed item, so the message is taken from the item when there is one.
+        - name: Note the message the role stopped with
+          ansible.builtin.set_fact:
+            ring_controller_host_refusals_outcome: >-
+              {{ (ansible_failed_result.results | selectattr('failed', 'defined') | selectattr('failed') | map(attribute='msg') | first
+              if ansible_failed_result.results is defined else ansible_failed_result.msg | default('no message')) }}
+
+    - name: List the role's paths after the role has run
+      ansible.builtin.command:
+        argv: "{{ ['find'] + scenario_snapshot_roots + ['-printf', '%p %y %m %u %g %i %T@ %s\\n'] }}"
+      register: ring_controller_host_refusals_after
+      changed_when: false
+
+    - name: Require the message to be the expected one, and to hold no key and no input value
+      ansible.builtin.assert:
+        that:
+          - ring_controller_host_refusals_outcome == (ring_controller_host_refusals_case.expect | default('accepted'))
+          - "'PRIVATE KEY' not in ring_controller_host_refusals_outcome"
+          - ring_controller_host_refusals_case.forbidden | default([]) | select('in', ring_controller_host_refusals_outcome) | list | length == 0
+        fail_msg: 'Case "{{ ring_controller_host_refusals_case.name }}" gave "{{ ring_controller_host_refusals_outcome }}".'
+        quiet: true
+
+    - name: Require the role to have changed none of its paths, whether it accepted or refused
+      ansible.builtin.assert:
+        that:
+          - ring_controller_host_refusals_before.stdout_lines | sort == ring_controller_host_refusals_after.stdout_lines | sort
+        fail_msg: 'Case "{{ ring_controller_host_refusals_case.name }}" changed the host.'
+        quiet: true
+      when: not (ring_controller_host_refusals_case.changes | default(false))
+
+    - name: Look at the paths the case says must still be absent
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop: '{{ ring_controller_host_refusals_case.absent | default([]) }}'
+      register: ring_controller_host_refusals_absent
+
+    - name: Require those paths to be absent
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        fail_msg: 'Case "{{ ring_controller_host_refusals_case.name }}" left {{ item.item }} in place or made it.'
+        quiet: true
+      loop: '{{ ring_controller_host_refusals_absent.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Look at the paths the case says must keep their mode
+      ansible.builtin.stat:
+        path: '{{ item.path }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop: '{{ ring_controller_host_refusals_case.modes | default([]) }}'
+      loop_control:
+        label: '{{ item.path }}'
+      register: ring_controller_host_refusals_moded
+
+    - name: Require those paths to have the mode they had
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.mode == item.item.mode
+        fail_msg: 'Case "{{ ring_controller_host_refusals_case.name }}" changed the mode of {{ item.item.path }}.'
+        quiet: true
+      loop: '{{ ring_controller_host_refusals_moded.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+  always:
+    - name: Put the host back
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop: '{{ ring_controller_host_refusals_case.restore | default([]) }}'
+      loop_control:
+        label: '{{ item | join(" ") }}'
+      changed_when: true

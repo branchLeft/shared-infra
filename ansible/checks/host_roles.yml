@@ -5,40 +5,75 @@
 
 # A role is named by its directory under ansible/roles/. The check does not look at
 # that directory, so a name may be listed before its role merges. A host with no
-# entry may apply the two pull roles and nothing else. Planned, not listed: control_plane_db.
+# entry may apply the two pull roles and nothing else.
 edge1:
   - host_inputs
   - host_baseline
   - egress_nat
   - ci_login
+  - ci_jump
+  - deploy_verifier
   - deploy_tooling
   - edge_stack
+  - node_exporter
   - exporters_and_collectors
   - ntfy_pager
   - monitoring_stack
+# edge-t, the tenants project's base host. The name has no hyphen because HOST_NAME allows
+# [a-z][a-z0-9]*. egress_nat makes it the gateway of the tenants network (one gateway per
+# network, test_egress_nat_single_gateway.py). ci_jump is the jump account's key options, the
+# second hop of the pipeline's route (ws#2899); ci_login and deploy_tooling follow with the
+# edge-t server (ws#2898), and the edge stack as a later change.
+edget:
+  - host_inputs
+  - host_baseline
+  - egress_nat
+  - ci_jump
 ops1:
   - host_inputs
   - host_baseline
+  - safety_service
+  - safety_channel_key
   - breakglass_mint_host
   - status_page
+  - deploy_verifier
   - control_plane
   - nextcloud_stack
   - backup_worker
   - backup_restore
+  - control_plane_db
+  - node_exporter
+  - ring_controller_host
 app1:
   - host_inputs
   - deploy_tooling
   - deploy_slot_keys
+  - export_bundler
+  - deploy_verifier
   - website_app1
   - breakglass_grant_host
   - host_baseline
 db1:
   - host_inputs
+  - deploy_verifier
   - db1_stack
   - db1_backup_timers
   - db1_grants
   - tunnel_account
   - host_baseline
+  - node_exporter
+# dbt1, the database host db-t1. Five roles after the pull roles, no host_inputs: the host
+# has no private inputs, so the loader has nothing to read (R11 applies only when it is
+# listed). egress_nat is applied bare with its gateway switch unset: this host is no gateway.
+# deploy_tooling (class internal, no policy program) installs the deploy wrapper and the
+# compose unit, and db_t1 is the first role to run the wrapper on this host, so it follows
+# deploy_verifier and deploy_tooling.
+dbt1:
+  - host_baseline
+  - egress_nat
+  - deploy_verifier
+  - deploy_tooling
+  - db_t1
 demo1:
   - demo1_build
   - demo1_egress_spool

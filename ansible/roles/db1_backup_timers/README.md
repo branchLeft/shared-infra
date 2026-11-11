@@ -73,12 +73,34 @@ because the unit files fix the paths they run.
   fetched over the network from raw.githubusercontent.com at the pinned commit, so
   the container needs that network. The verify play checks each program against its
   pinned digest, and each unit byte for byte against the role's own copy.
+- `molecule/refusals` converges the same host, then runs three cases on
+  `provision_tenant_db.py`, the program `db1_grants` runs. A: a wrong pinned digest
+  (passed as an `include_role` parameter, which beats `vars/main.yml`) is refused by
+  the fetch, and no file is left at the destination. B: a file with other bytes, mode
+  0666 and an owner that is not root is replaced by the pinned bytes as `root:root` 0644. C: the pinned bytes with mode 0666 are reset to 0644. The role heals a wrong
+  mode or owner and does not refuse it; the checksum on the fetch is what refuses
+  wrong bytes. Each case empties the facts and registers of the last, and B and C
+  read the broken state before the role runs, so neither can pass on a file that was
+  already right. The scenario leaves out `check-fresh`, `idempotence`,
+  `check-configured` and `molecule-check`, which the default scenario runs, so the
+  two shards stay short (`molecule/refusals/skip-steps.txt`).
 - `tests/unit/test_db1_backup_timers.py` checks the schedule values in the units,
   that every program a unit runs is fetched, that every fetched program has a
   digest, that the commit is a full sha, and that no `.py` file is in `files/`. Its
-  `CrossRoleTests` fail when a file `db1_grants` stages is not delivered here, is
-  pinned to a different digest in `db1_grants`, or when the two roles pin different
-  commits.
+  `DeliveryControlTests` read `tasks/main.yml` and fail when a fetch has no checksum
+  taken from the pinned digest of its item, is not `root:root` with mode 0644, or is
+  skipped for any reason but check mode. Its `CrossRoleTests` fail when a file
+  `db1_grants` stages is not delivered here, is pinned to a different digest in
+  `db1_grants`, or when the two roles pin different commits.
+
+## Check mode and a fresh db1
+
+The fetches are skipped in check mode, because a check-mode run creates no
+directory to write into. A plan of a fresh db1 therefore shows no program, and the
+`db1_grants` plan refuses with `program-missing` until a real apply of this role has
+run. That is ISSUE branchLeft/workspace#2861, filed on its own and not fixed here. The
+live db1 gets `provision_tenant_db.py` from the first gated apply, as `db1_grants`
+Live blockers 1 and 6 say.
 
 ## Not covered
 

@@ -1,0 +1,11 @@
+#!/bin/sh
+# TEST STAND-IN in front of the real unbound-checkconf, installed by prepare.yml. It records
+# each call and runs the real program, unless the switch checkconf_rejects is set, which is
+# a configuration that unbound refuses.
+state=/var/lib/standin-docker
+printf '%s\n' "$*" >> "$state/checkconf.log"
+if [ -e "$state/flags/checkconf_rejects" ]; then
+  echo "unbound-checkconf: stand-in rejection: the configuration is refused" >&2
+  exit 1
+fi
+exec /usr/sbin/unbound-checkconf "$@"

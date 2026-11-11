@@ -157,6 +157,14 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "unit, not an instance of the Compose template, and nothing here sees "
         "whether that repository declares a health signal for it."
     ),
+    "ring-controller": (
+        "branchLeft/ghost-platform commits the ring controller's programs and "
+        "systemd units, and no Compose file for it. This repository names it only "
+        "in the /opt/branchleft/ring-controller and /etc/branchleft/ring-controller "
+        "paths of the ansible/roles/ring_controller_host role. It is a systemd unit, "
+        "not an instance of the Compose template, and nothing here sees whether that "
+        "repository declares a health signal for it."
+    ),
     "state-copy": (
         "branchLeft/ghost-platform commits the state copy's installer and its "
         "systemd units, and no Compose file for it. This repository names it only "
@@ -198,6 +206,15 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "because the scratch image cannot carry a healthcheck. It is registered "
         "because the scan reads the path as a stack name. No `*/stack/compose.yml` "
         "exists for it."
+    ),
+    "dbt1": (
+        "An instance of the template on the tenant database host, started through "
+        "branchleft-deploy. Its Compose text is rendered from a Jinja template by the "
+        "ansible/roles/db_t1 role of branchLeft/shared-infra and is never committed as "
+        "a Compose file, and the scan reads only `*/stack/compose.yml`, so it cannot "
+        "read this one. Its health signal, a real query that pins the server version, "
+        "is held by that role's unit tests, and the deploy wrapper refuses a Compose "
+        "file with a service that declares none."
     ),
 }
 
@@ -243,6 +260,7 @@ REPOSITORY = HETZNER.parent
 SCANNED_SUFFIXES = frozenset(
     {
         "",
+        ".Caddyfile",
         ".asc",
         ".authoring",
         ".conf",
@@ -251,6 +269,7 @@ SCANNED_SUFFIXES = frozenset(
         ".gotmpl",
         ".in",
         ".j2",
+        ".js",
         ".json",
         ".local",
         ".md",

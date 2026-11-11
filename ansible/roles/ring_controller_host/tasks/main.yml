@@ -1,0 +1,366 @@
+---
+# The role makes the ring controller's host side on ops1: the service account, two OpenSSH keys
+# (the ledger-signing key and the push key), a digest-pinned bundle when one is named, the two
+# units, and an environment file of public values. It starts nothing: the timer is held disabled
+# and stopped until ring_controller_host_bundle_sha256 is set.
+#
+# It touches only its own paths (vars/main.yml): /etc/branchleft/ring-controller, the state and
+# release directories, its two unit files and its account. It asserts its parents and never
+# changes them. Which host may apply it is the owner's list (checks/host_roles.yml, R9); an
+# in-role host test would be no control, because under the pull inventory_hostname is localhost.
+
+# --- Inputs first, refused before any task changes anything. No message names a value (ANS-16).
+# The argument spec coerces a wrong type rather than rejecting it and accepts an empty string, so
+# these reject both. Each input has its own task, so a refusal names the one input at fault.
+- name: Refuse a bundle digest that is set and is not 64 lowercase hex digits
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_bundle_sha256 is string
+      - ring_controller_host_bundle_sha256 | length == 0 or ring_controller_host_bundle_sha256 is match(ring_controller_host_sha256_pattern)
+    quiet: true
+    fail_msg: ring_controller_host_bundle_sha256 must be empty or 64 lowercase hex digits.
+
+- name: Refuse a bundle URL that is set and is not an https URL with no credential
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_bundle_url is string
+      - ring_controller_host_bundle_url | length == 0 or ring_controller_host_bundle_url is match(ring_controller_host_bundle_url_pattern)
+    quiet: true
+    fail_msg: ring_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
+
+- name: Refuse a ledger URL that is set and is not an https URL with no credential
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_ledger_url is string
+      - ring_controller_host_ledger_url | length == 0 or ring_controller_host_ledger_url is match(ring_controller_host_ledger_url_pattern)
+    quiet: true
+    fail_msg: ring_controller_host_ledger_url must be empty or an https URL with no user name, password, query or fragment.
+
+- name: Refuse a ledger push remote that is set and is not ssh://git@HOST/ORG/REPO.git
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_ledger_push_remote is string
+      - ring_controller_host_ledger_push_remote | length == 0 or ring_controller_host_ledger_push_remote is match(ring_controller_host_push_remote_pattern)
+    quiet: true
+    fail_msg: ring_controller_host_ledger_push_remote must be empty or ssh://git@HOST/ORG/REPO.git.
+
+- name: Refuse a known-hosts line that is set and is not one host-key line
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_push_known_hosts is string
+      - ring_controller_host_push_known_hosts | length == 0 or ring_controller_host_push_known_hosts is match(ring_controller_host_known_hosts_pattern)
+    quiet: true
+    fail_msg: ring_controller_host_push_known_hosts must be empty or one known_hosts line with a host, a key type and a key.
+
+# A digest names a bundle to run, and a bundle with no ledger to read, nowhere to push or no
+# host key to pin would be started half configured. Each missing input is named.
+- name: Refuse a bundle digest with no bundle URL
+  ansible.builtin.assert:
+    that: ring_controller_host_bundle_sha256 | length == 0 or ring_controller_host_bundle_url | length > 0
+    quiet: true
+    fail_msg: ring_controller_host_bundle_url is empty while ring_controller_host_bundle_sha256 is set.
+
+- name: Refuse a bundle digest with no ledger URL
+  ansible.builtin.assert:
+    that: ring_controller_host_bundle_sha256 | length == 0 or ring_controller_host_ledger_url | length > 0
+    quiet: true
+    fail_msg: ring_controller_host_ledger_url is empty while ring_controller_host_bundle_sha256 is set.
+
+- name: Refuse a bundle digest with no ledger push remote
+  ansible.builtin.assert:
+    that: ring_controller_host_bundle_sha256 | length == 0 or ring_controller_host_ledger_push_remote | length > 0
+    quiet: true
+    fail_msg: ring_controller_host_ledger_push_remote is empty while ring_controller_host_bundle_sha256 is set.
+
+- name: Refuse a bundle digest with no known-hosts line
+  ansible.builtin.assert:
+    that: ring_controller_host_bundle_sha256 | length == 0 or ring_controller_host_push_known_hosts | length > 0
+    quiet: true
+    fail_msg: ring_controller_host_push_known_hosts is empty while ring_controller_host_bundle_sha256 is set.
+
+# --- What the role stands on. It asserts these and never makes or changes them.
+- name: Look at ssh-keygen
+  ansible.builtin.stat:
+    path: '{{ ring_controller_host_ssh_keygen }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: ring_controller_host_keygen_stat
+
+- name: Require ssh-keygen to be a root-owned regular file that only root can change
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_keygen_stat.stat.exists
+      - ring_controller_host_keygen_stat.stat.isreg
+      - ring_controller_host_keygen_stat.stat.uid == 0
+      - not ring_controller_host_keygen_stat.stat.wgrp
+      - not ring_controller_host_keygen_stat.stat.woth
+    quiet: true
+    fail_msg: ssh-keygen is missing, is not a regular file, is not root's or can be changed by others. The role does not install it.
+
+- name: Look at the parent directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ ring_controller_host_parents }}'
+  register: ring_controller_host_parent_stats
+  loop_control:
+    label: '{{ item }}'
+
+- name: Require each parent to be a root-owned directory that only root can change
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.uid == 0
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it.
+  loop: '{{ ring_controller_host_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# --- The account. System, no login, no home: it owns the keys and the state and nothing else.
+- name: Create the service group
+  ansible.builtin.group:
+    name: '{{ ring_controller_host_account }}'
+    system: true
+
+- name: Create the service account
+  ansible.builtin.user:
+    name: '{{ ring_controller_host_account }}'
+    group: '{{ ring_controller_host_account }}'
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: /usr/sbin/nologin
+
+# Read-only. A fresh host in check mode has no account yet, and a task that names it as an owner
+# would fail there, so the tasks that need it run when it exists. On an apply it always does.
+- name: Look for the service account
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ ring_controller_host_account }}'
+    fail_key: false
+
+- name: Note whether the service account exists
+  ansible.builtin.set_fact:
+    ring_controller_host_account_present: '{{ getent_passwd[ring_controller_host_account] is not none }}'
+
+# --- Directories. The config and release directories are root's and world-readable: they hold
+# public text and root-owned programs. The state directory is the account's alone.
+- name: Make the directories the role owns
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - '{{ ring_controller_host_config_dir }}'
+    - '{{ ring_controller_host_base_dir }}'
+    - '{{ ring_controller_host_releases_dir }}'
+
+- name: Make the state directory, owned by the service account and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ ring_controller_host_state_dir }}'
+    state: directory
+    owner: '{{ ring_controller_host_account }}'
+    group: '{{ ring_controller_host_account }}'
+    mode: '0700'
+  when: ring_controller_host_account_present
+
+# --- The keys. One module makes both pairs inside one process and never returns a private byte,
+# so the task is hidden and its diff is off (ANS-16) although its arguments are only paths and
+# names. The module's refusal is a fixed code and a path, so it is read out by an assert below.
+- name: Look at the config directory the keys live under
+  ansible.builtin.stat:
+    path: '{{ ring_controller_host_config_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: ring_controller_host_config_stat
+
+- name: Note whether the keys can be planned or made now
+  ansible.builtin.set_fact:
+    ring_controller_host_keys_ready: '{{ ring_controller_host_account_present and ring_controller_host_config_stat.stat.isdir | default(false) }}'
+
+- name: Make the ledger-signing key and the push key if they are absent
+  ring_controller_host_keys:
+    directory: '{{ ring_controller_host_keys_directory }}'
+    owner: '{{ ring_controller_host_account }}'
+    group: '{{ ring_controller_host_account }}'
+    ssh_keygen: '{{ ring_controller_host_ssh_keygen }}'
+  register: ring_controller_host_keys_result
+  failed_when: false
+  no_log: true
+  diff: false
+  when: ring_controller_host_keys_ready
+
+# failed_when: false makes the failed flag false, so a refusal is read from the message: only a
+# failure carries one. The message is a fixed code and a path, so it is safe to show.
+- name: Stop if the key module refused
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_keys_result.msg is not defined
+    fail_msg: >-
+      {{ ring_controller_host_keys_result.msg | default('the key module returned no result') }}
+    quiet: true
+  when: ring_controller_host_keys_ready
+
+# The recorded output of the apply: the two public halves with their fingerprints, which the owner
+# copies. They are public data. On a fresh host the plan cannot know them yet, so it says so.
+- name: Record the public half of the ledger-signing key
+  ansible.builtin.debug:
+    msg: >-
+      Ring controller ledger-signing public half:
+      {{ ring_controller_host_keys_result.ledger_signing_public | default('not yet made', true) }}
+      fingerprint {{ ring_controller_host_keys_result.ledger_signing_fingerprint | default('not yet made', true) }}
+
+- name: Record the public half of the push key
+  ansible.builtin.debug:
+    msg: >-
+      Ring controller push public half:
+      {{ ring_controller_host_keys_result.push_public | default('not yet made', true) }}
+      fingerprint {{ ring_controller_host_keys_result.push_fingerprint | default('not yet made', true) }}
+
+# --- The host key the push pins. Public text, one line, validated above; empty until set.
+- name: Write the known-hosts file the push pins the remote with
+  ansible.builtin.copy:
+    content: "{{ ring_controller_host_push_known_hosts ~ '\n' if ring_controller_host_push_known_hosts | length > 0 else '' }}"
+    dest: '{{ ring_controller_host_known_hosts_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+# --- The bundle, only when a digest is set. get_url holds the download to the digest, so a
+# wrong one stops the role here, before anything is unpacked and before the link moves. In check
+# mode a directory not yet made cannot take a download, so the fetch is skipped there.
+- name: Make the directory of this release
+  ansible.builtin.file:
+    path: '{{ ring_controller_host_release_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: ring_controller_host_bundle_sha256 | length > 0
+
+- name: Look at the release directory
+  ansible.builtin.stat:
+    path: '{{ ring_controller_host_release_dir }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: ring_controller_host_release_stat
+  when: ring_controller_host_bundle_sha256 | length > 0
+
+- name: Download the bundle and hold it to its digest
+  ansible.builtin.get_url:
+    url: '{{ ring_controller_host_bundle_url }}'
+    dest: '{{ ring_controller_host_bundle_file }}'
+    checksum: 'sha256:{{ ring_controller_host_bundle_sha256 }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - ring_controller_host_bundle_sha256 | length > 0
+    - ring_controller_host_release_stat.stat.exists
+
+- name: Unpack the bundle, owned by root and closed to writes by anyone else
+  ansible.builtin.unarchive:
+    src: '{{ ring_controller_host_bundle_file }}'
+    dest: '{{ ring_controller_host_release_dir }}'
+    remote_src: true
+    owner: root
+    group: root
+    mode: 'u=rwX,go=rX'
+    extra_opts:
+      - --no-same-owner
+      - --no-same-permissions
+    creates: '{{ ring_controller_host_release_dir }}/{{ ring_controller_host_binary_relative }}'
+  when:
+    - ring_controller_host_bundle_sha256 | length > 0
+    - ring_controller_host_release_stat.stat.exists
+
+- name: Look at the bundle's program
+  ansible.builtin.stat:
+    path: '{{ ring_controller_host_release_dir }}/{{ ring_controller_host_binary_relative }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: ring_controller_host_binary_stat
+  when: ring_controller_host_bundle_sha256 | length > 0
+
+- name: Require the program to be a root-owned executable that no one else can write
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_binary_stat.stat.exists
+      - ring_controller_host_binary_stat.stat.isreg
+      - ring_controller_host_binary_stat.stat.uid == 0
+      - ring_controller_host_binary_stat.stat.xusr
+      - not ring_controller_host_binary_stat.stat.wgrp
+      - not ring_controller_host_binary_stat.stat.woth
+    quiet: true
+    fail_msg: The bundle has no bin/ring-controller that is a root-owned executable regular file no one else can write. current was not moved.
+  when:
+    - ring_controller_host_bundle_sha256 | length > 0
+    - not ansible_check_mode or ring_controller_host_binary_stat.stat.exists
+
+- name: Point current at this release
+  ansible.builtin.file:
+    path: '{{ ring_controller_host_current_link }}'
+    src: '{{ ring_controller_host_release_dir }}'
+    state: link
+    owner: root
+    group: root
+  when:
+    - ring_controller_host_bundle_sha256 | length > 0
+    - ring_controller_host_binary_stat.stat.exists
+
+# --- The units and the environment file. The units are static files, never templated.
+- name: Write the environment file of public values
+  ansible.builtin.template:
+    src: ring-controller.env.j2
+    dest: '{{ ring_controller_host_env_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Install the service and timer units
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ ring_controller_host_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ ring_controller_host_units }}'
+  notify: Reload systemd manager
+
+# Without this the handler runs at the end of the play, and the timer task below would meet a
+# unit systemd has not read.
+- name: Load the units before the timer is handled
+  ansible.builtin.meta: flush_handlers
+
+- name: Look at the installed timer
+  ansible.builtin.stat:
+    path: '{{ ring_controller_host_unit_dir }}/{{ ring_controller_host_timer_unit }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: ring_controller_host_timer_stat
+
+# The one step that turns the controller on is a digest, and with none the timer is held
+# disabled and stopped: the role owns this unit, so it converges it either way. A fresh host in
+# check mode has no unit file yet and is skipped.
+- name: Hold the timer to the state the digest asks for
+  ansible.builtin.systemd_service:
+    name: '{{ ring_controller_host_timer_unit }}'
+    enabled: '{{ ring_controller_host_bundle_sha256 | length > 0 }}'
+    state: "{{ 'started' if ring_controller_host_bundle_sha256 | length > 0 else 'stopped' }}"
+  when: ring_controller_host_timer_stat.stat.exists

@@ -14,6 +14,6 @@ if [ -e /run/edge-unit.fail ]; then
   echo "UNIT-START-FAILED" >> /var/log/docker-standin.calls
   exit 1
 fi
-echo "UNIT-START caddyfile=$(short_sha /opt/branchleft/edge/Caddyfile) compose=$(short_sha /opt/branchleft/edge/compose.yml)" >> /var/log/docker-standin.calls
+echo "UNIT-START caddyfile=$(short_sha /opt/branchleft/edge/caddy/Caddyfile) compose=$(short_sha /opt/branchleft/edge/compose.yml)" >> /var/log/docker-standin.calls
 # `up -d --wait` leaves both services running, as the real unit does.
 printf 'caddy\ncrowdsec\n' > /run/standin.running

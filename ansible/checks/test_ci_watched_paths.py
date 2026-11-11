@@ -21,7 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ansible.yml"
 FILTER = re.compile(r"watched=\(\n(.*?)\n\s*\)", re.DOTALL)
 # The directories watched whole, whatever they hold now or later.
-WHOLE = ("ansible/", "hetzner/")
+WHOLE = ("ansible/", "hetzner/", "mail/")
+# The hand-step ratchet register: every runbook it counts must be a path the filter watches.
+REGISTER = Path(__file__).resolve().parent / "hand_runbook_steps.yml"
 
 
 def parse_watched(workflow_text: str) -> list[str]:
@@ -63,11 +65,18 @@ class WatchedPathsTest(unittest.TestCase):
         detail = [f"{path} (read by {', '.join(sorted(self.reads[path]))})" for path in missing]
         self.assertEqual([], detail, "these paths are read by role tests but not in the filter")
 
-    def test_ansible_and_hetzner_are_watched_whole(self) -> None:
+    def test_ansible_hetzner_and_mail_are_watched_whole(self) -> None:
         # A file named one by one is a file the next edit forgets to name.
         for directory in WHOLE:
             with self.subTest(directory=directory):
                 self.assertIn(directory, self.watched)
+
+    def test_every_runbook_the_ratchet_counts_is_watched(self) -> None:
+        # The ratchet (test_no_new_hand_runbook_steps.py) reads every mail/RUNBOOK-*.md. A runbook
+        # change the filter does not name never runs it, so a new hand step could land green.
+        runbooks = set(re.findall(r"^(\S+\.md):\s*$", REGISTER.read_text(encoding="utf-8"), re.M))
+        self.assertIn("mail/RUNBOOK-mx1-provision.md", runbooks)
+        self.assertEqual([], uncovered(runbooks, self.watched))
 
     def test_the_lint_files_and_the_two_files_the_tools_read_are_watched(self) -> None:
         for path in (

@@ -1,0 +1,902 @@
+---
+# The lifecycle of the two Compose classes and the resolver, against the stand-in docker. Each case
+# puts the host the first converge built into one state and applies the role again; what the role
+# did is read from the stand-in's own records (its containers, with the file each one holds as it
+# was when the container was created, and its log of every call), never from the role's output.
+#
+# A case ends with the host back where it started, so the next one begins from the baseline. The
+# environment variable MX1_CASES, a comma-separated list of case names, runs those cases alone
+# (a sabotage run is one case); unset, the scenario runs its own group of cases.
+#
+# What the stand-in does and does not model is in the role's README ("How it is tested"): it models
+# the part of Compose that the role's gap lay in (a mounted file's content and an env_file's content
+# are not seen by `up`; a file replaced by a rename leaves a container on the old file), and nothing
+# else of Docker.
+- name: Lifecycle cases
+  hosts: all
+  gather_facts: false
+  vars:
+    lc_tasks: '{{ playbook_dir }}/../default/tasks'
+    # Two scenarios share this file, so that the cases of both have one preamble and one end: this one
+    # runs the cases that edit what the repository holds, and adoption runs the cases for a host with
+    # no stamp. MX1_CASES, a comma-separated list of case names, runs those cases alone.
+    lc_scenario: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') }}"
+    lc_groups:
+      lifecycle:
+        - no_change_run
+        - caddyfile_only_change
+        - shim_env_only_change
+        - stalwart_env_edit
+        - drift_due
+        - pending_after_crash
+        - unhealthy_after_up
+        - resolver_drift
+      adoption:
+        - adopt_clean
+        - record_only_after_readback
+        - adopt_stale_mount
+        - adopt_container_down
+        - adopt_image_wrong
+    lc_only: "{{ lookup('ansible.builtin.env', 'MX1_CASES') | split(',') | select | list }}"
+    lc_selected: '{{ lc_only if lc_only | length > 0 else lc_groups[lc_scenario] }}'
+    lc_nl: "\n"
+    lc_caddyfile: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/shim.Caddyfile', rstrip=false) }}"
+    lc_caddyfile_next: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/shim.Caddyfile', rstrip=false) }}# a rule the next commit adds\n"
+    lc_caddyfile_after_crash: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/shim.Caddyfile', rstrip=false) }}# a rule added before a crash\n"
+    lc_stalwart_compose: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/docker-compose.yml', rstrip=false) }}"
+    lc_dropin: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../files/10-branchleft-local-recursive.conf', rstrip=false) }}"
+    lc_shim_image: "{{ (lookup('ansible.builtin.file', playbook_dir ~ '/../../files/shim-compose.yml') | from_yaml).services['mailgun-shim'].image }}"
+    lc_stamps:
+      - /var/lib/branchleft/mx1.stalwart.applied
+      - /var/lib/branchleft/mx1.shim.applied
+      - /var/lib/branchleft/mx1.resolver.applied
+    lc_rotated_token: 'ROTATED-{{ scenario_shim_secret }}'
+    lc_edited_secret: 'EDITED-{{ scenario_shim_secret }}'
+  tasks:
+    # ----- Start from the baseline, whatever an earlier run of this play left -----
+
+    - name: Clear the stand-ins' switches
+      ansible.builtin.find:
+        paths: /var/lib/standin-docker/flags
+        file_type: any
+      register: mx1_stack_lc_flags
+
+    - name: Remove them
+      ansible.builtin.file:
+        path: '{{ item.path }}'
+        state: absent
+      loop: '{{ mx1_stack_lc_flags.files }}'
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Apply the role, so a stamp or a file an earlier run moved is put right
+      ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+    - name: Assert the baseline applied
+      ansible.builtin.assert:
+        that: not mx1_stack_run.failed
+        quiet: true
+        fail_msg: 'The baseline did not apply: {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+    - name: Record the baseline
+      ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+      vars:
+        snap_label: base
+
+    # ----- A run that has nothing to do touches nothing -----
+
+    - name: Case no_change_run
+      when: "'no_change_run' in lc_selected"
+      block:
+        - name: Apply the role to a converged host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: no_change
+
+        - name: Assert the run did not fail and moved nothing, made no call to up and no certificate check
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/untouched.yml'
+          vars:
+            snap_before: base
+            snap_after: no_change
+            reason: a converged host
+
+        - name: Assert it did not fail
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped on a converged host: {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+    # ----- The case the High was about -----
+    # The repository's Caddyfile changes and nothing else does. Compose does not see the content of a
+    # mounted file, and a rename leaves the running Caddy on the old inode, which it reads only at
+    # start. The role must recreate Caddy, and only Caddy, and read back before it stamps.
+
+    - name: Case caddyfile_only_change
+      when: "'caddyfile_only_change' in lc_selected"
+      block:
+        - name: Apply the role with a Caddyfile that has one more rule
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+          vars:
+            run_caddyfile: '{{ lc_caddyfile_next }}'
+
+        - name: Assert the role finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: caddyfile
+
+        - name: Look at the Caddyfile on the host and the stamp
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            checksum_algorithm: sha256
+          loop:
+            - /etc/mailgun-shim/Caddyfile
+            - /var/lib/branchleft/mx1.shim.applied
+          register: mx1_stack_lc_after
+
+        - name: Assert the container holds the new Caddyfile, the stamp names it and was written after the container started
+          vars:
+            mx1_stack_lc_caddy: "{{ mx1_stack_snaps.caddyfile.containers['mailgun-shim-caddy'] }}"
+            mx1_stack_lc_new_sum: "{{ lc_caddyfile_next | hash('sha256') }}"
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_lc_after.results[0].stat.checksum == mx1_stack_lc_new_sum
+              - >-
+                mx1_stack_lc_caddy.mounts | selectattr('container_path', 'equalto', '/etc/caddy/Caddyfile')
+                | map(attribute='sha256') | first == mx1_stack_lc_new_sum
+              - "('shim_caddyfile ' ~ mx1_stack_lc_new_sum) in mx1_stack_snaps.caddyfile.stamps.shim"
+              - mx1_stack_lc_after.results[1].stat.mtime * 1000000000 > mx1_stack_lc_caddy.started_ns
+              - mx1_stack_snaps.caddyfile.openssl | length == mx1_stack_snaps.base.openssl | length + 2
+            quiet: true
+            fail_msg: The new Caddyfile is not the one the container holds, the stamp does not name it, or it was written before the container started.
+
+        - name: Assert one call to up for the project and one forced recreate naming caddy alone
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/up_calls.yml'
+          vars:
+            snap_before: base
+            snap_after: caddyfile
+            expect_ups: 2
+            expect_forced: [caddy]
+
+        - name: Assert only the Caddy container was created again
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/recreated.yml'
+          vars:
+            snap_before: base
+            snap_after: caddyfile
+            expect_recreated: [mailgun-shim-caddy]
+
+        - name: Apply the role again with the same Caddyfile
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+          vars:
+            run_caddyfile: '{{ lc_caddyfile_next }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: caddyfile_again
+
+        - name: Assert the second run moved nothing, made no call to up and no certificate check
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/untouched.yml'
+          vars:
+            snap_before: caddyfile
+            snap_after: caddyfile_again
+            reason: the same Caddyfile applied twice
+
+        - name: Put the repository's Caddyfile back
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert it was put back
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    # ----- The shim secret changes: the shim's env_file changes and nothing Compose can see does -----
+
+    - name: Case shim_env_only_change
+      when: "'shim_env_only_change' in lc_selected"
+      block:
+        - name: Give the credentials file another shim secret
+          ansible.builtin.replace:
+            path: /root/.stalwart-service-credentials
+            regexp: '^blog-shim-bulk-submission:.*$'
+            replace: 'blog-shim-bulk-submission:{{ lc_rotated_token }}'
+          no_log: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert the role finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: shim_env
+
+        - name: Assert one forced recreate, naming the shim alone
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/up_calls.yml'
+          vars:
+            snap_before: base
+            snap_after: shim_env
+            expect_ups: 2
+            expect_forced: [mailgun-shim]
+
+        - name: Assert only the shim container was created again
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/recreated.yml'
+          vars:
+            snap_before: base
+            snap_after: shim_env
+            expect_recreated: [mailgun-shim]
+
+        - name: Look at the environment file on the host
+          ansible.builtin.stat:
+            path: /etc/mailgun-shim/env
+            checksum_algorithm: sha256
+          register: mx1_stack_lc_env
+
+        - name: Assert the container read the environment file as it is now
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_snaps.shim_env.containers['mailgun-shim'].env_files['/etc/mailgun-shim/env'] == mx1_stack_lc_env.stat.checksum
+              - mx1_stack_lc_env.stat.checksum != mx1_stack_snaps.base.sums['/etc/mailgun-shim/env']
+            quiet: true
+            fail_msg: The shim container does not hold the environment file the host has.
+
+        - name: Put the shim secret back
+          ansible.builtin.replace:
+            path: /root/.stalwart-service-credentials
+            regexp: '^blog-shim-bulk-submission:.*$'
+            replace: 'blog-shim-bulk-submission:{{ scenario_shim_secret }}'
+          no_log: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert it finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    # ----- A hand-edited .env: Compose interpolates it, so Compose itself recreates Stalwart -----
+
+    - name: Case stalwart_env_edit
+      when: "'stalwart_env_edit' in lc_selected"
+      block:
+        - name: Edit the Prometheus secret by hand
+          ansible.builtin.replace:
+            path: /opt/stalwart/.env
+            regexp: '^STALWART_PROMETHEUS_SECRET=.*$'
+            replace: 'STALWART_PROMETHEUS_SECRET={{ lc_edited_secret }}'
+          no_log: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert the role finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: stalwart_env
+
+        - name: Assert one call to up, forcing nothing
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/up_calls.yml'
+          vars:
+            snap_before: base
+            snap_after: stalwart_env
+            expect_ups: 1
+            expect_forced: []
+
+        - name: Assert only Stalwart was created again
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/recreated.yml'
+          vars:
+            snap_before: base
+            snap_after: stalwart_env
+            expect_recreated: [stalwart]
+
+        - name: Assert Stalwart holds the .env the host has, and the file was never rewritten by the role
+          vars:
+            mx1_stack_lc_dotenv_sum: "{{ mx1_stack_snaps.stalwart_env.sums['/opt/stalwart/.env'] }}"
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_snaps.stalwart_env.containers['stalwart'].dotenv_sha256 == mx1_stack_lc_dotenv_sum
+              - mx1_stack_lc_dotenv_sum != mx1_stack_snaps.base.sums['/opt/stalwart/.env']
+            quiet: true
+            fail_msg: Stalwart does not hold the .env the host has.
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: stalwart_env_again
+
+        - name: Assert the second run moved nothing
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/untouched.yml'
+          vars:
+            snap_before: stalwart_env
+            snap_after: stalwart_env_again
+            reason: the same edit applied twice
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    # ----- A host with no stamp -----
+    # The hand scripts left the files, the containers and the resolver as the repository describes
+    # them, and there is no stamp. When nothing is off, the role writes the three stamps and
+    # nothing else. When anything is off, it acts.
+
+    - name: Case adopt_clean
+      when: "'adopt_clean' in lc_selected"
+      block:
+        - name: Take the stamps away, as a host the hand scripts built has none
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop: '{{ lc_stamps }}'
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert the role finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: adopted
+
+        - name: Assert it wrote the three stamps and nothing else, made no call to up and no certificate check
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/untouched.yml'
+          vars:
+            snap_before: base
+            snap_after: adopted
+            allow_paths: '{{ lc_stamps }}'
+            reason: only the three stamps are written
+
+        - name: Assert the stamps are the ones the converged host had, written after every container started
+          vars:
+            mx1_stack_lc_stalwart_stamp: "{{ mx1_stack_snaps.adopted.mtimes['/var/lib/branchleft/mx1.stalwart.applied'] * 1000000000 }}"
+            mx1_stack_lc_shim_stamp: "{{ mx1_stack_snaps.adopted.mtimes['/var/lib/branchleft/mx1.shim.applied'] * 1000000000 }}"
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_snaps.adopted.stamps == mx1_stack_snaps.base.stamps
+              - mx1_stack_lc_stalwart_stamp > mx1_stack_snaps.adopted.containers['stalwart'].started_ns
+              - mx1_stack_lc_shim_stamp > mx1_stack_snaps.adopted.containers['mailgun-shim-caddy'].started_ns
+              - mx1_stack_lc_shim_stamp > mx1_stack_snaps.adopted.containers['mailgun-shim'].started_ns
+            quiet: true
+            fail_msg: The adopted stamps are not the converged host's, or were written before a container started.
+
+        - name: Assert the role read the containers' files before it wrote the stamps
+          vars:
+            mx1_stack_lc_new_calls: '{{ mx1_stack_snaps.adopted.argv[(mx1_stack_snaps.base.argv | length) :] }}'
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_lc_new_calls | select('search', '^exec mailgun-shim-caddy sha256sum /etc/caddy/Caddyfile$') | list | length >= 1
+              - mx1_stack_lc_new_calls | select('search', '^inspect ') | list | length >= 3
+            quiet: true
+            fail_msg: 'The role adopted the host without reading the containers back: {{ mx1_stack_lc_new_calls }}'
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    - name: Case record_only_after_readback
+      when: "'record_only_after_readback' in lc_selected"
+      block:
+        - name: Take only the shim's stamp away
+          ansible.builtin.file:
+            path: /var/lib/branchleft/mx1.shim.applied
+            state: absent
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: record_only
+
+        - name: Assert the shim's stamp is the only thing written, and it is back as it was
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/untouched.yml'
+          vars:
+            snap_before: base
+            snap_after: record_only
+            allow_paths: [/var/lib/branchleft/mx1.shim.applied]
+            reason: only the shim's stamp is written
+
+        - name: Assert the stamp is as it was
+          ansible.builtin.assert:
+            that:
+              - not mx1_stack_run.failed
+              - mx1_stack_snaps.record_only.stamps == mx1_stack_snaps.base.stamps
+            quiet: true
+            fail_msg: The shim's stamp is not what it was before it was taken away.
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    - name: Case adopt_stale_mount
+      when: "'adopt_stale_mount' in lc_selected"
+      block:
+        - name: Take the shim's stamp away
+          ansible.builtin.file:
+            path: /var/lib/branchleft/mx1.shim.applied
+            state: absent
+
+        # The content stays the repository's. Only the modification time moves, past the start of the
+        # Caddy that runs, which is what a Caddyfile written after Caddy started looks like.
+        - name: Make the Caddyfile newer than the Caddy that runs, with the same content
+          ansible.builtin.file:
+            path: /etc/mailgun-shim/Caddyfile
+            state: touch
+            mode: '0644'
+            modification_time: now
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert the role finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: stale_mount
+
+        - name: Assert it acted on Caddy, and was not adopted
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/up_calls.yml'
+          vars:
+            snap_before: base
+            snap_after: stale_mount
+            expect_ups: 2
+            expect_forced: [caddy]
+
+        - name: Assert only the Caddy container was created again, and the stamp is back
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/recreated.yml'
+          vars:
+            snap_before: base
+            snap_after: stale_mount
+            expect_recreated: [mailgun-shim-caddy]
+
+        - name: Assert the stamp was written after the new Caddy started
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_snaps.stale_mount.stamps.shim == mx1_stack_snaps.base.stamps.shim
+              - >-
+                mx1_stack_snaps.stale_mount.mtimes['/var/lib/branchleft/mx1.shim.applied'] * 1000000000
+                > mx1_stack_snaps.stale_mount.containers['mailgun-shim-caddy'].started_ns
+            quiet: true
+            fail_msg: The stamp was not written after Caddy started again.
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    - name: Case adopt_container_down
+      when: "'adopt_container_down' in lc_selected"
+      block:
+        - name: Take the stamps away and stop the Caddy container
+          ansible.builtin.shell:
+            cmd: rm -f /var/lib/branchleft/mx1.*.applied && docker standin stop mailgun-shim-caddy
+          changed_when: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert the role finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: container_down
+
+        - name: Assert one call to up for the shim's project, forcing nothing
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/up_calls.yml'
+          vars:
+            snap_before: base
+            snap_after: container_down
+            expect_ups: 1
+            expect_forced: []
+
+        - name: Assert no container was created again
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/recreated.yml'
+          vars:
+            snap_before: base
+            snap_after: container_down
+            expect_recreated: []
+
+        - name: Assert Caddy runs again, and the three stamps are back
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_snaps.container_down.containers['mailgun-shim-caddy'].status == 'running'
+              - mx1_stack_snaps.container_down.stamps == mx1_stack_snaps.base.stamps
+            quiet: true
+            fail_msg: Caddy was not started again, or a stamp is not as it was.
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    - name: Case adopt_image_wrong
+      when: "'adopt_image_wrong' in lc_selected"
+      block:
+        - name: Take the stamps away and put the shim on an image the compose file does not name
+          ansible.builtin.shell:
+            cmd: rm -f /var/lib/branchleft/mx1.*.applied && docker standin retag mailgun-shim example.invalid/other@sha256:{{ '0' * 64 }}
+          changed_when: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert the role finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: image_wrong
+
+        - name: Assert the shim runs the pinned image again, and Stalwart was left alone
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_snaps.image_wrong.containers['mailgun-shim'].image == lc_shim_image
+              - mx1_stack_snaps.image_wrong.containers['mailgun-shim'].generation == mx1_stack_snaps.base.containers['mailgun-shim'].generation + 1
+              - mx1_stack_snaps.image_wrong.containers['stalwart'] == mx1_stack_snaps.base.containers['stalwart']
+              - mx1_stack_snaps.image_wrong.stamps == mx1_stack_snaps.base.stamps
+              - mx1_stack_snaps.image_wrong.ups[(mx1_stack_snaps.base.ups | length):] | select('search', '--force-recreate') | list | length == 0
+            quiet: true
+            fail_msg: The shim was not put back on the image the compose file pins, or something else was touched.
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    # ----- A file changed by hand, with the stamp still there -----
+
+    - name: Case drift_due
+      when: "'drift_due' in lc_selected"
+      block:
+        - name: Edit Stalwart's compose file by hand
+          ansible.builtin.copy:
+            content: '{{ lc_stalwart_compose }}# a hand edit{{ lc_nl }}'
+            dest: /opt/stalwart/docker-compose.yml
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Assert the role finished
+          ansible.builtin.assert:
+            that: not mx1_stack_run.failed
+            quiet: true
+            fail_msg: 'The role stopped at {{ mx1_stack_run.task }}: {{ mx1_stack_run.text }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: drift
+
+        - name: Assert Stalwart's project was brought up once and nothing was forced
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/up_calls.yml'
+          vars:
+            snap_before: base
+            snap_after: drift
+            expect_ups: 1
+            expect_forced: []
+
+        - name: Assert the file is the repository's again, no container was created again, and the stamp is as it was
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_snaps.drift.sums['/opt/stalwart/docker-compose.yml'] == mx1_stack_snaps.base.sums['/opt/stalwart/docker-compose.yml']
+              - mx1_stack_snaps.drift.containers == mx1_stack_snaps.base.containers
+              - mx1_stack_snaps.drift.stamps == mx1_stack_snaps.base.stamps
+            quiet: true
+            fail_msg: The hand edit was not undone, a container was touched, or the stamp changed.
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+
+    # ----- A run that stops part-way is followed by a run that acts again -----
+
+    - name: Case pending_after_crash
+      when: "'pending_after_crash' in lc_selected"
+      block:
+        - name: Make compose up fail, as a crash after the files were placed would
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/fail_up
+            state: touch
+            mode: '0644'
+
+        - name: Apply the role with a Caddyfile that has one more rule
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+          vars:
+            run_caddyfile: '{{ lc_caddyfile_after_crash }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: crashed
+
+        - name: Look at the Caddyfile on the host
+          ansible.builtin.stat:
+            path: /etc/mailgun-shim/Caddyfile
+            checksum_algorithm: sha256
+          register: mx1_stack_lc_crashed
+
+        - name: Assert the role stopped at compose up, the stamp says pending, the file was placed and no container moved
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_run.failed
+              - mx1_stack_run.task == 'Bring the project up, so Compose recreates what its own hash says changed'
+              - mx1_stack_snaps.crashed.stamps.shim == 'pending' ~ lc_nl
+              - mx1_stack_snaps.crashed.stamps.stalwart == mx1_stack_snaps.base.stamps.stalwart
+              - mx1_stack_lc_crashed.stat.checksum == (lc_caddyfile_after_crash | hash('sha256'))
+              - mx1_stack_snaps.crashed.containers == mx1_stack_snaps.base.containers
+            quiet: true
+            fail_msg: 'The crash did not leave the stamp pending with the file placed: {{ mx1_stack_run.task }}'
+
+        - name: Let compose up work again
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/fail_up
+            state: absent
+
+        - name: Apply the role again with the same Caddyfile
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+          vars:
+            run_caddyfile: '{{ lc_caddyfile_after_crash }}'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: after_crash
+
+        - name: Assert the second run acted, though the file was already in place
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/up_calls.yml'
+          vars:
+            snap_before: crashed
+            snap_after: after_crash
+            expect_ups: 2
+            expect_forced: [caddy]
+
+        - name: Assert Caddy was created again, and the stamp names the new file
+          ansible.builtin.assert:
+            that:
+              - not mx1_stack_run.failed
+              - ('shim_caddyfile ' ~ (lc_caddyfile_after_crash | hash('sha256'))) in mx1_stack_snaps.after_crash.stamps.shim
+              - mx1_stack_snaps.after_crash.containers['mailgun-shim-caddy'].generation == mx1_stack_snaps.base.containers['mailgun-shim-caddy'].generation + 1
+            quiet: true
+            fail_msg: The run after the crash did not recreate Caddy and record the stamp.
+
+        - name: Put the repository's Caddyfile back
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+      always:
+        - name: Let compose up work
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/fail_up
+            state: absent
+
+    - name: Case unhealthy_after_up
+      when: "'unhealthy_after_up' in lc_selected"
+      block:
+        - name: Report the shim unhealthy, and take its stamp away
+          ansible.builtin.shell:
+            cmd: rm -f /var/lib/branchleft/mx1.shim.applied && touch /var/lib/standin-docker/flags/unhealthy.mailgun-shim
+          changed_when: true
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: unhealthy
+
+        - name: Assert the role stopped, the stamp says pending and Stalwart's stamp is as it was
+          ansible.builtin.assert:
+            that:
+              - mx1_stack_run.failed
+              - mx1_stack_snaps.unhealthy.stamps.shim == 'pending' ~ lc_nl
+              - mx1_stack_snaps.unhealthy.stamps.stalwart == mx1_stack_snaps.base.stamps.stalwart
+            quiet: true
+            fail_msg: 'The role did not stop on an unhealthy container, or left a stamp that says converged: {{ mx1_stack_run.task }}'
+
+        - name: Report the shim healthy again
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/unhealthy.mailgun-shim
+            state: absent
+
+        - name: Apply the role again
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: healthy_again
+
+        - name: Assert the run recorded the stamp
+          ansible.builtin.assert:
+            that:
+              - not mx1_stack_run.failed
+              - mx1_stack_snaps.healthy_again.stamps.shim == mx1_stack_snaps.base.stamps.shim
+            quiet: true
+            fail_msg: The run after the container was healthy did not record the stamp.
+
+        - name: Keep this as the baseline
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: base
+      always:
+        - name: Report the shim healthy
+          ansible.builtin.file:
+            path: /var/lib/standin-docker/flags/unhealthy.mailgun-shim
+            state: absent
+
+    # ----- The resolver -----
+
+    - name: Case resolver_drift
+      when: "'resolver_drift' in lc_selected"
+      block:
+        - name: Edit the unbound drop-in by hand
+          ansible.builtin.copy:
+            content: '{{ lc_dropin }}# a hand edit{{ lc_nl }}'
+            dest: /etc/unbound/unbound.conf.d/10-branchleft-local-recursive.conf
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Apply the role
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+        - name: Look for a backup of the drop-in the role left behind
+          ansible.builtin.find:
+            paths: /etc/unbound/unbound.conf.d
+            patterns: '10-branchleft-local-recursive.conf.*'
+          register: mx1_stack_lc_backups
+
+        - name: Look at the drop-in
+          ansible.builtin.stat:
+            path: /etc/unbound/unbound.conf.d/10-branchleft-local-recursive.conf
+            checksum_algorithm: sha256
+          register: mx1_stack_lc_dropin
+
+        - name: Record the host
+          ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+          vars:
+            snap_label: resolver
+
+        - name: Assert the drop-in is the repository's, no backup is left, the stamp is as it was and the containers were not touched
+          ansible.builtin.assert:
+            that:
+              - not mx1_stack_run.failed
+              - mx1_stack_lc_dropin.stat.checksum == (lc_dropin | hash('sha256'))
+              - mx1_stack_lc_backups.files | length == 0
+              - mx1_stack_snaps.resolver.stamps == mx1_stack_snaps.base.stamps
+              - mx1_stack_snaps.resolver.containers == mx1_stack_snaps.base.containers
+              - mx1_stack_snaps.resolver.ups == mx1_stack_snaps.base.ups
+            quiet: true
+            fail_msg: 'The drop-in was not put right, a backup is left, or the Compose classes were touched: {{ mx1_stack_run.task }}'
+
+    # ----- The end: the host is the baseline, and no secret reached the log -----
+
+    - name: Apply the role last
+      ansible.builtin.include_tasks: '{{ lc_tasks }}/run_role.yml'
+
+    - name: Record the host
+      ansible.builtin.include_tasks: '{{ lc_tasks }}/snapshot.yml'
+      vars:
+        snap_label: end
+
+    - name: Assert the host ends as it began, the cases left no switch set, and the role did not stop
+      ansible.builtin.assert:
+        that:
+          - not mx1_stack_run.failed
+          - mx1_stack_snaps.end.stamps.shim == mx1_stack_snaps.base.stamps.shim
+          - mx1_stack_snaps.end.stamps.resolver == mx1_stack_snaps.base.stamps.resolver
+          - mx1_stack_snaps.end.containers | dict2items | map(attribute='value.status') | unique | list == ['running']
+        quiet: true
+        fail_msg: The host does not end as it began.
+
+    - name: Read the Prometheus secret Stalwart's .env holds now
+      ansible.builtin.slurp:
+        src: /opt/stalwart/.env
+      register: mx1_stack_lc_dotenv
+      no_log: true
+
+- name: Verify the run's log on the machine that runs the test
+  hosts: localhost
+  gather_facts: false
+  vars:
+    lc_log_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    lc_secrets:
+      - '{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
+      - 'ROTATED-{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
+      - 'EDITED-{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
+  tasks:
+    # The control first: a value the converge printed on purpose. A scan that cannot find it would
+    # find nothing for a secret either.
+    - name: Look for the control value in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ lc_log_dir }}'
+        patterns: ansible.log
+        contains: LOG-SCAN-CONTROL-VALUE
+        read_whole_file: true
+      register: mx1_stack_lc_control
+
+    - name: Look for each secret in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ lc_log_dir }}'
+        patterns: ansible.log
+        contains: '{{ item }}'
+        read_whole_file: true
+      loop: '{{ lc_secrets }}'
+      register: mx1_stack_lc_leaks
+      no_log: true
+
+    - name: Assert the scan works and no secret is in the log
+      ansible.builtin.assert:
+        that:
+          - mx1_stack_lc_control.matched == 1
+          - mx1_stack_lc_leaks.results | map(attribute='matched') | select | list | length == 0
+        quiet: true
+        fail_msg: >-
+          Either the log scan cannot see a printed value (control found in
+          {{ mx1_stack_lc_control.matched }} file(s), expected 1) or a secret reached the log.

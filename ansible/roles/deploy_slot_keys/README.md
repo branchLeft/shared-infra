@@ -57,7 +57,8 @@ Each entry:
   it over.
 
 The list holds tenant stack names and public keys, which are private. It is supplied at
-run time (an extra variable or a vaulted inventory value) and is never committed to this
+run time (on a pulled host, from the host's own root-only inputs file through the `host_inputs`
+loader, which is the only route there) and is never committed to this
 repository (ANS-16). Everything else the role uses is fixed in
 [`vars/main.yml`](vars/main.yml) and in the module, and an inventory value does not
 change it.
@@ -116,10 +117,14 @@ root run `python -m unittest discover -s ansible/checks`. CI runs all of them.
 Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode, the
 approval of the protected environment, a pull of that exact commit on the host, and a
 second run that must report zero changes. Nothing in this repository applies the role by
-hand. The role is listed for `app1` in `ansible/checks/host_roles.yml`; the slot list for
-a real host is supplied at run time and recorded by the owner, and is not part of this
-change. How the owner records a tenant's key and what to check on the host afterwards is
-in the private ghost-platform-docs repository, not here.
+hand. The role is listed for `app1` in `ansible/checks/host_roles.yml` and applied by
+`ansible/playbooks/app1.yml`, last, after `deploy_tooling` (the slot program needs the wrapper
+that role installs). The slot list for a real host is supplied at run time: the owner records it
+in the host's `/etc/branchleft/host-inputs.json` under `deploy_slot_keys_slots`, and the
+`host_inputs` loader sets it, so the pull has no extra variable. The loader refuses an empty
+list, so app1's pull stops until the file holds at least one slot. How the owner records a
+tenant's key and what to check on the host afterwards is in the private ghost-platform-docs
+repository, not here.
 
 ## How to change it safely
 

@@ -1,0 +1,105 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the files the role made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_config_dir }}'
+        - '{{ scenario_config_file }}'
+        - '{{ scenario_env_file }}'
+        - '{{ scenario_state_dir }}'
+        - '{{ scenario_unit }}'
+      register: safety_service_v_stats
+
+    - name: Name each file's facts by its path
+      ansible.builtin.set_fact:
+        safety_service_v_by_path: >-
+          {{ dict(safety_service_v_stats.results | map(attribute='item')
+          | zip(safety_service_v_stats.results | map(attribute='stat'))) }}
+
+    - name: Require the files to have the owner and mode the role means
+      ansible.builtin.assert:
+        that:
+          - safety_service_v_by_path[scenario_config_dir].isdir
+          - safety_service_v_by_path[scenario_config_dir].mode == '0755'
+          - safety_service_v_by_path[scenario_config_dir].pw_name == 'root'
+          - safety_service_v_by_path[scenario_config_file].mode == '0644'
+          - safety_service_v_by_path[scenario_config_file].pw_name == 'root'
+          - safety_service_v_by_path[scenario_env_file].mode == '0644'
+          - safety_service_v_by_path[scenario_env_file].pw_name == 'root'
+          - safety_service_v_by_path[scenario_state_dir].isdir
+          - safety_service_v_by_path[scenario_state_dir].mode == '0700'
+          - safety_service_v_by_path[scenario_state_dir].pw_name == scenario_account
+          - safety_service_v_by_path[scenario_unit].pw_name == 'root'
+        quiet: true
+
+    - name: Read the configuration and the environment file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ scenario_config_file }}'
+        - '{{ scenario_env_file }}'
+      register: safety_service_v_read
+
+    - name: Name the account's numeric ids
+      ansible.builtin.getent:
+        database: passwd
+        key: '{{ scenario_account }}'
+
+    - name: Require the configuration to hold the inputs, the two files and nothing else
+      vars:
+        config: '{{ safety_service_v_read.results[0].content | b64decode | from_json }}'
+        env_lines: '{{ (safety_service_v_read.results[1].content | b64decode).splitlines() | reject("match", "^#") | list }}'
+      ansible.builtin.assert:
+        that:
+          - config.keys() | sort | list == ['arachnid', 'audit', 'cache', 'channel', 'hosts']
+          - config.arachnid.baseUrl == scenario_origin
+          - config.arachnid.credentialFile == scenario_credential_file
+          - config.channel.signingKeyFile == scenario_key_file
+          - config.hosts | length == 1
+          - config.hosts[0].id == scenario_host_id
+          - config.hosts[0].endpoint == scenario_host_endpoint
+          - "config.hosts[0].safety == {'near': true, 'exact': true}"
+          - env_lines | length == 2
+          - env_lines[0].startswith('SAFETY_SERVICE_IMAGE=ghcr.io/branchleft/content-safety@sha256:')
+          - "env_lines[1] == 'SAFETY_SERVICE_USER=' ~ getent_passwd[scenario_account][1] ~ ':' ~ getent_passwd[scenario_account][2]"
+        quiet: true
+
+    - name: Look at the unit's state
+      ansible.builtin.systemd_service:
+        name: content-safety.service
+      register: safety_service_v_unit
+
+    - name: Require the unit to be enabled and running
+      ansible.builtin.assert:
+        that:
+          - safety_service_v_unit.status.UnitFileState == 'enabled'
+          - safety_service_v_unit.status.ActiveState == 'active'
+        quiet: true
+
+    - name: Read what the unit ran the stand-in docker client with
+      ansible.builtin.slurp:
+        src: '{{ scenario_docker_args_file }}'
+      register: safety_service_v_args
+
+    - name: Require the container to run as the account, read-only, with no published port
+      vars:
+        run_args: '{{ (safety_service_v_args.content | b64decode).splitlines() }}'
+      ansible.builtin.assert:
+        that:
+          - run_args[0] == 'run'
+          - "'--read-only' in run_args"
+          - "'--cap-drop' in run_args"
+          - "'--user' in run_args"
+          - "run_args[run_args.index('--user') + 1] == getent_passwd[scenario_account][1] ~ ':' ~ getent_passwd[scenario_account][2]"
+          - "'--publish' not in run_args"
+          - "'--privileged' not in run_args"
+          - run_args[-1].startswith('ghcr.io/branchleft/content-safety@sha256:')
+        quiet: true

@@ -9,6 +9,7 @@ import {
   rrsetResourceName,
   type RrsetSpec,
   validateZone,
+  ZONE_FILES,
 } from './dnsZone';
 
 const zoneFile = JSON.parse(fs.readFileSync(path.join(__dirname, 'dns', 'zone.json'), 'utf8'));
@@ -46,7 +47,7 @@ describe('the checked-in zone', () => {
   });
 
   it('gives every rrset a distinct resource name', () => {
-    const names = spec.rrsets.map(rrsetResourceName);
+    const names = spec.rrsets.map((r) => rrsetResourceName(r));
     expect(new Set(names).size).toBe(names.length);
   });
 });
@@ -123,6 +124,151 @@ describe('rrsetResourceName', () => {
     expect(rrsetResourceName({ name: 'google._domainkey', type: 'TXT' })).toBe(
       'google._domainkey-txt'
     );
+  });
+
+  it('prefixes only when asked, so the first zone keeps the names already applied', () => {
+    expect(rrsetResourceName({ name: '@', type: 'A' }, 'publicpress-co-uk')).toBe(
+      'publicpress-co-uk-apex-a'
+    );
+    expect(rrsetResourceName({ name: '@', type: 'A' }, undefined)).toBe('apex-a');
+    expect(rrsetResourceName({ name: '@', type: 'A' }, '')).toBe('apex-a');
+  });
+});
+
+/**
+ * The resource name is part of each rrset's URN. These are the names already
+ * applied for branchleft.co.uk: a change to any one is a delete-and-create of
+ * a live record, mail included, so the list is literal and any drift fails.
+ */
+const BRANCHLEFT_RESOURCE_NAMES = [
+  'apex-a',
+  'apex-mx',
+  'apex-txt',
+  '_acme-challenge-cname',
+  '_acme-challenge.blog-cname',
+  '_acme-challenge.www-cname',
+  '_dmarc-txt',
+  '_domainconnect-cname',
+  'blog-a',
+  'book-a',
+  'cloud-a',
+  'console-a',
+  'google._domainkey-txt',
+  'mx1-a',
+  'mx1-aaaa',
+  'ntfy-a',
+  'v1-ed25519-20260811._domainkey-txt',
+  'v1-rsa-20260811._domainkey-txt',
+  'www-a',
+];
+
+describe('ZONE_FILES', () => {
+  const read = (file: string) =>
+    validateZone(JSON.parse(fs.readFileSync(path.join(__dirname, 'dns', file), 'utf8')));
+
+  it('lists branchleft.co.uk first, with the URN parts already applied', () => {
+    expect(ZONE_FILES[0]).toEqual({ file: 'zone.json', zoneResource: 'branchleft-co-uk' });
+    const spec = read(ZONE_FILES[0].file);
+    expect(spec.zone).toBe('branchleft.co.uk');
+    expect(spec.rrsets.map((r) => rrsetResourceName(r, ZONE_FILES[0].rrsetPrefix))).toEqual(
+      BRANCHLEFT_RESOURCE_NAMES
+    );
+  });
+
+  it('adds publicpress.co.uk second, every resource name prefixed', () => {
+    expect(ZONE_FILES).toHaveLength(2);
+    const [, second] = ZONE_FILES;
+    expect(second.zoneResource).toBe('publicpress-co-uk');
+    const spec = read(second.file);
+    expect(spec.zone).toBe('publicpress.co.uk');
+    expect(spec.rrsets.length).toBeGreaterThan(0);
+    for (const rrset of spec.rrsets) {
+      expect(rrsetResourceName(rrset, second.rrsetPrefix)).toMatch(/^publicpress-co-uk-/);
+    }
+  });
+
+  it('gives every zone and every rrset, across both zones, a distinct resource name', () => {
+    const names = ZONE_FILES.flatMap((zoneFile) => [
+      zoneFile.zoneResource,
+      ...read(zoneFile.file).rrsets.map((r) => rrsetResourceName(r, zoneFile.rrsetPrefix)),
+    ]);
+    expect(new Set(names).size).toBe(names.length);
+  });
+
+  it('names each zone resource after its zone', () => {
+    for (const zoneFile of ZONE_FILES) {
+      expect(zoneFile.zoneResource).toBe(read(zoneFile.file).zone.replaceAll('.', '-'));
+    }
+  });
+});
+
+describe('the checked-in publicpress.co.uk zone', () => {
+  const spec = validateZone(
+    JSON.parse(fs.readFileSync(path.join(__dirname, 'dns', 'publicpress.co.uk.json'), 'utf8'))
+  );
+  const find = (name: string, type: string) =>
+    spec.rrsets.find((r) => r.name === name && r.type === type)?.values ?? [];
+
+  it('carries the mail-authentication records, so the move cannot silently drop them', () => {
+    expect(find('@', 'MX').length).toBeGreaterThan(0);
+    expect(find('@', 'TXT').some((v) => v.startsWith('"v=spf1 '))).toBe(true);
+    expect(find('_dmarc', 'TXT').some((v) => v.startsWith('"v=DMARC1;'))).toBe(true);
+    expect(find('s1-ionos._domainkey', 'CNAME')).toEqual(['s1.dkim.ionos.com.']);
+    expect(find('s2-ionos._domainkey', 'CNAME')).toEqual(['s2.dkim.ionos.com.']);
+  });
+});
+
+/**
+ * Every record the IONOS zone holds, as the cutover must carry it: written out
+ * here from the IONOS dig transcript (`captures/publicpress.co.uk.ionos-dig.txt`),
+ * not read back from the zone file, so a record dropped from the file fails
+ * here. The zone must hold these and nothing else.
+ */
+const PUBLICPRESS_CARRIED: RrsetSpec[] = [
+  { name: '@', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
+  { name: '@', type: 'MX', ttl: 3600, values: ['10 mx00.ionos.co.uk.', '10 mx01.ionos.co.uk.'] },
+  {
+    name: '@',
+    type: 'TXT',
+    ttl: 3600,
+    values: ['"v=spf1 ip4:167.233.252.240 ip6:2a01:4f8:1c18:866::1 -all"'],
+  },
+  { name: '_dmarc', type: 'TXT', ttl: 3600, values: ['"v=DMARC1; p=none; adkim=s; aspf=s"'] },
+  {
+    name: '_domainconnect',
+    type: 'CNAME',
+    ttl: 3600,
+    values: ['_domainconnect.ionos.com.'],
+  },
+  { name: 'autodiscover', type: 'CNAME', ttl: 3600, values: ['adsredir.ionos.info.'] },
+  {
+    name: 'bl._domainkey',
+    type: 'TXT',
+    ttl: 3600,
+    values: [
+      '"v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxhILakyM7YDapZ0m2C/X8rwQzyXiZqAK2P7wAecrq3DIb018rk4Ts6RlFrMh5NHgGGAY6nKC+H7uRidtzU7Q3Qso1FnfdQWoV0SWPw8TbKh0OsdzsS67Qa9uzGFzWH9qzr7FvuPzfykWZR062/CAWDGcsrzQ0LbgVp5hNnymlSp3hsJjAdo6lSg" "KKOwaDw7Zl76C9POHlJjyabVcdOVAJF6uSaDwxiJ/6GX/pGPBRUErkWKnI35lNk3k2BpfraI88WeP3wPphdxUqqmUPoidKNk5Kc1++f4EtKpWmWcAgmLhXvlJIKx7vCiKOH15+th0K5O4/QnNz/Qk64mU17OksQIDAQAB"',
+    ],
+  },
+  { name: 'id', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
+  { name: 'portal', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
+  { name: 's1-ionos._domainkey', type: 'CNAME', ttl: 3600, values: ['s1.dkim.ionos.com.'] },
+  { name: 's2-ionos._domainkey', type: 'CNAME', ttl: 3600, values: ['s2.dkim.ionos.com.'] },
+];
+
+describe('the publicpress.co.uk zone holds exactly the records IONOS holds', () => {
+  const spec = validateZone(
+    JSON.parse(fs.readFileSync(path.join(__dirname, 'dns', 'publicpress.co.uk.json'), 'utf8'))
+  );
+  const key = (r: Pick<RrsetSpec, 'name' | 'type'>) => `${r.name} ${r.type}`;
+
+  it('carries every IONOS record with the same name, type, TTL and values', () => {
+    for (const expected of PUBLICPRESS_CARRIED) {
+      expect(spec.rrsets, key(expected)).toContainEqual(expected);
+    }
+  });
+
+  it('holds no record the IONOS list lacks', () => {
+    expect(spec.rrsets.map(key).sort()).toEqual(PUBLICPRESS_CARRIED.map(key).sort());
   });
 });
 

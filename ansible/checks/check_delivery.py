@@ -2,7 +2,7 @@
 
 ``caller`` reads .github/workflows/ansible-delivery.yml and fails on anything that
 would let a pull request, a schedule or a manual run reach a host, float on a moved
-workflow, hand the call any secret but the seven it names, pass a push playbook other than the
+workflow, hand the call any secret but the twelve it names, pass a push playbook other than the
 one fixed here, share an approval with the Pulumi applies, or widen the token. ``environment``
 reads the answers of three read-only GitHub calls and fails unless the deployment environment
 is protected as the reusable workflow assumes, because that workflow cannot read the protection
@@ -32,11 +32,11 @@ REUSABLE = re.compile(
     re.ASCII,
 )
 # The oldest release of the reusable workflows a caller may pin: the first that declares the
-# ssh_push_hosts secret and the push-playbook input (the jump secrets and the
-# shard-timeout-minutes input came before it). A call that passes a secret or an input the called
-# workflow does not declare fails on GitHub, so a pin below this is a broken delivery. The drift
-# caller's test imports it: this is its one home.
-MIN_RELEASE = (1, 0, 19)
+# ssh_host_check_keys and ssh_host_apply_keys secrets (the ssh_push_hosts secret, the push-playbook
+# input, the jump secrets and the shard-timeout-minutes input came before it). A call that passes a
+# secret or an input the called workflow does not declare fails on GitHub, so a pin below this is a
+# broken delivery. The drift caller's test imports it: this is its one home.
+MIN_RELEASE = (1, 0, 23)
 # The playbook the receiver of a pushed host runs, a path from the repository root. One value for
 # every pushed host (the workflow takes one path), held here once: both callers pass it and the
 # drift caller's test imports it.
@@ -70,14 +70,31 @@ SECRETS = {
     "ssh_known_hosts": "${{ secrets.ANSIBLE_KNOWN_HOSTS }}",
     "ssh_check_key": "${{ secrets.ANSIBLE_CHECK_KEY }}",
     "ssh_apply_key": "${{ secrets.SSH_APPLY_KEY }}",
+    # The per-host key maps, optional in the reusable workflow: an unset secret is empty, and a
+    # host with no entry keeps the shared key. The check map is a repository secret, as the
+    # drift caller passes it too. The apply map is an environment secret of ansible-hosts,
+    # named here as the apply key is; held there, it is read only after the approval.
+    "ssh_host_check_keys": "${{ secrets.ANSIBLE_HOST_CHECK_KEYS }}",
+    "ssh_host_apply_keys": "${{ secrets.SSH_HOST_APPLY_KEYS }}",
     # The hosts reached by a push, one user@host per line, a subset of ssh_hosts. An unset
     # repository secret is empty, and empty means every host is pulled.
     "ssh_push_hosts": "${{ secrets.ANSIBLE_PUSH_HOSTS }}",
     # Both or neither: an unset repository secret is empty, and empty means no jump.
     "ssh_jump_host": "${{ secrets.SSH_JUMP_HOST }}",
     "ssh_jump_key": "${{ secrets.SSH_JUMP_KEY }}",
+    # The second hop (edge-t, behind edge1), all three or none: an unset secret is empty, and
+    # empty means no second hop. The list is the subset of ssh_hosts reached through both hops.
+    "ssh_jump2_host": "${{ secrets.SSH_JUMP2_HOST }}",
+    "ssh_jump2_key": "${{ secrets.SSH_JUMP2_KEY }}",
+    "ssh_jump2_hosts": "${{ secrets.ANSIBLE_JUMP2_HOSTS }}",
 }
 APPLY_KEY = "ssh_apply_key"
+# The environment must hold the per-host apply map too. The reusable workflow treats it as
+# optional, but a repository or organisation secret of that name is readable by every workflow on
+# main without the approval, so the value must be held by the environment alone.
+HOST_APPLY_KEYS = "ssh_host_apply_keys"
+# The environment secrets the probe looks for, each reported when missing.
+ENVIRONMENT_SECRETS = (APPLY_KEY, HOST_APPLY_KEYS)
 
 WORKFLOW_KEYS = frozenset({"name", "on", "permissions", "jobs"})
 JOB_KEYS = frozenset({"uses", "with", "secrets", "needs"})
@@ -96,12 +113,13 @@ INPUT_KEYS = frozenset(
         PUSH_PLAYBOOK_INPUT,
     }
 )
-# The delivery may skip its lint and Molecule re-run only on the answer of the proof job, which
-# is true for a successful merge_group run of this exact commit (merge_group_proof.py). A static
-# true would skip it for a merge that never went through the queue, or refuse that merge.
+# The delivery never skips its lint and Molecule re-run. The merge queue runs the lint and the
+# unit tests only (the container shards ran on the pull request, not on the tree that is pushed),
+# so a successful queue run of the commit (merge_group_proof.py) says nothing about the
+# containers. The proof job stays, and its answer is no longer passed to the reusable workflow.
 PROOF_JOB = "queue-proof"
 PROOF_STEP = "proof"
-SKIP_EXPRESSION = "${{ needs.queue-proof.outputs.tested == 'true' }}"
+SKIP_VALUE = False
 PROOF_OUTPUTS = {"tested": "${{ steps.proof.outputs.tested }}"}
 # The check run the merge queue publishes for the gate: the name of the gate job of ansible.yml
 # (test_check_delivery.py reads it from there). The reusable workflow looks for it by this name.
@@ -203,10 +221,10 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
             "request gate runs, so a delivery tests a role as the gate does, got "
             f"{given.get('role-test-command')!r}"
         )
-    if given.get(SKIP_INPUT) != SKIP_EXPRESSION:
+    if given.get(SKIP_INPUT) is not SKIP_VALUE:
         findings.append(
-            f"with.{SKIP_INPUT} must be {SKIP_EXPRESSION!r}, so only a commit the proof job found "
-            f"tested by the merge queue skips the re-test, got {given.get(SKIP_INPUT)!r}"
+            f"with.{SKIP_INPUT} must be false, so a delivery re-runs the container shards the "
+            f"merge queue does not run, got {given.get(SKIP_INPUT)!r}"
         )
     if given.get(CHECK_NAME_INPUT) != GATE_CHECK_NAME:
         findings.append(
@@ -222,19 +240,23 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
 
 
 def secret_findings(secrets: object) -> list[str]:
-    """Check the call names its seven secrets one by one: apply key, push list and jump pair."""
+    """Check the call names its twelve secrets one by one.
+
+    The twelve are the keys, the per-host key maps, the push list, the jump pair and the second
+    hop's three.
+    """
     if secrets == "inherit":
         return [
-            "secrets: inherit passes every secret of the repository to the call: name the seven "
+            "secrets: inherit passes every secret of the repository to the call: name the twelve "
             "secrets"
         ]
     given = as_mapping(secrets)
     if given is None:
-        return [f"secrets must be a mapping of the seven named secrets, got {secrets!r}"]
+        return [f"secrets must be a mapping of the twelve named secrets, got {secrets!r}"]
     findings = []
     for key in sorted(given):
         if key not in SECRETS:
-            findings.append(f"secrets passes {key}, which is not one of the seven named secrets")
+            findings.append(f"secrets passes {key}, which is not one of the twelve named secrets")
     findings.extend(
         f"secrets.{key} must be {expected}, got {given.get(key)!r}"
         for key, expected in SECRETS.items()
@@ -321,7 +343,7 @@ def job_findings(jobs: object, other_environments: frozenset[str]) -> list[str]:
         floor = ".".join(str(part) for part in MIN_RELEASE)
         findings.append(
             f"job {JOB} calls {uses!r}, older than v{floor}, the first release that declares the "
-            "push list secret and the push-playbook input: a call that passes a secret or an "
+            "per-host key map secrets: a call that passes a secret or an "
             "input the workflow does not declare fails"
         )
     findings.extend(input_findings(job.get("with"), other_environments))
@@ -430,14 +452,14 @@ def environment_findings(
             "run that names a missing environment creates it with no protection"
         ]
     findings: list[str] = []
-    # Administrators may release a blocked run without a reviewer unless this is exactly False,
-    # and a new environment answers True. A missing key is a finding, so the probe proves the
-    # ruled value and not an absence of the field.
-    if described.get("can_admins_bypass") is not False:
+    # The administrator bypass must be ticked, so the owner is never blocked from taking an apply.
+    # Ruling: https://github.com/branchLeft/workspace/issues/2870#issuecomment-6564958314
+    # Only exactly True passes; a missing key or any other value is a finding.
+    if described.get("can_admins_bypass") is not True:
         findings.append(
-            f"environment {name} lets administrators bypass its protection rules: an administrator "
-            "whose merge started a run could then release it without the approval path, so 'Allow "
-            "administrators to bypass configured protection rules' must be off"
+            f"environment {name} does not let administrators bypass its protection rules: 'Allow "
+            "administrators to bypass configured protection rules' must be on, so the owner is "
+            "never blocked from an administrator bypass to take an apply"
         )
     rules = described.get("protection_rules")
     reviewer_rules = [
@@ -484,8 +506,11 @@ def environment_findings(
             )
             if entry is not None
         }
-        if APPLY_KEY not in held:
-            findings.append(f"environment {name} holds no secret {APPLY_KEY}")
+        findings.extend(
+            f"environment {name} holds no secret {wanted}"
+            for wanted in ENVIRONMENT_SECRETS
+            if wanted not in held
+        )
     return findings
 
 
@@ -553,7 +578,10 @@ def main(argv: Sequence[str]) -> int:
             if problem is not None:
                 findings.append(problem)
         if args.secrets is None:
-            notes.append(f"the secrets were not listed, so {APPLY_KEY} was not checked")
+            notes.append(
+                f"the secrets were not listed, so {APPLY_KEY} and {HOST_APPLY_KEYS} were "
+                "not checked"
+            )
         findings.extend(environment_findings(args.name, answers[0], answers[1], answers[2]))
     for finding in findings:
         print(f"FAIL {finding}")

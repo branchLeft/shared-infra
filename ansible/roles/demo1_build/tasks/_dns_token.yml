@@ -1,0 +1,73 @@
+---
+# Internal to the role, included from _site_candidates.yml before anything is rendered.
+# The DNS token is the owner's: placed once, root's alone. The role never reads it, not
+# even to fingerprint it: Caddy reads the file when it runs, and this step only looks at
+# the file itself. get_checksum and get_mime are off because each opens the file, and
+# follow is off so a link is seen as a link (ANS-16).
+#
+# A base that is not set or a token that is not placed yet is a stated skip, not a
+# failure (_site_candidates.yml says so). A token that is placed and is not a plain
+# root-only file with something in it is refused, each in its own assert, naming the
+# path and never a value.
+- name: Look at the DNS token file, without reading it
+  ansible.builtin.stat:
+    path: '{{ demo1_build_dns_token_file }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: demo1_build_dns_token_stat
+  when: demo1_build_wildcard_base != ''
+
+- name: Note whether the DNS token file is placed
+  ansible.builtin.set_fact:
+    demo1_build_dns_token_placed: "{{ demo1_build_wildcard_base != '' and (demo1_build_dns_token_stat.stat.exists | default(false)) }}"
+
+- name: Refuse a DNS token file that is placed and is not a plain, root-only, non-empty file
+  when: demo1_build_dns_token_placed | bool
+  block:
+    - name: Refuse a DNS token file that is a link
+      ansible.builtin.assert:
+        that:
+          - not demo1_build_dns_token_stat.stat.islnk
+        quiet: true
+        fail_msg: >-
+          The DNS token file {{ demo1_build_dns_token_file }} is a link. Place a plain file there,
+          owned by root, mode 0600.
+
+    - name: Refuse a DNS token file that is not a regular file
+      ansible.builtin.assert:
+        that:
+          - demo1_build_dns_token_stat.stat.isreg
+        quiet: true
+        fail_msg: >-
+          The DNS token file {{ demo1_build_dns_token_file }} is not a regular file. Place a plain
+          file there, owned by root, mode 0600.
+
+    - name: Refuse a DNS token file that is not root's
+      ansible.builtin.assert:
+        that:
+          - demo1_build_dns_token_stat.stat.pw_name == 'root'
+          - demo1_build_dns_token_stat.stat.gr_name == 'root'
+        quiet: true
+        fail_msg: >-
+          The DNS token file {{ demo1_build_dns_token_file }} is not root:root. Only root may own
+          the file Caddy reads the token from.
+
+    - name: Refuse a DNS token file open to group or others, or with an execute bit
+      ansible.builtin.assert:
+        that:
+          - demo1_build_dns_token_stat.stat.mode in demo1_build_dns_token_modes
+        quiet: true
+        fail_msg: >-
+          The DNS token file {{ demo1_build_dns_token_file }} is mode {{ demo1_build_dns_token_stat.stat.mode }}.
+          It must be 0600 or narrower.
+
+    - name: Refuse a DNS token file that is empty
+      ansible.builtin.assert:
+        that:
+          - demo1_build_dns_token_stat.stat.size > 0
+        quiet: true
+        fail_msg: >-
+          The DNS token file {{ demo1_build_dns_token_file }} is empty. Place the token in it, as
+          root, once.

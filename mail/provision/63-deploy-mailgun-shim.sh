@@ -7,7 +7,7 @@
 # byte-compare-then-copy (same pattern as 30-deploy-stalwart.sh), the
 # throttle-state seed is write-once (an operator's own tuning is never
 # clobbered), render_shim_env.py's own output is deterministic given the
-# same credential, and `docker compose up -d --wait` is a no-op once the
+# same credential and the same pinned image digest, and `docker compose up -d --wait` is a no-op once the
 # running containers already match. Safe to run twice in a row -- see
 # mail/RUNBOOK-mx1-provision.md's "Mailgun shim" section.
 set -euo pipefail
@@ -64,7 +64,12 @@ if grep -qE '^\s*image:.*PLACEHOLDER' "$DEST_COMPOSE"; then
     exit 1
 fi
 
-python3 "$SCRIPT_DIR/render_shim_env.py"
+# The env a shim image reads depends on the image: render_shim_env.py reads the
+# digest out of the compose file compose is about to use ($DEST_COMPOSE, not the
+# copy beside this script) and renders that digest's contract from
+# shim-env-contracts.json, or refuses with nothing written when the digest is
+# not listed there.
+SHIM_COMPOSE_PATH="$DEST_COMPOSE" python3 "$SCRIPT_DIR/render_shim_env.py"
 
 docker compose -p mailgun-shim -f "$DEST_COMPOSE" up -d --wait
 

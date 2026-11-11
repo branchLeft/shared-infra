@@ -1,0 +1,113 @@
+---
+# Test setup only, never part of the role. It makes the instance look as the mx1 host does
+# before the role runs: the credentials file the hand route shares (with the shim's secret
+# in it, a throwaway made for this run), the apt setting the host has, and stand-ins for what the
+# instance has instead of an engine and a network (docker, dig, openssl and a front for
+# unbound-checkconf), with the shim's own health answer. The stand-ins record what they are asked
+# in /var/lib/standin-docker, and files in its flags directory make them fail or lie. What each
+# models, and what it does not, is in the role's README ("How it is tested").
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    # PyYAML for the stand-in docker, which reads the compose files as Compose does.
+    - name: Install PyYAML for the stand-in docker
+      ansible.builtin.apt:
+        name: python3-yaml
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    # The host sets this, which is why the role names unbound-anchor and dns-root-data.
+    - name: Have apt install no recommended packages, as the mx1 host does
+      ansible.builtin.copy:
+        content: |
+          APT::Install-Recommends "false";
+        dest: /etc/apt/apt.conf.d/99-no-recommends
+        owner: root
+        group: root
+        mode: '0644'
+
+    # The host's cron package makes this directory; the role writes an entry into it and installs
+    # no cron. The test does not run a cron daemon, so the entry is never run in the instance.
+    - name: Make the directory the host's cron package makes
+      ansible.builtin.file:
+        path: /etc/cron.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Make the stand-ins' state directories
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/lib/standin-docker
+        - /var/lib/standin-docker/flags
+        - /var/lib/standin-docker/containers
+        - /var/lib/standin-docker/www
+
+    - name: Put the stand-ins in place
+      ansible.builtin.copy:
+        src: '{{ item.src }}'
+        dest: '{{ item.dest }}'
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - { src: standin-docker, dest: /usr/local/bin/docker }
+        - { src: standin-dig, dest: /usr/local/bin/dig }
+        - { src: standin-openssl, dest: /usr/local/bin/openssl }
+        - { src: standin-unbound-checkconf, dest: /usr/local/bin/unbound-checkconf }
+
+    # The flat label:secret file the 6x hand scripts share. The SMTP submission credential the
+    # pinned image reads is made on the real host by script 62; here it is the run's throwaway.
+    # Two other labels are there, one of them the other contract's, so the role is shown to read
+    # only the label its image's contract names.
+    - name: Put the credentials file in place, with the shim's secret in it
+      ansible.builtin.copy:
+        content: |
+          stalwart-admin:THROWAWAY-ADMIN-NOT-FOR-THE-SHIM
+          shim-drain-token:THROWAWAY-OTHER-CONTRACT-NOT-FOR-THIS-IMAGE
+          blog-shim-bulk-submission:{{ scenario_shim_secret }}
+        dest: /root/.stalwart-service-credentials
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    - name: Give the shim a health answer
+      ansible.builtin.copy:
+        content: |
+          {"status":"ok"}
+        dest: /var/lib/standin-docker/www/healthz
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Detached with its output closed, so the task returns while the server keeps running for
+    # the later steps. The port is the one shim-compose.yml publishes on loopback.
+    - name: Serve the health answer on loopback, as the shim does
+      ansible.builtin.shell:
+        cmd: setsid --fork python3 -m http.server 8825 --bind 127.0.0.1 --directory /var/lib/standin-docker/www >/dev/null 2>&1 </dev/null
+      changed_when: true
+
+    # What /etc/resolv.conf holds before the role runs, kept beside the stand-ins' state so that
+    # verify can show the role left it as it was.
+    - name: Read the system resolver file
+      ansible.builtin.stat:
+        path: /etc/resolv.conf
+        checksum_algorithm: sha256
+      register: mx1_stack_prepare_resolv
+
+    - name: Keep its checksum
+      ansible.builtin.copy:
+        content: '{{ mx1_stack_prepare_resolv.stat.checksum }}'
+        dest: /var/lib/standin-docker/resolv.sha256
+        owner: root
+        group: root
+        mode: '0644'

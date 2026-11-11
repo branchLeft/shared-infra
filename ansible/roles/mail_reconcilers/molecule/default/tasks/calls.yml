@@ -1,0 +1,18 @@
+---
+# Read what the stand-in API logged, as a list of calls. An absent log is no call.
+- name: Look for the stand-in's log
+  ansible.builtin.stat:
+    path: /var/tmp/stand-in/calls.jsonl
+  register: mail_reconcilers_verify_calls_stat
+
+- name: Read the stand-in's log
+  ansible.builtin.slurp:
+    src: /var/tmp/stand-in/calls.jsonl
+  register: mail_reconcilers_verify_calls_slurp
+  when: mail_reconcilers_verify_calls_stat.stat.exists
+
+- name: Keep the calls as data
+  ansible.builtin.set_fact:
+    mail_reconcilers_verify_calls: >-
+      {{ (mail_reconcilers_verify_calls_slurp.content | ansible.builtin.b64decode).splitlines()
+         | map('ansible.builtin.from_json') | list if mail_reconcilers_verify_calls_stat.stat.exists else [] }}

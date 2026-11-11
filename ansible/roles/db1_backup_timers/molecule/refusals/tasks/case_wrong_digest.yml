@@ -1,0 +1,55 @@
+---
+# The digest is wrong and the file is absent, so a fetch that was not checked
+# would leave real bytes on the host. The wrong digest goes in as an include_role
+# parameter, which beats the role's vars file.
+- name: Empty what an earlier case left
+  ansible.builtin.set_fact:
+    db1_backup_timers_refusals_completed: false
+    db1_backup_timers_refusals_failure: {}
+    db1_backup_timers_refusals_bad_digests: {}
+
+- name: Remove the program so the fetch has to write it
+  ansible.builtin.file:
+    path: '{{ verify_program_path }}'
+    state: absent
+
+- name: Pin a wrong digest for the program
+  ansible.builtin.set_fact:
+    db1_backup_timers_refusals_bad_digests: >-
+      {{ db1_backup_timers_program_sha256 | combine({verify_program: '0000000000000000000000000000000000000000000000000000000000000000'}) }}
+
+- name: Apply the role with the wrong digest, expecting a refusal
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.db1_backup_timers
+      vars:
+        db1_backup_timers_program_sha256: '{{ db1_backup_timers_refusals_bad_digests }}'
+
+    - name: Note that the role finished
+      ansible.builtin.set_fact:
+        db1_backup_timers_refusals_completed: true
+  rescue:
+    - name: Keep the failure
+      ansible.builtin.set_fact:
+        db1_backup_timers_refusals_failure: '{{ ansible_failed_result }}'
+
+- name: Read the program's path
+  ansible.builtin.stat:
+    path: '{{ verify_program_path }}'
+  register: db1_backup_timers_refusals_after
+
+- name: Assert the wrong digest was refused and no file was left
+  ansible.builtin.assert:
+    that:
+      - not db1_backup_timers_refusals_completed
+      - db1_backup_timers_refusals_failure | length > 0
+      - "'checksum' in (db1_backup_timers_refusals_failure | to_json | lower)"
+      - verify_program in (db1_backup_timers_refusals_failure | to_json)
+      - not db1_backup_timers_refusals_after.stat.exists
+    quiet: true
+    fail_msg: A wrong pinned digest was not refused, or the refused fetch left a file.
+
+- name: Apply the role with the right digest to put the program back
+  ansible.builtin.include_role:
+    name: branchleft.db1_backup_timers

@@ -1,2 +1,6 @@
 ansible/roles/db1_grants/molecule/default/files/fakes/fake_mysql.py
-ansible/roles/demo1_build/molecule/default/files/ghost-platform/demo-host/provision/branchleft_slot.py
+ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/branchleft_slot.py
+# Vendored, built tenant-export tooling that restores a dump into a scratch database (backup/restore tooling and a bare readiness probe); run as root, held to its sha256 pin by the export_bundler role.
+ansible/roles/export_bundler/files/ghost-platform/services/export-bundler/dist/scratchDatabase.js
+# Test harness that provisions a role and database in a throwaway Postgres container to prove the control-plane migration login holds no superuser power (database provisioning and administration, not application code).
+hetzner/provision/test_control_plane_hba_server.py

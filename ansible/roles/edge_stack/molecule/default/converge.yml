@@ -29,6 +29,7 @@
         mode: '0755'
       loop:
         - ''
+        - caddy
         - crowdsec
         - crowdsec/acquis.d
       when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
@@ -44,7 +45,7 @@
         group: root
         mode: '0644'
       loop:
-        - { path: Caddyfile, content: "# earlier release of the Caddyfile\n" }
+        - { path: caddy/Caddyfile, content: "# earlier release of the Caddyfile\n" }
         - { path: compose.yml, content: "# earlier release of the Compose file\nname: edge\n" }
         - { path: crowdsec/config.yaml.local, content: "# earlier release\n" }
         - { path: crowdsec/acquis.d/caddy.yaml, content: "# earlier release\n" }
@@ -66,7 +67,7 @@
         force: true
         mode: '0644'
       loop:
-        - { src: Caddyfile, name: Caddyfile }
+        - { src: caddy/Caddyfile, name: Caddyfile }
         - { src: crowdsec/config.yaml.local, name: config.yaml.local }
       loop_control:
         label: '{{ item.name }}'
@@ -133,7 +134,7 @@
 
     - name: Read the inode of the Caddyfile the containers hold
       ansible.builtin.stat:
-        path: '{{ edge_stack_converge_dir }}/Caddyfile'
+        path: '{{ edge_stack_converge_dir }}/caddy/Caddyfile'
         get_checksum: false
       register: edge_stack_converge_before
       when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
@@ -169,7 +170,7 @@
         path: '{{ edge_stack_converge_repo_stack }}/{{ item }}'
         checksum_algorithm: sha256
       loop:
-        - Caddyfile
+        - caddy/Caddyfile
         - compose.yml
       register: edge_stack_converge_sources
       delegate_to: localhost
@@ -186,7 +187,7 @@
         path: '{{ item }}'
         checksum_algorithm: sha256
       loop:
-        - '{{ edge_stack_converge_dir }}/Caddyfile'
+        - '{{ edge_stack_converge_dir }}/caddy/Caddyfile'
         - /var/lib/standin-mount/Caddyfile
       register: edge_stack_converge_after
       when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode

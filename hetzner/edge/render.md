@@ -208,6 +208,30 @@ the `*` version segment.
 After the protection chain, before `reverse_proxy`: a client probing for an open setup is
 throttled and seen by CrowdSec rather than answered for free.
 
+## `logDirective`: retention and rotation
+
+Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of
+2026-08-24, inside the 90-day ceiling the website privacy notice states). The directive is
+`roll_keep_for 720h`, which Caddy turns into 30 days.
+
+`roll_keep_for` only prunes files that have already been rolled, so a file must also roll on
+a clock. `roll_at 00:00` rolls every log daily at midnight UTC, even with no writes. Caddy
+v2.11.4 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
+`github.com/DeRuina/timberjack` v1.4.2 on a background timer). `roll_interval` exists in the
+same module but rolls only on the next write, so it would not bound a quiet edge, and it is
+not used.
+
+`roll_keep 31` keeps 31 rolled files. Caddy's default of 10 would cap the daily roll at 10
+days and shorten the retention silently. The worst-case age of an entry is about 31 days (30
+days plus the one day its file spans), not exactly 30. A tighter 30-day bound would need
+`roll_keep_for 696h`; that is a change to the owner's value and is not made here.
+
+`render.test.ts` pins all three directives on every log and bounds the retention at or below
+2160h, so a later value above 90 days fails.
+
+A change to a log output option (retention, roll, or format) takes effect only when the caddy
+container is recreated, not on `caddy reload`. See `hetzner/RUNBOOK-edge.md` "Log retention".
+
 ## `logDirective`: break-glass token redaction and strip
 
 The break-glass sign-in (how support opens a customer's Ghost admin) carries a single-use
@@ -390,6 +414,12 @@ failure would take the magic-link path down with the general one. Whoever evalua
 CDN owns changing this line to a trusted-proxy configuration in the same change, never
 afterwards.
 
+The same key can also fail without a CDN: if the edge's container networking presents
+real clients as a Docker bridge address (for example `172.18.0.1` behind the docker-proxy),
+every collapsed client shares one budget per zone. This module cannot see that; the
+owner-run percentile and bridge-address check in `RUNBOOK-edge.md` §10a is what looks
+for it before the general throttle is applied live.
+
 ## `protectionChain`: handler evaluation order
 
 The handler chain, in evaluation order: throttle runs **before** the WAF, which is the
@@ -398,3 +428,14 @@ at priority 1000–1003, ahead of the throttle at 2000). The retired edge evalua
 shared fleet; this one evaluates on two vCPUs, so a flood that reached the WAF first would
 spend exactly the capacity the throttle exists to protect. The observable difference is
 confined to a client that is both flooding and attacking: it is answered 429 rather than 403.
+
+### What the general throttle covers
+
+`protectionChain` is called by four block builders, so the one `rateLimit` posture
+field throttles all four: `siteBlock` (zone `<site>_per_ip`), `redirectBlock` (zone
+`<site>_redirect_per_ip`), `staticBlock` (zone `<site>_per_ip`, the `publicpress.co.uk`
+holding page) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
+loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` never calls
+`protectionChain`. Under the committed posture that is one general `rate_limit` directive
+per throttled block, each in its own zone, and `render.test.ts` counts them per kind
+from the registries.

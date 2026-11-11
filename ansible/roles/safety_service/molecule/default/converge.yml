@@ -1,0 +1,44 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the files of other roles before the role runs
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: '{{ scenario_canaries }}'
+      register: safety_service_canaries_before
+
+    - name: Apply the role with its inputs set
+      ansible.builtin.include_role:
+        name: branchleft.safety_service
+      vars:
+        safety_service_arachnid_base_url: '{{ scenario_origin }}'
+        safety_service_hosts:
+          - id: '{{ scenario_host_id }}'
+            kind: demo
+            endpoint: '{{ scenario_host_endpoint }}'
+
+    - name: Look at the same files after the role has run
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: '{{ scenario_canaries }}'
+      register: safety_service_canaries_after
+
+    # The role touches nothing outside its own paths. Each canary keeps its inode, mtime, mode,
+    # owner and checksum across the role's run; the idempotence step runs this play again, so
+    # both runs are held to it.
+    - name: Require the files of other roles to be exactly as they were
+      ansible.builtin.assert:
+        that:
+          - item.0.stat.exists
+          - item.1.stat.inode == item.0.stat.inode
+          - item.1.stat.mtime == item.0.stat.mtime
+          - item.1.stat.mode == item.0.stat.mode
+          - item.1.stat.pw_name == item.0.stat.pw_name
+          - item.1.stat.checksum == item.0.stat.checksum
+        quiet: true
+        fail_msg: A file the role does not own was changed.
+      loop: '{{ safety_service_canaries_before.results | zip(safety_service_canaries_after.results) | list }}'
+      loop_control:
+        label: '{{ item.0.item }}'

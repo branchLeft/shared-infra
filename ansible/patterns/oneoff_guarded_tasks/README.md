@@ -208,15 +208,20 @@ marked "reviewed" is not run by the scenario.
   writes neither.
 - A request with its tag and confirmation runs the step, writes the marker with its
   owner, group, mode and text, and the effect has its mode.
-- A second request changes nothing.
+- A second request changes nothing, and its effect and its marker are each reported as
+  skipped (a recap cannot show a skipped gate).
 - A step whose effect fails writes no marker, and the next request runs the effect
   again (the command's failure text is asserted).
 - A first request on a state directory that no plain apply made creates the directory
   and writes the marker in it.
+- In check mode, step two's marker is reported as a change, with the destination and
+  text the step sets, and its effect is skipped; nothing is written.
+- A request of step two with its marker present skips its effect and its marker, and
+  leaves the marker's text as it was.
 
-Reviewed, not tested by the scenario: the marker task of `EXAMPLE_STEP_TWO` and its
-group (see the limits), the `--tags never` run (see the limits), and forgery of a
-marker by root (see the limits).
+Reviewed, not tested by the scenario: the owner, group and mode of step two's marker
+(see the limits), the `--tags never` run (see the limits), and forgery of a marker by
+root (see the limits).
 
 ### (e) How a service role copies it
 
@@ -304,18 +309,52 @@ What each part of the scenario does:
      marker and ran no effect;
   5. requests EXAMPLE_STEP_ONE with its tag and confirmation and checks the effect's
      mode, the marker's owner, group, mode and text;
-  6. requests it a second time and asserts zero changes;
+  6. requests it a second time, and asserts zero changes and that its effect and marker
+     are reported as skipped;
   7. requests EXAMPLE_STEP_TWO, whose effect fails, twice, and checks both fail, the
      second trying the effect again (the command's failure text), and that no marker was
      written;
   8. requests EXAMPLE_STEP_ONE on a state directory that no plain apply made, and checks
-     the directory is created root-owned with mode `0755` and holds the marker.
+     the directory is created root-owned with mode `0755` and holds the marker;
+  9. requests EXAMPLE_STEP_TWO in check mode with the diff, and asserts its marker is
+     reported as a change with the step-two destination and text while its effect is
+     skipped, then checks it wrote no marker;
+  10. plants a marker for EXAMPLE_STEP_TWO that holds other text, requests step two with
+      that marker present, and asserts its effect and marker are skipped and the text is
+      unchanged.
 - `check-configured` runs the converge in check mode on the configured container. It
   reports no change, because the steps are skipped.
 - `molecule-check` is Molecule's own `check` action.
 
 CI runs the same harness over every role and pattern, so the Ansible job runs this
 test on each pull request that touches `ansible/`.
+
+## Sabotage record
+
+Each row is one edit to one file under `tasks/`, made by hand and run through the
+harness (`ansible/harness/run_harness.py` on this pattern). The red is the first
+failing step of that run. The edit is then reverted with `git checkout` of that file,
+so the tree is the same as before it, and the green is the harness run on the restored
+tree. One run on that tree is the green for every row, and the final run is recorded
+in the pull request that carries this table.
+
+| #   | Control                            | Edit                                                                      | Red (first failing step)                                                            | Green |
+| --- | ---------------------------------- | ------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ----- |
+| 1   | State directory mode               | `tasks/main.yml`: `0755` to `0750`                                        | verify step 1: the state directory is not root-owned and mode `0755`                | pass  |
+| 2   | State directory owner and group    | `tasks/main.yml`: `owner` and `group` lines removed                       | verify step 1: as row 1                                                             | pass  |
+| 3   | State directory `always` tag       | `tasks/main.yml`: `always` removed from the directory task                | verify step 8: the first request on a fresh state directory did not succeed         | pass  |
+| 4   | Step one marker gate               | `tasks/_step_one.yml`: `when` removed from the marker copy                | verify step 6: a second request ran a task it should skip                           | pass  |
+| 5   | Step one marker mode               | `tasks/_step_one.yml`: `0644` to `0600`                                   | verify step 5: the effect, marker owner, mode or text is not as the step sets it    | pass  |
+| 6   | Step one marker text               | `tasks/_step_one.yml`: `EXAMPLE_STEP_ONE\n` to `EXAMPLE_STEP_ONE_X\n`     | verify step 5: as row 5                                                             | pass  |
+| 7   | Step one effect mode               | `tasks/_step_one.yml`: `0640` to `0644`                                   | verify step 5: as row 5                                                             | pass  |
+| 8   | Step two `never` tag               | `tasks/main.yml`: `never` removed from the step-two import                | check-fresh: the plain apply is refused with `REFUSED: EXAMPLE_STEP_TWO`            | pass  |
+| 9   | Step one own tag                   | `tasks/main.yml`: `oneoff_guarded_tasks_step_one` removed from its import | verify step 2: the tag alone is not refused                                         | pass  |
+| 10  | Step two own tag                   | `tasks/main.yml`: `oneoff_guarded_tasks_step_two` removed from its import | verify step 2: a wrong confirmation is not refused                                  | pass  |
+| 11  | Step two marker gate               | `tasks/_step_two.yml`: `when` removed from the marker copy                | verify step 10: a request with the marker present ran the step-two marker           | pass  |
+| 12  | Step two marker destination        | `tasks/_step_two.yml`: `dest` names `EXAMPLE_STEP_ONE`                    | verify step 9: check mode does not show the step-two destination and text           | pass  |
+| 13  | Step two marker text               | `tasks/_step_two.yml`: `EXAMPLE_STEP_TWO\n` to `EXAMPLE_STEP_2\n`         | verify step 9: as row 12                                                            | pass  |
+| 14  | Confirmation-shape check           | `tasks/main.yml`: the whole check removed                                 | verify step 2: a confirmation with a line break is not refused by the step id check | pass  |
+| 15  | Step two marker mode (named limit) | `tasks/_step_two.yml`: `0644` to `0600`                                   | none: stays green, so this control is untested (see the limits)                     | pass  |
 
 ## How it is delivered
 
@@ -362,9 +401,12 @@ a terminal, once that workflow exists. Until then no step runs on any host.
   `ansible.builtin.command` is skipped in check mode, so the scenario makes no claim
   about the check-mode result of that step. A real command effect that must show its
   change in check mode needs a module, or a check of its own.
-- **Step two's marker task never runs to completion.** Step two always fails, so the
-  scenario never writes its marker. The marker task's text and group are the same
-  template as step one's, and they are reviewed, not tested.
+- **Step two's marker task is reached only in check mode and with a marker planted.**
+  Step two's effect always fails, so a request never writes its marker. Its destination,
+  its text and its gate are tested in check mode and with a planted marker (verify steps
+  9 and 10). Its owner, group and mode are not tested: a change to its mode stays green
+  (sabotage row 15 below). A test of them needs a step-two effect that succeeds, which
+  this placeholder design does not have, so they are a named limit, not a claim.
 - **`--tags never` runs every never-tagged task, both steps included.** With a
   confirmation that names only one step, that step runs, then the other step refuses
   and the play stops: a partial effect followed by a failure. Each step still needs its

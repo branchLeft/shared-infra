@@ -1,0 +1,13 @@
+#!/bin/sh
+# TEST STAND-IN for openssl s_client, installed by prepare.yml. The instance runs no
+# Caddy and no Stalwart to answer. It records each call, and prints the two things the
+# role's probe looks for (the server name and a verify code of 0), unless the switch
+# openssl_unverified is set.
+state=/var/lib/standin-docker
+printf '%s\n' "$*" >> "$state/openssl.log"
+if [ -e "$state/flags/openssl_unverified" ]; then
+  echo "Verify return code: 18 (self-signed certificate)"
+else
+  echo "subject=CN = mx1.branchleft.co.uk"
+  echo "Verify return code: 0 (ok)"
+fi

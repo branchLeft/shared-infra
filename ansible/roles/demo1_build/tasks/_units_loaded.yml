@@ -1,0 +1,53 @@
+---
+# Internal to the role, included last by _units.yml, after the handlers have run.
+# Asks systemd whether each colour instance loads. An instance loads only when the
+# shared compose template unit it is an instance of is installed and the drop-in the
+# role wrote is read with it. _units.yml installs that template from hetzner/provision/
+# (A-7, the README's Phase A-7). This check says what is missing and never names the
+# template's path itself: the path is a variable in vars/main.yml.
+#
+# Read-only: systemd_service with a name and no state changes nothing (ANS-10). On a
+# host without the drop-in directories, as in a first plan, there is nothing to read,
+# so the check is skipped with a visible line that says it was NOT verified. It never
+# passes silently.
+
+- name: Look at which colour drop-in directories exist
+  ansible.builtin.find:
+    paths: '{{ demo1_build_unit_dir }}'
+    patterns: 'branchleft-compose@demo-*.service.d'
+    file_type: directory
+  register: demo1_build_units_dirs
+
+- name: Say the colour units were NOT verified, because their drop-ins are not on this host yet
+  ansible.builtin.debug:
+    msg: >-
+      Colour units NOT verified: the drop-in directories are not on this host yet (check mode, first plan),
+      so systemd was not asked whether the colour instances load. An apply asks, and stops if one does not.
+  register: demo1_build_units_notice
+  when: ansible_check_mode and (demo1_build_units_dirs.matched | int) < (demo1_build_colour_instances | length)
+
+- name: Ask systemd whether each colour instance loads, changing nothing
+  ansible.builtin.systemd_service:
+    name: '{{ item }}.service'
+  loop: '{{ demo1_build_colour_instances }}'
+  loop_control:
+    label: '{{ item }}'
+  register: demo1_build_units_load
+  check_mode: false
+  changed_when: false
+  when: not ansible_check_mode or (demo1_build_units_dirs.matched | int) >= (demo1_build_colour_instances | length)
+
+- name: Refuse a colour instance that does not load
+  ansible.builtin.assert:
+    that:
+      - item.status.LoadState == 'loaded'
+    quiet: true
+    fail_msg: >-
+      {{ item.item }}.service does not load (LoadState {{ item.status.LoadState | default('unknown') }}). The shared
+      compose template unit is not installed, or it does not load with the drop-ins the role wrote. The role installs
+      the template from hetzner/provision/ in the same run, so a template that is still missing or does not load is a
+      fault in that file or in the drop-ins: see the demo1_build README, Phase A-7.
+  loop: '{{ demo1_build_units_load.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+  when: not ansible_check_mode or (demo1_build_units_dirs.matched | int) >= (demo1_build_colour_instances | length)

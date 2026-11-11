@@ -1,0 +1,52 @@
+---
+# A clean slate for one case: no credential file but those named in reset_files, no
+# recorded call, the stand-in holding reset_state and returning a throwaway secret.
+# reset_files is a list of {path, kind (file or link), mode}.
+- name: Remove everything a step reads or leaves
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ verify_admin }}'
+    - '{{ verify_service }}'
+    - '{{ verify_mailbox }}'
+    - /var/tmp/stand-in/calls.jsonl
+    - /var/tmp/stand-in/fail
+    - /var/tmp/stand-in/docker.calls
+
+- name: Place the credential files the case wants
+  ansible.builtin.copy:
+    content: "{{ 'admin:ADMINSECRET-' if item.path == verify_admin else 'old-label:APPSECRET-' }}{{ scenario_run }}\n"
+    dest: '{{ item.path }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ reset_files | selectattr("kind", "eq", "file") | list }}'
+  loop_control:
+    label: '{{ item.path }} {{ item.mode }}'
+  no_log: true
+
+- name: Place the links the case wants
+  ansible.builtin.file:
+    src: /etc/hostname
+    dest: '{{ item.path }}'
+    state: link
+  loop: '{{ reset_files | selectattr("kind", "eq", "link") | list }}'
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Give the stand-in its state and the secret it returns
+  ansible.builtin.copy:
+    content: '{{ item.content }}'
+    dest: '{{ item.dest }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - dest: /var/tmp/stand-in/state.json
+      content: '{{ reset_state | default({}) | ansible.builtin.to_json }}'
+    - dest: /var/tmp/stand-in/secret
+      content: 'APPSECRET-{{ scenario_run }}'
+  loop_control:
+    label: '{{ item.dest }}'
+  no_log: true

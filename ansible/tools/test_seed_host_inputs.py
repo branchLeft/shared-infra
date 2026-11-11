@@ -92,13 +92,20 @@ APP1_LIVE: dict[str, tuple[str, str]] = {
     "website_app1_smtp_password": ("website.env", "CONTACT_SMTP_PASSWORD"),
 }
 APP1_KEYS = tuple(APP1_LIVE)
+# The app1 slot list is typed, never live: one stack, its public key, and no adopt by default.
+SLOTS_KEY = "deploy_slot_keys_slots"
+SLOT_STACK = "tenant-alpha"
+SLOT_KEY = "ssh-ed25519 " + "A" * 68
+SLOT_LINE = f"{SLOT_STACK} {SLOT_KEY}"
+# Typed only on edge1: the CI jump account's name exists nowhere on the host to read.
+JUMP_KEY = "ci_jump_user"
 CA_KEY = "backup_worker_db_ca_pem"
 TENANTS_KEY = "backup_worker_tenants"
 TENANTS = [
     {"slug": "alpha", "recipient": RECIPIENT_A},
     {"slug": "beta", "recipient": RECIPIENT_B},
 ]
-EDGE1_KEYS = tuple(EDGE1_LIVE)
+EDGE1_KEYS = (*EDGE1_LIVE, JUMP_KEY)
 OPS1_KEYS = (*OPS1_LIVE, CA_KEY, TENANTS_KEY)
 
 
@@ -313,8 +320,10 @@ class Rig:
         self.cfg.mkdir()
         self.cfg.chmod(0o755)
         self.answers = list(answers)
+        self.jump_answer: str | None = value_for(JUMP_KEY)
         self.path_answers = list(path_answers)
         self.prompts: list[str] = []
+        self.flushes = 0
         self.out = io.StringIO()
         self.err = io.StringIO()
         self.uid = os.getuid()
@@ -326,15 +335,23 @@ class Rig:
             root_gid=self.cfg.stat().st_gid,
             ask_secret=self.secret,
             ask_path=self.path,
+            flush_input=self.flush,
             out=self.out,
             err=self.err,
         )
 
     def secret(self, prompt: str) -> str:
         self.prompts.append(prompt)
+        # The jump account's name is typed on every edge1 fill and never live, whatever else a
+        # test queues, so it is answered apart from the queue and the other prompts keep theirs.
+        if prompt.startswith(f"{JUMP_KEY}: ") and self.jump_answer is not None:
+            return self.jump_answer
         if not self.answers:
             raise EOFError
         return self.answers.pop(0)
+
+    def flush(self) -> None:
+        self.flushes += 1
 
     def path(self, prompt: str) -> str:
         self.prompts.append(prompt)
@@ -425,20 +442,34 @@ def app1_value(key: str) -> str:
 
 
 def app1_document() -> dict[str, object]:
-    return {key: app1_value(key) for key in APP1_KEYS}
+    document: dict[str, object] = {key: app1_value(key) for key in APP1_KEYS}
+    document[SLOTS_KEY] = [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False}]
+    return document
 
 
 class FillTests(unittest.TestCase):
-    def test_edge1_is_filled_from_the_live_files_with_no_prompt(self) -> None:
+    def test_edge1_is_filled_from_the_live_files_and_only_the_jump_account_is_typed(self) -> None:
         rig = Rig(self)
         rig.seed_edge1()
         self.assertEqual(0, rig.run("--host", "edge1"))
         self.assertEqual(edge1_document(), rig.document())
-        self.assertEqual([], rig.prompts)
+        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
         for key in EDGE1_KEYS:
             self.assertIn(key, rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
-        self.assertIn("typed (0): none", rig.stdout)
+        self.assertIn(f"typed (1): {JUMP_KEY}", rig.stdout)
+        self.assertIn(f"filled from live ({len(EDGE1_LIVE)}):", rig.stdout)
+        self.assertNotIn(value_for(JUMP_KEY), rig.everything)
+
+    def test_edget_has_no_live_file_and_only_the_jump_account_is_typed(self) -> None:
+        # edge-t is a new host: nothing on it to read, so the one input of its row is typed.
+        rig = Rig(self)
+        self.assertEqual(0, rig.run("--host", "edget"))
+        self.assertEqual({JUMP_KEY: value_for(JUMP_KEY)}, rig.document())
+        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
+        self.assertIn(f"typed (1): {JUMP_KEY}", rig.stdout)
+        self.assertIn("still missing (0): none", rig.stdout)
+        self.assertNotIn(value_for(JUMP_KEY), rig.everything)
 
     def test_the_pager_keys_are_found_in_monitoring_env_when_the_pager_file_is_absent(self) -> None:
         rig = Rig(self)
@@ -498,17 +529,17 @@ class FillTests(unittest.TestCase):
         rig = Rig(self, answers=["typed-snds-value"])
         rig.seed_edge1(skip=["monitoring_stack_snds_data_url"])
         self.assertEqual(0, rig.run("--host", "edge1"))
-        self.assertEqual(1, len(rig.prompts))
+        self.assertEqual(2, len(rig.prompts))
         self.assertIn("monitoring_stack_snds_data_url", rig.prompts[0])
         self.assertEqual("typed-snds-value", rig.document()["monitoring_stack_snds_data_url"])
-        self.assertIn("typed (1): monitoring_stack_snds_data_url", rig.stdout)
+        self.assertIn(f"typed (2): monitoring_stack_snds_data_url, {JUMP_KEY}", rig.stdout)
         self.assertNotIn("typed-snds-value", rig.everything)
 
     def test_a_live_value_is_never_prompted_over(self) -> None:
         rig = Rig(self, answers=["typed"])
         rig.seed_edge1()
         rig.run("--host", "edge1")
-        self.assertEqual([], rig.prompts)
+        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
         self.assertEqual(["typed"], rig.answers)
 
     def test_an_empty_answer_writes_nothing_and_names_the_key(self) -> None:
@@ -527,6 +558,7 @@ class FillTests(unittest.TestCase):
 
     def test_no_terminal_writes_nothing_and_lists_every_missing_key(self) -> None:
         rig = Rig(self)
+        rig.jump_answer = None
         self.assertEqual(1, rig.run("--host", "edge1"))
         self.assertFalse(rig.dest.exists())
         self.assertIn(f"still missing ({len(EDGE1_KEYS)}):", rig.stdout)
@@ -603,21 +635,24 @@ class FillTests(unittest.TestCase):
         self.assertIn(CA_KEY, rig.stdout)
         self.assertNotIn("SENTKEY", rig.everything)
 
-    def test_app1_is_filled_from_website_env_with_no_prompt(self) -> None:
-        rig = Rig(self)
+    def test_app1_is_filled_from_website_env_and_the_slots_are_typed(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
         self.assertEqual(app1_document(), rig.document())
-        self.assertEqual([], rig.prompts)
+        # One prompt for the slot line and one for the empty line that ends the list.
+        self.assertEqual(2, len(rig.prompts))
+        self.assertTrue(all(SLOTS_KEY in prompt for prompt in rig.prompts))
         self.assertIn(
             "filled from live (4): website_app1_smtp_host, website_app1_smtp_port, "
             "website_app1_smtp_user, website_app1_smtp_password",
             rig.stdout,
         )
+        self.assertIn(f"typed (1): {SLOTS_KEY}", rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
 
     def test_app1_port_stays_a_string(self) -> None:
-        rig = Rig(self)
+        rig = Rig(self, answers=[SLOT_LINE, ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
         port = rig.document()["website_app1_smtp_port"]
@@ -630,7 +665,17 @@ class FillTests(unittest.TestCase):
         rig = Rig(self)
         rig.seed_app1(skip=["website_app1_smtp_port"])
         self.assertEqual(1, rig.run("--host", "app1"))
-        self.assertIn("still missing (1): website_app1_smtp_port", rig.stdout)
+        self.assertIn(
+            f"still missing (2): website_app1_smtp_port, {SLOTS_KEY}",
+            rig.stdout,
+        )
+        self.assertFalse(rig.dest.exists())
+
+    def test_app1_without_a_slot_is_missing_and_nothing_is_written(self) -> None:
+        rig = Rig(self, answers=[""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn(f"still missing (1): {SLOTS_KEY}", rig.stdout)
         self.assertFalse(rig.dest.exists())
 
 
@@ -813,6 +858,20 @@ class SetTests(unittest.TestCase):
         self.assertNotIn("rotated-value", rig.everything)
         self.assertEqual([], [p.name for p in rig.cfg.iterdir() if p.name.endswith(".tmp")])
 
+    def test_the_jump_account_is_added_to_the_file_edge1_already_has(self) -> None:
+        # The path the owner takes once: edge1's file holds the eleven live keys from before the
+        # jump account was added, and one --set adds the twelfth without touching the rest.
+        rig = Rig(self, answers=["typed-jump-account"])
+        rig.jump_answer = None
+        earlier = {key: value for key, value in edge1_document().items() if key != JUMP_KEY}
+        rig.put(tool.DEST_NAME, json.dumps(earlier))
+        self.assertEqual(0, rig.run("--host", "edge1", "--set", JUMP_KEY))
+        self.assertEqual({**earlier, JUMP_KEY: "typed-jump-account"}, rig.document())
+        self.assertEqual(0o600, stat.S_IMODE(rig.dest.stat().st_mode))
+        self.assertEqual([f"{JUMP_KEY}: "], rig.prompts)
+        self.assertIn(f"set {JUMP_KEY} ({len('typed-jump-account')} bytes)", rig.stdout)
+        self.assertNotIn("typed-jump-account", rig.everything)
+
     def test_set_prompts_with_the_key_name(self) -> None:
         rig = self.seeded()
         rig.run("--host", "edge1", "--set", self.KEY)
@@ -888,6 +947,163 @@ class SetTests(unittest.TestCase):
         self.assertEqual([{"slug": "gamma", "recipient": RECIPIENT_A}], rig.document()[TENANTS_KEY])
 
 
+class SlotTests(unittest.TestCase):
+    """The app1 slot list is typed one line each, and each line is held to its shape."""
+
+    def test_a_typed_slot_is_a_mapping_with_a_boolean_adopt_that_defaults_to_false(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        slots = list_of(rig.document()[SLOTS_KEY])
+        expected = [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False}]
+        self.assertEqual(expected, slots)
+        self.assertIs(False, mapping_of(slots[0])["adopt_existing"])
+
+    def test_the_literal_adopt_at_the_end_sets_adopt_and_the_key_keeps_its_spaces(self) -> None:
+        rig = Rig(self, answers=[f"{SLOT_LINE} adopt", ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(
+            [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": True}],
+            rig.document()[SLOTS_KEY],
+        )
+
+    def test_two_slots_are_kept_in_the_order_typed(self) -> None:
+        second_key = "ssh-ed25519 " + "B" * 68
+        rig = Rig(self, answers=[SLOT_LINE, f"tenant-beta {second_key} adopt", ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(
+            [
+                {"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False},
+                {"stack": "tenant-beta", "public_key": second_key, "adopt_existing": True},
+            ],
+            rig.document()[SLOTS_KEY],
+        )
+
+    def test_set_replaces_the_slots_and_no_other_key(self) -> None:
+        rig = Rig(self, answers=["tenant-gamma ssh-ed25519 " + "G" * 68, ""])
+        rig.put(tool.DEST_NAME, json.dumps(app1_document()))
+        self.assertEqual(0, rig.run("--host", "app1", "--set", SLOTS_KEY))
+        expected = {
+            **app1_document(),
+            SLOTS_KEY: [
+                {
+                    "stack": "tenant-gamma",
+                    "public_key": "ssh-ed25519 " + "G" * 68,
+                    "adopt_existing": False,
+                }
+            ],
+        }
+        self.assertEqual(expected, rig.document())
+        self.assertEqual(0o600, stat.S_IMODE(rig.dest.stat().st_mode))
+
+    def test_a_malformed_line_writes_nothing_and_exits_non_zero(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, "onlyastack", ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertIn(f"still missing (1): {SLOTS_KEY}", rig.stdout)
+
+    def test_a_malformed_line_after_a_good_one_is_not_skipped(self) -> None:
+        # The good line first: a tool that skipped the bad line and asked again would
+        # reach the empty line holding one slot and write it.
+        rig = Rig(self, answers=[SLOT_LINE, "onlyastack", SLOT_LINE.replace("alpha", "beta"), ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_the_first_step_on_the_four_keys_app1_holds_today_adds_the_slots(self) -> None:
+        four = {key: app1_value(key) for key in APP1_KEYS}
+        rig = Rig(self, answers=[SLOT_LINE, ""])
+        rig.put(tool.DEST_NAME, json.dumps(four))
+        self.assertEqual(0, rig.run("--host", "app1", "--set", SLOTS_KEY))
+        self.assertEqual(
+            {
+                **four,
+                SLOTS_KEY: [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False}],
+            },
+            rig.document(),
+        )
+
+    def test_a_pasted_private_key_is_refused_and_pending_input_is_flushed(self) -> None:
+        rig = Rig(self, answers=["-----BEGIN OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXk", ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+        self.assertGreaterEqual(rig.flushes, 1)
+        self.assertNotIn("PRIVATE KEY", rig.everything.replace("PRIVATE KEY'", ""))
+
+    def test_a_line_that_is_not_a_stack_a_key_type_and_a_base64_blob_is_refused(self) -> None:
+        for bad in (
+            f"{SLOT_STACK} adopt",
+            f"{SLOT_STACK} ssh-dss " + "A" * 68,
+            f"{SLOT_STACK} ssh-ed25519 not*base64!",
+            f"{SLOT_STACK} {'A' * 68}",
+            f"{SLOT_STACK} ssh-ed25519",
+        ):
+            with self.subTest(line_length=len(bad)):
+                rig = Rig(self, answers=[bad, ""])
+                rig.seed_app1()
+                self.assertEqual(1, rig.run("--host", "app1"))
+                self.assertFalse(rig.dest.exists())
+                self.assertGreaterEqual(rig.flushes, 1)
+
+    def test_a_key_comment_is_dropped_and_adopt_is_the_last_word_after_it(self) -> None:
+        rig = Rig(self, answers=[f"{SLOT_LINE} someone@example adopt", ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertEqual(
+            [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": True}],
+            rig.document()[SLOTS_KEY],
+        )
+
+    def test_a_pasted_private_key_at_the_tenants_prompt_is_refused_and_flushed(self) -> None:
+        rig = Rig(self, answers=["-----BEGIN OPENSSH PRIVATE KEY-----", "b3BlbnNzaC1rZXk", ""])
+        rig.put(tool.DEST_NAME, json.dumps(ops1_document()))
+        self.assertEqual(1, rig.run("--host", "ops1", "--set", TENANTS_KEY))
+        self.assertGreaterEqual(rig.flushes, 1)
+
+    def test_a_stack_given_twice_writes_nothing_and_exits_non_zero(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} ssh-ed25519 {'B' * 68}", ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_key_given_twice_writes_nothing_and_exits_non_zero(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, f"tenant-beta {SLOT_KEY}", ""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_refusal_with_no_terminal_gives_the_fixed_message_and_no_traceback(self) -> None:
+        rig = Rig(self, answers=[SLOT_LINE, f"{SLOT_STACK} ssh-ed25519 not*base64!", ""])
+        rig.seed_app1()
+        rig.ctx.flush_input = tool.flush_terminal_input
+        # /dev/null is a real descriptor that is not a terminal: tcflush raises termios.error there.
+        with open(os.devnull) as null, mock.patch("sys.stdin", null):
+            self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertIn(
+            "that line is not 'stack public_key [adopt]', or repeats one.", rig.err.getvalue()
+        )
+        self.assertNotIn("Traceback", rig.err.getvalue())
+        self.assertFalse(rig.dest.exists())
+
+    def test_an_empty_list_writes_nothing_and_exits_non_zero(self) -> None:
+        rig = Rig(self, answers=[""])
+        rig.seed_app1()
+        self.assertEqual(1, rig.run("--host", "app1"))
+        self.assertFalse(rig.dest.exists())
+
+    def test_a_typed_slot_is_never_echoed(self) -> None:
+        rig = Rig(self, answers=["SENTSTACK ssh-ed25519 SENTSLOTKEY0123456789 adopt", ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertNotIn("SENTSTACK", rig.everything)
+        self.assertNotIn("SENTSLOTKEY", rig.everything)
+        self.assertIn("SENTSTACK", json.dumps(rig.document()))
+
+
 class LeakTests(unittest.TestCase):
     """No value reaches stdout, stderr or a prompt, on any path."""
 
@@ -900,6 +1116,8 @@ class LeakTests(unittest.TestCase):
             RECIPIENT_B,
             "SENT-TYPED",
             "SENT-LINKFAIL",
+            "SENTSTACK",
+            "SENTSLOTKEY",
         ]
 
     def assert_clean(self, rig: Rig, label: str) -> None:
@@ -915,7 +1133,7 @@ class LeakTests(unittest.TestCase):
         rig.seed_ops1()
         self.assertEqual(0, rig.run("--host", "ops1"))
         self.assert_clean(rig, "ops1 fill")
-        rig = Rig(self)
+        rig = Rig(self, answers=["SENTSTACK ssh-ed25519 SENTSLOTKEY0123456789", ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
         self.assert_clean(rig, "app1 fill")

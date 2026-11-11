@@ -1,0 +1,5 @@
+---
+# The same converge as the default scenario's: the cases start from the configured
+# host. Imported, not copied, so the play has one home.
+- name: Converge as the default scenario does
+  ansible.builtin.import_playbook: ../default/converge.yml

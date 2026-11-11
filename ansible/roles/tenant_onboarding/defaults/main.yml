@@ -1,0 +1,7 @@
+---
+# The three values a request names, given on the command line and never committed.
+# A plain apply reads none of them. The defaults are empty, so a run that names no
+# tenant names nothing.
+tenant_onboarding_confirm: ''
+tenant_onboarding_slug: ''
+tenant_onboarding_uid: ''

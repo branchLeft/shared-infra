@@ -219,6 +219,55 @@ host_inputs_verify_cases:
     content: "{{ host_inputs_test_doc | combine({'db1_grants_ops1_host': false}) | to_json }}"
     code: missing-key
     names: db1_grants_ops1_host
+  # ----- The optional input (edge1's ci_jump_user) -----
+  # The file may leave it out; nothing else may be left out, and a name that is there must be
+  # usable. These run as edge1, whose row holds eleven required inputs and this one.
+  - name: edge1 file with the optional input empty
+    kind: content
+    content: "{{ host_inputs_test_edge1_required_doc | combine({'ci_jump_user': ''}) | to_json }}"
+    host: edge1
+    code: missing-key
+    names: ci_jump_user
+  - name: edge1 file with the optional input null
+    kind: content
+    content: "{{ host_inputs_test_edge1_required_doc | combine({'ci_jump_user': none}) | to_json }}"
+    host: edge1
+    code: missing-key
+    names: ci_jump_user
+  - name: edge1 file with the optional input white space
+    kind: content
+    content: "{{ host_inputs_test_edge1_required_doc | combine({'ci_jump_user': '  '}) | to_json }}"
+    host: edge1
+    code: missing-key
+    names: ci_jump_user
+  - name: edge1 file that lacks a required input although the optional one is there
+    kind: content
+    content: >-
+      {{ host_inputs_test_edge1_required_doc | dict2items
+      | rejectattr('key', 'equalto', 'monitoring_stack_smtp_password') | list | items2dict
+      | combine({'ci_jump_user': host_inputs_test_jump_name}) | to_json }}
+    host: edge1
+    code: missing-key
+    names: monitoring_stack_smtp_password
+  - name: edge1 file that holds only the optional input
+    kind: content
+    content: "{{ {'ci_jump_user': host_inputs_test_jump_name} | to_json }}"
+    host: edge1
+    code: missing-key
+    names: monitoring_stack_smtp_username
+  - name: edge1 file that lacks a required input and the optional one
+    kind: content
+    content: >-
+      {{ host_inputs_test_edge1_required_doc | dict2items
+      | rejectattr('key', 'equalto', 'ntfy_pager_pager_token') | list | items2dict | to_json }}
+    host: edge1
+    code: missing-key
+    names: ntfy_pager_pager_token
+  - name: edge1 file with a key outside the row, the optional one left out
+    kind: content
+    content: "{{ host_inputs_test_edge1_required_doc | combine({'extra_key': host_inputs_test_marker}) | to_json }}"
+    host: edge1
+    code: unknown-key
   # ----- The host -----
   - name: a host with no row
     kind: content

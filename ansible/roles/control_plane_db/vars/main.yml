@@ -34,10 +34,17 @@ control_plane_db_admin_url_name: admin-url
 control_plane_db_tenant_password_name: tenant-password
 control_plane_db_owner_password_name: owner-password
 control_plane_db_provisioner_password_name: provisioner-password
+# The migrator's two inputs. migrator-password is read by provision, which creates the login
+# with it. migrator-url is read by migrate alone, which connects as the login and not as the
+# administrator: the owner places one per migrate request, and it is removed on every exit.
+control_plane_db_migrator_password_name: migrator-password
+control_plane_db_migrator_url_name: migrator-url
 control_plane_db_admin_url_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_admin_url_name }}'
 control_plane_db_tenant_password_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_tenant_password_name }}'
 control_plane_db_owner_password_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_owner_password_name }}'
 control_plane_db_provisioner_password_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_provisioner_password_name }}'
+control_plane_db_migrator_password_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_migrator_password_name }}'
+control_plane_db_migrator_url_file: '{{ control_plane_db_input_dir }}/{{ control_plane_db_migrator_url_name }}'
 
 # The input files' owner, group and mode. The group is the applications image's
 # user, which reads them through a read-only mount and nothing else can.
@@ -48,11 +55,19 @@ control_plane_db_input_dir_mode: '0750'
 control_plane_db_image_user: '1000:1000'
 
 # The two connection URL files the applications read, and the one login each holds.
-# The provisioner login has no URL file: nothing reads it.
+# The provisioner login has no URL file yet: its runtime user, the lifecycle worker, is not built.
 control_plane_db_portal_url_file: '{{ control_plane_db_config_dir }}/portal-database-url'
 control_plane_db_console_url_file: '{{ control_plane_db_config_dir }}/console-database-url'
 control_plane_db_tenant_login: portal_tenant_login
 control_plane_db_owner_login: portal_owner_login
+# The third login is the lifecycle worker's runtime login. It holds no URL file: the
+# provisioning program connects as it once, after its transaction commits, to prove the boundary.
+control_plane_db_provisioner_login: portal_provisioner_login
+# The fourth login is the migration login: not a superuser, no BYPASSRLS, owner of the portal
+# database and its objects. The full provision's last step and every migrate-only run connect
+# as it. The program's manifest is its single home; the role holds the name only, to look for
+# its rule in the access file, and the program refuses a URL that does not name it.
+control_plane_db_migrator_login: portal_migrator_login
 control_plane_db_database_host: db
 control_plane_db_database_name: portal
 
@@ -60,6 +75,29 @@ control_plane_db_database_name: portal
 control_plane_db_url_tail: '@{{ control_plane_db_database_host }}:5432/{{ control_plane_db_database_name }}'
 
 control_plane_db_network: control-plane_default
+
+# The access rules the running database was started on. The control_plane role
+# delivers the file into the `postgres` subdirectory of the stack directory; the stack's
+# compose file mounts that directory into the db container, so the container sees a
+# delivered file at once, and the control_plane role reloads the server after every
+# deploy. The rules the server runs on are the container's copy, which is read here and
+# not assumed: it must equal the delivered one, byte for byte. A unit test pins the three
+# constants below to the control_plane role and to the compose file.
+control_plane_db_hba_file: /opt/branchleft/control-plane/postgres/pg_hba.conf
+control_plane_db_hba_container: control-plane-db-1
+control_plane_db_hba_container_file: /etc/postgresql-hba/pg_hba.conf
+
+# The logins the file must admit to the portal database, and the shape of a rule that
+# does: host, a database list holding portal, the login, any address, scram. A rule is
+# looked for by its parts, so the column spacing is free. The login is put between the
+# prefix and the suffix.
+control_plane_db_hba_logins:
+  - '{{ control_plane_db_tenant_login }}'
+  - '{{ control_plane_db_owner_login }}'
+  - '{{ control_plane_db_provisioner_login }}'
+  - '{{ control_plane_db_migrator_login }}'
+control_plane_db_hba_rule_prefix: '(?m)^host[ \t]+(?:[^ \t,#]+,)*portal(?:,[^ \t,#]+)*[ \t]+'
+control_plane_db_hba_rule_suffix: '[ \t]+\S+[ \t]+scram-sha-256[ \t]*$'
 
 # Identity reconciler.
 control_plane_db_pat_file: '{{ control_plane_db_stack_state_dir }}/zitadel-state/reconciler.pat'

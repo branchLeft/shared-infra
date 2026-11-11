@@ -136,12 +136,74 @@ CI_LOGIN_PATHS = [
     "ansible/owner_vars/edge1.yml",
 ]
 
+# ci_jump writes the options of the jump account's key lines, which decide which private hosts
+# the gated run may reach through edge1. The whole role is the owner's, its module and the molecule
+# plays that prove the restriction included.
+CI_JUMP_PATHS = [
+    "ansible/roles/ci_jump/tasks/main.yml",
+    "ansible/roles/ci_jump/tasks/_guards.yml",
+    "ansible/roles/ci_jump/tasks/_keys.yml",
+    "ansible/roles/ci_jump/tasks/_readback.yml",
+    "ansible/roles/ci_jump/templates/authorized_keys.j2",
+    "ansible/roles/ci_jump/vars/main.yml",
+    "ansible/roles/ci_jump/library/ci_jump_authorized_keys.py",
+    "ansible/roles/ci_jump/tests/unit/test_ci_jump_authorized_keys.py",
+    "ansible/roles/ci_jump/molecule/default/verify.yml",
+    "ansible/roles/ci_jump/molecule/refusals/converge.yml",
+    "ansible/roles/ci_jump/README.md",
+    "ansible/checks/test_ci_jump_pins.py",
+]
+
 # The owner-run writer of a host's inputs file runs as root, takes every input value and writes
 # the file the loader reads, so it is the owner's alone. Its test holds the proofs of what it
 # keeps secret, so the test is the owner's too.
 SEEDING_TOOL_PATHS = [
     "ansible/tools/seed_host_inputs.py",
     "ansible/tools/test_seed_host_inputs.py",
+]
+
+# The three guards the demo1 root bootstrap runbook calls, their tests and the captured docker
+# output the image gate reads. A weaker guard or a fixture edited to suit it would let the runbook
+# go on, so these are the owner's alone.
+BOOTSTRAP_GUARD_PATHS = [
+    "ansible/tools/pubkey_only.py",
+    "ansible/tools/test_pubkey_only.py",
+    "ansible/tools/ci_key_line.py",
+    "ansible/tools/test_ci_key_line.py",
+    "ansible/tools/spool_image_gate.py",
+    "ansible/tools/test_spool_image_gate.py",
+    "ansible/tools/fixtures/docker-inspect-loaded-by-digest.json",
+    "ansible/tools/fixtures/docker-inspect-absent.json",
+]
+
+# safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
+# whole role is the owner's, its module, units, environment template and the tests that hold them
+# included. The ring controller role also installs the unit of a service that holds a push key,
+# and safety_service installs the unit that mounts the channel key and the hash-source credential.
+KEY_ROLE_PATHS = [
+    "ansible/roles/safety_channel_key/tasks/main.yml",
+    "ansible/roles/safety_channel_key/library/safety_channel_key.py",
+    "ansible/roles/safety_channel_key/README.md",
+    "ansible/roles/ring_controller_host/tasks/main.yml",
+    "ansible/roles/ring_controller_host/vars/main.yml",
+    "ansible/roles/ring_controller_host/meta/argument_specs.yml",
+    "ansible/roles/ring_controller_host/library/ring_controller_host_keys.py",
+    "ansible/roles/ring_controller_host/files/ring-controller.service",
+    "ansible/roles/ring_controller_host/files/ring-controller.timer",
+    "ansible/roles/ring_controller_host/templates/ring-controller.env.j2",
+    "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_keys.py",
+    "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_units.py",
+    "ansible/roles/ring_controller_host/molecule/default/verify.yml",
+    "ansible/roles/ring_controller_host/README.md",
+    "ansible/roles/safety_service/tasks/main.yml",
+    "ansible/roles/safety_service/vars/main.yml",
+    "ansible/roles/safety_service/meta/argument_specs.yml",
+    "ansible/roles/safety_service/files/content-safety.service",
+    "ansible/roles/safety_service/templates/service.env.j2",
+    "ansible/roles/safety_service/templates/config.json.j2",
+    "ansible/roles/safety_service/tests/unit/test_safety_service.py",
+    "ansible/roles/safety_service/molecule/default/verify.yml",
+    "ansible/roles/safety_service/README.md",
 ]
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
@@ -216,8 +278,35 @@ class CodeownersTests(unittest.TestCase):
     def test_the_ci_login_role_and_the_owner_vars_are_owned_by_the_owner(self) -> None:
         self.assert_owned(CI_LOGIN_PATHS)
 
+    def test_the_ci_jump_role_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(CI_JUMP_PATHS)
+
+    def test_the_key_making_roles_are_owned_by_the_owner(self) -> None:
+        # The CODEOWNERS line for ring_controller_host is the control: delete it and every role
+        # path above that is not under a loader directory falls back to no owner and this fails.
+        self.assert_owned(KEY_ROLE_PATHS)
+
+    def test_the_ring_controller_role_line_is_its_own_not_a_loader_line(self) -> None:
+        patterns = {pattern for pattern, _ in self.rules}
+        self.assertIn("/ansible/roles/ring_controller_host/", patterns)
+        for path in (
+            "ansible/roles/ring_controller_host/README.md",
+            "ansible/roles/ring_controller_host/vars/main.yml",
+            "ansible/roles/ring_controller_host/tasks/main.yml",
+        ):
+            with self.subTest(path=path):
+                lines = [
+                    p
+                    for p, _ in self.rules
+                    if pathspec.GitIgnoreSpec.from_lines([p]).match_file(path)
+                ]
+                self.assertEqual(lines, ["/ansible/roles/ring_controller_host/"])
+
     def test_the_seeding_tool_is_owned_by_the_owner(self) -> None:
         self.assert_owned(SEEDING_TOOL_PATHS)
+
+    def test_the_bootstrap_guards_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(BOOTSTRAP_GUARD_PATHS)
 
     def test_the_standards_template_paths_are_owned_by_the_owner(self) -> None:
         self.assert_owned(
@@ -245,7 +334,14 @@ class CodeownersTests(unittest.TestCase):
             "hetzner/scripts/anything.sh",
             "ansible/harness/anything.py",
         }
-        owned = PULL_ROLE_PATHS + HOST_INPUTS_PATHS + CI_LOGIN_PATHS + SEEDING_TOOL_PATHS
+        owned = (
+            PULL_ROLE_PATHS
+            + HOST_INPUTS_PATHS
+            + CI_LOGIN_PATHS
+            + SEEDING_TOOL_PATHS
+            + BOOTSTRAP_GUARD_PATHS
+            + KEY_ROLE_PATHS
+        )
         for path in ESTATE_PATHS + GATE_PATHS + owned + UNOWNED_PATHS:
             if path in stands_for_more:
                 continue

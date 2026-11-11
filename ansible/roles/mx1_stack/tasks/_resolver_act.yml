@@ -1,0 +1,168 @@
+---
+# Acts on the resolver. The caller has marked the stamp pending, and has read mx1_stack_resolver_missing,
+# mx1_stack_anchor_state, mx1_stack_unbound_running and mx1_stack_resolv_before.
+
+# Masked before the package lands, so the unit never gets the chance to repoint the whole host at a
+# resolver that is not serving yet. dpkg then logs a "systemctl preset failed" line for this unit
+# during the install; that is the mask working, not a failure.
+- name: Mask the unit that would repoint the host's resolver at unbound
+  ansible.builtin.systemd_service:
+    name: '{{ mx1_stack_resolvconf_unit }}'
+    masked: true
+
+# unbound-anchor and dns-root-data are Recommends, and this host sets APT::Install-Recommends false,
+# so they are named. The index is refreshed only when something is missing.
+- name: Install the packages that are missing
+  ansible.builtin.apt:
+    name: '{{ mx1_stack_resolver_missing }}'
+    state: present
+    update_cache: true
+  when: mx1_stack_resolver_missing | ansible.builtin.length > 0
+
+# unbound-anchor exits non-zero when it had to write or update the anchor, which is the normal first-run
+# path, so its status says nothing about success: the file existing does.
+- name: Bootstrap the DNSSEC root anchor
+  ansible.builtin.command:
+    argv:
+      - unbound-anchor
+      - -a
+      - '{{ mx1_stack_root_anchor }}'
+  changed_when: true
+  failed_when: false
+  when:
+    - mx1_stack_anchor_state == 'absent'
+    - not ansible_check_mode
+
+- name: Read the root anchor again
+  ansible.builtin.stat:
+    path: '{{ mx1_stack_root_anchor }}'
+    get_checksum: false
+  register: mx1_stack_anchor_after
+
+- name: Refuse a host where the DNSSEC root anchor could not be bootstrapped
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_anchor_after.stat.exists
+      - mx1_stack_anchor_after.stat.size > 0
+    quiet: true
+    fail_msg: Could not bootstrap the DNSSEC root anchor at {{ mx1_stack_root_anchor }}. The stamp was not written.
+  when: not ansible_check_mode
+
+- name: Give the root anchor to unbound
+  ansible.builtin.file:
+    path: '{{ mx1_stack_root_anchor }}'
+    owner: unbound
+    group: unbound
+    state: file
+  when:
+    - mx1_stack_anchor_state == 'absent'
+    - not ansible_check_mode
+
+- name: Note that the anchor is bootstrapped
+  ansible.builtin.set_fact:
+    mx1_stack_anchor_state: bootstrapped
+  when: not ansible_check_mode
+
+# The drop-in is validated as part of the whole assembled configuration, not alone: a conflict with a
+# distro drop-in only shows up there, and on a live mail host a bad configuration must never reach a
+# restart. The previous file is kept as a backup until the check has passed, and put back if it has not.
+- name: Deliver the drop-in and have unbound check the whole configuration
+  block:
+    - name: Deliver the unbound drop-in
+      ansible.builtin.copy:
+        content: '{{ mx1_stack_resolver_dropin_text }}'
+        dest: '{{ mx1_stack_resolver_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+        backup: true
+      register: mx1_stack_dropin
+
+    - name: Have unbound check its assembled configuration
+      mx1_stack_probe:
+        action: unbound_checkconf
+      when: not ansible_check_mode
+  rescue:
+    - name: Put the previous drop-in back
+      ansible.builtin.copy:
+        src: '{{ mx1_stack_dropin.backup_file }}'
+        dest: '{{ mx1_stack_resolver_dropin }}'
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      when: (mx1_stack_dropin | ansible.builtin.default({})).backup_file is ansible.builtin.defined
+
+    - name: Take out the drop-in that was refused, as there was none before
+      ansible.builtin.file:
+        path: '{{ mx1_stack_resolver_dropin }}'
+        state: absent
+      when:
+        - (mx1_stack_dropin | ansible.builtin.default({})).backup_file is ansible.builtin.undefined
+        - (mx1_stack_dropin | ansible.builtin.default({})) is ansible.builtin.changed
+
+    - name: Remove the backup of the previous drop-in after it was put back
+      ansible.builtin.file:
+        path: '{{ mx1_stack_dropin.backup_file }}'
+        state: absent
+      when: (mx1_stack_dropin | ansible.builtin.default({})).backup_file is ansible.builtin.defined
+
+    - name: Stop, with the drop-in put back
+      ansible.builtin.fail:
+        msg: >-
+          unbound-checkconf rejected the configuration with the new drop-in, so the previous drop-in was put
+          back and unbound was not restarted. The stamp was not written, so the next run tries again.
+
+- name: Remove the backup of the previous drop-in
+  ansible.builtin.file:
+    path: '{{ mx1_stack_dropin.backup_file }}'
+    state: absent
+  when: mx1_stack_dropin.backup_file is ansible.builtin.defined
+
+- name: Enable unbound
+  ansible.builtin.systemd_service:
+    name: unbound
+    enabled: true
+  when: not (ansible_check_mode and mx1_stack_resolver_missing | ansible.builtin.length > 0)
+
+- name: Restart unbound when its configuration changed, it was just installed or it was not running
+  ansible.builtin.systemd_service:
+    name: unbound
+    state: restarted
+  when:
+    - >-
+      mx1_stack_dropin is ansible.builtin.changed or mx1_stack_resolver_missing | ansible.builtin.length > 0
+      or not (mx1_stack_unbound_running | ansible.builtin.bool)
+    - not (ansible_check_mode and mx1_stack_resolver_missing | ansible.builtin.length > 0)
+
+- name: Read the system resolver file again
+  ansible.builtin.stat:
+    path: '{{ mx1_stack_resolv_conf }}'
+    checksum_algorithm: sha256
+  register: mx1_stack_resolv_after
+
+# Debian's unbound-resolvconf unit would otherwise point the whole box at unbound on install, a far
+# wider blast radius than the DNSBL check needs, so the file is meant to be exactly as it was. The role
+# does not revert it: the hand route's `resolvconf -d` is dropped because it runs a command whose result
+# the role cannot read back. The README names the repair.
+- name: Refuse a run that changed the system resolver file
+  ansible.builtin.assert:
+    that:
+      - >-
+        (mx1_stack_resolv_after.stat.checksum | ansible.builtin.default('absent'))
+        == (mx1_stack_resolv_before.stat.checksum | ansible.builtin.default('absent'))
+    quiet: true
+    fail_msg: >-
+      {{ mx1_stack_resolv_conf }} changed while unbound was installed or restarted. The system resolver was
+      meant to be untouched, and the role does not revert it: restore it by hand (the README, "If a run
+      fails after unbound restarted") before relying on this host. The stamp was not written.
+
+# Mail/provision's recursion check, in the probe: dig @127.0.0.1 for a name, retried, with an address
+# in the answer. It runs after the restart and before the stamp.
+- name: Ask the local resolver to resolve a name
+  mx1_stack_probe:
+    action: recursion
+    name: '{{ mx1_stack_recursion_name }}'
+    tries: '{{ mx1_stack_recursion_tries }}'
+    interval: '{{ mx1_stack_recursion_interval }}'
+  when: not ansible_check_mode

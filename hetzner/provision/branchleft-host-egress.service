@@ -14,6 +14,11 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/branchleft-host-egress
+# A failed run (no subnet route yet, after the script's own bounded wait) is
+# retried after a delay rather than left until the next timer tick. Restart=
+# on a oneshot needs systemd 244 or later; Debian 11 ships 247, Debian 12 252.
+Restart=on-failure
+RestartSec=15s
 
 [Install]
 WantedBy=multi-user.target

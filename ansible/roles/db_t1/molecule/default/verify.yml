@@ -1,0 +1,152 @@
+---
+# What must be on the instance after the converge with an image. The files are compared
+# with the role's own templates rendered on the machine that runs the test. The deploy
+# program is a stand-in that records its calls, so the single call and the pin it wrote
+# are asserted. The sentinel root value must appear in no log (ANS-16).
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the templates are rendered with the values the
+  # role uses and cannot drift from them.
+  vars_files:
+    - ../../vars/main.yml
+  vars:
+    db_t1_verify_project: /opt/branchleft/dbt1
+    db_t1_verify_unit: branchleft-compose@dbt1.service
+  tasks:
+    - name: Read the directories and files the role delivers
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /etc/branchleft
+        - /opt/branchleft
+        - '{{ db_t1_verify_project }}'
+        - '{{ db_t1_verify_project }}/conf.d'
+        - '{{ db_t1_verify_project }}/run'
+        - '{{ db_t1_verify_project }}/run/mysqld'
+        - '{{ db_t1_verify_project }}/compose.yml'
+        - '{{ db_t1_verify_project }}/conf.d/branchleft.cnf'
+        - /etc/branchleft/dbt1.image.env
+        - /etc/branchleft/dbt1.env
+      register: db_t1_verify_paths
+
+    - name: Assert the directories are root-owned 0755 and the socket directory belongs to the container user
+      ansible.builtin.assert:
+        that:
+          - item.stat.isdir
+          - item.stat.mode == '0755'
+          - item.stat.uid == (1001 if item.item.endswith('/run/mysqld') else 0)
+          - item.stat.gid == 0
+        quiet: true
+        fail_msg: A directory is missing, not mode 0755, or not owned as the role states.
+      loop: '{{ db_t1_verify_paths.results[0:6] }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Assert the compose file and the configuration are root 0644 plain files
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg
+          - item.stat.mode == '0644'
+          - item.stat.uid == 0
+          - item.stat.gid == 0
+        quiet: true
+        fail_msg: The compose file or the configuration is missing or not root 0644.
+      loop: '{{ db_t1_verify_paths.results[6:8] }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Assert the pin, written by the stand-in, is root 0600 and the root file is untouched
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_paths.results[8].stat.isreg
+          - db_t1_verify_paths.results[8].stat.mode == '0600'
+          - db_t1_verify_paths.results[9].stat.isreg
+          - db_t1_verify_paths.results[9].stat.mode == '0600'
+          - db_t1_verify_paths.results[9].stat.uid == 0
+        quiet: true
+        fail_msg: The pin or the owner-placed root file is not a plain root 0600 file.
+
+    - name: Read the delivered files
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ db_t1_verify_project }}/compose.yml'
+        - '{{ db_t1_verify_project }}/conf.d/branchleft.cnf'
+        - /etc/branchleft/dbt1.image.env
+        - '{{ scenario_deploy_log }}'
+      register: db_t1_verify_files
+
+    - name: Render the role's own templates on the machine that runs the test
+      ansible.builtin.set_fact:
+        db_t1_verify_compose: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../../templates/compose.yml.j2') }}"
+        db_t1_verify_cnf: "{{ lookup('ansible.builtin.template', playbook_dir ~ '/../../templates/branchleft.cnf.j2') }}"
+
+    - name: Assert the files are the rendered templates, the pin is the one line and the deploy was called once
+      ansible.builtin.assert:
+        that:
+          - (db_t1_verify_files.results[0].content | b64decode) == db_t1_verify_compose
+          - (db_t1_verify_files.results[1].content | b64decode) == db_t1_verify_cnf
+          - (db_t1_verify_files.results[2].content | b64decode) == ('IMAGE=' ~ scenario_image ~ db_t1_line_end)
+          - (db_t1_verify_files.results[3].content | b64decode) == ('dbt1 ' ~ scenario_image ~ db_t1_line_end)
+        quiet: true
+        fail_msg: >-
+          A delivered file differs from its template, the pin is not the one line, or the
+          deploy program was not called exactly once with the stack and the image.
+
+    - name: Assert the compose file keeps the properties the role exists for
+      ansible.builtin.assert:
+        that:
+          - "'image: ${IMAGE}' in db_t1_verify_compose"
+          - "'MYSQL_ROOT_HOST: localhost' in db_t1_verify_compose"
+          - "'PERCONA_TELEMETRY_DISABLE' in db_t1_verify_compose"
+          - "'network_mode: host' in db_t1_verify_compose"
+          - "'ports:' not in db_t1_verify_compose"
+          - "'bind-address = 127.0.0.1' in db_t1_verify_cnf"
+          - "'mysqlx = OFF' in db_t1_verify_cnf"
+          - "'gtid_mode = ON' in db_t1_verify_cnf"
+        quiet: true
+        fail_msg: The rendered compose file or configuration lost a property the role exists for.
+
+    - name: Ask systemd for the stack's unit
+      ansible.builtin.systemd_service:
+        name: '{{ db_t1_verify_unit }}'
+      register: db_t1_verify_unit_state
+
+    - name: Assert the unit is enabled and the role did not start it
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_unit_state.status.UnitFileState == 'enabled'
+          - db_t1_verify_unit_state.status.ActiveState != 'active'
+        quiet: true
+        fail_msg: The stack's unit is not enabled, or the role started it (only the deploy program starts it).
+
+- name: Verify that no log shows the root value
+  hosts: localhost
+  gather_facts: false
+  # The log is read on the controller. The control case is the canary the converge
+  # prints through a task with no no_log: without it, an empty scan would prove nothing.
+  tasks:
+    - name: Read the log of the whole scenario and the sentinel
+      ansible.builtin.set_fact:
+        db_t1_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+        db_t1_verify_sentinel: "{{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/root_value') }}"
+      no_log: true
+
+    - name: Assert the log shows the control case and the role's tasks
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in db_t1_verify_log"
+          - "'Look for the one expected line in the root file' in db_t1_verify_log"
+        quiet: true
+        fail_msg: The log lacks the canary or a task of the role, so an empty scan would prove nothing.
+
+    - name: Assert the root value is in no log
+      ansible.builtin.assert:
+        that:
+          - db_t1_verify_sentinel not in db_t1_verify_log
+          - db_t1_verify_sentinel | length == 40
+        quiet: true
+        fail_msg: The throwaway root value appears in the log, or the sentinel is not the expected one. The value is not printed.
+      no_log: true

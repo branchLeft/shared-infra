@@ -1,0 +1,47 @@
+---
+# Test scaffolding, not role tasks. Asserts that the block molecule.yml puts on
+# raw.githubusercontent.com and ghcr.io is in force in this container: each name
+# resolves to the container's own loopback only, and an HTTPS request to it gets no
+# answer. The demo host's egress allowlist holds the package mirrors only, so a
+# role that reaches either name must fail in the test and not pass on a runner that
+# has internet. The one home of this check: the verify step of every demo1_build
+# scenario that has one, and of the demo1_egress_spool scenarios, includes it. Take
+# the etc_hosts key out of a molecule.yml and its verify step fails here.
+- name: Resolve each blocked name the way a program in the container does
+  ansible.builtin.command:
+    argv: [getent, ahosts, '{{ item }}']
+  loop: [raw.githubusercontent.com, ghcr.io]
+  register: demo1_build_blocked_resolution
+  changed_when: false
+
+- name: Assert each blocked name resolves to the loopback and to nothing else
+  ansible.builtin.assert:
+    that:
+      - item.stdout_lines | length > 0
+      - item.stdout_lines | map('regex_search', '^\S+') | unique | difference(['127.0.0.1', '::1']) | length == 0
+    quiet: true
+    fail_msg: '{{ item.item }} resolves to an address outside the container, so the block on it is not in force.'
+  loop: '{{ demo1_build_blocked_resolution.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: Try to reach each blocked name over HTTPS
+  ansible.builtin.uri:
+    url: 'https://{{ item }}/'
+    validate_certs: false
+    use_proxy: false
+    timeout: 5
+  loop: [raw.githubusercontent.com, ghcr.io]
+  register: demo1_build_blocked_reach
+  failed_when: false
+  changed_when: false
+
+- name: Assert that no request to a blocked name was answered
+  ansible.builtin.assert:
+    that:
+      - item.status | default(-1) == -1
+    quiet: true
+    fail_msg: 'A request to {{ item.item }} was answered ({{ item.status | default("no status") }}), so the block on it is not in force.'
+  loop: '{{ demo1_build_blocked_reach.results }}'
+  loop_control:
+    label: '{{ item.item }}'

@@ -1,17 +1,16 @@
-import * as pulumi from '@pulumi/pulumi';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { type Created, installTenantsMocks, TYPES } from './tenants.fixtures';
 
 /**
  * A token that addresses the demos project must register no provider resource.
  * The mocks answer the guard's reads with demos sentinels, so the guard refuses.
+ * That covers the network, the subnet, the default route, both Hosts and
+ * everything in them: the route and edge-t are declared outside any other gate
+ * than the verified value, so this is their control.
  */
 
-interface Created {
-  type: string;
-  name: string;
-}
-
-const created: Created[] = [];
+let created: Created[] = [];
 
 /** Rejections the refused guard causes in resources that wait on it. */
 const refusals: unknown[] = [];
@@ -25,33 +24,11 @@ const providerCreates = () => created.filter((resource) => resource.type.startsW
 
 beforeAll(() => {
   process.on('unhandledRejection', onRejection);
-  process.env.PULUMI_CONFIG = JSON.stringify({
-    'branchleft-hetzner-tenants:image': 'debian-13',
-    'branchleft-hetzner-tenants:dbt1ServerType': 'cx23',
-    'branchleft-hetzner-tenants:ownerSshKeyNames': '["rob@branchleft.co.uk"]',
-    'branchleft-hetzner-tenants:dbt1DeployPublicKey':
-      'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEXAMPLE deploy@test',
+  created = installTenantsMocks({
+    config: { 'branchleft-hetzner-tenants:dbt1Enabled': 'true' },
+    servers: [{ name: 'demo1' }],
+    firewalls: [{ name: 'project-marker-demos' }],
   });
-  pulumi.runtime.setMocks(
-    {
-      newResource(args: pulumi.runtime.MockResourceArgs) {
-        created.push({ type: args.type, name: args.name });
-        return { id: `${args.name}-id`, state: { ...args.inputs } };
-      },
-      call(args: pulumi.runtime.MockCallArgs) {
-        if (args.token === 'hcloud:index/getServers:getServers') {
-          return { servers: [{ name: 'demo1' }] };
-        }
-        if (args.token === 'hcloud:index/getFirewalls:getFirewalls') {
-          return { firewalls: [{ name: 'project-marker-demos' }] };
-        }
-        return {};
-      },
-    },
-    'branchleft-hetzner-tenants',
-    'production',
-    false
-  );
 });
 
 afterAll(() => {
@@ -73,6 +50,18 @@ describe('tenants program under a token for another project', () => {
       true
     );
     expect(providerCreates()).toEqual([]);
+    // The first import of the program transforms it and its imports; under a
+    // loaded full suite that has outlasted the 5s default.
+  }, 30_000);
+
+  it('registers no default route, no edge-t and no db-t1 while the check refuses', () => {
+    // db-t1 is switched on in this file's config so its absence is the gate's work.
+    const types = created.map((resource) => resource.type);
+    expect(types).not.toContain(TYPES.route);
+    expect(types).not.toContain(TYPES.server);
+    expect(types).not.toContain(TYPES.firewall);
+    expect(types).not.toContain(TYPES.primaryIp);
+    expect(types).not.toContain(TYPES.serverNetwork);
   });
 
   it('registers no PrimaryIp for a public-networked Host under the same gate', async () => {

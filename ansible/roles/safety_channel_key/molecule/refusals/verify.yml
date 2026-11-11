@@ -1,0 +1,90 @@
+---
+# The refusal cases of the role, one for each guard. Each is one bad state on the host the role has
+# already delivered, and the role must stop with its own message, leave what it found as it found
+# it, and never print the key. A case has: name; expect, the exact message the role must stop
+# with (absent for a control that must be accepted); owner, the owner input in place of the
+# delivered root; files, to put in place (path, content, mode); commands, argv lists that make the bad
+# state; restore, argv lists that put the host back.
+#
+# The first case is a control: the same role on the host as delivered must accept. Without it, a
+# role that refused everything would pass every case.
+- name: Keep the key as delivered
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the key
+      ansible.builtin.slurp:
+        src: '{{ scenario_key }}'
+      register: safety_channel_key_refusals_original
+      no_log: true
+
+    - name: Hold the key, to put it back and to look for it
+      ansible.builtin.set_fact:
+        safety_channel_key_refusals_original_content: '{{ safety_channel_key_refusals_original.content }}'
+        safety_channel_key_refusals_original_text: '{{ safety_channel_key_refusals_original.content | b64decode }}'
+      no_log: true
+      diff: false
+
+- name: Run every case
+  hosts: all
+  gather_facts: false
+  vars:
+    # Made-up texts that look like keys: the base64 of the bytes 0 to 30 (31 bytes, so too
+    # short) and of the bytes 0 to 31 followed by a newline. Never a key.
+    safety_channel_key_refusals_short: AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHg==
+    safety_channel_key_refusals_with_newline: "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=\n"
+    safety_channel_key_refusals_cases:
+      - name: control, the host as delivered
+      - name: a key readable by its group
+        commands:
+          - [chmod, '0640', '{{ scenario_key }}']
+        expect: 'E-KEY-MODE-WIDE: {{ scenario_key }}'
+      - name: a key readable by others
+        commands:
+          - [chmod, '0604', '{{ scenario_key }}']
+        expect: 'E-KEY-MODE-WIDE: {{ scenario_key }}'
+      - name: a link in the key's place
+        commands:
+          - [mv, '{{ scenario_key }}', /root/real-key]
+          - [ln, -s, /root/real-key, '{{ scenario_key }}']
+        restore:
+          - [rm, -f, '{{ scenario_key }}']
+          - [mv, /root/real-key, '{{ scenario_key }}']
+        expect: 'E-KEY-OPEN: {{ scenario_key }}'
+      - name: a key of 31 bytes
+        files:
+          - path: '{{ scenario_key }}'
+            content: '{{ safety_channel_key_refusals_short }}'
+            mode: '0400'
+        expect: 'E-KEY-FORM: {{ scenario_key }}'
+      - name: a key with a trailing newline
+        files:
+          - path: '{{ scenario_key }}'
+            content: '{{ safety_channel_key_refusals_with_newline }}'
+            mode: '0400'
+        expect: 'E-KEY-FORM: {{ scenario_key }}'
+      - name: a file of someone else's in the key directory
+        commands:
+          - [touch, '{{ scenario_directory }}/notes.txt']
+        restore:
+          - [rm, -f, '{{ scenario_directory }}/notes.txt']
+        expect: 'E-DIR-FOREIGN: {{ scenario_directory }}/notes.txt'
+      - name: a parent directory that others can write
+        commands:
+          - [chmod, '0777', /etc/branchleft]
+        restore:
+          - [chmod, '0755', /etc/branchleft]
+        expect: 'E-PARENT: /etc/branchleft'
+      - name: an owner the host does not have
+        owner: no-such-account
+        expect: 'E-OWNER-UNKNOWN: {{ scenario_directory }}'
+      - name: an owner that is not a name
+        owner: Root
+        expect: 'E-ARGS: {{ scenario_directory }}'
+  tasks:
+    - name: Run each case
+      ansible.builtin.include_tasks: tasks/case.yml
+      loop: '{{ safety_channel_key_refusals_cases }}'
+      loop_control:
+        loop_var: safety_channel_key_refusals_case
+        label: '{{ safety_channel_key_refusals_case.name }}'

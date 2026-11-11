@@ -1,0 +1,384 @@
+---
+# The outcome, asserted in the order the claims are made. Each request is an
+# ansible-playbook run of request.yml on the controller, against the same container, so it
+# is the run a maintainer would make. Every check that follows a request reads the host.
+# Tasks that name the canary tenant carry no_log, so the log holds no canary name or UID.
+
+# 1. The plain apply installed the pinned files and no tenant state.
+- name: Check the plain apply
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    - name: Read the program and its register
+      ansible.builtin.stat:
+        path: '{{ item.path }}'
+        checksum_algorithm: sha256
+      loop:
+        - path: '{{ tenant_onboarding_program }}'
+          sha256: '{{ tenant_onboarding_program_sha256 }}'
+        - path: '{{ tenant_onboarding_register }}'
+          sha256: '{{ tenant_onboarding_register_sha256 }}'
+      register: tenant_onboarding_verify_installed
+      loop_control:
+        label: '{{ item.path }}'
+
+    - name: Assert each file is the pinned file, root-owned, mode 0644
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.isreg
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == '0644'
+          - item.stat.checksum == item.item.sha256
+        quiet: true
+        fail_msg: '{{ item.item.path }} is not the pinned file, root-owned with mode 0644.'
+      loop: '{{ tenant_onboarding_verify_installed.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    - name: Read the tenant state paths after a plain apply
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/branchleft/tenant-uids
+        - /var/lib/fake-docker/volumes.json
+      register: tenant_onboarding_verify_tenant_state_before
+
+    - name: Assert a plain apply created no volume and no UID claim
+      ansible.builtin.assert:
+        that:
+          - tenant_onboarding_verify_tenant_state_before.results | map(attribute='stat') | selectattr('exists') | list | length == 0
+        quiet: true
+        fail_msg: A plain apply created tenant state, so a guarded step ran without its tag.
+
+# 2. Refusals: each names the step's tag or confirmation wrongly, or leaves an input out.
+# Each is refused by its message, and runs nothing.
+- name: Refuse each wrong request by its message
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_onboarding_verify_request_base:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+    tenant_onboarding_verify_provision_tag: tenant_onboarding_provision_volumes
+    tenant_onboarding_verify_refusals:
+      - case: provision tag alone
+        tag: '{{ tenant_onboarding_verify_provision_tag }}'
+        extra: { tenant_onboarding_slug: example-holder, tenant_onboarding_uid: 30002 }
+        text: 'PROVISION_TENANT_VOLUMES was requested by its tag without'
+      - case: provision tag with the enable confirmation
+        tag: '{{ tenant_onboarding_verify_provision_tag }}'
+        extra:
+          {
+            tenant_onboarding_confirm: ENABLE_TENANT_UNIT,
+            tenant_onboarding_slug: example-holder,
+            tenant_onboarding_uid: 30002,
+          }
+        text: 'PROVISION_TENANT_VOLUMES was requested by its tag without'
+      - case: provision confirmation with a line break
+        tag: '{{ tenant_onboarding_verify_provision_tag }}'
+        extra:
+          {
+            tenant_onboarding_confirm: "PROVISION_TENANT_VOLUMES\n",
+            tenant_onboarding_slug: example-holder,
+            tenant_onboarding_uid: 30002,
+          }
+        text: 'is not a step id'
+      - case: provision confirmation as a list
+        tag: '{{ tenant_onboarding_verify_provision_tag }}'
+        extra:
+          {
+            tenant_onboarding_confirm: [PROVISION_TENANT_VOLUMES],
+            tenant_onboarding_slug: example-holder,
+            tenant_onboarding_uid: 30002,
+          }
+        text: 'is not a step id'
+      - case: provision confirmed without a slug
+        tag: '{{ tenant_onboarding_verify_provision_tag }}'
+        extra: { tenant_onboarding_confirm: PROVISION_TENANT_VOLUMES, tenant_onboarding_uid: 30002 }
+        text: 'needs tenant_onboarding_slug'
+      - case: provision confirmed with a UID that is not digits
+        tag: '{{ tenant_onboarding_verify_provision_tag }}'
+        extra:
+          {
+            tenant_onboarding_confirm: PROVISION_TENANT_VOLUMES,
+            tenant_onboarding_slug: example-holder,
+            tenant_onboarding_uid: 'abc',
+          }
+        text: 'needs tenant_onboarding_slug'
+  tasks:
+    - name: Make each refused request
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        tenant_onboarding_verify_request_case: '{{ item.case }}'
+        tenant_onboarding_verify_request_tag: '{{ item.tag }}'
+        tenant_onboarding_verify_request_extra: '{{ item.extra }}'
+        tenant_onboarding_verify_request_expect_success: false
+        tenant_onboarding_verify_request_expect_text: '{{ item.text }}'
+        tenant_onboarding_verify_request_expect_unchanged: false
+      loop: '{{ tenant_onboarding_verify_refusals }}'
+      loop_control:
+        label: '{{ item.case }}'
+
+# 3. The refusals ran nothing.
+- name: Check the refusals left no tenant state
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the tenant state paths after the refusals
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/branchleft/tenant-uids
+        - /var/lib/fake-docker/volumes.json
+      register: tenant_onboarding_verify_tenant_state_refused
+
+    - name: Assert the refused requests created no volume and no claim
+      ansible.builtin.assert:
+        that:
+          - tenant_onboarding_verify_tenant_state_refused.results | map(attribute='stat') | selectattr('exists') | list | length == 0
+        quiet: true
+        fail_msg: A refused request changed the host.
+
+# 4. The program's own refusals, shown with its message, on names that are not the canary.
+# The holder is provisioned first, so a UID is held when the next request asks for it.
+- name: Ask the program for each name and UID it must refuse
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_onboarding_verify_request_base:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+    tenant_onboarding_verify_provision_tag: tenant_onboarding_provision_volumes
+  tasks:
+    - name: Provision the holder tenant, which holds one UID
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        tenant_onboarding_verify_request_case: provision the holder tenant
+        tenant_onboarding_verify_request_tag: '{{ tenant_onboarding_verify_provision_tag }}'
+        tenant_onboarding_verify_request_extra:
+          tenant_onboarding_confirm: PROVISION_TENANT_VOLUMES
+          tenant_onboarding_slug: '{{ scenario_holder_slug }}'
+          tenant_onboarding_uid: '{{ scenario_holder_uid }}'
+        tenant_onboarding_verify_request_expect_success: true
+        tenant_onboarding_verify_request_expect_text: ''
+        tenant_onboarding_verify_request_expect_unchanged: false
+
+    - name: Make each refused program request
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        tenant_onboarding_verify_request_case: '{{ item.case }}'
+        tenant_onboarding_verify_request_tag: '{{ tenant_onboarding_verify_provision_tag }}'
+        tenant_onboarding_verify_request_extra:
+          tenant_onboarding_confirm: PROVISION_TENANT_VOLUMES
+          tenant_onboarding_slug: '{{ item.slug }}'
+          tenant_onboarding_uid: '{{ item.uid }}'
+        tenant_onboarding_verify_request_expect_success: false
+        tenant_onboarding_verify_request_expect_text: '{{ item.text }}'
+        tenant_onboarding_verify_request_expect_unchanged: false
+      loop:
+        - case: reserved name
+          slug: '{{ scenario_reserved_slug }}'
+          uid: '{{ scenario_reserved_uid }}'
+          text: 'is reserved for a non-tenant stack'
+        - case: UID outside the range
+          slug: '{{ scenario_range_slug }}'
+          uid: '{{ scenario_range_uid }}'
+          text: 'outside the reserved tenant range'
+        - case: slug that begins with a dash
+          slug: '{{ scenario_dash_slug }}'
+          uid: '{{ scenario_reserved_uid }}'
+          text: 'must start with a lowercase letter'
+        - case: UID held by another tenant
+          slug: '{{ scenario_refused_slug }}'
+          uid: '{{ scenario_holder_uid }}'
+          text: 'is already claimed on this host by tenant'
+      loop_control:
+        label: '{{ item.case }}'
+
+- name: Check the holder is the only tenant the program provisioned
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the stand-in's volumes
+      ansible.builtin.slurp:
+        src: /var/lib/fake-docker/volumes.json
+      register: tenant_onboarding_verify_volumes_holder
+
+    - name: Assert the holder's three volumes are the only volumes, and no refused name holds one
+      ansible.builtin.assert:
+        that:
+          - (tenant_onboarding_verify_volumes_holder.content | b64decode | from_json) | list | sort == tenant_onboarding_verify_holder_volumes | sort
+        quiet: true
+        fail_msg: A refused program request created a volume, or the holder's volumes are not the only ones.
+      vars:
+        tenant_onboarding_verify_holder_volumes:
+          - ghost-example-holder-content
+          - ghost-example-holder-adapters
+          - ghost-example-holder-metrics
+
+# 5. The canary tenant: provisioned, then requested again, which must change nothing.
+- name: Provision the canary tenant and ask for it again
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_onboarding_verify_request_base:
+      - ansible-playbook
+      - -i
+      - '{{ lookup("ansible.builtin.env", "MOLECULE_INVENTORY_FILE") }}'
+      - '{{ playbook_dir }}/request.yml'
+    tenant_onboarding_verify_canary_extra:
+      tenant_onboarding_confirm: PROVISION_TENANT_VOLUMES
+      tenant_onboarding_slug: '{{ scenario_canary_slug }}'
+      tenant_onboarding_uid: '{{ scenario_canary_uid }}'
+  tasks:
+    - name: Provision the canary tenant
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        tenant_onboarding_verify_request_case: provision the canary tenant
+        tenant_onboarding_verify_request_tag: tenant_onboarding_provision_volumes
+        tenant_onboarding_verify_request_extra: '{{ tenant_onboarding_verify_canary_extra }}'
+        tenant_onboarding_verify_request_expect_success: true
+        tenant_onboarding_verify_request_expect_text: ''
+        tenant_onboarding_verify_request_expect_unchanged: false
+
+    - name: Ask for the canary tenant again, which must change nothing
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        tenant_onboarding_verify_request_case: provision the canary tenant again
+        tenant_onboarding_verify_request_tag: tenant_onboarding_provision_volumes
+        tenant_onboarding_verify_request_extra: '{{ tenant_onboarding_verify_canary_extra }}'
+        tenant_onboarding_verify_request_expect_success: true
+        tenant_onboarding_verify_request_expect_text: ''
+        tenant_onboarding_verify_request_expect_unchanged: true
+
+# 6. The canary's state on the host, read back. Every task here names the canary, so
+# every task carries no_log.
+- name: Check the canary tenant on the host
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the stand-in's volumes (no_log, names the canary)
+      ansible.builtin.slurp:
+        src: /var/lib/fake-docker/volumes.json
+      register: tenant_onboarding_verify_volumes_raw
+      no_log: true
+
+    - name: Read the canary's three volumes and their mountpoints (no_log)
+      ansible.builtin.set_fact:
+        tenant_onboarding_verify_canary_mounts: >-
+          {{ tenant_onboarding_verify_volumes_raw.content | b64decode | from_json }}
+      no_log: true
+
+    - name: Assert the canary's three volumes exist (no_log)
+      ansible.builtin.assert:
+        that:
+          - tenant_onboarding_verify_canary_content in tenant_onboarding_verify_canary_mounts
+          - tenant_onboarding_verify_canary_adapters in tenant_onboarding_verify_canary_mounts
+          - tenant_onboarding_verify_canary_metrics in tenant_onboarding_verify_canary_mounts
+        quiet: true
+        fail_msg: The canary tenant's three volumes were not all created.
+      no_log: true
+      vars:
+        tenant_onboarding_verify_canary_content: 'ghost-{{ scenario_canary_slug }}-content'
+        tenant_onboarding_verify_canary_adapters: 'ghost-{{ scenario_canary_slug }}-adapters'
+        tenant_onboarding_verify_canary_metrics: 'ghost-{{ scenario_canary_slug }}-metrics'
+
+    - name: Stat the canary's content, adapters and metrics mountpoints (no_log)
+      ansible.builtin.stat:
+        path: '{{ tenant_onboarding_verify_canary_mounts["ghost-" ~ scenario_canary_slug ~ "-" ~ item].mountpoint }}'
+      loop:
+        - content
+        - adapters
+        - metrics
+      register: tenant_onboarding_verify_canary_dirs
+      no_log: true
+
+    - name: Assert the canary's volumes have their owners and modes (no_log)
+      ansible.builtin.assert:
+        that:
+          - tenant_onboarding_verify_canary_dirs.results[0].stat.uid == scenario_canary_uid | int
+          - tenant_onboarding_verify_canary_dirs.results[0].stat.mode == '0700'
+          - tenant_onboarding_verify_canary_dirs.results[1].stat.uid == 0
+          - tenant_onboarding_verify_canary_dirs.results[1].stat.mode == '0555'
+          - tenant_onboarding_verify_canary_dirs.results[2].stat.uid == scenario_canary_uid | int
+          - tenant_onboarding_verify_canary_dirs.results[2].stat.mode == '0755'
+        quiet: true
+        fail_msg: The canary tenant's volumes do not have the owners and modes the program sets.
+      no_log: true
+
+    - name: Stat the seed file inside the canary's content volume (no_log)
+      ansible.builtin.stat:
+        path: '{{ tenant_onboarding_verify_canary_dirs.results[0].stat.path }}/.branchleft-seed'
+      register: tenant_onboarding_verify_canary_seed
+      no_log: true
+
+    - name: Read the seed file inside the canary's content volume (no_log)
+      ansible.builtin.slurp:
+        src: '{{ tenant_onboarding_verify_canary_dirs.results[0].stat.path }}/.branchleft-seed'
+      register: tenant_onboarding_verify_canary_seed_body
+      no_log: true
+
+    - name: Assert the seed file has the tenant's owner, mode and text (no_log)
+      ansible.builtin.assert:
+        that:
+          - tenant_onboarding_verify_canary_seed.stat.uid == scenario_canary_uid | int
+          - tenant_onboarding_verify_canary_seed.stat.mode == '0600'
+          - (tenant_onboarding_verify_canary_seed_body.content | b64decode) == scenario_canary_slug ~ "\n"
+        quiet: true
+        fail_msg: The seed file in the canary's content volume is not the tenant's, or has the wrong mode.
+      no_log: true
+
+    - name: Stat the UID claim directory and the canary's claim (no_log)
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - /etc/branchleft/tenant-uids
+        - '/etc/branchleft/tenant-uids/{{ scenario_canary_slug }}'
+      register: tenant_onboarding_verify_claims
+      no_log: true
+
+    - name: Read the canary's claim (no_log)
+      ansible.builtin.slurp:
+        src: '/etc/branchleft/tenant-uids/{{ scenario_canary_slug }}'
+      register: tenant_onboarding_verify_claim_body
+      no_log: true
+
+    - name: Assert the claim directory is root 0700 and the claim is root 0600 with the tenant's slug and UID (no_log)
+      ansible.builtin.assert:
+        that:
+          - tenant_onboarding_verify_claims.results[0].stat.uid == 0
+          - tenant_onboarding_verify_claims.results[0].stat.mode == '0700'
+          - tenant_onboarding_verify_claims.results[1].stat.uid == 0
+          - tenant_onboarding_verify_claims.results[1].stat.mode == '0600'
+          - (tenant_onboarding_verify_claim_body.content | b64decode) == 'slug=' ~ scenario_canary_slug ~ "\nuid=" ~ (scenario_canary_uid | string) ~ "\n"
+        quiet: true
+        fail_msg: The UID claim directory or the canary's claim is not as the program writes it.
+      no_log: true
+
+# 7. The log holds neither the canary's name nor its UID. Read on the controller.
+- name: Scan the scenario log for the canary tenant
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Read the scenario log (no_log, it holds the canary if a line leaks it)
+      ansible.builtin.slurp:
+        src: '{{ lookup("ansible.builtin.env", "MOLECULE_EPHEMERAL_DIRECTORY") }}/ansible.log'
+      register: tenant_onboarding_verify_log
+      no_log: true
+
+    - name: Assert the log holds neither the canary's name nor its UID (no_log)
+      ansible.builtin.assert:
+        that:
+          - (tenant_onboarding_verify_log.content | b64decode) is not search(scenario_canary_slug)
+          - (tenant_onboarding_verify_log.content | b64decode) is not search(scenario_canary_uid | string)
+        quiet: true
+        fail_msg: The scenario log holds the canary tenant's name or UID; a tenant value reached a log.
+      no_log: true
