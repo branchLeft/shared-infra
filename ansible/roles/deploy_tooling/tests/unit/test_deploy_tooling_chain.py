@@ -4,9 +4,8 @@ The fixtures under ``fixtures/`` are what ``iptables -S`` printed in a Debian 13
 container for the policy program, captured from a real run (the module's docstring says
 how they print). The container has no Docker, so its test puts the jump from FORWARD to
 DOCKER-USER in place the way Docker does, and the captured listings carry that one line.
-The program tested is the one the role installs, read from its one home in
-``hetzner/provision``. The pattern README gives the command, with the library directory
-on PYTHONPATH.
+The program tested is the one the role installs, read from the role's own ``files/``. The
+pattern README gives the command, with the library directory on PYTHONPATH.
 """
 
 import dataclasses
@@ -23,8 +22,8 @@ from ruamel.yaml import YAML
 
 ROLE = Path(__file__).resolve().parents[2]
 FIXTURES = ROLE / "tests" / "unit" / "fixtures"
-PROGRAMS = ROLE.parents[2] / "hetzner" / "provision"
-PROGRAM = PROGRAMS / "branchleft_docker_user_policy.sh"
+PROGRAMS = ROLE / "files"
+PROGRAM = PROGRAMS / "branchleft_docker_user_policy.py"
 
 STANDARD: chain.Variant = "standard"
 PROTECTED: chain.Variant = "protected_no_db"
@@ -42,6 +41,10 @@ V4_STANDARD_DELETIONS: Mapping[str, str] = {
 V4_PROTECTED_DELETIONS: Mapping[str, str] = {
     "established accept": V4_STANDARD_DELETIONS["established accept"],
     "spool bridge forward drop": V4_STANDARD_DELETIONS["spool bridge forward drop"],
+    "protected-port drop 8303": (
+        "-A DOCKER-USER ! -s 10.20.1.10/32 -p tcp -m conntrack --ctorigdst 10.20.1.50 "
+        "--ctorigdstport 8303 -j DROP"
+    ),
     "protected-port drop 8302": (
         "-A DOCKER-USER ! -s 10.20.1.10/32 -p tcp -m conntrack --ctorigdst 10.20.1.50 "
         "--ctorigdstport 8302 -j DROP"
@@ -202,14 +205,15 @@ class LiteralTests(unittest.TestCase):
         text = PROGRAM.read_text(encoding="utf-8")
         for name in chain.LITERAL_NAMES:
             with self.subTest(literal=name):
-                renamed = text.replace(f"{name}=", f"RENAMED_{name}=")
+                constant = chain.PROGRAM_CONSTANTS[name]
+                renamed = text.replace(f"\n{constant} = ", f"\nRENAMED_{constant} = ")
                 self.assertNotEqual(renamed, text)
                 with self.assertRaises(chain.LiteralMissingError) as caught:
                     chain.read_literals(renamed)
                 self.assertIn(name, str(caught.exception))
 
     def test_a_program_that_assigns_a_literal_twice_is_refused(self) -> None:
-        text = PROGRAM.read_text(encoding="utf-8") + '\nMETADATA_ADDRESS="169.254.169.253"\n'
+        text = PROGRAM.read_text(encoding="utf-8") + '\nMETADATA_ADDRESS = "169.254.169.253"\n'
         with self.assertRaises(chain.LiteralMissingError) as caught:
             chain.read_literals(text)
         self.assertIn("METADATA_ADDRESS", str(caught.exception))
@@ -217,11 +221,31 @@ class LiteralTests(unittest.TestCase):
     def test_a_value_that_is_not_an_address_a_port_or_a_name_is_refused(self) -> None:
         text = PROGRAM.read_text(encoding="utf-8")
         bad = text.replace(
-            'METADATA_ADDRESS="169.254.169.254"', 'METADATA_ADDRESS="not-an-address"'
+            'METADATA_ADDRESS = "169.254.169.254"', 'METADATA_ADDRESS = "not-an-address"'
         )
+        self.assertNotEqual(bad, text)
         with self.assertRaises(chain.LiteralInvalidError) as caught:
             chain.read_literals(bad)
         self.assertIn("METADATA_ADDRESS", str(caught.exception))
+
+    def test_a_value_assigned_inside_a_function_is_not_read(self) -> None:
+        text = PROGRAM.read_text(encoding="utf-8")
+        hidden = text.replace(
+            '\nMETADATA_ADDRESS = "169.254.169.254"\n',
+            '\ndef elsewhere() -> None:\n    METADATA_ADDRESS = "169.254.169.254"\n',
+        )
+        self.assertNotEqual(hidden, text)
+        with self.assertRaises(chain.LiteralMissingError) as caught:
+            chain.read_literals(hidden)
+        self.assertIn("METADATA_ADDRESS", str(caught.exception))
+
+    def test_a_program_that_is_not_python_is_refused(self) -> None:
+        with self.assertRaises(chain.LiteralUnreadableError):
+            chain.read_literals("#!/usr/bin/env bash\nset -euo pipefail\nif [[ -z $x ]]; then\n")
+
+    def test_the_protected_ports_are_the_four_the_program_refuses(self) -> None:
+        literals = chain.read_literals(PROGRAM.read_text(encoding="utf-8"))
+        self.assertEqual(literals.protected_ports, ("8300", "8301", "8302", "8303"))
 
     def test_a_missing_program_is_reported_as_unreadable(self) -> None:
         with self.assertRaises(chain.ReconcilerUnreadableError):
@@ -273,7 +297,7 @@ class PassingTests(unittest.TestCase):
 
     def test_the_protected_chain_without_a_database_passes(self) -> None:
         found = check(PROTECTED)
-        self.assertEqual((found.owned_rules, found.foreign_rules), (7 + 2 + 2 + 1, 2))
+        self.assertEqual((found.owned_rules, found.foreign_rules), (8 + 2 + 2 + 1, 2))
 
     def test_a_host_with_no_ipv6_docker_user_chain_passes(self) -> None:
         no_chain = v6_listing(lambda lines: [line for line in lines if "DOCKER-USER" not in line])
@@ -367,6 +391,16 @@ class OrderTests(unittest.TestCase):
             ),
             str(caught.exception),
         )
+
+    def test_the_status_page_port_in_the_wrong_order_fails(self) -> None:
+        first = V4_PROTECTED_DELETIONS["protected-port drop 8303"]
+        second = V4_PROTECTED_DELETIONS["protected-port drop 8302"]
+
+        def swap(lines: list[str]) -> list[str]:
+            return [second if ln == first else first if ln == second else ln for ln in lines]
+
+        with self.assertRaises(chain.RuleMisplacedError):
+            check(PROTECTED, v4=listing(PROTECTED, swap))
 
     def test_protected_ports_in_the_wrong_order_fail(self) -> None:
         first = V4_PROTECTED_DELETIONS["protected-port drop 8302"]
@@ -741,9 +775,14 @@ class SummaryTests(unittest.TestCase):
         self.assertTrue(all(c.state == "unreadable" for c in found.chains))
 
     def test_a_policy_text_that_is_not_usable_still_fails_as_the_apply_would(self) -> None:
-        params = chain.SummaryParams("not a program\n", STANDARD, frozenset())
-        with self.assertRaises(chain.LiteralMissingError):
-            chain.summarise(params, runner_for(listing(STANDARD)))
+        for text, error in (
+            ("not a program\n", chain.LiteralUnreadableError),
+            ("UNRELATED = 1\n", chain.LiteralMissingError),
+        ):
+            with self.subTest(text=text):
+                params = chain.SummaryParams(text, STANDARD, frozenset())
+                with self.assertRaises(error):
+                    chain.summarise(params, runner_for(listing(STANDARD)))
 
     def test_the_result_is_counts_flags_and_names_only(self) -> None:
         found = summarise(v4=self.marked())
@@ -831,7 +870,7 @@ class SummaryTests(unittest.TestCase):
                 self.assertEqual((found.would_refuse, found.at_risk, found.unreadable), (0, 0, 0))
                 self.assertEqual(
                     verdicts(found, "iptables", "DOCKER-USER"),
-                    [(6 if variant == STANDARD else 8, "below-policy")],
+                    [(6 if variant == STANDARD else 9, "below-policy")],
                 )
 
     def test_forward_rule_one_other_than_the_docker_user_jump_is_reported(self) -> None:

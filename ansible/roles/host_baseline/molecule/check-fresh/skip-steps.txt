@@ -1,0 +1,10 @@
+# The steps this shard leaves out, one per line; a line that starts with # is a comment.
+#
+# This scenario is the plan on a fresh host: check-fresh and converge both run the role in
+# check mode (converge.yml), and this instance has no Docker and no network, so nothing
+# can be configured to check. The idempotence, verify, check-configured and molecule-check
+# steps belong to the default scenario, which applies the role for real.
+idempotence
+verify
+check-configured
+molecule-check

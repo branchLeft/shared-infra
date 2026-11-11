@@ -165,7 +165,7 @@ a host's only route off the subnet is the network's own gateway, and Hetzner
 resolves that against this table. It is unprotected on purpose — deleting it
 detaches nothing and loses no state, and moving the gateway to another host
 has to stay an ordinary apply. The forwarding at the far end is not Pulumi's:
-the `egress_nat` role installs it on edge1 (the reconciler is `provision/branchleft_nat.sh`), and
+the `egress_nat` role installs it on edge1 (the reconciler is `ansible/roles/egress_nat/files/branchleft_nat.py`), and
 `RUNBOOK-provision-host.md` carries the order the two have to happen in.
 
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`
@@ -580,6 +580,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@ntfy-pager`, which is not an instance  | nowhere: the pager's secrets file, `/etc/branchleft/ntfy-pager.env`, written by the `ntfy_pager` role    | no                |
 | `branchleft-compose@mail-spool`                            | nowhere: `branchLeft/ghost-platform`'s `render-core` golden, fetched by the `demo1_egress_spool` role    | no                |
 | `branchleft-compose@status`, which is not an instance      | nowhere: the project directory of the `status_page` role's plain `docker compose` Gatus page             | no                |
+| `branchleft-compose@dbt1`                                  | nowhere: rendered from a template by the `db_t1` role of `branchLeft/shared-infra`                       | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that

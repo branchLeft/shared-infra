@@ -7,7 +7,15 @@ argument_specs:
       reloads sshd only after that check passes, then reads the resolved
       settings back. Installs unattended-upgrades, apt-listchanges and
       fail2ban, writes their configuration and enables both services. Delivers
-      Docker's apt signing key and source and installs Docker CE. The role has
-      no inputs and handles no secret.
+      Docker's apt signing key and source and installs Docker CE. The one input
+      is the fail2ban ignore list, whose default is in defaults/main.yml; the
+      role handles no secret.
     author: branchLeft
-    options: {}
+    options:
+      host_baseline_fail2ban_ignoreip:
+        type: str
+        description: >-
+          The addresses and ranges the sshd jail never bans, one line of
+          space-separated IP addresses and CIDR ranges. The default exempts
+          loopback and edge1's private address. Changing it changes only the
+          ignoreip line of the jail.

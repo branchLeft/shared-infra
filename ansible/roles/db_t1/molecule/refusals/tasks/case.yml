@@ -1,0 +1,36 @@
+---
+# One case: apply the role with the case's inputs, then assert it stopped with the case's
+# message (or, for the control, that it went through). Every register and fact is reset
+# first: a case that read the previous case's result could pass without testing anything.
+- name: Reset the case result
+  ansible.builtin.set_fact:
+    db_t1_case_accepted: false
+    db_t1_case_message: ''
+
+- name: Apply the role with this case's inputs
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.db_t1
+      vars:
+        db_t1_image: '{{ db_t1_case.image | default(scenario_image_other) }}'
+        db_t1_image_env_path: "{{ db_t1_case.pin | default(db_t1_scratch ~ '/absent.image.env') }}"
+        db_t1_data_directory: "{{ db_t1_case.data | default(db_t1_scratch ~ '/empty-data') }}"
+        db_t1_secrets_path: "{{ db_t1_case.root_file | default(db_t1_scratch ~ '/good.env') }}"
+        db_t1_deploy_program: "{{ db_t1_case.program | default('/bin/true') }}"
+
+    - name: Record that the role went through
+      ansible.builtin.set_fact:
+        db_t1_case_accepted: true
+  rescue:
+    - name: Record the message of the refusal
+      ansible.builtin.set_fact:
+        db_t1_case_message: "{{ ansible_failed_result.msg | default('') }}"
+
+- name: Assert the case ended as it should
+  ansible.builtin.assert:
+    that:
+      - (db_t1_case_accepted | bool) == (db_t1_case.fragment == '')
+      - db_t1_case.fragment in db_t1_case_message
+    quiet: true
+    fail_msg: "The case '{{ db_t1_case.name }}' did not end as it should: accepted={{ db_t1_case_accepted }}, message={{ db_t1_case_message }}"

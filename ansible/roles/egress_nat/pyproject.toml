@@ -8,6 +8,8 @@ requires-python = ">=3.12"
 strict = true
 disallow_any_explicit = true
 python_version = "3.12"
+# The program the role installs, checked with its tests (ansible.yml, "Check each role's own program").
+mypy_path = "./files"
 
 # PyYAML ships no type information. This names the one module; it is not a blanket ignore.
 [[tool.mypy.overrides]]
@@ -17,3 +19,9 @@ ignore_missing_imports = true
 [tool.ruff]
 # The repository's ruff policy (ansible/pyproject.toml).
 extend = "../../pyproject.toml"
+
+# The tests raise AssertionError from their own helpers to fail a test, as unittest expects. The
+# three rules that want a TypeError, a message kept in the class and a docstring Raises section
+# are for code that a caller catches, not for a test helper.
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["TRY003", "TRY004", "DOC501"]

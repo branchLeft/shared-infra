@@ -92,6 +92,11 @@ it with a stamp that it writes only after a restart was read back as active.
   file with its `SNDS_DATA_URL` line removed. The list is `monitoring_stack_fingerprint_files`
   in `vars/main.yml`. The `SNDS_DATA_URL` line is left out because only the collector reads it and it
   rotates every 30 days; a rotation must not recreate the stack.
+  The secrets file's digest comes from the module `library/monitoring_stack_envfile_digest.py`,
+  which returns that one digest and nothing else. It replaced a shell pipeline (`sed` into
+  `sha256sum`) and hashes the same bytes, so a stamp written by the shell version still matches.
+  No built-in module hashes a file with some of its lines left out, and `slurp` would read the
+  secrets file into a variable, which this role does not do; that is why a module is used (ANS-9).
 - **The stamp** is `/var/lib/branchleft/monitoring.applied`: one sha256 and a
   newline, `root:root` `0600`. It is written last, after the restart and a
   read-back that finds the unit `active`. The directory `/var/lib/branchleft` is
@@ -142,6 +147,14 @@ it with a stamp that it writes only after a restart was read back as active.
 
 The role does not restart `edge` and does not start `monitoring` for the first
 time.
+
+### The digest module
+
+`library/monitoring_stack_envfile_digest.py` is the one custom module of the role. Its
+arguments are `path` and `skip_key`; it returns `digest` (64 hex characters) and
+`changed: false` in both modes, and it never writes the file. A refusal names the path or
+the argument, never a line. Its unit test is `tests/unit/test_monitoring_stack_envfile_digest.py`;
+the role's unit suites run with `ansible/checks/run_role_unit_tests.sh`.
 
 ### Order
 

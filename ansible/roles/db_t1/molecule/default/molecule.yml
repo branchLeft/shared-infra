@@ -1,0 +1,66 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container. Molecule's interpolation
+# has no "required variable" form, so when the variable is unset the name
+# falls back to one the Docker daemon rejects: the run fails at create, loudly,
+# instead of sharing a container name with another run.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, the release every production
+    # host runs, trusted by digest (see the README of the files_and_units
+    # pattern for why this image and what it does not prove). The digest is the
+    # pin; the tag is informational and moves weekly. The role enables a unit,
+    # so the platform runs systemd as PID 1, a platform the author justifies
+    # here, per ANS-15. Copied from the website_app1 scenario.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # Destroy removes the container's anonymous volumes. This scenario's cgroup
+    # bind mount means none is created; the key guards against one if the mount
+    # is ever dropped.
+    keep_volumes: false
+    # No privileged mode and no added capabilities. The host cgroup namespace is
+    # a stated exception (ANS-15): on a cgroup v2 host a private namespace over
+    # the read-write cgroup mount below makes systemd exit at once.
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    command: /lib/systemd/systemd
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 3 prints each task's result with
+    # the arguments it was given, so a task that handles the root value and lacks
+    # no_log shows it in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '3'
+  inventory:
+    # The root value below is a throwaway SENTINEL made for this run by
+    # prepare.yml on the controller, in a file under scenario_sentinel_dir. The
+    # same label gives the same value, so the log can be searched for it. No
+    # value is in this file.
+    group_vars:
+      all:
+        scenario_sentinel_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/throwaway-secrets"
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        # A made-up digest of the made-up image the converge deploys. No image is
+        # pulled in the container.
+        scenario_image: ghcr.io/branchleft/percona-server@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+        scenario_image_other: ghcr.io/branchleft/percona-server@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+        # Where the stand-in deploy program records its calls.
+        scenario_deploy_log: /var/tmp/stand-in-branchleft-deploy.log
+verifier:
+  name: ansible

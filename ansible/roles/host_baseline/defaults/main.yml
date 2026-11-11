@@ -1,3 +1,6 @@
 ---
-# The role has no inputs: every value it writes is a constant of the baseline
-# (see vars/main.yml), the same on every container host.
+# The one input. The default is the ignore list the baseline has always written:
+# loopback and edge1's private address, which carries the CI and owner routes to these hosts.
+# It lives here, not in argument_specs, because an argument spec default is not set as a
+# variable when the role runs through import_role (the converge of the check-fresh scenario).
+host_baseline_fail2ban_ignoreip: 127.0.0.1/8 ::1 10.20.1.10
