@@ -11,6 +11,7 @@ import os
 import tempfile
 import unittest
 import urllib.error
+import urllib.request
 from unittest import mock
 
 import read_sending_state as rss
@@ -47,6 +48,15 @@ def _reply(domains, keys, accounts):
         ["x:DkimSignature/get", {"list": keys}, "keys"],
         ["x:Account/get", {"list": accounts}, "accounts"],
     ]
+
+
+def _fake_opener(reply_obj):
+    """An opener whose open() returns the given JSON reply, so a test sees the request sent."""
+    resp = mock.MagicMock()
+    resp.__enter__.return_value.read.return_value = json.dumps(reply_obj).encode()
+    opener = mock.MagicMock()
+    opener.open.return_value = resp
+    return opener
 
 
 def _run(reply, secret=FAKE_SECRET, jmap=None):
@@ -90,6 +100,7 @@ class ReadTests(unittest.TestCase):
                 "mailbox abuse@branchleft.co.uk",
                 "mailbox complaints@branchleft.co.uk",
                 "mailbox rob@branchleft.co.uk",
+                "accounts without a matching domain: 0",
                 "postmaster: absent",
                 "abuse: present as mailbox",
                 "complaints: present as mailbox",
@@ -213,6 +224,47 @@ class ReadTests(unittest.TestCase):
         )
 
 
+class UnmatchedAccountTests(unittest.TestCase):
+    def test_account_without_a_domain_id_is_skipped_and_counted(self):
+        reply = _reply(
+            [_domain("a", "branchleft.co.uk")],
+            [],
+            [_account("a", "rob"), {"id": "g1", "name": "everyone"}],
+        )
+        code, out, err = _run(reply)
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        lines = out.splitlines()
+        self.assertIn("mailbox rob@branchleft.co.uk", lines)
+        self.assertIn("accounts without a matching domain: 1", lines)
+        self.assertFalse([line for line in lines if "everyone" in line])
+
+    def test_account_with_an_unknown_domain_id_is_skipped_and_counted(self):
+        reply = _reply(
+            [_domain("a", "branchleft.co.uk")],
+            [],
+            [_account("a", "rob"), _account("zzz", "orphan")],
+        )
+        code, out, err = _run(reply)
+        self.assertEqual(code, 0)
+        self.assertEqual(err, "")
+        lines = out.splitlines()
+        self.assertIn("mailbox rob@branchleft.co.uk", lines)
+        self.assertIn("accounts without a matching domain: 1", lines)
+        self.assertFalse([line for line in lines if "orphan" in line])
+
+    def test_count_is_printed_as_zero_when_every_account_matches(self):
+        reply = _reply([_domain("a", "branchleft.co.uk")], [], [_account("a", "rob")])
+        _, out, _ = _run(reply)
+        self.assertIn("accounts without a matching domain: 0", out.splitlines())
+
+    def test_dkim_key_with_unknown_domain_still_refuses(self):
+        reply = _reply([_domain("a", "branchleft.co.uk")], [_key("zzz", "bl")], [])
+        code, out, _ = _run(reply)
+        self.assertEqual(code, 1)
+        self.assertEqual(out, "")
+
+
 class ReadOnlyTests(unittest.TestCase):
     def test_read_calls_are_all_gets(self):
         for call in READ_CALLS:
@@ -230,26 +282,56 @@ class ReadOnlyTests(unittest.TestCase):
                 with self.assertRaises(ReadError):
                     assert_read_only([[method, {}, "c"]])
 
-    def test_jmap_refuses_a_write_before_sending_anything(self):
+    def test_guard_refuses_a_write_by_its_own_message_before_any_send(self):
+        # urlopen returns a valid, empty reply, so if the guard were removed the
+        # call would succeed and the assertion below would name the missing refusal.
+        opener = _fake_opener({"methodResponses": []})
         calls = [["x:Account/set", {"create": {}}, "c"]]
-        with mock.patch.object(rss.urllib.request, "urlopen") as urlopen:
-            with self.assertRaises(ReadError):
+        with mock.patch.object(rss, "_build_opener", return_value=opener):
+            with self.assertRaisesRegex(
+                ReadError, "refusing to send a method that is not a read"
+            ):
                 rss._jmap(("admin", FAKE_SECRET), calls)
-        urlopen.assert_not_called()
+        opener.open.assert_not_called()
 
-    def test_jmap_sends_one_request_with_only_the_read_calls(self):
-        reply = {"methodResponses": _reply([], [], [])}
-        fake_resp = mock.MagicMock()
-        fake_resp.__enter__.return_value.read.return_value = json.dumps(reply).encode()
-        with mock.patch.object(
-            rss.urllib.request, "urlopen", return_value=fake_resp
-        ) as urlopen:
+    def test_request_is_one_call_to_the_loopback_api(self):
+        opener = _fake_opener({"methodResponses": _reply([], [], [])})
+        with mock.patch.object(rss, "_build_opener", return_value=opener):
             responses = rss._jmap(("admin", FAKE_SECRET), READ_CALLS)
-        self.assertEqual(urlopen.call_count, 1)
-        sent = urlopen.call_args[0][0]
+        self.assertEqual(opener.open.call_count, 1)
+        sent = opener.open.call_args[0][0]
         self.assertEqual(sent.full_url, "http://127.0.0.1:8080/jmap")
-        self.assertIn(b'"x:Domain/get"', sent.data)
         self.assertEqual(len(responses), 3)
+
+    def test_request_restricts_properties_on_every_read(self):
+        # The key material never enters the process: each read names its fields.
+        opener = _fake_opener({"methodResponses": _reply([], [], [])})
+        with mock.patch.object(rss, "_build_opener", return_value=opener):
+            rss._jmap(("admin", FAKE_SECRET), READ_CALLS)
+        body = json.loads(opener.open.call_args[0][0].data)
+        sent = {call[0]: call[1] for call in body["methodCalls"]}
+        self.assertEqual(len(body["methodCalls"]), 3)
+        self.assertEqual(sent["x:Account/get"], {"properties": ["name", "domainId"]})
+        self.assertEqual(sent["x:Domain/get"], {"properties": ["id", "name"]})
+        self.assertEqual(
+            sent["x:DkimSignature/get"],
+            {"properties": ["id", "domainId", "selector", "stage"]},
+        )
+
+    def test_opener_ignores_proxy_environment(self):
+        env = {
+            "http_proxy": "http://proxy.invalid:3128",
+            "HTTP_PROXY": "http://proxy.invalid:3128",
+        }
+        with mock.patch.dict(os.environ, env):
+            opener = rss._build_opener()
+        # An empty ProxyHandler registers no proxy method, so no handler in the
+        # opener can route through the environment's proxy. The default one would.
+        proxies = [
+            h for h in opener.handlers if isinstance(h, urllib.request.ProxyHandler)
+        ]
+        self.assertEqual(proxies, [])
+        self.assertFalse(any(hasattr(h, "proxy_open") for h in opener.handlers))
 
     def test_output_lines_are_only_the_allowed_types(self):
         reply = _reply(
@@ -262,6 +344,7 @@ class ReadOnlyTests(unittest.TestCase):
             "domain ",
             "dkim ",
             "mailbox ",
+            "accounts without a matching domain: ",
             "postmaster: ",
             "abuse: ",
             "complaints: ",

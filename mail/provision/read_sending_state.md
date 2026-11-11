@@ -25,7 +25,11 @@ Sorted lines, then three summaries and one note:
     postmaster: present as mailbox|absent
     abuse: present as mailbox|absent
     complaints: present as mailbox|absent
+    accounts without a matching domain: <count>
     aliases: not read (...)
+
+An account with no `domainId`, or one naming a domain that was not read, is
+skipped and counted on that line; the report does not fail for it.
 
 The role checks look only at `branchleft.co.uk` mailbox accounts. A Stalwart
 alias is a list field on an account, and this script does not read it, so
@@ -40,6 +44,8 @@ class name. No traceback, no URL and no response body is ever printed.
 - It sends only `x:Domain/get`, `x:DkimSignature/get` and `x:Account/get` in one
   JMAP request. `assert_read_only` refuses any method not ending in `/get`
   before a byte is sent, and the unit tests check the request list.
+- Each read names its fields (`properties`), so `privateKey` and `publicKey`
+  never enter the process. Empty proxy handler: `http_proxy` is ignored.
 - It never prints a credential, a `privateKey` or a `publicKey`. The tests feed
   fake values for each and assert none of them reach stdout or stderr.
 - It is self-contained: it imports nothing from the provisioning modules, so

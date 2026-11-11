@@ -25,8 +25,12 @@ MAIL_DOMAIN = "branchleft.co.uk"
 # Every method this script sends. Each name must end in "/get"; assert_read_only
 # refuses anything else before a byte is sent.
 READ_CALLS: list[list[Any]] = [
-    ["x:Domain/get", {}, "domains"],
-    ["x:DkimSignature/get", {}, "keys"],
+    ["x:Domain/get", {"properties": ["id", "name"]}, "domains"],
+    [
+        "x:DkimSignature/get",
+        {"properties": ["id", "domainId", "selector", "stage"]},
+        "keys",
+    ],
     ["x:Account/get", {"properties": ["name", "domainId"]}, "accounts"],
 ]
 
@@ -56,6 +60,12 @@ def assert_read_only(calls: list[list[Any]]) -> None:
             raise ReadError("refusing to send a method that is not a read")
 
 
+def _build_opener() -> urllib.request.OpenerDirector:
+    # An empty ProxyHandler: http_proxy and HTTP_PROXY in the environment are
+    # ignored, so the loopback call never leaves the host by a proxy.
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
 def _jmap(auth: tuple[str, str], calls: list[list[Any]]) -> list[list[Any]]:
     assert_read_only(calls)
     body = json.dumps(
@@ -65,7 +75,7 @@ def _jmap(auth: tuple[str, str], calls: list[list[Any]]) -> list[list[Any]]:
     token = base64.b64encode(f"{auth[0]}:{auth[1]}".encode()).decode()
     req.add_header("Authorization", f"Basic {token}")
     req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with _build_opener().open(req, timeout=30) as resp:
         payload = json.loads(resp.read())
     return payload["methodResponses"]
 
@@ -120,10 +130,16 @@ def build_lines(results: dict[str, dict[str, Any]]) -> list[str]:
         f"dkim {_domain_name(k.get('domainId'), name_by_id)} {_text(k.get('selector'))} {_text(k.get('stage'))}"
         for k in keys
     ]
-    mailboxes = {
-        f"{_text(a.get('name'))}@{_domain_name(a.get('domainId'), name_by_id)}"
-        for a in accounts
-    }
+    # An account with no domain, or one naming a domain that was not read, is
+    # skipped and counted rather than failing the whole report.
+    mailboxes: set[str] = set()
+    unmatched = 0
+    for account in accounts:
+        domain_id = account.get("domainId")
+        if not isinstance(domain_id, str) or domain_id not in name_by_id:
+            unmatched += 1
+            continue
+        mailboxes.add(f"{_text(account.get('name'))}@{name_by_id[domain_id]}")
     body += [f"mailbox {address}" for address in mailboxes]
 
     def role(local: str) -> str:
@@ -132,6 +148,7 @@ def build_lines(results: dict[str, dict[str, Any]]) -> list[str]:
         )
 
     return sorted(body) + [
+        f"accounts without a matching domain: {unmatched}",
         f"postmaster: {role('postmaster')}",
         f"abuse: {role('abuse')}",
         f"complaints: {role('complaints')}",
