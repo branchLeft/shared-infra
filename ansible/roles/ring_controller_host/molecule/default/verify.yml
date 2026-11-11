@@ -125,7 +125,6 @@
           - ring_controller_host_v_systemd.results[0].status.ActiveState == 'inactive'
           - ring_controller_host_v_systemd.results[1].status.LoadState == 'loaded'
           - ring_controller_host_v_systemd.results[1].status.ActiveState == 'inactive'
-          - scenario_key in (ring_controller_host_v_systemd.results[1].status.LoadCredential | default(''))
         quiet: true
         fail_msg: The timer is not installed and held off, or the service is running with no digest set.
 

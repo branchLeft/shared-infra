@@ -205,8 +205,8 @@ PYTHONPATH=files:library python -m unittest discover -b -s tests/unit -p 'test_*
 The Molecule `default` scenario applies the role with no digest and converges twice (the second must
 change nothing). It checks the key's owner and mode (root, `0400`, alone in a `0700` root directory),
 that the service account cannot read the key on disk while root can (a control on the probe), that
-the unit holds the `LoadCredential=` line and systemd reports it, that the public half printed is
-the file's and is one SPKI key, that a rerun leaves the private file alone, that the unit's
+the unit holds the `LoadCredential=` line (systemd's status output does not list it), that the
+public half printed is the file's and is one SPKI key, that a rerun leaves the private file alone, that the unit's
 environment holds exactly the four names, no name ending in `_API_KEY` and nothing starting
 `ANTHROPIC_`, that `PATH` finds no `claude` (with a control that finds one when it is planted), that
 the timer is disabled and stopped, and that files of other roles are exactly as they were. It runs
