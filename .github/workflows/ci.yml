@@ -1,53 +1,13 @@
 name: CI
 
 # Type-checks every Pulumi program on every PR, and applies the CI-owned
-# stacks on every push to `main` — each through a plan job whose output a
-# human approves before the paired apply job runs.
+# stacks on every push to `main`, each through a plan job that a human approves
+# before its apply job runs. The guardrails, the deploy pipelines and why there
+# is no preview job on pull requests are in .github/workflows/ci.md.
 #
-# The GCP edge program that used to live at the repository root (edge.ts and
-# its deploy-plan/deploy-apply jobs) is gone: the GCP estate was destroyed
-# 2026-09-13 and the program removed once it described infrastructure that
-# no longer existed. What is left is Hetzner-native: the mail stack
-# and both `hetzner/` stacks. The guardrails below are unchanged for them.
-#
-#   1. Anything credentialed runs only on `push` to `main` — a reviewed, merged
-#      commit. Pull requests get type-check only, and no credentials of any
-#      kind.
-#   2. Hetzner has no Workload Identity Federation equivalent — its API accepts
-#      a bearer token and nothing else — so each stack's token is scoped to one
-#      hcloud project and one pipeline (hetzner/RUNBOOK-new-stack.md §7), a
-#      trade doc 14 §3.5 records deliberately.
-#   3. A preflight parses the real `pulumi preview` plan for this exact run and
-#      aborts before `pulumi up` if it would destroy protected infrastructure
-#      (scripts/assert-no-hetzner-deletes.py).
-#   4. Every apply job declares an `environment` and a concurrency group. The
-#      environment's protection rule is what pauses the apply until the plan
-#      job's summary has been read and approved — the delete guard catches the
-#      destruction class mechanically, the reviewer catches the plan that is
-#      green, non-destructive and still wrong. An environment with no
-#      protection rule pauses nothing and says nothing; verify the rule via
-#      the API before trusting the gate. The mail apply is in its own
-#      environment, `production-mail`, so no approval meant for another
-#      stack's apply can release it.
-#   5. The apply job re-runs preview and the guard immediately before
-#      `pulumi up`: what was approved and what is applied can diverge only
-#      inside one run's window, and never past the guard.
-#   6. The two Hetzner applies are routed by the spend gate (github-workflows'
-#      `spend-gate` action). A plan whose every change is a free resource type
-#      runs its apply in `production-free`, which only the reviewer App's
-#      protection rule answers. Every other plan, and any plan the gate could
-#      not read, runs in `production`, where the owner approves. Only the exact
-#      string `production-free` selects the free environment, the apply
-#      re-gates its own preview before `pulumi up`, and the apply refuses an
-#      environment without a rule. The mail apply is never routed: it stays in
-#      `production-mail` (scripts/choose-apply-environment.py,
-#      scripts/test_ci_apply_environments.py).
-#
-# There is deliberately no `pulumi preview` job on pull requests. It is the
-# obvious next step, but it means handing credentials to a job running
-# unmerged code, and a bearer token would work from anywhere, which makes the
-# risk live rather than blocked. The plan-then-approve split above is the
-# compensating control: no plan applies unread.
+# Seven check jobs skip their own steps when a pull request or merge queue entry
+# changes nothing they read; the path map and the rules are in scripts/ci_skip.md
+# (and scripts/ci_skip.py). Every other check job always runs in full.
 
 on:
   push:
@@ -65,7 +25,7 @@ on:
   merge_group:
     types: [checks_requested]
 
-# `packages: read` is what lets `npm ci` fetch @branchleft/* from GitHub
+# `packages: read` is what lets `pnpm install` fetch @branchleft/* from GitHub
 # Packages. The registry rejects anonymous requests even for a public package,
 # so the run's own GITHUB_TOKEN is passed as NODE_AUTH_TOKEN below; no
 # long-lived credential is involved.
@@ -93,23 +53,26 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       - name: Format check
-        run: npm run format:check
+        run: pnpm run format:check
 
   mail-typecheck:
     name: Type check (mail)
@@ -131,21 +94,38 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: mail-typecheck
+
+      - name: Setup pnpm
+        if: steps.skip.outputs.run != 'false'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.skip.outputs.run != 'false'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: mail/.nvmrc
-          cache: npm
-          cache-dependency-path: mail/package-lock.json
+          cache: pnpm
+          cache-dependency-path: mail/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        if: steps.skip.outputs.run != 'false'
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        if: steps.skip.outputs.run != 'false'
+        run: pnpm exec tsc --noEmit
 
   mail-provision-checks:
     name: Lint + test (mail/provision)
@@ -165,11 +145,66 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: mail-provision-checks
+
       - name: Shellcheck
+        if: steps.skip.outputs.run != 'false'
         run: shellcheck mail/provision/*.sh
 
       - name: Python unit tests
-        run: python3 -m unittest discover -s mail/provision -p 'test_*.py' -v
+        if: steps.skip.outputs.run != 'false'
+        run: python3 scripts/trace_reads.py --unit mail-provision-checks -- -m unittest discover -s mail/provision -p 'test_*.py' -v
+
+  shim-image-starts:
+    name: Shim image starts (mail/provision)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Renders the shim's environment file from main exactly as 63 does, then
+    # starts the digest shim-compose.yml pins with it and asks the compose
+    # healthcheck (main once rendered an environment the pinned image could
+    # not start with, and nothing noticed). The container runs
+    # with no network and a placeholder credential, on the runner's own docker
+    # daemon, and never touches mx1.
+    #
+    # Deliberately NOT in `mail-plan`'s `needs`. It pulls an image from the
+    # registry, and gating a mail plan on a registry outage would couple an
+    # unrelated path to a network dependency. It gates review, not the plan, and
+    # can be a required pull-request check. The pull retries once.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Decides from the changed paths whether the steps below need to run. The job
+      # reads only mail/provision (scripts/ci_skip.py UNITS), so a diff that misses
+      # mail/ skips them; the job and its required check still report either way.
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: shim-image-starts
+
+      - name: Start the pinned image with the rendered environment
+        if: steps.skip.outputs.run != 'false'
+        run: python3 mail/provision/check_shim_image_starts.py
+
+      # The control: the environment main rendered before the fix must still stop this image,
+      # and for the missing SMTP_HOST only, never a mount or permission error. A check that
+      # cannot fail is not a check.
+      - name: Control, the stale drain-only environment stops the same image
+        if: always() && steps.skip.outputs.run != 'false'
+        run: python3 mail/provision/check_shim_image_starts.py --expect-smtp-host-missing
 
   hetzner-typecheck:
     name: Type check (hetzner)
@@ -190,16 +225,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -212,13 +250,13 @@ jobs:
       # fails as `Tsconfig not found`, which reads like a missing file rather
       # than a missing install.
       - name: Install the repository root's dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         working-directory: .
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       # estate.ts constructs resources at module scope, so it is not
       # unit-testable here -- `pulumi preview` is what covers it. network.ts
@@ -229,11 +267,11 @@ jobs:
       # @branchleft/hetzner-host, whose own CI job below runs their suite.
       # hetznerHost.test.ts is what remains here: it constructs a `Host` from
       # that package under mocks and proves this project can actually resolve
-      # and use it -- the `file:` dependency's own build has to have worked
+      # and use it -- the `link:` dependency's own build has to have worked
       # for this step to pass, which is exactly the failure mode a version
       # mismatch or a broken package boundary would produce.
       - name: Unit tests
-        run: npm test
+        run: pnpm run test
 
   hetzner-host-typecheck:
     name: Type check + test (hetzner-host)
@@ -257,21 +295,24 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner-host/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner-host/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner-host/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Type check
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       # cloudInit.ts renders the one document that grants the CI deploy
       # account its sudo rule, from a value that arrives as stack config;
@@ -279,7 +320,7 @@ jobs:
       # at all. Both are create-time-only and in `ignoreChanges`, so a wrong
       # answer is permanent and appears in no later diff.
       - name: Unit tests
-        run: npm test
+        run: pnpm run test
 
   hetzner-provision-checks:
     name: Lint + test (hetzner/provision)
@@ -302,7 +343,7 @@ jobs:
       # A managed Python, so the YAML parser the stack-keys check uses can be
       # installed without touching the system interpreter.
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -402,8 +443,19 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: edge-config-validate
+
       # The runner is amd64 and so is the edge, so no emulation is involved.
       - name: Build the edge Caddy image
+        if: steps.skip.outputs.run != 'false'
         # Static tag, not one built from `github.sha`: a `${{ }}` inside a `run:`
         # body is substituted before the shell parses the line. The runner is
         # isolated per job, so there is nothing for a unique tag to disambiguate.
@@ -412,6 +464,7 @@ jobs:
       # The Compose file is not rendered, so nothing else would notice a typo in
       # it until a deploy failed on the host.
       - name: Check the Compose file resolves
+        if: steps.skip.outputs.run != 'false'
         env:
           IMAGE: ghcr.io/branchleft/edge-caddy@sha256:0000000000000000000000000000000000000000000000000000000000000000
           CROWDSEC_BOUNCER_KEY: validation-only
@@ -426,9 +479,10 @@ jobs:
       # rendered file its own formatter disagrees with makes every later diff
       # ambiguous about whether the config or the layout moved.
       - name: Load every rendered configuration through Caddy
+        if: steps.skip.outputs.run != 'false'
         run: |
           status=0
-          for config in hetzner/edge/stack/Caddyfile hetzner/edge/validation/Caddyfile.*; do
+          for config in hetzner/edge/stack/caddy/Caddyfile hetzner/edge/validation/Caddyfile.*; do
             output=$(docker run --rm \
               --env CROWDSEC_BOUNCER_KEY=validation-only \
               --env ACME_EMAIL=validation@example.invalid \
@@ -464,13 +518,25 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: monitoring-config-validate
+
       # render_alertmanager_config.py's own unit tests -- the pure
       # string-substitution logic that stands in for Alertmanager's lack of
       # `{env.X}` support (see that script's docstring).
       - name: Python unit tests
-        run: python3 -m unittest discover -s hetzner/monitoring -p 'test_*.py' -v
+        if: steps.skip.outputs.run != 'false'
+        run: python3 scripts/trace_reads.py --unit monitoring-config-validate -- -m unittest discover -s hetzner/monitoring -p 'test_*.py' -v
 
       - name: Check the Compose file resolves
+        if: steps.skip.outputs.run != 'false'
         env:
           GRAFANA_ADMIN_PASSWORD: validation-only
         run: docker compose -f hetzner/monitoring/stack/compose.yml config -q
@@ -480,10 +546,11 @@ jobs:
       # accept from one they reject, the same gap `edge-config-validate` closes
       # for Caddy.
       - name: Validate the Prometheus config and alert rules
+        if: steps.skip.outputs.run != 'false'
         # `chmod a+r` first: these images run as a non-root user, and a bind
         # mount is read as that container-side user regardless of who wrote
         # the file. A fresh checkout here is 0644, but a workstation checkout
-        # need not be -- `npm run render` rewrites prometheus.yml in place and
+        # need not be -- `pnpm run render` rewrites prometheus.yml in place and
         # left it 0600 once, which git cannot see (it tracks only the exec
         # bit) and which `rsync -av` then copied faithfully onto the host,
         # crash-looping Prometheus. This step cannot catch that, because it
@@ -508,6 +575,7 @@ jobs:
       # fire. Its own `rule_files:` entry is relative to itself, so the mount
       # layout below has to mirror hetzner/monitoring/'s own directory shape.
       - name: Test the alert rules with promtool
+        if: steps.skip.outputs.run != 'false'
         run: |
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
@@ -531,6 +599,7 @@ jobs:
             test rules alert_rules_deadline_test.yml
 
       - name: Render the Alertmanager config with placeholder secrets
+        if: steps.skip.outputs.run != 'false'
         env:
           SMTP_USERNAME: validation-user
           SMTP_PASSWORD: validation/pass&word
@@ -544,6 +613,7 @@ jobs:
         run: python3 hetzner/monitoring/stack/render_alertmanager_config.py
 
       - name: Validate the Alertmanager config
+        if: steps.skip.outputs.run != 'false'
         # render_alertmanager_config.py writes this file `0600` and, when it
         # runs as root, chowns it to the uid the alertmanager image runs as.
         # This job is not root, so no chown happens and the file stays owned
@@ -565,6 +635,7 @@ jobs:
       # it: each line names the exact receiver set an alert must reach, and
       # --verify.receivers fails the step on any other set.
       - name: Test the Alertmanager routing
+        if: steps.skip.outputs.run != 'false'
         run: |
           route() {
             docker run --rm \
@@ -627,6 +698,7 @@ jobs:
       # the access rules back from the server itself: anonymous holds nothing,
       # the owner reads, both publishers only write, and the tokens exist.
       - name: Validate the ntfy config and its access rules
+        if: steps.skip.outputs.run != 'false'
         run: |
           image=docker.io/binwiederhier/ntfy:v2.28.0@sha256:6ef4b819f722fccdc036af611c4774cfdc2de821ab74fdd48bbf4c9d6f8973da
           cid=$(docker run -d --rm --label branchleft.agent=ci-ntfy-validate \
@@ -655,17 +727,18 @@ jobs:
           grep -q '403' <<<"$anon"
 
       - name: Remove the rendered ntfy config
-        if: always()
+        if: always() && steps.skip.outputs.run != 'false'
         run: rm -f hetzner/monitoring/stack/ntfy/server.yml
 
       # Never committed: it carries the placeholder secrets rendered above,
       # and the real thing carries real ones -- the same reason RUNBOOK-monitoring.md
       # tells the operator to re-render rather than to hand-edit this file.
       - name: Remove the rendered Alertmanager config
-        if: always()
+        if: always() && steps.skip.outputs.run != 'false'
         run: rm -f hetzner/monitoring/stack/alertmanager/alertmanager.yml
 
       - name: Validate the blackbox_exporter config
+        if: steps.skip.outputs.run != 'false'
         run: |
           chmod a+r hetzner/monitoring/stack/blackbox/blackbox.yml
           docker run --rm \
@@ -696,7 +769,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: nextcloud1-config-validate
+
       - name: Check the Compose file resolves
+        if: steps.skip.outputs.run != 'false'
         env:
           NEXTCLOUD_DB_PASSWORD: validation-only
           NEXTCLOUD_REDIS_PASSWORD: validation-only
@@ -717,7 +801,18 @@ jobs:
         with:
           persist-credentials: false
 
+      # Decides from the changed paths whether the steps below need to run. It
+      # only ever reads `false` for a fully mapped diff that misses this job's
+      # inputs; the job and its required check still report either way
+      # (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: control-plane-config-validate
+
       - name: Check the Compose file resolves, with and without the applications
+        if: steps.skip.outputs.run != 'false'
         env:
           IMAGE: ghcr.io/branchleft/portal-apps@sha256:0000000000000000000000000000000000000000000000000000000000000000
           CONTROL_PLANE_DB_ADMIN_PASSWORD: validation-only
@@ -734,6 +829,7 @@ jobs:
       # init overlay is the control case: it must carry the sentinel, or the
       # negative check above it could not have failed.
       - name: Check the rendered runtime config holds no administrator credential
+        if: steps.skip.outputs.run != 'false'
         env:
           IMAGE: ghcr.io/branchleft/portal-apps@sha256:0000000000000000000000000000000000000000000000000000000000000000
           COMPOSE_PROFILES: apps
@@ -756,14 +852,17 @@ jobs:
       # text match misses a quoted key. The control case must exit 1 exactly,
       # so a checker that stopped matching cannot pass the step silently.
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        if: steps.skip.outputs.run != 'false'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
       - name: Install the YAML parser the stack-keys check uses
+        if: steps.skip.outputs.run != 'false'
         run: python3 -m pip install --quiet pyyaml==6.0.3
 
       - name: Check the stack files' parsed keys, and that the check still rejects a quoted env_file
+        if: steps.skip.outputs.run != 'false'
         run: |
           checker=hetzner/provision/stack_keys_check.py
           stack=hetzner/control-plane/stack
@@ -788,7 +887,7 @@ jobs:
       # A managed Python, so the YAML parser the workflow-concurrency test reads
       # workflows with can be installed without touching the system interpreter.
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -812,10 +911,10 @@ jobs:
       # The no-op gate's contract is checked by the shared action, which reads
       # only this workflow file, so this repo keeps no test of its own for it.
       - name: Check the no-op gate contract
-        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        uses: branchLeft/github-workflows/.github/actions/check-apply-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           workflow: .github/workflows/ci.yml
-          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply
+          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply hetzner-dns-plan:hetzner-dns-apply
           verdict-step: noop
           summary-step: Write the plan to the job summary
           plan-file: preview-plan.json
@@ -846,7 +945,7 @@ jobs:
       # The scripts suite imports the YAML parser the workflow-concurrency test
       # reads workflows with, so this job installs it the way scripts-tests does.
       - name: Set up Python
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: '3.12'
 
@@ -860,64 +959,10 @@ jobs:
         run: python3 scripts/audit-pulumi-secrets.py
 
   # ---------------------------------------------------------------------------
-  # Deploy pipelines. Each stack gets a plan job and an apply job: the plan job
-  # writes the real `pulumi preview` plan for this exact commit to its job
-  # summary, and the apply job — gated by its environment's protection rules
-  # (`production`, or `production-mail` for the mail stack alone) — runs only
-  # after the plan has been read and approved. The apply job
-  # re-runs preview and the delete guard itself, so the approved window can
-  # never smuggle a plan past the gate.
-  #
-  # `changes` below decides which of the three pairs even start: a push that
-  # touches none of a stack's own inputs skips that stack's plan, and its
-  # apply with it — a job that `needs` a skipped dependency inherits the skip
-  # by default, so nothing downstream has to repeat the condition. None of
-  # these six jobs are required-status-check contexts (checked against this
-  # repo's ruleset before this filter was written), so a skip here can never
-  # satisfy a branch-protection gate; it only decides whether an apply gets
-  # queued at all.
-  #
-  # A second, finer skip: each plan job that ran also outputs `has_changes`,
-  # and its apply job's `if:` skips only on an explicit 'false'. A plan that
-  # changes nothing, stack outputs included, skips its apply, so no approval
-  # is asked for it and the run graph shows the apply skipped; the plan job's
-  # summary says so on its first line. An unset output does not skip, and a
-  # plan job that was skipped or failed still skips its apply (the implicit
-  # success() of an `if:` with no status function). The shared plan-has-changes
-  # action computes it and fails closed: only a plan that parsed and is wholly `same`
-  # is `false`. It reads preview.json and a saved update plan (a second
-  # preview, in its own step), because preview.json cannot show an
-  # outputs-only change. The environments, their reviewers and the
-  # ungated-environment refusal are untouched: only when the gate is asked
-  # changes.
-  #
-  # A wrong filter — a path that feeds a stack's plan but isn't listed here —
-  # produces a skip with no red anywhere, which would be worse than the
-  # unread-approval habit this exists to fix. The lists below are traced
-  # against each program's actual import graph, not guessed, and kept
-  # coarse on purpose — a whole dependency directory such as `hetzner-host/**`
-  # rather than the individual files inside it — because a coarse filter's
-  # failure mode is an unnecessary plan and a precise one's is a missed apply.
-  #
-  # Three things the machinery cannot enforce, on the approver:
-  #   - Approve each queued apply individually, with its own plan summary open.
-  #     The pending-deployments screen offers a multi-select approve, and using
-  #     it signs off plans nobody read.
-  #   - The environment rule itself lives in repo settings. Each apply job's
-  #     first step verifies via the API that its environment pauses it and
-  #     fails the apply if not, so an unconfigured gate is a red run, not a
-  #     silent unattended apply. `production-mail` must have a
-  #     required-reviewer rule; `production` may have that or an enabled
-  #     custom deployment protection rule of the reviewer App (integration
-  #     id 5090756). `production-free`, which only a plan the spend gate reads
-  #     as free reaches, needs that App rule: a plan job routes to it only
-  #     while the rule is there, and the apply checks again.
-  #   - A newer push run cancels older runs of this workflow still `waiting`
-  #     for approval, from each plan job (the step after its checkout, which
-  #     the script it runs needs on disk). The workflow-level group does not do
-  #     this job. It is keyed on the run id for every push, so no push run
-  #     queues behind a run paused for approval, and its cancel-in-progress is
-  #     false for every such run (pinned by scripts/test_workflow_concurrency.py).
+  # Deploy pipelines: each stack's plan job writes the real plan for this commit
+  # to its job summary, and its apply job runs only after that plan is read and
+  # approved. The gates, the skip rules and the approver's duties are in
+  # .github/workflows/ci.md, section "Deploy pipelines".
   # ---------------------------------------------------------------------------
 
   changes:
@@ -931,6 +976,7 @@ jobs:
       mail: ${{ steps.filter.outputs.mail }}
       hetzner_network: ${{ steps.filter.outputs.hetzner_network }}
       hetzner_estate: ${{ steps.filter.outputs.hetzner_estate }}
+      hetzner_dns: ${{ steps.filter.outputs.hetzner_dns }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -952,7 +998,7 @@ jobs:
               - 'mail/Pulumi.yaml'
               - 'mail/Pulumi.production.yaml'
               - 'mail/package.json'
-              - 'mail/package-lock.json'
+              - 'mail/pnpm-lock.yaml'
               - 'mail/.nvmrc'
               - 'mail/tsconfig.json'
               - 'scripts/assert-no-hetzner-deletes.py'
@@ -966,7 +1012,7 @@ jobs:
               - 'hetzner/Pulumi.yaml'
               - 'hetzner/Pulumi.production.yaml'
               - 'hetzner/package.json'
-              - 'hetzner/package-lock.json'
+              - 'hetzner/pnpm-lock.yaml'
               - 'hetzner/.nvmrc'
               - 'hetzner/tsconfig.json'
               - 'hetzner-host/**'
@@ -978,10 +1024,28 @@ jobs:
               - 'hetzner/projects.ts'
               - 'hetzner/estate/**'
               - 'hetzner/package.json'
-              - 'hetzner/package-lock.json'
+              - 'hetzner/pnpm-lock.yaml'
               - 'hetzner/.nvmrc'
               - 'hetzner/tsconfig.json'
               - 'hetzner-host/**'
+              - 'scripts/assert-no-hetzner-deletes.py'
+              - '.github/workflows/ci.yml'
+            # The DNS program imports only dnsZone.ts, which imports
+            # projectGuard.ts and projects.ts; it does not import hetzner-host.
+            # `hetzner/dns/**` is the whole directory on purpose (zone files,
+            # the checker, the runbooks): a docs-only edit there costs one
+            # no-op plan, never an apply. Pinned against the real import graph
+            # by scripts/test_ci_apply_environments.py (DnsFilterTests).
+            hetzner_dns:
+              - 'hetzner/dns/**'
+              - 'hetzner/dns.ts'
+              - 'hetzner/dnsZone.ts'
+              - 'hetzner/projectGuard.ts'
+              - 'hetzner/projects.ts'
+              - 'hetzner/package.json'
+              - 'hetzner/pnpm-lock.yaml'
+              - 'hetzner/.nvmrc'
+              - 'hetzner/tsconfig.json'
               - 'scripts/assert-no-hetzner-deletes.py'
               - '.github/workflows/ci.yml'
 
@@ -1057,6 +1121,7 @@ jobs:
           PLANS_MAIL: ${{ needs.changes.outputs.mail }}
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1065,7 +1130,7 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1078,16 +1143,19 @@ jobs:
             fi
           done
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: mail/.nvmrc
-          cache: npm
-          cache-dependency-path: mail/package-lock.json
+          cache: pnpm
+          cache-dependency-path: mail/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1152,7 +1220,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1230,16 +1298,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: mail/.nvmrc
-          cache: npm
-          cache-dependency-path: mail/package-lock.json
+          cache: pnpm
+          cache-dependency-path: mail/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1370,6 +1441,7 @@ jobs:
           PLANS_MAIL: ${{ needs.changes.outputs.mail }}
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1378,7 +1450,7 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1391,16 +1463,19 @@ jobs:
             fi
           done
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1453,7 +1528,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # v1.0.12
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1498,7 +1573,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1598,16 +1673,19 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1656,7 +1734,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # v1.0.12
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           working-directory: hetzner
@@ -1778,6 +1856,7 @@ jobs:
           PLANS_MAIL: ${{ needs.changes.outputs.mail }}
           PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
           PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
         run: |
           api="repos/${GITHUB_REPOSITORY}/actions"
           older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
@@ -1786,7 +1865,7 @@ jobs:
           for run in ${older}; do
             decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
               python3 scripts/cancel-superseded-waiting.py \
-                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}") ||
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
               decision="keep: the jobs of run ${run} could not be read"
             verdict=${decision%%:*}
             if [ "${verdict}" = "cancel" ]; then
@@ -1799,12 +1878,15 @@ jobs:
             fi
           done
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       # The estate project shares hetzner/'s node_modules by design — its
@@ -1812,7 +1894,7 @@ jobs:
       # @pulumi/hcloud (see estate.ts's header).
       - name: Install dependencies
         working-directory: hetzner
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1862,7 +1944,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # v1.0.12
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -1903,7 +1985,7 @@ jobs:
       - name: Decide whether the plan changes anything
         id: noop
         if: always()
-        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@2cfa57c06773bc70172022be12a85ce4ae5bcb6b # v1.0.10
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           plan-file: preview-plan.json
@@ -1998,17 +2080,20 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - name: Setup Node
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: hetzner/.nvmrc
-          cache: npm
-          cache-dependency-path: hetzner/package-lock.json
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
           registry-url: https://npm.pkg.github.com
 
       - name: Install dependencies
         working-directory: hetzner
-        run: npm ci
+        run: pnpm install --frozen-lockfile
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -2051,7 +2136,7 @@ jobs:
       - name: Decide whether the plan could cost money
         id: spend
         continue-on-error: true
-        uses: branchLeft/github-workflows/.github/actions/spend-gate@10b735392df0f32742c0f322b666c2c7249b782c # v1.0.12
+        uses: branchLeft/github-workflows/.github/actions/spend-gate@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
         with:
           preview-json: preview.json
           working-directory: hetzner/estate
@@ -2085,6 +2170,323 @@ jobs:
         run: |
           {
             echo '## Hetzner estate deploy'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '### Plan this run applied'
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-dns-plan:
+    name: Plan (hetzner dns, pulumi preview)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Only the jobs that actually gate this stack. The DNS program shares no
+    # StackReference with the network or estate stacks, so it is not serialised
+    # behind them, and the host-package and provisioning checks are left out:
+    # coupling them would block a DNS fix on an unrelated red.
+    needs: [changes, hetzner-typecheck, scripts-tests, pulumi-inventory-audit]
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.changes.outputs.hetzner_dns == 'true'
+
+    # The plan reads the DNS credentials, so it has an environment of its own,
+    # as `mail-plan` does (issue #2195): `dns-plan` carries no reviewer and
+    # deploys from `main` only. The token can repoint the zone for the website,
+    # the edge and mail, so the three DNS secrets live in `dns-plan` and
+    # `production-dns` and not at repository level, where a job on a branch
+    # could read them. A job without one of these environments reads them
+    # empty. This job runs on a push to `main` alone (the `if` above), so a
+    # pull-request or merge-queue run skips it before the environment is asked
+    # and the main-only policy never has to refuse a branch.
+    environment: dns-plan
+
+    # See mail-plan: the apply job is skipped only when this is the string
+    # 'false'. This stack has no routing output: its apply is always in
+    # `production-dns`.
+    outputs:
+      has_changes: ${{ steps.noop.outputs.has_changes }}
+
+    # See mail-plan: `actions: write` is only for the cancel step.
+    permissions:
+      contents: read
+      packages: read
+      actions: write
+
+    defaults:
+      run:
+        working-directory: hetzner/dns
+
+    # The token is the DNS Hetzner project's alone (id 16139783); dnsZone.ts
+    # refuses any other project's. The state bucket credentials are the Hetzner
+    # backend's, shared with the sibling stacks, and stay at repository level
+    # (they open the state bucket; they cannot write a zone).
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_DNS }}
+      PULUMI_SALT_HETZNER_DNS: ${{ secrets.PULUMI_SALT_HETZNER_DNS }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_DNS }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      # Older runs of this workflow that are still paused for approval have
+      # applied nothing. Cancel the ones this run supersedes: never a run with
+      # a job in progress or an apply that started, and never a run paused on
+      # a stack this push did not plan (that change would then never apply).
+      # Hygiene, not a gate: a failure here must not block the plan.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cancel older runs that are still waiting for approval
+        continue-on-error: true
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLANS_MAIL: ${{ needs.changes.outputs.mail }}
+          PLANS_NETWORK: ${{ needs.changes.outputs.hetzner_network }}
+          PLANS_ESTATE: ${{ needs.changes.outputs.hetzner_estate }}
+          PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}
+        run: |
+          api="repos/${GITHUB_REPOSITORY}/actions"
+          older=$(gh api "${api}/workflows/ci.yml/runs?branch=main&event=push&status=waiting&per_page=100" |
+            jq -r --argjson current "${GITHUB_RUN_NUMBER}" \
+              '.workflow_runs[] | select(.status == "waiting" and .head_branch == "main" and .event == "push" and .run_number < $current) | .id')
+          for run in ${older}; do
+            decision=$(gh api "${api}/runs/${run}/jobs?per_page=100" |
+              python3 scripts/cancel-superseded-waiting.py \
+                --mail "${PLANS_MAIL}" --network "${PLANS_NETWORK}" --estate "${PLANS_ESTATE}" --dns "${PLANS_DNS}") ||
+              decision="keep: the jobs of run ${run} could not be read"
+            verdict=${decision%%:*}
+            if [ "${verdict}" = "cancel" ]; then
+              gh api --method POST "${api}/runs/${run}/cancel" --silent
+              echo "cancelled superseded run ${run}: ${decision#*: }"
+              echo "- Cancelled run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "kept run ${run}: ${decision#*: }"
+              echo "- Kept run ${run}: ${decision#*: }" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          done
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      # The dns project shares hetzner/'s node_modules by design — its program
+      # file sits in the package root so every project there resolves one
+      # @pulumi/hcloud (see hetzner/dns.ts and dns/Pulumi.yaml's `main`).
+      - name: Install dependencies
+        working-directory: hetzner
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_DNS is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_DNS is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_DNS" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_DNS is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_DNS" >> Pulumi.production.yaml
+
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      # See mail-plan: a second preview saves the update plan, best effort.
+      - name: Save the update plan for the no-change check
+        continue-on-error: true
+        run: pulumi preview --stack production --save-plan preview-plan.json > /dev/null
+
+      # The zone is the one protected type: deleting or replacing it takes the
+      # website, the edge and mail down together. A record removal is an
+      # ordinary apply, so the record type is deliberately unprotected.
+      - name: Refuse a plan that destroys the DNS zone
+        run: |
+          python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
+
+          if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      # See mail-plan: fails closed, and writes the summary's first line.
+      - name: Decide whether the plan changes anything
+        id: noop
+        if: always()
+        uses: branchLeft/github-workflows/.github/actions/plan-has-changes@77506b6d4603ef432bbdec734139fec91e5bea47 # v1.1.0
+        with:
+          preview-json: preview.json
+          plan-file: preview-plan.json
+          working-directory: hetzner/dns
+
+      - name: Write the plan to the job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner dns plan — read before approving the apply'
+            echo
+            echo "Commit: \`${COMMIT_SHA}\`"
+            echo
+            echo '```json'
+            python3 -m json.tool preview.json 2>/dev/null \
+              || echo '(no plan captured — the run failed before preview)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  hetzner-dns-apply:
+    name: Apply (hetzner dns, pulumi up)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: [hetzner-dns-plan]
+    # See mail-apply: a no-op plan skips this job before its environment is asked.
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.hetzner-dns-plan.outputs.has_changes != 'false'
+
+    # The DNS apply has an environment of its own, as the mail apply does. An
+    # approval releases every job waiting in one environment for the run, so
+    # sharing `production` with the network or estate apply would let an
+    # approval meant for them release a DNS change. `production-dns` carries
+    # the owner's required-reviewer rule, and the gate step below accepts that
+    # rule alone. This literal is the only place the name appears as a job
+    # environment (the pins are in the scripts/ tests for the CI environments).
+    environment: production-dns
+
+    concurrency:
+      group: pulumi-hetzner-dns-deploy
+      cancel-in-progress: false
+
+    defaults:
+      run:
+        working-directory: hetzner/dns
+
+    env:
+      PULUMI_CONFIG_PASSPHRASE: ${{ secrets.PULUMI_PASSPHRASE_HETZNER_DNS }}
+      PULUMI_SALT_HETZNER_DNS: ${{ secrets.PULUMI_SALT_HETZNER_DNS }}
+      HCLOUD_TOKEN: ${{ secrets.HCLOUD_TOKEN_DNS }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.HETZNER_S3_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.HETZNER_S3_SECRET_ACCESS_KEY }}
+      AWS_REGION: hel1
+
+    steps:
+      # If the job is running and no required-reviewer rule exists, nothing
+      # paused it — the environment key is silently inert without one. Fail
+      # here, before any credential is touched, rather than apply unattended.
+      # Only a required-reviewer rule counts: the reviewer App's custom rule is
+      # deliberately never read, so it cannot release a DNS apply. Any failure
+      # to read the environment fails the step (the shell runs with -e), and a
+      # non-numeric answer counts as no rule.
+      - name: Refuse to apply through an ungated environment
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/production-dns" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
+          if [ "${reviewers}" -eq 0 ]; then
+            echo "::error::the production-dns environment has no required-reviewer rule -- the plan-approval gate is not real. Configure it in repo settings before any CI apply." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: hetzner/.nvmrc
+          cache: pnpm
+          cache-dependency-path: hetzner/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        working-directory: hetzner
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Verify the deploy secrets are present
+        run: |
+          fail=0
+          [ -n "$PULUMI_CONFIG_PASSPHRASE" ] || { echo "::error::PULUMI_PASSPHRASE_HETZNER_DNS is empty or unset" ; fail=1; }
+          [ -n "$HCLOUD_TOKEN" ] || { echo "::error::HCLOUD_TOKEN_DNS is empty or unset" ; fail=1; }
+          [ -n "$AWS_ACCESS_KEY_ID" ] || { echo "::error::HETZNER_S3_ACCESS_KEY_ID is empty or unset" ; fail=1; }
+          [ -n "$AWS_SECRET_ACCESS_KEY" ] || { echo "::error::HETZNER_S3_SECRET_ACCESS_KEY is empty or unset" ; fail=1; }
+          case "$PULUMI_SALT_HETZNER_DNS" in
+            v1:*) ;;
+            *) echo "::error::PULUMI_SALT_HETZNER_DNS is empty or does not start with 'v1:'" ; fail=1;;
+          esac
+          exit "$fail"
+
+      - name: Restore the stack's encryption salt
+        run: |
+          printf '\nencryptionsalt: %s\n' "$PULUMI_SALT_HETZNER_DNS" >> Pulumi.production.yaml
+
+      # Re-planned and re-gated after approval, not carried over from the plan
+      # job: two jobs are two runners, and the guard must see the exact plan
+      # this apply acts on.
+      - name: Preview the plan
+        run: pulumi preview --stack production --json > preview.json
+
+      - name: Refuse to apply a plan that destroys the DNS zone
+        run: |
+          python3 ../../scripts/assert-no-hetzner-deletes.py --self-test
+          python3 ../../scripts/assert-no-hetzner-deletes.py --verify-coverage ..
+
+          if ! python3 ../../scripts/assert-no-hetzner-deletes.py preview.json; then
+            echo "--- full plan follows ---"
+            python3 -m json.tool preview.json
+            exit 1
+          fi
+
+      - name: Apply
+        run: pulumi up --stack production --yes
+
+      - name: Write outcome to job summary
+        if: always()
+        env:
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          {
+            echo '## Hetzner dns deploy'
             echo
             echo "Commit: \`${COMMIT_SHA}\`"
             echo

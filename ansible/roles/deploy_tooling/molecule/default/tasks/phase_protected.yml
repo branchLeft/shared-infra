@@ -27,11 +27,12 @@
   register: deploy_tooling_scenario_protected_chain
   changed_when: false
 
-# The chain the program built, read directly: both protected-port drops are in
-# it and no rule accepts traffic to the database's port.
+# The chain the program built, read directly: all three protected-port drops are
+# in it and no rule accepts traffic to the database's port.
 - name: Assert the protected drops are present and the database accept is not
   ansible.builtin.assert:
     that:
+      - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8300') | list | length == 1
       - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8301') | list | length == 1
       - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--ctorigdstport 8302') | list | length == 1
       - deploy_tooling_scenario_protected_chain.stdout_lines | select('search', '--dport 3306') | list | length == 0

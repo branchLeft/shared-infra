@@ -1,0 +1,13 @@
+# Generated from sites.ts and hetzner/status/render.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+web:
+  port: 8080
+endpoints:
+  - name: SELF
+    group: test-target
+    url: http://127.0.0.1:8080/health
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] == 200'

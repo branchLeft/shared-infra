@@ -1,0 +1,23 @@
+---
+# Run a program once, the way a forced command does: the caller's whole text arrives in
+# SSH_ORIGINAL_COMMAND and the bundle on standard input. A refusal is an answer, not a fault, so
+# the exit status is kept for the assertion that follows.
+#
+# Takes request_name, request_text, request_config, and optionally request_mode (default apply),
+# request_program (default the installed one), request_input (what standard input reads from: a
+# file, or a process substitution such as <(...) for a stream; default empty) and
+# request_wrapper (a command to run it under, such as `timeout 20`).
+- name: 'Run the receiver: {{ request_name }}'
+  ansible.builtin.shell:
+    executable: /bin/bash
+    cmd: >-
+      {{ request_wrapper | default('') }}
+      {{ request_program | default(verify_program) }}
+      --mode {{ request_mode | default('apply') }}
+      --config {{ request_config }}
+      < {{ request_input | default('/dev/null') }}
+  environment:
+    SSH_ORIGINAL_COMMAND: '{{ request_text | string }}'
+  register: pull_trigger_pr_result
+  changed_when: false
+  failed_when: false

@@ -48,13 +48,63 @@ control_plane_masterkey_secret: >-
 
 control_plane_project_dir: /opt/branchleft/control-plane
 
+# The Compose project of the stack: the `name:` of compose.yml, which the unit and
+# the deploy wrapper also use. The labels Compose puts on a container are read with it.
+control_plane_project_name: control-plane
+
+# Whether the caller gave an image pin. The image and the two secret contents are
+# optional inputs; an empty string counts as not given.
+control_plane_image_given: >-
+  {{ (control_plane_app_image | default('', true) | string | length) > 0 }}
+
+# The deploy wrapper's record of the last pin it wrote: one line IMAGE=<reference>, in
+# /etc/branchleft/<stack>.image.env, which the stack's unit reads (branchleft_deploy.py).
+control_plane_image_record: /etc/branchleft/control-plane.image.env
+
+# Docker is read for the portal container where something uses it (the bring-up, the
+# deploy wrapper), or where no pin was given and the wrapper's record holds none.
+control_plane_reads_docker: >-
+  {{ (control_plane_bring_up | ansible.builtin.bool)
+     or (control_plane_start_units | ansible.builtin.bool)
+     or not ((control_plane_image_given | ansible.builtin.bool)
+             or (control_plane_recorded_image | default('') | length > 0)) }}
+
+# The shape the deploy wrapper accepts: a name and a sha256 digest.
+control_plane_image_pattern: '\A[a-z0-9][^\s@]*@sha256:[0-9a-f]{64}\Z'
+
 # The files of the stack directory the role carries. compose.init.yml is
 # carried but never read by the unit: it is the second -f file of the one-off
 # init run, and the unit does not read it.
 control_plane_stack_files:
   - compose.yml
   - compose.init.yml
-  - pg_hba.conf
+  - postgres/pg_hba.conf
+
+# The subdirectories of the project directory that hold the files above. The role makes
+# them before it copies. The database's access rules sit alone in `postgres`, because the
+# compose file mounts that whole directory into the db container (and not the single file:
+# a delivered file replaces the old one by rename, which a single-file bind mount does not
+# follow), so the container sees that one file and nothing else of the stack.
+control_plane_stack_dirs:
+  - postgres
+
+# Where the access rules were before they moved into `postgres`. The role removes this
+# file once the stack runs on the new mount, so nobody edits a copy that governs nothing.
+control_plane_legacy_hba_file: '{{ control_plane_project_dir }}/pg_hba.conf'
+
+# The database container, as Compose names it: the project, the service and the replica
+# number. A unit test pins it to the project name in compose.yml. The role reloads the
+# server in it after every deploy.
+control_plane_db_container: control-plane-db-1
+
+# The files above whose diff the plan does not show: both set environment variables named
+# like passwords from other variables, which the plan's secret scan would withhold the whole
+# plan of the host over. The rest are delivered by a task that shows its diff.
+# ansible/checks/test_plan_diff_scan.py fails if a file listed here has no such line, or if
+# a file left out of it has one.
+control_plane_stack_files_hidden:
+  - compose.yml
+  - compose.init.yml
 
 control_plane_stack_unit: branchleft-compose@control-plane.service
 control_plane_deploy_wrapper: /usr/local/sbin/branchleft-deploy
@@ -62,3 +112,35 @@ control_plane_deploy_wrapper: /usr/local/sbin/branchleft-deploy
 control_plane_isolation_reconciler: /usr/local/sbin/branchleft-docker-user-policy
 control_plane_isolation_unit_name: branchleft-docker-user-policy.service
 control_plane_isolation_unit: /etc/systemd/system/branchleft-docker-user-policy.service
+
+# ----- The preflight on a host the stack shares with Nextcloud -----
+# Constants, not inputs: a caller cannot loosen a floor or retarget the check by an inventory or
+# play variable. Changing one is a change to this file, which review reads.
+#
+# The floors are the ones the delivery runbook reads by hand, in MiB as `free -m` and `df -BM`
+# print them. Memory: the stack's four hard limits sum to 1664 MiB, and the owner's margin on
+# top of them is 1000 MiB, so a host with no stack container yet needs 2664 MiB available. Once
+# a stack container exists its memory is already in use, so the runbook's own floor for a running
+# stack, 1000 MiB, applies; a floor of 2664 there would refuse an ordinary re-apply on a host
+# that has run the stack since the owner measured it. Disk: the stack's images and volume
+# headroom come to about 3.5 GiB, under the runbook's floor of 5 GiB, which applies to the root
+# file system and to Docker's data root (they are often one).
+control_plane_min_available_memory_fresh_mib: 2664
+control_plane_min_available_memory_running_mib: 1000
+control_plane_min_free_disk_mib: 5120
+
+# The preflight reads Docker, which the container test does not have, so it runs where the
+# role would start or change containers. The collision check reads no host state and always runs.
+control_plane_preflight_reads_host: >-
+  {{ (control_plane_bring_up | ansible.builtin.bool) or (control_plane_start_units | ansible.builtin.bool) }}
+
+# The Compose files the stack is deployed from, parsed, and every name the deploy is configured
+# with that Compose would turn into a project name: the role's own, the project directory's, and
+# the instance of the unit. The check refuses Nextcloud's project name in any of them.
+control_plane_compose_documents:
+  - "{{ lookup('ansible.builtin.file', 'stack/compose.yml') | ansible.builtin.from_yaml }}"
+  - "{{ lookup('ansible.builtin.file', 'stack/compose.init.yml') | ansible.builtin.from_yaml }}"
+control_plane_project_names:
+  - '{{ control_plane_project_name }}'
+  - '{{ control_plane_project_dir | ansible.builtin.basename }}'
+  - '{{ control_plane_stack_unit | ansible.builtin.regex_replace("\A[^@]+@(.+)\.service\Z", "\1") }}'

@@ -1,0 +1,63 @@
+---
+# An account that exists is never modified: the role only creates a missing one and
+# then checks the result. A hand-made account is the expected case on a live host.
+- name: Look up the pipeline account before anything is changed
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ ci_login_user }}'
+    fail_key: false
+  register: ci_login_account_before
+
+# No password argument: useradd leaves the new account's password field locked.
+- name: Create the pipeline account when it is absent
+  ansible.builtin.user:
+    name: '{{ ci_login_user }}'
+    system: true
+    create_home: true
+    shell: '{{ ci_login_shell }}'
+    state: present
+  when: ci_login_account_before.ansible_facts.getent_passwd[ci_login_user] is none
+
+- name: Read the pipeline account again
+  ansible.builtin.getent:
+    database: passwd
+    key: '{{ ci_login_user }}'
+    fail_key: false
+  register: ci_login_account_after
+
+# The password field is the hash itself, so the task and the fact that reads it keep it out of the log.
+- name: Read the password field of the pipeline account
+  ansible.builtin.getent:
+    database: shadow
+    key: '{{ ci_login_user }}'
+    fail_key: false
+  register: ci_login_shadow_after
+  no_log: true
+
+- name: Work out whether the account is there, what its shell is and whether it is locked
+  ansible.builtin.set_fact:
+    ci_login_account_present: '{{ ci_login_account_after.ansible_facts.getent_passwd[ci_login_user] is not none }}'
+    ci_login_account_shell: >-
+      {{ (ci_login_account_after.ansible_facts.getent_passwd[ci_login_user] | default([], true))[5] | default('') }}
+    ci_login_account_locked: >-
+      {{ ((ci_login_shadow_after.ansible_facts.getent_shadow[ci_login_user] | default([], true))[0] | default('')) is match(ci_login_locked_pattern) }}
+  no_log: true
+
+# These two run only when the account is there. In check mode on a host that has no
+# account yet it is not there, because the create step above only reports; that is the
+# one case they skip. A real run always has the account by now.
+- name: Refuse an account whose shell cannot run a forced command
+  ansible.builtin.assert:
+    that:
+      - ci_login_account_shell | basename not in ci_login_refused_shell_names
+    quiet: true
+    fail_msg: The pipeline account has a shell that cannot run a forced command (nologin or false). The role does not change an existing account.
+  when: ci_login_account_present | bool
+
+- name: Refuse an account that has a usable password
+  ansible.builtin.assert:
+    that:
+      - ci_login_account_locked | bool
+    quiet: true
+    fail_msg: The pipeline account has a password that is not locked. The role does not change an existing account; lock it by hand.
+  when: ci_login_account_present | bool

@@ -1,0 +1,74 @@
+---
+# Nothing here is private. The role has no secret input and no required input:
+# every value below has a default, and the pinned bundler is public.
+
+# The one home of the export bundler's source is branchLeft/ghost-platform, at
+# services/export-bundler. This role carries a built copy of it under
+# files/ghost-platform, at the same paths, and the host takes it from the signed
+# commit CI pushes to it; the host never fetches it from anywhere. Each file is held
+# to the sha256 below, on the machine that runs the role, before the role writes
+# anything to the host. The commit below is the last ghost-platform commit that
+# changed the bundler's build inputs (its source, lock file, tsconfig files and
+# package.json): it is the record of where the bytes came from, and the role writes
+# it to the host's COMMIT file. A bump rebuilds at the new commit and changes the
+# files under files/ghost-platform, this commit and every checksum in one change
+# (README, "Vendored files"): a copy that does not match its pin stops the role before
+# it writes.
+export_bundler_source_sha: 5fb63577cb5850b351c964caa49c93a382516367
+
+# Every file the role carries, one path and one sha256 each, relative to the bundler's
+# own directory (services/export-bundler). The role writes exactly these files to the
+# host, and removes anything else under the host's dist directory.
+export_bundler_release_files:
+  - path: package.json
+    sha256: 1a29600ba3984910e8d1ee34d7310e63ae0525898723cca6a24812ea71755711
+  - path: dist/ageEncryption.js
+    sha256: 5d3d46c656b0a42814126f2c9e4ad8773d4d4147b0351db66d0c3a137fa91a5d
+  - path: dist/archive.js
+    sha256: 7f01cc5071cb96e1f4a2a47d1ffbcf4ffcd03bc51e0acff75aa291dc9b052dc0
+  - path: dist/auditLog.js
+    sha256: 29e000b93d239152a1aaded73947bd9b933a68caa88c4fc8639cab3616eed466
+  - path: dist/cleanup.js
+    sha256: 643d3ba13c3acabcb42da0548e06f4b37229351edc9acf2a20092aee68ab5424
+  - path: dist/cli.js
+    sha256: 9699e83d55d2acd5f0cf10a96afbca0720324e76c7968f0efa39e3089a6c4472
+  - path: dist/colourIsolation.js
+    sha256: 1078eb0e9f39f279cfe472471505e42649525d496d4efd902f4634c878273869
+  - path: dist/containerRunner.js
+    sha256: 14254363faf0992efbc57889d65d8ebf79f8d8d947e5dc64e84f8584c18f43c9
+  - path: dist/drainFlag.js
+    sha256: eeb30a75701f3125dd1a71cf57735d6a505e386570472b3533e1c6a6b41afc1b
+  - path: dist/drainFlagStore.js
+    sha256: 91cce7c93980dbfa4e2ceddf7cbb33011e30d67f98d0bc9dadce25adccf07320
+  - path: dist/drainGate.js
+    sha256: 4d53bc33d89b8a16d6343186cdf606c16b8c654b0528778c40b49dfd61df5468
+  - path: dist/envFile.js
+    sha256: bee446b59aee072d24d8eb990cd2bead2d047427798e150c0777b334d7132a4e
+  - path: dist/exportRunner.js
+    sha256: 05d5062bdd414ea0891bf3a38a014d0421de5e8ae5c6709f0c051169712ed778
+  - path: dist/extensions.js
+    sha256: e5670683a2fd8f121ffd05e8425d2375b95bab40dc9adca54505cc7e42950a18
+  - path: dist/ghostExportClient.js
+    sha256: b15d44c61228791c628ed90e3e96308799eafff00250bd2cb120df2241b0acc7
+  - path: dist/ghostProbe.js
+    sha256: 4838a3dd9700df5fbc229da4c8f74e76e0c1a38f1a92d8ed86bb5f39a5fabb94
+  - path: dist/manifest.js
+    sha256: a2af8159955845f7ee433aee773991518f882697d888168f48f2052b704c9fc0
+  - path: dist/mediaManifest.js
+    sha256: bbd32f13818422b524a712be6a12b91424ef617819832d166f5be98c6e8ce609
+  - path: dist/operatorToken.js
+    sha256: aa78b11e0965a09dff081d67530f781930c47356ca38c32a656f16de9fdbfb7d
+  - path: dist/scratchDatabase.js
+    sha256: 5ce49340994b4dd632bfc9cf5248091cd272bff292935433863e660c6185b0bb
+  - path: dist/supportAccountProbe.js
+    sha256: 8ca8bef4c8518e11c5b489449850a48d51ebb3f790000a1988a72aa65e163632
+  - path: dist/supportGrant.js
+    sha256: ab3f578b8ec4ad385120d04736c75b0f55656bf275859d509c5f1917c56af0de
+  - path: dist/tenantConfig.js
+    sha256: 1b025d1eb93cd46558a1e0ffd6c98d918c079e0e175a3c53ae22da786e500c63
+
+# Where the bundler goes on the host (the export runbook's Deliver step 4), and the
+# directory the export runs keep their flags, output, audit log and descriptors in (Run
+# step 2). Both are root's and closed to everyone else.
+export_bundler_dir: /root/export-bundler
+export_bundler_state_dir: /root/export-bundler-state

@@ -1,0 +1,54 @@
+---
+# Internal to the role. The drain token is a root-only file the owner places
+# once, and the role only asserts it: it is never an input, never read into a
+# variable and never written. Everything here only reads, so it runs in check
+# mode as well (ANS-10). The file's content is not read by Ansible at all; the
+# one task that opens it is grep, which prints nothing.
+- name: Look at the drain token file
+  ansible.builtin.stat:
+    path: '{{ demo1_egress_spool_token_path }}'
+    follow: false
+  register: demo1_egress_spool_token_stat
+
+- name: Refuse a drain token file that is missing, not root's, not mode 0600 or empty
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_token_stat.stat.exists
+      - demo1_egress_spool_token_stat.stat.isreg
+      - not demo1_egress_spool_token_stat.stat.islnk
+      - demo1_egress_spool_token_stat.stat.pw_name == 'root'
+      - demo1_egress_spool_token_stat.stat.gr_name == 'root'
+      - demo1_egress_spool_token_stat.stat.mode == '0600'
+      - demo1_egress_spool_token_stat.stat.size > 0
+    quiet: true
+    fail_msg: >-
+      {{ demo1_egress_spool_token_path }} is missing, is not a regular file, is not owned by root:root,
+      is not mode 0600, or is empty. The owner places this file once; the role never writes or generates the token.
+
+# grep -q prints nothing and the task has no_log, so the token cannot reach the
+# log. A line with a name and no value is refused: the spool would refuse to
+# start on it, and the drain endpoint would have no token to check.
+- name: Check the drain token file holds a SHIM_DRAIN_TOKEN line with a value
+  ansible.builtin.command:
+    argv:
+      [
+        grep,
+        -q,
+        -E,
+        '{{ demo1_egress_spool_token_line_pattern }}',
+        '{{ demo1_egress_spool_token_path }}',
+      ]
+  register: demo1_egress_spool_token_line
+  changed_when: false
+  failed_when: demo1_egress_spool_token_line.rc not in [0, 1]
+  check_mode: false
+  no_log: true
+
+- name: Refuse a drain token file with no SHIM_DRAIN_TOKEN line
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_token_line.rc == 0
+    quiet: true
+    fail_msg: >-
+      {{ demo1_egress_spool_token_path }} holds no SHIM_DRAIN_TOKEN= line with a value.
+      The owner places the token there once; the role never writes it.

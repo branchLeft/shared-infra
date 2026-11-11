@@ -32,6 +32,15 @@
         pull_trigger_fixtures: '{{ pull_trigger_fixtures_file.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'
         pull_trigger_base_config: '{{ pull_trigger_config_file.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'
 
+    # A host that is not on the role's bundle-host list keeps the configuration it always had: the
+    # new key is written for the push receiver's host only, so no remote host's file changes.
+    - name: A remote host's installed configuration has no source key
+      ansible.builtin.assert:
+        that:
+          - "'source' not in pull_trigger_base_config"
+        fail_msg: 'a remote host was given the source key: {{ pull_trigger_base_config }}'
+        success_msg: the remote host's configuration is as it was before the bundle source existed
+
     - name: Name the commits and markers
       ansible.builtin.set_fact:
         pull_trigger_commits: '{{ pull_trigger_fixtures.commits }}'
@@ -353,7 +362,7 @@
     - name: Remove the test on the commit's tree from the first copy
       ansible.builtin.replace:
         path: /var/tmp/ptt/mut/no-commit-test
-        regexp: '^(\s+)if not cache\.regular_file_in_commit\(commit, self\._config\.playbook\):$'
+        regexp: '^(\s+)if not repository\.regular_file_in_commit\(commit, self\._config\.playbook\):$'
         replace: '\1if False:'
       register: pull_trigger_cut_commit_test
 
@@ -1362,6 +1371,8 @@
           dest: /var/tmp/ptt-unit/meta/argument_specs.yml
         - src: '{{ verify_role_directory }}/tests/unit/test_pull_trigger.py'
           dest: /var/tmp/ptt-unit/tests/unit/test_pull_trigger.py
+        - src: '{{ verify_role_directory }}/tests/unit/test_pull_trigger_bundle.py'
+          dest: /var/tmp/ptt-unit/tests/unit/test_pull_trigger_bundle.py
       loop_control:
         label: '{{ item.dest }}'
 

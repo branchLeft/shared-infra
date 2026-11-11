@@ -32,6 +32,9 @@ from configure_stalwart import (
     METRICS_SCRAPE_SOURCES,
     METRICS_SECRET_VARIABLE,
     METRICS_TARGET,
+    REPORT_NAME,
+    REPORT_QUEUE_TARGET,
+    REPORT_SCHEDULE_TARGET,
     SECURITY_TARGET,
     plan_acme_provider,
     plan_allowed_ips,
@@ -39,6 +42,8 @@ from configure_stalwart import (
     plan_http_change,
     plan_listener_changes,
     plan_metrics_change,
+    plan_report_queue,
+    plan_report_schedule,
     plan_security_change,
     plan_tracer_change,
 )
@@ -888,6 +893,163 @@ class PlanAllowedIpsTests(unittest.TestCase):
         self.assertEqual(created[0]["address"], MONITORING_IP)
 
 
+REPORT_QUEUE_ID = "q-report"
+OTHER_QUEUES = [
+    {"id": "q-local", "name": "local", "threadsPerNode": 25},
+    {"id": "q-remote", "name": "remote", "threadsPerNode": 50},
+    {"id": "q-dsn", "name": "dsn", "threadsPerNode": 5},
+]
+# What the pinned image seeds: the report schedule is absent although its
+# queue is present, because the seed's own write is rejected by validation.
+SEEDED_SCHEDULES_WITHOUT_REPORT = [
+    {"id": "s-local", "name": "local", "queueId": "q-local"},
+    {"id": "s-remote", "name": "remote", "queueId": "q-remote"},
+    {"id": "s-dsn", "name": "dsn", "queueId": "q-dsn"},
+]
+
+
+class PlanReportQueueTests(unittest.TestCase):
+    def test_a_missing_report_queue_is_created_with_the_stock_thread_count(self):
+        args, queue_id = plan_report_queue(OTHER_QUEUES)
+
+        self.assertIsNone(queue_id)
+        created = list(args["create"].values())
+        self.assertEqual(len(created), 1)
+        self.assertEqual(created[0]["name"], "report")
+        self.assertEqual(created[0]["threadsPerNode"], 5)
+
+    def test_an_existing_report_queue_is_reused_and_left_as_tuned(self):
+        queues = OTHER_QUEUES + [
+            {"id": REPORT_QUEUE_ID, "name": "report", "threadsPerNode": 9}
+        ]
+
+        self.assertEqual(plan_report_queue(queues), ({}, REPORT_QUEUE_ID))
+
+    def test_the_create_payload_is_a_copy_of_the_target(self):
+        args, _ = plan_report_queue([])
+        next(iter(args["create"].values()))["threadsPerNode"] = 1
+
+        self.assertEqual(REPORT_QUEUE_TARGET["threadsPerNode"], 5)
+
+
+class PlanReportScheduleTests(unittest.TestCase):
+    def test_the_seeded_state_without_a_report_schedule_gets_one_on_the_report_queue(self):
+        args = plan_report_schedule(SEEDED_SCHEDULES_WITHOUT_REPORT, REPORT_QUEUE_ID)
+
+        created = list(args["create"].values())
+        self.assertEqual(len(created), 1)
+        schedule = created[0]
+        self.assertEqual(schedule["name"], "report")
+        self.assertEqual(schedule["queueId"], REPORT_QUEUE_ID)
+        self.assertEqual(schedule["expiry"], {"@type": "Attempts", "maxAttempts": 8})
+        self.assertEqual(schedule["notify"], {"@type": "Default"})
+        self.assertEqual(
+            [step["duration"] for step in schedule["retry"]["intervals"].values()],
+            [1800000, 3600000, 7200000],
+        )
+
+    def test_an_existing_report_schedule_is_a_no_op_even_if_tuned(self):
+        schedules = SEEDED_SCHEDULES_WITHOUT_REPORT + [
+            {"id": "s-report", "name": "report", "queueId": "q-elsewhere"}
+        ]
+
+        self.assertEqual(plan_report_schedule(schedules, REPORT_QUEUE_ID), {})
+
+    def test_the_name_is_the_one_the_default_schedule_expression_returns(self):
+        # Stalwart's stock schedule expression answers 'report' for
+        # source == 'report'; a different name here would never be looked up.
+        self.assertEqual(REPORT_NAME, "report")
+        self.assertEqual(REPORT_SCHEDULE_TARGET["name"], REPORT_NAME)
+        self.assertEqual(REPORT_QUEUE_TARGET["name"], REPORT_NAME)
+
+    def test_no_interval_list_is_empty_because_the_server_rejects_that(self):
+        # The stock seed wrote notify as Custom with no intervals; the
+        # server's own validation refuses that (at least one interval), so
+        # the seed write was dropped and the schedule never existed.
+        for field in ("notify", "retry"):
+            value = REPORT_SCHEDULE_TARGET[field]
+            if value["@type"] == "Custom":
+                self.assertGreaterEqual(len(value["intervals"]), 1, field)
+            else:
+                self.assertEqual(value, {"@type": "Default"}, field)
+
+    def test_the_create_payload_is_a_copy_of_the_target(self):
+        args = plan_report_schedule([], REPORT_QUEUE_ID)
+        next(iter(args["create"].values()))["expiry"]["maxAttempts"] = 1
+
+        self.assertEqual(REPORT_SCHEDULE_TARGET["expiry"]["maxAttempts"], 8)
+
+
+class ReconcileReportDeliveryTests(unittest.TestCase):
+    """_reconcile_report_delivery's literal JMAP method strings, call order
+    and arguments, against a fake _jmap_call."""
+
+    AUTH = ("admin", "admin-secret-not-real")
+
+    def setUp(self):
+        patcher = mock.patch("sys.stdout", new_callable=io.StringIO)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _run(self, schedules, queues):
+        calls = []
+
+        def fake_jmap_call(auth, method, args):
+            calls.append((method, args))
+            if method == "x:MtaDeliverySchedule/get":
+                return {"list": schedules}
+            if method == "x:MtaVirtualQueue/get":
+                return {"list": queues}
+            if method == "x:MtaVirtualQueue/set":
+                return {"created": {"report": {"id": "q-new"}}}
+            if method == "x:MtaDeliverySchedule/set":
+                return {"created": {"report": {"id": "s-new"}}}
+            raise AssertionError(f"unexpected method: {method}")
+
+        with mock.patch.object(cs, "_jmap_call", side_effect=fake_jmap_call):
+            changed = cs._reconcile_report_delivery(self.AUTH)
+        return changed, calls
+
+    def test_the_seeded_state_creates_only_the_schedule_on_the_existing_queue(self):
+        queues = OTHER_QUEUES + [{"id": REPORT_QUEUE_ID, "name": "report", "threadsPerNode": 5}]
+
+        changed, calls = self._run(SEEDED_SCHEDULES_WITHOUT_REPORT, queues)
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            [method for method, _ in calls],
+            ["x:MtaDeliverySchedule/get", "x:MtaVirtualQueue/get", "x:MtaDeliverySchedule/set"],
+        )
+        created = list(calls[2][1]["create"].values())
+        self.assertEqual(created[0]["queueId"], REPORT_QUEUE_ID)
+
+    def test_a_missing_queue_is_created_first_and_its_new_id_is_used(self):
+        changed, calls = self._run(SEEDED_SCHEDULES_WITHOUT_REPORT, OTHER_QUEUES)
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            [method for method, _ in calls],
+            [
+                "x:MtaDeliverySchedule/get",
+                "x:MtaVirtualQueue/get",
+                "x:MtaVirtualQueue/set",
+                "x:MtaDeliverySchedule/set",
+            ],
+        )
+        created = list(calls[3][1]["create"].values())
+        self.assertEqual(created[0]["queueId"], "q-new")
+
+    def test_a_present_schedule_makes_one_get_and_no_write(self):
+        schedules = SEEDED_SCHEDULES_WITHOUT_REPORT + [
+            {"id": "s-report", "name": "report", "queueId": REPORT_QUEUE_ID}
+        ]
+
+        changed, calls = self._run(schedules, OTHER_QUEUES)
+
+        self.assertFalse(changed)
+        self.assertEqual(calls, [("x:MtaDeliverySchedule/get", {})])
+
+
 class WaitForStalwartReadyTests(unittest.TestCase):
     """_wait_for_stalwart_ready polls a fake _request rather than sleeping a
     fixed guess -- a monotonically increasing fake clock stands in for
@@ -989,6 +1151,7 @@ class MainRestartReadinessTests(unittest.TestCase):
             "_reconcile_tracer",
             "_reconcile_security",
             "_reconcile_allowed_ips",
+            "_reconcile_report_delivery",
         )
         for i, name in enumerate(names):
             value = listeners_changed if i == 0 else False
@@ -1014,6 +1177,19 @@ class MainRestartReadinessTests(unittest.TestCase):
             result = cs.main()
 
         self.assertEqual(result, 0)
+        wait_mock.assert_called_once_with(self.AUTH)
+
+    def test_a_created_report_schedule_alone_restarts_stalwart(self):
+        self._patch_remaining_reconcilers(listeners_changed=False)
+
+        with mock.patch.object(
+            cs, "_reconcile_report_delivery", return_value=True
+        ) as report_mock, mock.patch.object(cs, "_wait_for_stalwart_ready") as wait_mock:
+            result = cs.main()
+
+        self.assertEqual(result, 0)
+        report_mock.assert_called_once_with(self.AUTH)
+        self.run_mock.assert_called_once()
         wait_mock.assert_called_once_with(self.AUTH)
 
     def test_no_restart_and_no_probe_when_nothing_changed(self):
@@ -1112,6 +1288,90 @@ class CompleteBootstrapTests(unittest.TestCase):
 
         with open(self.credentials_path, encoding="utf-8") as f:
             self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+
+    def test_a_failed_restart_leaves_the_secret_saved_at_mode_0600(self):
+        cs.subprocess.run.side_effect = subprocess.CalledProcessError(
+            1, ["docker", "restart", "stalwart"]
+        )
+        wait_mock = mock.Mock(return_value=None)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock):
+            with self.assertRaises(subprocess.CalledProcessError):
+                cs._complete_bootstrap()
+
+        with open(self.credentials_path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+        self.assertEqual(stat.S_IMODE(os.stat(self.credentials_path).st_mode), 0o600)
+        wait_mock.assert_not_called()
+
+    def test_the_credentials_file_is_saved_before_the_restart_runs(self):
+        restart_checks = []
+
+        def check_file_before_restart(command, **kwargs):
+            if command == ["docker", "restart", "stalwart"]:
+                with open(self.credentials_path, encoding="utf-8") as f:
+                    self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+                self.assertEqual(stat.S_IMODE(os.stat(self.credentials_path).st_mode), 0o600)
+                restart_checks.append(command)
+
+        cs.subprocess.run.side_effect = check_file_before_restart
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", mock.Mock(return_value=None)):
+            cs._complete_bootstrap()
+
+        self.assertEqual(restart_checks, [["docker", "restart", "stalwart"]])
+
+    def test_the_temporary_file_is_created_at_mode_0600_whatever_the_umask(self):
+        # Variant used: chmod and fchmod are patched out, so only the creation
+        # mode passed to os.open can produce 0600. The old code never called
+        # os.replace and created the file at the umask-default mode, so it fails.
+        old_umask = os.umask(0)
+        self.addCleanup(os.umask, old_umask)
+
+        observed_source_modes = []
+        real_replace = os.replace
+
+        def spying_replace(src, dst, *args, **kwargs):
+            observed_source_modes.append(stat.S_IMODE(os.stat(src).st_mode))
+            real_replace(src, dst, *args, **kwargs)
+
+        wait_mock = mock.Mock(return_value=None)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", wait_mock), \
+             mock.patch.object(os, "chmod"), \
+             mock.patch.object(os, "fchmod"), \
+             mock.patch.object(os, "replace", side_effect=spying_replace):
+            cs._complete_bootstrap()
+
+        self.assertEqual(observed_source_modes, [0o600])
+
+    def test_a_re_run_over_a_saved_file_overwrites_it(self):
+        with open(self.credentials_path, "w", encoding="utf-8") as f:
+            f.write("stale:STALE_VALUE\n")
+        os.chmod(self.credentials_path, 0o600)
+
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", mock.Mock(return_value=None)):
+            cs._complete_bootstrap()
+
+        with open(self.credentials_path, encoding="utf-8") as f:
+            self.assertEqual(f.read(), f"{self.NEW_USERNAME}:{self.NEW_SECRET}\n")
+        self.assertEqual(stat.S_IMODE(os.stat(self.credentials_path).st_mode), 0o600)
+
+    def test_no_temporary_file_is_left_after_success(self):
+        directory = os.path.dirname(self.credentials_path)
+        with mock.patch.object(cs, "_wait_for_stalwart_ready", mock.Mock(return_value=None)):
+            cs._complete_bootstrap()
+
+        self.assertEqual(os.listdir(directory), [os.path.basename(self.credentials_path)])
+
+    def test_no_temporary_file_is_left_when_the_replace_fails(self):
+        directory = os.path.dirname(self.credentials_path)
+        replace_patcher = mock.patch.object(
+            os, "replace", side_effect=OSError("TEST_REPLACE_FAILURE")
+        )
+        with replace_patcher, \
+             mock.patch.object(cs, "_wait_for_stalwart_ready", mock.Mock(return_value=None)):
+            with self.assertRaises(OSError):
+                cs._complete_bootstrap()
+
+        self.assertEqual(os.listdir(directory), [])
 
 
 SECRET_VALUE = "TEST_SECRET_VALUE"

@@ -1,0 +1,70 @@
+---
+# The endpoint stops answering while a new value must be delivered: the role brings the
+# stack up once, refuses because the endpoint is not 200, and records nothing. The answer is
+# put back afterwards, whatever happens.
+- name: Count the real up calls before the endpoint fails
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/compose_stack_standin/argv.log]
+  register: widened_down_before
+  changed_when: false
+  failed_when: widened_down_before.rc > 1
+  check_mode: false
+
+- name: Apply the role while the endpoint does not answer
+  block:
+    - name: Take the endpoint's answer away
+      ansible.builtin.file:
+        path: /var/lib/compose_stack_standin/www/health
+        state: absent
+
+    - name: Apply the role with a short wait
+      ansible.builtin.include_role:
+        name: branchleft.compose_stack
+      vars:
+        compose_stack_project_dir: /opt/compose_widened
+        compose_stack_project_name: widened
+        compose_stack_project_mode: '0755'
+        compose_stack_compose_template: '{{ playbook_dir }}/templates/widened.yaml.j2'
+        compose_stack_compose_file: widened.yml
+        compose_stack_config_files:
+          - name: stack/config.yaml
+            content: "greeting = ENDPOINT_DOWN\n"
+            mode: '0644'
+        compose_stack_http_check_url: http://127.0.0.1:8304/health
+        compose_stack_http_check_delay: 1
+        compose_stack_wait_timeout: 2
+
+    - name: Fail because the role accepted an endpoint that does not answer
+      ansible.builtin.fail:
+        msg: The role accepted a stack whose endpoint does not answer 200.
+  rescue:
+    - name: Assert the role stopped at the endpoint check
+      ansible.builtin.assert:
+        that:
+          - "'did not answer 200' in ansible_failed_result.msg"
+        quiet: true
+        fail_msg: 'The endpoint check did not refuse the stack. It stopped with: {{ ansible_failed_result.msg }}'
+  always:
+    - name: Put the endpoint's answer back
+      ansible.builtin.copy:
+        content: |
+          {"status":"UP"}
+        dest: /var/lib/compose_stack_standin/www/health
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: Count the real up calls after the endpoint failed
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/compose_stack_standin/argv.log]
+  register: widened_down_after
+  changed_when: false
+  failed_when: widened_down_after.rc > 1
+  check_mode: false
+
+- name: Assert the failed run did bring the stack up once before it refused
+  ansible.builtin.assert:
+    that:
+      - (widened_down_after.stdout | ansible.builtin.int) - (widened_down_before.stdout | ansible.builtin.int) == 1
+    quiet: true
+    fail_msg: The failed run must call up once before the endpoint check refuses it.

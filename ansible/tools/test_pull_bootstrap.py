@@ -610,6 +610,47 @@ class ConfigRefusalTest(unittest.TestCase):
         tasks = ConfigTexts.tasks.replace("ansible.builtin.to_nice_json", "ansible.builtin.to_json")
         self.refuses("no longer writes to_nice_json", tasks=tasks)
 
+    def written_content(self, tasks: str) -> object:
+        task = tool.config_task(YAML(typ="safe").load(tasks))
+        return tool.mapping(task["ansible.builtin.copy"], "the copy").get("content")
+
+    def with_content(self, content: str) -> str:
+        """Return the role's tasks with the configuration task writing ``content`` instead."""
+        line = "    content: " + json.dumps(content, ensure_ascii=False)
+        return re.sub(r"^    content: .*$", lambda _: line, ConfigTexts.tasks, flags=re.MULTILINE)
+
+    def test_the_task_that_merges_in_the_source_renders_the_same_bytes_as_without_it(self) -> None:
+        self.assertEqual(tool.SOURCE_CONTENT, self.written_content(ConfigTexts.tasks))
+        plain = self.with_content(tool.CONFIG_CONTENT)
+        self.assertNotEqual(plain, ConfigTexts.tasks)
+        self.assertEqual(render(tasks=plain), render())
+        self.assertNotIn("source", json.loads(render()))
+
+    def test_a_different_template_that_merges_something_else_in_is_refused(self) -> None:
+        for content in (
+            tool.SOURCE_CONTENT.replace("pull_trigger_config_source", "pull_trigger_signers"),
+            tool.SOURCE_CONTENT.replace("combine(", "combine({'a': 1}, "),
+            tool.SOURCE_CONTENT.replace("to_nice_json", "to_json"),
+        ):
+            self.refuses("no longer writes to_nice_json", tasks=self.with_content(content))
+
+    def test_a_source_expression_other_than_the_roles_is_refused(self) -> None:
+        tasks = ConfigTexts.tasks.replace("{'source': 'bundle'}", "{'source': 'remote'}")
+        self.assertNotEqual(tasks, ConfigTexts.tasks)
+        self.refuses("is not the expression this tool reads", tasks=tasks)
+
+    def test_a_bundle_list_that_is_not_a_list_of_names_is_refused(self) -> None:
+        variables = ConfigTexts.variables.replace("  - demo1\n", "  - 1\n")
+        self.assertNotEqual(variables, ConfigTexts.variables)
+        self.refuses("is not a list of host names", variables=variables)
+
+    def test_a_host_in_the_bundle_list_is_refused_as_a_host_that_must_pull(self) -> None:
+        variables = ConfigTexts.variables.replace("  - demo1\n", f"  - {tool.ENROLLED_HOST}\n")
+        self.assertNotEqual(variables, ConfigTexts.variables)
+        self.refuses(
+            "takes bundles, and this tool bootstraps a host that pulls", variables=variables
+        )
+
     def test_a_task_key_that_is_not_a_plain_variable_is_refused(self) -> None:
         tasks = ConfigTexts.tasks.replace(
             "remote_url: '{{ pull_trigger_remote_url }}'",

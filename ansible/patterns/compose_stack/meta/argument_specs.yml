@@ -3,12 +3,14 @@ argument_specs:
   main:
     short_description: Deliver a compose file and its files, bring the stack up when they change, check it is healthy
     description: >-
-      Renders a compose file, a configuration file and secret files into a project
-      directory, refuses a compose file whose images are not pinned by digest or a
-      project directory that holds a compose override file, brings the stack up only
-      when the content differs from the content last recorded as healthy or a
-      delivered file changed, and fails if a service is not running and healthy
-      afterwards. It never removes volumes.
+      Renders a compose file from a template the caller names, writes configuration files
+      and secret files into a project directory, refuses a compose file whose images are not
+      pinned by digest, a configuration file name that is not a plain relative path, or a
+      project directory that holds a compose override file, brings the stack up only when the
+      content differs from the content last recorded as healthy or a delivered file changed,
+      and fails if a service is not running and healthy afterwards. An optional endpoint can
+      be asked from the host too, and the content is recorded only after it answers 200. It
+      never removes volumes.
     author: AUTHOR_NAME
     options:
       compose_stack_project_dir:
@@ -27,19 +29,51 @@ argument_specs:
         type: str
         description: Group of the project directory and of the configuration and secret files. The group must exist before the role runs.
         default: root
+      compose_stack_project_mode:
+        type: str
+        description: Mode of the project directory and of any directory a configuration file needs.
+        default: '0750'
+      compose_stack_compose_template:
+        type: str
+        description: Template in the role's templates directory the compose file is rendered from. Its images must each be pinned by digest.
+        default: compose.yaml.j2
+      compose_stack_compose_file:
+        type: str
+        description: Name of the compose file in the project directory. It is always named on every Compose call.
+        default: compose.yaml
       compose_stack_app_image:
         type: str
-        required: true
         description: >-
-          Image of the app service, pinned by digest as NAME@sha256:64 hex digits,
-          or NAME:TAG@sha256:64 hex digits. A reference without a digest is refused.
+          Image of the app service in the default template, pinned by digest as NAME@sha256:64 hex
+          digits, or NAME:TAG@sha256:64 hex digits. A stack with its own template does not use it.
+          A reference without a digest is refused.
+        default: ''
       compose_stack_app_greeting:
         type: str
-        description: Value written into the configuration file. Not a secret.
+        description: Value written into the default configuration file. Not a secret.
         default: EXAMPLE_GREETING
+      compose_stack_config_files:
+        type: list
+        elements: dict
+        description: >-
+          Configuration files to write into the project directory. Each name is a relative path of at
+          most one directory level. A file in a directory of its own gets that directory first.
+        options:
+          name:
+            type: str
+            required: true
+            description: File name relative to the project directory, for example app.conf or stack/config.yaml.
+          content:
+            type: str
+            required: true
+            description: The file's content, byte for byte. Not a secret; a secret goes in compose_stack_secret_files.
+          mode:
+            type: str
+            default: '0640'
+            description: File mode.
       compose_stack_wait_timeout:
         type: int
-        description: Seconds the stack may take to become healthy after it is brought up.
+        description: Seconds the stack may take to become healthy after it is brought up, and the endpoint may take to answer.
         default: 120
       compose_stack_services:
         type: list
@@ -50,11 +84,21 @@ argument_specs:
           lists the stateless services only, so a change to the app's files does not
           restart the database. The health check always reads the whole project.
         default: []
+      compose_stack_http_check_url:
+        type: str
+        description: >-
+          Optional. An endpoint the host asks with GET, which must answer 200 before the content is
+          recorded as healthy. Empty means no such check.
+        default: ''
+      compose_stack_http_check_delay:
+        type: int
+        description: Seconds between the requests to the endpoint.
+        default: 2
       compose_stack_secret_files:
         type: list
         elements: dict
-        required: true
-        description: Secret files to write into the project directory with mode 0600. The content is a secret, supplied at run time.
+        description: Optional secret files to write into the project directory with mode 0600. The content is a secret, supplied at run time.
+        default: []
         options:
           name:
             type: str

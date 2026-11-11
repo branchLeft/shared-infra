@@ -1,0 +1,108 @@
+---
+# The page stops answering while the stack must be brought up: the stamp is
+# taken away so a bring-up is due, and the health answer is taken away so the
+# page returns 404. The role must try the bring-up once, then refuse with the
+# health check's own message, and must not record the content as healthy. The
+# answer and the application are then restored, and the role must bring the
+# stack up again and record the same stamp as before, which shows a run that
+# failed at the health check is followed by one that tries again.
+- name: Count the real up calls before the unhealthy application
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/status_page_standin/argv.log]
+  register: status_page_unhealthy_ups_before
+  changed_when: false
+  failed_when: status_page_unhealthy_ups_before.rc > 1
+
+- name: Read the stamp before the unhealthy application
+  ansible.builtin.slurp:
+    src: /opt/branchleft/status/.status_page_stamp
+  register: status_page_unhealthy_stamp_before
+
+- name: Take the recorded stamp away so a bring-up is due
+  ansible.builtin.file:
+    path: /opt/branchleft/status/.status_page_stamp
+    state: absent
+
+- name: Take the health answer away
+  ansible.builtin.file:
+    path: /var/lib/status_page_standin/www/health
+    state: absent
+
+- name: Refuse a page that does not answer
+  block:
+    - name: Apply the role with a short wait
+      ansible.builtin.include_role:
+        name: branchleft.status_page
+      vars:
+        status_page_wait_timeout: 2
+
+    - name: Fail because the role accepted a page that does not answer
+      ansible.builtin.fail:
+        msg: The role accepted a page that does not answer on /health.
+  rescue:
+    - name: Assert the health check refused the page
+      ansible.builtin.assert:
+        that:
+          - "'did not answer 200 on' in ansible_failed_result.msg"
+        quiet: true
+        fail_msg: >-
+          The role did not refuse the page with the health check.
+          It stopped with: {{ ansible_failed_result.msg }}
+  always:
+    - name: Give the page its health answer back
+      ansible.builtin.copy:
+        content: |
+          {"status":"UP"}
+        dest: /var/lib/status_page_standin/www/health
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: Look for a stamp after the refused application
+  ansible.builtin.stat:
+    path: /opt/branchleft/status/.status_page_stamp
+  register: status_page_unhealthy_stamp_refused
+
+- name: Count the real up calls after the refused application
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/status_page_standin/argv.log]
+  register: status_page_unhealthy_ups_refused
+  changed_when: false
+  failed_when: status_page_unhealthy_ups_refused.rc > 1
+
+- name: Assert the refused application tried the bring-up once and recorded nothing
+  ansible.builtin.assert:
+    that:
+      - not status_page_unhealthy_stamp_refused.stat.exists
+      - (status_page_unhealthy_ups_refused.stdout | ansible.builtin.int) - (status_page_unhealthy_ups_before.stdout | ansible.builtin.int) == 1
+    quiet: true
+    fail_msg: >-
+      A page that does not answer must leave no stamp and cost one bring-up. Stamp present:
+      {{ status_page_unhealthy_stamp_refused.stat.exists }}. Up calls: {{ status_page_unhealthy_ups_before.stdout }} before,
+      {{ status_page_unhealthy_ups_refused.stdout }} after.
+
+- name: Apply the role again with the page answering
+  ansible.builtin.include_role:
+    name: branchleft.status_page
+
+- name: Read the stamp after the retry
+  ansible.builtin.slurp:
+    src: /opt/branchleft/status/.status_page_stamp
+  register: status_page_unhealthy_stamp_after
+
+- name: Count the real up calls after the retry
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/status_page_standin/argv.log]
+  register: status_page_unhealthy_ups_after
+  changed_when: false
+  failed_when: status_page_unhealthy_ups_after.rc > 1
+
+- name: Assert the retry brought the stack up again and recorded the same stamp
+  ansible.builtin.assert:
+    that:
+      - status_page_unhealthy_stamp_after.content == status_page_unhealthy_stamp_before.content
+      - (status_page_unhealthy_ups_after.stdout | ansible.builtin.int) - (status_page_unhealthy_ups_refused.stdout | ansible.builtin.int) == 1
+    quiet: true
+    fail_msg: >-
+      The run after a failed health check must bring the stack up once and record the stamp it
+      recorded before. Up calls: {{ status_page_unhealthy_ups_refused.stdout }} then {{ status_page_unhealthy_ups_after.stdout }}.

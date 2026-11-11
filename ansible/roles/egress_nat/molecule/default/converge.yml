@@ -105,7 +105,7 @@
         # run it again.
         - name: Install an earlier release of the NAT reconciler
           ansible.builtin.copy:
-            src: old_reconciler.sh
+            src: old_reconciler.py
             dest: /usr/local/sbin/branchleft-nat
             owner: root
             group: root
@@ -151,7 +151,7 @@
             path: '{{ item }}'
             checksum_algorithm: sha256
           loop:
-            - '{{ playbook_dir }}/files/old_reconciler.sh'
+            - '{{ playbook_dir }}/files/old_reconciler.py'
             - '{{ playbook_dir }}/files/old_nat.service'
           register: egress_nat_converge_update_sources
           delegate_to: localhost

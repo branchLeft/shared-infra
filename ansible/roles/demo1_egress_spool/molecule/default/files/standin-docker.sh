@@ -1,0 +1,135 @@
+#!/bin/sh
+# Test stand-in for docker, installed by prepare.yml. It is not a Docker and proves
+# nothing about the real one: it answers the few commands the role and the shared
+# Compose unit make from files in /var/lib/standin-docker, which tasks/standin_state.yml
+# writes, so a case can make it report a bad value. The spool itself is the stub in
+# drain-stub.py, started and stopped as `compose up` and `compose down`.
+echo "docker $*" >> /var/log/docker-standin.calls
+
+state=/var/lib/standin-docker
+project=/opt/branchleft/mail-spool
+volumes=/var/lib/docker/volumes
+
+case $1 in
+  volume)
+    case $2 in
+      inspect)
+        [ -d "$volumes/$3/_data" ] || {
+          echo "Error: No such volume: $3" >&2
+          exit 1
+        }
+        printf '[{"Name": "%s", "Mountpoint": "%s/%s/_data"}]\n' "$3" "$volumes" "$3"
+        ;;
+      create)
+        mkdir -p "$volumes/$3/_data"
+        echo "$3"
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  image)
+    # The host never pulls, so the role looks for the image it will start. Only an image
+    # named in $state/images (tasks/standin_state.yml writes it) is on this stand-in host.
+    case $2 in
+      inspect)
+        # An empty name is refused first: grep -x would match it against any blank line.
+        if [ -z "$3" ] || ! grep -qxF -- "$3" "$state/images" 2>/dev/null; then
+          echo "Error: No such image: $3" >&2
+          exit 1
+        fi
+        # Real docker prints a JSON list, one object per image, with the digests it
+        # knows the image by in RepoDigests. By default the stand-in lists one image whose
+        # RepoDigests is the asked reference when that is a name@digest, as an image
+        # loaded under that name lists. tasks/standin_state.yml can replace the digests
+        # (image-digests, one per line, none for an empty list) or the number of images
+        # (image-count). The stand-in proves the role's reading, not Docker's.
+        digests=""
+        if [ -f "$state/image-digests" ]; then
+          while IFS= read -r line; do
+            case $line in '#'* | '') continue ;; esac
+            digests="$digests${digests:+,}\"$line\""
+          done < "$state/image-digests"
+        else
+          case $3 in *@sha256:*) digests="\"$3\"" ;; esac
+        fi
+        count=$(sed -n 's/^count=//p' "$state/image-count" 2>/dev/null)
+        count=${count:-1}
+        out=""
+        n=0
+        while [ "$n" -lt "$count" ]; do
+          out="$out${out:+,}{\"Id\": \"sha256:0000000000000000000000000000000000000000000000000000000000000000\", \"RepoDigests\": [$digests]}"
+          n=$((n + 1))
+        done
+        echo "[$out]"
+        ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  inspect)
+    [ "$2" = mail-spool-mail-spool-1 ] || exit 1
+    # The image the container was started with is filled in where the file holds the
+    # marker; a case that wants another image writes it into the file instead.
+    image=$(cat "$state/running-image" 2>/dev/null || true)
+    sed "s|@@IMAGE@@|$image|" "$state/inspect.json"
+    ;;
+  port)
+    [ "$2" = mail-spool-mail-spool-1 ] || exit 1
+    cat "$state/port.txt"
+    ;;
+  compose)
+    # The unit runs in the project directory. A missing Compose file is an error.
+    [ -f "$project/compose.yml" ] || {
+      echo "no configuration file provided: not found" >&2
+      exit 1
+    }
+    case $2 in
+      pull)
+        # The unit runs this before every start. The demo host has no route to a
+        # registry, so a pull fails, as it did when it was tried with an unresolvable
+        # registry; Compose skips it for a service whose pull_policy is never, which
+        # the override beside the Compose file sets.
+        grep -qx '    pull_policy: never' "$project/compose.override.yml" 2>/dev/null && exit 0
+        echo "failed to resolve reference: no route to a registry" >&2
+        exit 1
+        ;;
+      up)
+        # The Compose file interpolates this with ${SHIM_DRAIN_TOKEN:?...}, which
+        # fails the run when the owner's environment file is missing or empty.
+        [ -n "${SHIM_DRAIN_TOKEN:-}" ] || {
+          echo "required variable SHIM_DRAIN_TOKEN is missing a value" >&2
+          exit 1
+        }
+        # With the override beside the Compose file, Compose runs the image from the
+        # environment the unit loads from the pin file. Without it, it runs the image
+        # the Compose file carries, which is what the role must never leave in place.
+        if [ -f "$project/compose.override.yml" ]; then
+          [ -n "${IMAGE:-}" ] || {
+            echo "required variable IMAGE is missing a value" >&2
+            exit 1
+          }
+          image=$IMAGE
+        else
+          image=$(sed -n "s/^ *image: *'\(.*\)' *$/\1/p" "$project/compose.yml" | head -n 1)
+        fi
+        printf '%s' "$image" > "$state/running-image"
+        systemctl start standin-drain-stub.service
+        # Compose --wait returns once the service is up.
+        tries=0
+        while [ "$tries" -lt 40 ]; do
+          if ss -H -ltn 'sport = :8095' | grep -q LISTEN; then
+            exit 0
+          fi
+          tries=$((tries + 1))
+          sleep 0.5
+        done
+        echo "standin: the drain stub did not start listening" >&2
+        exit 1
+        ;;
+      down)
+        systemctl stop standin-drain-stub.service
+        ;;
+      *) exit 0 ;;
+    esac
+    ;;
+  *) exit 0 ;;
+esac

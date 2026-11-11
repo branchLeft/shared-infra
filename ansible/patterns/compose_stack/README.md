@@ -5,6 +5,17 @@ installs a Docker Compose file and its configuration files and runs
 `docker compose up -d`. It delivers one example stack with placeholder names, and no
 real service. Copy the shape, not the names.
 
+The clause IDs in this README are defined on the standards repository's
+[Ansible stack page](https://github.com/branchLeft/standards/blob/main/docs/stacks/ansible.md).
+The ones it relies on are
+[ANS-9](https://github.com/branchLeft/standards/blob/main/docs/stacks/ansible.md#ans-9--a-module-before-a-command),
+[ANS-10](https://github.com/branchLeft/standards/blob/main/docs/stacks/ansible.md#ans-10--every-role-supports-check-mode),
+[ANS-11](https://github.com/branchLeft/standards/blob/main/docs/stacks/ansible.md#ans-11--a-second-run-changes-nothing),
+[ANS-12](https://github.com/branchLeft/standards/blob/main/docs/stacks/ansible.md#ans-12--no-role-imports-another-role),
+[ANS-15](https://github.com/branchLeft/standards/blob/main/docs/stacks/ansible.md#ans-15--every-role-carries-a-container-only-molecule-test),
+[ANS-16](https://github.com/branchLeft/standards/blob/main/docs/stacks/ansible.md#ans-16--secrets-never-reach-a-log) and
+[ANS-17](https://github.com/branchLeft/standards/blob/main/docs/stacks/ansible.md#ans-17--a-role-is-applied-only-by-the-gated-workflow).
+
 ## What it does, and what it does not
 
 It refuses, before it writes anything, a compose file in which any image is not pinned
@@ -28,13 +39,35 @@ whose stack needs any of those has another role for it (ANS-12).
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables, and
-[`defaults/main.yml`](defaults/main.yml) holds their defaults. A variable with no
-default must be supplied: the image, which must carry a digest, and the list of secret
-files. The argument specification is the authority for which variables are required.
-The only secret is `compose_stack_secret_files[].content`. It is supplied at run time,
-has no default (ANS-16) and is marked `no_log` in the specification. The compose file
-refers to the secret files by name, so a service role that renames one renames it in
-`templates/compose.yaml.j2` too.
+[`defaults/main.yml`](defaults/main.yml) holds their defaults. The argument specification
+is the authority for which variables are required; none is required now, and the defaults
+are the one-application recipe: `compose.yaml.j2` renders the compose file, and one
+configuration file, `app.conf`, is rendered from `app.conf.j2`.
+
+The contract a stack with more than one service, or with its own images, needs:
+
+- `compose_stack_compose_template` names the template, in the role's `templates/`, the
+  compose file is rendered from, and `compose_stack_compose_file` names the file in the
+  project directory. Every image the file names must carry a digest, whatever the template.
+- `compose_stack_config_files` is a list of `name`, `content` and `mode`. A name is a
+  relative path of at most one directory level, each part starting with a letter or
+  digit, so it cannot climb out of the project directory; a name that does not match is
+  refused before anything is written. A file in a directory of its own gets that directory
+  first, with `compose_stack_project_mode`. The default `mode` is `0640`.
+- `compose_stack_secret_files` is optional and defaults to none. The only secret is
+  `compose_stack_secret_files[].content`. It is supplied at run time, has no default
+  (ANS-16) and is marked `no_log` in the specification. The compose file refers to the
+  secret files by name, so a service role that renames one renames it in its template too.
+- `compose_stack_http_check_url`, optional, is an endpoint the host asks with `GET` until it
+  answers `200` within `compose_stack_wait_timeout`. Empty, the default, means no such check.
+  The compose health check always runs and is not optional: a service with no container, one
+  not running, or one whose healthcheck is not healthy fails the run.
+- The stamp is written only after both checks pass, so a run that fails at either is followed
+  by one that tries again.
+
+The image variable `compose_stack_app_image` is used by the default template only. The
+stamp covers the rendered compose file, every configuration file's name, mode and content,
+and the secret files' names and content.
 
 `compose_stack_services` is the list of services to recreate when a file changes; empty
 means every service in the project. It exists so that a stack with a database next to
@@ -46,13 +79,17 @@ protect).
 - ansible-core as pinned in `ansible/requirements.txt`, with `min_ansible_version` in
   `meta/main.yml` equal to it.
 - The collection `community.docker`, from the `ansible` package pinned in
-  `ansible/requirements.txt`, on the machine that runs Ansible.
+  `ansible/requirements.txt`, on the machine that runs Ansible. The pinned release is
+  5.4.0. In a virtual environment it sits under
+  `site-packages/ansible_collections/community/docker/`; `ansible/README.md`, under "Why
+  the collections come with the `ansible` package", says why it is there.
 - On the target: Debian 13 (the release the test runs on), Python 3, the Docker CLI and
   the Compose plugin at the version `community.docker.docker_compose_v2` needs. The
   module reads it with `docker compose version --format json` and refuses an older one
   before it does anything else, with the message "need version 2.18.0 or later". The
   number is `MINIMUM_COMPOSE_VERSION` in `plugins/module_utils/_compose_v2.py` of the
-  pinned collection; read it there after a bump of the collection. The role makes no
+  pinned collection (in the virtual environment, as above); read it there after a bump of
+  the collection. The role makes no
   second reading of the version: that would be a `command` whose output is parsed
   (ANS-9) on the same input the module already checks.
 - The user and group named in `compose_stack_owner` and `compose_stack_group` exist
@@ -104,7 +141,7 @@ brought up from the same play, by a task that reads the stamp:
 - name: Work out the stamp of the content this run delivers
   ansible.builtin.set_fact:
     compose_stack_stamp: >-
-      {{ {'compose': compose_stack_compose_text, 'config': compose_stack_config_text, 'secrets': compose_stack_secret_files}
+      {{ {'compose': compose_stack_compose_text, 'config': compose_stack_config_files, 'secrets': compose_stack_secret_files}
       | ansible.builtin.to_json(sort_keys=True) | ansible.builtin.hash('sha256') }}
   no_log: true
 
@@ -293,7 +330,9 @@ What it cannot show: that real Compose accepts those arguments (`--file`,
 does on an engine, in particular when images are not yet pulled and without `--wait`
 (**unverified**), what real `up` reports as changed, or the real `ps` field set (the
 stand-in sends a subset; the role reads only `Service`, `State` and `Health`). The
-first live consumer's gated run is the real proof (ANS-17).
+gated run of a live role that brings its stack up is the real proof (ANS-17). The one
+live consumer so far, `roles/monitoring_stack`, delivers files only, so this path has no
+live run yet.
 
 ## How to run its test
 
@@ -304,9 +343,14 @@ From the repository root, with Docker running locally and Python 3.12 or later.
 python3 -m venv .venv
 # Install the lock with the one recipe: ansible/README.md, "Install, and install with no network".
 .venv/bin/python ansible/harness/run_harness.py ansible/patterns/compose_stack
+.venv/bin/python ansible/harness/run_harness.py ansible/patterns/compose_stack --scenario widened
 ```
 
-The harness lints the role and runs the scenario in `molecule/default/` on one
+The first scenario is the one-application recipe. `molecule/widened/` is the caller's
+contract: its own template, a configuration file in a directory of its own, a named compose
+file, no secret, and the endpoint check. It refuses a configuration file name that climbs out
+of the project directory, and an endpoint that does not answer; each refusal is asserted by
+its own rescue. The harness lints the role and runs the scenario in `molecule/default/` on one
 container, and exits non-zero if any step fails. It removes its container when it
 finishes. There is no systemd in this scenario, so it takes none of the cgroup settings
 `files_and_units` needs (the reason for each platform key is in `molecule.yml`).
@@ -432,7 +476,8 @@ the limits). `state: absent` with `remove_volumes` is not an input (see the limi
   service names also recreates the named services' dependencies (the role's text says
   only the named services are recreated, which is read from documentation and not
   shown, so a service that another depends on may be recreated too); and whether
-  named volumes survive a recreate. The first gated run is the proof (ANS-17).
+  named volumes survive a recreate. A gated run of a role that recreates a stack is the
+  proof (ANS-17).
 - **The scope of `compose_stack_services` is a name check by Compose, not by the role.**
   A name that is not a service in the compose file is refused by Compose when it runs
   `up`, which the stand-in does not do. Tested: that the input reaches the module.
@@ -497,10 +542,11 @@ the limits). `state: absent` with `remove_volumes` is not an input (see the limi
   and fails a minute later is a later run's failure.
 - **The check-mode skip on a fresh host** is stated in (c); the harness does not catch
   a silent skip, and this section is the review of it.
-- CI runs this scenario: the step "Run the harness over every role and pattern" in the
-  Ansible workflow (`.github/workflows/ansible.yml`) expands `ansible/roles/*/` and
-  `ansible/patterns/*/`, on a runner image the workflow pins. It runs the same harness
-  as the local run above, on the runner's own Docker daemon.
+- CI runs this scenario: the shard job step "Run the harness over this role or pattern,
+  for this scenario" in the Ansible workflow (`.github/workflows/ansible.yml`) runs once
+  per shard. `ansible/harness/list_shards.py` lists the shards, every role, pattern and
+  `molecule/` scenario, on a runner image the workflow pins. It runs the same harness as
+  the local run above, on the runner's own Docker daemon.
 - The image is a third-party systemd-capable Debian 13 base used here for its Python
   and Ansible-ready layout. It is trusted by digest, as the `files_and_units` README
   records; this scenario uses the same pin and none of its systemd settings.
@@ -511,8 +557,12 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after 
 approval of its protected environment. A plan job shows each host's diff in check
 mode first; after the approval the host pulls that exact commit of `main` and applies
 it, and a second run must report zero changes. Nothing is applied from a laptop. This
-pattern is not applied to any host: it exists to be copied, and the trigger and the
-reusable workflow are separate work.
+pattern is not applied to any host itself: it exists to be copied. Two roles on `main`
+use its recipe, and the gated workflow delivers both. `roles/monitoring_stack`, in
+`ansible/playbooks/edge1.yml`, uses the file-delivery half and has no `docker compose`
+task. `roles/status_page`, in `ansible/playbooks/ops1.yml`, is a standalone full copy of
+the recipe, not a consumer of these files. The trigger and the reusable workflow are
+separate work.
 
 ## How a service role copies it
 
@@ -536,8 +586,9 @@ reusable workflow are separate work.
    value in `molecule.yml`. Set `compose_stack_services` (under the new prefix) to the
    stateless services if the stack holds a database.
 5. List the service's secret files in `compose_stack_secret_files` and have the compose
-   file name them. Take the real values from wherever the secrets pattern says
-   (ANS-16 leaves that to it); the scenario keeps a throwaway built from the run id.
+   file name them. Take the real values from the secrets pattern,
+   `ansible/patterns/secrets_and_no_log` (ANS-16 leaves that to it); the scenario keeps a
+   throwaway built from the run id.
 6. Keep the stand-in and its calls as they are. If the service's compose file uses a
    feature that makes the module call something new, the stand-in answers "call not
    expected" and the verify play's list of allowed calls says which. Add the call there

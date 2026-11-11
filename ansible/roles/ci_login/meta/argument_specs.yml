@@ -1,0 +1,41 @@
+---
+argument_specs:
+  main:
+    short_description: Keep the pipeline account, its sudoers file and its two forced-command key lines
+    description: >-
+      Makes sure the account the CI pipeline logs in as exists with a locked password and a real
+      shell, installs its sudoers file (two commands, nothing else), and, only when
+      ci_login_manage_keys is true, makes its authorised keys exactly the two declared lines. The
+      key lines carry no source address limit.
+    author: branchLeft
+    options:
+      ci_login_manage_keys:
+        type: bool
+        default: false
+        description: >-
+          When false the role leaves the account's authorised keys alone, whatever ci_login_keys
+          holds. When true the role makes them exactly the two entries of ci_login_keys.
+      ci_login_keys:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The two public keys the pipeline logs in with, one for each mode, and no others. Read only
+          when ci_login_manage_keys is true, and then it must hold exactly one apply entry and one
+          check entry: an empty list is refused and never read as remove-all. Public keys, but
+          treated as sensitive: no task prints them.
+        options:
+          key:
+            type: str
+            required: true
+            description: >-
+              One public key on one line, as ssh-keygen writes it, with no options in front. The role
+              refuses a key of an unknown type or a body length that type cannot have, and never
+              prints it.
+          mode:
+            type: str
+            required: true
+            choices: [apply, check]
+            description: >-
+              Which of the two commands this key may run: the pull trigger in apply mode or in check
+              mode. The command and the restrictions are fixed by the role, not set here.

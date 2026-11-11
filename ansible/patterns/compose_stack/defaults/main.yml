@@ -3,6 +3,27 @@ compose_stack_project_dir: /opt/compose_stack_example
 compose_stack_project_name: compose_stack_example
 compose_stack_owner: root
 compose_stack_group: root
+# Mode of the project directory and of any directory a configuration file needs.
+compose_stack_project_mode: '0750'
+# The template the compose file is rendered from, in the role's templates/, and the
+# name the compose file takes in the project directory.
+compose_stack_compose_template: compose.yaml.j2
+compose_stack_compose_file: compose.yaml
+# The one-application recipe's image and greeting. A stack that names its own
+# images in its own template does not need compose_stack_app_image.
+compose_stack_app_image: ''
 compose_stack_app_greeting: EXAMPLE_GREETING
-compose_stack_wait_timeout: 120
+# Configuration files, each a name relative to the project directory (at most one
+# directory deep), its content and its mode. The default is the one file the
+# one-application recipe always wrote.
+compose_stack_config_files:
+  - name: app.conf
+    content: "{{ lookup('ansible.builtin.template', 'app.conf.j2') }}"
+    mode: '0640'
+compose_stack_secret_files: []
 compose_stack_services: []
+compose_stack_wait_timeout: 120
+# Optional host-side check of an endpoint. Empty means no such check; the compose
+# health check always runs.
+compose_stack_http_check_url: ''
+compose_stack_http_check_delay: 2

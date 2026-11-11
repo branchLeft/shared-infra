@@ -15,6 +15,18 @@ each dependent creating its own copy of shared infrastructure.
 
 - `Host`, `HostArgs`, `HostRole` — the component and its arguments.
 - `EDGE_RULES`, `INTERNAL_RULES` — per-role firewall rule sets.
+- `HostArgs.sshSourceIp`, `sshRestrictedRules`, `edgeRulesSshFrom`,
+  `assertSshSourceAddress`, `sshFromOneAddressViolations` — the optional
+  narrowing of a public host's SSH rule to one public IPv4 address (a /32), and
+  the function that states what such a rule set must look like. Absent, a host
+  gets its role's rule set byte for byte; present, only the SSH source changes,
+  so the input can narrow SSH and cannot widen it or add a port. A CIDR, an IPv6
+  address, a hostname, or a private, loopback, link-local, shared or reserved
+  address is refused, before anything is created when the value is a plain
+  string and when an output resolves otherwise. It is refused on a host with no
+  public networking.
+- `HostArgs.adopt`, `AdoptArgs`, `assertAdoption` — adopt a server made by hand
+  instead of creating one ("Adopting a server made by hand" below).
 - `renderCloudInit`, `CloudInitArgs`, `assertDeployPublicKey` — the first-boot
   user-data and the validation that protects it.
 - `Enrolment`, `PullBootstrap`, `PullBootstrapFile`, `assertEnrolment`,
@@ -23,14 +35,18 @@ each dependent creating its own copy of shared infrastructure.
   enrolment of an edge host into the gated pull, and its validation
   ("Enrolment" below).
 - `NETWORK_CIDR`, `SUBNET_CIDR`, `HOST_IPS`, `APP_HOST_IPS`,
-  `ESTATE_LOCATION`, `EuCentralLocation`, `EstateLocation` — the shared
-  address plan every host and its peers are named from.
+  `TENANTS_HOST_IPS`, `ESTATE_LOCATION`, `EuCentralLocation`,
+  `EstateLocation` — the shared address plan every host and its peers are named
+  from. The tenants project reuses the estate's range (a network does not span
+  projects), so `ADDRESS_REGISTER` lists every private address of both projects,
+  built from those constants, and `duplicateAddresses` finds an address held
+  twice; `addressRegister.test.ts` refuses one.
 
 ## `Host`
 
-`Host` creates a machine outright, rather than importing a hand-provisioned
-one and reconciling around it — a different problem from adopting an
-existing server, with a different set of `ignoreChanges`. `sshKeys` and
+`Host` creates a machine outright. Adopting a hand-made one is the opt-in
+`adopt` argument ("Adopting a server made by hand" below); without it nothing
+here imports or reconciles around an existing server. `sshKeys` and
 `image` are ignored on the underlying `hcloud.Server` because both are
 create-time-only at the provider, regardless of how the server came to
 exist.
@@ -77,6 +93,53 @@ component, which turns every throwaway host into manual console cleanup; and
 a lab host labelled `env: production` corrupts cost attribution and any
 label-selector rule that reads it. Both default to the production values, so
 a lab stack has to say so — which is the right way round.
+
+## Adopting a server made by hand
+
+`adopt: { serverId, ipv4Id?, ipv6Id?, stage? }` makes `Host` import a server (and,
+on a public host, its two primary IPs) that already exists, by id, instead of
+creating them. Ids are plain strings, because Pulumi's `import` option takes a
+literal, never an output. The input is checked before any resource exists: a
+non-numeric id, a public host without both address ids, a private-only host given
+one, or an unknown stage throws.
+
+- **`userData`, `sshKeys`, `image` and `firewallIds` are ignored.** The first three
+  are the fields the provider treats as replacing, and a console-made server
+  differs on all of them. Cloud-init does not run on an adopted host, so whatever
+  the document would have done is the owner's hand bootstrap.
+- **`publicNets` is ignored, at both stages, on public and private-only hosts.**
+  The provider's read never sets a server's public interface, so an adopted
+  server has none in state, and the first apply sees the declared `publicNets` as
+  changed. The provider then powers the server off, unassigns the primary IP on
+  it and, because the old set held no address id, deletes that primary IP before
+  it tries to assign the id it just deleted. The addresses are held by the
+  imported `PrimaryIp` resources instead. A created host does not ignore it.
+- **Two stages.** Pulumi refuses an import whose inputs differ from the live
+  resource, and a console-made server differs from the component in what the
+  component itself sets. `stage: 'import'` (the default) leaves protection, labels
+  and the primary IPs' name, auto-delete, protection and labels alone; a
+  private-only host also leaves its `networks` alone, because the owner attaches
+  the network and removes a leftover public address by hand.
+  `stage: 'converge'` declares them all except `publicNets`, which stays ignored,
+  and the update is in place. Stay on `converge` afterwards.
+- **The firewall is attached, not declared on the server.** `firewallIds` is
+  create-time intent at the provider, so an adopted server gets a
+  `FirewallAttachment`, which adds to the firewalls already on it and removes none.
+  The owner's own firewall stays until this one is attached and is detached by
+  hand after, so the host is never unfiltered. A private-only host gets no
+  attachment at any stage: a Hetzner Cloud Firewall filters only the public
+  interface, the host has none, and the provider refuses the attachment ("no public
+  network interfaces found, firewall cannot be attached to server"). The host's own
+  Firewall is still declared, and the owner's holding firewall stays on it as an
+  inert second line.
+- **Not covered:** a hand-attached network on a public host (the component attaches
+  it; a hand attachment makes that fail), and a network that exists in the project
+  but not in the stack's state.
+
+The procedure for the tenants project's three servers is
+`hetzner/tenants/RUNBOOK-adopt-console-servers.md`. `host.test.ts` ("adopting a
+server made by hand") reads the `ignoreChanges` list and the import id off the
+request the SDK sends the engine, since the mocks do not pass them on.
 
 ## Cloud-init
 
@@ -222,16 +285,33 @@ than a caret range: the provider version is part of every resource's URN, so
 a consumer resolving a different version than this package's own resources
 use would put one topology behind two provider instances. Install your own
 `@pulumi/hcloud` at the exact version this package's `peerDependencies`
-names; npm refuses the install otherwise rather than silently nesting a
-second copy.
+names, so the install resolves one copy rather than nesting a second.
 
 ## Local development
 
 ```bash
-nvm use && npm ci
-npm run typecheck
-npm test
+nvm use && pnpm install --frozen-lockfile
+pnpm run typecheck
+pnpm run test
 ```
+
+## Where the estate is placed
+
+`ESTATE_LOCATION` in `addressPlan.ts` is `nbg1`, the one location every host is created in. It is a
+shared constant rather than a per-stack setting because the estate is built by more than one stack
+in more than one repository, and `location` is create-time-only on `hcloud.Server`. A per-stack
+value lets a second apply land somewhere the first did not, with a clean preview, and the app and
+database hosts are the latency-sensitive pair, so a split between them is the outcome to prevent.
+
+It is weaker than one apply in two ways. Nothing stops a stack passing another value to `Host`. And
+a stack that has already applied does not follow a later edit to the constant: its hosts stay where
+they were created, so changing it after a host exists describes an estate that is already split.
+Read `estateLocation` from the applied stack's outputs to learn where a host is.
+
+`hel1` is the substitute if `cx23` is out of stock at apply time. Reach and cost do not change,
+because a subnet spans the whole `eu-central` zone, so the mail hop stays intra-network either way.
+What is given up is that the hop's latency becomes unmeasured, which is what the placement rule
+exists to avoid.
 
 ## Notes kept from the source
 

@@ -1,0 +1,46 @@
+---
+# Applies the role once and keeps how it ended in mx1_stack_run, so a case can assert on a
+# failure as well as on a success. The texts the role delivers are variables (vars/main.yml), and
+# a role parameter outranks them, so a case puts a different repository text through the role for
+# this one run, without touching the repository, by naming one of:
+#   run_caddyfile       the Caddyfile
+#   run_shim_compose    the mailgun-shim's compose file
+#   run_stalwart_compose  Stalwart's compose file
+#   run_dropin          the unbound drop-in
+# A text not named is the repository's own, read from the files the role links to.
+#   mx1_stack_run.failed   whether the role stopped
+#   mx1_stack_run.task     the name of the task that stopped it
+#   mx1_stack_run.text     that task's result as JSON (no secret is in a message the role fails with)
+- name: Apply the role and keep how it ended
+  vars:
+    mx1_stack_run_files: '{{ playbook_dir }}/../../files'
+    mx1_stack_run_caddyfile: "{{ run_caddyfile | default(lookup('ansible.builtin.file', mx1_stack_run_files ~ '/shim.Caddyfile', rstrip=false)) }}"
+    mx1_stack_run_shim_compose: >-
+      {{ run_shim_compose | default(lookup('ansible.builtin.file', mx1_stack_run_files ~ '/shim-compose.yml', rstrip=false)) }}
+    mx1_stack_run_stalwart_compose: >-
+      {{ run_stalwart_compose | default(lookup('ansible.builtin.file', mx1_stack_run_files ~ '/docker-compose.yml', rstrip=false)) }}
+    mx1_stack_run_dropin: >-
+      {{ run_dropin | default(lookup('ansible.builtin.file', mx1_stack_run_files ~ '/10-branchleft-local-recursive.conf', rstrip=false)) }}
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.mx1_stack
+      vars:
+        mx1_stack_shim_caddyfile_text: '{{ mx1_stack_run_caddyfile }}'
+        mx1_stack_shim_compose_text: '{{ mx1_stack_run_shim_compose }}'
+        mx1_stack_stalwart_compose_text: '{{ mx1_stack_run_stalwart_compose }}'
+        mx1_stack_resolver_dropin_text: '{{ mx1_stack_run_dropin }}'
+
+    - name: Note that the role finished
+      ansible.builtin.set_fact:
+        mx1_stack_run:
+          failed: false
+          task: ''
+          text: ''
+  rescue:
+    - name: Note where the role stopped
+      ansible.builtin.set_fact:
+        mx1_stack_run:
+          failed: true
+          task: '{{ ansible_failed_task.name }}'
+          text: '{{ ansible_failed_result | ansible.builtin.to_json }}'

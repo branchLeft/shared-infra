@@ -1,0 +1,80 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  # The four inputs besides the digest and the URL are the same in every apply here. Play
+  # variables outrank a role's defaults, which is where the role keeps its five inputs.
+  vars:
+    ring_controller_host_ledger_url: '{{ scenario_ledger_url }}'
+    ring_controller_host_ledger_push_remote: '{{ scenario_push_remote }}'
+    ring_controller_host_push_known_hosts: '{{ scenario_known_hosts_line }}'
+  tasks:
+    - name: Look at the two bundles built in prepare
+      ansible.builtin.stat:
+        path: '{{ scenario_fixture_dir }}/bundle-{{ item }}.tar.gz'
+        checksum_algorithm: sha256
+      loop:
+        - good
+        - noexec
+      register: ring_controller_host_fixture_stats
+
+    - name: Hold each bundle's digest
+      ansible.builtin.set_fact:
+        ring_controller_host_good_digest: '{{ ring_controller_host_fixture_stats.results[0].stat.checksum }}'
+        ring_controller_host_noexec_digest: '{{ ring_controller_host_fixture_stats.results[1].stat.checksum }}'
+
+    - name: Apply the role with the good bundle's digest
+      ansible.builtin.include_role:
+        name: branchleft.ring_controller_host
+      vars:
+        ring_controller_host_bundle_sha256: '{{ ring_controller_host_good_digest }}'
+        ring_controller_host_bundle_url: '{{ scenario_good_url }}'
+        ring_controller_host_bundle_url_pattern: '{{ scenario_url_pattern }}'
+
+    # The control case for the digest pin. A well-formed digest the download does not have must
+    # stop the role at the download, before anything is unpacked and before the link moves.
+    # The assertion names the checksum, so a failure of any other kind does not pass for this
+    # one. Check mode skips it: get_url does not compare a checksum there.
+    - name: Prove a wrong digest is refused
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with a digest the bundle does not have
+          ansible.builtin.include_role:
+            name: branchleft.ring_controller_host
+          vars:
+            ring_controller_host_bundle_sha256: '{{ scenario_wrong_digest }}'
+            ring_controller_host_bundle_url: '{{ scenario_good_url }}'
+            ring_controller_host_bundle_url_pattern: '{{ scenario_url_pattern }}'
+        - name: Fail if the wrong digest was accepted
+          ansible.builtin.fail:
+            msg: The role accepted a bundle that does not have the pinned digest.
+      rescue:
+        - name: Assert the failure was the checksum
+          ansible.builtin.assert:
+            that:
+              - "'did not match' in (ansible_failed_result | string | lower)"
+            quiet: true
+            fail_msg: The role failed on the wrong digest for a reason other than the checksum.
+
+    # The control case for the program check. A bundle whose bin/ring-controller is not
+    # executable has the right digest and unpacks, and the role must still refuse to link it.
+    - name: Prove a bundle without an executable program is refused
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with the bundle whose program is not executable
+          ansible.builtin.include_role:
+            name: branchleft.ring_controller_host
+          vars:
+            ring_controller_host_bundle_sha256: '{{ ring_controller_host_noexec_digest }}'
+            ring_controller_host_bundle_url: '{{ scenario_noexec_url }}'
+            ring_controller_host_bundle_url_pattern: '{{ scenario_url_pattern }}'
+        - name: Fail if the bundle without an executable was accepted
+          ansible.builtin.fail:
+            msg: The role linked a bundle whose program is not executable.
+      rescue:
+        - name: Assert the failure was the program check
+          ansible.builtin.assert:
+            that:
+              - "'root-owned executable' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed on the bundle without an executable for a reason other than the program check.

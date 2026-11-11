@@ -1,0 +1,15 @@
+---
+# The role as a pulled host's playbook applies it: after the pull roles, with the
+# host named by enrolled_host and no other input. Facts are not gathered, as in the
+# pulled playbooks. The refusal cases are in verify.yml, because they change the
+# file and this play must report zero changes on its second run (the idempotence
+# step).
+- name: Converge
+  hosts: all
+  gather_facts: false
+  vars:
+    enrolled_host: db1
+  tasks:
+    - name: Load the host's inputs from its file
+      ansible.builtin.include_role:
+        name: branchleft.host_inputs

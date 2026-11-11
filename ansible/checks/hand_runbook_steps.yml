@@ -1,0 +1,45 @@
+# Every RUNBOOK*.md and the number of its fenced shell blocks that reach a host and change it.
+# More blocks than listed fails test_no_new_hand_runbook_steps.py, and so do fewer: lower the
+# count when a step moves into a role. A runbook with no such block needs no entry.
+# Reasons: stays-as-code, or pending-role naming the role that will replace the steps. A role name
+# must be a directory under ansible/roles/ (RealTree checks it), so a role is named once it exists.
+hetzner/RUNBOOK-edge.md:
+  steps: 5
+  reason: pending-role
+  role: edge_stack
+hetzner/RUNBOOK-monitoring.md:
+  steps: 12
+  reason: pending-role
+  role: monitoring_stack
+hetzner/RUNBOOK-nextcloud.md:
+  steps: 4
+  reason: stays-as-code
+hetzner/RUNBOOK-provision-host.md:
+  steps: 10
+  reason: pending-role
+  role: host_baseline
+# Two blocks: the first-boot bootstrap of the servers the owner made by hand (edge-t, db-t1), the
+# route the owner chose on 7 Nov ("Buy 3 now, I adopt", ws#1634). The count may only go down.
+hetzner/tenants/RUNBOOK-adopt-console-servers.md:
+  steps: 2
+  reason: pending-role
+  role: host_baseline
+mail/RUNBOOK-mx1-disaster-recovery.md:
+  steps: 1
+  reason: pending-role
+  role: mx1_stack
+mail/RUNBOOK-mx1-prometheus-metrics.md:
+  steps: 6
+  reason: pending-role
+  role: mx1_stack
+# Five, not three: the two steps that wire the DNSBL check to Healthchecks.io are owner-run
+# provisioning on mx1 (writing its root-only credential file, then a fire drill that runs and
+# removes a file there). They are hand-only until mx1_stack takes the runbook.
+mail/RUNBOOK-mx1-provision.md:
+  steps: 5
+  reason: pending-role
+  role: mx1_stack
+mail/RUNBOOK-mx1-reboot.md:
+  steps: 2
+  reason: pending-role
+  role: mx1_stack

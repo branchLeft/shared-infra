@@ -1,0 +1,29 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Read the fixtures prepare.yml made
+      ansible.builtin.slurp:
+        src: /var/tmp/ptt/fixtures.json
+      register: pull_trigger_converge_fixtures
+
+    # Molecule links the role under its namespace and name. enrolled_host is the play variable
+    # an enrolled host's playbook sets; the role takes a host named in its constant list as one
+    # that takes bundles, and writes the `source` key for it. The one signer is the stand-in for
+    # GitHub's own signing key, made for this run. The floor seed is the commit the bootstrap
+    # brings the host up at; passed here as the bootstrap passes it, with -e.
+    - name: Apply the role as the bootstrap of a host that takes bundles
+      ansible.builtin.include_role:
+        name: branchleft.pull_trigger
+      vars:
+        converge_values: '{{ pull_trigger_converge_fixtures.content | ansible.builtin.b64decode | ansible.builtin.from_json }}'
+        enrolled_host: demo1
+        pull_trigger_remote_url: https://example.invalid/EXAMPLE_ORG/EXAMPLE_REPO
+        pull_trigger_signers:
+          - format: openpgp
+            key: '{{ converge_values.pgp_key }}'
+        pull_trigger_playbooks:
+          - ansible/playbooks/host.yml
+        pull_trigger_playbook: ansible/playbooks/host.yml
+        pull_trigger_floor_seed: '{{ converge_values.seed }}'

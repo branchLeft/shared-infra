@@ -34,7 +34,12 @@ services:
       # issuing under an anonymous account nobody can be told about.
       ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in /etc/branchleft/edge.env}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The directory, not the file. A deploy replaces a file by writing a new one
+      # and renaming it into place; a container mounted to the file keeps the old
+      # inode and goes on reading the old bytes, so a validate or reload inside it
+      # checks configuration that is no longer on the host. A directory mount sees
+      # whatever the name points at.
+      - ./caddy:/etc/caddy:ro
       # ACME account keys and every issued certificate. Losing this volume means
       # re-issuing every certificate against Let's Encrypt's rate limits.
       - caddy-data:/data

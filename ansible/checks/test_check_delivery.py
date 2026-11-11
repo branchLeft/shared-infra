@@ -220,12 +220,23 @@ class CallerTests(unittest.TestCase):
                 job_of(document)["uses"] = workflow + ref
 
             self.assert_names(self.weakened(set_uses), "exact tag")
-        for ref in ("@v1.0.12", "@v2.3.4"):
+        for ref in ("@v1.0.23", "@v2.3.4"):
 
             def set_good(document: dict[str, object], ref: str = ref) -> None:
                 job_of(document)["uses"] = workflow + ref
 
             self.assertEqual([], self.weakened(set_good))
+
+    def test_a_pin_below_the_push_release_is_named(self) -> None:
+        # The call passes the push list and playbook, and a release that does not declare them
+        # fails it.
+        workflow = "branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml"
+        for ref in ("@v1.0.15", "@v1.0.18", "@v1.0.19", "@v1.0.22", "@v1.0.0", "@v0.9.99"):
+
+            def set_old(document: dict[str, object], ref: str = ref) -> None:
+                job_of(document)["uses"] = workflow + ref
+
+            self.assert_names(self.weakened(set_old), "the first release that declares")
 
     def test_another_workflow_or_repository_is_named(self) -> None:
         for uses in (
@@ -245,11 +256,150 @@ class CallerTests(unittest.TestCase):
 
         self.assert_names(self.weakened(inherit), "secrets: inherit")
 
-    def test_an_explicit_apply_key_is_named(self) -> None:
-        def pass_key(document: dict[str, object]) -> None:
-            section(job_of(document), "secrets")["ssh_apply_key"] = "${{ secrets.APPLY }}"
+    def test_a_caller_without_the_apply_key_is_named(self) -> None:
+        def drop_key(document: dict[str, object]) -> None:
+            del section(job_of(document), "secrets")["ssh_apply_key"]
 
-        self.assert_names(self.weakened(pass_key), "the apply key is a secret of the environment")
+        self.assert_names(self.weakened(drop_key), "secrets.ssh_apply_key must be")
+
+    def test_a_wrong_apply_key_expression_is_named(self) -> None:
+        for value in ("${{ secrets.APPLY }}", "", "${{ secrets.ANSIBLE_CHECK_KEY }}"):
+
+            def set_key(document: dict[str, object], value: str = value) -> None:
+                section(job_of(document), "secrets")["ssh_apply_key"] = value
+
+            self.assert_names(self.weakened(set_key), "secrets.ssh_apply_key must be")
+
+    def test_a_caller_without_a_host_key_map_is_named(self) -> None:
+        for name in ("ssh_host_check_keys", "ssh_host_apply_keys"):
+
+            def drop_secret(document: dict[str, object], name: str = name) -> None:
+                del section(job_of(document), "secrets")[name]
+
+            self.assert_names(self.weakened(drop_secret), f"secrets.{name} must be")
+
+    def test_a_wrong_host_key_map_expression_is_named(self) -> None:
+        # The apply map comes from the environment's own secret, never the shared apply key or
+        # the check map, and a literal is no secret.
+        wrong = (
+            "",
+            "literal-value",
+            "${{ secrets.SSH_APPLY_KEY }}",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+        )
+        for name in ("ssh_host_check_keys", "ssh_host_apply_keys"):
+            for value in wrong:
+
+                def set_secret(
+                    document: dict[str, object], name: str = name, value: str = value
+                ) -> None:
+                    section(job_of(document), "secrets")[name] = value
+
+                self.assert_names(self.weakened(set_secret), f"secrets.{name} must be")
+
+    def test_a_caller_without_a_jump_secret_is_named(self) -> None:
+        for name in ("ssh_jump_host", "ssh_jump_key"):
+
+            def drop_secret(document: dict[str, object], name: str = name) -> None:
+                del section(job_of(document), "secrets")[name]
+
+            self.assert_names(self.weakened(drop_secret), f"secrets.{name} must be")
+
+    def test_a_wrong_jump_secret_expression_is_named(self) -> None:
+        # The jump key must never be the check key or the apply key, and a literal is no secret.
+        wrong = (
+            "",
+            "literal-value",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+            "${{ secrets.SSH_APPLY_KEY }}",
+            "${{ secrets.ANSIBLE_HOSTS }}",
+        )
+        for name in ("ssh_jump_host", "ssh_jump_key"):
+            for value in wrong:
+
+                def set_secret(
+                    document: dict[str, object], name: str = name, value: str = value
+                ) -> None:
+                    section(job_of(document), "secrets")[name] = value
+
+                self.assert_names(self.weakened(set_secret), f"secrets.{name} must be")
+
+    def test_a_caller_without_a_second_jump_secret_is_named(self) -> None:
+        for name in ("ssh_jump2_host", "ssh_jump2_key", "ssh_jump2_hosts"):
+
+            def drop_secret(document: dict[str, object], name: str = name) -> None:
+                del section(job_of(document), "secrets")[name]
+
+            self.assert_names(self.weakened(drop_secret), f"secrets.{name} must be")
+
+    def test_a_wrong_second_jump_secret_expression_is_named(self) -> None:
+        # The second hop's key is its own: never the first hop's, the check key or the apply key.
+        wrong = (
+            "",
+            "literal-value",
+            "${{ secrets.SSH_JUMP_KEY }}",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+            "${{ secrets.SSH_APPLY_KEY }}",
+            "${{ secrets.ANSIBLE_HOSTS }}",
+        )
+        for name in ("ssh_jump2_host", "ssh_jump2_key", "ssh_jump2_hosts"):
+            for value in wrong:
+
+                def set_secret(
+                    document: dict[str, object], name: str = name, value: str = value
+                ) -> None:
+                    section(job_of(document), "secrets")[name] = value
+
+                self.assert_names(self.weakened(set_secret), f"secrets.{name} must be")
+
+    def test_the_push_list_secret_and_playbook_are_fixed(self) -> None:
+        # The control: each line is weakened from the committed caller, which is green. The push
+        # list must be the ANSIBLE_PUSH_HOSTS secret, the playbook the one constant, and the
+        # pin a release that declares them (a call that passes a key the workflow does not
+        # declare fails on GitHub).
+        self.assertEqual([], self.weakened(lambda document: None))
+
+        def drop_secret(document: dict[str, object]) -> None:
+            del section(job_of(document), "secrets")["ssh_push_hosts"]
+
+        def drop_playbook(document: dict[str, object]) -> None:
+            del section(job_of(document), "with")[check_delivery.PUSH_PLAYBOOK_INPUT]
+
+        def pin_without_push_keys(document: dict[str, object]) -> None:
+            job_of(document)["uses"] = GOOD_TAG.replace("@v1.0.11", "@v1.0.18")
+
+        for change, mechanism in (
+            (drop_secret, "secrets.ssh_push_hosts must be"),
+            (drop_playbook, "with.push-playbook must be"),
+            (pin_without_push_keys, "the first release that declares"),
+        ):
+            with self.subTest(change=change.__name__):
+                self.assert_names(self.weakened(change), mechanism)
+        for value in (
+            "",
+            "literal-value",
+            "${{ secrets.ANSIBLE_HOSTS }}",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+            "${{ secrets.SSH_APPLY_KEY }}",
+        ):
+            with self.subTest(secret=value):
+
+                def set_secret(document: dict[str, object], value: str = value) -> None:
+                    section(job_of(document), "secrets")["ssh_push_hosts"] = value
+
+                self.assert_names(self.weakened(set_secret), "secrets.ssh_push_hosts must be")
+        for path in ("ansible/playbooks/edge1.yml", "../ansible/playbooks/demo1.yml", "", None):
+            with self.subTest(playbook=path):
+
+                def set_playbook(document: dict[str, object], path: object = path) -> None:
+                    section(job_of(document), "with")[check_delivery.PUSH_PLAYBOOK_INPUT] = path
+
+                self.assert_names(self.weakened(set_playbook), "with.push-playbook must be")
+
+    def test_the_push_playbook_is_a_playbook_of_this_repository(self) -> None:
+        playbook = ROOT / check_delivery.PUSH_PLAYBOOK
+        self.assertTrue(playbook.is_file(), check_delivery.PUSH_PLAYBOOK)
+        self.assertEqual((ROOT / "ansible" / "playbooks").resolve(), playbook.resolve().parent)
 
     def test_another_secret_or_a_swapped_secret_is_named(self) -> None:
         def add_secret(document: dict[str, object]) -> None:
@@ -384,9 +534,30 @@ class CallerTests(unittest.TestCase):
 
             self.assert_names(self.weakened(add_input), f"with has {key}")
 
-    def test_a_skip_that_is_not_the_proofs_answer_is_named(self) -> None:
-        # A static true skips the re-test of a merge that never went through the queue.
-        for value in (True, "true", "${{ true }}", "${{ needs.queue-proof.outputs.tested }}", None):
+    def test_the_delivery_retests_because_the_queue_does_not_run_the_container_shards(self) -> None:
+        # The merge queue's required check passes on the lint alone, as the shard job of ansible.yml
+        # is skipped there by its condition. A queue run therefore proves nothing about the
+        # containers, so the delivery must not take it as a reason to skip its own shards.
+        ansible, problem = load_yaml(WORKFLOWS / "ansible.yml")
+        self.assertIsNone(problem)
+        shard = mutable(mutable(mutable(ansible)["jobs"])["shard"])
+        self.assertIn("github.event_name != 'merge_group'", str(shard["if"]))
+        given = section(job_of(committed()), "with")
+        self.assertIs(False, given[check_delivery.SKIP_INPUT])
+
+    def test_a_skip_that_is_not_off_is_named(self) -> None:
+        # True skips the re-test of a merge that never went through the queue, and the proof's
+        # answer skips it for one the queue tested on the lint alone: neither is allowed.
+        for value in (
+            True,
+            "true",
+            "false",
+            0,
+            "${{ true }}",
+            "${{ needs.queue-proof.outputs.tested }}",
+            "${{ needs.queue-proof.outputs.tested == 'true' }}",
+            None,
+        ):
 
             def set_skip(document: dict[str, object], value: object = value) -> None:
                 section(job_of(document), "with")[check_delivery.SKIP_INPUT] = value
@@ -541,8 +712,16 @@ class CallerTests(unittest.TestCase):
         def rename(document: dict[str, object]) -> None:
             section(job_of(document), "with")["environment"] = "ansible"
 
+        def drop_role_test(document: dict[str, object]) -> None:
+            del section(job_of(document), "with")["role-test-command"]
+
+        def retarget_role_test(document: dict[str, object]) -> None:
+            section(job_of(document), "with")["role-test-command"] = "harness/other.py"
+
         self.assert_names(self.weakened(narrow), "with.role-directories must be")
         self.assert_names(self.weakened(repoint), "with.python-paths must be")
+        self.assert_names(self.weakened(drop_role_test), "with.role-test-command must be")
+        self.assert_names(self.weakened(retarget_role_test), "with.role-test-command must be")
         self.assert_names(self.weakened(rename), "with.environment must be")
 
     def test_a_second_job_or_a_new_top_level_key_is_named(self) -> None:
@@ -589,12 +768,12 @@ def environment(
     name: str = "ansible-hosts",
     reviewers: list[dict[str, object]] | None = None,
     prevent_self_review: bool = True,
-    can_admins_bypass: bool = False,
+    can_admins_bypass: bool = True,
     custom_branch_policies: bool = True,
 ) -> dict[str, object]:
     """Return an environment answer set up as the owner step says.
 
-    Prevent self-review is ticked, as the gated apply requires, and administrators may not bypass
+    Prevent self-review is ticked, as the gated apply requires, and administrators may bypass
     the rules.
     """
     rules: list[dict[str, object]] = [
@@ -622,7 +801,10 @@ MAIN_ONLY: dict[str, object] = {
     "branch_policies": [{"id": 1, "name": "main", "type": "branch"}],
 }
 NOT_FOUND: dict[str, object] = {"message": "Not Found", "status": "404"}
-WITH_KEY: dict[str, object] = {"total_count": 1, "secrets": [{"name": "SSH_APPLY_KEY"}]}
+WITH_KEY: dict[str, object] = {
+    "total_count": 2,
+    "secrets": [{"name": "SSH_APPLY_KEY"}, {"name": "SSH_HOST_APPLY_KEYS"}],
+}
 
 
 class ChosenEnvironmentTests(unittest.TestCase):
@@ -778,29 +960,27 @@ class EnvironmentTests(unittest.TestCase):
         findings = check_delivery.environment_findings("production", live, NOT_FOUND, None)
         self.assert_names(findings, "no custom branch policy")
         self.assert_names(findings, "no branch policy list")
-        self.assert_names(findings, "lets administrators bypass")
 
-    def test_administrators_who_may_bypass_are_not_ready(self) -> None:
-        # A new environment answers True, and the admin whose merge started the run could then
-        # release it with no reviewer, which defeats the bypass rule.
-        self.assert_names(
-            self.judge(environment(can_admins_bypass=True)), "lets administrators bypass"
-        )
+    def test_administrators_who_may_bypass_are_ready(self) -> None:
+        # The owner must never be blocked from an administrator bypass to take an apply.
+        self.assertEqual([], self.judge(environment(can_admins_bypass=True)))
 
     def test_a_missing_bypass_setting_is_not_ready(self) -> None:
         # A missing key fails closed: the probe must prove the ruled value, not its absence.
         described = environment()
         del described["can_admins_bypass"]
-        self.assert_names(self.judge(described), "lets administrators bypass")
+        self.assert_names(self.judge(described), "does not let administrators bypass")
 
     def test_a_bypass_setting_that_is_not_a_boolean_is_not_ready(self) -> None:
-        for value in (None, "false", 0):
+        for value in (None, "true", "false", 0, 1):
             described = environment()
             described["can_admins_bypass"] = value
-            self.assert_names(self.judge(described), "lets administrators bypass")
+            self.assert_names(self.judge(described), "does not let administrators bypass")
 
-    def test_administrators_who_may_not_bypass_are_ready(self) -> None:
-        self.assertEqual([], self.judge(environment(can_admins_bypass=False)))
+    def test_administrators_who_may_not_bypass_are_not_ready(self) -> None:
+        self.assert_names(
+            self.judge(environment(can_admins_bypass=False)), "does not let administrators bypass"
+        )
 
     def test_prevent_self_review_ticked_is_ready(self) -> None:
         # The gated apply keeps Prevent self-review on.
@@ -875,9 +1055,24 @@ class EnvironmentTests(unittest.TestCase):
         ):
             self.assert_names(self.judge(environment(), MAIN_ONLY, secrets), "holds no secret")
 
-    def test_the_apply_key_is_found_whatever_its_case(self) -> None:
-        for name in ("ssh_apply_key", "SSH_APPLY_KEY", "Ssh_Apply_Key"):
-            secrets = {"secrets": [{"name": name}]}
+    def test_a_missing_host_apply_keys_secret_is_reported(self) -> None:
+        # The apply key alone is not enough: the per-host map must be held by the environment too,
+        # so that no repository secret of that name is what the apply job reads.
+        for secrets in (
+            {"secrets": [{"name": "SSH_APPLY_KEY"}]},
+            {"secrets": [{"name": "SSH_APPLY_KEY"}, {"name": "ANSIBLE_HOST_CHECK_KEYS"}]},
+        ):
+            findings = self.judge(environment(), MAIN_ONLY, secrets)
+            self.assert_names(findings, "holds no secret ssh_host_apply_keys")
+            self.assertFalse(any("holds no secret ssh_apply_key" in f for f in findings), findings)
+
+    def test_the_apply_keys_are_found_whatever_their_case(self) -> None:
+        for apply_key, host_keys in (
+            ("ssh_apply_key", "ssh_host_apply_keys"),
+            ("SSH_APPLY_KEY", "SSH_HOST_APPLY_KEYS"),
+            ("Ssh_Apply_Key", "Ssh_Host_Apply_Keys"),
+        ):
+            secrets = {"secrets": [{"name": apply_key}, {"name": host_keys}]}
             self.assertEqual([], self.judge(environment(), MAIN_ONLY, secrets))
 
     def test_unlisted_secrets_are_not_judged(self) -> None:

@@ -1,0 +1,379 @@
+# Each file that names a pending-role script in hand_installers.yml, with the sorted list
+# of those scripts it names. Frozen by test_no_new_script_dependents.py; it only shrinks.
+# Edit it by hand in the change that moves a caller; nothing regenerates it.
+.github/CODEOWNERS:
+  - hetzner/provision/30-install-deploy-tooling.sh
+ansible/checks/ci_select.py:
+  - mail/provision/65-install-local-resolver.sh
+ansible/checks/test_codeowners.py:
+  - hetzner/provision/30-install-deploy-tooling.sh
+ansible/checks/test_deploy_tooling_links.py:
+  - hetzner/provision/30-install-deploy-tooling.sh
+  - hetzner/provision/app-host-isolation.sh
+ansible/checks/test_egress_nat_single_gateway.py:
+  - hetzner/provision/branchleft_nat.sh
+ansible/checks/test_host_baseline_matches_scripts.py:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - hetzner/provision/20-install-docker.sh
+  - mail/provision/00-harden-ssh.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/20-install-docker.sh
+ansible/checks/test_mx1_stack_agree.py:
+  - mail/provision/65-install-local-resolver.sh
+  - mail/provision/70-schedule-dnsbl-check.sh
+ansible/checks/test_no_new_hand_installers.py:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+ansible/roles/deploy_tooling/README.md:
+  - hetzner/provision/30-install-deploy-tooling.sh
+  - hetzner/provision/app-host-isolation.sh
+ansible/roles/deploy_tooling/vars/main.yml:
+  - hetzner/provision/30-install-deploy-tooling.sh
+  - hetzner/provision/app-host-isolation.sh
+  - hetzner/provision/branchleft_docker_user_policy.sh
+ansible/roles/deploy_verifier/README.md:
+  - hetzner/provision/30-install-deploy-tooling.sh
+ansible/roles/egress_nat/README.md:
+  - hetzner/provision/05-configure-host-egress.sh
+  - hetzner/provision/branchleft_host_egress.sh
+  - hetzner/provision/branchleft_nat.sh
+  - hetzner/provision/nat-gateway.sh
+ansible/roles/egress_nat/molecule/default/verify.yml:
+  - hetzner/provision/branchleft_host_egress.sh
+ansible/roles/egress_nat/tasks/_reconciler.yml:
+  - hetzner/provision/05-configure-host-egress.sh
+  - hetzner/provision/nat-gateway.sh
+ansible/roles/egress_nat/tasks/main.yml:
+  - hetzner/provision/05-configure-host-egress.sh
+ansible/roles/egress_nat/tests/unit/test_egress_nat_role.py:
+  - hetzner/provision/branchleft_host_egress.sh
+ansible/roles/egress_nat/vars/main.yml:
+  - hetzner/provision/branchleft_host_egress.sh
+ansible/roles/mail_reconcilers/tests/unit/test_mail_reconcilers.py:
+  - hetzner/provision/run-all.sh
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/40-configure-stalwart.sh
+  - mail/provision/50-provision-mailboxes.sh
+  - mail/provision/60-provision-website-submission-credential.sh
+  - mail/provision/61-provision-blog-submission-credential.sh
+  - mail/provision/62-provision-shim-submission-credential.sh
+  - mail/provision/63-deploy-mailgun-shim.sh
+  - mail/provision/64-provision-alerting-submission-credential.sh
+  - mail/provision/65-install-local-resolver.sh
+  - mail/provision/66-provision-nextcloud-submission-credential.sh
+  - mail/provision/67-provision-collector-submission-credential.sh
+  - mail/provision/68-provision-zitadel-submission-credential.sh
+  - mail/provision/70-schedule-dnsbl-check.sh
+  - mail/provision/run-all.sh
+ansible/roles/mail_reconcilers/vars/main.yml:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - hetzner/provision/20-install-docker.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/00-harden-ssh.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/20-install-docker.sh
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/40-configure-stalwart.sh
+  - mail/provision/50-provision-mailboxes.sh
+  - mail/provision/60-provision-website-submission-credential.sh
+  - mail/provision/61-provision-blog-submission-credential.sh
+  - mail/provision/62-provision-shim-submission-credential.sh
+  - mail/provision/63-deploy-mailgun-shim.sh
+  - mail/provision/64-provision-alerting-submission-credential.sh
+  - mail/provision/65-install-local-resolver.sh
+  - mail/provision/66-provision-nextcloud-submission-credential.sh
+  - mail/provision/67-provision-collector-submission-credential.sh
+  - mail/provision/68-provision-zitadel-submission-credential.sh
+  - mail/provision/70-schedule-dnsbl-check.sh
+  - mail/provision/run-all.sh
+ansible/roles/mx1_stack/files/10-branchleft-local-recursive.conf:
+  - mail/provision/65-install-local-resolver.sh
+ansible/roles/mx1_stack/files/docker-compose.yml:
+  - mail/provision/30-deploy-stalwart.sh
+ansible/roles/mx1_stack/files/shim-compose.yml:
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/63-deploy-mailgun-shim.sh
+ansible/roles/mx1_stack/tasks/_dnsbl.yml:
+  - mail/provision/70-schedule-dnsbl-check.sh
+ansible/roles/mx1_stack/tasks/_resolver.yml:
+  - mail/provision/65-install-local-resolver.sh
+ansible/roles/mx1_stack/tasks/_shim.yml:
+  - mail/provision/63-deploy-mailgun-shim.sh
+ansible/roles/mx1_stack/tasks/_stalwart.yml:
+  - mail/provision/30-deploy-stalwart.sh
+ansible/roles/mx1_stack/vars/main.yml:
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/63-deploy-mailgun-shim.sh
+  - mail/provision/65-install-local-resolver.sh
+  - mail/provision/70-schedule-dnsbl-check.sh
+ansible/roles/node_exporter/files/node-exporter.service:
+  - hetzner/provision/branchleft_docker_user_policy.sh
+ansible/roles/tunnel_account/README.md:
+  - hetzner/provision/45-install-db-tunnel.sh
+ansible/roles/tunnel_account/files/branchleft-db-tunnel.service:
+  - hetzner/provision/45-install-db-tunnel.sh
+hetzner-host/README.md:
+  - hetzner/provision/05-configure-host-egress.sh
+hetzner-host/cloudInit.ts:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/05-configure-host-egress.sh
+  - mail/provision/00-harden-ssh.sh
+hetzner-host/firewalls.ts:
+  - hetzner/provision/00-harden-ssh.sh
+  - mail/provision/00-harden-ssh.sh
+hetzner-host/testdata/cloud-init-private-only.golden:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/05-configure-host-egress.sh
+  - mail/provision/00-harden-ssh.sh
+hetzner-host/testdata/cloud-init-public.golden:
+  - hetzner/provision/00-harden-ssh.sh
+  - mail/provision/00-harden-ssh.sh
+hetzner/README.md:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+hetzner/RUNBOOK-monitoring.md:
+  - hetzner/provision/app-host-isolation.sh
+  - hetzner/provision/branchleft_docker_user_policy.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/50-provision-mailboxes.sh
+  - mail/provision/61-provision-blog-submission-credential.sh
+  - mail/provision/64-provision-alerting-submission-credential.sh
+  - mail/provision/run-all.sh
+hetzner/RUNBOOK-nextcloud.md:
+  - hetzner/provision/app-host-isolation.sh
+hetzner/RUNBOOK-provision-host.md:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/05-configure-host-egress.sh
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - hetzner/provision/20-install-docker.sh
+  - hetzner/provision/30-install-deploy-tooling.sh
+  - hetzner/provision/app-host-isolation.sh
+  - hetzner/provision/branchleft_docker_user_policy.sh
+  - hetzner/provision/branchleft_nat.sh
+  - hetzner/provision/nat-gateway.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/00-harden-ssh.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/20-install-docker.sh
+  - mail/provision/run-all.sh
+hetzner/estate.md:
+  - hetzner/provision/app-host-isolation.sh
+  - hetzner/provision/branchleft_docker_user_policy.sh
+hetzner/provision/05-configure-host-egress.sh:
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - hetzner/provision/branchleft_host_egress.sh
+  - hetzner/provision/nat-gateway.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/run-all.sh
+hetzner/provision/20-install-docker.sh:
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+hetzner/provision/45-install-db-tunnel.md:
+  - hetzner/provision/45-install-db-tunnel.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+hetzner/provision/app-host-isolation.sh:
+  - hetzner/provision/branchleft_docker_user_policy.sh
+  - hetzner/provision/nat-gateway.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+hetzner/provision/branchleft-db-tunnel.service:
+  - hetzner/provision/45-install-db-tunnel.sh
+hetzner/provision/branchleft_deploy.md:
+  - hetzner/provision/30-install-deploy-tooling.sh
+hetzner/provision/branchleft_docker_user_policy.sh:
+  - hetzner/provision/20-install-docker.sh
+  - hetzner/provision/app-host-isolation.sh
+  - hetzner/provision/branchleft_host_egress.sh
+  - hetzner/provision/branchleft_nat.sh
+  - mail/provision/20-install-docker.sh
+hetzner/provision/branchleft_host_egress.sh:
+  - hetzner/provision/05-configure-host-egress.sh
+  - hetzner/provision/branchleft_nat.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+hetzner/provision/branchleft_nat.sh:
+  - hetzner/provision/20-install-docker.sh
+  - hetzner/provision/nat-gateway.sh
+  - mail/provision/20-install-docker.sh
+hetzner/provision/nat-gateway.sh:
+  - hetzner/provision/branchleft_nat.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+hetzner/provision/node-exporter.service:
+  - hetzner/provision/branchleft_docker_user_policy.sh
+hetzner/provision/run-all.sh:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/05-configure-host-egress.sh
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - hetzner/provision/20-install-docker.sh
+  - hetzner/provision/30-install-deploy-tooling.sh
+  - hetzner/provision/nat-gateway.sh
+  - mail/provision/00-harden-ssh.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/20-install-docker.sh
+hetzner/provision/test_00_harden_ssh.py:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/00-harden-ssh.sh
+  - mail/provision/run-all.sh
+hetzner/provision/test_20_install_docker.py:
+  - hetzner/provision/20-install-docker.sh
+  - mail/provision/20-install-docker.sh
+hetzner/provision/test_45_install_db_tunnel.py:
+  - hetzner/provision/45-install-db-tunnel.sh
+hetzner/provision/test_branchleft_docker_user_policy.py:
+  - hetzner/provision/app-host-isolation.sh
+  - hetzner/provision/branchleft_docker_user_policy.sh
+  - hetzner/provision/branchleft_nat.sh
+  - hetzner/provision/nat-gateway.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+hetzner/provision/test_branchleft_host_egress.py:
+  - hetzner/provision/05-configure-host-egress.sh
+  - hetzner/provision/branchleft_host_egress.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+hetzner/provision/test_branchleft_nat.py:
+  - hetzner/provision/branchleft_nat.sh
+  - hetzner/provision/nat-gateway.sh
+hetzner/provision/test_compose_unit_contract.md:
+  - hetzner/provision/30-install-deploy-tooling.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+hetzner/scripts/test-control-plane-port-policy.sh:
+  - hetzner/provision/branchleft_docker_user_policy.sh
+hetzner/scripts/test-spool-bridge-egress.sh:
+  - hetzner/provision/branchleft_docker_user_policy.sh
+hetzner/scripts/test_probe_edget_gateway.py:
+  - hetzner/provision/branchleft_nat.sh
+hetzner/tenants/RUNBOOK-edget-gateway-proof.md:
+  - hetzner/provision/branchleft_nat.sh
+mail/RUNBOOK-mx1-disaster-recovery.md:
+  - hetzner/provision/run-all.sh
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/50-provision-mailboxes.sh
+  - mail/provision/run-all.sh
+mail/RUNBOOK-mx1-prometheus-metrics.md:
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/40-configure-stalwart.sh
+mail/RUNBOOK-mx1-provision.md:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - hetzner/provision/20-install-docker.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/00-harden-ssh.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/20-install-docker.sh
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/40-configure-stalwart.sh
+  - mail/provision/50-provision-mailboxes.sh
+  - mail/provision/60-provision-website-submission-credential.sh
+  - mail/provision/61-provision-blog-submission-credential.sh
+  - mail/provision/62-provision-shim-submission-credential.sh
+  - mail/provision/63-deploy-mailgun-shim.sh
+  - mail/provision/64-provision-alerting-submission-credential.sh
+  - mail/provision/65-install-local-resolver.sh
+  - mail/provision/66-provision-nextcloud-submission-credential.sh
+  - mail/provision/67-provision-collector-submission-credential.sh
+  - mail/provision/68-provision-zitadel-submission-credential.sh
+  - mail/provision/70-schedule-dnsbl-check.sh
+  - mail/provision/run-all.sh
+mail/RUNBOOK-mx1-reboot.md:
+  - mail/provision/30-deploy-stalwart.sh
+mail/provision/30-deploy-stalwart.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+mail/provision/40-configure-stalwart.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+mail/provision/50-provision-mailboxes.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+mail/provision/60-provision-website-submission-credential.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+mail/provision/61-provision-blog-submission-credential.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/60-provision-website-submission-credential.sh
+  - mail/provision/run-all.sh
+mail/provision/62-provision-shim-submission-credential.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+mail/provision/63-deploy-mailgun-shim.sh:
+  - mail/provision/30-deploy-stalwart.sh
+mail/provision/64-provision-alerting-submission-credential.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/60-provision-website-submission-credential.sh
+  - mail/provision/run-all.sh
+mail/provision/65-install-local-resolver.md:
+  - mail/provision/65-install-local-resolver.sh
+mail/provision/66-provision-nextcloud-submission-credential.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/60-provision-website-submission-credential.sh
+  - mail/provision/run-all.sh
+mail/provision/67-provision-collector-submission-credential.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+mail/provision/68-provision-zitadel-submission-credential.sh:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+mail/provision/check_dnsbl_blocklist.md:
+  - mail/provision/65-install-local-resolver.sh
+mail/provision/check_shim_image_starts.md:
+  - mail/provision/63-deploy-mailgun-shim.sh
+mail/provision/docker-compose.yml:
+  - mail/provision/30-deploy-stalwart.sh
+mail/provision/provision_collector_submission_credential.md:
+  - hetzner/provision/run-all.sh
+  - mail/provision/67-provision-collector-submission-credential.sh
+  - mail/provision/run-all.sh
+mail/provision/provision_website_submission_credential.py:
+  - mail/provision/60-provision-website-submission-credential.sh
+  - mail/provision/61-provision-blog-submission-credential.sh
+  - mail/provision/62-provision-shim-submission-credential.sh
+  - mail/provision/64-provision-alerting-submission-credential.sh
+mail/provision/provision_zitadel_submission_credential.md:
+  - mail/provision/68-provision-zitadel-submission-credential.sh
+mail/provision/render_shim_env.md:
+  - mail/provision/62-provision-shim-submission-credential.sh
+mail/provision/render_shim_env.py:
+  - mail/provision/62-provision-shim-submission-credential.sh
+  - mail/provision/63-deploy-mailgun-shim.sh
+mail/provision/rotate_admin_credential.py:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh
+mail/provision/run-all.sh:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - hetzner/provision/20-install-docker.sh
+  - mail/provision/00-harden-ssh.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/20-install-docker.sh
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/40-configure-stalwart.sh
+  - mail/provision/50-provision-mailboxes.sh
+  - mail/provision/60-provision-website-submission-credential.sh
+  - mail/provision/61-provision-blog-submission-credential.sh
+  - mail/provision/62-provision-shim-submission-credential.sh
+  - mail/provision/63-deploy-mailgun-shim.sh
+  - mail/provision/64-provision-alerting-submission-credential.sh
+  - mail/provision/65-install-local-resolver.sh
+  - mail/provision/66-provision-nextcloud-submission-credential.sh
+  - mail/provision/70-schedule-dnsbl-check.sh
+mail/provision/shim-compose.yml:
+  - mail/provision/30-deploy-stalwart.sh
+  - mail/provision/63-deploy-mailgun-shim.sh
+mail/provision/test_install_local_resolver.py:
+  - mail/provision/65-install-local-resolver.sh
+mail/provision/test_provision_zitadel_submission_credential.py:
+  - hetzner/provision/run-all.sh
+  - mail/provision/68-provision-zitadel-submission-credential.sh
+  - mail/provision/run-all.sh
+mail/provision/trigger_acme_renewal.py:
+  - hetzner/provision/run-all.sh
+  - mail/provision/run-all.sh

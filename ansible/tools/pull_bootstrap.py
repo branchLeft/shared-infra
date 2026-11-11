@@ -118,6 +118,17 @@ PLAYBOOK_VARS_ENTRIES: Final = (
 CONFIG_TASK_NAME: Final = "Write the configuration"
 CONFIG_CONTENT: Final = "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
 CONFIG_VARIABLE: Final = "pull_trigger_config"
+# The other shape the task may take: the same variable merged with the source the role picks.
+SOURCE_CONTENT: Final = (
+    "{{ pull_trigger_config | ansible.builtin.combine(pull_trigger_config_source)"
+    " | ansible.builtin.to_nice_json }}\n"
+)
+SOURCE_VARIABLE: Final = "pull_trigger_config_source"
+SOURCE_EXPRESSION: Final = (
+    "{{ {'source': 'bundle'} if (enrolled_host | default('')) in pull_trigger_bundle_hosts"
+    " else {} }}"
+)
+BUNDLE_HOSTS: Final = "pull_trigger_bundle_hosts"
 VALUE_EXPRESSION: Final = re.compile(r"\{\{ (?P<name>pull_trigger_[a-z_]+)(?P<int> \| int)? \}\}")
 REFERENCE: Final = re.compile(r"\{\{ (?P<name>[a-z_]+) \}\}")
 # Any text Ansible would template: an expression, a statement or a comment.
@@ -233,12 +244,11 @@ def render_config(
     """
     task = config_task(parse_yaml(tasks_text, TASKS_PATH))
     copy = mapping(task.get("ansible.builtin.copy"), "the configuration task's copy")
-    if copy.get("content") != CONFIG_CONTENT:
+    if copy.get("content") not in (CONFIG_CONTENT, SOURCE_CONTENT):
         message = "the configuration task no longer writes to_nice_json of one variable"
         raise BootstrapError(message)
-    declared = mapping(
-        mapping(task.get("vars"), "the task's vars").get(CONFIG_VARIABLE), CONFIG_VARIABLE
-    )
+    task_vars = mapping(task.get("vars"), "the task's vars")
+    declared = mapping(task_vars.get(CONFIG_VARIABLE), CONFIG_VARIABLE)
     variables = merge_variables(
         (DEFAULTS_PATH, mapping(parse_yaml(defaults_text, DEFAULTS_PATH), DEFAULTS_PATH)),
         (VARS_PATH, mapping(parse_yaml(vars_text, VARS_PATH), VARS_PATH)),
@@ -249,8 +259,29 @@ def render_config(
     config: dict[str, object] = {}
     for key, expression in declared.items():
         config[key] = resolve(key, expression, variables)
+    if copy.get("content") == SOURCE_CONTENT:
+        config.update(source_of(task_vars.get(SOURCE_VARIABLE), variables))
     check_config(config)
     return json.dumps(config, indent=4, sort_keys=True, separators=(",", ": ")) + "\n"
+
+
+def source_of(expression: object, variables: Mapping[str, object]) -> dict[str, str]:
+    """Return what the role merges into the configuration to name the host's source.
+
+    Only the role's own expression is read, and it is worked out here, not skipped: a host named
+    in the bundle list gets a ``source`` key, and ``check_config`` refuses that for this tool.
+
+    Raises:
+        BootstrapError: The expression is not the role's, or the bundle list is not a list of names.
+    """
+    if expression != SOURCE_EXPRESSION:
+        message = f"{SOURCE_VARIABLE} is not the expression this tool reads"
+        raise BootstrapError(message)
+    hosts = variables.get(BUNDLE_HOSTS)
+    if not isinstance(hosts, list) or not all(isinstance(host, str) for host in hosts):
+        message = f"{BUNDLE_HOSTS} is not a list of host names"
+        raise BootstrapError(message)
+    return {"source": "bundle"} if ENROLLED_HOST in hosts else {}
 
 
 def fill(key: str, value: object, variables: Mapping[str, object]) -> object:
@@ -340,6 +371,9 @@ def check_config(config: Mapping[str, object]) -> None:
     signers = config["signers"]
     if not isinstance(signers, list) or not signers:
         message = "the signer allowlist is empty"
+        raise BootstrapError(message)
+    if "source" in config:
+        message = f"{ENROLLED_HOST} takes bundles, and this tool bootstraps a host that pulls"
         raise BootstrapError(message)
     playbooks = config["playbooks"]
     playbook = config["playbook"]

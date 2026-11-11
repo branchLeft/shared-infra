@@ -1,0 +1,20 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # The control for the secret scan in verify.yml: this loop prints its item, because it
+    # does not set no_log. If the scan cannot find this value in the run's log, the scan
+    # cannot see a leak either, and verify fails.
+    - name: Print a value the log scan must be able to find
+      ansible.builtin.assert:
+        that: item | length > 0
+        quiet: true
+      loop:
+        - LOG-SCAN-CONTROL-VALUE
+
+    # Molecule links the role under its namespace and name, the namespace from
+    # galaxy_info in meta/main.yml. The include carries no no_log.
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.mx1_stack

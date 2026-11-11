@@ -1,0 +1,46 @@
+---
+# One application of the widened contract, with the number of real `up` calls it must
+# cause. The caller sets widened_title, widened_greeting and widened_expected_ups.
+# Counting reads the stand-in's log, which holds only calls made for real.
+- name: Count the real up calls before this application
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/compose_stack_standin/argv.log]
+  register: widened_before
+  changed_when: false
+  failed_when: widened_before.rc > 1
+  check_mode: false
+
+- name: Apply the role with the caller's values
+  ansible.builtin.include_role:
+    name: branchleft.compose_stack
+  vars:
+    compose_stack_project_dir: /opt/compose_widened
+    compose_stack_project_name: widened
+    compose_stack_project_mode: '0755'
+    compose_stack_compose_template: '{{ playbook_dir }}/templates/widened.yaml.j2'
+    compose_stack_compose_file: widened.yml
+    compose_stack_config_files:
+      - name: stack/config.yaml
+        content: "greeting = {{ widened_greeting }}\n"
+        mode: '0644'
+    compose_stack_http_check_url: http://127.0.0.1:8304/health
+    compose_stack_http_check_delay: 1
+    compose_stack_wait_timeout: 30
+
+- name: Count the real up calls after this application
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/compose_stack_standin/argv.log]
+  register: widened_after
+  changed_when: false
+  failed_when: widened_after.rc > 1
+  check_mode: false
+
+- name: Assert the stack was brought up exactly as often as the content changed
+  ansible.builtin.assert:
+    that:
+      - (widened_after.stdout | ansible.builtin.int) - (widened_before.stdout | ansible.builtin.int) == widened_expected_ups | ansible.builtin.int
+    fail_msg: >-
+      {{ widened_title }}: expected {{ widened_expected_ups }} real up call(s), the
+      stand-in logged {{ (widened_after.stdout | ansible.builtin.int) - (widened_before.stdout | ansible.builtin.int) }}.
+    quiet: true
+  when: not ansible_check_mode

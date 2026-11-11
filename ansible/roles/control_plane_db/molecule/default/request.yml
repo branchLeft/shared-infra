@@ -1,0 +1,15 @@
+---
+# A request for one step, as the gated pull makes it: this playbook with the step's
+# tag named on the command line and control_plane_db_step set with -e. verify.yml
+# runs it with ansible-playbook for each case. Molecule's default sequence does not.
+- name: Request one step
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with the tag named on the command line
+      ansible.builtin.include_role:
+        name: branchleft.control_plane_db
+      # always: the include itself must run under --tags, so the role's own
+      # tasks are the ones the named tag selects.
+      tags:
+        - always

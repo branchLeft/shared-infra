@@ -4,7 +4,9 @@ name: Ansible delivery
 # reusable workflow of branchLeft/github-workflows, which lints, runs Molecule over
 # every role and pattern, asks each host in check mode what this commit would change,
 # and then waits on the deployment environment below before the apply. The lint and
-# Molecule re-run is skipped only for a commit the merge queue already tested (queue-proof).
+# Molecule re-run is never skipped: the merge queue runs the lint and the unit tests only,
+# and the container shards ran on the pull request, so this is the run that tests the
+# merged tree in containers before any host is asked.
 #
 # It runs on a push to main and on nothing else. A pull request is gated by
 # ansible.yml, whose required check keeps its name. No pull request, schedule or
@@ -15,9 +17,10 @@ name: Ansible delivery
 # it before the first run, with all of these set:
 #   - required reviewer: one user, the single owner account the probe accepts, alone, no team and no other user;
 #   - Prevent self-review: ticked, so the person who merged a change cannot approve its deploy;
-#   - Allow administrators to bypass configured protection rules: unticked;
+#   - Allow administrators to bypass configured protection rules: ticked, so the owner is never blocked from an administrator bypass to take an apply (owner ruling, 1 Nov 2026);
 #   - deployment branches: main only;
-#   - environment secret: ssh_apply_key.
+#   - environment secrets: ssh_apply_key and ssh_host_apply_keys (the per-host apply keys, one JSON
+#     object; optional for the workflow, and check_delivery.py reports it missing).
 # ansible/checks/check_delivery.py fails on every line of this file that would weaken
 # that. Its `environment` command reads the environment's protection when given the
 # answers of three read-only GitHub calls (the environment, its deployment branch
@@ -27,8 +30,16 @@ name: Ansible delivery
 # where the three files are the output of `gh api` on repos/<owner>/<repo>/environments/
 # ansible-hosts, on its /deployment-branch-policies and on its /secrets.
 #
-# The apply key is an environment secret and is never passed here. The three secrets
-# below are repository secrets, named one by one: `secrets: inherit` would pass all.
+# The apply key and the per-host apply keys are environment secrets, named here like the others:
+# only the job in the environment reads them, after approval. The per-host check keys,
+# ANSIBLE_HOST_CHECK_KEYS, are a repository secret that the drift caller passes too. The ten
+# repository secrets (the jump pair and the second hop's three: each set is both or neither, all
+# three or none; the push list: optional, and empty means every host is pulled) are named one by
+# one; `secrets: inherit` passes all. The second hop, edge-t behind edge1, reaches only the hosts
+# listed in ANSIBLE_JUMP2_HOSTS; the other hosts keep the one hop.
+# The push list, ANSIBLE_PUSH_HOSTS, is one user@host per line, a subset of ANSIBLE_HOSTS: the
+# hosts that never open a connection, reached through the jump host with push-playbook. The
+# owner creates it; its value is never written in this repository.
 
 on:
   push:
@@ -39,11 +50,11 @@ permissions:
   actions: read
 
 jobs:
-  # Decides whether this push may skip the lint and Molecule re-run. It may only when the
-  # merge queue ran the Ansible workflow, to a green result, on exactly this commit
-  # (ansible/checks/merge_group_proof.py holds the rule). A push run of the same commit is
-  # green too, so a merge that skipped the queue is not told apart by a green check; it
-  # re-tests in full. The job fails toward testing: an unreadable answer is "false".
+  # Finds whether the merge queue ran the Ansible workflow, to a green result, on exactly this
+  # commit (ansible/checks/merge_group_proof.py holds the rule). The answer no longer skips
+  # anything: a queue run now passes on the lint alone, so it proves nothing about the
+  # containers, and the delivery below re-tests in full whatever the answer is. The job fails
+  # toward "false": an unreadable answer is "false".
   queue-proof:
     name: Find the merge queue run of this commit
     runs-on: ubuntu-24.04
@@ -70,16 +81,28 @@ jobs:
 
   delivery:
     needs: [queue-proof]
-    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.0.15
+    uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.1.0
     with:
       environment: ansible-hosts
+      push-playbook: ansible/playbooks/demo1.yml
       role-directories: |
         roles/*
         patterns/*
       python-paths: harness checks
-      skip-rerun-after-merge-group: ${{ needs.queue-proof.outputs.tested == 'true' }}
+      role-test-command: harness/run_harness.py
+      skip-rerun-after-merge-group: false
       merge-group-check-name: Lint and test the Ansible roles
+      shard-timeout-minutes: 45 # the edge_stack Molecule shard takes up to 39 minutes
     secrets:
       ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
       ssh_check_key: ${{ secrets.ANSIBLE_CHECK_KEY }}
+      ssh_apply_key: ${{ secrets.SSH_APPLY_KEY }}
+      ssh_host_check_keys: ${{ secrets.ANSIBLE_HOST_CHECK_KEYS }}
+      ssh_host_apply_keys: ${{ secrets.SSH_HOST_APPLY_KEYS }}
+      ssh_push_hosts: ${{ secrets.ANSIBLE_PUSH_HOSTS }}
+      ssh_jump_host: ${{ secrets.SSH_JUMP_HOST }}
+      ssh_jump_key: ${{ secrets.SSH_JUMP_KEY }}
+      ssh_jump2_host: ${{ secrets.SSH_JUMP2_HOST }}
+      ssh_jump2_key: ${{ secrets.SSH_JUMP2_KEY }}
+      ssh_jump2_hosts: ${{ secrets.ANSIBLE_JUMP2_HOSTS }}

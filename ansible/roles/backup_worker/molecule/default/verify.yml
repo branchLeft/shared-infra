@@ -24,6 +24,23 @@
       ansible.builtin.set_fact:
         backup_worker_verify_release: '{{ backup_worker_verify_current.stat.lnk_source }}'
 
+    # A regression check on the end state, not a sabotage control. The environment
+    # file is widened by hand and the role is applied again with the same test values.
+    # The assertions below then read the restored owner, group, mode and content. This
+    # case cannot show the write order: the template writes the value on every run and
+    # sets the attributes after it, so the end state is the same with or without the
+    # attribute task. The order is proven by the unit test (tests/unit).
+    - name: Widen the environment file by hand, as an operator might
+      ansible.builtin.file:
+        path: /etc/branchleft/backup-worker.env
+        owner: nobody
+        group: nogroup
+        mode: '0644'
+
+    - name: Apply the role again over the widened environment file
+      ansible.builtin.include_role:
+        name: branchleft.backup_worker
+
     # The environment file: root, 0600, one line for each of the nine names the
     # installer requires. Values are compared and never printed.
     - name: Look at the environment file

@@ -1,0 +1,31 @@
+---
+# Test scaffolding: put the host back as the owner leaves it, after a case spoiled
+# it. Whatever the path holds (a file, a link, a directory) is removed first.
+- name: Put the two directories above the file back
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /etc
+    - '{{ host_inputs_test_dir }}'
+
+- name: Remove whatever is at the host inputs path and at the link target
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ host_inputs_test_path }}'
+    - '{{ host_inputs_test_link_target }}'
+
+- name: Place the good file again
+  ansible.builtin.copy:
+    content: '{{ host_inputs_test_json }}'
+    dest: '{{ host_inputs_test_path }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false

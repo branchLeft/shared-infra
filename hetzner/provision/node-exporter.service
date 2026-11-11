@@ -1,5 +1,5 @@
-# Installed at /etc/systemd/system/node_exporter.service by
-# 40-install-node-exporter.sh. Deliberately not a Compose service: ops1 runs
+# Installed at /etc/systemd/system/node_exporter.service by the node_exporter
+# role (ansible/roles/node_exporter). Deliberately not a Compose service: ops1 runs
 # the DOCKER-USER isolation policy (branchleft_docker_user_policy.sh), which
 # sees every *forwarded* packet a published container port receives and
 # drops everything to the estate subnet with no carve-out for this host --

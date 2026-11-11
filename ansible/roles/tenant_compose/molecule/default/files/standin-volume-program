@@ -1,0 +1,19 @@
+#!/bin/sh
+# Test stand-in for the volume program the tenant onboarding role installs. It keeps the
+# same two interfaces the role uses, `--list-claims` and `--uid N SLUG`, and the same
+# register format (one slug=uid line per claim), and records each call.
+set -eu
+claims=/etc/branchleft/tenant-uids
+state=/var/lib/standin
+mkdir -p "$state" "$claims"
+if [ "$1" = "--list-claims" ]; then
+  for claim in "$claims"/*; do
+    [ -e "$claim" ] || continue
+    printf '%s=%s\n' "$(basename "$claim")" "$(cat "$claim")"
+  done
+  exit 0
+fi
+uid="$2"
+slug="$3"
+printf '%s %s\n' "$slug" "$uid" >>"$state/volume.log"
+printf '%s\n' "$uid" >"$claims/$slug"

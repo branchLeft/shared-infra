@@ -7,6 +7,8 @@ free-form string, a shell string or an argument list. A playbook is read as a ro
 A command that only runs the wrapper is not a write and is not found. The README's named
 limits say what these checks cannot see. One role is allowed for now, and only for the policy
 program and its unit: it is retired by its own follow-up after this role has run on the host.
+demo1_build is allowed to read and name the compose template unit, and nothing else of the
+owner's, as ALLOWED_SECOND_OWNER_PROGRAMS says; it is still refused a copy or a link of it.
 """
 
 from __future__ import annotations
@@ -29,6 +31,14 @@ OWNER = "deploy_tooling"
 # A second role is exempt only for the target lists named here, never for the whole role.
 ALLOWED_SECOND_OWNERS: dict[str, frozenset[str]] = {
     "control_plane": frozenset({"deploy_tooling_app_file_targets"}),
+}
+# The compose template unit is in deploy_tooling_common_file_targets with the deploy wrapper,
+# which no second role may name, so demo1_build is exempt by program and not by that group.
+# The exemption is for reads and names of the file only. A byte copy or a link of it in
+# demo1_build is still refused, so the role must read the template from hetzner/provision.
+# Ruled 4 Nov on ws#2364 (comment 6630331961): scoped exemption for demo1, role keeps no copy.
+ALLOWED_SECOND_OWNER_PROGRAMS: dict[str, frozenset[str]] = {
+    "demo1_build": frozenset({"branchleft-compose@.service"}),
 }
 # Only to fill a test tree: the check itself reads the programs from the role's own target lists.
 PROGRAMS = role_vars.program_names(role_vars.load_vars())
@@ -220,6 +230,7 @@ def reference_problems(
     variables: dict[str, object],
     owned: Sequence[role_vars.Target],
     exempt_groups: frozenset[str],
+    exempt_programs: frozenset[str] = frozenset(),
 ) -> list[str]:
     """Return each place code reads a program from its home or names a path this role installs.
 
@@ -227,7 +238,11 @@ def reference_problems(
     it installs is then unknown.
     """
     held = [
-        target for target in owned if target.kind == "file" and target.group not in exempt_groups
+        target
+        for target in owned
+        if target.kind == "file"
+        and target.group not in exempt_groups
+        and target.program not in exempt_programs
     ]
     programs = sorted({target.program for target in held})
     paths = sorted({target.path for target in held})
@@ -265,20 +280,26 @@ def second_owner_problems(
     roles: Path,
     provision: Path,
     allowed: Mapping[str, frozenset[str]] = ALLOWED_SECOND_OWNERS,
+    allowed_programs: Mapping[str, frozenset[str]] = ALLOWED_SECOND_OWNER_PROGRAMS,
 ) -> list[str]:
     """Return each way a role other than the owner, or a playbook, holds or names a program."""
     ansible = roles.parent
     owned = role_vars.targets(role_vars.load_vars(roles / OWNER))
     shared = _shared_variables(ansible)
-    home = provision.resolve()
+    # A program lives in hetzner/provision or, when the owner holds it, in the owner's files/.
+    homes = {provision.resolve(), (roles / OWNER / "files").resolve()}
     problems: list[str] = []
     for role in sorted(entry for entry in roles.iterdir() if entry.is_dir()):
         if role.name == OWNER:
             continue
         exempt_groups = allowed.get(role.name, frozenset())
+        # Reads and names only: the copy and link checks below still hold for this role.
+        read_exempt = allowed_programs.get(role.name, frozenset())
         exempt_programs = {target.program for target in owned if target.group in exempt_groups}
         digests = {
-            hashlib.sha256((provision / target.program).read_bytes()).hexdigest(): target.program
+            hashlib.sha256(
+                role_vars.program_file(target, roles / OWNER, provision).read_bytes()
+            ).hexdigest(): target.program
             for target in owned
             if target.program and target.program not in exempt_programs
         }
@@ -286,7 +307,7 @@ def second_owner_problems(
             shown = path.relative_to(roles).as_posix()
             if path.is_symlink():
                 target_path = path.resolve()
-                if target_path.parent == home and target_path.name in digests.values():
+                if target_path.parent in homes and target_path.name in digests.values():
                     problems.append(f"{shown} is a link to {target_path.name}")
             elif path.is_file():
                 copy = digests.get(hashlib.sha256(path.read_bytes()).hexdigest())
@@ -294,7 +315,12 @@ def second_owner_problems(
                     problems.append(f"{shown} is a copy of {copy}")
         problems.extend(
             reference_problems(
-                _code_files(role), roles, _variables(role, shared), owned, exempt_groups
+                _code_files(role),
+                roles,
+                _variables(role, shared),
+                owned,
+                exempt_groups,
+                exempt_programs=read_exempt,
             )
         )
     problems.extend(
@@ -315,8 +341,11 @@ class TestSingleOwner(unittest.TestCase):
         (self.roles / OWNER / "vars").mkdir(parents=True)
         shutil.copy(role_vars.ROLE / "vars" / "main.yml", self.roles / OWNER / "vars" / "main.yml")
         (self.roles / "control_plane").mkdir()
-        for name in PROGRAMS:
-            (self.provision / name).write_bytes(f"home of {name}\n".encode())
+        (self.roles / OWNER / "files").mkdir()
+        for target in role_vars.targets(role_vars.load_vars()):
+            if target.program:
+                home = role_vars.program_file(target, self.roles / OWNER, self.provision)
+                home.write_bytes(f"home of {target.program}\n".encode())
 
     def found(self) -> list[str]:
         return second_owner_problems(self.roles, self.provision)
@@ -344,6 +373,12 @@ class TestSingleOwner(unittest.TestCase):
         self.assertEqual(
             ALLOWED_SECOND_OWNERS,
             {"control_plane": frozenset({"deploy_tooling_app_file_targets"})},
+        )
+
+    def test_the_program_allow_list_is_the_compose_template_for_demo1_build_only(self) -> None:
+        self.assertEqual(
+            ALLOWED_SECOND_OWNER_PROGRAMS,
+            {"demo1_build": frozenset({"branchleft-compose@.service"})},
         )
 
     def test_the_programs_are_the_role_target_lists_own(self) -> None:
@@ -395,15 +430,19 @@ class TestSingleOwner(unittest.TestCase):
     def test_a_second_role_holding_a_copy_is_found(self) -> None:
         (self.roles / "other_role" / "files").mkdir(parents=True)
         copy = self.roles / "other_role" / "files" / "policy.sh"
-        copy.write_bytes((self.provision / "branchleft_docker_user_policy.sh").read_bytes())
+        copy.write_bytes(
+            (self.roles / OWNER / "files" / "branchleft_docker_user_policy.py").read_bytes()
+        )
         self.assertEqual(
             self.found(),
-            ["other_role/files/policy.sh is a copy of branchleft_docker_user_policy.sh"],
+            ["other_role/files/policy.sh is a copy of branchleft_docker_user_policy.py"],
         )
 
     def test_the_allowed_role_may_hold_a_copy_of_the_policy_program(self) -> None:
         copy = self.roles / "control_plane" / "policy.sh"
-        copy.write_bytes((self.provision / "branchleft_docker_user_policy.sh").read_bytes())
+        copy.write_bytes(
+            (self.roles / OWNER / "files" / "branchleft_docker_user_policy.py").read_bytes()
+        )
         self.assertEqual(self.found(), [])
 
     def test_the_allowed_role_may_not_hold_a_copy_of_the_wrapper(self) -> None:
@@ -423,9 +462,11 @@ class TestSingleOwner(unittest.TestCase):
     def test_the_same_copy_under_a_role_not_on_the_list_is_found(self) -> None:
         (self.roles / "not_listed").mkdir()
         copy = self.roles / "not_listed" / "policy.sh"
-        copy.write_bytes((self.provision / "branchleft_docker_user_policy.sh").read_bytes())
+        copy.write_bytes(
+            (self.roles / OWNER / "files" / "branchleft_docker_user_policy.py").read_bytes()
+        )
         self.assertEqual(
-            self.found(), ["not_listed/policy.sh is a copy of branchleft_docker_user_policy.sh"]
+            self.found(), ["not_listed/policy.sh is a copy of branchleft_docker_user_policy.py"]
         )
 
     def test_a_second_role_reading_a_program_by_path_is_found(self) -> None:
@@ -447,14 +488,14 @@ class TestSingleOwner(unittest.TestCase):
     def test_a_second_role_reading_a_program_through_a_variable_is_found(self) -> None:
         self.write_tasks(
             "other_role",
-            "other_role_source: '{{ other_role_dir }}/branchleft_docker_user_policy.sh'\n"
+            "other_role_source: '{{ other_role_dir }}/branchleft_docker_user_policy.py'\n"
             "other_role_dir: /srv/checkout/hetzner/provision\n",
             directory="vars",
         )
         self.assertEqual(
             self.found(),
             [
-                "other_role/vars/main.yml reads branchleft_docker_user_policy.sh,"
+                "other_role/vars/main.yml reads branchleft_docker_user_policy.py,"
                 " which the deploy_tooling role installs"
             ],
         )
@@ -751,13 +792,13 @@ class TestSingleOwner(unittest.TestCase):
         self.write_tasks(
             "other_role",
             "- ansible.builtin.copy:\n"
-            "    src: '{{ other_role_home }}/branchleft_docker_user_policy.sh'\n"
+            "    src: '{{ other_role_home }}/branchleft_docker_user_policy.py'\n"
             "    dest: /opt/x\n",
         )
         self.assertEqual(
             self.found(),
             [
-                "other_role/tasks/main.yml reads branchleft_docker_user_policy.sh,"
+                "other_role/tasks/main.yml reads branchleft_docker_user_policy.py,"
                 " which the deploy_tooling role installs"
             ],
         )
@@ -865,7 +906,7 @@ class TestSingleOwner(unittest.TestCase):
             "control_plane",
             "- ansible.builtin.copy:\n"
             "    src: '{{ role_path }}/../../../hetzner/provision/"
-            "branchleft_docker_user_policy.sh'\n"
+            "branchleft_docker_user_policy.py'\n"
             "    dest: /usr/local/sbin/branchleft-docker-user-policy\n"
             "- ansible.builtin.copy:\n"
             "    src: branchleft-docker-user-policy.service\n"
@@ -909,6 +950,43 @@ class TestSingleOwner(unittest.TestCase):
                 )
             ],
         )
+
+    def test_demo1_build_holding_a_copy_of_the_compose_template_is_found(self) -> None:
+        copy = self.roles / "demo1_build" / "files" / "unit"
+        copy.parent.mkdir(parents=True)
+        copy.write_bytes((self.provision / "branchleft-compose@.service").read_bytes())
+        self.assertEqual(
+            self.found(),
+            ["demo1_build/files/unit is a copy of branchleft-compose@.service"],
+        )
+
+    def test_demo1_build_holding_a_link_to_the_compose_template_is_found(self) -> None:
+        link = self.roles / "demo1_build" / "files" / "unit"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.provision / "branchleft-compose@.service")
+        self.assertEqual(
+            self.found(),
+            ["demo1_build/files/unit is a link to branchleft-compose@.service"],
+        )
+
+    def test_demo1_build_naming_the_wrapper_is_found(self) -> None:
+        self.write_tasks("demo1_build", "- ansible.builtin.copy: {src: branchleft_deploy.py}\n")
+        self.assertEqual(
+            self.found(),
+            [
+                "demo1_build/tasks/main.yml reads branchleft_deploy.py,"
+                " which the deploy_tooling role installs"
+            ],
+        )
+
+    def test_demo1_build_naming_the_compose_template_path_is_not_found(self) -> None:
+        self.write_tasks(
+            "demo1_build",
+            "- ansible.builtin.copy:\n"
+            "    src: '{{ role_path }}/../../../hetzner/provision/branchleft-compose@.service'\n"
+            "    dest: /etc/systemd/system/branchleft-compose@.service\n",
+        )
+        self.assertEqual(self.found(), [])
 
     def test_a_task_file_that_cannot_be_read_is_found_rather_than_skipped(self) -> None:
         self.write_tasks("other_role", "- name: [unclosed\n")

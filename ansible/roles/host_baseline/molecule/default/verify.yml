@@ -33,6 +33,7 @@
           maxretry = 5
           findtime = 10m
           bantime = 1h
+          ignoreip = 127.0.0.1/8 ::1 10.20.1.10
       - path: /etc/apt/sources.list.d/docker.list
         content: >
           deb [arch={{ host_baseline_verify_arch.stdout }} signed-by=/etc/apt/keyrings/docker.asc]

@@ -62,6 +62,7 @@ class RunbookVerifyTargetsTests(unittest.TestCase):
                     "cadvisor",
                     "blackbox_http",
                     "blackbox_mail",
+                    "blackbox_object_storage",
                     "stalwart",
                 ]
             ),

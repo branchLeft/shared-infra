@@ -86,6 +86,19 @@
     - demo1_build_release_ready | bool
     - not ansible_check_mode or (demo1_build_dropin_dirs.matched | int) >= (demo1_build_colour_instances | length)
 
+# The shared template the drop-ins extend (A-7). The role reads it from hetzner/provision/
+# of the checkout and installs that file's bytes; it keeps no copy of its own, so the
+# bytes have one home. The variables in vars/main.yml name the path, and no other task
+# does. Written before the reload, so systemd reads the template with the drop-ins.
+- name: Install the shared compose template unit, read from hetzner/provision
+  ansible.builtin.copy:
+    src: '{{ demo1_build_compose_template_src }}'
+    dest: '{{ demo1_build_compose_template_dest }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
 - name: Render the health router's template unit with the pinned renderer, printing it and writing nothing
   ansible.builtin.command:
     argv: "{{ [demo1_build_python] + demo1_build_python_flags + [demo1_build_provision_dir ~ '/render_router_unit.py'] }}"
@@ -115,3 +128,7 @@
 
 - name: Load queued unit changes before the role goes on
   ansible.builtin.meta: flush_handlers
+
+# Asked only after the reload above, so systemd has read what the role wrote. Read-only.
+- name: Ask systemd whether each colour instance loads
+  ansible.builtin.include_tasks: _units_loaded.yml

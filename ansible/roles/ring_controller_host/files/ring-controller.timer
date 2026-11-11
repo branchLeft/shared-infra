@@ -1,0 +1,12 @@
+# The tick of the ring controller. Installed by the ring_controller_host role, enabled only when
+# the role is given a bundle digest, and stopped and disabled again when the digest is cleared.
+[Unit]
+Description=Ring controller tick
+
+[Timer]
+OnBootSec=2min
+OnUnitInactiveSec=5min
+Unit=ring-controller.service
+
+[Install]
+WantedBy=timers.target

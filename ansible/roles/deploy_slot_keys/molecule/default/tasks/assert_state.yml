@@ -1,0 +1,153 @@
+---
+# What a host the role has configured looks like. state_slots is the list of slots the host
+# should hold, each a stack and the name of its key pair. Included by verify.yml after the
+# converge, after a rotation and again after the host is put back. Every task that reads a
+# key or a register file hides its result, so the log check in verify.yml sees only the
+# role's own output.
+- name: Look at the paths the role makes
+  ansible.builtin.stat:
+    path: '{{ item }}'
+  loop:
+    - /home/deploy/.ssh/authorized_keys
+    - /home/deploy
+    - /home/deploy/.ssh
+    - /home/deploy/.bashrc
+    - /etc/branchleft/deploy-slots
+    - '{{ deploy_slot_keys_program_path }}'
+  register: deploy_slot_keys_scenario_state_paths
+  no_log: true
+
+- name: Assert authorized_keys, the deploy home and its dotfile are root's and closed to the account
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_state_paths.results[0].stat.pw_name == 'root'
+      - deploy_slot_keys_scenario_state_paths.results[0].stat.gr_name == 'deploy'
+      - deploy_slot_keys_scenario_state_paths.results[0].stat.mode == '0640'
+      - deploy_slot_keys_scenario_state_paths.results[1].stat.pw_name == 'root'
+      - deploy_slot_keys_scenario_state_paths.results[1].stat.gr_name == 'deploy'
+      - deploy_slot_keys_scenario_state_paths.results[1].stat.mode == '0750'
+      - deploy_slot_keys_scenario_state_paths.results[2].stat.pw_name == 'root'
+      - deploy_slot_keys_scenario_state_paths.results[2].stat.gr_name == 'deploy'
+      - deploy_slot_keys_scenario_state_paths.results[2].stat.mode == '0750'
+      - deploy_slot_keys_scenario_state_paths.results[3].stat.pw_name == 'root'
+      - not deploy_slot_keys_scenario_state_paths.results[3].stat.wgrp
+      - not deploy_slot_keys_scenario_state_paths.results[3].stat.woth
+    quiet: true
+
+- name: Assert the register is root's and closed, and the program is root's
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_state_paths.results[4].stat.pw_name == 'root'
+      - deploy_slot_keys_scenario_state_paths.results[4].stat.gr_name == 'root'
+      - deploy_slot_keys_scenario_state_paths.results[4].stat.mode == '0700'
+      - deploy_slot_keys_scenario_state_paths.results[5].stat.pw_name == 'root'
+      - deploy_slot_keys_scenario_state_paths.results[5].stat.gr_name == 'root'
+      - deploy_slot_keys_scenario_state_paths.results[5].stat.mode == '0755'
+    quiet: true
+
+- name: Try to write what the deploy account must not be able to write
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - deploy
+      - --
+      - test
+      - -w
+      - '{{ item }}'
+  loop:
+    - /home/deploy
+    - /home/deploy/.ssh
+    - /home/deploy/.ssh/authorized_keys
+    - /home/deploy/.bashrc
+    - /tmp
+  register: deploy_slot_keys_scenario_state_writable
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+# /tmp is the control: the account can write there, so a test that could not say yes would
+# not have said no above.
+- name: Assert the account can write nothing in its home, and can write the control
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_state_writable.results | map(attribute='rc') | list == [1, 1, 1, 1, 0]
+    quiet: true
+
+- name: Try to put a file in the account's .ssh directory as the account
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - deploy
+      - --
+      - touch
+      - /home/deploy/.ssh/EXAMPLE_REPLACEMENT
+  register: deploy_slot_keys_scenario_state_touch
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Assert the account could not replace authorized_keys
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_state_touch.rc != 0
+    quiet: true
+
+- name: Read the public key of each slot the host should hold
+  ansible.builtin.slurp:
+    src: '{{ scenario_key_dir }}/{{ item.key_name }}.pub'
+  loop: '{{ state_slots }}'
+  loop_control:
+    label: '{{ item.key_name }}'
+  register: deploy_slot_keys_scenario_state_public
+  no_log: true
+
+- name: Start the list of lines the host should hold
+  ansible.builtin.set_fact:
+    deploy_slot_keys_scenario_state_expected: []
+  no_log: true
+
+# Built here, from the shape the issue states, and not from the role's own code.
+- name: Work out the line each slot should have
+  ansible.builtin.set_fact:
+    deploy_slot_keys_scenario_state_expected: >-
+      {{ deploy_slot_keys_scenario_state_expected + ['restrict,command="/usr/bin/sudo -n /usr/local/sbin/branchleft-deploy --slot %s" %s branchleft-slot:%s'
+         | format(item.0.stack, (item.1.content | b64decode | trim).split(' ')[:2] | join(' '), item.0.stack)] }}
+  loop: '{{ state_slots | zip(deploy_slot_keys_scenario_state_public.results) | list }}'
+  loop_control:
+    label: '{{ item.0.key_name }}'
+  no_log: true
+
+- name: Read authorized_keys and the host-level line kept before the role
+  ansible.builtin.slurp:
+    src: '{{ item }}'
+  loop:
+    - /home/deploy/.ssh/authorized_keys
+    - '{{ scenario_record_dir }}/host-line'
+  register: deploy_slot_keys_scenario_state_files
+  no_log: true
+
+- name: Assert the host-level line is first and untouched, and the slots follow it exactly
+  ansible.builtin.assert:
+    that:
+      - held_lines[0] == kept_lines[0]
+      - held_lines[1:] | sort == deploy_slot_keys_scenario_state_expected | sort
+    quiet: true
+  vars:
+    held_lines: '{{ (deploy_slot_keys_scenario_state_files.results[0].content | b64decode).splitlines() }}'
+    kept_lines: '{{ (deploy_slot_keys_scenario_state_files.results[1].content | b64decode).splitlines() }}'
+
+- name: Count the register files
+  ansible.builtin.find:
+    paths: /etc/branchleft/deploy-slots
+    file_type: any
+    hidden: true
+  register: deploy_slot_keys_scenario_state_register
+  no_log: true
+
+- name: Assert the register holds one file for each slot and nothing else
+  ansible.builtin.assert:
+    that:
+      - deploy_slot_keys_scenario_state_register.matched == state_slots | length
+    quiet: true

@@ -1,0 +1,10 @@
+# A caller's own compose file, named by compose_stack_compose_template. One service,
+# pinned by digest, with no secret and no healthcheck of its own, so the stack's
+# health is judged on running and the optional endpoint check carries the rest.
+services:
+  web:
+    image: '{{ widened_image }}'
+    restart: unless-stopped
+    volumes:
+      - ./stack/config.yaml:/etc/widened/config.yaml:ro
+volumes: {}

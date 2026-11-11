@@ -1,0 +1,68 @@
+---
+# Test scaffolding, not role tasks: the stand-in for the docker CLI that the
+# instance has instead of an engine, and a stand-in for the page that answers
+# /health on the loopback port the role asks. The stand-in docker keeps its
+# files in /var/lib/status_page_standin: argv.log holds the arguments of every
+# call made for real, dryrun.log those made with --dry-run, and ps.json is what
+# `compose ps` prints. The health answer is the file www/health; the verify play
+# takes it away to test the health check.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Create the stand-in's state directory and the directory it serves
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/lib/status_page_standin
+        - /var/lib/status_page_standin/www
+
+    - name: Install the stand-in as the docker command
+      ansible.builtin.copy:
+        src: docker_standin.sh
+        dest: /usr/local/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Start the stand-in's call logs empty
+      ansible.builtin.copy:
+        content: ''
+        dest: '/var/lib/status_page_standin/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+        force: true
+      loop:
+        - argv.log
+        - dryrun.log
+
+    - name: Report both services as running
+      ansible.builtin.copy:
+        content: |
+          {"Name":"stand-in-gatus-1","Service":"gatus","State":"running","Labels":"","Networks":"default","Publishers":null}
+          {"Name":"stand-in-status-test-target-1","Service":"status-test-target","State":"running","Labels":"","Networks":"default","Publishers":null}
+        dest: /var/lib/status_page_standin/ps.json
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Give the page a health answer
+      ansible.builtin.copy:
+        content: |
+          {"status":"UP"}
+        dest: /var/lib/status_page_standin/www/health
+        owner: root
+        group: root
+        mode: '0644'
+
+    # Detached with its output closed, so the task returns while the server
+    # keeps running for the later steps. The port is the role's own.
+    - name: Serve the health answer on loopback
+      ansible.builtin.shell:
+        cmd: setsid --fork python3 -m http.server 8303 --bind 127.0.0.1 --directory /var/lib/status_page_standin/www >/dev/null 2>&1 </dev/null
+      changed_when: true

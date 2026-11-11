@@ -1,0 +1,16 @@
+---
+# Internal to the role. The part of the export runbook's Part C that can be declared:
+# Run step 2's state directory, made here as 0700 all the way down. The runbook's
+# `mkdir -p -m 700 state/flags state/out` gives only the last two directories mode 0700;
+# the parent gets the shell's umask, normally 0755. The audit log, the token FIFO, the
+# descriptors and the archives live in these directories and are made by the export and
+# the owner, so nothing inside them is touched here: no task lists, changes or removes
+# anything in them.
+- name: Make the state directory and the two directories under it
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+  loop: '{{ [export_bundler_state_dir] + export_bundler_state_subdirs }}'

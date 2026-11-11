@@ -1,0 +1,50 @@
+---
+# The role found a hand-made account, sudoers file and key lines. It must change none of
+# them: no file is newer than the marker prepare.yml left, and the account is as it was.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Assert the host is as the hand left it
+      ansible.builtin.include_tasks: tasks/assert_untouched.yml
+
+    # The flag on, and the declared keys the very lines the hand wrote: the first gated run
+    # after the owner fills the keys must find nothing to change.
+    - name: Apply the role with the key half switched on and the keys already there
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: true
+        ci_login_keys: '{{ scenario_keys }}'
+
+    - name: Assert the key lines were not rewritten
+      ansible.builtin.include_tasks: tasks/assert_untouched.yml
+
+    # Other keys with the flag on do rewrite the file, exclusively: the control case that
+    # shows the untouched result above is the flag and not a role that cannot write.
+    - name: Apply the role with the key half switched on and other keys
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: true
+        ci_login_keys: '{{ scenario_other_keys }}'
+
+    - name: Read the account's authorised keys
+      ansible.builtin.command:
+        argv:
+          - cat
+          - '{{ scenario_home }}/.ssh/authorized_keys'
+      register: ci_login_verify_keys
+      changed_when: false
+      check_mode: false
+      no_log: true
+
+    - name: Assert the key file now holds exactly the other two keys
+      ansible.builtin.assert:
+        that:
+          - ci_login_verify_keys.stdout_lines | length == 2
+          - scenario_other_apply_public in ci_login_verify_keys.stdout_lines[0] or scenario_other_apply_public in ci_login_verify_keys.stdout_lines[1]
+          - scenario_other_check_public in ci_login_verify_keys.stdout_lines[0] or scenario_other_check_public in ci_login_verify_keys.stdout_lines[1]
+          - scenario_apply_public.split(' ')[1] not in ci_login_verify_keys.stdout
+          - scenario_check_public.split(' ')[1] not in ci_login_verify_keys.stdout
+        quiet: true

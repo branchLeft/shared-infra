@@ -1,0 +1,63 @@
+---
+# Every input is checked before the key file is touched. No assertion loops: a failed loop
+# prints its item, which here would be a key. An empty list is refused, never applied, because
+# an exclusive write of nothing would remove every key.
+- name: Refuse an empty key list
+  ansible.builtin.assert:
+    that:
+      - ci_login_keys | length > 0
+    quiet: true
+    fail_msg: ci_login_manage_keys is true but ci_login_keys is empty. The role never reads an empty list as remove every key.
+
+- name: Refuse a key list that is not one apply key and one check key
+  ansible.builtin.assert:
+    that:
+      - ci_login_keys | length == ci_login_modes | length
+      - ci_login_keys | map(attribute='mode') | sort == ci_login_modes | sort
+    quiet: true
+    fail_msg: ci_login_keys must hold exactly one apply entry and one check entry, so the exclusive write cannot drop a pipeline key.
+
+# The refusal names the position of each bad entry and never the key.
+- name: Find the key entries that are not one plausible public key
+  ansible.builtin.set_fact:
+    ci_login_bad_key_numbers: >-
+      {{ range(1, (ci_login_keys | length) + 1)
+      | zip(ci_login_keys | map(attribute='key') | map('regex_search', ci_login_key_pattern))
+      | rejectattr('1') | map(attribute='0') | list }}
+  no_log: true
+
+- name: Refuse a key entry that is not one public key on one line
+  ansible.builtin.assert:
+    that:
+      - ci_login_bad_key_numbers | length == 0
+    quiet: true
+    fail_msg: >-
+      Key entry number {{ ci_login_bad_key_numbers | join(', ') }} is not one public key on one line: a
+      known key type, a base64 body of the length that type has, an optional comment of printable
+      ASCII, and no options in front.
+
+# The same key twice would be written once, and one key would then hold both commands.
+- name: Find the key bodies
+  ansible.builtin.set_fact:
+    ci_login_key_bodies: "{{ ci_login_keys | map(attribute='key') | map('split', ' ') | map(attribute='1') | unique | list }}"
+  no_log: true
+
+- name: Refuse the same key for both modes
+  ansible.builtin.assert:
+    that:
+      - ci_login_key_bodies | length == ci_login_modes | length
+    quiet: true
+    fail_msg: The apply key and the check key must be two different keys.
+
+# exclusive: true makes the account's file exactly this list, so a key left out is removed.
+# The key module needs the account, so a check-mode run on a host that has none yet stops here
+# after the checks above; the account is created by the real run.
+- name: Make the authorised keys of the pipeline account exactly the two declared keys
+  ansible.posix.authorized_key:
+    user: '{{ ci_login_user }}'
+    key: "{{ lookup('ansible.builtin.template', 'authorized_keys.j2') }}"
+    exclusive: true
+    manage_dir: true
+  no_log: true
+  diff: false
+  when: ci_login_account_present | bool

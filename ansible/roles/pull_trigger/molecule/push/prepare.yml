@@ -1,0 +1,81 @@
+---
+# Test setup only, never part of the role. It installs the programs with the role's own package
+# task file, builds the throwaway keys and the signed history with a bundle of each commit, and
+# then, last, cuts the container off from every network. The apt index refresh is the one step
+# that reaches a package mirror; nothing after the last task of this file has a network.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Refresh the apt index, which the image ships empty
+      ansible.builtin.apt:
+        update_cache: true
+
+    - name: Install sudo, which only the test of the command Rob runs uses and the role never does
+      ansible.builtin.apt:
+        name: sudo
+        state: present
+
+    - name: Install the programs the trigger runs, with the role's own task file
+      ansible.builtin.include_role:
+        name: branchleft.pull_trigger
+        tasks_from: packages
+
+    - name: Create the directory the setup programs live in
+      ansible.builtin.file:
+        path: /var/tmp/ptt-setup
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The fixture builder is the default scenario's: one home, used by both.
+    - name: Place the fixture builder
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../default/files/make_fixtures.py'
+        dest: /var/tmp/ptt-setup/make_fixtures.py
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Build the throwaway keys, the signed history and a bundle of each commit
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/python3
+          - /var/tmp/ptt-setup/make_fixtures.py
+          - --push
+        creates: /var/tmp/ptt/fixtures.json
+
+    - name: Find the networks the container is on
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - '{% raw %}{{range $key, $value := .NetworkSettings.Networks}}{{$key}} {{end}}{% endraw %}'
+          - 'role-test-{{ lookup("ansible.builtin.env", "ROLE_TEST_RUN_ID") }}'
+      delegate_to: localhost
+      register: pull_trigger_pr_networks
+      changed_when: false
+
+    - name: Refuse to go on if the run id is not set, which would name some other container
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') | length > 0
+          - pull_trigger_pr_networks.stdout | trim | length > 0
+        fail_msg: The container has no network to leave, or the run id is not set.
+        quiet: true
+
+    # From here on the container has no network. The label on the container, set by the harness,
+    # is what makes the name above this run's own; the disconnect names the same container.
+    - name: Cut the container off from every network
+      ansible.builtin.command:
+        argv:
+          - docker
+          - network
+          - disconnect
+          - '{{ item }}'
+          - 'role-test-{{ lookup("ansible.builtin.env", "ROLE_TEST_RUN_ID") }}'
+      delegate_to: localhost
+      loop: '{{ pull_trigger_pr_networks.stdout | trim | split(" ") }}'
+      changed_when: true

@@ -1,0 +1,18 @@
+---
+argument_specs:
+  main:
+    short_description: Load this host's private role inputs from its one root-only file, or refuse the run
+    description: >-
+      Reads /etc/branchleft/host-inputs.json, the file the owner places on the host
+      once, and sets each value in it as a host fact under the name of the role
+      argument it feeds, so a role that needs a private input receives it with no
+      change to the role and no value in the repository. The file must be a regular
+      file owned by root:root with mode exactly 0600, in a directory path that only
+      root can write. It must hold one JSON object whose keys are exactly this
+      host's required inputs, each with a value. Any other state stops the run
+      before a single input is set, with a message that names a path or a key and
+      never a value. The role has no input of its own: the host is the playbook's
+      enrolled_host, and the keys it expects are the row for that host in
+      vars/main.yml. It changes nothing on the host.
+    author: branchLeft
+    options: {}

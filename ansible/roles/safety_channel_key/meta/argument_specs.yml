@@ -1,0 +1,25 @@
+---
+argument_specs:
+  main:
+    short_description: Generate the safety service's request-signing key if it is absent
+    description: >-
+      Makes the key directory, generates the Ed25519 signing seed on the host the first time
+      and never again, writes the matching public half beside it, and prints that public half
+      as the apply's recorded output. The seed is made on the host, never leaves it, and is
+      never in a log, a return value or an argument. No input is a secret.
+    author: branchLeft
+    options:
+      safety_channel_key_owner:
+        type: str
+        default: root
+        description: >-
+          The account that owns the directory and both files. Lowercase letters, digits,
+          underscore and hyphen, starting with a letter or underscore, 32 characters at most;
+          the module refuses any other shape and any account the host does not have. Set it
+          to the account the safety service runs as, because the service refuses a key
+          readable by anyone else. An existing key with another owner is adopted: its owner
+          and mode are set and its bytes are never touched.
+      safety_channel_key_group:
+        type: str
+        default: root
+        description: The group that owns the directory and both files. The same shape as the owner.

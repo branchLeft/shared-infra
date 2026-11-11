@@ -1,0 +1,17 @@
+---
+# The repository-file cases, included by verify.yml in the `repository` scenario only
+# Moved out of verify.yml as they were. Each one changes a file that
+# decides what apt trusts or reads, so the role refreshes the index, and the refresh
+# fails in a container with no network: that failure is how the test sees it ran.
+# The refresh is the slow part of these cases (README, "Timing a run").
+# ----- A change to a repository file refreshes the index -----
+# The container has no network, so the refresh fails, which is how the test
+# sees that it ran. Nothing else in the role reaches the network.
+- name: Leave the repository files the hand-run installer made
+  ansible.builtin.include_tasks: legacy_files.yml
+
+- name: Change the repository source by hand
+  ansible.builtin.include_tasks: source_changed.yml
+
+- name: Change the repository key file by hand
+  ansible.builtin.include_tasks: key_changed.yml

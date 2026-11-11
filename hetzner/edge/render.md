@@ -208,6 +208,108 @@ the `*` version segment.
 After the protection chain, before `reverse_proxy`: a client probing for an open setup is
 throttled and seen by CrowdSec rather than answered for free.
 
+## `logDirective`: retention and rotation
+
+Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of
+2026-08-24, inside the 90-day ceiling the website privacy notice states). The directive is
+`roll_keep_for 720h`, which Caddy turns into 30 days.
+
+`roll_keep_for` only prunes files that have already been rolled, so a file must also roll on
+a clock. `roll_at 00:00` rolls every log daily at midnight UTC, even with no writes. Caddy
+v2.11.4 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
+`github.com/DeRuina/timberjack` v1.4.2 on a background timer). `roll_interval` exists in the
+same module but rolls only on the next write, so it would not bound a quiet edge, and it is
+not used.
+
+`roll_keep 31` keeps 31 rolled files. Caddy's default of 10 would cap the daily roll at 10
+days and shorten the retention silently. The worst-case age of an entry is about 31 days (30
+days plus the one day its file spans), not exactly 30. A tighter 30-day bound would need
+`roll_keep_for 696h`; that is a change to the owner's value and is not made here.
+
+`render.test.ts` pins all three directives on every log and bounds the retention at or below
+2160h, so a later value above 90 days fails.
+
+A change to a log output option (retention, roll, or format) takes effect only when the caddy
+container is recreated, not on `caddy reload`. See `hetzner/RUNBOOK-edge.md` "Log retention".
+
+## `logDirective`: break-glass token redaction and strip
+
+The break-glass sign-in (how support opens a customer's Ghost admin) carries a single-use
+token in the query parameter `bl_break_glass` on a `/ghost/` request. Left alone, Caddy's
+JSON access log writes it to disk in clear. Measured against Caddy v2.11.4 with the old
+bare `format json`, the token appears in exactly three fields of a log line:
+`request.uri`, `request.headers.Referer` (a refused token leaves the sign-in page at its
+original URL, and its same-origin sub-requests send that URL) and `resp_headers.Location`
+(Ghost's 302 to `/ghost/#/?bl_break_glass=...`). Nowhere else; `breakGlassToken.test.ts`
+reads the real log back to keep it that way.
+
+**Redaction.** Every `log` block, of every kind (site, redirect, static, probe), is written
+by `logDirective`, which wraps the same JSON encoder in `format filter` and runs a
+`regexp` filter over those three fields. The value of the parameter becomes `REDACTED`, so
+a reader of the log can still see that a token was presented. A line with no token is
+written byte for byte as before and has the same JSON key set, so CrowdSec's parser and
+the rate-limit derivation in the runbook read it unchanged; the test compares the parsed
+key sets of the old and new formats.
+
+The log pattern is deliberately wider than what Ghost reads. It is case-insensitive and
+redacts any parameter whose name starts with the token's, so `BL_BREAK_GLASS=`,
+`bl_break_glass[]=` and a bare `?bl_break_glass` leave nothing. The `[?&]` boundary also
+covers the `#/?bl_break_glass=` fragment in Ghost's `Location`. It does not hide the name
+when it sits inside another parameter's value, which is not a token to anyone. The pattern
+uses no backslash, brace or quote, so Caddyfile quoting cannot corrupt it. The `query`
+filter is not used: it re-encodes every URI it touches, which would change token-free
+lines.
+
+**Strip.** The token is read only on `/ghost/` (Ghost's adapter reads exactly
+`bl_break_glass`, case-sensitive, as a string). On any other path the adapter never sees,
+refuses or consumes it, so it would sit valid in Ghost's request log until it expires. The
+edge therefore removes it with `uri ... query -bl_break_glass` before any other handler,
+and forwards the rest. It is a strip, not a refusal, so a stray parameter on an ordinary
+page is not turned into an error. On `/ghost/` the request is forwarded byte for byte.
+
+The gate (`@break_glass_strip`) is a CEL `expression` over the raw request target
+`{http.request.orig_uri}`, not Caddy's `path` matcher. The `path` matcher lowercases,
+decodes and cleans before matching, but Ghost's router (Express) routes on the raw path, so
+`/%67host/`, `/ghost%2Fx` and `/%67host/x` would look like `/ghost/` to Caddy while Ghost
+sends them to its front end, where the adapter never sees the token. Reading the raw target
+removes the disagreement. It fires when both hold:
+
+- the query has a parameter whose name is the token's, at the start of a parameter (so
+  `a=?bl_break_glass=T` is one parameter named `a` and does not fire). Each character of
+  the name is accepted as itself or as its percent form, with either hex case, because
+  `%5f` and `%5F` decode to the same byte. The letters stay case-sensitive. One
+  function, `paramNamePattern`, spells the name for both this gate and the log filter.
+- the raw path is not `/ghost` followed by `/`, `?` or the end (lowercase only), or it
+  contains two dot-spellings in a row (`.` or `%2e`).
+
+The keep-test is lowercase on purpose. Express also routes `/GHOST/`, so a capitalised
+break-glass URL is stripped and fails; the minter only builds lowercase `/ghost/` URLs.
+`/ghost/../` is stripped although Express would route it into the admin app, to keep the
+rule simple and to err toward stripping. Every form where Caddy and Express could disagree
+about "under `/ghost/`" is therefore stripped, which is the safe direction.
+
+`uri query` re-encodes the query it rewrites: keys come out sorted and values re-escaped.
+Measured, the other parameters keep their decoded names and values; a token-only query
+leaves no `?` at all; a pair with an invalid escape (`c=%ZZ`) is dropped by Go's query
+parser along with the token. The rule fires only when the parameter is present, so no
+other query string is ever re-encoded.
+
+The strip is first in the route after the HSTS header, ahead of `request_body`, the
+protection chain, the setup refusal and `reverse_proxy`, so neither the AppSec hop nor the
+upstream carries a token that is off `/ghost/`. It is unconditional (no posture field
+switches it off), is on every served site block and on both probe listeners so a loopback
+`curl` can prove it, and is absent from redirect, static and metrics blocks, whose logs are
+still filtered.
+
+Not covered, by decision:
+
+- Ghost's own request log on the application host. The token is on `/ghost/` by design,
+  and the adapter's README names that as accepted.
+- CrowdSec's records (alerts, AppSec event metadata).
+- Forms the adapter does not read: `BL_BREAK_GLASS`, `bl_break_glass[]` (an array, refused
+  as malformed) and a name hidden inside another parameter's value. They are forwarded
+  as sent, and the first two are redacted in the log.
+
 ## `siteBlock`: discard route
 
 `EdgeSite.discardRoute` is one literal path the edge answers itself: `POST` gets an empty
@@ -312,6 +414,12 @@ failure would take the magic-link path down with the general one. Whoever evalua
 CDN owns changing this line to a trusted-proxy configuration in the same change, never
 afterwards.
 
+The same key can also fail without a CDN: if the edge's container networking presents
+real clients as a Docker bridge address (for example `172.18.0.1` behind the docker-proxy),
+every collapsed client shares one budget per zone. This module cannot see that; the
+owner-run percentile and bridge-address check in `RUNBOOK-edge.md` §10a is what looks
+for it before the general throttle is applied live.
+
 ## `protectionChain`: handler evaluation order
 
 The handler chain, in evaluation order: throttle runs **before** the WAF, which is the
@@ -320,3 +428,14 @@ at priority 1000–1003, ahead of the throttle at 2000). The retired edge evalua
 shared fleet; this one evaluates on two vCPUs, so a flood that reached the WAF first would
 spend exactly the capacity the throttle exists to protect. The observable difference is
 confined to a client that is both flooding and attacking: it is answered 429 rather than 403.
+
+### What the general throttle covers
+
+`protectionChain` is called by four block builders, so the one `rateLimit` posture
+field throttles all four: `siteBlock` (zone `<site>_per_ip`), `redirectBlock` (zone
+`<site>_redirect_per_ip`), `staticBlock` (zone `<site>_per_ip`, the `publicpress.co.uk`
+holding page) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
+loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` never calls
+`protectionChain`. Under the committed posture that is one general `rate_limit` directive
+per throttled block, each in its own zone, and `render.test.ts` counts them per kind
+from the registries.

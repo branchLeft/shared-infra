@@ -19,8 +19,24 @@ second Compose stack beside it, does not create the host, and assumes
 `branchleft-compose@.service`, Docker and `/usr/local/sbin/branchleft-deploy`
 are already installed.
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['public_net']['ipv4']['ip'])")
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_IPV4=$(hcloud server ip edge1)
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   systemctl is-active branchleft-compose@edge &&
   test -x /usr/bin/python3 &&
@@ -135,7 +151,7 @@ both stacks reads its config through a bind mount **as the container-side
 user**, not as root.
 
 That combination has already broken a deploy. `hetzner/monitoring/stack/prometheus/prometheus.yml`
-is written by `npm run render` (a Vitest file snapshot), which left it `0600` in
+is written by `pnpm run render` (a Vitest file snapshot), which left it `0600` in
 one workstation checkout. Git records `100644` and cannot see the difference --
 it tracks only the executable bit -- so the mode is invisible to review, to
 `git status` and to CI, which checks out its own copy at `0644`. `rsync -av`
@@ -288,9 +304,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 `absent` means there is nothing to lose. Anything else: edit the file in
 place rather than overwriting it.
 
-The values are written by the `monitoring_stack` Ansible role: the role is the
-target, and the shell blocks in this step are interim hand paths, named below,
-for the time until a playbook runs the role. The role creates `/etc/branchleft`
+The values are written by the `monitoring_stack` Ansible role, which the edge1
+playbook runs on each gated apply. The role creates `/etc/branchleft`
 and `/etc/branchleft/monitoring.env` if they are absent, closes the file to
 `root:root 0600` before any value is written, and writes these keys, each on
 its own line, leaving the other keys in place:
@@ -299,8 +314,9 @@ its own line, leaving the other keys in place:
   `ALERT_RECIPIENT_EMAIL`, `MAILHOST_PING_URL`, `GRAFANA_ADMIN_PASSWORD`
   (a change to any of these restarts the stack, if it is enabled)
 - `SNDS_DATA_URL` (read by the SNDS collector only; a change does not restart
-  the stack). Until a gated run replaces it, step 14 still writes this key by
-  hand, and that hand write is the one that remains.
+  the stack). It comes from the `monitoring_stack_snds_data_url` key of
+  `/etc/branchleft/host-inputs.json`; step 14 rotates it there, and nothing
+  writes this line by hand.
 
 The owner supplies each value from the password manager. Nothing generates
 one. `GRAFANA_ADMIN_PASSWORD` is read by Grafana only when it first creates its
@@ -331,54 +347,12 @@ secrets file except its `SNDS_DATA_URL` line) changes the hashed file, so the
 first role run after it restarts the stack once, even when the role's own inputs
 are unchanged. The role's README, "Restart", has the detail.
 
-**The role does not yet run on a host, so these hand paths stay the runnable
-ones until the first gated converge.** No playbook in this repository runs
-either role yet. Each interim hand block in steps 3, 4, 5, 13 and 14 is marked with
-an `interim-hand-block` comment and listed in
-`hetzner/provision/test_runbook_monitoring_hand_blocks.py`, which fails on a hand
-block that is not listed. They are retired together, after the first gated
-converge has run on a host. On a host where the file is absent, the block below
-writes the six keys in one go, with a guard that refuses to overwrite a file
-that exists. Read each value from the password manager into the shell; it
-reaches the host on stdin, not on a command line. Run it only when the file is
-absent (the check above printed `absent`).
-
-<!-- interim-hand-block: s3-value-block -->
-
-```bash
-read -rs SMTP_USERNAME && export SMTP_USERNAME
-read -rs SMTP_PASSWORD && export SMTP_PASSWORD
-read -rs HEALTHCHECKS_PING_URL && export HEALTHCHECKS_PING_URL
-read -rs ALERT_RECIPIENT_EMAIL && export ALERT_RECIPIENT_EMAIL
-read -rs MAILHOST_PING_URL && export MAILHOST_PING_URL
-read -rs GRAFANA_ADMIN_PASSWORD && export GRAFANA_ADMIN_PASSWORD
-{ printf 'SMTP_USERNAME=%s\n' "$SMTP_USERNAME";
-  printf 'SMTP_PASSWORD=%s\n' "$SMTP_PASSWORD";
-  printf 'HEALTHCHECKS_PING_URL=%s\n' "$HEALTHCHECKS_PING_URL";
-  printf 'ALERT_RECIPIENT_EMAIL=%s\n' "$ALERT_RECIPIENT_EMAIL";
-  printf 'MAILHOST_PING_URL=%s\n' "$MAILHOST_PING_URL";
-  printf 'GRAFANA_ADMIN_PASSWORD=%s\n' "$GRAFANA_ADMIN_PASSWORD"; } |
-  ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
-    test ! -e /etc/branchleft/monitoring.env || { echo "FAILED: monitoring.env exists; not overwriting it" >&2; exit 1; }
-    install -d -m 0755 -o root -g root /etc/branchleft &&
-    umask 077 &&
-    cat > /etc/branchleft/monitoring.env &&
-    chmod 0600 /etc/branchleft/monitoring.env &&
-    ls -l /etc/branchleft/monitoring.env && grep -c . /etc/branchleft/monitoring.env'
-unset SMTP_USERNAME SMTP_PASSWORD HEALTHCHECKS_PING_URL ALERT_RECIPIENT_EMAIL MAILHOST_PING_URL GRAFANA_ADMIN_PASSWORD
-```
-
-Expect `-rw------- 1 root root` and `6`. Anything else: stop and read the error.
-Do not print the file.
-
-**Gap: rotating one of the six keys above has no runnable path yet.** The block
-refuses when the file exists, because a rewrite would overwrite the `NTFY_` and
-`STALWART_` lines, and the `STALWART_PROMETHEUS_SECRET` block below replaces only
-its own key. The role is not wired to any host, so until the first gated converge
-no hand command replaces `SMTP_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` or another of
-the six in place. A single-key rotation path is its own ticket in the backlog; once
-the role runs on a host, changing the key's input and running the role is that
-path. Until then, a rotation of one of them waits.
+**The role runs on edge1.** The edge1 playbook wires `monitoring_stack` (PR #544,
+merged 2026-10-31), and the gated apply of commit c3ef323 converged the host on
+2026-11-01. The role writes the six keys above from the host's inputs on each
+gated apply, so rotating one of them is a change to its input followed by that
+apply. No hand block writes them any more. The `STALWART_PROMETHEUS_SECRET` block
+below is the one hand path left in this step.
 
 Check the file's shape without printing it:
 
@@ -430,23 +404,11 @@ reads the new value on its next restart (step 7b).
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering here independently.
 
-**The `monitoring_stack` role covers this copy, and this rsync stays the runnable
-path until the first gated converge.** The role delivers the same files with the
-same modes, from the same directory. It never deletes, so the `--delete` below
-has no counterpart in the role: a file removed from the repository stays on a host
-the role has converged, and must be removed by hand. Once the role runs on a host,
-retire this command for that host. Sections 3, 4, 5 and 14 keep their hand paths
-until then.
-
-<!-- interim-hand-block: s4-rsync -->
-
-```bash
-rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
-  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'chown -R root:root /opt/branchleft/monitoring/'
-```
+**The `monitoring_stack` role makes this copy on each gated apply.** It delivers
+the same files with the same modes, from the same directory. It never deletes, unlike
+the `rsync --delete` this step used to run, so a file removed from the repository
+stays on a host the role has converged, and must be removed by hand. No command in
+this step is typed by hand.
 
 **This copy alone changes nothing in the running stack.** Prometheus and
 Alertmanager both read their config only from what is on disk when their
@@ -454,29 +416,19 @@ container starts. Prometheus's reload endpoint is disabled outright -- this
 stack does not pass `--web.enable-lifecycle`, so `POST /-/reload` is refused
 and there is no way to make it pick up a new file short of restarting it.
 Alertmanager's own reload mechanism does not help either: the file it would
-reload is `alertmanager/alertmanager.yml`, which this same rsync deletes (see
-below) and only a restart's `ExecStartPre` regenerates -- there is nothing on
-disk to reload until that has run. All three mounts -- `prometheus.yml`,
-`alerts.yml`, `alertmanager.yml` -- are `:ro`, so the bytes on disk change the
-instant `rsync` finishes while the running containers go on serving whatever
-they last read. The change is not deployed until `systemctl restart
+reload is `alertmanager/alertmanager.yml`, which only a restart's `ExecStartPre`
+writes -- there is nothing on disk to reload until that has run. All three
+mounts -- `prometheus.yml`, `alerts.yml`, `alertmanager.yml` -- are `:ro`, so the
+bytes on disk change the instant the copy finishes while the running containers
+go on serving whatever they last read. The change is not deployed until `systemctl restart
 branchleft-compose@monitoring` runs, in step 7 below -- first-time bring-up
 starts it there for the first time; every later update to this directory
 restarts it the same way, in step 7's "Updating an already-running stack".
 
-`--delete` matters here specifically: `render_alertmanager_config.py` writes
-`alertmanager/alertmanager.yml` on the host, which does not exist in the
-committed tree, so every copy deletes the previous render. That restart is
-what puts it back: step 7's `ExecStartPre` runs
-`render_alertmanager_config.py` before every start, first or otherwise. **A
-copy that is not followed by that restart leaves the host with no
-`alertmanager.yml` on disk at all.** Nothing looks wrong -- the running
-Alertmanager container holds its own file open and keeps serving it -- so the
-gap is invisible until the container is next recreated for any unrelated
-reason and fails to start against a missing file. The `chown` here corrects
-ownership on whatever `--delete` left behind; it never touches
-`alertmanager.yml`, because `--delete` has already removed it by the time
-`chown` runs.
+`render_alertmanager_config.py` writes `alertmanager/alertmanager.yml` on the
+host, which does not exist in the committed tree, and the copy does not touch it.
+Step 7's `ExecStartPre` runs `render_alertmanager_config.py` before every start,
+first or otherwise, so the restart in step 7 is what writes it.
 
 **Note: `alertmanager/alertmanager.yml` must remain owned by uid 65534.** See
 `render_alertmanager_config.py` — Alertmanager runs as `nobody` and a bind mount
@@ -487,29 +439,17 @@ is read as the container-side user, so a root-owned file becomes unreadable.
 `$EDGE1_IPV4` is set under "What has to be true first" above; re-set it
 first if you are entering here independently.
 
-The `monitoring_stack` role installs both drop-ins: `monitoring.override.conf`
-into `branchleft-compose@monitoring.service.d/` and `edge.override.conf` into
-`branchleft-compose@edge.service.d/`, each as `override.conf`, `root:root` mode
-`0644`, and it reloads systemd when either changed. The role is not yet wired
-to a host (step 3), so until the first gated converge this script is the
-runnable path, and it installs the same two files:
-
-<!-- interim-hand-block: s5-script-call -->
-
-```bash
-hetzner/provision/install-systemd-drop-ins.sh root@"$EDGE1_IPV4"
-```
+The `monitoring_stack` role installs `monitoring.override.conf` into
+`branchleft-compose@monitoring.service.d/` as `override.conf`, `root:root` mode
+`0644`, and it reloads systemd when that file changed. The `edge_stack` role
+installs the edge drop-in, `edge.override.conf`, the same way. The edge1 playbook
+runs both roles on each gated apply, so no command in this step is typed by hand.
 
 The role does not restart `edge`, and it does not start `monitoring`.
 
 Neither drop-in takes effect until the affected unit next starts or
 restarts -- step 6 does that for `edge`, and step 7's first-ever start does
 it for `monitoring`.
-
-`hetzner/provision/install-systemd-drop-ins.sh` still exists and still installs
-the same two files for the host-provision path (`RUNBOOK-provision-host.md`).
-It is retired in a follow-up PR, after the first gated run of the role has
-converged on a host.
 
 ## 6. Restart the edge stack
 
@@ -659,6 +599,15 @@ and `blackbox_mail`'s labels are what catch the exporter itself being down --
 a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
+
+`blackbox_object_storage` is one target: the Hetzner Object Storage endpoint
+`hel1.your-objectstorage.com`, probed over HTTPS through blackbox_exporter's
+`http_object_storage` module. It carries `expected_up: 'true'` and should read
+`up`. The module counts a 403 from the bare endpoint as up, because the service
+refuses anonymous requests there by design. A `down` here means the connection
+was refused or timed out, which `ObjectStorageProbeFailed` pages on after 15
+minutes.
+
 Only `node` for `app1`, `node` for `db1` and `node` for `ops1` are expected
 `down`: `app1`/`db1`'s exporters are not provisioned yet, and `ops1`'s carries
 `expected_up: 'false'` until §15 below confirms it live and flips that label
@@ -739,7 +688,7 @@ publishes Grafana on `10.20.1.10:3000` only, and `10.20.1.10` does not route
 from the public internet.
 
 ```bash
-EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o json | python3 -c "import json, sys; print(json.load(sys.stdin)['private_net'][0]['ip'])")
+EDGE1_PRIVATE_IPV4=$(hcloud server describe edge1 -o format='{{(index .PrivateNet 0).IP}}')
 ssh -i ~/.ssh/id_ed25519_hetzner -L 3000:"$EDGE1_PRIVATE_IPV4":3000 root@"$EDGE1_IPV4" -N &
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 ```
@@ -747,7 +696,7 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:3000/login
 Expect `200`, reached only through the tunnel. Confirm the registry side too:
 
 ```bash
-grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/Caddyfile
+grep -R "grafana\|$EDGE1_PRIVATE_IPV4" sites.ts hetzner/edge/stack/caddy/Caddyfile
 ```
 
 Expect no match in either file -- Grafana carries no hostname, no Caddy
@@ -870,46 +819,32 @@ re-copy, restart. `$EDGE1_IPV4` is set under "What has to be true first"
 above; re-set it first if you are entering here independently -- this is
 the section most likely to be entered mid-incident, days after the deploy.
 
-Once the `monitoring_stack` role runs on a host, a rollback is the checkout
-below followed by a gated run, which copies the same files and restarts the
-unit by fingerprint (step 3), and the copy and restart in this block are
-retired with the other interim hand blocks. Until then this block is the
-runnable path.
+A rollback is a revert that restores `hetzner/monitoring/stack` to
+`<PREVIOUS_MERGED_SHA>`, merged to `main` the usual way, followed by the gated
+apply of edge1. That apply copies the same files and restarts the unit by
+fingerprint (step 3). No hand command is part of it.
 
-<!-- interim-hand-block: s13-rollback -->
-
-```bash
-git checkout <PREVIOUS_MERGED_SHA> -- hetzner/monitoring/stack
-rsync -av --delete --no-owner --no-group --chmod=u=rwX,go=rX \
-  -e 'ssh -i ~/.ssh/id_ed25519_hetzner' \
-  hetzner/monitoring/stack/ root@"$EDGE1_IPV4":/opt/branchleft/monitoring/ &&
-ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
-  'chown -R root:root /opt/branchleft/monitoring/ &&
-   systemctl restart branchleft-compose@monitoring'
-```
-
-Then `git checkout HEAD -- hetzner/monitoring/stack` on the workstation. If
-the rollback also needs to undo an edge-side change (the metrics endpoints
-or the cgroup containment), the same pattern applies to
-`hetzner/edge/stack`, followed by `systemctl restart branchleft-compose@edge`.
+If the rollback also needs to undo an edge-side change (the metrics endpoints
+or the cgroup containment), revert `hetzner/edge/stack` the same way: the gated
+apply delivers it, and `systemctl restart branchleft-compose@edge` (step 6) makes
+it take effect.
 
 ## 14. Deploy the SNDS complaint-rate collector
 
-`snds/collect_snds_metrics.py` is copied to the host as part of step 4's
-`hetzner/monitoring/stack/` rsync (it lives under that directory). This
+`snds/collect_snds_metrics.py` is copied to the host as part of step 4's copy of
+`hetzner/monitoring/stack/` (it lives under that directory). This
 section is everything specific to it on top of that: the automated-access
 URL, node-exporter's textfile-collector mount, and the systemd timer that
 actually runs it.
 
-**Two writers of `SNDS_DATA_URL`: read this before you rotate the URL.** The
-`monitoring_stack` role (`ansible/roles/monitoring_stack`) writes this key from
-its input on every run, and it does not restart the stack, so nothing signals a
-conflict. The hand write in this section is the other writer. Once the role runs
-on a host, the next run puts back the value it was given. A rotation changes the
-role's input and this key, in that order, before the role runs again (the role's
-README, "Secrets"). Until a gated path exists for the rotation, this section is the
-one that rotates the key. An operator who rotates here alone loses the change on
-the next gated run, and the collector then fails without warning.
+**One writer of `SNDS_DATA_URL`: read this before you rotate the URL.** The
+`monitoring_stack` role (`ansible/roles/monitoring_stack`) writes the
+`SNDS_DATA_URL` line of `/etc/branchleft/monitoring.env` from the
+`monitoring_stack_snds_data_url` key of `/etc/branchleft/host-inputs.json` on
+every gated apply, and it restarts nothing for that line. That key is the only
+place a rotation changes. Nothing writes the line in `monitoring.env` by hand any
+more: the next apply would put back whatever the key holds, and the collector
+would then fail without warning.
 
 **First, generate an automated-access URL.** Sign in to the SNDS portal at
 `https://sendersupport.olc.protection.outlook.com/snds/` as the registered
@@ -931,113 +866,69 @@ person can actually keep.
 
 **The URL is the credential.** It grants download of the account's SNDS data
 to anyone holding it, so it is handled exactly like the passwords beside it:
-written straight into `/etc/branchleft/monitoring.env` as `SNDS_DATA_URL`
-(§3's table) on the host, never pasted into a terminal that logs, an issue, a
-PR, or a chat. The collector never prints it -- every error path redacts both
-the whole URL and the key alone before anything reaches the journal.
-`$EDGE1_IPV4` is set under "What has to be true first" above; re-set it first
-if you are entering this section independently -- every command below reuses
-it.
+typed at a hidden prompt on the host, never pasted into a terminal that logs, an
+issue, a PR, or a chat; kept in `/etc/branchleft/host-inputs.json` (`root:root`,
+`0600`); and delivered into `monitoring.env` by the role. The collector never
+prints it -- every error path redacts both the whole URL and the key alone before
+anything reaches the journal. `$EDGE1_IPV4` is set under "What has to be true
+first" above; re-set it first if you are entering this section independently --
+every command below reuses it.
 
-Paste the URL when the shell prompts, so it never enters shell history, and
-let it reach the host **on stdin** rather than on a command line. The new file is
-built beside the old one and checked before it is moved over, so a failed run
-leaves the old file untouched and removes its temporary file:
-
-<!-- interim-hand-block: s14-snds-write -->
+Run the seeding tool on edge1. It asks for the URL at a hidden prompt (`-t` gives
+it a terminal), so the URL never reaches a command line, shell history or `ps`,
+on either machine. The tool is in the checkout the host's last apply pulled, at
+`/var/lib/pull-trigger/current`; before the commit that added the tool has
+applied, the pull request that added it carries the step that copies it to the
+host.
 
 ```bash
-read -rs SNDS_URL
-printf '%s' "$SNDS_URL" | ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
-  umask 077
-  f=/etc/branchleft/monitoring.env
-  t=$f.tmp
-  trap "rm -f $t" EXIT
-  url=$(cat)
-  if [ -z "$url" ]; then echo "FAILED: refusing to write an empty SNDS_DATA_URL" >&2; exit 1; fi
-  if [ ! -f "$f" ]; then echo "FAILED: $f is absent; write it with step 3 first" >&2; exit 1; fi
-  { grep -v "^SNDS_DATA_URL=" "$f" || [ $? -eq 1 ]; } > "$t" &&
-    printf "SNDS_DATA_URL=%s\n" "$url" >> "$t" &&
-    [ "$(grep -c "^SNDS_DATA_URL=" "$t")" = 1 ] &&
-    [ "$(sed -n "s/^SNDS_DATA_URL=//p" "$t" | wc -c | tr -d " ")" = "$(( $(printf %s "$url" | wc -c) + 1 ))" ] &&
-    mv "$t" "$f" &&
-    echo "OK: SNDS_DATA_URL replaced, $(printf %s "$url" | wc -c | tr -d " ") bytes, exactly one line" ||
-    { echo "FAILED: monitoring.env was NOT updated -- see the error above" >&2; exit 1; }'
-unset SNDS_URL
+ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
+  python3 -I /var/lib/pull-trigger/current/ansible/tools/seed_host_inputs.py \
+  --host edge1 --set monitoring_stack_snds_data_url
 ```
 
-Expect `OK: SNDS_DATA_URL replaced, N bytes, exactly one line` **and exit
-0**. `OK` is printed only after the move succeeded. Anything else means the file
-was not updated and the collector is still using the old link -- which, if you
-have just re-enabled automated access, is already invalidated. Do not proceed on
-the message alone: `echo $?`.
+Expect `set monitoring_stack_snds_data_url (N bytes) in
+/etc/branchleft/host-inputs.json` **and exit 0**. Check `N` against the URL's
+real length in bytes: it is the one confirmation that does not involve printing
+the credential back, and it catches a truncated paste. Any failure before the
+rename means the file was not changed and the key still holds the old link -- which, if you have
+just re-enabled automated access, is already invalidated. The tool changes only
+this key. It refuses a file that is missing, not `root:root 0600`, not one JSON
+object or holding a key outside edge1's row, and it refuses an empty answer; it
+writes the new file beside the old one, renames it over the old one, then reads
+the result back. A failed read-back is the one exception to the line above: the
+new file is already in place and the old one is not restored. The tool prints
+`inspect it` and exits non-zero, so inspect the file before the apply. It never prints the
+value, and it prints the key name only. Do not run it with `--replace` or without
+`--set` between a rotation and the apply that delivers it: that fills the file
+from the live `monitoring.env`, which still holds the old URL.
 
-Check `N` against the URL's real length in bytes, since that is the one
-confirmation that does not involve printing the credential back.
+**The new URL reaches the collector at the next gated apply, not at once.** The
+apply of edge1 runs on a push to `main` and waits for approval; no manual or
+scheduled run reaches a host. Until it has run, `monitoring.env` and the
+collector keep the old link. The apply restarts nothing for this line:
+`snds-collector.service` reads the file fresh on its next scheduled run, unlike
+Alertmanager's secrets, which need a stack restart. A stale or absent URL fails
+only that one run. Three alerts cover the gap, and they fire at different times on
+purpose: `SNDSCollectorFailing` within the hour (off
+`snds_collector_last_run_success`, rewritten every run);
+`SNDSAccessLinkExpiringSoon` at 25 days, _before_ the link dies; and
+`SNDSCollectorStale` at 36 hours as the backstop for a collector that is not
+running at all. §8's target-verification list has no entry for any of them, since
+this does not run as a Prometheus scrape target -- see "What this stack
+deliberately does not do" below.
 
-**Three things this deliberately does not do, each of which corrupts the
-credential when written the obvious way.**
+**Rotating it, every 30 days.** Disable and re-enable automated access on that
+same portal page (Microsoft issues a new link only that way; re-enabling
+immediately invalidates the old one), run the command above with the new URL, and
+make sure a push to `main` and the approval of edge1's apply follow, because that
+apply is what delivers it. Nothing else needs updating: the collector notices the
+URL changed, restarts its own 30-day clock, and `SNDSAccessLinkExpiringSoon`
+clears on the next scrape. It tracks this by storing a SHA-256 of the URL --
+never the URL -- in `snds-link-state.json` beside the textfile output.
 
-1. **It does not pass the URL through `sed`'s replacement text.** An `&`
-   there expands to the whole matched line, and the portal's URLs carry more
-   than one query parameter. Measured, with a two-parameter URL:
-
-   ```
-   SNDS_DATA_URL=https://…/data.aspx?key=NEWSECRETSNDS_DATA_URL=https://old.example/snds/data.aspx?key=OLDSECRETformat=csv
-   ```
-
-   The new key is truncated and **the just-invalidated old credential is
-   written back into the file**. The symptom is an HTTP 400, whose own
-   message blames a truncated paste -- so the diagnosis points at the
-   operator rather than at this command. Quoting does not fix it: `&` is a
-   `sed` metacharacter, not a shell one.
-
-2. **It does not interpolate the URL into the `ssh` command line**, where it
-   would be visible to `ps` on both machines and defeat the `read -rs`
-   above. `url=$(cat)` takes it from stdin, and `printf '%s'` writes it
-   without interpreting backslashes the way `echo` would.
-3. **It rewrites the whole file** rather than appending on a conditional, so
-   a failed edit cannot leave two `SNDS_DATA_URL=` lines with the stale one
-   winning.
-
-4. **It reports failure as failure.** Every step is chained with `&&` and
-   the result is read back -- exactly one `SNDS_DATA_URL=` line, and its
-   stored length matching what was sent. An earlier version of this command
-   printed `wrote SNDS_DATA_URL (N characters)` from the shell variable, after
-   an unchecked `mv`: against an unwritable directory every write failed, the
-   file kept the old credential, and it still printed success and exited 0.
-   The count is read from the file, never from the variable.
-
-Checked against four cases before being written down here: a URL containing
-`&`, `%2F`, `%2B` and `%3D` (round-trips byte-identically, old line gone,
-exactly one `SNDS_DATA_URL=` line, other secrets untouched, result `0600`);
-an unwritable target (fails, exits 1, leaves the old value in place); empty
-input (refuses, exits 1, leaves the old value in place); and a first-time
-write into a file with no `SNDS_DATA_URL=` line yet (appends, preserves the
-rest).
-
-This does not restart anything -- `snds-collector.service` reads the file
-fresh on its next scheduled run, unlike Alertmanager's secrets, which need a
-stack restart. A stale or absent URL fails only that one run. Three alerts
-cover it, and they fire at different times on purpose:
-`SNDSCollectorFailing` within the hour (off `snds_collector_last_run_success`,
-rewritten every run); `SNDSAccessLinkExpiringSoon` at 25 days, _before_ the
-link dies; and `SNDSCollectorStale` at 36 hours as the backstop for a
-collector that is not running at all. §8's target-verification list has no
-entry for any of them, since this does not run as a Prometheus scrape target
--- see "What this stack deliberately does not do" below.
-
-**Rotating it, every 30 days.** Disable and re-enable automated access on
-that same portal page (Microsoft issues a new link only that way; re-enabling
-immediately invalidates the old one), then re-run the command above with the
-new URL. Nothing else needs updating: the collector notices the URL changed,
-restarts its own 30-day clock, and `SNDSAccessLinkExpiringSoon` clears on the
-next scrape. It tracks this by storing a SHA-256 of the URL -- never the URL
--- in `snds-link-state.json` beside the textfile output.
-
-**Then install the timer.** Not covered by step 5's
-`install-systemd-drop-ins.sh` -- that script only installs `*.override.conf`
-drop-ins for units this stack's template already defines, and
+**Then install the timer.** Not covered by step 5: step 5 installs only
+`*.override.conf` drop-ins for units this stack's template already defines, and
 `snds-collector.service`/`.timer` are standalone units of their own.
 
 ```bash
@@ -1137,25 +1028,19 @@ exact ordering mistake branchLeft/workspace#1149 exists to prevent.
 Same shape as "5. Provision a host that has no public address" above, reached
 through the `edge1` jump host — `$EDGE1_IPV4` is set there; re-set it first if
 entering here independently. **Native binary, not a Compose service**:
-`40-install-node-exporter.sh`'s own header explains why — ops1 runs
-`app-host-isolation.sh`'s `DOCKER-USER` policy, which drops every forwarded
-packet to the subnet with no carve-out for this host, and a published
-container port is forwarded traffic. A process bound to the host's own
-private address and reached over `INPUT` is not.
+The native install is the `node_exporter` role (`ansible/roles/node_exporter`),
+applied by ops1's gated pull, not a hand copy. The role's own README explains why
+the exporter is native: ops1 runs `app-host-isolation.sh`'s `DOCKER-USER` policy,
+which drops every forwarded packet to the subnet with no carve-out for this host,
+and a published container port is forwarded traffic. A process bound to the
+host's own private address and reached over `INPUT` is not.
 
-```bash
-cd ~/branchLeft/shared-infra
-HOST_PRIVATE_IP=10.20.1.50   # ops1 -- HOST_IPS.ops1, unchanged in value by the host rename, only in key name
-JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
-scp -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" -r hetzner/provision/. root@"$HOST_PRIVATE_IP":/root/platform-provision
-ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'find /root/platform-provision -type d -name __pycache__ -prune -exec rm -rf {} + && chmod +x /root/platform-provision/*.sh /root/platform-provision/*.py && /root/platform-provision/40-install-node-exporter.sh'
-```
-
-Expect the script's own closing line, `40-install-node-exporter: done,
-listening on 10.20.1.50:9100`. If it instead prints `no address in
-10.20.1.0/24 found on this host`, stop — that means this ran against the
-wrong host or the private network is not attached, not a problem the script
-can reconcile around.
+There is no command to run by hand here. The step is the owner's gate approval of
+the ops1 pull once the role is on `main`. After that apply, read the result on
+ops1: `systemctl is-active node_exporter.service` prints `active`, and the
+exporter listens on `10.20.1.50:9100`. If the role refuses with `no address in
+10.20.1.0/24` or with a mount at or above 70 percent, stop and fix the host;
+the role does not reconcile either of those.
 
 ### 15b. The firewall rule this does not need, stated rather than left silent
 
@@ -1217,7 +1102,7 @@ exactly the gap that hid `db1`'s four-day `mysqld_exporter` crash loop
 carries the full account). Once 15d's `1` is confirmed:
 
 1. Change `ops1`'s `expectedUp: false` to `true` in `MONITORED_NODE_HOSTS`.
-2. `npm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.
+2. `pnpm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.
 3. Open a PR for that diff alone, citing this section and 15d's read-back.
 4. Once merged, redeploy per 15c again — this second redeploy is the one that
    actually arms `HostOrServiceDown`/`ServiceFlapping` for `ops1`.
@@ -1439,18 +1324,20 @@ this platform cannot see (spam-trap hits, volume trends, complaint history).
 **`SNDSAccessLinkExpiringSoon`** -- a chore, not an incident, and the only
 one of these that arrives _before_ anything breaks. The automated-access URL
 is 25 days old and Microsoft kills it at 30. Rotate it per §14 (disable and
-re-enable automated access in the portal, then write the new URL into
-`/etc/branchleft/monitoring.env`); the collector restarts its own clock when
-it sees the new URL and the alert clears on the next scrape. Left alone, it
-becomes `SNDSCollectorFailing` in five days.
+re-enable automated access in the portal, then run §14's command, which puts
+the new URL into `/etc/branchleft/host-inputs.json`; the next gated apply
+delivers it); the collector restarts its own clock when it sees the new URL and
+the alert clears on the next scrape. Left alone, it becomes
+`SNDSCollectorFailing` in five days.
 
 **`SNDSCollectorFailing`** -- the collector ran and failed, read straight off
 `snds_collector_last_run_success`. `journalctl -u snds-collector.service -n
 20` names the cause on the last line. The one that matters:
 
 - `HTTP 400 -- SNDS rejected the automated-access link as malformed`. A
-  truncated paste into `monitoring.env` is the usual cause; re-do §14's
-  write step.
+  truncated paste at the hidden prompt is the usual cause; re-run §14's
+  command (it prints the byte length to check against the URL's real length),
+  and the next gated apply delivers the corrected URL.
 
 **A 404 is deliberately NOT a failure and never reaches this alert.** See
 "When SNDS has no data at all" below.

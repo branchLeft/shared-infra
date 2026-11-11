@@ -1,0 +1,12 @@
+---
+# Calls the role's module in check mode with the list declare_slots.yml built, and keeps
+# the result where verify.yml reads it. The call hides its result, so a refusal shows no
+# stack name or key; verify.yml reads the counts from the registered variable.
+- name: Call the module in check mode with the declared list
+  deploy_slot_keys_reconcile:
+    program_path: '{{ deploy_slot_keys_program_path }}'
+    slots: '{{ deploy_slot_keys_scenario_declared_slots }}'
+  check_mode: true
+  register: deploy_slot_keys_scenario_check_result
+  failed_when: false
+  no_log: true

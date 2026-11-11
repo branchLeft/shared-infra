@@ -24,7 +24,7 @@ is.
 | `projectGuard.ts`                     | Refuses a stack whose token addresses a different project — see below                          |
 | `RUNBOOK-seven-projects.md`           | Creating the five new projects, their tokens and markers, and proving isolation                |
 | `scripts/probe-project-isolation.py`  | The 7x7 token isolation proof, with a swap-mode control that must report FAIL                  |
-| `dns.ts`, `dnsZone.ts`, `dns/`        | The DNS zone stack, its zone file, `zonecheck.py` and the cutover runbook                      |
+| `dns.ts`, `dnsZone.ts`, `dns/`        | The DNS zone stack, its two zone files, `zonecheck.py` and the cutover runbooks                |
 | `network.ts`                          | The private network, its subnet, and the estate's default route out to the internet            |
 | `egress.ts`                           | Validates the default route's gateway against the constraints the route API enforces           |
 | `estate.ts`, `estate/`                | The estate stack — `edge1` today; see "The estate stack" for what it does not create           |
@@ -43,16 +43,16 @@ feature here rather than a limitation.
 `projects.ts` is the table below as data; the guard and the isolation probe
 both read it.
 
-| Project  | Holds                                                                     | Token today                                                                                                         |
-| -------- | ------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                |
-| org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                              |
-| tenants  | Built fresh: `edge-t`, `app-t1`, `db-t1`                                  | a Read probe token only, until a stack needs one                                                                    |
-| demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                    |
-| dns      | The branchleft.co.uk DNS zone and no hosts                                | `HCLOUD_TOKEN`, exported by hand per `hetzner/dns/RUNBOOK-dns-cutover.md` — `hetzner/dns/`'s stack, no CI apply yet |
-| backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                    |
-| demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one                                                                    |
-| lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret                                                                         |
+| Project  | Holds                                                                     | Token today                                                                                                                                                                                                            |
+| -------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                                                                                                                   |
+| org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                                                                                                                                 |
+| tenants  | Built fresh: `edge-t`, `db-t1` (switch off), `app-t1`                     | a Read probe token only, until a stack needs one                                                                                                                                                                       |
+| demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                                                                                                                       |
+| dns      | The branchleft.co.uk and publicpress.co.uk DNS zones and no hosts         | `HCLOUD_TOKEN`: first-time init by hand per `hetzner/dns/RUNBOOK-dns-cutover.md`; CI plans and applies every later change (`HCLOUD_TOKEN_DNS`, plan in `dns-plan`, apply in `production-dns`) — `hetzner/dns/`'s stack |
+| backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                                                                                                                       |
+| demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one                                                                                                                                                                       |
+| lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret                                                                                                                                                                            |
 
 A stolen dns or demo-dns token reaches no data outside that one zone. A
 stolen backup _Cloud API_ token reaches no bucket at all — Object Storage is
@@ -165,7 +165,7 @@ a host's only route off the subnet is the network's own gateway, and Hetzner
 resolves that against this table. It is unprotected on purpose — deleting it
 detaches nothing and loses no state, and moving the gateway to another host
 has to stay an ordinary apply. The forwarding at the far end is not Pulumi's:
-`provision/nat-gateway.sh` installs it, and
+the `egress_nat` role installs it on edge1 (the reconciler is `ansible/roles/egress_nat/files/branchleft_nat.py`), and
 `RUNBOOK-provision-host.md` carries the order the two have to happen in.
 
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`
@@ -431,6 +431,12 @@ Hetzner console and rescue system, not a password.
 
 ## Deploys
 
+A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`) is
+verified before the wrapper pins it. The verifier runs with no GitHub credential, and the design is
+fail-closed: a host with no credential refuses every registered deploy. The verifier and its pinned
+gh come from the `deploy_verifier` role, applied on `edge1`, `app1`, `ops1` and `db1`. See
+`provision/branchleft_deploy.md`, "The verifier runs with no credential" and "Live checks, in order".
+
 `branchleft-deploy <stack> <image@sha256:...>` — or `branchleft-deploy --slot
 <stack>` with the reference on stdin, for a slot key — is the whole of what CI
 can do as root. It refuses anything but a digest-pinned reference, refuses a
@@ -451,6 +457,35 @@ actually is -- the unit `failed` on both pins -- rather than a claimed
 recovery that did not happen, or an outage that a failed exit code alone
 does not prove: with no `ExecStop` at all, `docker ps` is what actually
 tells the two states apart, whether or not that restart succeeded.
+
+A failed start is retried before the unit stays `failed`. The template carries
+`Restart=on-failure`, `RestartSec=30s`, `StartLimitIntervalSec=900` and
+`StartLimitBurst=5`: the first start and four retries, 30 seconds apart. A start
+that failed because `containerd` or the Docker daemon was briefly away -- the
+failure is `failed to create task for container: Unavailable: error reading
+from server: EOF` -- is therefore tried again for about two minutes, plus the
+time each attempt takes, before the unit gives up. Without it such a unit
+stayed `failed` until someone looked. The rollback signal does not change:
+`systemctl restart` returns when the start job fails, with the failed start's
+non-zero exit code, before the retry timer fires, so `branchleft-deploy` still
+sees a failure and rolls back. The Molecule case `case_compose_retry.yml` of the
+`deploy_tooling` role records that exit code, and the retry counts, on real
+systemd. The retry follows a failed _start_ only: a stack that started and
+later lost a container is not touched, because its unit is still active.
+
+Every start counts against the limit, `branchleft-deploy`'s explicit ones
+included, and the limit is what makes the retry stop. A stack that has spent
+it is `failed` with result `start-limit-hit`, is listed by `systemctl --failed`,
+and refuses the next `systemctl restart` with `Start request repeated too
+quickly` until 15 minutes have passed. Do not wait: run `systemctl reset-failed
+branchleft-compose@<stack>`, then `systemctl restart branchleft-compose@<stack>`
+(or re-run the deploy job). The same limit refuses a sixth start of one stack
+inside 15 minutes, so a run of deploys to one stack that fast needs the same
+`reset-failed`. A start that fails slowly -- a pull that hangs until the 600
+second `TimeoutStartSec` -- spaces the starts out so that five never fall inside
+15 minutes, and that unit keeps retrying about every ten minutes instead of
+stopping. The new unit applies to a host when the `deploy_tooling` role next runs
+there; until then the host keeps the unit it has.
 
 A restart with no previous pin to roll back to -- a first deploy, always --
 removes the pin file instead of leaving one that failed, because there is
@@ -498,8 +533,10 @@ points) with the two applications behind the `apps` profile, because they cannot
 start until the identity reconciler has run against a running Zitadel. Every
 container has a `mem_limit`, and `provision/test_control_plane_stack.py` holds
 their sum under the host's measured available memory with a margin.
-PostgreSQL's `pg_hba.conf` is mounted beside the Compose file and selected at
-start: each login reaches only its own database, with `scram-sha-256` and a
+PostgreSQL's `pg_hba.conf` sits alone in a `postgres/` directory beside the Compose
+file, which the database container mounts as a directory and selects at start (a
+changed file reaches the running server because the `control_plane` Ansible role
+reloads it after every deploy, with no hand step): each login reaches only its own database, with `scram-sha-256` and a
 final `reject`, pinned by the same test file. The sign-in service runs as its own
 unprivileged database login and holds no administrator credential: it starts
 from Zitadel's setup phase, and the init phase that needs the administrator is
@@ -530,15 +567,20 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@website`                               | `branchLeft/website`, `deploy/compose.yml`                                                               | no                |
 | `branchleft-compose@db`                                    | `branchLeft/ghost-platform`, `db/stack/compose.yml`                                                      | no                |
 | `branchleft-compose@blog`, and one per further tenant slug | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`                             | no                |
+| `branchleft-compose@tenant-a`, a placeholder tenant slug   | nowhere: rendered, as for `blog`, by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`             | no                |
 | `branchleft-compose@demo-`, the prefix of each demo slot   | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
 | `branchleft-compose@demo-0-a`, one named demo instance     | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
 | `branchleft-compose@demo-host`, which is not an instance   | nowhere: the directory the `demo1_build` role stages `branchLeft/ghost-platform`'s demo programs into    | no                |
 | `branchleft-compose@demo-sidecar`, which is no instance    | nowhere: the sidecar's image pin file, read by `branchLeft/ghost-platform`'s `demo-host/provision`       | no                |
 | `branchleft-compose@broker`, which is not an instance      | nowhere: the broker program has its own unit, built from `branchLeft/ghost-platform`'s `services/broker` | no                |
 | `branchleft-compose@backup-worker`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
+| `branchleft-compose@ring-controller`                       | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@state-copy`                            | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@restore-drill`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@ntfy-pager`, which is not an instance  | nowhere: the pager's secrets file, `/etc/branchleft/ntfy-pager.env`, written by the `ntfy_pager` role    | no                |
+| `branchleft-compose@mail-spool`                            | nowhere: `branchLeft/ghost-platform`'s `render-core` golden, fetched by the `demo1_egress_spool` role    | no                |
+| `branchleft-compose@status`, which is not an instance      | nowhere: the project directory of the `status_page` role's plain `docker compose` Gatus page             | no                |
+| `branchleft-compose@dbt1`                                  | nowhere: rendered from a template by the `db_t1` role of `branchLeft/shared-infra`                       | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that
@@ -572,8 +614,8 @@ interoperate across the boundary — see the file's own comment for why that is
 not guaranteed for free.
 
 ```bash
-nvm use && npm test          # from hetzner/ (hetznerHost.test.ts)
-nvm use && npm test          # from hetzner-host/ (cloudInit.ts, host.ts)
+nvm use && pnpm run test         # from hetzner/ (hetznerHost.test.ts)
+nvm use && pnpm run test         # from hetzner-host/ (cloudInit.ts, host.ts)
 python3 -m unittest discover -s scripts -p 'test_*.py'
 ```
 
@@ -597,11 +639,11 @@ renderer, its tests, and the directory those tests produce.
   committed copy no longer matches the registry:
 
 ```bash
-nvm use && npm run render    # from hetzner/, rewrites edge/stack/
-nvm use && npm test          # from hetzner/, fails if it is stale
+nvm use && pnpm run render    # from hetzner/, rewrites edge/stack/
+nvm use && pnpm run test         # from hetzner/, fails if it is stale
 ```
 
-Both need the **repository root's** `npm ci` to have been run as well as this
+Both need the **repository root's** `pnpm install --frozen-lockfile` to have been run as well as this
 project's. The suite imports the root's `sites.ts`, Vitest loads the tsconfig
 nearest to that file to transform it, and that tsconfig extends a package that
 only resolves from a `node_modules` beside it. Without the root install the

@@ -1,0 +1,32 @@
+---
+# Place the administrator URL file and the four passwords as the owner does, with
+# place_tenant_password or place_migrator_password to replace the tenant's or the migrator's.
+- name: Place the administrator URL file
+  ansible.builtin.import_tasks: place.yml
+  vars:
+    place_path: '{{ verify_input_dir }}/admin-url'
+    place_content: "{{ scenario_admin_url }}\n"
+
+- name: Place the tenant password
+  ansible.builtin.import_tasks: place.yml
+  vars:
+    place_path: '{{ verify_input_dir }}/tenant-password'
+    place_content: "{{ place_tenant_password | default(scenario_tenant_password) }}\n"
+
+- name: Place the owner password
+  ansible.builtin.import_tasks: place.yml
+  vars:
+    place_path: '{{ verify_input_dir }}/owner-password'
+    place_content: "{{ scenario_owner_password }}\n"
+
+- name: Place the provisioner password
+  ansible.builtin.import_tasks: place.yml
+  vars:
+    place_path: '{{ verify_input_dir }}/provisioner-password'
+    place_content: "{{ scenario_provisioner_password }}\n"
+
+- name: Place the migrator password
+  ansible.builtin.import_tasks: place.yml
+  vars:
+    place_path: '{{ verify_input_dir }}/migrator-password'
+    place_content: "{{ place_migrator_password | default(scenario_migrator_password) }}\n"

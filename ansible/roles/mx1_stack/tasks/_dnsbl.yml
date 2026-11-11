@@ -1,0 +1,28 @@
+---
+# The DNSBL check (70-schedule-dnsbl-check.sh). A listed sending address silently kills deliverability
+# for everyone sending through this host, so the listing has to be found by a check and not by a
+# complaint. The script is delivered to /root/mail-provision, where the hand route ran it, and an
+# hourly cron.d entry runs it. There is no action and no stamp: cron watches /etc/cron.d on its own.
+- name: Make the directory the DNSBL check runs from
+  ansible.builtin.file:
+    path: '{{ mx1_stack_dnsbl_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Deliver the DNSBL check
+  ansible.builtin.copy:
+    content: '{{ mx1_stack_dnsbl_script_text }}'
+    dest: '{{ mx1_stack_dnsbl_script }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Schedule the DNSBL check hourly
+  ansible.builtin.copy:
+    content: '{{ mx1_stack_dnsbl_cron_text }}'
+    dest: '{{ mx1_stack_dnsbl_cron }}'
+    owner: root
+    group: root
+    mode: '0644'

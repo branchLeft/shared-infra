@@ -15,22 +15,6 @@
     edge_stack_verify_dropin_source: '{{ playbook_dir }}/../../../../../hetzner/monitoring/systemd/edge.override.conf'
     edge_stack_verify_pin_good: IMAGE=ghcr.io/branchleft/edge-caddy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     edge_stack_verify_hex64: '^[0-9a-f]{64}$'
-    edge_stack_verify_pin_other: ghcr.io/branchleft/edge-caddy@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
-    # What the role gives the locked script, for the case that runs the script by itself. Every
-    # action is off, so only the pin can stop it.
-    edge_stack_verify_script_env:
-      EDGE_PROJECT_DIR: /opt/branchleft/edge
-      EDGE_IMAGE_ENV: /etc/branchleft/edge.image.env
-      EDGE_ENV_FILE: /etc/branchleft/edge.env
-      EDGE_IMAGE_PATTERN: '^IMAGE=[a-z0-9][A-Za-z0-9._:/-]*@sha256:[0-9a-f]{64}$'
-      EDGE_UNIT: branchleft-compose@edge.service
-      EDGE_CADDY_CANDIDATE: /nonexistent/Caddyfile
-      EDGE_CADDY_WRITE: '0'
-      EDGE_CADDY_RELOAD: '0'
-      EDGE_COMPOSE_RESTART: '0'
-      EDGE_CROWDSEC_RESTART: '0'
-      EDGE_WAIT_TRIES: '1'
-      EDGE_WAIT_INTERVAL: '1'
   tasks:
     - name: Make a directory for the variants of the stack, on the machine that runs the test
       ansible.builtin.tempfile:
@@ -50,7 +34,7 @@
         path: '{{ edge_stack_verify_real_stack }}/{{ item }}'
         checksum_algorithm: sha256
       loop:
-        - Caddyfile
+        - caddy/Caddyfile
         - compose.yml
         - crowdsec/config.yaml.local
       register: edge_stack_verify_real_stats
@@ -202,7 +186,7 @@
           vars:
             edge_stack_verify_variant_name: p2
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p2\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p2\n" }
 
         - name: Apply the role
           ansible.builtin.include_tasks: tasks/run_role.yml
@@ -366,7 +350,7 @@
           vars:
             edge_stack_verify_variant_name: p6
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p6\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p6\n" }
               - { path: compose.yml, append: "\n# case p6\n" }
               - { path: crowdsec/config.yaml.local, append: "\n# case p6\n" }
 
@@ -407,7 +391,7 @@
         - name: Tear the Caddyfile on the host, in place
           ansible.builtin.copy:
             content: "# torn\n"
-            dest: '{{ edge_stack_verify_dir }}/Caddyfile'
+            dest: '{{ edge_stack_verify_dir }}/caddy/Caddyfile'
             owner: root
             group: root
             mode: '0644'
@@ -456,7 +440,7 @@
           vars:
             edge_stack_verify_variant_name: p8
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p8\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p8\n" }
               - { path: compose.yml, append: "\n# case p8\n" }
               - { path: crowdsec/config.yaml.local, append: "\n# case p8\n" }
 
@@ -621,7 +605,7 @@
           vars:
             edge_stack_verify_variant_name: p10
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p10\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p10\n" }
 
         - name: Apply the role
           ansible.builtin.include_tasks: tasks/run_role.yml
@@ -661,7 +645,7 @@
           vars:
             edge_stack_verify_variant_name: p11
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p11\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p11\n" }
 
         - name: Make the reload fail
           ansible.builtin.file:
@@ -705,10 +689,10 @@
               '{{ edge_stack_verify_runs.p11a.after.stamps.caddy }}'; the rerun called {{ edge_stack_verify_runs.p11b.kinds }}.
 
     # ----- p11c, p11d: a run that dies after a file is placed and before any action -----
-    # p11 dies in the Caddy reload, which is inside the locked script, after the pending
-    # mark. The Compose and CrowdSec files are placed by tasks of the role, so a run can
-    # die after they are placed and before the first action; tasks/crash_run.yml makes
-    # the prune fail for that. On a host with no stamp, a placed file equals the
+    # p11 dies in the Caddy reload, which is inside the locked module, after the pending
+    # mark. The Compose and CrowdSec files are placed by the same module, before the first
+    # action, so a run can die after they are placed and before it; tasks/crash_run.yml
+    # makes the prune fail for that. On a host with no stamp, a placed file equals the
     # repository's, which is what a hand-delivered host looks like: unless the class
     # was marked pending before the file was placed, the next run would adopt it and
     # never restart the unit or CrowdSec.
@@ -824,7 +808,7 @@
           vars:
             edge_stack_verify_variant_name: p12
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p12\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p12\n" }
 
         - name: Make the container show the old Caddyfile
           ansible.builtin.file:
@@ -877,7 +861,7 @@
           vars:
             edge_stack_verify_variant_name: p13
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# BROKEN-CADDYFILE\n" }
+              - { path: caddy/Caddyfile, append: "\n# BROKEN-CADDYFILE\n" }
               - { path: compose.yml, append: "\n# case p13\n" }
 
         - name: Apply the role
@@ -912,7 +896,7 @@
           vars:
             edge_stack_verify_variant_name: p14
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p14\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p14\n" }
               - { path: compose.yml, append: "\n# BROKEN-COMPOSE\n" }
 
         - name: Apply the role
@@ -965,7 +949,7 @@
 
         - name: Put a link in that variant
           ansible.builtin.file:
-            src: Caddyfile
+            src: caddy/Caddyfile
             dest: '{{ edge_stack_verify_variants.p15c.path }}/Caddyfile.link'
             state: link
           delegate_to: localhost
@@ -1002,7 +986,7 @@
           vars:
             edge_stack_verify_variant_name: pins
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case pins\n" }
+              - { path: caddy/Caddyfile, append: "\n# case pins\n" }
 
         - name: Refuse a tag, a second line, trailing text and an empty file
           ansible.builtin.include_tasks: tasks/pin_case.yml
@@ -1019,8 +1003,8 @@
           loop_control:
             label: '{{ item.name }}'
 
-        # The role reads the pin early and the script reads it again inside the lock. A
-        # holder of the lock changes the pin while the role waits, so only the script's
+        # The role reads the pin early and the module reads it again inside the lock. A
+        # holder of the lock changes the pin while the role waits, so only the module's
         # own check can refuse it.
         - name: Hold the deploy lock for twenty seconds and then change the pin, as a deploy would
           ansible.builtin.command:
@@ -1054,7 +1038,7 @@
           retries: 60
           delay: 1
 
-        - name: Assert the script refused the pin inside the lock and nothing was placed
+        - name: Assert the module refused the pin inside the lock and nothing was placed
           ansible.builtin.assert:
             that:
               - edge_stack_verify_runs.p16toctou.failed
@@ -1146,19 +1130,35 @@
           vars:
             edge_stack_verify_variant_name: p18
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p18\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p18\n" }
 
+        - name: Clear any readiness signal left by an earlier holder
+          ansible.builtin.file:
+            path: /run/edge-p18a.holder.ready
+            state: absent
+
+        # The holder touches the signal only after flock has taken the lock, so the
+        # signal is proof the lock is held. A fixed settle time is not: a loaded host can
+        # start the holder after the role has already validated.
         - name: Hold the deploy lock for twenty-five seconds, as a running deploy does
           ansible.builtin.command:
-            argv: [flock, /etc/branchleft/edge.deploy.lock, sleep, '25']
+            argv:
+              [
+                flock,
+                /etc/branchleft/edge.deploy.lock,
+                sh,
+                -c,
+                'touch /run/edge-p18a.holder.ready; sleep 25',
+              ]
           async: 90
           poll: 0
           register: edge_stack_verify_p18_holder
           changed_when: false
 
-        - name: Give the holder time to take the lock
+        - name: Wait until the holder has taken the lock
           ansible.builtin.wait_for:
-            timeout: 1
+            path: /run/edge-p18a.holder.ready
+            timeout: 30
 
         - name: Apply the role with a wait of two seconds
           ansible.builtin.include_tasks: tasks/run_role.yml
@@ -1175,17 +1175,30 @@
           retries: 60
           delay: 1
 
+        - name: Clear any readiness signal left by an earlier holder
+          ansible.builtin.file:
+            path: /run/edge-p18b.holder.ready
+            state: absent
+
         - name: Hold the deploy lock for twenty-five seconds again
           ansible.builtin.command:
-            argv: [flock, /etc/branchleft/edge.deploy.lock, sleep, '25']
+            argv:
+              [
+                flock,
+                /etc/branchleft/edge.deploy.lock,
+                sh,
+                -c,
+                'touch /run/edge-p18b.holder.ready; sleep 25',
+              ]
           async: 90
           poll: 0
           register: edge_stack_verify_p18_holder_b
           changed_when: false
 
-        - name: Give the holder time to take the lock
+        - name: Wait until the second holder has taken the lock
           ansible.builtin.wait_for:
-            timeout: 1
+            path: /run/edge-p18b.holder.ready
+            timeout: 30
 
         - name: Apply the role with a wait of thirty seconds
           ansible.builtin.include_tasks: tasks/run_role.yml
@@ -1463,7 +1476,7 @@
             edge_stack_verify_variant_edits:
               - { path: compose.yml, append: "\n# case p22\n" }
               - { path: crowdsec/config.yaml.local, append: "\n# case p22\n" }
-              - { path: Caddyfile, append: "\n# case p22\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p22\n" }
 
         - name: Make CrowdSec's Local API not answer
           ansible.builtin.file:
@@ -1529,7 +1542,7 @@
           vars:
             edge_stack_verify_variant_name: p23
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case p23\n" }
+              - { path: caddy/Caddyfile, append: "\n# case p23\n" }
               - { path: crowdsec/config.yaml.local, append: "\n# case p23\n" }
 
         - name: Apply the role
@@ -1600,7 +1613,7 @@
           loop:
             - /opt/branchleft/edge
             - /opt/branchleft/edge/crowdsec/acquis.d
-            - /opt/branchleft/edge/Caddyfile
+            - /opt/branchleft/edge/caddy/Caddyfile
           register: edge_stack_verify_p24_stats
 
         - name: Assert the Caddyfile was created whole, root's and mode 0644, in directories of 0755, and every class was acted on once and recorded
@@ -1634,7 +1647,7 @@
           vars:
             edge_stack_verify_variant_name: pinmove
             edge_stack_verify_variant_edits:
-              - { path: Caddyfile, append: "\n# case pin move\n" }
+              - { path: caddy/Caddyfile, append: "\n# case pin move\n" }
 
         - name: Ask the stand-in to move the pin while it validates the Caddyfile
           ansible.builtin.copy:
@@ -1685,48 +1698,6 @@
             fail_msg: >-
               The run after a refused apply did not reload Caddy and record the class. It called
               {{ edge_stack_verify_runs.p26rerun.kinds }} and said '{{ edge_stack_verify_runs.p26rerun.msg }}'.
-
-        # The script by itself, with every action off. Each of the three runs is stopped,
-        # or not, by the pin alone, so a refusal below cannot be a refusal for another
-        # reason, and the third is the control: the same call is let through when the pin is
-        # the validated one.
-        - name: Return to the converged host
-          ansible.builtin.include_tasks: tasks/reset.yml
-
-        - name: Run the apply mode with no validated pin, with another valid one, and with the pin that is there
-          ansible.builtin.include_tasks: tasks/script_apply.yml
-          vars:
-            edge_stack_verify_script_name: '{{ item.name }}'
-            edge_stack_verify_script_pin: '{{ item.pin }}'
-          loop:
-            - name: other
-              pin: '{{ edge_stack_verify_pin_other }}'
-            - name: same
-              pin: '{{ edge_stack_verify_pin_good | regex_replace("^IMAGE=", "") }}'
-          loop_control:
-            label: '{{ item.name }}'
-
-        - name: Run the apply mode with no validated pin at all
-          ansible.builtin.include_tasks: tasks/script_apply.yml
-          vars:
-            edge_stack_verify_script_name: none
-
-        - name: Assert the script refuses no pin and another pin, and lets the same pin through
-          ansible.builtin.assert:
-            that:
-              - edge_stack_verify_script.none.rc == 74
-              - "'no validated pin' in edge_stack_verify_script.none.stderr"
-              - edge_stack_verify_script.other.rc == 74
-              - "'changed since the candidates were validated' in edge_stack_verify_script.other.stderr"
-              - edge_stack_verify_script.same.rc == 0
-              - edge_stack_verify_script.same.stdout == ''
-              - edge_stack_verify_script.none.calls == 0
-              - edge_stack_verify_script.other.calls == 0
-              - edge_stack_verify_script.same.calls == 0
-            quiet: true
-            fail_msg: >-
-              The apply mode did not refuse a missing or a different validated pin with exit code 74, or refused the pin
-              that is there. It said {{ edge_stack_verify_script }}.
 
     # ----- p27: the Compose file that arrives is the one the validation read -----
     # The stand-in adds a line to the candidate as it validates it, so the file the
@@ -1997,7 +1968,7 @@
           ansible.builtin.assert:
             that:
               - "'EDGE_STACK_LOG_CANARY' in edge_stack_verify_log"
-              - "'Validate the candidates under the deploy lock' in edge_stack_verify_log"
+              - "'Validate, place and apply under the deploy lock' in edge_stack_verify_log"
             quiet: true
             fail_msg: The log lacks the canary or the role's task name, so an empty scan would prove nothing.
           no_log: true

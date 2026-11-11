@@ -10,7 +10,8 @@ about them beyond the hostname itself.
 
 `hetzner/edge/render.ts` derives the Caddy and CrowdSec configuration for
 the Hetzner edge VM from these entries; `hetzner/monitoring/render.ts`
-derives blackbox probe targets from them too. No other edge reads this file.
+derives blackbox probe targets from them too, and `hetzner/status/render.ts` derives
+the status page's probes from the same list. No other edge reads this file.
 
 `cloudRunService` and `region` on some entries are vestigial: no code reads
 them any more. Pruning them is its own pass.

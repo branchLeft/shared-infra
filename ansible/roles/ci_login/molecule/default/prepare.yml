@@ -1,0 +1,46 @@
+---
+# The default scenario starts from a host that has no pipeline account: the role must make it.
+# Prepare makes the throwaway keys on the controller (the image has no ssh-keygen) and keeps
+# a copy of the main sudoers file for the verify play to compare against.
+- name: Make the throwaway keys on the controller
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Make the directory for this run's throwaway keys
+      ansible.builtin.file:
+        path: '{{ scenario_key_dir }}'
+        state: directory
+        mode: '0700'
+
+    # No module in the pinned collections makes an SSH key pair, so the command is used (ANS-9).
+    - name: Make one throwaway key pair for each key the scenario uses
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - 'PLACEHOLDER_{{ item }}'
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - apply
+        - check
+        - other_apply
+        - other_check
+        - stale
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Keep a copy of the main sudoers file as the image ships it
+      ansible.builtin.copy:
+        src: /etc/sudoers
+        dest: /var/tmp/sudoers.before
+        remote_src: true
+        mode: preserve

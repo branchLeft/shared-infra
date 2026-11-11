@@ -1,12 +1,13 @@
 """Check the host playbooks under the gated pull.
 
-Rules R0 to R9, and what each one does not see, are in ansible/checks/README.md. A
+Rules R0 to R11, and what each one does not see, are in ansible/checks/README.md. A
 failure names the rule and the file. This check catches a protected key set outside
 its one file. It does not judge a role edit: nothing here gates one (see checks/README.md).
 """
 
 from __future__ import annotations
 
+import copy
 import re
 import sys
 from pathlib import Path
@@ -34,11 +35,66 @@ LOADED_DIRS = frozenset(
         "handlers",
         "playbooks",
         "trust",
+        "owner_vars",
         "inventories",
     )
 )
 TASK_SUFFIXES = (".yml", ".yaml")
-TREES = ("playbooks", "trust")
+TREES = ("playbooks", "trust", "owner_vars")
+TREE_RULES = {"playbooks": "R2", "trust": "R5", "owner_vars": "R10"}
+OWNER_VARS_DIR = "owner_vars"
+# The keys a host's owner_vars file holds, exactly. A host named nowhere here may have no file.
+CI_LOGIN_VARS = frozenset(("ci_login_keys", "ci_login_manage_keys"))
+# The variables of the ci_jump role that live in the repository. Every host that applies the role
+# carries all of them in its own owner_vars file, with its own address, destinations and keys. The
+# jump account's name is not among them: it is held out of this public repository, and reaches the
+# role only through the host's private inputs file (host_inputs row, key ci_jump_user), so an
+# owner_vars file that holds it is refused as an unknown key.
+JUMP_VARS = frozenset(
+    (
+        "ci_jump_keys",
+        "ci_jump_manage_keys",
+        "ci_jump_own_address",
+        "ci_jump_destinations",
+    )
+)
+# The hosts that apply ci_jump, one entry each. check() requires this to equal the hosts whose
+# row in host_roles.yml lists the role, so a host cannot gain the role without its owner_vars
+# keys, nor the keys without the role.
+JUMP_HOSTS = frozenset(("edge1", "edget"))
+JUMP_ROLE = "ci_jump"
+APPS_IMAGE_KEY = "control_plane_db_apps_image"
+# The five inputs of the ring_controller_host role. Each is public text that is empty until the
+# owner sets it, and an empty digest keeps the controller's timer off. The role holds the shapes
+# (its vars/main.yml patterns), so only the type is read here, as for APPS_IMAGE_KEY.
+RING_CONTROLLER_TEXT_KEYS = frozenset(
+    (
+        "ring_controller_host_bundle_sha256",
+        "ring_controller_host_bundle_url",
+        "ring_controller_host_ledger_url",
+        "ring_controller_host_ledger_push_remote",
+        "ring_controller_host_push_known_hosts",
+    )
+)
+_BASE_OWNER_KEYS = {
+    "edge1": CI_LOGIN_VARS,
+    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)) | RING_CONTROLLER_TEXT_KEYS,
+}
+OWNER_VARS_KEYS = {
+    host: _BASE_OWNER_KEYS.get(host, frozenset())
+    | (JUMP_VARS if host in JUMP_HOSTS else frozenset())
+    for host in (*_BASE_OWNER_KEYS, *JUMP_HOSTS)
+}
+STEPS_KEY = "pull_trigger_steps"
+# Only the shape of an allow-list entry. Which ids, tags and words are valid is the program's
+# rule alone (pull_trigger.py: STEP_IDS, _step_from, WORD_PATTERN), and test_step_allowlist.py
+# feeds the real file through the program's own parser, so none of it is copied here.
+STEP_ENTRY = frozenset(("id", "tag", "word"))
+OWNER_KEY_ENTRY = frozenset(("key", "mode"))
+OWNER_KEY_MODES = frozenset(("apply", "check"))
+# A ci_jump_keys entry is the public key and nothing else: the options of the written line are
+# the role's, and the destinations are one list for every key (the role takes none per key).
+JUMP_KEY_ENTRY = frozenset(("key",))
 README_EXCEPTIONS = frozenset(("playbooks/README.md", "trust/README.md"))
 INCLUDE_VARS = frozenset(
     ("include_vars", "ansible.builtin.include_vars", "ansible.legacy.include_vars")
@@ -82,7 +138,10 @@ REMOTE_URL = "https://github.com/branchLeft/shared-infra.git"
 SIGNERS_EXPR = "{{ pull_trigger_signers }}"
 REMOTE_EXPR = "{{ pull_trigger_remote_url }}"
 CONFIG_DEST = "{{ pull_trigger_config_path }}"
-CONFIG_CONTENT = "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\n"
+CONFIG_CONTENT = (
+    "{{ pull_trigger_config | ansible.builtin.combine(pull_trigger_config_source)"
+    " | ansible.builtin.to_nice_json }}\n"
+)
 CONFIG_MENTION = re.compile(r"pull_trigger_config(\b|_path\b)")
 REFUSE_ASSERT = [
     "ansible_play_hosts_all | length == 1",
@@ -96,12 +155,29 @@ EXPECTED_ROLES = [
     },
     {"role": "../roles/pull_trigger"},
 ]
+# The play vars a host's playbook carries beside enrolled_host, pinned per host and exactly. The
+# owner merges every edit here, so the value is decided by this table and not by the playbook.
+# A host not in the table gets enrolled_host alone. deploy_tooling_host_class has no default in
+# the role (ANS-7), so a host that applies the role must name its class here, and a host of
+# class app must also name the policy variant the role expects its firewall chain to be. The
+# egress_nat role makes a host a NAT gateway only when egress_nat_gateway_enabled is true (a
+# bool, so the string "true" does not match), and a second gateway on one network loops that
+# network's egress. A network does not span hcloud projects, so the switch is on one host per
+# network: edge1 for the estate's network and edget (edge-t) for the tenants network, and no
+# other host. R2 allows no `vars` on a role entry, so these rows are their one home.
+HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
+    "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
+    "edget": {"egress_nat_gateway_enabled": True},
+    "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
+    "dbt1": {"deploy_tooling_host_class": "internal"},
+}
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
 HOST_ROLES_FILE = "checks/host_roles.yml"
 ROLE_PATH = "../roles/"
 ROLE_NAME = re.compile(r"[a-z][a-z0-9_]*")
 HOST_NAME = re.compile(r"[a-z][a-z0-9]*")
 PULL_ROLES = frozenset(("ansible_runtime", "pull_trigger"))
+LOADER_ROLE = "host_inputs"
 EXPECTED_COMMON = {
     REMOTE_KEY: REMOTE_URL,
     PLAYBOOK_KEY: DERIVED_PLAYBOOK,
@@ -109,8 +185,13 @@ EXPECTED_COMMON = {
 }
 
 
+# The one definition of the loader every read uses: libyaml's C parser where PyYAML was built
+# with it (the pinned wheel is), else the pure-Python SafeLoader. Both build only plain data.
+_BASE_LOADER: type[yaml.SafeLoader] = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+
+
 # PyYAML ships no type stubs and the lock has no types-PyYAML, so mypy sees SafeLoader as Any.
-class _AnyTagLoader(yaml.SafeLoader):  # type: ignore[misc]
+class _AnyTagLoader(_BASE_LOADER):  # type: ignore[misc]
     """SafeLoader with every tag accepted. Ansible's loader takes !unsafe and !vault, and a
     list that carries such a value still runs as plays, so the README play-list parse must
     not refuse to read one. Only the README play-list check uses it."""
@@ -127,23 +208,47 @@ def _construct_any_tag(loader: yaml.SafeLoader, suffix: str, node: yaml.Node) ->
 _AnyTagLoader.add_multi_constructor("", _construct_any_tag)
 
 
+# What a parse gave, by loader and file text: the document, or the error message. The text is
+# the key because a rewrite in place keeps the path, the size and perhaps the mtime, and a
+# stale parse here would be a false green in a safety check; the same text parses the same
+# whichever path it was read from, so one parse serves every copy of the tree. _load hands out a
+# deep copy of the cached parse, so no caller can change what another gets. The cache has no
+# bound: it grows by one entry per distinct file text, which is fine for the test suite and
+# the one-shot command, and an accepted limit for any long-lived process that imports this.
+_PARSED: dict[tuple[type[yaml.SafeLoader], str], tuple[object, str | None]] = {}
+
+
 def _load(
-    path: Path, findings: list[str], label: str, loader: type[yaml.SafeLoader] = yaml.SafeLoader
+    path: Path, findings: list[str], label: str, loader: type[yaml.SafeLoader] = _BASE_LOADER
 ) -> object:
     """The one YAML reader, for every rule, for R6 and for the README play-list check. The
     loader is the only difference: the README check passes _AnyTagLoader, the same reader with
     every tag accepted. A missing file is reported by its own rule, not here. An unparseable
-    file is a finding under the caller's label."""
+    file is a finding under the caller's label. The file is read on every call; only the
+    parse of a text already seen is skipped."""
     if not path.is_file():
         return None
     try:
-        # The loader is always a SafeLoader subclass whose only addition turns any tag into a
-        # plain list, dict or string, so no Python object is built here.
-        doc: object = yaml.load(path.read_text(encoding="utf-8"), Loader=loader)  # noqa: S506
-    except (OSError, ValueError, yaml.YAMLError) as error:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as error:
         findings.append(f"{label}: cannot be read as YAML: {error}")
         return None
-    return doc
+    parsed = _PARSED.get((loader, text))
+    if parsed is None:
+        try:
+            # The loader is always a SafeLoader subclass whose only addition turns any tag into
+            # a plain list, dict or string, so no Python object is built here.
+            parsed = (yaml.load(text, Loader=loader), None)  # noqa: S506
+        except (ValueError, yaml.YAMLError) as error:
+            parsed = (None, str(error))
+        _PARSED[(loader, text)] = parsed
+    doc, error_text = parsed
+    if error_text is not None:
+        findings.append(f"{label}: cannot be read as YAML: {error_text}")
+        return None
+    # A copy, so a caller that changes what it was handed cannot change what the next caller
+    # gets from the same cached parse.
+    return copy.deepcopy(doc)
 
 
 def _mapping(value: object) -> dict[str, object]:
@@ -214,10 +319,19 @@ def _check_roles(label: str, stem: str, roles: object, listed: list[str], out: l
             out.append(f"{label}: role {name} is applied twice")
         else:
             seen.append(name)
+    if LOADER_ROLE in seen and seen[0] != LOADER_ROLE:
+        out.append(
+            f"R11 {stem}.yml: role {LOADER_ROLE} must be the first role after the pull roles, "
+            f"so no role runs before the host's inputs are loaded or refused"
+        )
 
 
 def _check_enrolled(
-    stem: str, plays: list[dict[str, object]], listed: list[str], findings: list[str]
+    stem: str,
+    plays: list[dict[str, object]],
+    listed: list[str],
+    has_owner_vars: bool,
+    findings: list[str],
 ) -> None:
     label = f"R2 {stem}.yml"
     if len(plays) != 1:
@@ -228,10 +342,12 @@ def _check_enrolled(
         findings.append(f"{label}: play key {key} is not allowed, only {sorted(PLAY_KEYS)}")
     if play.get("hosts") != "all":
         findings.append(f"{label}: hosts must be all")
-    expected_vars = {HOST_KEY: stem}
+    expected_vars = {HOST_KEY: stem, **HOST_PLAY_VARS.get(stem, {})}
     if play.get("vars") != expected_vars:
         findings.append(f"{label}: vars must be exactly {expected_vars}")
     expected_files = [COMMON_INCLUDE, f"{{{{ playbook_dir }}}}/../trust/{stem}.yml"]
+    if has_owner_vars:
+        expected_files.append(f"{{{{ playbook_dir }}}}/../{OWNER_VARS_DIR}/{stem}.yml")
     if play.get("vars_files") != expected_files:
         findings.append(f"{label}: vars_files must be exactly {expected_files}")
     _check_roles(label, stem, play.get("roles"), listed, findings)
@@ -563,16 +679,18 @@ def _in_place(tree: str, inside: tuple[str, ...]) -> bool:
 
 
 def _check_names(ansible: Path, findings: list[str]) -> None:
-    """Shared by R2, R4 and R5: the one name rule for playbooks/ and trust/, at any depth.
+    """Shared by R2, R4, R5 and R10: the one name rule for playbooks/, trust/ and owner_vars/.
 
     Every entry that is not a directory is refused unless it is a link-free exact .yml placed
-    where Ansible reads it, or one of the two README paths named exactly. A link is refused
-    whatever its name, so the check never follows one. Any other name, case or depth is
-    refused, so R6 reads every file the pull can load from these two trees.
+    where Ansible reads it, or one of the two README paths named exactly (owner_vars/ has
+    none). A link is refused whatever its name, so the check never follows one. Any other
+    name, case or depth is refused, so R6 reads every file the pull can load from these trees.
     """
     for tree in TREES:
-        rule = "R5" if tree == "trust" else "R2"
+        rule = TREE_RULES[tree]
         base = ansible / tree
+        if not base.is_dir():
+            continue
         for path in sorted(base.rglob("*")):
             inside = path.relative_to(base)
             label = f"{rule} {inside.as_posix()}"
@@ -592,7 +710,118 @@ def _check_names(ansible: Path, findings: list[str]) -> None:
 
 def _yml_files(directory: Path) -> list[Path]:
     """The top-level .yml files of a tree. _check_names has already refused every other name."""
+    if not directory.is_dir():
+        return []
     return sorted(path for path in directory.iterdir() if path.is_file() and path.suffix == ".yml")
+
+
+def _step_shape_problems(steps: object) -> list[str]:
+    """The shape of pull_trigger_steps: a list of mappings with exactly id, tag and word, all
+    text. Whether an id is on the program's closed list, a tag is the id's own and a word is
+    well formed is judged by the program (see STEP_ENTRY), not here."""
+    if not isinstance(steps, list):
+        return [f"{STEPS_KEY} must be a list of {sorted(STEP_ENTRY)} entries"]
+    problems: list[str] = []
+    for entry in steps:
+        if not isinstance(entry, dict) or set(entry) != STEP_ENTRY:
+            problems.append(f"a {STEPS_KEY} entry must hold exactly {sorted(STEP_ENTRY)}")
+        elif not all(isinstance(value, str) for value in entry.values()):
+            problems.append(f"a {STEPS_KEY} entry needs a text id, tag and word")
+    return problems
+
+
+def _jump_key_problems(doc: dict[str, object]) -> list[str]:
+    """The shape of the ci_jump values. What a destination or a key may look like is the role's
+    rule alone (library/ci_jump_authorized_keys.py), so only the types are read here."""
+    problems: list[str] = []
+    if "ci_jump_manage_keys" in doc and not isinstance(doc["ci_jump_manage_keys"], bool):
+        problems.append("ci_jump_manage_keys must be a bool")
+    if "ci_jump_own_address" in doc and not isinstance(doc["ci_jump_own_address"], str):
+        problems.append("ci_jump_own_address must be text")
+    destinations = doc.get("ci_jump_destinations", [])
+    if not isinstance(destinations, list) or not all(
+        isinstance(item, str) for item in destinations
+    ):
+        problems.append("ci_jump_destinations must be a list of text entries")
+    keys = doc.get("ci_jump_keys", [])
+    if not isinstance(keys, list):
+        problems.append("ci_jump_keys must be a list of {key} entries")
+        return problems
+    for entry in keys:
+        if not isinstance(entry, dict) or set(entry) != JUMP_KEY_ENTRY:
+            problems.append(f"a ci_jump_keys entry must hold exactly {sorted(JUMP_KEY_ENTRY)}")
+        elif not isinstance(entry["key"], str):
+            problems.append("a ci_jump_keys entry needs a text key")
+    return problems
+
+
+def _owner_key_problems(doc: dict[str, object]) -> list[str]:
+    """What is wrong with the values of an owner_vars file, by key. A missing key is reported
+    by the caller, which compares the key set."""
+    problems: list[str] = []
+    if STEPS_KEY in doc:
+        problems.extend(_step_shape_problems(doc[STEPS_KEY]))
+    # Only that it is text. That it is NAME@sha256: and 64 hex digits is the role's pattern
+    # (control_plane_db_image_pattern), which test_step_allowlist.py reads by name.
+    if APPS_IMAGE_KEY in doc and not isinstance(doc[APPS_IMAGE_KEY], str):
+        problems.append(f"{APPS_IMAGE_KEY} must be text")
+    problems.extend(
+        f"{key} must be text"
+        for key in sorted(RING_CONTROLLER_TEXT_KEYS)
+        if key in doc and not isinstance(doc[key], str)
+    )
+    problems.extend(_jump_key_problems(doc))
+    if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
+        problems.append("ci_login_manage_keys must be a bool")
+    keys = doc.get("ci_login_keys", [])
+    if not isinstance(keys, list):
+        problems.append("ci_login_keys must be a list of {key, mode} entries")
+        return problems
+    for entry in keys:
+        if not isinstance(entry, dict) or set(entry) != OWNER_KEY_ENTRY:
+            problems.append(f"a ci_login_keys entry must hold exactly {sorted(OWNER_KEY_ENTRY)}")
+            continue
+        mode = entry["mode"]
+        if not isinstance(entry["key"], str) or not isinstance(mode, str):
+            problems.append("a ci_login_keys entry needs a text key and a text mode")
+        elif mode not in OWNER_KEY_MODES:
+            problems.append(f"a ci_login_keys mode must be one of {sorted(OWNER_KEY_MODES)}")
+    return problems
+
+
+def _check_owner_vars(directory: Path, enrolled: set[str], findings: list[str]) -> None:
+    """R10: an owner_vars file exists only for an enrolled host, and holds exactly the keys its
+    host is allowed (OWNER_VARS_KEYS), with values of the right shape. The name rule is shared
+    (_check_names). A protected key in one of these files is refused by R6, whose allowed set
+    for this tree is empty."""
+    for path in _yml_files(directory):
+        label = f"R10 {OWNER_VARS_DIR}/{path.name}"
+        if path.stem not in enrolled:
+            findings.append(f"{label}: has no enrolled playbook")
+            continue
+        allowed = OWNER_VARS_KEYS.get(path.stem)
+        if allowed is None:
+            findings.append(f"{label}: this host has no owner_vars keys, so it may have no file")
+            continue
+        doc = _mapping(_load(path, findings, label))
+        if set(doc) != allowed:
+            findings.append(f"{label}: must hold exactly {sorted(allowed)}")
+        findings.extend(f"{label}: {problem}" for problem in _owner_key_problems(doc))
+
+
+def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> None:
+    """R10: the hosts that list the ci_jump role are exactly JUMP_HOSTS, the hosts whose
+    owner_vars file may carry the jump account's variables. Each such host has its own jump
+    account, address, destinations and keys, so the rule is the same for every one of them."""
+    applying = {host for host, roles in host_roles.items() if JUMP_ROLE in roles}
+    findings.extend(
+        f"R10 {HOST_ROLES_FILE}: {host} lists {JUMP_ROLE} but is not in JUMP_HOSTS"
+        for host in sorted(applying - JUMP_HOSTS)
+    )
+    findings.extend(
+        f"R10 {HOST_ROLES_FILE}: {host} is in JUMP_HOSTS but does not list {JUMP_ROLE}"
+        for host in sorted(JUMP_HOSTS - applying)
+    )
 
 
 def check(root: Path) -> list[str]:
@@ -623,9 +852,13 @@ def check(root: Path) -> list[str]:
     if not enrolled:
         findings.append("R1 no top-level playbook applies the pull_trigger role")
     host_roles = _read_host_roles(ansible, findings)
+    owner_vars = ansible / OWNER_VARS_DIR
+    owner_stems = {path.stem for path in _yml_files(owner_vars)}
     for stem, plays in sorted(enrolled.items()):
-        _check_enrolled(stem, plays, host_roles.get(stem, []), findings)
+        _check_enrolled(stem, plays, host_roles.get(stem, []), stem in owner_stems, findings)
     _check_derivation(includes, findings)
+    _check_owner_vars(owner_vars, set(enrolled), findings)
+    _check_jump_hosts(host_roles, findings)
 
     trust_files = _yml_files(trust)
     trust_stems = {path.stem for path in trust_files}

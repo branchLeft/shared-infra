@@ -126,11 +126,43 @@ function unescapedLength(text: string): number {
  * One stable resource name per rrset. It is part of the URN, so it must not
  * change when anything but the owner and type does -- a value edit is then an
  * update in place, never a delete-and-create that briefly serves nothing.
+ *
+ * `prefix` keeps a second zone's names apart from the first's. The first
+ * zone passes none, because its names are already live: adding a prefix there
+ * would rename every URN, which Pulumi reads as delete-and-create of every
+ * live record, mail included.
  */
-export function rrsetResourceName(rrset: Pick<RrsetSpec, 'name' | 'type'>): string {
+export function rrsetResourceName(
+  rrset: Pick<RrsetSpec, 'name' | 'type'>,
+  prefix?: string
+): string {
   const owner = rrset.name === '@' ? 'apex' : rrset.name;
-  return `${owner}-${rrset.type.toLowerCase()}`;
+  const name = `${owner}-${rrset.type.toLowerCase()}`;
+  return prefix ? `${prefix}-${name}` : name;
 }
+
+/**
+ * Every zone this stack manages, one checked-in zone file each, built by the
+ * same code in `dns.ts`. `zoneResource` and `rrsetPrefix` are URN parts: the
+ * first entry's are frozen at what is already applied, and a test pins them.
+ */
+export interface ZoneFile {
+  /** File name under `dns/`. */
+  file: string;
+  /** The `hcloud.Zone` resource name. */
+  zoneResource: string;
+  /** Prefix for this zone's rrset resource names; none for the first zone. */
+  rrsetPrefix?: string;
+}
+
+export const ZONE_FILES: readonly ZoneFile[] = [
+  { file: 'zone.json', zoneResource: 'branchleft-co-uk' },
+  {
+    file: 'publicpress.co.uk.json',
+    zoneResource: 'publicpress-co-uk',
+    rrsetPrefix: 'publicpress-co-uk',
+  },
+];
 
 /**
  * Fixed instructions for the `dns` project's own-marker check, below.

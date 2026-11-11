@@ -1,0 +1,197 @@
+name: Publish edge Caddy image
+
+# Builds hetzner/edge/Dockerfile on a native amd64 runner and pushes it to
+# ghcr.io/branchleft/edge-caddy with the run's own GITHUB_TOKEN, then reads the
+# pushed digest back from the image store and publishes the digest-qualified
+# reference as the job's `image` output and in its summary. The edge host pins
+# that reference and nothing else: a tag can be re-pointed, a digest cannot.
+#
+# Started by hand, from `main` only. The tag is caddy-<CADDY_VERSION>-<revision>,
+# the Caddy version read from the Dockerfile and the revision typed at dispatch;
+# a tag that already exists is refused, never overwritten, and nothing is
+# tagged `latest`. The procedure around it is the runbook section "Build and
+# publish the Caddy image" in hetzner/RUNBOOK-edge.md.
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Revision number for the image tag, a positive integer not yet used for this Caddy version
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Build and push the edge Caddy image
+    runs-on: ubuntu-latest
+    # The edge build is observed at 1.5 to 2 minutes; this leaves room for a slow module fetch.
+    timeout-minutes: 15
+    # `main` only: a dispatch from another ref must not publish an image.
+    if: github.ref == 'refs/heads/main'
+    # Two dispatches must not race to the same tag; the later one waits and is then refused.
+    concurrency:
+      group: publish-edge-caddy-image
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image: ${{ steps.digest.outputs.image }}
+
+    env:
+      IMAGE: ghcr.io/branchleft/edge-caddy
+
+    steps:
+      - name: Refuse any ref but main
+        id: main-only
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::This workflow publishes only from refs/heads/main; it was started from '$GITHUB_REF'. Nothing was built."
+            exit 1
+          fi
+
+      # The revision is typed by a person. It is checked here, before anything
+      # uses it, and only the checked value is handed to later steps.
+      - name: Validate the revision
+        id: revision
+        env:
+          REVISION: ${{ inputs.revision }}
+        run: |
+          set -euo pipefail
+          pattern='^[1-9][0-9]*$'
+          if ! [[ $REVISION =~ $pattern ]]; then
+            echo "::error::revision must be a positive integer with no leading zero; got '$REVISION'. Nothing was built."
+            exit 1
+          fi
+          echo "REVISION=$REVISION" >> "$GITHUB_ENV"
+
+      # An emulated build can produce an image that starts and then restarts in
+      # a loop on the host, so a runner or daemon that is not amd64 stops here.
+      - name: Require a native amd64 runner
+        id: native-architecture
+        run: |
+          set -euo pipefail
+          machine="$(uname -m)"
+          server="$(docker version --format '{{.Server.Arch}}')"
+          if [ "$machine" != "x86_64" ] || [ "$server" != "amd64" ]; then
+            echo "::error::native amd64 required: runner is '$machine', Docker server is '$server'. Nothing was built."
+            exit 1
+          fi
+
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the Caddy version and form the tag
+        id: tag
+        run: |
+          set -euo pipefail
+          line="$(grep -E '^ARG CADDY_VERSION=' hetzner/edge/Dockerfile || true)"
+          caddy_version="${line#ARG CADDY_VERSION=}"
+          pattern='^[0-9]+\.[0-9]+\.[0-9]+$'
+          if ! [[ $caddy_version =~ $pattern ]]; then
+            echo "::error::hetzner/edge/Dockerfile must carry exactly one 'ARG CADDY_VERSION=X.Y.Z' line; read '$line'. Nothing was built."
+            exit 1
+          fi
+          echo "IMAGE_TAG=caddy-${caddy_version}-${REVISION}" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        id: login
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Only a plain "not found" from the registry counts as absent. Denied,
+      # unauthorised, network and rate-limit answers all stop the run: they say
+      # nothing about whether the tag exists.
+      - name: Refuse to overwrite an existing tag
+        id: absent
+        run: |
+          set +e
+          output="$(docker manifest inspect "$IMAGE:$IMAGE_TAG" 2>&1)"
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "::error::$IMAGE:$IMAGE_TAG already exists. Dispatch again with a revision that is not yet used."
+            exit 1
+          fi
+          case "$output" in
+            *"no such manifest"* | *"manifest unknown"*)
+              echo "$IMAGE:$IMAGE_TAG is not yet published."
+              ;;
+            *)
+              echo "::error::could not tell whether $IMAGE:$IMAGE_TAG exists, so nothing was pushed: $output"
+              exit 1
+              ;;
+          esac
+
+      - name: Build the image
+        id: build
+        run: |
+          docker build \
+            --file hetzner/edge/Dockerfile \
+            --label org.opencontainers.image.source=https://github.com/branchLeft/shared-infra \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "$IMAGE:$IMAGE_TAG" \
+            hetzner/edge
+
+      - name: Require an amd64 image
+        id: built-architecture
+        run: |
+          set -euo pipefail
+          architecture="$(docker image inspect --format '{{.Architecture}}' "$IMAGE:$IMAGE_TAG")"
+          if [ "$architecture" != "amd64" ]; then
+            echo "::error::the built image is '$architecture', not amd64. Nothing was pushed."
+            exit 1
+          fi
+
+      - name: Push the image
+        id: push
+        run: docker push "$IMAGE:$IMAGE_TAG"
+
+      # The digest is read from the image store after the push, never
+      # assembled from the tag or the commit. A missing, doubled or malformed
+      # digest fails the job, so no run ends green without a reference to pin.
+      - name: Read and verify the pushed digest
+        id: digest
+        run: |
+          set -euo pipefail
+          repo_digests="$(docker inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE:$IMAGE_TAG")"
+          reference="$(printf '%s\n' "$repo_digests" | grep -F "$IMAGE@" || true)"
+          digest="${reference#"$IMAGE@"}"
+          pattern='^sha256:[0-9a-f]{64}$'
+          if ! [[ $digest =~ $pattern ]]; then
+            echo "::error::no single well-formed sha256 digest for $IMAGE:$IMAGE_TAG (got: '$reference')"
+            exit 1
+          fi
+          echo "image=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+          echo "Pushed $IMAGE@$digest"
+
+      - name: Write the outcome to the job summary
+        id: summary
+        if: always()
+        env:
+          PINNED_IMAGE: ${{ steps.digest.outputs.image }}
+        run: |
+          {
+            echo '## edge Caddy image'
+            echo
+            echo "Commit: \`$GITHUB_SHA\`"
+            echo "Tag: \`${IMAGE_TAG:-not formed}\`"
+            if [ -n "$PINNED_IMAGE" ]; then
+              echo "Pin this: \`$PINNED_IMAGE\`"
+              echo
+              echo 'The package must be public before the edge host can pull it; see "Build and publish the Caddy image" in hetzner/RUNBOOK-edge.md.'
+            else
+              echo 'NO DIGEST: this run produced no image reference. Pin nothing from it.'
+              echo 'If the push step ran, the tag may exist in the registry; the step log says.'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,136 @@
+---
+# One case of the Caddy image check, imported by converge.yml. The image that judges the
+# candidate is on the host, but docker lists something else under its reference: no digests
+# (what an image loaded into a Docker on the classic image store lists), another digest, two
+# images, or output that is not JSON. The role must refuse each, before it renders or stages
+# anything, and must say so with the reason. The control lists the pinned digest and stages
+# the candidate.
+#
+# docker is a stand-in (molecule/default/files/standin-docker.sh). It answers
+# `docker image inspect` from the state directory, and tests/unit/test_caddy_judge.py ties its
+# answers to a real Docker on both image stores.
+#
+# converge_case.digests is the list of digests the stand-in reports (an empty list for none),
+# count the number of images, raw the whole output; none set, it reports the pinned digest of
+# one image. converge_case.accepted is the control, and expect is what the refusal must name.
+- name: Refuse or accept the Caddy image the host holds
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    demo1_build_wildcard_base: site-fixture.invalid
+    demo1_build_caddy_image: 'demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+    converge_state: /var/lib/standin-docker
+    converge_candidate: /var/lib/branchleft/demo-candidates/Caddyfile
+  tasks:
+    - name: Set the stand-in docker's answer and run the role's site step on its own
+      when: not ansible_check_mode
+      block:
+        - name: Make the candidate directory the role declares
+          ansible.builtin.file:
+            path: /var/lib/branchleft/demo-candidates
+            state: directory
+            owner: root
+            group: root
+            mode: '0700'
+          changed_when: false
+
+        - name: Have the stand-in docker list the digests the case says
+          ansible.builtin.copy:
+            content: "{{ converge_case.digests | join('\n') }}\n"
+            dest: '{{ converge_state }}/image-digests'
+            owner: root
+            group: root
+            mode: '0644'
+          changed_when: false
+          when: converge_case.digests is defined
+
+        - name: Have the stand-in docker list the number of images the case says
+          ansible.builtin.copy:
+            content: "count={{ converge_case.count }}\n"
+            dest: '{{ converge_state }}/image-count'
+            owner: root
+            group: root
+            mode: '0644'
+          changed_when: false
+          when: converge_case.count is defined
+
+        - name: Have the stand-in docker print the output the case says
+          ansible.builtin.copy:
+            content: "{{ converge_case.raw }}\n"
+            dest: '{{ converge_state }}/image-raw'
+            owner: root
+            group: root
+            mode: '0644'
+          changed_when: false
+          when: converge_case.raw is defined
+
+        - name: Run the role's site step on its own
+          ansible.builtin.include_role:
+            name: branchleft.demo1_build
+            tasks_from: _site_candidates.yml
+
+        - name: Fail if an image the case must refuse was accepted
+          ansible.builtin.fail:
+            msg: The role accepted an image it must refuse.
+          when: not (converge_case.accepted | default(false))
+
+        - name: Look at the Caddyfile the control staged
+          ansible.builtin.stat:
+            path: '{{ converge_candidate }}'
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_candidate
+          when: converge_case.accepted | default(false)
+
+        - name: Assert the control staged the root-only mode 0600 Caddyfile
+          ansible.builtin.assert:
+            that:
+              - demo1_build_converge_candidate.stat.isreg
+              - demo1_build_converge_candidate.stat.pw_name == 'root'
+              - demo1_build_converge_candidate.stat.mode == '0600'
+            quiet: true
+            fail_msg: The pinned image did not stage the root-only mode 0600 Caddyfile.
+          when: converge_case.accepted | default(false)
+
+      rescue:
+        - name: Assert the control case was not refused
+          ansible.builtin.assert:
+            that:
+              - not (converge_case.accepted | default(false))
+            quiet: true
+            fail_msg: 'The role refused the pinned image: {{ ansible_failed_result.msg | default("") }}'
+
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.assert:
+            that:
+              - converge_case.expect in (ansible_failed_result.msg | default(''))
+            quiet: true
+            fail_msg: 'The role failed for a reason other than the one this case is for: {{ ansible_failed_result.msg | default("") }}'
+
+        - name: Look for a candidate the refusal left behind
+          ansible.builtin.stat:
+            path: '{{ converge_candidate }}'
+            follow: false
+            get_checksum: false
+          register: demo1_build_converge_refused_candidate
+
+        - name: Assert the refusal staged nothing
+          ansible.builtin.assert:
+            that:
+              - not demo1_build_converge_refused_candidate.stat.exists
+            quiet: true
+            fail_msg: The role staged a candidate with an image it refused.
+
+      always:
+        - name: Put the stand-in docker's answers back, and remove any candidate the case staged
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - '{{ converge_state }}/image-digests'
+            - '{{ converge_state }}/image-count'
+            - '{{ converge_state }}/image-raw'
+            - '{{ converge_candidate }}'
+          changed_when: false
+          when: not ansible_check_mode

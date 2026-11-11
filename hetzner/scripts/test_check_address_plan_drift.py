@@ -58,11 +58,11 @@ def address_plan(subnet_cidr: str = SUBNET_CIDR, edge1: str = EDGE1, db1: str = 
 
 
 def nat_script(subnet_cidr: str = SUBNET_CIDR) -> str:
-    return f'SUBNET="${{BRANCHLEFT_NAT_SUBNET:-{subnet_cidr}}}"\n'
+    return f'DEFAULT_SUBNET = "{subnet_cidr}"\n'
 
 
 def docker_user_policy_script(db1: str = DB1) -> str:
-    return f'DB_HOST="${{BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST:-{db1}}}"\n'
+    return f'DEFAULT_DB_HOST = "{db1}"\n'
 
 
 def runbook(
@@ -121,9 +121,9 @@ class TreeBuilder:
         self.write(
             "hetzner-host/addressPlan.ts", address_plan(plan_subnet, plan_edge1, plan_db1)
         )
-        self.write("hetzner/provision/branchleft_nat.sh", nat_script(nat_subnet))
+        self.write("ansible/roles/egress_nat/files/branchleft_nat.py", nat_script(nat_subnet))
         self.write(
-            "hetzner/provision/branchleft_docker_user_policy.sh",
+            "ansible/roles/deploy_tooling/files/branchleft_docker_user_policy.py",
             docker_user_policy_script(docker_user_policy_db1),
         )
         self.write(
@@ -147,7 +147,7 @@ class SubnetDriftTests(unittest.TestCase):
             failures = capd.check(tree.root)
             joined = " ".join(failures)
             self.assertTrue(
-                any("branchleft_nat.sh" in f and "10.20.1.0/24" in f and "10.20.0.0/23" in f for f in failures),
+                any("branchleft_nat.py" in f and "10.20.1.0/24" in f and "10.20.0.0/23" in f for f in failures),
                 joined,
             )
 
@@ -173,8 +173,8 @@ class SubnetDriftTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_subnet="10.20.2.0/24")
             failures = capd.check(tree.root)
-            nat_failure = next(f for f in failures if "branchleft_nat.sh" in f)
-            self.assertIn(str(tree.root / "hetzner" / "provision" / "branchleft_nat.sh"), nat_failure)
+            nat_failure = next(f for f in failures if "branchleft_nat.py" in f)
+            self.assertIn(str(tree.root / "ansible" / "roles" / "egress_nat" / "files" / "branchleft_nat.py"), nat_failure)
             self.assertIn("10.20.1.0/24", nat_failure)
             self.assertIn("10.20.2.0/24", nat_failure)
 
@@ -224,9 +224,9 @@ class Edge1DriftTests(unittest.TestCase):
 
 class Db1DriftTests(unittest.TestCase):
     """db1's address is checked in two places this PR adds: the bare literal
-    branchleft_docker_user_policy.sh hardcodes as its DB_HOST default (no
+    branchleft_docker_user_policy.py hardcodes as its DEFAULT_DB_HOST (no
     repository checkout on the host to derive it from, same constraint
-    branchleft_nat.sh's SUBNET literal already has), and the `/32` form the
+    branchleft_nat.py's DEFAULT_SUBNET literal already has), and the `/32` form the
     runbook's own verification block greps for against real `iptables -S`
     output."""
 
@@ -237,7 +237,7 @@ class Db1DriftTests(unittest.TestCase):
             script_failures = [
                 f
                 for f in failures
-                if "branchleft_docker_user_policy.sh" in f and "10.20.1.20" in f and "10.20.1.25" in f
+                if "branchleft_docker_user_policy.py" in f and "10.20.1.20" in f and "10.20.1.25" in f
             ]
             self.assertEqual(len(script_failures), 1, failures)
 
@@ -289,11 +289,11 @@ class MissingLiteralTests(unittest.TestCase):
     def test_a_nat_script_with_no_subnet_literal_fails_rather_than_passing(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = TreeBuilder(pathlib.Path(tmp)).sound()
-            tree.write("hetzner/provision/branchleft_nat.sh", "echo hello\n")
+            tree.write("ansible/roles/egress_nat/files/branchleft_nat.py", "echo hello\n")
             failures = capd.check(tree.root)
             self.assertTrue(
                 any(
-                    "branchleft_nat.sh" in f and "found none" in f
+                    "branchleft_nat.py" in f and "found none" in f
                     for f in failures
                 ),
                 failures,
@@ -302,11 +302,11 @@ class MissingLiteralTests(unittest.TestCase):
     def test_a_docker_user_policy_script_with_no_db1_literal_fails_rather_than_passing(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = TreeBuilder(pathlib.Path(tmp)).sound()
-            tree.write("hetzner/provision/branchleft_docker_user_policy.sh", "echo hello\n")
+            tree.write("ansible/roles/deploy_tooling/files/branchleft_docker_user_policy.py", "echo hello\n")
             failures = capd.check(tree.root)
             self.assertTrue(
                 any(
-                    "branchleft_docker_user_policy.sh" in f and "found none" in f
+                    "branchleft_docker_user_policy.py" in f and "found none" in f
                     for f in failures
                 ),
                 failures,
@@ -474,7 +474,7 @@ class FalsePositiveExemptionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             tree = TreeBuilder(pathlib.Path(tmp)).sound(plan_subnet="10.20.2.0/24")
             failures = capd.check(tree.root)
-            self.assertTrue(any("branchleft_nat.sh" in f for f in failures), failures)
+            self.assertTrue(any("branchleft_nat.py" in f for f in failures), failures)
 
     def test_a_hosts_own_address_as_a_slash_32_is_not_flagged_as_a_subnet(self):
         # The regression this guards: a DOCKER-USER accept rule naming one

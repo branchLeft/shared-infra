@@ -67,7 +67,7 @@ be mergeable until the move is confirmed.** Before starting:
 - [ ] Pulumi CLI **v3.255.0 or later** (`pulumi state move` exists from 3.129;
       the flags used here were read from 3.255.0's `--help`).
 - [ ] This PR is merged to `shared-infra`'s `main` and checked out locally.
-- [ ] `npm ci && npx tsc --noEmit` passes in `shared-infra`.
+- [ ] `pnpm install --frozen-lockfile && pnpm exec tsc --noEmit` passes in `shared-infra`.
 - [ ] The website-side removal PR exists, is approved, and is blocked from
       merging (§0).
 - [ ] `website`'s `main` is green _right now_. Do not start on top of a broken
@@ -529,7 +529,7 @@ For a precise list of what landed where:
 ```bash
 pulumi stack export --cwd ~/branchLeft/shared-infra \
   --stack organization/branchleft-shared-infra/production \
-  | python3 -c 'import json,sys; [print(r["urn"]) for r in json.load(sys.stdin)["deployment"]["resources"]]'
+  | jq -r '.deployment.resources[].urn'
 ```
 
 ### Rollback for step 10

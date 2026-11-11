@@ -1,0 +1,120 @@
+---
+# Test scaffolding, not role tasks. Writes what the stand-in docker reports and how the
+# stand-in drain endpoint listens. With no standin_override it writes the healthy spool
+# the golden Compose file describes; a refusal case passes a dict whose keys replace one
+# value each:
+#   health    the container's health status (default healthy)
+#   readonly  whether its root filesystem is read-only (default true)
+#   networks  the networks it is joined to (default: the drain network and the seven slots)
+#   extra_networks  networks it is joined to as well
+#   image     the image the container reports (default: the one it was started with)
+#   port      the line docker port prints (default 8081/tcp -> 127.0.0.1:8095)
+#   bind      the address the endpoint listens on (default 127.0.0.1)
+#   open      whether the endpoint answers the drain path with no token (default false)
+#   images    the images that are on the host, as the role's image check finds them (default:
+#             the golden Compose file's image and the bumped pin the converge step writes)
+- name: Write the images the stand-in docker holds
+  ansible.builtin.copy:
+    # The header line keeps the content from ever rendering empty, which ansible.builtin.copy
+    # refuses; an empty list renders the header alone. Each image is one line after it.
+    content: |
+      # stand-in docker images, one per line
+      {% for image in standin_images %}
+      {{ image }}
+      {% endfor %}
+    dest: /var/lib/standin-docker/images
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    standin_golden_compose: '{{ playbook_dir }}/../../files/ghost-platform/render-core/test/golden/mail-spool-compose.demo1.yml'
+    standin_golden_image: >-
+      {{ lookup('ansible.builtin.file', standin_golden_compose) | regex_findall("image: '([^']+)'") | first }}
+    standin_images: '{{ (standin_override | default({})).images | default([standin_golden_image, standin_bumped_pin]) }}'
+
+# What `docker image inspect` lists for an image that is on the host. With neither key the
+# stand-in lists one image whose RepoDigests is the asked reference. A case that wants a
+# wrong or missing digest, or two images, sets the key, and the files go away again when a
+# later call sets neither (the reset at the end of a case passes an empty override).
+- name: Write the digests the stand-in docker lists for an image
+  ansible.builtin.copy:
+    content: |
+      # stand-in docker RepoDigests, one per line
+      {% for digest in standin_override.image_digests %}
+      {{ digest }}
+      {% endfor %}
+    dest: /var/lib/standin-docker/image-digests
+    owner: root
+    group: root
+    mode: '0644'
+  when: standin_override is defined and standin_override.image_digests is defined
+
+- name: Take back the digests where the override names none
+  ansible.builtin.file:
+    path: /var/lib/standin-docker/image-digests
+    state: absent
+  when: standin_override is not defined or standin_override.image_digests is not defined
+
+- name: Write how many images the stand-in docker lists
+  ansible.builtin.copy:
+    # A bare number would be read back by Ansible as an integer and lose its newline, so the
+    # file holds a key and the stand-in docker takes the value after it.
+    content: "count={{ (standin_override | default({})).image_count | default(1) }}\n"
+    dest: /var/lib/standin-docker/image-count
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Write what the stand-in docker inspect reports
+  ansible.builtin.copy:
+    content: |
+      [{"Name": "/mail-spool-mail-spool-1",
+        "State": {"Status": "running", "Health": {"Status": "{{ standin_health }}"}},
+        "Config": {"Image": "{{ standin_image }}"},
+        "HostConfig": {"ReadonlyRootfs": {{ standin_readonly | bool | to_json }}},
+        "NetworkSettings": {"Networks": { {% for network in standin_networks %}"{{ network }}": {}{{ "," if not loop.last else "" }}{% endfor %} }}}]
+    dest: /var/lib/standin-docker/inspect.json
+    owner: root
+    group: root
+    mode: '0644'
+  vars:
+    standin_health: "{{ (standin_override | default({})).health | default('healthy') }}"
+    standin_image: "{{ (standin_override | default({})).image | default('@@IMAGE@@') }}"
+    standin_readonly: '{{ (standin_override | default({})).readonly | default(true) }}'
+    standin_default_networks:
+      - branchleft-mail-spool-drain
+      - branchleft-mail-30001
+      - branchleft-mail-30002
+      - branchleft-mail-30003
+      - branchleft-mail-30004
+      - branchleft-mail-30005
+      - branchleft-mail-30006
+      - branchleft-mail-30007
+    standin_networks: >-
+      {{ ((standin_override | default({})).networks | default(standin_default_networks))
+      + ((standin_override | default({})).extra_networks | default([])) }}
+
+- name: Write what the stand-in docker port prints
+  ansible.builtin.copy:
+    content: "{{ (standin_override | default({})).port | default('8081/tcp -> 127.0.0.1:8095') }}\n"
+    dest: /var/lib/standin-docker/port.txt
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Write how the stand-in drain endpoint listens
+  ansible.builtin.copy:
+    content: |
+      STUB_BIND={{ (standin_override | default({})).bind | default('127.0.0.1') }}
+      STUB_OPEN={{ 1 if ((standin_override | default({})).open | default(false) | bool) else 0 }}
+    dest: /etc/standin-drain-stub.env
+    owner: root
+    group: root
+    mode: '0644'
+
+# Only restarts the endpoint if it is running: before the spool is delivered there is
+# nothing to restart, and the stand-in docker starts it with this file already in place.
+- name: Restart the stand-in drain endpoint if it is running
+  ansible.builtin.command:
+    argv: [systemctl, try-restart, standin-drain-stub.service]
+  changed_when: true

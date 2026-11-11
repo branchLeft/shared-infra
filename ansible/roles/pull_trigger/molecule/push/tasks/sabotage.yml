@@ -1,0 +1,31 @@
+---
+# Make a copy of the installed program with some of its text changed, so that a case can show
+# that the check which text carries is the one stopping the request: run against the copy, the
+# case must be answered differently. Takes sabotage_name and sabotage_edits, a list of
+# regexp and replace pairs; every edit must change the copy, so a program text that no longer
+# matches fails here and not as a case that quietly stopped testing anything.
+- name: 'Copy the program: {{ sabotage_name }}'
+  ansible.builtin.copy:
+    src: '{{ verify_program }}'
+    dest: '/var/tmp/ptt/mut/{{ sabotage_name }}'
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: 'Change the copy: {{ sabotage_name }}'
+  ansible.builtin.replace:
+    path: '/var/tmp/ptt/mut/{{ sabotage_name }}'
+    regexp: '{{ item.regexp }}'
+    replace: '{{ item.replace }}'
+  loop: '{{ sabotage_edits }}'
+  loop_control:
+    label: '{{ item.regexp }}'
+  register: pull_trigger_pr_sabotage_result
+
+- name: 'Every edit changed the copy: {{ sabotage_name }}'
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_pr_sabotage_result.results | map(attribute='changed') | select | list | length == sabotage_edits | length
+    fail_msg: the program text no longer matches the lines this test changes; update the test
+    success_msg: 'the copy was made: {{ sabotage_name }}'

@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  standalone: true
+  author: branchLeft
+  # Molecule derives a fully qualified role name from the namespace, or from
+  # the author when there is none, and refuses an upper-case author.
+  namespace: branchleft
+  description: Runs the control plane's three one-off database and identity steps, each behind its own tag and confirmation, and records that each ran.
+  license: PolyForm-Shield-1.0.0
+  min_ansible_version: '2.21.5'

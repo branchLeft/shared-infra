@@ -1,0 +1,67 @@
+---
+# Internal to the role: included from main.yml right after the inputs and before
+# anything is written to the host. The bundler is this role's own copy under
+# files/ghost-platform, and it arrives in the signed commit the host checks out. Each
+# file is hashed where the role runs and held to its pinned sha256 here, so a digit
+# flipped in a pin, or a file changed without its pin, stops the role before it writes
+# anything. A file under dist/ that no pin names is refused as well: the host's dist
+# directory is made to hold exactly the pinned files, so an unpinned one would be
+# either dropped silently or shipped unchecked. Reading is not a change, so this runs
+# in check mode too.
+- name: Hash each vendored file where the role runs
+  ansible.builtin.stat:
+    path: '{{ export_bundler_vendored_root }}/{{ item.path }}'
+    follow: false
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  loop: '{{ export_bundler_release_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: export_bundler_vendored_stats
+
+- name: Refuse a vendored file that is missing, is not a plain file or does not have its pinned sha256
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isreg
+      - not item.stat.islnk
+      - item.stat.nlink == 1
+      - item.stat.checksum == item.item.sha256
+    quiet: true
+    fail_msg: >-
+      {{ item.item.path }} in the role's files/ghost-platform is missing, is not a plain file with one
+      link, or does not match its pin ({{ item.item.sha256 }}). Nothing has been written to the host.
+  loop: '{{ export_bundler_vendored_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+
+- name: Look for everything the role carries under dist
+  ansible.builtin.find:
+    paths: '{{ export_bundler_vendored_root }}/dist'
+    file_type: any
+    hidden: true
+    recurse: true
+    follow: false
+  delegate_to: localhost
+  become: false
+  register: export_bundler_vendored_found
+
+# What is there that no pin names, as paths relative to the vendored root.
+- name: Work out which files under dist no pin names
+  ansible.builtin.set_fact:
+    export_bundler_vendored_unpinned: >-
+      {{ export_bundler_vendored_found.files
+         | map(attribute='path')
+         | map('relpath', export_bundler_vendored_root)
+         | difference(export_bundler_release_files | map(attribute='path') | list)
+         | list }}
+
+- name: Refuse a file under dist that no pin names
+  ansible.builtin.assert:
+    that:
+      - export_bundler_vendored_unpinned | length == 0
+    quiet: true
+    fail_msg: >-
+      The role's files/ghost-platform holds a file under dist/ that no pin names:
+      {{ export_bundler_vendored_unpinned | join(', ') }}. Nothing has been written to the host.

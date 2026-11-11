@@ -1,0 +1,200 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars_files:
+    - ../../vars/main.yml
+  vars:
+    tenant_compose_verify_stacks: [tenant-a, tenant-b, mail-spool]
+  tasks:
+    # ----- Files: owner, group, mode, and what they hold -----
+
+    - name: Look at each stack's directory and files
+      ansible.builtin.stat:
+        path: '{{ item.path }}'
+        get_checksum: false
+      loop:
+        - { path: '{{ tenant_compose_stack_root }}/tenant-a', mode: '0755' }
+        - { path: '{{ tenant_compose_stack_root }}/tenant-a/compose.yml', mode: '0644' }
+        - path: '{{ tenant_compose_stack_root }}/tenant-a/{{ tenant_compose_stamp_name }}'
+          mode: '0600'
+        - { path: '{{ tenant_compose_stack_root }}/tenant-b/compose.yml', mode: '0644' }
+        - { path: '{{ tenant_compose_stack_root }}/mail-spool/compose.yml', mode: '0644' }
+        - path: '{{ tenant_compose_stack_root }}/mail-spool/{{ tenant_compose_stamp_name }}'
+          mode: '0600'
+        - { path: '{{ tenant_compose_config_root }}/tenant-a.env', mode: '0600' }
+        - { path: '{{ tenant_compose_config_root }}/tenant-b.env', mode: '0600' }
+        - { path: '{{ tenant_compose_config_root }}/tenant-a.image.env', mode: '0600' }
+        - { path: '{{ tenant_compose_config_root }}/mail-spool.image.env', mode: '0600' }
+      loop_control:
+        label: '{{ item.path }}'
+      register: tenant_compose_verify_files
+
+    - name: Assert each is owned by root and has its mode
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == item.item.mode
+        quiet: true
+        fail_msg: '{{ item.item.path }} is missing, is not owned by root, or has mode {{ item.stat.mode | default("none") }}.'
+      loop: '{{ tenant_compose_verify_files.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    - name: Look for files the role must never write
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop:
+        - '{{ tenant_compose_config_root }}/mail-spool.env'
+        - '{{ tenant_compose_stack_root }}/tenant-c'
+        - '{{ tenant_compose_config_root }}/tenant-c.env'
+        - '{{ tenant_compose_config_root }}/tenant-c.image.env'
+      register: tenant_compose_verify_absent
+
+    - name: Assert the spool's token file was never written, and the refused tenant has no files
+      ansible.builtin.assert:
+        that:
+          - not item.stat.exists
+        quiet: true
+        fail_msg: '{{ item.item }} exists; the role wrote it.'
+      loop: '{{ tenant_compose_verify_absent.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read what the first tenant's files hold
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ tenant_compose_config_root }}/tenant-a.env'
+        - '{{ tenant_compose_config_root }}/tenant-a.image.env'
+        - '{{ tenant_compose_config_root }}/tenant-b.image.env'
+        - '{{ tenant_compose_config_root }}/mail-spool.image.env'
+        - '{{ tenant_compose_stack_root }}/tenant-a/{{ tenant_compose_stamp_name }}'
+      register: tenant_compose_verify_held
+      no_log: true
+
+    - name: Assert the secrets are the scenario's, the pins are as expected and the stamp is a bare digest
+      ansible.builtin.assert:
+        that:
+          - (tenant_compose_verify_held.results[0].content | b64decode) == tenant_compose_verify_expected_secrets
+          - (tenant_compose_verify_held.results[1].content | b64decode) == tenant_compose_verify_expected_pin_a
+          - (tenant_compose_verify_held.results[2].content | b64decode) == tenant_compose_verify_expected_pin_b
+          - (tenant_compose_verify_held.results[3].content | b64decode) == tenant_compose_verify_expected_pin_spool
+          - (tenant_compose_verify_held.results[4].content | b64decode) is match('^[0-9a-f]{64}$')
+        quiet: true
+        fail_msg: A secrets file, a pin file or the stamp does not hold what the last application delivered.
+      vars:
+        tenant_compose_verify_expected_secrets: "GHOST_DB_PASSWORD={{ scenario_secret }}\nGHOST_MAIL_PASSWORD={{ scenario_mail_secret }}\n"
+        tenant_compose_verify_expected_pin_a: "IMAGE={{ scenario_newer_image }}\n"
+        tenant_compose_verify_expected_pin_b: "IMAGE={{ scenario_image }}\n"
+        tenant_compose_verify_expected_pin_spool: "IMAGE={{ scenario_spool_image }}\n"
+      no_log: true
+
+    # ----- The units -----
+
+    - name: Read each stack's unit as systemd holds it
+      ansible.builtin.systemd_service:
+        name: '{{ tenant_compose_unit_prefix }}@{{ item }}.service'
+      loop: '{{ tenant_compose_verify_stacks }}'
+      register: tenant_compose_verify_units
+
+    - name: Assert each unit is active and enabled for boot
+      ansible.builtin.assert:
+        that:
+          - item.status.ActiveState == 'active'
+          - item.status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: '{{ item.item }} is {{ item.status.ActiveState }} and {{ item.status.UnitFileState }}.'
+      loop: '{{ tenant_compose_verify_units.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    # ----- What the stand-ins were asked -----
+
+    - name: Read the stand-ins' records
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /var/lib/standin/starts.log
+        - /var/lib/standin/volume.log
+      register: tenant_compose_verify_records
+
+    - name: Work out the lines of each record
+      ansible.builtin.set_fact:
+        tenant_compose_verify_start_lines: '{{ (tenant_compose_verify_records.results[0].content | b64decode).splitlines() }}'
+        tenant_compose_verify_volume_lines: '{{ (tenant_compose_verify_records.results[1].content | b64decode).splitlines() }}'
+
+    # The restart is made under the deploy lock, and the unit's command saw it held. A
+    # start with the lock free would be one the role made without it.
+    - name: Assert every start the role made was made with the deploy lock held, and with the secret set for a tenant
+      ansible.builtin.assert:
+        that:
+          - tenant_compose_verify_start_lines | length > 0
+          - tenant_compose_verify_start_lines | reject('search', ' lock=held$') | list | length == 0
+          - tenant_compose_verify_start_lines | select('match', '^tenant-') | reject('search', ' secret=set ') | list | length == 0
+          - tenant_compose_verify_start_lines | select('match', '^mail-spool ') | reject('search', ' secret=unset ') | list | length == 0
+        quiet: true
+        fail_msg: A start was made without the deploy lock, or without the tenant's secret in its environment.
+
+    - name: Assert the last start of each stack ran on the pin the stack holds
+      ansible.builtin.assert:
+        that:
+          - tenant_compose_verify_start_lines | select('match', '^tenant-a ') | list | last is search('image=' ~ scenario_newer_image ~ ' ')
+          - tenant_compose_verify_start_lines | select('match', '^tenant-b ') | list | last is search('image=' ~ scenario_image ~ ' ')
+          - tenant_compose_verify_start_lines | select('match', '^mail-spool ') | list | last is search('image=' ~ scenario_spool_image ~ ' ')
+        quiet: true
+        fail_msg: A stack was last started on an image other than the one in its pin file.
+
+    # The volume program is asked once for each tenant that did not hold its uid, however
+    # many times the role has run since, and the register holds the uids it was given.
+    - name: Assert the volume program was called once for each tenant, and only for the tenants
+      ansible.builtin.assert:
+        that:
+          - tenant_compose_verify_volume_lines | sort == ['tenant-a 30901', 'tenant-b 30902']
+        quiet: true
+        fail_msg: 'The volume program was called {{ tenant_compose_verify_volume_lines }}.'
+
+    # ----- The log of the whole run, on the machine that runs the test -----
+
+- name: Verify the run's log on the machine that runs the test
+  hosts: localhost
+  gather_facts: false
+  vars:
+    tenant_compose_verify_log_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    tenant_compose_verify_secrets:
+      - '{{ hostvars[groups["all"][0]].scenario_secret }}'
+      - 'EARLIER-{{ hostvars[groups["all"][0]].scenario_secret }}'
+      - '{{ hostvars[groups["all"][0]].scenario_mail_secret }}'
+  tasks:
+    # The control first: a value the converge printed on purpose. A scan that cannot find it
+    # would find nothing for a secret either. Without read_whole_file, find matches the
+    # pattern at the start of each line only, so it would find neither.
+    - name: Look for the control value in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ tenant_compose_verify_log_dir }}'
+        patterns: ansible.log
+        contains: LOG-SCAN-CONTROL-VALUE
+        read_whole_file: true
+      register: tenant_compose_verify_control
+
+    - name: Look for each secret in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ tenant_compose_verify_log_dir }}'
+        patterns: ansible.log
+        contains: '{{ item }}'
+        read_whole_file: true
+      loop: '{{ tenant_compose_verify_secrets }}'
+      register: tenant_compose_verify_leaks
+      no_log: true
+
+    - name: Assert the scan works and no secret is in the log
+      ansible.builtin.assert:
+        that:
+          - tenant_compose_verify_control.matched == 1
+          - tenant_compose_verify_leaks.results | map(attribute='matched') | select | list | length == 0
+        quiet: true
+        fail_msg: >-
+          Either the log scan cannot see a printed value (control found in
+          {{ tenant_compose_verify_control.matched }} file(s), expected 1) or a secret reached the log.

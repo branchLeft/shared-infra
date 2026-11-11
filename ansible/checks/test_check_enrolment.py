@@ -12,11 +12,29 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from check_enrolment import ROOT, check
+import yaml  # type: ignore[import-untyped]
+from check_enrolment import (
+    _BASE_LOADER,
+    _PARSED,
+    JUMP_HOSTS,
+    JUMP_VARS,
+    OWNER_VARS_KEYS,
+    RING_CONTROLLER_TEXT_KEYS,
+    ROOT,
+    _AnyTagLoader,
+    _construct_any_tag,
+    _load,
+    check,
+)
 
 # A playbook that applies the pull on edge1: it is refused in any name the pull cannot read.
 EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
+# The loader's entry in db1's playbook, as it stands on main.
+LOADER_LINE = "    - role: ../roles/host_inputs # noqa: role-name[path]\n"
+# The stack's entry in db1's playbook, after the loader, as it stands on main.
+STACK_LINE = "    - role: ../roles/db1_stack # noqa: role-name[path]\n"
 
 
 class RealTree(unittest.TestCase):
@@ -38,6 +56,18 @@ class Sabotage(unittest.TestCase):
         self.assertIn(old, text, f"the sabotage matched nothing in {relative}")
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
+    def _reset(self) -> None:
+        """Put the owner_vars files back as they are on main, between two sabotages of one test.
+
+        The ci_jump sabotages edit edget's file, which ships the role inert and so holds the
+        empty values they replace; edge1's file has the role turned on by the owner.
+        """
+        shutil.copytree(
+            ROOT / "ansible" / "owner_vars",
+            self.ansible / "owner_vars",
+            dirs_exist_ok=True,
+        )
+
     def _write(self, relative: str, text: str) -> None:
         path = self.ansible / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,8 +75,12 @@ class Sabotage(unittest.TestCase):
 
     def _assert_rule(self, rule: str) -> list[str]:
         findings = check(self.root)
+        # A prefix match that refuses a longer rule number: "R1" must not match "R10 ...".
         self.assertTrue(
-            any(finding.startswith(rule) for finding in findings),
+            any(
+                finding.startswith(rule) and not finding[len(rule) : len(rule) + 1].isdigit()
+                for finding in findings
+            ),
             f"expected a {rule} finding, got {findings}",
         )
         return findings
@@ -58,10 +92,31 @@ class Sabotage(unittest.TestCase):
 
     # R1: an empty enrolled set fails, it does not pass over nothing.
     def test_r1_no_enrolled_playbook(self) -> None:
-        for host in ("edge1", "ops1", "app1"):
+        for host in ("edge1", "edget", "ops1", "app1", "db1", "dbt1", "demo1"):
             (self.ansible / "playbooks" / f"{host}.yml").unlink()
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
+
+    # R2: the tenants gateway's switch is pinned exactly, in both directions.
+    def test_r2_edget_gateway_switch_removed(self) -> None:
+        self._edit("playbooks/edget.yml", "    egress_nat_gateway_enabled: true\n", "")
+        self._assert_rule("R2 edget.yml")
+
+    def test_r2_edget_gateway_switch_set_false(self) -> None:
+        self._edit(
+            "playbooks/edget.yml",
+            "egress_nat_gateway_enabled: true",
+            "egress_nat_gateway_enabled: 'true'",
+        )
+        self._assert_rule("R2 edget.yml")
+
+    def test_r2_a_host_without_a_pin_cannot_carry_the_switch(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    enrolled_host: ops1\n",
+            "    enrolled_host: ops1\n    egress_nat_gateway_enabled: true\n",
+        )
+        self._assert_rule("R2 ops1.yml")
 
     # R2: the refusal include is missing from pre_tasks.
     def test_r2_refusal_include_removed(self) -> None:
@@ -128,15 +183,153 @@ class Sabotage(unittest.TestCase):
 
     # R4: a trust file has no enrolled playbook.
     def test_r4_trust_file_without_playbook(self) -> None:
-        self._write("trust/db1.yml", "---\npull_trigger_signers: []\n")
-        self._assert_rule("R4 trust/db1.yml")
+        self._write("trust/mx9.yml", "---\npull_trigger_signers: []\n")
+        self._assert_rule("R4 trust/mx9.yml")
+
+    # R4: demo1 is enrolled, so its playbook needs its trust file. Without it the real tree is red.
+    def test_r4_demo1_playbook_without_trust_file(self) -> None:
+        (self.ansible / "trust" / "demo1.yml").unlink()
+        self._assert_rule("R4 demo1.yml is enrolled but has no trust/demo1.yml")
+
+    # R2, fail closed: demo1 without the signer refusal would run on an empty trust list.
+    def test_r2_demo1_signer_include_removed(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "    - name: Refuse an empty signer list\n"
+            "      ansible.builtin.include_tasks: includes/require_signers.yml\n",
+            "",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R2: demo1 without the host refusal could be applied to any host.
+    def test_r2_demo1_refusal_include_removed(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml\n",
+            "",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R2: demo1's play loads its own trust file, not another host's.
+    def test_r2_demo1_vars_files_points_at_another_hosts_trust_file(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "'{{ playbook_dir }}/../trust/demo1.yml'",
+            "'{{ playbook_dir }}/../trust/db1.yml'",
+        )
+        self._assert_rule("R2 demo1.yml")
+
+    # R5: demo1's trust file holds the signer list and nothing else.
+    def test_r5_demo1_trust_file_holds_a_second_key(self) -> None:
+        self._edit(
+            "trust/demo1.yml",
+            "pull_trigger_signers:\n",
+            "pull_trigger_remote_url: https://example.invalid/x.git\npull_trigger_signers:\n",
+        )
+        self._assert_rule("R5 trust/demo1.yml")
+
+    # R4: db1 is enrolled, so its playbook needs its trust file. Without it the real tree is red.
+    def test_r4_db1_playbook_without_trust_file(self) -> None:
+        (self.ansible / "trust" / "db1.yml").unlink()
+        self._assert_rule("R4 db1.yml is enrolled but has no trust/db1.yml")
+
+    # R5: db1's trust file holds the signer list and nothing else.
+    def test_r5_db1_trust_file_holds_a_second_key(self) -> None:
+        self._edit(
+            "trust/db1.yml",
+            "pull_trigger_signers:\n",
+            "db1_stack_exporter_password: x\npull_trigger_signers:\n",
+        )
+        self._assert_rule("R5 trust/db1.yml")
+
+    # R2, fail closed: db1 without the signer refusal would run on an empty trust list.
+    def test_r2_db1_signer_include_removed(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            "    - name: Refuse an empty signer list\n"
+            "      ansible.builtin.include_tasks: includes/require_signers.yml\n",
+            "",
+        )
+        self._assert_rule("R2 db1.yml")
+
+    # R2: db1 without the host refusal could be applied to any host.
+    def test_r2_db1_refusal_include_removed(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            "      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml\n",
+            "",
+        )
+        self._assert_rule("R2 db1.yml")
+
+    # R2: db1 may apply only the roles on its own list in host_roles.yml.
+    def test_r2_db1_applies_a_role_not_on_its_list(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+            "    - role: ../roles/control_plane # noqa: role-name[path]\n",
+        )
+        self._assert_rule("R2 db1.yml: role control_plane is not on db1's list")
+
+    # R2: a role entry of db1 may not carry the role inputs the pull route has no channel for.
+    def test_r2_db1_role_entry_carries_an_input(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            STACK_LINE,
+            STACK_LINE + "      vars:\n        db1_stack_exporter_password: x\n",
+        )
+        self._assert_rule("R2 db1.yml")
+
+    # R11: the loader of a host's private inputs is the first role after the pull roles, so no
+    # role runs before the inputs are loaded or the run is refused. The positive control first:
+    # a role after the loader passes, so a check that refused every extra role would not pass.
+    def test_r10_a_role_after_the_loader_passes(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            LOADER_LINE,
+            LOADER_LINE + "    - role: ../roles/tunnel_account # noqa: role-name[path]\n",
+        )
+        self.assertEqual(check(self.root), [])
+
+    # R11, the sabotage: a role before the loader is refused by name.
+    def test_r10_a_role_before_the_loader_is_refused(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            LOADER_LINE,
+            "    - role: ../roles/tunnel_account # noqa: role-name[path]\n" + LOADER_LINE,
+        )
+        findings = self._assert_rule("R11 db1.yml")
+        self.assertTrue(any("must be the first role after the pull roles" in f for f in findings))
+
+    # R11, the sabotage: the loader behind two roles is refused too, not only behind one. The
+    # real playbook already applies db1_grants, so this case also trips the applied-twice rule;
+    # the assertion is on the R11 finding alone.
+    def test_r10_the_loader_last_of_three_is_refused(self) -> None:
+        self._edit(
+            "playbooks/db1.yml",
+            LOADER_LINE,
+            "    - role: ../roles/db1_grants # noqa: role-name[path]\n"
+            "    - role: ../roles/tunnel_account # noqa: role-name[path]\n" + LOADER_LINE,
+        )
+        self._assert_rule("R11 db1.yml")
+
+    # R2: the loader is on the lists of the hosts with a row only, so another host (demo1) cannot
+    # apply it.
+    def test_r10_the_loader_on_another_host_is_refused(self) -> None:
+        self._edit(
+            "playbooks/demo1.yml",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n",
+            "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._assert_rule("R2 demo1.yml: role host_inputs is not on demo1's list")
 
     # R5: a trust file holds a key other than the signer list.
     def test_r5_trust_file_holds_a_second_key(self) -> None:
         self._edit(
             "trust/ops1.yml",
-            "pull_trigger_signers: []\n",
-            "pull_trigger_signers: []\npull_trigger_remote_url: https://example.invalid/x.git\n",
+            "pull_trigger_signers:\n",
+            "pull_trigger_remote_url: https://example.invalid/x.git\npull_trigger_signers:\n",
         )
         self._assert_rule("R5 trust/ops1.yml")
 
@@ -172,12 +365,12 @@ class Sabotage(unittest.TestCase):
 
     # R7: a playbook that is not enrolled names the trust path, so a partial enrolment hides.
     def test_r7_unenrolled_playbook_names_a_trust_file(self) -> None:
-        self._edit(
-            "playbooks/db1.yml",
-            "---\n",
-            "---\n# A partial enrolment would name trust/db1.yml here.\n",
+        self._write(
+            "playbooks/mx9.yml",
+            "---\n# A partial enrolment would name trust/mx9.yml here.\n"
+            "- name: Not enrolled\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n",
         )
-        self._assert_rule("R7 db1.yml")
+        self._assert_rule("R7 mx9.yml")
 
     # R2: a top-level .yaml playbook that applies pull_trigger is refused, not skipped.
     def test_r2_top_level_yaml_playbook_is_refused(self) -> None:
@@ -777,7 +970,9 @@ class Sabotage(unittest.TestCase):
     def test_r8_writer_content_is_a_literal(self) -> None:
         self._edit(
             "roles/pull_trigger/tasks/main.yml",
-            '    content: "{{ pull_trigger_config | ansible.builtin.to_nice_json }}\\n"',
+            '    content: "{{ pull_trigger_config | ansible.builtin.combine('
+            "pull_trigger_config_source)"
+            ' | ansible.builtin.to_nice_json }}\\n"',
             "    content: 'x'",
         )
         self._assert_rule("R8 ansible/roles/pull_trigger/tasks/main.yml")
@@ -800,6 +995,603 @@ class Sabotage(unittest.TestCase):
             "---\n- name: x\n  ansible.builtin.debug:\n    msg: hi\n",
         )
         self._assert_rule("R8 roles/pull_trigger/tasks: found 0")
+
+    # R10 and R2: owner_vars/. The real tree is green; each sabotage below is red on its rule.
+    def _owner_vars(self, text: str) -> None:
+        self._write("owner_vars/edge1.yml", text)
+
+    def _assert_one(self, prefix: str) -> None:
+        findings = check(self.root)
+        self.assertTrue(
+            any(finding.startswith(prefix) for finding in findings),
+            f"expected a finding starting {prefix!r}, got {findings}",
+        )
+
+    # Control: a file the owner has filled in, with both modes and the flag on, passes. Without
+    # this a check that refused every file would pass for a strict one.
+    def test_r10_a_filled_owner_vars_file_passes(self) -> None:
+        key = "ssh-ed25519 " + "A" * 68
+        self._owner_vars(
+            "---\nci_login_manage_keys: true\nci_login_keys:\n"
+            f"  - key: {key} a\n    mode: apply\n  - key: {key} b\n    mode: check\n"
+            "ci_jump_manage_keys: true\n"
+            "ci_jump_own_address: 10.0.0.2\n"
+            "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
+            f"ci_jump_keys:\n  - key: {key} c\n"
+        )
+        self.assertEqual(check(self.root), [])
+
+    # R10: a key beyond the two the host is allowed.
+    def test_r10_owner_vars_holds_an_extra_key(self) -> None:
+        self._edit("owner_vars/edge1.yml", "ci_login_keys: []\n", "ci_login_keys: []\nextra: 1\n")
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+
+    # R10 and R6: a signer list in owner_vars is refused by both, whatever R10 allows.
+    def test_r10_and_r6_owner_vars_sets_the_signer_list(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys: []\npull_trigger_signers: []\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml")
+        self._assert_one("R6 ansible/owner_vars/edge1.yml: sets pull_trigger_signers")
+
+    # R10: the flag is one of the two allowed keys, so a file without it is refused.
+    def test_r10_owner_vars_lacks_the_flag(self) -> None:
+        self._owner_vars("---\nci_login_keys: []\n")
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+
+    # R10: the flag is a bool, not the text a YAML user might quote.
+    def test_r10_owner_vars_flag_is_text(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml", "ci_login_manage_keys: false", "ci_login_manage_keys: 'false'"
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: ci_login_manage_keys must be a bool")
+
+    # R10: an entry holds a key and a mode and nothing else; a source limit has no place here.
+    def test_r10_owner_vars_entry_carries_a_source_limit(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys:\n  - key: x\n    mode: apply\n    from_addresses: [192.0.2.1]\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: a ci_login_keys entry must hold exactly")
+
+    # R10: the mode is one of the two commands.
+    def test_r10_owner_vars_entry_has_an_unknown_mode(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys:\n  - key: x\n    mode: step\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: a ci_login_keys mode must be one of")
+
+    # R10: the key list is a list.
+    def test_r10_owner_vars_keys_is_not_a_list(self) -> None:
+        self._edit("owner_vars/edge1.yml", "ci_login_keys: []", "ci_login_keys: nothing")
+        self._assert_one("R10 owner_vars/edge1.yml: ci_login_keys must be a list")
+
+    # R10: a file for a host that is not enrolled.
+    def test_r10_owner_vars_file_without_an_enrolled_playbook(self) -> None:
+        self._write("owner_vars/mx9.yml", "---\nci_login_keys: []\n")
+        self._assert_one("R10 owner_vars/mx9.yml: has no enrolled playbook")
+
+    # R10: demo1's roles take no owner keys, so it may have no file either.
+    def test_r10_owner_vars_file_for_demo1(self) -> None:
+        self._write("owner_vars/demo1.yml", "---\nci_login_keys: []\n")
+        self._assert_one("R10 owner_vars/demo1.yml: this host has no owner_vars keys")
+
+    # R10 and R2: an enrolled host that has no owner_vars keys may have no file, and its
+    # playbook, which does not load it, disagrees with the file.
+    def test_r10_owner_vars_file_for_a_host_with_no_keys(self) -> None:
+        self._write("owner_vars/app1.yml", "---\nci_login_keys: []\n")
+        self._assert_one("R10 owner_vars/app1.yml: this host has no owner_vars keys")
+        self._assert_one("R2 app1.yml: vars_files must be exactly")
+
+    # R10 for the ci_jump values: each of the four keys is required, and each has a shape.
+    def test_r10_owner_vars_lacks_a_ci_jump_key(self) -> None:
+        for name in (
+            "ci_jump_manage_keys: false\n",
+            "ci_jump_own_address: ''\n",
+            "ci_jump_destinations: []\n",
+            "ci_jump_keys: []\n",
+        ):
+            with self.subTest(name=name):
+                self._edit("owner_vars/edget.yml", name, "")
+                self._assert_one("R10 owner_vars/edget.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_owner_vars_ci_jump_flag_is_text(self) -> None:
+        self._edit(
+            "owner_vars/edget.yml", "ci_jump_manage_keys: false", "ci_jump_manage_keys: 'false'"
+        )
+        self._assert_one("R10 owner_vars/edget.yml: ci_jump_manage_keys must be a bool")
+
+    # The jump account's name is the owner's secret: it is never a key of this public file, in any
+    # spelling of value, and reaches the role through the host's private inputs file only.
+    def test_r10_owner_vars_refuses_the_jump_accounts_name(self) -> None:
+        for value in ("''", "jumper", "[jumper]"):
+            with self.subTest(value=value):
+                self._edit(
+                    "owner_vars/edget.yml",
+                    "ci_jump_keys: []\n",
+                    f"ci_jump_keys: []\nci_jump_user: {value}\n",
+                )
+                self._assert_one("R10 owner_vars/edget.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_the_jump_account_is_not_among_the_keys_a_host_may_set(self) -> None:
+        self.assertNotIn("ci_jump_user", JUMP_VARS)
+        self.assertEqual(
+            JUMP_VARS,
+            {"ci_jump_keys", "ci_jump_manage_keys", "ci_jump_own_address", "ci_jump_destinations"},
+        )
+
+    def test_r10_owner_vars_ci_jump_own_address_is_a_number(self) -> None:
+        self._edit("owner_vars/edget.yml", "ci_jump_own_address: ''", "ci_jump_own_address: 5")
+        self._assert_one("R10 owner_vars/edget.yml: ci_jump_own_address must be text")
+
+    # R10 per jump host: the rule is the same for every host that applies the role, and a host
+    # cannot gain the role without its owner_vars keys, nor the keys without the role.
+    def test_r10_the_jump_keys_are_allowed_for_every_jump_host_and_for_no_other(self) -> None:
+        for host in JUMP_HOSTS:
+            self.assertTrue(JUMP_VARS <= OWNER_VARS_KEYS[host], host)
+        for host, keys in OWNER_VARS_KEYS.items():
+            if host not in JUMP_HOSTS:
+                self.assertFalse(JUMP_VARS & keys, host)
+
+    def test_r10_a_host_that_lists_ci_jump_is_a_jump_host(self) -> None:
+        self._edit("checks/host_roles.yml", "ops1:\n", "ops1:\n  - ci_jump\n")
+        self._assert_one("R10 checks/host_roles.yml: ops1 lists ci_jump but is not in JUMP_HOSTS")
+
+    def test_r10_a_jump_host_that_does_not_list_ci_jump(self) -> None:
+        self._edit("checks/host_roles.yml", "  - ci_login\n  - ci_jump\n", "  - ci_login\n")
+        self._assert_one("R10 checks/host_roles.yml: edge1 is in JUMP_HOSTS but does not list")
+
+    def test_r10_a_second_jump_host_has_the_same_rule(self) -> None:
+        # ops1 stands for a second jump host: its table row gains the jump keys, its file holds
+        # them, and the same shape rules apply to its values.
+        with (
+            mock.patch.dict(
+                OWNER_VARS_KEYS, {"ops1": OWNER_VARS_KEYS["ops1"] | JUMP_VARS}, clear=False
+            ),
+            mock.patch("check_enrolment.JUMP_HOSTS", frozenset((*JUMP_HOSTS, "ops1"))),
+        ):
+            self._edit("checks/host_roles.yml", "ops1:\n", "ops1:\n  - ci_jump\n")
+            ops1 = self.ansible / "owner_vars" / "ops1.yml"
+            text = ops1.read_text(encoding="utf-8")
+            ops1.write_text(
+                text + "ci_jump_manage_keys: false\nci_jump_own_address: ''\n"
+                "ci_jump_destinations: []\nci_jump_keys: []\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(check(self.root), [])
+            ops1.write_text(text + "ci_jump_manage_keys: 'no'\n", encoding="utf-8")
+            self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
+
+    def test_r10_owner_vars_ci_jump_destinations_hold_a_mapping(self) -> None:
+        self._edit(
+            "owner_vars/edget.yml",
+            "ci_jump_destinations: []",
+            "ci_jump_destinations:\n  - host: db-t1",
+        )
+        self._assert_one("R10 owner_vars/edget.yml: ci_jump_destinations must be a list of text")
+        self._reset()
+        self._edit(
+            "owner_vars/edget.yml", "ci_jump_destinations: []", "ci_jump_destinations: db-t1"
+        )
+        self._assert_one("R10 owner_vars/edget.yml: ci_jump_destinations must be a list of text")
+
+    def test_r10_owner_vars_ci_jump_keys_is_not_a_list(self) -> None:
+        self._edit("owner_vars/edget.yml", "ci_jump_keys: []", "ci_jump_keys: nothing")
+        self._assert_one("R10 owner_vars/edget.yml: ci_jump_keys must be a list")
+
+    # R10: a ci_jump key entry is the key and nothing else, so a per-key destination list or a
+    # per-key option has no place in the file.
+    def test_r10_owner_vars_ci_jump_entry_carries_more_than_a_key(self) -> None:
+        self._edit(
+            "owner_vars/edget.yml",
+            "ci_jump_keys: []",
+            "ci_jump_keys:\n  - key: x\n    destinations: [db-t1]",
+        )
+        self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry must hold exactly")
+        self._reset()
+        self._edit("owner_vars/edget.yml", "ci_jump_keys: []", "ci_jump_keys:\n  - key: 5")
+        self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry needs a text key")
+
+    # ops1's owner_vars file holds the step allow-list and the applications image the steps run
+    # (wiring ws#2531), and nothing else. The positive control first: the real file passes, and it
+    # is the two keys, so a check that refused every ops1 file would not pass for a strict one.
+    def test_r10_ops1_owner_vars_holds_only_the_step_allowlist_the_image_and_the_ring_inputs(
+        self,
+    ) -> None:
+        self.assertEqual(check(self.root), [])
+        text = (self.ansible / "owner_vars" / "ops1.yml").read_text(encoding="utf-8")
+        self.assertIn("pull_trigger_steps:", text)
+        self.assertIn("control_plane_db_apps_image:", text)
+        self.assertEqual(
+            sorted(
+                ["control_plane_db_apps_image", "pull_trigger_steps", *RING_CONTROLLER_TEXT_KEYS]
+            ),
+            sorted(self._ops1_keys()),
+        )
+
+    # The ring controller role's five inputs are public text, empty until the owner sets them. The
+    # check reads only the type; the role holds the shapes. Each key, set to a non-text value, is
+    # refused by name; each key missing is refused as a key set that is not exact; and none is
+    # allowed on another host's file. The positive control above is the real file passing.
+    def test_r10_ops1_ring_controller_inputs_must_be_text(self) -> None:
+        for key in sorted(RING_CONTROLLER_TEXT_KEYS):
+            with self.subTest(key=key):
+                self._reset()
+                self._edit("owner_vars/ops1.yml", f"{key}: ''", f"{key}: 7")
+                self._assert_one(f"R10 owner_vars/ops1.yml: {key} must be text")
+
+    def test_r10_ops1_ring_controller_inputs_missing_is_refused(self) -> None:
+        for key in sorted(RING_CONTROLLER_TEXT_KEYS):
+            with self.subTest(key=key):
+                self._reset()
+                self._edit("owner_vars/ops1.yml", f"{key}: ''\n", "")
+                self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
+
+    def test_r10_the_ring_controller_inputs_are_ops1s_alone(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys: []\nring_controller_host_bundle_sha256: ''\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+
+    # The image is the one value of the role's interface the owner may fix for ops1; it must be
+    # text, and a file without it is refused as a missing key (the key set is exact).
+    def test_r10_ops1_apps_image_is_not_text(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml",
+            "control_plane_db_apps_image: ",
+            "control_plane_db_apps_image: 7\n#",
+        )
+        self._assert_one("R10 owner_vars/ops1.yml: control_plane_db_apps_image must be text")
+
+    def test_r10_ops1_apps_image_missing(self) -> None:
+        self._write("owner_vars/ops1.yml", "---\npull_trigger_steps: []\n")
+        self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
+
+    def test_r10_the_apps_image_is_ops1s_alone(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys: []\ncontrol_plane_db_apps_image: x\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+
+    def _ops1_keys(self) -> list[str]:
+        doc = _load(self.ansible / "owner_vars" / "ops1.yml", [], "ops1.yml")
+        if not isinstance(doc, dict):
+            self.fail("ops1.yml must load as a mapping of owner_vars keys")
+        return [str(key) for key in doc]
+
+    # W5: the role's step variable is the second key of the guard and must never be set by an
+    # owner file. R10 holds the key set to exactly the allow-list.
+    def test_r10_ops1_owner_vars_sets_the_role_step_variable(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml",
+            "pull_trigger_steps:\n",
+            "control_plane_db_step: migrate\npull_trigger_steps:\n",
+        )
+        self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
+
+    # W5 on the check itself: with the variable added to the allowed set the same file passes,
+    # so the test above is red only because the set is exact. The set is restored whatever happens.
+    def test_r10_the_exact_key_set_is_what_refuses_the_role_step_variable(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml",
+            "pull_trigger_steps:\n",
+            "control_plane_db_step: migrate\npull_trigger_steps:\n",
+        )
+        original = OWNER_VARS_KEYS["ops1"]
+        OWNER_VARS_KEYS["ops1"] = original | {"control_plane_db_step"}
+        try:
+            findings = check(self.root)
+        finally:
+            OWNER_VARS_KEYS["ops1"] = original
+        self.assertFalse(any(f.startswith("R10 owner_vars/ops1.yml") for f in findings), findings)
+
+    # W7: the allow-list is a list of {id, tag, word} mappings, all text. The ids, tags and
+    # words are the program's to judge (test_step_allowlist.py), so only the shape is refused.
+    def test_r10_ops1_steps_is_a_string(self) -> None:
+        self._write("owner_vars/ops1.yml", "---\npull_trigger_steps: migrate\n")
+        self._assert_one("R10 owner_vars/ops1.yml: pull_trigger_steps must be a list")
+
+    def test_r10_ops1_step_entry_has_a_fourth_field(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml",
+            "    word: MIGRATE-OPS1\n",
+            "    word: MIGRATE-OPS1\n    extra: x\n",
+        )
+        self._assert_one("R10 owner_vars/ops1.yml: a pull_trigger_steps entry must hold exactly")
+
+    def test_r10_ops1_step_entry_has_a_word_that_is_not_text(self) -> None:
+        self._edit("owner_vars/ops1.yml", "word: MIGRATE-OPS1", "word: 1234")
+        self._assert_one("R10 owner_vars/ops1.yml: a pull_trigger_steps entry needs a text")
+
+    # R10: the allow-list is ops1's alone; edge1's file may not carry it.
+    def test_r10_edge1_owner_vars_carries_the_step_allowlist(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys: []\npull_trigger_steps: []\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+
+    # W8: the play loads ops1's owner file exactly while the file exists (the both-ways rule).
+    def test_r2_ops1_owner_vars_entry_dropped_from_vars_files(self) -> None:
+        self._edit("playbooks/ops1.yml", "    - '{{ playbook_dir }}/../owner_vars/ops1.yml'\n", "")
+        self._assert_one("R2 ops1.yml: vars_files must be exactly")
+
+    def test_r2_ops1_owner_vars_entry_without_the_file(self) -> None:
+        (self.ansible / "owner_vars" / "ops1.yml").unlink()
+        self._assert_one("R2 ops1.yml: vars_files must be exactly")
+
+    # W2: control_plane_db is applied on ops1 only while ops1's list names it.
+    def test_r2_control_plane_db_off_ops1_list(self) -> None:
+        self._edit(
+            "checks/host_roles.yml",
+            "  - backup_restore\n  - control_plane_db\n",
+            "  - backup_restore\n",
+        )
+        self._assert_one("R2 ops1.yml: role control_plane_db is not on ops1's list")
+
+    # W3: only ops1 may apply it. edge1 has no entry for it, and so is refused.
+    def test_r2_control_plane_db_on_another_host(self) -> None:
+        path = self.ansible / "playbooks" / "edge1.yml"
+        path.write_text(
+            path.read_text(encoding="utf-8").rstrip("\n")
+            + "\n    - role: ../roles/control_plane_db # noqa: role-name[path]\n",
+            encoding="utf-8",
+        )
+        self._assert_one("R2 edge1.yml: role control_plane_db is not on edge1's list")
+
+    # W4: the role's second key is the step variable, and it is never set in a play. The only
+    # form of a role entry after the pull roles is `role: ../roles/NAME`.
+    def test_r2_control_plane_db_entry_sets_the_step_variable(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    - role: ../roles/control_plane_db # noqa: role-name[path]\n",
+            "    - role: ../roles/control_plane_db # noqa: role-name[path]\n"
+            "      vars:\n        control_plane_db_step: migrate\n",
+        )
+        self._assert_one("R2 ops1.yml: a role entry after the pull roles must be only")
+
+    # R10: the name rule. A README, a nested file, another suffix and a link are refused.
+    def test_r10_owner_vars_readme_is_refused(self) -> None:
+        self._write("owner_vars/README.md", "# Notes\n\nProse only.\n")
+        self._assert_one("R10 README.md: must be an exact .yml")
+
+    def test_r10_owner_vars_nested_file_is_refused(self) -> None:
+        self._write("owner_vars/sub/edge1.yml", "---\nci_login_keys: []\n")
+        self._assert_one("R10 sub/edge1.yml: a .yml must sit at the top of owner_vars/")
+
+    def test_r10_owner_vars_other_suffix_is_refused(self) -> None:
+        self._write("owner_vars/edge1.yaml", "---\nci_login_keys: []\n")
+        self._assert_one("R10 edge1.yaml: must be an exact .yml")
+
+    def test_r10_owner_vars_link_is_refused(self) -> None:
+        (self.ansible / "owner_vars" / "link.yml").symlink_to("edge1.yml")
+        self._assert_one("R10 link.yml: is a link")
+
+    # R2: the playbook must load the owner_vars file when it exists, and only then.
+    def test_r2_owner_vars_entry_dropped_from_vars_files(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml", "    - '{{ playbook_dir }}/../owner_vars/edge1.yml'\n", ""
+        )
+        self._assert_one("R2 edge1.yml: vars_files must be exactly")
+
+    def test_r2_owner_vars_entry_without_the_file(self) -> None:
+        (self.ansible / "owner_vars" / "edge1.yml").unlink()
+        self._assert_one("R2 edge1.yml: vars_files must be exactly")
+
+    def test_r2_owner_vars_entry_names_another_hosts_file(self) -> None:
+        self._edit("playbooks/edge1.yml", "../owner_vars/edge1.yml", "../owner_vars/ops1.yml")
+        self._assert_one("R2 edge1.yml: vars_files must be exactly")
+
+    def test_r2_vars_files_gains_a_fourth_entry(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "    - '{{ playbook_dir }}/../owner_vars/edge1.yml'\n",
+            "    - '{{ playbook_dir }}/../owner_vars/edge1.yml'\n"
+            "    - '{{ playbook_dir }}/../owner_vars/other.yml'\n",
+        )
+        self._assert_one("R2 edge1.yml: vars_files must be exactly")
+
+    # R2: edge1 may set one play var beside enrolled_host, the deploy_tooling class, pinned by
+    # HOST_PLAY_VARS. The positive control first: the real edge1 play carries it and the tree
+    # is green, so a check that refused every extra var would not pass.
+    def test_r2_pinned_play_var_passes_on_edge1(self) -> None:
+        text = (self.ansible / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
+        self.assertIn("    deploy_tooling_host_class: gateway\n", text)
+        self.assertEqual(check(self.root), [])
+
+    # R2: the pinned value is exact, so a different class is refused (sabotage a).
+    def test_r2_pinned_play_var_with_another_class(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "deploy_tooling_host_class: gateway",
+            "deploy_tooling_host_class: app",
+        )
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R2: dropping the pinned var is refused too, the pin is the whole value (sabotage b).
+    def test_r2_pinned_play_var_removed(self) -> None:
+        self._edit("playbooks/edge1.yml", "    deploy_tooling_host_class: gateway\n", "")
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R2: a host with no row in the table keeps the exact pin (sabotage c).
+    def test_r2_pinned_play_var_on_a_host_with_no_row(self) -> None:
+        self._edit(
+            "playbooks/ops1.yml",
+            "    enrolled_host: ops1\n",
+            "    enrolled_host: ops1\n    deploy_tooling_host_class: gateway\n",
+        )
+        self._assert_one("R2 ops1.yml: vars must be exactly")
+
+    # R2: an extra key beside the pinned one is refused (sabotage d).
+    def test_r2_pinned_play_var_with_an_extra_key(self) -> None:
+        self._edit(
+            "playbooks/edge1.yml",
+            "    deploy_tooling_host_class: gateway\n",
+            "    deploy_tooling_host_class: gateway\n    deploy_tooling_extra: x\n",
+        )
+        self._assert_one("R2 edge1.yml: vars must be exactly")
+
+    # R9 through R2: the role is applied only while it is on edge1's list (sabotage e).
+    def test_r2_deploy_tooling_off_the_list(self) -> None:
+        self._edit(
+            "checks/host_roles.yml",
+            "  - ci_jump\n  - deploy_verifier\n  - deploy_tooling\n",
+            "  - ci_jump\n  - deploy_verifier\n",
+        )
+        self._assert_one("R2 edge1.yml: role deploy_tooling is not on edge1's list")
+
+
+class _PurePythonAnyTagLoader(yaml.SafeLoader):  # type: ignore[misc]
+    """_AnyTagLoader's reader on the pure-Python parser: the reference its parse is held to."""
+
+
+_PurePythonAnyTagLoader.add_multi_constructor("", _construct_any_tag)
+
+# Texts neither parser may read. Parity is on the refusal, not on the wording of the message.
+UNREADABLE = ("a: [\n", "a: b: c\n", "a:\n\t- b\n", "a: !unsafe x\n", "- !vault |\n  $X\n", "{")
+
+
+def _outcome(text: str, loader: type) -> tuple[str, object]:
+    try:
+        return "read", yaml.load(text, Loader=loader)  # noqa: S506
+    except (ValueError, yaml.YAMLError):
+        return "refused", None
+
+
+class LoaderParity(unittest.TestCase):
+    """The reader is libyaml's C parser where PyYAML has it. It must give, for every file the
+    check reads, what the pure-Python SafeLoader gives, or a safety check would judge
+    a different document in CI than the one the pure parser reads. One divergence is known and
+    pinned below: a tab inside a plain scalar (`a: x<TAB>y`) is refused by the pure loader and
+    read by libyaml, which Ansible itself uses. On a runner whose PyYAML has no libyaml the check
+    falls back to the pure loader (see `_BASE_LOADER`) and refuses such a file, so its verdict
+    can differ from one reached with libyaml. The pinned wheel has libyaml, and
+    test_the_loader_is_libyaml_when_pyyaml_has_it says which loader a run used."""
+
+    def _texts(self) -> list[tuple[Path, str]]:
+        paths = sorted((*ROOT.glob("ansible/**/*.yml"), *ROOT.glob("ansible/**/*.yaml")))
+        return [(path, path.read_text(encoding="utf-8")) for path in paths if path.is_file()]
+
+    def test_the_loader_is_libyaml_when_pyyaml_has_it(self) -> None:
+        if yaml.__with_libyaml__:
+            self.assertIs(_BASE_LOADER, yaml.CSafeLoader)
+        else:
+            self.assertIs(_BASE_LOADER, yaml.SafeLoader)
+
+    def test_the_loader_reads_every_file_as_the_pure_python_loader_does(self) -> None:
+        texts = self._texts()
+        self.assertGreater(len(texts), 50, "the glob found too few files to be a parity check")
+        for path, text in texts:
+            with self.subTest(path=str(path.relative_to(ROOT))):
+                self.assertEqual(
+                    _outcome(text, _BASE_LOADER), _outcome(text, yaml.SafeLoader), "strict"
+                )
+                self.assertEqual(
+                    _outcome(text, _AnyTagLoader), _outcome(text, _PurePythonAnyTagLoader), "any"
+                )
+
+    def test_the_one_known_divergence_is_a_tab_inside_a_plain_scalar(self) -> None:
+        # Recorded so the class docstring cannot drift from the facts: the pure loader refuses
+        # the text, libyaml reads it. Where PyYAML has no libyaml the loaders are the same.
+        text = "a: x\ty\n"
+        pure = _outcome(text, yaml.SafeLoader)
+        self.assertEqual(pure[0], "refused")
+        if yaml.__with_libyaml__:
+            self.assertEqual(_outcome(text, _BASE_LOADER)[0], "read")
+        else:
+            self.assertEqual(_outcome(text, _BASE_LOADER), pure)
+
+    def test_the_loader_refuses_what_the_pure_python_loader_refuses(self) -> None:
+        for text in UNREADABLE:
+            with self.subTest(text=text):
+                strict = _outcome(text, _BASE_LOADER)
+                self.assertEqual(strict, _outcome(text, yaml.SafeLoader))
+                if "!" in text:
+                    self.assertEqual(strict[0], "refused", "a tag is refused by the strict loader")
+                    self.assertEqual(
+                        _outcome(text, _AnyTagLoader), _outcome(text, _PurePythonAnyTagLoader)
+                    )
+                    self.assertEqual(_outcome(text, _AnyTagLoader)[0], "read")
+                else:
+                    self.assertEqual(strict[0], "refused")
+
+
+class LoadCache(unittest.TestCase):
+    """The parse is cached by file text. The file is read on every call, so an edit is seen."""
+
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.path = Path(temp.name) / "play.yml"
+
+    def test_an_edit_of_the_same_length_is_read_not_replayed(self) -> None:
+        self.path.write_text("signers: [aaaa]\n", encoding="utf-8")
+        self.assertEqual(_load(self.path, [], "x"), {"signers": ["aaaa"]})
+        before = self.path.stat()
+        self.path.write_text("signers: [bbbb]\n", encoding="utf-8")
+        self.assertEqual(self.path.stat().st_size, before.st_size, "the case is a same-size edit")
+        self.assertEqual(_load(self.path, [], "x"), {"signers": ["bbbb"]})
+
+    def test_a_caller_that_changes_a_loaded_value_does_not_change_the_next_load(self) -> None:
+        self.path.write_text("signers: [aaaa]\nnested: {inner: [1, 2]}\n", encoding="utf-8")
+        first = _load(self.path, [], "x")
+        if not isinstance(first, dict):
+            self.fail(f"expected a mapping, got {type(first).__name__}")
+        first["signers"].append("zzzz")
+        first["nested"]["inner"].clear()
+        first["added"] = True
+        second = _load(self.path, [], "x")
+        self.assertEqual(second, {"signers": ["aaaa"], "nested": {"inner": [1, 2]}})
+
+    def test_an_unreadable_file_is_a_finding_every_time_under_the_callers_label(self) -> None:
+        self.path.write_text("a: [\n", encoding="utf-8")
+        first: list[str] = []
+        second: list[str] = []
+        self.assertIsNone(_load(self.path, first, "R2 one.yml"))
+        self.assertIsNone(_load(self.path, second, "R6 two.yml"))
+        self.assertEqual(len(first), 1)
+        self.assertEqual(len(second), 1)
+        self.assertTrue(first[0].startswith("R2 one.yml: cannot be read as YAML: "))
+        self.assertTrue(second[0].startswith("R6 two.yml: cannot be read as YAML: "))
+        self.assertEqual(first[0].split(": ", 2)[2], second[0].split(": ", 2)[2])
+
+    def test_a_file_fixed_after_a_failed_read_is_read(self) -> None:
+        self.path.write_text("a: [\n", encoding="utf-8")
+        self.assertIsNone(_load(self.path, [], "x"))
+        self.path.write_text("a: [1]\n", encoding="utf-8")
+        findings: list[str] = []
+        self.assertEqual(_load(self.path, findings, "x"), {"a": [1]})
+        self.assertEqual(findings, [])
+
+    def test_the_two_loaders_do_not_share_a_result(self) -> None:
+        self.path.write_text("- hosts: all\n  note: !unsafe '{{ x }}'\n", encoding="utf-8")
+        for _ in range(2):
+            strict: list[str] = []
+            self.assertIsNone(_load(self.path, strict, "strict"))
+            self.assertEqual(len(strict), 1)
+            self.assertEqual(
+                _load(self.path, [], "any", _AnyTagLoader),
+                [{"hosts": "all", "note": "{{ x }}"}],
+            )
+
+    def test_the_cache_holds_a_parse_per_text_not_per_call(self) -> None:
+        self.path.write_text("only: this-text-is-unique-to-the-cache-test\n", encoding="utf-8")
+        _load(self.path, [], "x")
+        held = len(_PARSED)
+        _load(self.path, [], "x")
+        self.assertEqual(len(_PARSED), held)
 
 
 if __name__ == "__main__":

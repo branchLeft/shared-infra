@@ -1,0 +1,18 @@
+---
+# Counts the starts the compose unit stand-in has recorded for each placeholder stack, as
+# tenant_compose_scenario_start_counts. A start is one line of the stand-in's log.
+- name: Read the stand-in's log of starts
+  ansible.builtin.slurp:
+    src: /var/lib/standin/starts.log
+  register: tenant_compose_scenario_starts_raw
+  failed_when: false
+
+- name: Count the starts of each stack
+  ansible.builtin.set_fact:
+    tenant_compose_scenario_start_counts:
+      tenant-a: "{{ tenant_compose_scenario_start_lines | select('match', '^tenant-a ') | list | length }}"
+      tenant-b: "{{ tenant_compose_scenario_start_lines | select('match', '^tenant-b ') | list | length }}"
+      tenant-c: "{{ tenant_compose_scenario_start_lines | select('match', '^tenant-c ') | list | length }}"
+      mail-spool: "{{ tenant_compose_scenario_start_lines | select('match', '^mail-spool ') | list | length }}"
+  vars:
+    tenant_compose_scenario_start_lines: "{{ ((tenant_compose_scenario_starts_raw.content | default('')) | b64decode).splitlines() }}"

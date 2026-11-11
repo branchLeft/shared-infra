@@ -1,0 +1,18 @@
+---
+# A good file, root-only, at another path, and the host inputs path a link to it.
+- name: Write a good file at another path
+  ansible.builtin.copy:
+    content: '{{ host_inputs_test_json }}'
+    dest: '{{ host_inputs_test_link_target }}'
+    owner: root
+    group: root
+    mode: '0600'
+  no_log: true
+  diff: false
+
+- name: Make the host inputs path a link to it
+  ansible.builtin.file:
+    src: '{{ host_inputs_test_link_target }}'
+    dest: '{{ host_inputs_test_path }}'
+    state: link
+    force: true

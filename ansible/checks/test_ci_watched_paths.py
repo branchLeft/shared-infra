@@ -11,6 +11,7 @@ a role reads is outside the filter.
 from __future__ import annotations
 
 import re
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,7 +21,9 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ansible.yml"
 FILTER = re.compile(r"watched=\(\n(.*?)\n\s*\)", re.DOTALL)
 # The directories watched whole, whatever they hold now or later.
-WHOLE = ("ansible/", "hetzner/")
+WHOLE = ("ansible/", "hetzner/", "mail/")
+# The hand-step ratchet register: every runbook it counts must be a path the filter watches.
+REGISTER = Path(__file__).resolve().parent / "hand_runbook_steps.yml"
 
 
 def parse_watched(workflow_text: str) -> list[str]:
@@ -62,11 +65,18 @@ class WatchedPathsTest(unittest.TestCase):
         detail = [f"{path} (read by {', '.join(sorted(self.reads[path]))})" for path in missing]
         self.assertEqual([], detail, "these paths are read by role tests but not in the filter")
 
-    def test_ansible_and_hetzner_are_watched_whole(self) -> None:
+    def test_ansible_hetzner_and_mail_are_watched_whole(self) -> None:
         # A file named one by one is a file the next edit forgets to name.
         for directory in WHOLE:
             with self.subTest(directory=directory):
                 self.assertIn(directory, self.watched)
+
+    def test_every_runbook_the_ratchet_counts_is_watched(self) -> None:
+        # The ratchet (test_no_new_hand_runbook_steps.py) reads every mail/RUNBOOK-*.md. A runbook
+        # change the filter does not name never runs it, so a new hand step could land green.
+        runbooks = set(re.findall(r"^(\S+\.md):\s*$", REGISTER.read_text(encoding="utf-8"), re.M))
+        self.assertIn("mail/RUNBOOK-mx1-provision.md", runbooks)
+        self.assertEqual([], uncovered(runbooks, self.watched))
 
     def test_the_lint_files_and_the_two_files_the_tools_read_are_watched(self) -> None:
         for path in (
@@ -113,6 +123,68 @@ class WatchedPathsTest(unittest.TestCase):
                 ["hetzner/monitoring/systemd/monitoring.override.conf"],
             ),
         )
+
+
+class CommentsAreNotReadsTest(unittest.TestCase):
+    # A path named in a comment tells the reader something; it does not make the role read
+    # it, so the filter must not be widened to cover it.
+    def test_whole_line_yaml_comment_is_not_a_read(self) -> None:
+        text = "# Mirrors hetzner/provision/test_compose_unit_contract.py.\n"
+        self.assertEqual(set(), ci_select.outside_reads(text))
+
+    def test_trailing_yaml_comment_is_not_a_read(self) -> None:
+        text = "verify_repo: ROOT  # mirrors hetzner/provision/branchleft-nat.service\n"
+        self.assertEqual(set(), ci_select.outside_reads(text))
+
+    def test_shell_comments_are_not_reads(self) -> None:
+        whole = "    # cp hetzner/provision/x.service /etc\n"
+        trailing = "cp a b  # hetzner/provision/x.service\n"
+        self.assertEqual(set(), ci_select.outside_reads(whole))
+        self.assertEqual(set(), ci_select.outside_reads(trailing))
+
+    def test_joined_path_in_a_comment_is_not_a_read(self) -> None:
+        text = '# ROOT / "hetzner" / "provision" / "x.service"\n'
+        self.assertEqual(set(), ci_select.outside_reads(text))
+
+    def test_a_real_read_on_a_line_with_a_comment_still_counts(self) -> None:
+        text = "src: '{{ verify_repo }}/hetzner/provision/x.service'  # the unit file\n"
+        self.assertEqual({"hetzner/provision/x.service"}, ci_select.outside_reads(text))
+
+    def test_a_real_read_after_a_hash_inside_quotes_still_counts(self) -> None:
+        text = 'marker: " # "; src: "hetzner/provision/x.service"\n'
+        self.assertEqual({"hetzner/provision/x.service"}, ci_select.outside_reads(text))
+
+    def test_a_real_read_after_an_escaped_quote_still_counts(self) -> None:
+        text = 'note: "a \\" b # c"; src: "hetzner/provision/x.service"\n'
+        self.assertEqual({"hetzner/provision/x.service"}, ci_select.outside_reads(text))
+
+    def test_a_comment_only_fixture_reads_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vars_dir = root / "ansible" / "roles" / "backup_restore"
+            vars_dir = vars_dir / "molecule" / "default" / "vars"
+            vars_dir.mkdir(parents=True)
+            (vars_dir / "test.yml").write_text(
+                "# Mirrors hetzner/provision/test_compose_unit_contract.py.\n"
+                "verify_repo: ROOT  # and hetzner/provision/branchleft-nat.service\n",
+                encoding="utf-8",
+            )
+            self.assertEqual({}, ci_select.reads_by_path(root))
+
+    def test_a_real_read_fixture_is_still_found(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            vars_dir = root / "ansible" / "roles" / "backup_restore"
+            vars_dir = vars_dir / "molecule" / "default" / "vars"
+            vars_dir.mkdir(parents=True)
+            (vars_dir / "test.yml").write_text(
+                "# Mirrors hetzner/provision/test_compose_unit_contract.py.\n"
+                "verify_repo: '{{ root }}/hetzner/provision/x.service'  # the unit\n",
+                encoding="utf-8",
+            )
+            self.assertIn("hetzner/provision/x.service", ci_select.reads_by_path(root))
+            reads = ci_select.reads_by_path(root)
+            self.assertNotIn("hetzner/provision/test_compose_unit_contract.py", reads)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,31 @@
+---
+# One migrator URL file the role must refuse. Takes case_name and item
+# (owner, group, mode, content). The refusal removes the file.
+- name: 'Place an migrator URL file: {{ case_name }}'
+  ansible.builtin.copy:
+    content: '{{ item.content }}'
+    dest: '{{ verify_input_dir }}/migrator-url'
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+  no_log: true
+
+- name: 'Refuse an migrator URL file: {{ case_name }}'
+  ansible.builtin.include_tasks: refuse.yml
+  vars:
+    ask_name: 'an migrator URL file: {{ case_name }}'
+    ask_tags: control_plane_db_migrate
+    ask_extra: { control_plane_db_step: migrate }
+    refused_text: 'REFUSED: /etc/branchleft/control-plane/provision/migrator-url must be a regular file'
+
+- name: 'Look for the migrator URL file after the refusal: {{ case_name }}'
+  ansible.builtin.stat:
+    path: '{{ verify_input_dir }}/migrator-url'
+  register: control_plane_db_verify_after_refusal
+
+- name: 'Assert the refused migrator URL file is gone: {{ case_name }}'
+  ansible.builtin.assert:
+    that:
+      - not control_plane_db_verify_after_refusal.stat.exists
+    quiet: true
+    fail_msg: A refused migrator URL file was left on the disk.

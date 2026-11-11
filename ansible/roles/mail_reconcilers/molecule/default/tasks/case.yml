@@ -1,0 +1,63 @@
+---
+# One request from a table: reset, ask, read the stand-in's calls, then assert the outcome.
+# A case names its step, and its tag if that differs (tags for several), a credential
+# (cred), the files it starts with (files) and what the stand-in holds (state, which is
+# the step's name unless given). A case with text expects a refusal containing that text
+# and exactly calls calls (none by default); one without expects success, with calls
+# counted only if given. A case with a label has that credential recorded once in the
+# service credential file, which must be root's with mode 0600.
+- name: 'Reset for: {{ case.name }}'
+  ansible.builtin.include_tasks: reset.yml
+  vars:
+    reset_files: '{{ verify_file_sets[case.files | default("admin")] }}'
+    reset_state: '{{ verify_states[case.state | default(case.step | default("none"))] | default({}) }}'
+
+- name: 'Ask: {{ case.name }}'
+  ansible.builtin.include_tasks: ask.yml
+  vars:
+    ask_name: '{{ case.name }}'
+    ask_tags: '{{ case.tags | default("mail_reconcilers_" ~ (case.tag | default(case.step))) }}'
+    ask_extra: >-
+      {{ ({'mail_reconcilers_step': case.step} if case.step is defined else {})
+         | combine({'mail_reconcilers_credential': case.cred} if case.cred is defined else {}) }}
+    ask_check: '{{ case.check | default(false) }}'
+
+- name: Read the stand-in's calls
+  ansible.builtin.include_tasks: calls.yml
+
+- name: 'Assert the outcome: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - (mail_reconcilers_verify_ask.rc == 0) == (case.text is not defined)
+      - (verify_texts[case.text] if case.text is defined else '') in (mail_reconcilers_verify_ask.stdout ~ mail_reconcilers_verify_ask.stderr)
+      - (case.text is not defined and case.calls is not defined) or mail_reconcilers_verify_calls | length == (case.calls | default(0))
+    quiet: true
+    fail_msg: >-
+      {{ case.name }}: expected {{ 'a refusal containing ' ~ verify_texts[case.text] if case.text is defined else 'success' }}
+      and {{ case.calls | default('any number of') }} calls; got exit
+      {{ mail_reconcilers_verify_ask.rc }} and {{ mail_reconcilers_verify_calls | length }} calls.
+
+- name: 'Count the lines recorded under the label of: {{ case.name }}'
+  ansible.builtin.command:
+    argv: [grep, -c, -e, '^{{ verify_labels[case.label] }}:', '{{ verify_service }}']
+  register: mail_reconcilers_verify_label
+  failed_when: false
+  changed_when: false
+  no_log: true
+  when: case.label is defined
+
+- name: 'Look at the service credential file of: {{ case.name }}'
+  ansible.builtin.stat:
+    path: '{{ verify_service }}'
+  register: mail_reconcilers_verify_service_stat
+  when: case.label is defined
+
+- name: 'Assert the credential was recorded once, in a root file of mode 0600: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_verify_label.stdout == '1'
+      - mail_reconcilers_verify_service_stat.stat.mode == '0600'
+      - mail_reconcilers_verify_service_stat.stat.pw_name == 'root'
+    quiet: true
+    fail_msg: '{{ case.name }}: the label {{ case.label }} is not recorded once in a root file of mode 0600.'
+  when: case.label is defined

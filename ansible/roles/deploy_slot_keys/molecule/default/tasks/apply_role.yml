@@ -1,0 +1,24 @@
+---
+# Applies the role to the slots in apply_slots. When apply_check is set the role runs in
+# check mode on purpose, whatever the play was started with; when it is not, the play's own
+# mode applies, which is what Molecule's check steps need.
+- name: Declare the slots to apply
+  ansible.builtin.include_tasks: declare_slots.yml
+  vars:
+    declare_slots: '{{ apply_slots }}'
+
+- name: Apply the role
+  ansible.builtin.include_role:
+    name: branchleft.deploy_slot_keys
+  vars:
+    deploy_slot_keys_slots: '{{ deploy_slot_keys_scenario_declared_slots }}'
+  when: apply_check is not defined
+
+- name: Apply the role in check mode
+  ansible.builtin.include_role:
+    name: branchleft.deploy_slot_keys
+    apply:
+      check_mode: true
+  vars:
+    deploy_slot_keys_slots: '{{ deploy_slot_keys_scenario_declared_slots }}'
+  when: apply_check is defined

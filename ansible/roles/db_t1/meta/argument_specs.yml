@@ -1,0 +1,19 @@
+---
+argument_specs:
+  main:
+    short_description: Prepare the tenant database host's Percona Server stack and deploy its attested image once
+    description: >-
+      Renders the stack's compose file and MySQL configuration, enables the stack's
+      unit, and, when an image is given, checks the owner-placed root credential file
+      (shape only, never printed) and has the host's deploy program pin that digest and
+      start the stack, once, on a host that has no pin and no data. It never replaces
+      the image of a database that has been deployed, and it holds no secret.
+    author: branchLeft
+    options:
+      db_t1_image:
+        type: str
+        description: >-
+          The Percona Server image pinned by digest, as ghcr.io/branchleft/NAME@sha256:
+          and 64 lower-case hex digits. Empty means no deploy. The deploy program must
+          also have the image registered as attested, or it refuses the deploy.
+        default: ''

@@ -1,46 +1,7 @@
 #!/usr/bin/env python3
 """Checks the mail host's public IP against the major DNSBLs (DNS-based
-blocklists) and raises a clear, actionable signal the moment any of them
-lists it. A listed address silently kills deliverability for every sender
-behind this host, which is exactly the kind of failure that must not wait
-for someone to notice complaints.
-
-Query mechanics (verified against each list's own docs and live DNS, not
-assumed identical -- see mail/RUNBOOK-mx1-provision.md's "DNSBL blocklist
-monitoring" section for the executed checks): every list in this set uses
-the same reversed-octet query -- `<reversed IP>.<zone>` -- and answers with
-either NXDOMAIN (not listed) or one or more A records in 127.0.0.0/8
-(listed; the last octet encodes the sub-list/reason and differs per list,
-irrelevant to this script beyond logging it). Spamhaus additionally
-documents a distinct 127.255.255.0/24 range for *query* errors (e.g. "this
-resolver is a public/open one and is blocked") that must never be read as
-a reputation signal -- applied defensively to every zone here, since no
-other list in this set is known to use that range for a real listing.
-
-Self-test before trusting a "not listed" result: every run also queries
-each zone for the industry-standard always-listed test address 127.0.0.2
-(confirmed live for Spamhaus/Barracuda/SpamCop/UCEPROTECT). If that
-sentinel doesn't come back listed, the zone isn't answering meaningfully --
-dead, unreachable, or rate-limiting this host -- and the real target's
-result for that zone is reported as inconclusive rather than clean. This
-is not hypothetical: dnsbl.sorbs.net currently has no DNS delegation at
-all (NXDOMAIN at the .net level, confirmed live) despite being in the
-minimum DNSBL set here, so without this self-test the SORBS entry would
-silently and permanently report "clean" while providing zero real signal.
-See the RUNBOOK for the live evidence.
-
-Queries go to the host's own local recursive resolver (127.0.0.1, unbound,
-installed by 65-install-local-resolver.sh) addressed explicitly rather than
-through the system resolver: Spamhaus answers 127.255.255.254 ("query
-blocked") to anything reaching it from a high-volume shared resolver, which
-a hosting provider's default resolvers and every public one are. If that local resolver is
-down or broken every lookup fails, the zone self-test below fails with it,
-and the run reports inconclusive -- never a false clean.
-
-Uses only the standard library, consistent with this directory's other
-scripts (see configure_stalwart.py's docstring for why) -- including the
-DNS query itself, which is why there is a small wire-format encoder and
-parser here rather than a dnspython dependency.
+blocklists), alerts the moment any lists it, and reports each run to a
+Healthchecks.io check. Reasoning: check_dnsbl_blocklist.md, "Module overview".
 
 Usage:
     python3 check_dnsbl_blocklist.py            # run a live check, alert on findings
@@ -50,16 +11,22 @@ from __future__ import annotations
 
 import argparse
 import enum
+import errno
 import ipaddress
 import json
 import logging
 import logging.handlers
 import os
 import socket
+import stat
 import struct
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
-from typing import Callable, Iterable
+from email.message import Message
+from typing import IO, Callable, Iterable, Mapping
 
 # The address to check. `DNSBL_TARGET_IP` wins when set; otherwise the mail
 # host's own hostname is resolved at run time, so this file carries no address
@@ -87,6 +54,24 @@ SENTINEL_LISTED_IP = "127.0.0.2"
 # Spamhaus-documented meta/error codes (query blocked/rate-limited -- not
 # reputation data). Applied to every zone defensively; see module docstring.
 QUERY_ERROR_PREFIX = "127.255.255."
+
+# Alert forwarding. The ping URL names and authorises one Healthchecks.io check,
+# so it is configuration read at call time (never source) and never logged.
+# The file named by DNSBL_ENV_FILE is read only when DNSBL_PING_URL is unset.
+# Runbook: "Forwarding findings to Healthchecks.io" in mail/RUNBOOK-mx1-provision.md.
+PING_URL_VARIABLE = "DNSBL_PING_URL"
+ENV_FILE_VARIABLE = "DNSBL_ENV_FILE"
+DEFAULT_ENV_FILE = "/etc/branchleft/dnsbl-check.conf"
+ENV_FILE_MAX_BYTES = 4096
+# Production accepts https only; a test widens this to exercise the real
+# network stack against a loopback server.
+ACCEPTED_PING_SCHEMES = frozenset({"https"})
+# Per socket operation, not wall-clock, and a single attempt: the next cron
+# tick is an hour away and the check's grace time covers a late one.
+PING_TIMEOUT_SECONDS = 10.0
+PING_BODY_LIMIT_BYTES = 10_000
+PING_ANSWER_LIMIT_BYTES = 64
+CRASH_PING_BODY = "dnsbl check crashed before completing"
 
 
 class Verdict(str, enum.Enum):
@@ -440,6 +425,202 @@ def resolve_a_records(hostname: str, timeout_seconds: int) -> ResolutionOutcome:
     return parse_response(payload, query_id, hostname)
 
 
+class PingConfigurationError(Exception):
+    """The ping URL, or the file it was to be read from, is unusable. The
+    message is a fixed phrase naming the reason only -- never the URL or any
+    file content -- so it is safe to log."""
+
+
+class PingAnswerError(Exception):
+    """The check answered 2xx but not with a plain OK. Healthchecks.io answers
+    200 "OK (not found)" to a URL naming no check and 200 "OK (rate limited)"
+    to a ping it ignored, so a 2xx alone does not prove the ping was
+    recorded."""
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """A redirect would send the credential, or a failure report, somewhere
+    the owner never configured, so a redirect is an error instead."""
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: IO[bytes],
+        code: int,
+        msg: str,
+        headers: Message,
+        newurl: str,
+    ) -> urllib.request.Request | None:
+        return None
+
+
+def _strip_matching_quotes(value: str) -> str:
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    return value
+
+
+def _parse_env_value(text: str, key: str) -> str | None:
+    """Pure: the value of `key` in simple KEY=VALUE text. Blank lines and
+    `#` comments are skipped, whitespace around names and values is trimmed,
+    nothing is expanded, and the last assignment wins as in a shell."""
+    value: str | None = None
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        name, separator, raw_value = stripped.partition("=")
+        if separator and name.strip() == key:
+            value = _strip_matching_quotes(raw_value.strip())
+    return value
+
+
+def _require_private_regular_file(descriptor: int) -> None:
+    """Raises PingConfigurationError unless the open descriptor is a regular
+    file owned by the running user with no group or other permission bits."""
+    info = os.fstat(descriptor)
+    if not stat.S_ISREG(info.st_mode):
+        raise PingConfigurationError("the env file is not a regular file")
+    if info.st_uid != os.geteuid():
+        raise PingConfigurationError("the env file is not owned by the running user")
+    if info.st_mode & 0o077:
+        raise PingConfigurationError("the env file is readable by group or other")
+
+
+def read_env_file_value(path: str, key: str) -> str | None:
+    """I/O: the value of `key` in the KEY=VALUE file at `path`; None if the
+    file does not exist or does not set the key. Fails closed: opens without
+    following a symlink or blocking on a FIFO, and checks the opened descriptor.
+
+    Raises PingConfigurationError if it is a symlink, not a regular file, not
+    owned by the running user, readable by group or other, larger than
+    ENV_FILE_MAX_BYTES, unreadable, or not UTF-8.
+    """
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise PingConfigurationError("the env file is a symbolic link") from None
+        raise PingConfigurationError("the env file cannot be opened") from None
+
+    try:
+        _require_private_regular_file(descriptor)
+    except PingConfigurationError:
+        os.close(descriptor)
+        raise
+    with os.fdopen(descriptor, "rb") as handle:
+        try:
+            content = handle.read(ENV_FILE_MAX_BYTES + 1)
+        except OSError:
+            raise PingConfigurationError("the env file cannot be read") from None
+    if len(content) > ENV_FILE_MAX_BYTES:
+        raise PingConfigurationError(f"the env file is larger than {ENV_FILE_MAX_BYTES} bytes")
+    try:
+        return _parse_env_value(content.decode("utf-8"), key)
+    except UnicodeDecodeError:
+        raise PingConfigurationError("the env file is not UTF-8 text") from None
+
+
+def _is_accepted_ping_url(url: str) -> bool:
+    if not url.isascii() or not url.isprintable() or " " in url:
+        return False
+    try:
+        parts = urllib.parse.urlsplit(url)
+        return parts.scheme in ACCEPTED_PING_SCHEMES and bool(parts.hostname)
+    except ValueError:
+        return False
+
+
+def resolve_ping_url(environ: Mapping[str, str]) -> str | None:
+    """The ping URL from DNSBL_PING_URL, else from the file named by
+    DNSBL_ENV_FILE (default DEFAULT_ENV_FILE); None if neither sets one.
+
+    Raises PingConfigurationError if the env file is refused or the URL is
+    not an accepted https URL with a host.
+    """
+    url = environ.get(PING_URL_VARIABLE, "").strip()
+    if not url:
+        env_file = environ.get(ENV_FILE_VARIABLE) or DEFAULT_ENV_FILE
+        url = read_env_file_value(env_file, PING_URL_VARIABLE) or ""
+    if not url:
+        return None
+    if not _is_accepted_ping_url(url):
+        raise PingConfigurationError("the configured ping URL is not an https URL with a host")
+    return url
+
+
+def build_ping_url(url: str, failed: bool) -> str:
+    """Pure: the URL to send to -- the bare ping URL for success, with
+    `/fail` appended to its path for a failure."""
+    if not failed:
+        return url
+    parts = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit(parts._replace(path=parts.path.rstrip("/") + "/fail"))
+
+
+def truncate_ping_body(body: str) -> bytes:
+    """Pure: the body as UTF-8, cut to PING_BODY_LIMIT_BYTES on a character
+    boundary so a long finding list cannot exceed what the check stores."""
+    return body.encode("utf-8")[:PING_BODY_LIMIT_BYTES].decode("utf-8", "ignore").encode("utf-8")
+
+
+def send_ping(url: str, body: str, failed: bool) -> None:
+    """I/O: one POST of `body` to the check, once, with no retry. Proxy
+    environment variables are ignored and redirects refused.
+
+    Raises urllib.error.URLError (or an OSError) on any transport failure,
+    urllib.error.HTTPError on a non-2xx answer, and PingAnswerError on a 2xx
+    answer that is not exactly OK. Their text can carry the URL, so callers
+    must not log it.
+    """
+    request = urllib.request.Request(
+        build_ping_url(url, failed),
+        data=truncate_ping_body(body),
+        method="POST",
+        headers={"Content-Type": "text/plain; charset=utf-8"},
+    )
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _RefuseRedirects)
+    with opener.open(request, timeout=PING_TIMEOUT_SECONDS) as response:
+        answer = response.read(PING_ANSWER_LIMIT_BYTES).strip()
+    if answer != b"OK":
+        raise PingAnswerError("the check did not answer OK")
+
+
+def describe_ping_failure(exc: Exception) -> str:
+    """Pure: a log-safe name for a failed ping -- an HTTP status or an
+    exception class name, never the exception's text."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"HTTP {exc.code}"
+    if isinstance(exc, PingAnswerError):
+        return str(exc)
+    if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, BaseException):
+        return type(exc.reason).__name__
+    return type(exc).__name__
+
+
+def forward_run_report(logger: logging.Logger, body: str, failed: bool) -> None:
+    """Report this run to the Healthchecks.io check. Raises nothing: whatever
+    goes wrong is logged at ERROR with no URL and no exception text, so the
+    check's own result and exit code are never affected by the forwarder."""
+    try:
+        url = resolve_ping_url(os.environ)
+        if url is None:
+            logger.error(
+                "dnsbl alert forwarding is not configured: no ping URL in %s or the file named by %s; "
+                "findings reach the journal only",
+                PING_URL_VARIABLE,
+                ENV_FILE_VARIABLE,
+            )
+            return
+        send_ping(url, body, failed)
+    except PingConfigurationError as exc:
+        logger.error("dnsbl alert forwarding is not configured: %s; findings reach the journal only", exc)
+    except Exception as exc:
+        logger.error("dnsbl alert forwarding failed (%s); the findings above are unaffected", describe_ping_failure(exc))
+
+
 def _load_state(path: str) -> dict[str, str]:
     try:
         with open(path, encoding="utf-8") as f:
@@ -551,17 +732,22 @@ def main(argv: list[str] | None = None) -> int:
         # look. logger.exception embeds the traceback in the log record
         # itself, not just a one-line summary.
         logger.exception("dnsbl check crashed before completing")
+        forward_run_report(logger, CRASH_PING_BODY, failed=True)
         return 1
 
+    # Forwarding comes after everything the check itself does and cannot
+    # change the exit code, which is fixed by the findings alone.
     if alerts:
         for line in alerts:
             logger.error(line)
-        logger.error(
-            "dnsbl check for %s: %d of %d list(s) need attention", target, len(alerts), len(results)
-        )
+        summary = f"dnsbl check for {target}: {len(alerts)} of {len(results)} list(s) need attention"
+        logger.error("%s", summary)
+        forward_run_report(logger, "\n".join([*alerts, summary]), failed=True)
         return 1
 
-    logger.info("dnsbl check for %s: clean on all %d list(s)", target, len(results))
+    clean_line = f"dnsbl check for {target}: clean on all {len(results)} list(s)"
+    logger.info("%s", clean_line)
+    forward_run_report(logger, clean_line, failed=False)
     return 0
 
 

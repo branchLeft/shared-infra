@@ -1,0 +1,6 @@
+---
+# Forget the stand-in's recorded calls, and nothing else.
+- name: Remove the stand-in's log
+  ansible.builtin.file:
+    path: /var/tmp/fake-docker/calls.jsonl
+    state: absent

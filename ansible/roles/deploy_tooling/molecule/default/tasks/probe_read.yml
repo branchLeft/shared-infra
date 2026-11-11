@@ -1,0 +1,16 @@
+---
+# Reads the probe instance of the compose unit into deploy_tooling_scenario_probe,
+# a mapping of the properties the retry case judges.
+- name: Read the probe instance
+  ansible.builtin.command:
+    argv:
+      - systemctl
+      - show
+      - branchleft-compose@Molecule-Probe.service
+      - --property=ActiveState,SubState,Result,NRestarts,InvocationID,StartLimitBurst,Restart
+  register: deploy_tooling_scenario_probe_show
+  changed_when: false
+
+- name: Keep the probe instance's properties as a mapping
+  ansible.builtin.set_fact:
+    deploy_tooling_scenario_probe: '{{ dict(deploy_tooling_scenario_probe_show.stdout_lines | map("split", "=", 1) | list) }}'

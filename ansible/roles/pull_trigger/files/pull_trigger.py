@@ -1,13 +1,13 @@
 #!/usr/bin/python3 -I
 """Apply one exact, verified commit of main to this host.
 
-The role installs this file as one root-owned program, the only thing the CI key
-can run. The caller supplies one commit id of 40 lowercase hex digits, or, for a
-step request on the separate step key, that commit and one step id and one typed
-confirmation word; every other value comes from a root-owned configuration file.
+The role installs this file as the only root-owned program the CI key can run. The caller
+gives a commit id (40 lowercase hex digits), and on the step key a step id and a typed word;
+all else is root-owned config. Steps and exit codes: the role README.
 
-The steps, their order and the exit codes are in the role README. ``Exit`` names
-the exit statuses.
+Commits come from the ``remote`` source (main from a read-only remote, every host today) or
+the ``bundle`` source (a git bundle on stdin, from a host that may not initiate connections,
+admitted via a quarantine repo). Config, never the caller, picks it; the rest is the same code.
 """
 
 import contextlib
@@ -17,6 +17,7 @@ import fcntl
 import json
 import os
 import re
+import select
 import shutil
 import signal
 import stat
@@ -53,6 +54,25 @@ CURRENT_NAME: Final = "current"
 # extension, which ansible requires of a configuration file.
 ANSIBLE_CONFIG_NAME: Final = "ansible.cfg"
 
+# The two sources a host can take its commit from (see the module docstring).
+SOURCE_REMOTE: Final = "remote"
+SOURCE_BUNDLE: Final = "bundle"
+SOURCES: Final = (SOURCE_REMOTE, SOURCE_BUNDLE)
+# The bundle source. A full-history bundle of this repository is a few MiB, so these are
+# generous; they bound a hostile or broken sender, not an honest one. The spool and the
+# quarantine live under the state directory and not under its scratch directory, because the
+# sweep under the lock deletes the scratch directory and would delete a concurrent upload.
+MAX_BUNDLE_BYTES: Final = 200 * 1024 * 1024
+BUNDLE_DEADLINE_SECONDS: Final = 300
+BUNDLE_READ_CHUNK: Final = 1024 * 1024
+SPOOL_GRACE_SECONDS: Final = 60
+SPOOL_NAME: Final = "spool"
+QUARANTINE_NAME: Final = "quarantine"
+QUARANTINE_REF: Final = "refs/pull-trigger/head"
+BUNDLE_HEADERS: Final = (b"# v2 git bundle\n", b"# v3 git bundle\n")
+BUNDLE_SUMMARY_PREFIX: Final = "push-receiver"
+PULL_SUMMARY_PREFIX: Final = "pull-trigger"
+
 HTTPS_URL: Final = re.compile(r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)+")
 FILE_URL: Final = re.compile(r"file:///[A-Za-z0-9._~/-]+")
 SSH_KEY: Final = re.compile(
@@ -81,8 +101,10 @@ CONFIG_KEYS: Final = frozenset(
         "keep_runs",
     },
 )
-# Optional, and its absence means no step may be requested, which is the safe direction.
-OPTIONAL_CONFIG_KEYS: Final = frozenset({"steps"})
+# Optional. An absent ``steps`` means no step may be requested, which is the safe direction. An
+# absent ``source`` means ``remote``: the role writes ``source`` only for a host that takes
+# bundles, so every other host keeps a configuration a program from before this key still parses.
+OPTIONAL_CONFIG_KEYS: Final = frozenset({"steps", "source"})
 
 # The closed list of steps this program will ever run. A step is a routine, named task of a
 # role that its playbook keeps behind the ``never`` tag. This is the only home of the list: the
@@ -216,6 +238,21 @@ class Why(enum.Enum):
     COMMAND_STATUS = "a git command failed"
     GIT_INIT = "git init failed"
     GIT_MERGE_BASE = "git merge-base failed"
+    CONFIG_SOURCE = "source must be remote or bundle"
+    BUNDLE_REQUEST_SHAPE = "a request is a mode, a commit and a playbook, as three words"
+    BUNDLE_REQUEST_INPUT = "a bundle request comes only in the text of the SSH command"
+    BUNDLE_MODE_WORD = "the mode word of a request is apply or check"
+    BUNDLE_STEP_MODE = "a step is not requested of a host that takes bundles"
+    MODE_MISMATCH = "the mode in the request is not the mode this key is fixed to"
+    FLOOR_ABSENT = "this host has no record of a last applied commit, so it has no floor"
+    BUNDLE_UNREADABLE = "standard input could not be read"
+    BUNDLE_NOT_A_BUNDLE = "standard input is not a git bundle"
+    BUNDLE_OVERSIZE = "the bundle is larger than the limit"
+    BUNDLE_STALLED = "the bundle was not received in time"
+    BUNDLE_UNVERIFIABLE = "the bundle does not verify"
+    BUNDLE_UNPACK = "the bundle's objects could not be unpacked, or failed the object check"
+    BUNDLE_FSCK = "the bundle's objects failed the object check"
+    BUNDLE_HEAD = "the bundle's HEAD is not the requested commit"
 
 
 class TriggerError(Exception):
@@ -284,6 +321,24 @@ class RollbackError(RefusedError):
     """The commit is older than the last one applied on this host."""
 
     reason = "rollback"
+
+
+class ModeMismatchError(RefusedError):
+    """The mode word in the request is not the mode the key is fixed to."""
+
+    reason = "mode-mismatch"
+
+
+class NoFloorError(RefusedError):
+    """A host that takes bundles has no record of a last applied commit, so it applies nothing."""
+
+    reason = "no-floor"
+
+
+class BadBundleError(RefusedError):
+    """Standard input is not a complete, well-formed bundle whose HEAD is the requested commit."""
+
+    reason = "bad-bundle"
 
 
 class UnsignedError(RefusedError):
@@ -389,6 +444,7 @@ class Config:
     timeout_seconds: int
     keep_runs: int
     steps: tuple[Step, ...] = ()
+    source: Literal["remote", "bundle"] = "remote"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -411,6 +467,29 @@ class Request:
     commit: str
     step: str | None = None
     word: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class BundleRequest:
+    """What the caller asked of a host that takes bundles: a mode, a commit and a playbook.
+
+    All three matched a pattern. The mode word is compared with the mode the key fixes, and the
+    playbook with the configured one, before anything is read from standard input; neither
+    is ever logged or printed (the line shows the key's mode and the configured playbook).
+    """
+
+    mode: Mode
+    commit: str
+    playbook: str
+
+
+@dataclasses.dataclass(frozen=True)
+class Receiving:
+    """Where a bundle arrives from, and the limits on it. Tests give a short deadline."""
+
+    descriptor: int = 0
+    max_bytes: int = MAX_BUNDLE_BYTES
+    deadline_seconds: float = BUNDLE_DEADLINE_SECONDS
 
 
 def utc_now() -> datetime:
@@ -538,6 +617,35 @@ def require_mode_fits(mode: Mode, request: Request) -> None:
         raise StepModeOnlyError(Why.STEP_MODE_ONLY)
     if request.step is None and mode is Mode.STEP:
         raise BadRequestError(Why.STEP_REQUEST_SHAPE)
+
+
+def resolve_bundle_request(arguments: Arguments, environ: Mapping[str, str]) -> BundleRequest:
+    """Return what the caller asked of a host that takes bundles, or refuse.
+
+    The text is ``<mode> <commit> <playbook>`` in ``SSH_ORIGINAL_COMMAND`` and nowhere else; the
+    bundle is read later. The key's mode must not be ``step``, and the word must be ``apply`` or
+    ``check``. Agreement is checked once the commit is named (``mode-mismatch``).
+
+    Raises:
+        BadRequestError: The text is not three words of the right shapes, comes some other way,
+            or the key's mode is ``step``.
+    """
+    if arguments.mode is Mode.STEP:
+        raise BadRequestError(Why.BUNDLE_STEP_MODE)
+    original = environ.get("SSH_ORIGINAL_COMMAND")
+    if original is None or arguments.positional:
+        raise BadRequestError(Why.BUNDLE_REQUEST_INPUT)
+    words = original.split(" ")
+    if len(words) != 3:  # noqa: PLR2004 - a mode, a commit and a playbook
+        raise BadRequestError(Why.BUNDLE_REQUEST_SHAPE)
+    word, commit, playbook = words
+    if word not in (Mode.APPLY.value, Mode.CHECK.value):
+        raise BadRequestError(Why.BUNDLE_MODE_WORD)
+    if COMMIT_PATTERN.fullmatch(commit) is None:
+        raise BadRequestError(Why.COMMIT_SHAPE)
+    if canonical_playbook(playbook) is None:
+        raise BadRequestError(Why.CONFIG_PLAYBOOK_PATH)
+    return BundleRequest(Mode(word), commit, playbook)
 
 
 def canonical_playbook(path: str) -> str | None:
@@ -700,6 +808,9 @@ def parse_config(text: str) -> Config:
         if not isinstance(entry, str) or canonical_playbook(entry) is None:
             raise ConfigError(Why.CONFIG_PLAYBOOK_PATH)
         playbooks.append(entry)
+    source = data.get("source", SOURCE_REMOTE)
+    if source not in SOURCES:
+        raise ConfigError(Why.CONFIG_SOURCE)
     return Config(
         remote_url=url,
         signers=tuple(_signer_from(entry) for entry in signers_value),
@@ -711,6 +822,7 @@ def parse_config(text: str) -> Config:
         timeout_seconds=_whole(data, "timeout_seconds", 1, 86_400),
         keep_runs=_whole(data, "keep_runs", 1, 1_000),
         steps=_steps_from(data),
+        source=SOURCE_BUNDLE if source == SOURCE_BUNDLE else SOURCE_REMOTE,
     )
 
 
@@ -868,8 +980,18 @@ def last_line(text: str) -> str:
 class Git:
     """Runs git against the cache with a fixed, clean environment."""
 
-    def __init__(self, tools: Tools, git_dir: Path, home: Path) -> None:
-        """Remember the cache directory and build the environment git runs in."""
+    def __init__(
+        self, tools: Tools, git_dir: Path, home: Path, protocols: str = "https:file"
+    ) -> None:
+        """Remember the cache directory and build the environment git runs in.
+
+        Args:
+            tools: The programs this run may start.
+            git_dir: The bare repository git works on.
+            home: A private HOME for git and gpg.
+            protocols: The transports git may use. The quarantine of a bundle allows ``file``
+                alone, which git needs to read a bundle file, and so no network transport.
+        """
         self._tools = tools
         self._git_dir = git_dir
         self.environment: dict[str, str] = {
@@ -879,7 +1001,7 @@ class Git:
             "GIT_CONFIG_GLOBAL": "/dev/null",
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ALLOW_PROTOCOL": "https:file",
+            "GIT_ALLOW_PROTOCOL": protocols,
         }
 
     def attempt(
@@ -929,12 +1051,55 @@ class Git:
             raise GitError(Why.GIT_INIT)
 
 
-class Cache:
+class Repository:
+    """A bare repository the commit is read from: what the signature and playbook checks ask of it.
+
+    The two sources differ in how a commit gets into the repository (a fetch of ``main`` into
+    the cache, or a bundle admitted into a quarantine) and in nothing after that. These are the
+    questions the rest of the run asks, written once, so both sources use the same code.
+    """
+
+    def __init__(self, git: Git) -> None:
+        """Remember the git runner, which is bound to this repository."""
+        self._git = git
+
+    @property
+    def git(self) -> Git:
+        """The git runner bound to this repository."""
+        return self._git
+
+    def has_commit(self, commit: str) -> bool:
+        """Say whether the repository holds this commit object."""
+        return self._git.attempt("cat-file", "-e", f"{commit}^{{commit}}").returncode == 0
+
+    def is_ancestor(self, older: str, newer: str) -> bool:
+        """Say whether ``older`` is ``newer`` or an ancestor of it.
+
+        Raises:
+            GitError: git cannot answer (for example ``older`` is not in the repository).
+        """
+        answer = self._git.attempt("merge-base", "--is-ancestor", older, newer)
+        if answer.returncode not in (0, 1):
+            raise GitError(Why.GIT_MERGE_BASE)
+        return answer.returncode == 0
+
+    def commit_is_signed(self, commit: str) -> bool:
+        """Say whether the commit object carries a signature header."""
+        header = self._git.output("cat-file", "commit", commit).split("\n\n", 1)[0]
+        return any(line.startswith(("gpgsig ", "gpgsig-sha256 ")) for line in header.split("\n"))
+
+    def regular_file_in_commit(self, commit: str, path: str) -> bool:
+        """Say whether ``path`` is a regular (not symlink, not directory) file in the commit."""
+        listing = self._git.output("ls-tree", "-z", commit, "--", path)
+        return listing.startswith(("100644 blob ", "100755 blob "))
+
+
+class Cache(Repository):
     """A root-owned bare repository holding only what was fetched from main."""
 
     def __init__(self, git: Git, remote_url: str) -> None:
         """Remember the git runner and the read-only remote."""
-        self._git = git
+        super().__init__(git)
         self._remote_url = remote_url
 
     def fetch_main(self) -> None:
@@ -965,32 +1130,60 @@ class Cache:
             NotOnMainError: The commit is unknown here or is not an ancestor of the tip.
             GitError: git fails for another reason.
         """
-        known = self._git.attempt("cat-file", "-e", f"{commit}^{{commit}}")
-        if known.returncode != 0:
+        if not self.has_commit(commit):
             raise NotOnMainError(Why.COMMIT_UNKNOWN)
         if not self.is_ancestor(commit, MAIN_REF):
             raise NotOnMainError(Why.COMMIT_NOT_ANCESTOR)
 
-    def is_ancestor(self, older: str, newer: str) -> bool:
-        """Say whether ``older`` is ``newer`` or an ancestor of it.
+
+class Quarantine(Repository):
+    """A per-run bare repository that a bundle is unpacked into before anything trusts it.
+
+    It is made for one request and removed when the request ends. Nothing in it is believed
+    until ``admit`` has checked the bundle, and the signature of the commit is checked in it by
+    the same ``Verifier`` that checks a commit in the cache. It is given a git that may use the
+    ``file`` transport (which git needs to read a bundle file) and no network transport.
+    """
+
+    def has_bundle_header(self, bundle: Path) -> bool:
+        """Say whether the file begins with a git bundle header (version 2 or 3)."""
+        with bundle.open("rb") as handle:
+            start = handle.read(max(len(header) for header in BUNDLE_HEADERS))
+        return start.startswith(BUNDLE_HEADERS)
+
+    def admit(self, bundle: Path, commit: str) -> None:
+        """Unpack the bundle here and require its HEAD to be the requested commit.
+
+        The bundle needs a bundle header and must verify (a complete history). Its objects must
+        unpack and pass git's object check, made by the fetch and by ``git fsck``, so the guard
+        does not depend on the git version (older gits ignore ``transfer.fsckObjects`` here).
 
         Raises:
-            GitError: git cannot answer (for example ``older`` is not in the cache).
+            BadBundleError: Any of those fails; each has its own sentence.
+            GitError: git cannot be run.
         """
-        answer = self._git.attempt("merge-base", "--is-ancestor", older, newer)
-        if answer.returncode not in (0, 1):
-            raise GitError(Why.GIT_MERGE_BASE)
-        return answer.returncode == 0
-
-    def commit_is_signed(self, commit: str) -> bool:
-        """Say whether the commit object carries a signature header."""
-        header = self._git.output("cat-file", "commit", commit).split("\n\n", 1)[0]
-        return any(line.startswith(("gpgsig ", "gpgsig-sha256 ")) for line in header.split("\n"))
-
-    def regular_file_in_commit(self, commit: str, path: str) -> bool:
-        """Say whether ``path`` is a regular (not symlink, not directory) file in the commit."""
-        listing = self._git.output("ls-tree", "-z", commit, "--", path)
-        return listing.startswith(("100644 blob ", "100755 blob "))
+        self._git.initialise()
+        if not self.has_bundle_header(bundle):
+            raise BadBundleError(Why.BUNDLE_NOT_A_BUNDLE)
+        if self._git.attempt("bundle", "verify", str(bundle)).returncode != 0:
+            raise BadBundleError(Why.BUNDLE_UNVERIFIABLE)
+        fetched = self._git.attempt(
+            "fetch",
+            "--no-tags",
+            "--no-recurse-submodules",
+            "--force",
+            "--quiet",
+            "--",
+            str(bundle),
+            f"+HEAD:{QUARANTINE_REF}",
+        )
+        if fetched.returncode != 0:
+            raise BadBundleError(Why.BUNDLE_UNPACK)
+        if self._git.attempt("fsck", "--strict", "--no-dangling", "--no-progress").returncode != 0:
+            raise BadBundleError(Why.BUNDLE_FSCK)
+        head = self._git.attempt("rev-parse", "--verify", "--quiet", f"{QUARANTINE_REF}^{{commit}}")
+        if head.returncode != 0 or head.stdout.strip() != commit:
+            raise BadBundleError(Why.BUNDLE_HEAD)
 
 
 def judge_signature(
@@ -1020,10 +1213,12 @@ def judge_signature(
 class Verifier:
     """Checks a commit's signature against the allowlist, with a keyring made for the run."""
 
-    def __init__(self, git: Git, cache: Cache, tools: Tools, signers: Sequence[Signer]) -> None:
+    def __init__(
+        self, git: Git, repository: Repository, tools: Tools, signers: Sequence[Signer]
+    ) -> None:
         """Remember what verification needs."""
         self._git = git
-        self._cache = cache
+        self._repository = repository
         self._tools = tools
         self._signers = signers
 
@@ -1036,7 +1231,7 @@ class Verifier:
         Raises:
             GitError: the keyring cannot be built or git cannot run.
         """
-        signed = self._cache.commit_is_signed(commit)
+        signed = self._repository.commit_is_signed(commit)
         with tempfile.TemporaryDirectory(dir=scratch_root, prefix="v-") as scratch:
             home = Path(scratch)
             try:
@@ -1156,12 +1351,19 @@ class Workspace:
         self.lock = state_dir / "lock"
         self.floor = state_dir / FLOOR_NAME
         self.current = state_dir / CURRENT_NAME
+        self.spool = state_dir / SPOOL_NAME
+        self.quarantine = state_dir / QUARANTINE_NAME
 
     def prepare(self) -> None:
         """Create the private directories, or check the existing ones."""
         for directory in (self.root, self.repo, self.work, self.scratch, self.home):
             ensure_private_dir(directory)
         write_private_file(self.home / ANSIBLE_CONFIG_NAME, "")
+
+    def prepare_bundle(self) -> None:
+        """Create the two directories only a host that takes bundles uses, or check them."""
+        for directory in (self.spool, self.quarantine):
+            ensure_private_dir(directory)
 
     def sweep(self) -> None:
         """Remove work directories and scratch left by a run that died (called under the lock)."""
@@ -1171,6 +1373,22 @@ class Workspace:
                 shutil.rmtree(stale, ignore_errors=True)
         for stale in self.scratch.iterdir():
             shutil.rmtree(stale, ignore_errors=True)
+
+    def sweep_bundle(self, oldest: float) -> None:
+        """Remove quarantines and old uploads that a run which died left (called under the lock).
+
+        Every quarantine is removed: only the run holding the lock makes one. A spool file is
+        removed only when it is older than ``oldest`` seconds, because another request may be
+        part-way through uploading one while this run holds the lock, and the sweep of the
+        scratch directory must not reach it.
+        """
+        for stale in self.quarantine.iterdir():
+            shutil.rmtree(stale, ignore_errors=True)
+        cutoff = time.time() - oldest
+        for upload in self.spool.iterdir():
+            with contextlib.suppress(FileNotFoundError):
+                if upload.lstat().st_mtime < cutoff:
+                    upload.unlink()
 
     def last_applied(self) -> str | None:
         """Return the commit last applied here, or None on a host that has none.
@@ -1464,6 +1682,74 @@ def require_playbook_in_checkout(checkout: Path, playbook: str) -> None:
         raise PlaybookNotAllowedError(Why.PLAYBOOK_ESCAPES)
 
 
+def spool_stream(spool_dir: Path, receiving: Receiving) -> Path:
+    """Copy the descriptor to a new private file in ``spool_dir`` and return its path.
+
+    The read is bounded in size and time: each wait is a ``select`` against one monotonic
+    deadline for the whole upload, so a sender that stalls or trickles is given up on (a
+    blocking read could not be cancelled). The file is removed if the read fails.
+
+    Raises:
+        BadBundleError: More than the byte limit arrives, the deadline passes before the end of
+            the stream, or the descriptor cannot be read.
+    """
+    deadline = time.monotonic() + receiving.deadline_seconds
+    descriptor, name = tempfile.mkstemp(dir=spool_dir, prefix="in-", suffix=".bundle")
+    path = Path(name)
+    try:
+        with os.fdopen(descriptor, "wb") as sink:
+            _copy_bounded(receiving, deadline, sink)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    return path
+
+
+def _copy_bounded(receiving: Receiving, deadline: float, sink: BinaryIO) -> None:
+    """Copy the descriptor to the sink until its end, within the byte limit and the deadline.
+
+    Raises:
+        BadBundleError: More than the limit arrives, or the deadline passes.
+    """
+    total = 0
+    while chunk := _read_before(receiving.descriptor, deadline):
+        total += len(chunk)
+        if total > receiving.max_bytes:
+            raise BadBundleError(Why.BUNDLE_OVERSIZE)
+        sink.write(chunk)
+
+
+def _read_before(descriptor: int, deadline: float) -> bytes:
+    """Read what is available on the descriptor, waiting no later than the monotonic deadline.
+
+    Returns:
+        Up to ``BUNDLE_READ_CHUNK`` bytes, or nothing at the end of the stream.
+
+    Raises:
+        BadBundleError: The deadline passes with nothing to read, or the descriptor is unusable.
+    """
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise BadBundleError(Why.BUNDLE_STALLED)
+    try:
+        ready, _, _ = select.select([descriptor], [], [], remaining)
+        if not ready:
+            raise BadBundleError(Why.BUNDLE_STALLED)
+        return os.read(descriptor, BUNDLE_READ_CHUNK)
+    except (OSError, ValueError):
+        raise BadBundleError(Why.BUNDLE_UNREADABLE) from None
+
+
+def say(text: str) -> None:
+    """Write a line to standard error, and go on if the caller has already gone.
+
+    A caller that has closed its end of the connection must not stop the journal line from
+    being written or the exit status from being returned.
+    """
+    with contextlib.suppress(OSError, ValueError):
+        sys.stderr.write(text)
+
+
 class Trigger:
     """One run from request to verdict."""
 
@@ -1474,6 +1760,7 @@ class Trigger:
         caller: BinaryIO,
         stop: threading.Event,
         clock: Clock = utc_now,
+        receiving: Receiving | None = None,
     ) -> None:
         """Wire the pieces a run needs."""
         self._config = config
@@ -1481,6 +1768,7 @@ class Trigger:
         self._stop = stop
         self._caller = caller
         self._clock = clock
+        self._receiving = receiving or Receiving()
         self._workspace = Workspace(config.state_dir)
         self._journal = Journal(config.log_dir, config.keep_runs)
         self._step_label = "-"
@@ -1499,7 +1787,22 @@ class Trigger:
         """
         return self._step_label
 
-    def execute(self, mode: Mode, request: Request | TriggerError) -> Verdict:
+    @property
+    def takes_bundles(self) -> bool:
+        """Say whether this host takes its commit from a bundle on standard input."""
+        return self._config.source == SOURCE_BUNDLE
+
+    def with_digit(self, verdict: Verdict) -> Verdict:
+        """Return the verdict with a digit for ``changed`` if this host takes bundles.
+
+        A host that takes bundles prints a digit on every outcome, 0 when nothing ran, because
+        the workflow that reads its line needs a digit to match. Other hosts keep their ``-``.
+        """
+        if self.takes_bundles and verdict.changed is None:
+            return dataclasses.replace(verdict, changed=0)
+        return verdict
+
+    def execute(self, mode: Mode, request: Request | BundleRequest | TriggerError) -> Verdict:
         """Run the request and record the outcome.
 
         Every failure ends as a verdict with a named reason: an expected one
@@ -1510,19 +1813,23 @@ class Trigger:
             The verdict.
         """
         started = self._clock()
-        commit = request.commit if isinstance(request, Request) else "-"
+        commit = request.commit if isinstance(request, (Request, BundleRequest)) else "-"
         try:
             self._workspace.prepare()
             self._journal.prepare()
             if isinstance(request, TriggerError):
                 raise request
-            verdict = self._guarded(mode, request)
+            if isinstance(request, BundleRequest):
+                verdict = self._guarded_bundle(mode, request)
+            else:
+                verdict = self._guarded(mode, request)
         except TriggerError as error:
             verdict = Verdict(error.exit_code, error.reason)
-            sys.stderr.write(f"pull-trigger: {error.reason}: {error.detail}\n")
+            say(f"pull-trigger: {error.reason}: {error.detail}\n")
         except OSError as error:
             verdict = Verdict(Exit.ERROR, "io-error")
-            sys.stderr.write(f"pull-trigger: io-error: {error.strerror}\n")
+            say(f"pull-trigger: io-error: {error.strerror}\n")
+        verdict = self.with_digit(verdict)
         try:
             self._journal.record(
                 Entry(
@@ -1536,8 +1843,66 @@ class Trigger:
                 ),
             )
         except OSError as error:
-            sys.stderr.write(f"pull-trigger: the log could not be written: {error.strerror}\n")
+            say(f"pull-trigger: the log could not be written: {error.strerror}\n")
         return verdict
+
+    def _guarded_bundle(self, mode: Mode, request: BundleRequest) -> Verdict:
+        """Check the request against the key and the configuration, take the bundle, then run.
+
+        Mode and playbook are checked before standard input is read (order: role README).
+
+        Raises:
+            ModeMismatchError: The request asks for a mode other than the key's.
+            PlaybookNotAllowedError: The playbook is not the configured one, or not allowlisted.
+            BadBundleError: The bundle cannot be received, or is not a good bundle.
+        """
+        if request.mode is not mode:
+            raise ModeMismatchError(Why.MODE_MISMATCH)
+        if (
+            request.playbook != self._config.playbook
+            or self._config.playbook not in self._config.playbooks
+        ):
+            raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_LISTED)
+        self._workspace.prepare_bundle()
+        spool = spool_stream(self._workspace.spool, self._receiving)
+        try:
+            with single_flight(self._workspace.lock):
+                self._workspace.sweep()
+                self._workspace.sweep_bundle(self._receiving.deadline_seconds + SPOOL_GRACE_SECONDS)
+                return self._admitted_bundle(mode, request.commit, spool)
+        finally:
+            spool.unlink(missing_ok=True)
+
+    def _admitted_bundle(self, mode: Mode, commit: str, spool: Path) -> Verdict:
+        """Admit the bundle into a quarantine, then verify and run as the pull route does.
+
+        The signature is checked, then the floor; the role README gives the floor rules.
+
+        Raises:
+            BadBundleError: The bundle is refused by the quarantine.
+            NoFloorError: The host has no floor.
+            RollbackError: The commit does not equal or descend from the floor.
+            PlaybookNotAllowedError: The playbook is not a regular file in the commit.
+        """
+        self._require_tools()
+        directory = Path(tempfile.mkdtemp(prefix="q-", dir=self._workspace.quarantine))
+        try:
+            git = Git(self._tools, directory, self._workspace.home, protocols="file")
+            quarantine = Quarantine(git)
+            quarantine.admit(spool, commit)
+            Verifier(git, quarantine, self._tools, self._config.signers).verify(
+                commit, self._workspace.scratch
+            )
+            floor = self._workspace.last_applied()
+            if floor is None:
+                raise NoFloorError(Why.FLOOR_ABSENT)
+            if floor != commit and not (
+                quarantine.has_commit(floor) and quarantine.is_ancestor(floor, commit)
+            ):
+                raise RollbackError(Why.COMMIT_OLDER)
+            return self._checked_out_and_run(quarantine, mode, commit, None)
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
 
     def _guarded(self, mode: Mode, request: Request) -> Verdict:
         """Check the playbook allowlist and the step, take the lock and run.
@@ -1595,9 +1960,19 @@ class Trigger:
         Verifier(git, cache, self._tools, self._config.signers).verify(
             commit, self._workspace.scratch
         )
-        if not cache.regular_file_in_commit(commit, self._config.playbook):
+        return self._checked_out_and_run(cache, mode, commit, step)
+
+    def _checked_out_and_run(
+        self, repository: Repository, mode: Mode, commit: str, step: Step | None
+    ) -> Verdict:
+        """Check the commit out of its repository and run the playbook: the same for both sources.
+
+        Raises:
+            PlaybookNotAllowedError: the playbook is not a regular file in the commit.
+        """
+        if not repository.regular_file_in_commit(commit, self._config.playbook):
             raise PlaybookNotAllowedError(Why.PLAYBOOK_NOT_REGULAR)
-        checkout = self._workspace.new_checkout(git, commit)
+        checkout = self._workspace.new_checkout(repository.git, commit)
         try:
             return self._run(mode, commit, checkout, step)
         finally:
@@ -1657,18 +2032,38 @@ class Trigger:
         return Verdict(Exit.WOULD_CHANGE if mode is Mode.CHECK else Exit.APPLIED, "ok", changed)
 
 
-def summary(verdict: Verdict, mode: str, commit: str, playbook: str, step: str = "-") -> str:
-    """Return the one line printed on stdout for the caller."""
-    return f"pull-trigger {describe(verdict, mode, commit, playbook, step)}"
+def summary(
+    verdict: Verdict,
+    mode: str,
+    commit: str,
+    playbook: str,
+    step: str = "-",
+    prefix: str = PULL_SUMMARY_PREFIX,
+) -> str:
+    """Return the one line printed on stdout for the caller.
+
+    The line of a host that takes bundles starts ``push-receiver`` where the pull route's
+    starts ``pull-trigger``, so a reader can tell which route answered. The fields after it are
+    the same ones.
+    """
+    return f"{prefix} {describe(verdict, mode, commit, playbook, step)}"
 
 
-def main(
+def write_summary(out: TextIO, line: str) -> None:
+    """Print the summary line, and go on if the caller has already closed its end."""
+    with contextlib.suppress(OSError, ValueError):
+        out.write(line + "\n")
+        out.flush()
+
+
+def main(  # noqa: PLR0913 - the seams a test needs: tools, both outputs and the input
     argv: Sequence[str],
     environ: Mapping[str, str],
     stop: threading.Event,
     tools: Tools | None = None,
     stdout: TextIO | None = None,
     caller: BinaryIO | None = None,
+    receiving: Receiving | None = None,
 ) -> int:
     """Run one request and return the exit status.
 
@@ -1681,42 +2076,64 @@ def main(
         arguments = parse_arguments(argv)
         config = load_config(arguments.config_path)
     except TriggerError as error:
-        sys.stderr.write(f"pull-trigger: {error.reason}: {error.detail}\n")
-        out.write(summary(Verdict(error.exit_code, error.reason), "-", "-", "-") + "\n")
+        say(f"pull-trigger: {error.reason}: {error.detail}\n")
+        write_summary(out, summary(Verdict(error.exit_code, error.reason), "-", "-", "-"))
         return int(error.exit_code)
-    request: Request | TriggerError
+    request: Request | BundleRequest | TriggerError
     try:
-        request = resolve_request(arguments, environ)
+        if config.source == SOURCE_BUNDLE:
+            request = resolve_bundle_request(arguments, environ)
+        else:
+            request = resolve_request(arguments, environ)
     except TriggerError as error:
         request = error
-    trigger = Trigger(config, tools or Tools(), relay, stop)
+    trigger = Trigger(config, tools or Tools(), relay, stop, receiving=receiving)
     try:
         verdict = trigger.execute(arguments.mode, request)
     except Exception as error:  # noqa: BLE001 - nothing may leave as an unnamed status
         # Only the class name is printed: a message could carry text from a failed command.
-        sys.stderr.write(f"pull-trigger: internal-error: {type(error).__name__}\n")
-        verdict = Verdict(Exit.ERROR, "internal-error")
-    commit = request.commit if isinstance(request, Request) else "-"
-    out.write(
-        summary(verdict, arguments.mode.value, commit, trigger.playbook_label, trigger.step_label)
-        + "\n"
+        say(f"pull-trigger: internal-error: {type(error).__name__}\n")
+        verdict = trigger.with_digit(Verdict(Exit.ERROR, "internal-error"))
+    commit = request.commit if isinstance(request, (Request, BundleRequest)) else "-"
+    prefix = BUNDLE_SUMMARY_PREFIX if trigger.takes_bundles else PULL_SUMMARY_PREFIX
+    write_summary(
+        out,
+        summary(
+            verdict,
+            arguments.mode.value,
+            commit,
+            trigger.playbook_label,
+            trigger.step_label,
+            prefix,
+        ),
     )
-    out.flush()
     return int(verdict.exit_code)
 
 
 def run_as_program() -> int:
     """Run as the installed program: set the umask and the signal handlers, then ``main``.
 
-    A dropped connection must not stop an apply half-way, so SIGHUP is ignored.
-    A person's TERM or INT asks the playbook to stop and the stop is recorded.
+    A dropped connection must not stop an apply half-way, so SIGHUP is ignored. A person's TERM
+    or INT asks the playbook to stop and the stop is recorded. Python ignores SIGPIPE, so a
+    caller that has closed its end shows up as an error on a write, which is dealt with where
+    the write is made; standard output is then pointed at the null device so that the flush at
+    interpreter exit does not turn a finished run into a failed one.
     """
     os.umask(0o022)
     stop = threading.Event()
     signal.signal(signal.SIGHUP, signal.SIG_IGN)
     for number in (signal.SIGTERM, signal.SIGINT):
         signal.signal(number, lambda _signal, _frame: stop.set())
-    return main(sys.argv[1:], os.environ, stop)
+    status = main(sys.argv[1:], os.environ, stop)
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.flush()
+        except (OSError, ValueError):
+            with contextlib.suppress(OSError, ValueError):
+                null = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(null, stream.fileno())
+                os.close(null)
+    return status
 
 
 if __name__ == "__main__":

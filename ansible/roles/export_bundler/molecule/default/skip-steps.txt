@@ -1,0 +1,10 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# The default scenario starts from a host that holds an older, wider-open bundler and a
+# state directory with files in it, applies the role, applies it again (which must report
+# no change) and checks the result. The three steps that only plan are the plan scenario's,
+# which starts from a host with nothing on it.
+check-fresh
+check-configured
+molecule-check

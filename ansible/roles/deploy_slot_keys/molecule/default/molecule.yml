@@ -1,0 +1,71 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production
+    # hosts, trusted by digest. The digest is the pin; the tag is informational
+    # and may since have moved on. It has sudo, visudo and Python in it. The
+    # scenario starts a real sshd of its own and does not need systemd, so it sets
+    # none of the settings that run systemd: no cgroup mount, no cgroup namespace
+    # mode and no tmpfs. No privileged mode and no added capabilities.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # A plain sleep keeps the container alive so Ansible can run in it, in place of
+    # the image's systemd, which needs a cgroup mount this scenario does not grant.
+    command: sleep infinity
+    # The image declares /sys/fs/cgroup as a volume and this scenario does not
+    # bind-mount it, so Docker makes an anonymous volume for every container
+    # started from the image. Molecule's destroy keeps a container's volumes
+    # unless told otherwise, and an anonymous volume carries no label to find it
+    # by, so each run would leave one behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 1 prints each task's result
+    # with the arguments it was given, so a task that handles the slots and lacks
+    # no_log shows them in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '1'
+    # The verify play calls the role's own module outside the role's tasks, to
+    # make the refusals it checks, so the role's library is on the module path.
+    ANSIBLE_LIBRARY: '${MOLECULE_PROJECT_DIRECTORY}/library'
+  inventory:
+    # The values the scenario runs with, read by the prepare, converge and verify
+    # plays. Placeholders only. The key pairs are made by prepare.yml inside the
+    # container, for this run only.
+    group_vars:
+      all:
+        scenario_key_dir: /root/slot-test-keys
+        scenario_record_dir: /var/lib/slot-test
+        scenario_ssh_port: 2222
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        scenario_stack_a: example-stack-a
+        scenario_stack_b: example-stack-b
+        scenario_stack_adopted: example-adopted
+        scenario_stack_unadopted: example-unadopted
+        scenario_stack_canary: example-log-canary
+        # A stack the host already runs is adopted by its entry, and a stack it
+        # already runs that is not adopted is refused.
+        scenario_existing_stacks:
+          - example-adopted
+          - example-unadopted
+        scenario_slots:
+          - { stack: example-stack-a, key_name: a }
+          - { stack: example-stack-b, key_name: b }
+          - { stack: example-adopted, key_name: adopted, adopt: true }
+          - { stack: example-log-canary, key_name: canary }
+verifier:
+  name: ansible

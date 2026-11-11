@@ -1,0 +1,88 @@
+# Generated from sites.ts and hetzner/status/render.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+web:
+  port: 8080
+storage:
+  type: sqlite
+  path: /data/data.db
+endpoints:
+  - name: branchleft.co.uk
+    group: sites
+    url: https://branchleft.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: www.branchleft.co.uk
+    group: sites
+    url: https://www.branchleft.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: blog.branchleft.co.uk
+    group: sites
+    url: https://blog.branchleft.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: cloud.branchleft.co.uk
+    group: sites
+    url: https://cloud.branchleft.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: book.branchleft.co.uk
+    group: sites
+    url: https://book.branchleft.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: portal.publicpress.co.uk
+    group: sites
+    url: https://portal.publicpress.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: console.branchleft.co.uk
+    group: sites
+    url: https://console.branchleft.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: id.publicpress.co.uk
+    group: sites
+    url: https://id.publicpress.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: ntfy.branchleft.co.uk
+    group: sites
+    url: https://ntfy.branchleft.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
+  - name: TEST
+    group: TEST
+    url: http://status-test-target:8080/health
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'

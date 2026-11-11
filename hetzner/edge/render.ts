@@ -202,8 +202,69 @@ interface Block {
   body: string[];
 }
 
+// Why: the single-use break-glass sign-in token travels in this query parameter.
+// See render.md §"logDirective: break-glass token redaction and strip".
+const BREAK_GLASS_PARAM = 'bl_break_glass';
+
+/**
+ * The one place the parameter name is spelled. Each character is itself or its
+ * percent form, with either hex case accepted for the percent form; letters stay
+ * case-sensitive. Uses no backslash or brace, so Caddyfile quoting leaves it alone.
+ */
+function paramNamePattern(): string {
+  return [...BREAK_GLASS_PARAM]
+    .map((ch) => {
+      const hex = ch.charCodeAt(0).toString(16).toUpperCase();
+      const spelled = [...hex]
+        .map((digit) => (/[A-F]/.test(digit) ? `[${digit}${digit.toLowerCase()}]` : digit))
+        .join('');
+      return `(?:${ch}|%${spelled})`;
+    })
+    .join('');
+}
+
+/** The log fields the token can appear in: the request line, a refused sign-in's Referer, Ghost's 302. */
+const BREAK_GLASS_LOG_FIELDS = ['request>uri', 'request>headers>Referer', 'resp_headers>Location'];
+
+/**
+ * Retention of every edge log, set explicitly rather than left to Caddy's own
+ * defaults. The owner decided 30 days on 2026-08-24: well inside the 90-day
+ * ceiling the website privacy notice commits to, and far
+ * longer than abuse investigation or incident response needs. Caddy's default
+ * happens to be about 90 days, so leaving it unset would keep the notice true by
+ * coincidence rather than by policy.
+ */
+const LOG_RETENTION = '720h';
+
+/**
+ * Rotation. `roll_keep_for` only prunes files that have already been rolled, so a
+ * roll must happen even on a quiet edge. `roll_at 00:00` (UTC) rolls daily on the
+ * clock; `roll_interval` would not, because it rolls only on the next write. Caddy
+ * v2.11.4 accepts `roll_at` (github.com/DeRuina/timberjack v1.4.2, rotation on a
+ * background timer). The count is 31, so 30 daily rolls are kept: Caddy's default
+ * of 10 would cap a daily roll at 10 days and silently shorten the retention.
+ */
+const LOG_ROLL_AT = '00:00';
+const LOG_ROLL_SIZE = '100MiB';
+const LOG_ROLL_KEEP = 31;
+
 function logDirective(path: string): string[] {
-  return ['log {', `\toutput file ${path}`, '\tformat json', '}'];
+  // Any parameter whose name starts with the token's, in any case, loses its value.
+  const pattern = `(?i)([?&]${paramNamePattern()})[^&#]*`;
+  return [
+    'log {',
+    `\toutput file ${path} {`,
+    `\t\troll_size ${LOG_ROLL_SIZE}`,
+    `\t\troll_keep ${LOG_ROLL_KEEP}`,
+    `\t\troll_keep_for ${LOG_RETENTION}`,
+    `\t\troll_at ${LOG_ROLL_AT}`,
+    '\t}',
+    '\tformat filter {',
+    '\t\twrap json',
+    ...BREAK_GLASS_LOG_FIELDS.map((field) => `\t\t${field} regexp "${pattern}" "$1=REDACTED"`),
+    '\t}',
+    '}',
+  ];
 }
 
 function tlsDirective(): string[] {
@@ -315,6 +376,23 @@ function ghostSetupMatcher(): string[] {
  */
 function ghostSetupRefusal(): string {
   return `respond @ghost_setup ${GHOST_SETUP_REFUSAL_STATUS}`;
+}
+
+// Why: the token is read only on /ghost/, so anywhere else it is stripped before
+// any other handler. The gate reads the raw request target (Caddy's path matcher
+// decodes and cleans, Express does not). See render.md §"logDirective: break-glass
+// token redaction and strip".
+function breakGlassStripMatcher(): string[] {
+  const target = '{http.request.orig_uri}';
+  const hasToken = `^[^?]*[?](?:[^&]*&)*${paramNamePattern()}(?:=|&|$)`;
+  const onGhost = '^/ghost(?:[/?]|$)';
+  const dotSegment = '^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])';
+  const fires = `${target}.matches('${hasToken}') && (!${target}.matches('${onGhost}') || ${target}.matches('${dotSegment}'))`;
+  return [`@break_glass_strip expression \`${fires}\``];
+}
+
+function breakGlassStrip(): string {
+  return `uri @break_glass_strip query -${BREAK_GLASS_PARAM}`;
 }
 
 /**
@@ -450,11 +528,14 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   // Unconditional, unlike the throttle matcher: it is a refusal, not a
   // posture, so no posture setting may switch it off.
   body.push(...ghostSetupMatcher());
+  body.push(...breakGlassStripMatcher());
   body.push(
     'route {',
     // Ahead of everything else, including request_body -- see hstsDirective's
     // own comment for why its position is load-bearing rather than tidiness.
     ...hstsDirective().map((line) => `\t${line}`),
+    // Before the body cap and the protection chain, so the WAF hop never carries it.
+    `\t${breakGlassStrip()}`,
     // Why: does not terminate handler chain; ordering buys tidiness only. AppSec
     // caps at appsec_max_body_bytes anyway. See render.md §"siteBlock: request_body ordering".
     ...requestBodyDirective(site).map((line) => `\t${line}`),
@@ -537,8 +618,10 @@ function probeBlock(
   // Same refusal as a real site, so a loopback `curl` can prove it before any
   // hostname serves the path for real.
   body.push(...ghostSetupMatcher());
+  body.push(...breakGlassStripMatcher());
   body.push(
     'route {',
+    `\t${breakGlassStrip()}`,
     ...protectionChain(posture, generalZone, {
       appsec: 'all',
       membersMagicLink: true,
@@ -550,9 +633,9 @@ function probeBlock(
     // whenever that block is missing -- and a verification step that passes
     // with the thing it verifies absent is not a verification step. This is
     // what makes RUNBOOK-edge.md §8b(4a) discriminating, and it is why the
-    // marker must survive into the committed posture rather than depending on
-    // the separate general zones, which render only under `rateLimit:
-    // 'enforcing'`.
+    // marker is a plain `header` line here rather than something that depends
+    // on the general throttle zones: those render only under `rateLimit:
+    // 'enforcing'`, and a marker has to survive a posture that turns them off.
     `\theader ${PROBE_MARKER_HEADER} ${marker}`,
     '\trespond 204',
     '}'

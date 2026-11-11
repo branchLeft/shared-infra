@@ -1,0 +1,24 @@
+---
+# Constants of the page, not inputs, so they live here and not in defaults/. The
+# image is Gatus v5.37.0 (released 2026-09-24) pinned by its index digest: the tag
+# is for a reader, the digest is what is pulled. It is a scratch image with no
+# shell, so no in-container healthcheck is possible; the role checks the page from
+# the host instead. Both services of the compose file use this one image.
+status_page_image: ghcr.io/twin/gatus:v5.37.0@sha256:094eb186e55235db367e90e9d56140e5897b7044c41de23cde4cc18e6da1242e
+
+# The host port the page is published on, on status_page_listen_address.
+status_page_port: 8303
+
+status_page_project_dir: /opt/branchleft/status
+status_page_project_name: status
+
+# The two configuration files, relative to files/stack (a link to
+# hetzner/status/stack, where hetzner/status/render.ts writes them).
+status_page_stack_files:
+  - config.yaml
+  - target.yaml
+
+status_page_stamp_file: '{{ status_page_project_dir }}/.status_page_stamp'
+
+# The health check polls this many seconds apart.
+status_page_health_delay: 2

@@ -5,9 +5,11 @@ Reasoning: see configure_stalwart.md, "Module overview".
 """
 from __future__ import annotations
 
+import copy
 import http.client
 import json
 import os
+import secrets
 import socket
 import subprocess
 import sys
@@ -108,6 +110,35 @@ ACME_PROVIDER_TARGET: dict[str, Any] = {
 }
 
 _DAY_MS = 86400000  # Duration fields serialise as a u64 of milliseconds
+_MINUTE_MS = 60000
+_HOUR_MS = 3600000
+
+# The delivery schedule and virtual queue named "report". Stalwart's stock
+# schedule expression answers 'report' for DMARC, TLS and failure reports;
+# the shipped seed for that schedule is rejected by the server's own
+# validation, so it never exists. Values are the seed's own, with the one
+# rejected field (an empty notify list) replaced by the stock default.
+# Reasoning: see configure_stalwart.md, "Report delivery schedule".
+REPORT_NAME = "report"
+REPORT_QUEUE_TARGET: dict[str, Any] = {
+    "name": REPORT_NAME,
+    "description": "DMARC and TLS report delivery queue",
+    "threadsPerNode": 5,
+}
+REPORT_SCHEDULE_TARGET: dict[str, Any] = {
+    "name": REPORT_NAME,
+    "description": "DMARC and TLS report delivery schedule",
+    "expiry": {"@type": "Attempts", "maxAttempts": 8},
+    "notify": {"@type": "Default"},
+    "retry": {
+        "@type": "Custom",
+        "intervals": {
+            "0": {"duration": 30 * _MINUTE_MS},
+            "1": {"duration": _HOUR_MS},
+            "2": {"duration": 2 * _HOUR_MS},
+        },
+    },
+}
 
 # Managed ban-rate policy on the Security singleton -- reasoning and full
 # posture: mail/RUNBOOK-mx1-provision.md's "Scan-ban" section. Every
@@ -349,6 +380,34 @@ def plan_allowed_ips(
     return {"create": create} if create else {}
 
 
+def _has_report_schedule(schedules: list[dict[str, Any]]) -> bool:
+    return any(item.get("name") == REPORT_NAME for item in schedules)
+
+
+def plan_report_queue(queues: list[dict[str, Any]]) -> tuple[dict[str, Any], str | None]:
+    """Pure diff: return the x:MtaVirtualQueue/set arguments needed so a
+    queue named "report" exists, plus that queue's id (None if it still needs
+    creating). An existing queue is reused as found, thread count included.
+    """
+    for queue in queues:
+        if queue.get("name") == REPORT_NAME:
+            return {}, queue["id"]
+    return {"create": {REPORT_NAME: copy.deepcopy(REPORT_QUEUE_TARGET)}}, None
+
+
+def plan_report_schedule(schedules: list[dict[str, Any]], queue_id: str) -> dict[str, Any]:
+    """Pure diff: return the x:MtaDeliverySchedule/set arguments needed so a
+    schedule named "report" exists on `queue_id`, or an empty dict if one
+    does. Create-only: an existing schedule is never rewritten, so an
+    operator's tuning of it survives.
+    """
+    if _has_report_schedule(schedules):
+        return {}
+    schedule = copy.deepcopy(REPORT_SCHEDULE_TARGET)
+    schedule["queueId"] = queue_id
+    return {"create": {REPORT_NAME: schedule}}
+
+
 def _request(method: str, path: str, auth: tuple[str, str], body: bytes | None = None) -> Any:
     import base64
 
@@ -400,6 +459,38 @@ def _read_bootstrap_password() -> str:
     )
 
 
+def _write_credentials_file(username: str, secret: str) -> None:
+    """Save the credentials at CREDENTIALS_PATH, never readable by anyone but the owner.
+
+    The text is written to a uniquely named sibling created with O_EXCL at mode 0600
+    and then moved over CREDENTIALS_PATH, so a re-run over an existing file replaces
+    it atomically and a leftover from an earlier crash can never block a later run.
+
+    Raises:
+        OSError: the temporary file could not be created, written or moved into place.
+    """
+    directory = os.path.dirname(CREDENTIALS_PATH) or "."
+    temporary_path = os.path.join(
+        directory, f".stalwart-admin-credentials.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    )
+    # The mode is set at creation, not with a later chmod, so the secret is never
+    # readable under the process umask, even for the moment before a chmod would run.
+    descriptor = os.open(temporary_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(f"{username}:{secret}\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, CREDENTIALS_PATH)
+    except BaseException:
+        try:
+            os.unlink(temporary_path)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 def _complete_bootstrap() -> tuple[str, str]:
     """Finishes Stalwart's setup wizard with its own inferred defaults
     (hostname/domain/storage -- all already correct from the
@@ -413,13 +504,10 @@ def _complete_bootstrap() -> tuple[str, str]:
     updated = result["updated"]["singleton"]
     username, secret = updated["username"], updated["secret"]
 
+    # The secret is shown only once, so neither a failed restart nor a readiness-poll
+    # timeout may lose it; it is saved before anything else can fail.
+    _write_credentials_file(username, secret)
     subprocess.run(["docker", "restart", "stalwart"], check=True, capture_output=True)
-
-    # Written before the readiness poll: the secret is shown only once, so a
-    # poll timeout must not lose it.
-    with open(CREDENTIALS_PATH, "w", encoding="utf-8") as f:
-        f.write(f"{username}:{secret}\n")
-    os.chmod(CREDENTIALS_PATH, 0o600)
     _wait_for_stalwart_ready((username, secret))
     print(f"configure_stalwart: bootstrap complete, credential written to {CREDENTIALS_PATH}")
     return username, secret
@@ -537,6 +625,22 @@ def _reconcile_allowed_ips(auth: tuple[str, str]) -> bool:
     return True
 
 
+def _reconcile_report_delivery(auth: tuple[str, str]) -> bool:
+    schedules = _jmap_call(auth, "x:MtaDeliverySchedule/get", {})["list"]
+    if _has_report_schedule(schedules):
+        print("configure_stalwart: report delivery schedule already present, no-op")
+        return False
+
+    queue_args, queue_id = plan_report_queue(_jmap_call(auth, "x:MtaVirtualQueue/get", {})["list"])
+    if queue_args:
+        result = _jmap_call(auth, "x:MtaVirtualQueue/set", queue_args)
+        queue_id = next(iter(result["created"].values()))["id"]
+        print("configure_stalwart: created the report virtual queue")
+    _jmap_call(auth, "x:MtaDeliverySchedule/set", plan_report_schedule(schedules, queue_id))
+    print("configure_stalwart: created the report delivery schedule")
+    return True
+
+
 def _wait_for_stalwart_ready(
     auth: tuple[str, str], timeout: float = 60.0, poll_interval: float = 2.0
 ) -> None:
@@ -592,6 +696,7 @@ def main() -> int:
             _reconcile_tracer(auth),
             _reconcile_security(auth),
             _reconcile_allowed_ips(auth),
+            _reconcile_report_delivery(auth),
         ]
     )
 

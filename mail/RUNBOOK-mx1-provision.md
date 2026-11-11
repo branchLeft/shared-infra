@@ -11,6 +11,13 @@ change at the registrar, described under "The MX cutover" below. Read "What
 this does not prove" at the end before relying on anything here for real mail
 traffic.
 
+The `mx1_stack` role (`ansible/roles/mx1_stack`) will replace scripts 30, 63, 65 and 70 once
+`branchLeft/shared-infra#352` wires its playbook; until then they stay the way to run those four
+steps by hand, and nothing here changes. The role's README says what it adds (a scoped recreate of
+only the container whose host input changed, and a freshness read-back before it records a
+stamp) and why it departs from script 63, which leaves Caddy running on an old Caddyfile after a
+content-only change. Do not run script 70 by hand once the role has been applied.
+
 ## What the scripts do
 
 All under `mail/provision/`, run in order by `run-all.sh`. Every script
@@ -25,7 +32,7 @@ needed to change.
 | `20-install-docker.sh`                                                                         | Installs Docker CE from Docker's own apt repo (trixie has no current `docker.io` package). No-ops entirely once Docker is present and running.                                                                                                   |
 | `docker-compose.yml`                                                                           | Pins `stalwartlabs/stalwart:v0.16.17` and its image digest (`@sha256:a8108e19…`). Publishes 25/443/465/587/993 on all interfaces (matching `mail/firewall.ts` exactly) and 8080 on `127.0.0.1` only.                                             |
 | `30-deploy-stalwart.sh`                                                                        | Copies the compose file to `/opt/stalwart` and runs `docker compose up -d`; waits for the container's own healthcheck.                                                                                                                           |
-| `40-configure-stalwart.sh` / `configure_stalwart.py`                                           | Reconciles Stalwart's _own_ settings (see below) via its JMAP-style management API — network listeners, the ACME provider, the domain's SAN list and ACME provider reference, HTTP access control, and the log tracer.                           |
+| `40-configure-stalwart.sh` / `configure_stalwart.py`                                           | Reconciles Stalwart's _own_ settings (see below) via its JMAP-style management API — network listeners, the ACME provider, the domain's SAN list and ACME provider reference, HTTP access control, the log tracer, and the report schedule.      |
 | `50-provision-mailboxes.sh` / `provision_mailboxes.py`                                         | Creates branchLeft's mailboxes (`MAILBOXES`) and the role-address Sieve forwarding scripts (`ROLE_ADDRESSES`). See "Mailbox provisioning" below.                                                                                                 |
 | `60-provision-website-submission-credential.sh` / `provision_website_submission_credential.py` | Creates the website contact form's dedicated, submission-only SMTP credential (send-as `info@`). See "Website submission credential" below.                                                                                                      |
 | `61-provision-blog-submission-credential.sh` / `provision_website_submission_credential.py`    | Same script as `60-...sh`, parameterised via environment variables for the blog's dedicated, submission-only SMTP credential (send-as `blog@`) instead. See "Blog submission credential" below.                                                  |
@@ -34,7 +41,7 @@ needed to change.
 | `64-provision-alerting-submission-credential.sh`                                               | Provisions Alertmanager's submission-only SMTP credential (send-as `alerts@`). Same script as 60/61/62, different parameters. Runs _before_ `63` in `run-all.sh` — see "Alerting submission credential" below.                                   |
 | `65-install-local-resolver.sh`                                                                 | Installs `unbound` as a loopback-only, fully recursive resolver (no forwarders) so DNSBL queries originate from mx1's own IP. Leaves `/etc/resolv.conf` alone. See "Local recursive resolver" below.                                             |
 | `70-schedule-dnsbl-check.sh`                                                                   | Idempotently installs the hourly `/etc/cron.d/dnsbl-check` entry that runs `check_dnsbl_blocklist.py`. See "DNSBL blocklist monitoring" below.                                                                                                   |
-| `check_dnsbl_blocklist.py`                                                                     | Not part of `run-all.sh` directly (it's what the cron entry above runs) — checks mx1's IP against five DNSBLs, alerting on any listing. `--status` prints the last recorded result without querying DNS. See "DNSBL blocklist monitoring" below. |
+| `check_dnsbl_blocklist.py`                                                                     | Not part of `run-all.sh` directly (what the cron entry above runs) — checks mx1's IP against five DNSBLs, logs findings and also forwards each run to a Healthchecks.io check. `--status` pings nothing. See "DNSBL blocklist monitoring" below. |
 | `rotate_admin_credential.py`                                                                   | Not part of `run-all.sh` — a standalone, on-demand rotation for the admin credential. See "Rotating the admin credential" below.                                                                                                                 |
 | `list_and_clear_blocked_ips.py`                                                                | Not part of `run-all.sh` — lists (`--list-only`), and clears specific (`--ip`, repeatable) or all (`--all`) IPs Stalwart's own scan-ban has blocked. See "Scan-ban" below.                                                                       |
 | `trigger_acme_renewal.py`                                                                      | Not part of `run-all.sh` — manually triggers a certificate renewal check. See "What remains owner-gated" below; normally unnecessary, since renewal is self-scheduled.                                                                           |
@@ -630,25 +637,34 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
   credential" above), send-as `blog@`, labelled `blog-shim-bulk-submission`
   — independently revocable from `61`'s transactional `blog-ghost-smtp`
   credential, so retiring or rotating the shim's bulk-mail path never
-  touches transactional mail or vice versa. **Not read by `render_shim_env.py`
-  any more** — the shim's own outbound delivery (`worker.ts`/`smtp.ts`) is
-  gone (`ghost-platform#238`, `branchLeft/workspace#1237`), so nothing in
-  this repo currently consumes this credential; it is retained because
+  touches transactional mail or vice versa. **Read by `render_shim_env.py`**
+  for the image `shim-compose.yml` pins today: that image (ghost-platform
+  `ddaeb39`) still delivers mail itself, and its `smtp-delivery` contract in
+  `shim-env-contracts.json` renders this credential as `SMTP_PASS`. A later
+  image whose outbound delivery is gone (`ghost-platform#238`,
+  `branchLeft/workspace#1237`) reads no SMTP variable, and would use the
+  `drain` contract instead; the credential is then retained because
   authenticated SMTP submission to mx1 is the only way anything reaches this
   host (HLD §03), and something has to hold it once the mail collector
   (`branchLeft/workspace#1239`) exists.
 - `63-deploy-mailgun-shim.sh` / `render_shim_env.py` — installs the compose
   file and Caddyfile, seeds `/var/lib/mailgun-shim/throttle.json` only if
-  absent, renders `/etc/mailgun-shim/env` (mode 600) — `PORT`,
-  `SHIM_DB_PATH`, `SHIM_THROTTLE_PATH` plus `SHIM_DRAIN_TOKEN` (generated on
-  the host on first use and recorded in
-  `/root/.stalwart-service-credentials` under `shim-drain-token`, the same
-  file `62`'s credential lives in, never printed) — and brings the stack up.
-  `SHIM_DRAIN_TOKEN` authenticates `GET /drain` as a bearer token
-  (`config.ts`'s `requireEnv` — an unset value fails the container closed);
-  the mail collector (`branchLeft/workspace#1239`) needs this same value to
-  call it, and moving it there is an owner step — see "Handing the drain
-  token to the collector" below.
+  absent, renders `/etc/mailgun-shim/env` (mode 600) and brings the stack up.
+  What the env holds depends on the image: `render_shim_env.py` reads the
+  digest from the installed compose file and renders that digest's contract
+  from `shim-env-contracts.json` (this directory travels to the host whole, so
+  the table does too). For the pinned digest, the `smtp-delivery` contract:
+  `PORT`, `SHIM_DB_PATH`, `SHIM_THROTTLE_PATH`, `SMTP_HOST`, `SMTP_PORT`,
+  `SMTP_SECURE`, `SMTP_USER`, and `SMTP_PASS` read from `62`'s credential in
+  `/root/.stalwart-service-credentials` (never printed, and this contract never
+  writes that file). A digest the table does not list is **refused**: exit 1,
+  naming the digest and the table, with `/etc/mailgun-shim/env` untouched, so
+  bumping the image means adding its digest and contract to the table in the
+  same change. The `drain` contract (`SHIM_DRAIN_TOKEN` authenticating
+  `GET /drain` as a bearer token; generated on the host on first use and
+  recorded under `shim-drain-token`) has no digest yet; it applies once a
+  drain image's digest is added to the table — see "Handing the drain token to
+  the collector" below.
 
 ### ACME coexistence
 
@@ -667,6 +683,10 @@ is an internal-listener setting, not a client-facing one, and that
 `acme` issuer block.
 
 ### Filling in the image digest
+
+A new digest also needs its entry in `shim-env-contracts.json` (`digests`,
+mapped to the contract that image reads), in the same commit:
+`render_shim_env.py` refuses a digest the table does not list.
 
 The mailgun-shim image (`ghcr.io/branchleft/mailgun-shim`) is built by a
 shim's own repository, so `shim-compose.yml` ships with a placeholder until a
@@ -760,8 +780,12 @@ this repo, a PR, or a chat transcript.
 
 ### Handing the drain token to the collector — owner action, once #1239 exists
 
-`render_shim_env.py` generates `SHIM_DRAIN_TOKEN` on mx1 itself (on first
-`63-deploy-mailgun-shim.sh` run after this change lands) and records it in
+**This section applies once a drain image's digest is added to
+`shim-env-contracts.json`.** The digest pinned today reads no drain token, so
+`render_shim_env.py` renders none for it, and generates and records nothing
+under `shim-drain-token`. Once a drain digest is pinned and listed,
+`render_shim_env.py` generates `SHIM_DRAIN_TOKEN` on mx1 itself (on the first
+`63-deploy-mailgun-shim.sh` run with that digest) and records it in
 `/root/.stalwart-service-credentials` under the `shim-drain-token` label —
 the same file `62`'s credential lives in, never printed by either script.
 The mail collector (`branchLeft/workspace#1239`), once built and deployed to
@@ -1008,11 +1032,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'dig +short @127.0.0.
 
 ### Alerting
 
-No existing alerting/webhook channel exists anywhere else in this repo
-(checked — no cron, systemd timer, or scheduling pattern currently exists
-in `shared-infra` at all, so there was no existing convention to reuse for
-either the schedule or the alert path). The chosen mechanism, in order of
-what it costs to build and run:
+mx1 has no alerting channel of its own (no cron, systemd timer, or
+scheduling pattern existed in `shared-infra` before this check, so there was
+no convention to reuse for either the schedule or the alert path). The
+mechanism is layered; in order of what each layer costs to build and run:
 
 - **Log level is the signal.** A routine "still clean" run logs one `INFO`
   line. Anything needing attention — a new or ongoing listing, or an
@@ -1037,21 +1060,178 @@ what it costs to build and run:
   that at all otherwise. No rotation is configured; expected volume is a
   handful of lines a month at most (one line per run only when something's
   actionable), revisit if that assumption turns out wrong.
-- **No email, no webhook, no new external service.** Explicitly considered
-  and rejected: mx1 hosts `rob@branchleft.co.uk` now, which makes
-  cron's traditional `MAILTO` mechanism tempting, but wiring cron's local
-  mail delivery to Stalwart would mean touching mx1's actual mail-serving
-  config (authenticated SMTP submission from a local MTA, or a local
-  sendmail shim) — out of scope here. A genuine push notification (a webhook,
-  a paging service) would be a new external service and either a new
-  credential or recurring spend, so it is flagged rather than built.
+- **Forwarding to a Healthchecks.io check.** Every run also reports to a
+  dedicated Healthchecks.io check, which notifies the owner on a finding and
+  also when the hourly pings stop arriving. It is the one new external
+  dependency here, on the free tier the estate already uses, and it is
+  described under "Forwarding findings to Healthchecks.io" below. Cron's
+  own local mail (`MAILTO`) was considered and rejected: it would mean
+  touching mx1's actual mail-serving config, and it would send the alert
+  through the very host whose reputation is the problem.
 
-**This is a judgement call left deliberately open.** journald-based alerting
-means somebody has to go looking rather than being pushed to. Since
-deliverability is what this check protects, an hourly `journalctl -t
-dnsbl-check -p err -b` spot-check, or a small forwarder that pushes journald
-`ERROR` lines from this identifier somewhere more proactive, is worth adding
-before real tenant traffic depends on it.
+**journald stays the backstop.** The log lines above are unchanged and are
+still written first; the forwarder runs after them and cannot change the
+exit code or skip the state save, so a Healthchecks.io outage or a mistyped
+URL costs the push, never the record.
+
+**Why not Prometheus.** There is no path for a custom metric from mx1 into
+Prometheus today, and building one needs an exporter and a firewall change.
+Any alert it raised would also be routed as email through the host whose
+reputation is the problem, where a ping to Healthchecks.io leaves mx1
+directly over HTTPS and notifies from outside it.
+
+### Forwarding findings to Healthchecks.io
+
+**Until steps 3 and 4 below are done this control is not live.** The
+script then logs one `ERROR` line per run (`alert forwarding is not
+configured`), which `journalctl -t dnsbl-check -p err` shows, on purpose:
+an unwired alert path must look loud, not quiet.
+
+**Decide the SORBS entry before wiring.** SORBS was found dead (see above),
+and while that holds every run reports `CHECK INCONCLUSIVE: SORBS`, which is
+a finding, so every run exits 1 and sends `/fail`. As shipped, the new check therefore
+goes Down at its first ping and stays Down, and a real listing would be
+indistinguishable from that standing state. This change does not alter which
+lists are checked or what counts as a finding; whether to drop SORBS, or to
+treat a dead list differently from a listing, is the platform owner's
+decision and has to be made first.
+
+How it works:
+
+- **What is sent.** A clean run pings the check's URL. A run with any
+  listing, or any inconclusive result, or a crash, pings the same URL with
+  `/fail` appended and the finding lines (and the summary line, which names
+  mx1's public address) as a plain-text body, cut to 10 kB. A listing that
+  persists sends `/fail` again every hour; that is intended.
+- **Where the URL comes from.** The URL is a credential: it identifies and
+  authorises the check. The script reads it from `DNSBL_PING_URL`, and if
+  that is unset from the `KEY=VALUE` file named by `DNSBL_ENV_FILE`
+  (default `/etc/branchleft/dnsbl-check.conf`). Cron sets no environment, so
+  on mx1 the file is what is used; the script reads it itself and nothing
+  sources it. Only an `https://` URL with a host is accepted. The file is
+  refused unless it is a regular file, owned by the user running the script,
+  with no group or other permissions and no more than 4096 bytes, and it is
+  never followed through a symlink. A refusal is logged by reason only.
+- **The URL never reaches a log.** A failed ping logs
+  `alert forwarding failed (<reason>)` at `ERROR`, where the reason is an
+  HTTP status or an exception class name. Healthchecks.io answers `200` with
+  `OK (not found)` to a URL naming no check and `OK (rate limited)` to a ping
+  it ignored, so any answer other than a plain `OK` is also logged as a
+  failure.
+- **The check result is independent.** The ping is sent after the findings
+  are logged and the state is saved. Whatever happens to it, the exit code
+  is what it would have been without it: 1 on findings, 0 on clean.
+- **Bounds.** One attempt, no retry, no redirect followed, proxy
+  environment variables ignored, 10 seconds per network operation. The DNS
+  lookup of the ping host is not bounded by that, which is acceptable: the
+  next run is an hour away and the check's grace time is 90 minutes.
+- **What does not ping.** `--status` queries nothing and pings nothing. A
+  manual bare run (see "Checking current status manually") does ping, the
+  same as the hourly one.
+
+The steps below are for the platform owner. Each says what becomes true when
+it succeeds.
+
+1. **Create the Healthchecks.io check.** In the Healthchecks.io account the
+   estate already uses, add one new check named for the mx1 DNSBL check. Set
+   the schedule to a period of 1 hour and a grace time of 90 minutes, so one
+   late cron tick does not alert and a missing hour does. On its
+   Integrations tab, tick the same notification channel or channels the
+   existing mail-host check (the one `MAILHOST_PING_URL` points at) uses. If
+   the account asks you to upgrade or pay for this, stop: that is a spend
+   decision. **What becomes true:** the check exists, shows as New, and
+   notifies the same people as the mail-host check. A New check does not
+   alert until its first ping arrives.
+2. **Read the ping URL into the shell.** Copy the new check's ping URL from
+   its page and read it without echoing it; never type it on a command line.
+
+   ```bash
+   # Prompts silently; paste the check's ping URL and press Enter.
+   read -rs DNSBL_PING_URL && export DNSBL_PING_URL
+   ```
+
+   **What becomes true:** the URL is in this shell's environment only, not
+   in history or on screen.
+
+3. **Install it on mx1 as a root-only file.** The URL travels on stdin, so it
+   is on no command line and in no process list (`printf` is a shell
+   builtin). The remote side refuses to overwrite an existing file, creates
+   `/etc/branchleft` as mode 0700 only if it is absent, and writes the file
+   as mode 0600.
+
+   ```bash
+   # Pipe the URL to mx1 on stdin and write it root-only; prints the file's mode and its key name only.
+   printf 'DNSBL_PING_URL=%s\n' "$DNSBL_PING_URL" |
+     ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk '
+       test ! -e /etc/branchleft/dnsbl-check.conf || { echo "FAILED: dnsbl-check.conf exists; not overwriting it" >&2; exit 1; }
+       test -d /etc/branchleft || install -d -m 0700 -o root -g root /etc/branchleft &&
+       umask 077 &&
+       cat > /etc/branchleft/dnsbl-check.conf &&
+       chmod 0600 /etc/branchleft/dnsbl-check.conf &&
+       stat -c "%a %U:%G" /etc/branchleft/dnsbl-check.conf &&
+       cut -d= -f1 /etc/branchleft/dnsbl-check.conf'
+   unset DNSBL_PING_URL
+   ```
+
+   Expect `600 root:root` then `DNSBL_PING_URL`. Anything else: stop and read
+   the error; do not print the file. To replace the URL later, remove the
+   file on mx1 first (the guard will not overwrite it) and repeat steps 2
+   and 3. **What becomes true:** the credential is on mx1 where the script
+   looks for it, readable by root only. Nothing reads it yet.
+
+4. **Copy the updated script to mx1.** Use the delivery command already
+   documented under "What the scripts do" above: the first line of its "Run
+   the whole set" block, the one that copies `mail/provision/.` to
+   `/root/mail-provision`, run from the repository root of the merged
+   change. Do not run the `ssh` line after it, which would run the whole
+   provisioning set, and keep the trailing `/.` on the source as that
+   section explains. The cron entry already runs
+   `/root/mail-provision/check_dnsbl_blocklist.py`, so nothing else changes.
+   Then confirm the new code is on mx1:
+
+   ```bash
+   # Counts the forwarder's entry points in the copy on mx1; expect a number above 0.
+   ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'grep -c forward_run_report /root/mail-provision/check_dnsbl_blocklist.py'
+   ```
+
+   **What becomes true:** the next `:05` cron run reports to the check, and
+   the first ping turns it from New to Up (or Down, if that run has
+   findings: see the SORBS note above). Doing step 4 before step 3 makes the
+   hourly run log the `not configured` error in the meantime.
+
+5. **Fire drill.** Run the script once on mx1 against the always-listed test
+   address the script itself uses as its self-test sentinel, with the state
+   file pointed at a throwaway path so the real state file is untouched:
+
+   ```bash
+   # Fire drill: target the always-listed test address, throwaway state file, then print the exit code and remove it.
+   ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'DNSBL_TARGET_IP=127.0.0.2 DNSBL_STATE_PATH=/run/dnsbl-drill-state.json python3 /root/mail-provision/check_dnsbl_blocklist.py; echo "exit=$?"; rm -f /run/dnsbl-drill-state.json'
+   ```
+
+   Expect `exit=1` and `NEW LISTING` lines at `ERROR` (a list that does not
+   answer, such as SORBS, shows `CHECK INCONCLUSIVE` instead). In
+   Healthchecks.io the check goes Down, its log holds those lines, and a
+   notification arrives on the channel or channels from step 1.
+   If no notification arrives, the wiring is not working: look at the check's
+   Integrations tab before trusting it. **What becomes true:** the whole path
+   (script, URL file, Healthchecks.io, notification) is proven end to end.
+   The drill's `ERROR` lines also appear in the journal (see "Checking
+   current status manually"); they are the drill, not a real listing.
+
+6. **Confirm recovery.** After the next real hourly run, or after one run
+   with no overrides, the check should go Up again:
+
+   ```bash
+   # Force a fresh live check with no overrides; it pings the check like the hourly run.
+   ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/check_dnsbl_blocklist.py; echo "exit=$?"'
+   ```
+
+   Expect `exit=0` and the check Up. While SORBS (or any list) still reports
+   a finding, the run exits 1 and the check stays Down: that is the standing
+   SORBS question above, not a fault in the wiring, and then step 5's Down
+   state with its log lines is the proof of the mechanism. **What becomes
+   true:** a clean run clears the Down state, so a later Down means a new
+   finding or a missed hour.
 
 ### Checking current status manually
 
@@ -1067,9 +1247,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'journalctl -t dnsbl-
 ```
 
 `--status` reads `/root/.dnsbl-check-state.json` (not secret — just the last
-verdict per list) without touching the network; the bare invocation always
-performs a live check and exits non-zero if anything needs attention, the
-same way the hourly cron run does.
+verdict per list) without touching the network and pings nothing; the bare
+invocation always performs a live check, pings the Healthchecks.io check, and
+exits non-zero if anything needs attention, the same way the hourly cron run
+does.
 
 ### If a listing is found
 

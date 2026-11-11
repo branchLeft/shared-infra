@@ -163,7 +163,7 @@ stack being created.
 ```bash
 cd hetzner
 nvm use
-npm ci
+pnpm install --frozen-lockfile
 ```
 
 A clean checkout has no `node_modules`, and `pulumi preview` in step 5 fails
@@ -231,7 +231,7 @@ bucket with read access alone —
 ```bash
 pulumi stack select production
 pulumi stack export --file /tmp/<project>.json
-python3 -c "import json; print(json.load(open('/tmp/<project>.json'))['deployment']['secrets_providers']['state']['salt'])"
+jq -r '.deployment.secrets_providers.state.salt' /tmp/<project>.json   # needs jq: brew install jq
 rm /tmp/<project>.json
 ```
 

@@ -1,0 +1,10 @@
+---
+# The plain apply: no tag is named and no step is confirmed, so every step is
+# skipped. Molecule runs this twice (converge, then idempotence).
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role as a plain apply
+      ansible.builtin.include_role:
+        name: branchleft.mail_reconcilers

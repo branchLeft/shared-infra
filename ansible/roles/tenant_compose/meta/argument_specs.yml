@@ -1,0 +1,64 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver the rendered compose stack of each tenant on an app host, and the host's mail spool
+    description: >-
+      Refuses, before it writes anything, any stack whose text breaks a delivery rule (the image,
+      the published ports, the networks and volumes, the secrets it refers to, the pin, the uid).
+      Then, for each tenant, makes the tenant's volumes through the volume program when the program
+      does not list the tenant's uid, writes the compose file, the secrets file and (once only) the
+      image pin, enables the tenant's stack unit and restarts it, under the deploy lock, only when
+      what it runs on changed or a file changed. It records that content as healthy only after the
+      unit is active. When a mail spool is given it is delivered first, and only after the drain
+      bridge's firewall rules are read back. It never renders, never removes a stack, a volume or a
+      file, and never rolls an image back.
+    author: branchLeft
+    options:
+      tenant_compose_stacks:
+        type: list
+        elements: dict
+        required: true
+        description: >-
+          The tenants of this host, one entry each, as the renderer produced them. Supplied at run
+          time: the list names tenants and is never kept in this repository. An empty list is
+          valid and delivers no tenant.
+        options:
+          slug:
+            type: str
+            required: true
+            description: The tenant's name. It is the compose file's name, a directory under /opt/branchleft and the unit's instance name.
+          uid:
+            type: int
+            required: true
+            description: The tenant's uid, from 30000 to 30999. The volume program owns the tenant's volumes by it.
+          compose_text:
+            type: str
+            required: true
+            description: The renderer's compose file for this tenant, byte for byte. Not a secret.
+          secrets_env_text:
+            type: str
+            required: true
+            no_log: true
+            description: The filled environment file for this tenant, one GHOST_ key per line. Every value is a secret.
+          image_env_text:
+            type: str
+            required: true
+            description: >-
+              The renderer's image pin, one IMAGE=NAME@sha256:64 hex digits line. It is written once,
+              when the tenant's pin file does not exist yet, and never replaced, because the deploy
+              wrapper is the only writer that advances a pin.
+      tenant_compose_mail_spool_text:
+        type: str
+        default: ''
+        description: >-
+          The renderer's compose file for the host's one mail spool, byte for byte. Empty means
+          this host has no spool to deliver. Not a secret: the spool's token is a file the owner
+          places, which this role never touches.
+      tenant_compose_spool_isolation_required:
+        type: bool
+        default: true
+        description: >-
+          Whether the spool is delivered only after the host's firewall is read back and shown to
+          drop everything its drain bridge sends to the host or forwards out. True is the safe
+          value. False is for a host that has no such rules because it delivers no spool traffic
+          to refuse, and it is the caller's statement, not a check.

@@ -1,0 +1,13 @@
+---
+- name: Refuse a step tag requested without its confirmation
+  ansible.builtin.assert:
+    that:
+      - mail_reconcilers_step is string
+      - mail_reconcilers_step is match(mail_reconcilers_id_pattern)
+      - mail_reconcilers_step in mail_reconcilers_step_ids
+      - ('mail_reconcilers_' ~ mail_reconcilers_step) in ansible_run_tags
+    quiet: true
+    fail_msg: >-
+      REFUSED: a step tag was requested ({{ ansible_run_tags | join(',') }}) but
+      mail_reconcilers_step is not a known step id whose own tag is among them, so no
+      step ran.

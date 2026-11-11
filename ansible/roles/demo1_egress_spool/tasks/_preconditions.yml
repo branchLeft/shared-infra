@@ -1,0 +1,118 @@
+---
+# Internal to the role. Everything here only reads, so it runs in check mode as
+# well (ANS-10). The role relies on what the host baseline and the host's first
+# build leave: Docker running with its DOCKER-USER chain, the two root-owned
+# directories, and the shared Compose template unit. It writes none of them,
+# and it refuses, naming the missing piece, when one is not as it expects.
+- name: Read the host's own short name
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: demo1_egress_spool_hostname
+  changed_when: false
+  check_mode: false
+
+- name: Refuse any host but the demo host
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_hostname.stdout == demo1_egress_spool_expected_host
+    quiet: true
+    fail_msg: >-
+      This host is named '{{ demo1_egress_spool_hostname.stdout }}', not '{{ demo1_egress_spool_expected_host }}'.
+      The demo container egress policy and the mail spool belong on the demo host only.
+      The inventory name is localhost under the pull, so the host's own name is the one read.
+
+- name: Ask systemd about Docker
+  ansible.builtin.systemd_service:
+    name: docker.service
+  register: demo1_egress_spool_docker_unit
+
+- name: Refuse a host where Docker is not running
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_docker_unit.status.ActiveState == 'active'
+    quiet: true
+    fail_msg: Docker is not active. The host baseline installs and starts it; this role installs no Docker.
+
+# DOCKER-USER is the chain Docker evaluates before its own rules. The egress
+# program refuses to run without it in either family, and has no safe
+# substitute, so the role refuses first and names the family.
+- name: Look for the DOCKER-USER chain in each family
+  ansible.builtin.command:
+    argv: ['{{ item }}', -t, filter, -S, DOCKER-USER]
+  loop: '{{ demo1_egress_spool_firewall_tools }}'
+  register: demo1_egress_spool_docker_user
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: Refuse a family with no DOCKER-USER chain
+  ansible.builtin.assert:
+    that:
+      - item.rc | default(1) == 0
+    quiet: true
+    fail_msg: >-
+      There is no DOCKER-USER chain in {{ item.item }}. Either Docker is not running yet or its nftables
+      backend is active, and the egress policy has no safe substitute chain.
+  loop: '{{ demo1_egress_spool_docker_user.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# Root runs the egress program from the sbin directory and reads the units and
+# the pin files from the others, so whoever can write one of them can run code
+# as root. The role creates none of them.
+- name: Look at the directories the role relies on and does not own
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+  loop:
+    - '{{ demo1_egress_spool_config_dir }}'
+    - '{{ demo1_egress_spool_opt_dir }}'
+    - '{{ demo1_egress_spool_sbin_dir }}'
+  register: demo1_egress_spool_parent_stats
+
+- name: Refuse a directory that is missing, a link, not root's or writable by group or others
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - not item.stat.islnk
+      - item.stat.pw_name == 'root'
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: >-
+      {{ item.item }} is missing, is a link, is not owned by root or is writable by group or others.
+      This role creates none of these directories.
+  loop: '{{ demo1_egress_spool_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# The shared Compose template unit is hand-installed on this host and has no
+# owner in this repository, so the role reads it and never writes it. Systemd
+# names the file it loaded the instance from; that file is then looked at.
+- name: Ask systemd for the spool's instance of the shared Compose template
+  ansible.builtin.systemd_service:
+    name: '{{ demo1_egress_spool_compose_unit }}'
+  register: demo1_egress_spool_template_state
+
+- name: Look at the file systemd loaded the Compose template from
+  ansible.builtin.stat:
+    path: '{{ demo1_egress_spool_template_state.status.FragmentPath | default("") }}'
+    follow: false
+  register: demo1_egress_spool_template_stat
+
+- name: Refuse a host with no shared Compose template unit, or one that is not root's
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_template_state.status.LoadState == 'loaded'
+      - demo1_egress_spool_template_state.status.FragmentPath == demo1_egress_spool_compose_template_path
+      - demo1_egress_spool_template_stat.stat.isreg
+      - not demo1_egress_spool_template_stat.stat.islnk
+      - demo1_egress_spool_template_stat.stat.pw_name == 'root'
+      - not demo1_egress_spool_template_stat.stat.wgrp
+      - not demo1_egress_spool_template_stat.stat.woth
+    quiet: true
+    fail_msg: >-
+      The shared Compose template unit, the file the instance {{ demo1_egress_spool_compose_unit }} is loaded from,
+      is missing or is not a regular file owned by root. This role never writes it; it is installed
+      on the host before this role runs.

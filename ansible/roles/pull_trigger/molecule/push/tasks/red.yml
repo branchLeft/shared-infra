@@ -1,0 +1,56 @@
+---
+# One case run against a copy of the program with a check cut out, to show that the check is what
+# stops the request: the answer must be the red one, not the refusal the installed program gives.
+# Takes the dictionary `case`: name, text, program, bundle or input, rc (the exit the copy gives),
+# not_reason (the reason the installed program gives, which the copy must not; left out when the
+# copy is killed by the wrapper, whose own exit status is then the whole answer), and optionally
+# mode, floor (a commit id, default the seed; empty for none), wrapper, overrides, and
+# floor_after (the floor the copy leaves, which shows that it applied).
+- name: 'Make the host for: {{ case.name }}'
+  ansible.builtin.include_tasks: scene.yml
+  vars:
+    scene_name: red
+    scene_floor: '{{ case.floor | default(pull_trigger_pr_commits.c0) }}'
+    scene_overrides: '{{ case.overrides | default({}) }}'
+
+# The placeholder playbook writes its marker only when the marker differs, so a marker an earlier
+# case left would make an apply report no change; every red case starts without one.
+- name: 'Remove the marker an earlier case left: {{ case.name }}'
+  ansible.builtin.file:
+    path: '{{ verify_marker }}'
+    state: absent
+
+- name: 'Request, against the changed program: {{ case.name }}'
+  ansible.builtin.include_tasks: request.yml
+  vars:
+    request_name: '{{ case.name }}'
+    request_text: '{{ case.text }}'
+    request_mode: '{{ case.mode | default("apply") }}'
+    request_config: /var/tmp/ptt/cfg/red.json
+    request_program: '{{ case.program }}'
+    request_wrapper: '{{ case.wrapper | default("") }}'
+    request_input: "{{ case.input | default(pull_trigger_pr_bundles ~ '/' ~ case.bundle ~ '.bundle' if case.bundle is defined else '/dev/null') }}"
+
+- name: 'With the check cut out the request is answered the red way: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - pull_trigger_pr_result.rc == case.rc
+      - case.not_reason is not defined or ('reason=' ~ case.not_reason ~ ' ') not in pull_trigger_pr_result.stdout
+    fail_msg: >-
+      the changed program still refused {{ case.name }}, so the check is not what stops it:
+      rc={{ pull_trigger_pr_result.rc }} {{ pull_trigger_pr_result.stdout }}
+    success_msg: 'red as it must be: {{ case.name }}'
+
+- name: 'Read the floor the changed program left: {{ case.name }}'
+  ansible.builtin.slurp:
+    src: /var/tmp/ptt/st-red/last-applied
+  register: pull_trigger_pr_red_floor
+  when: case.floor_after is defined
+
+- name: 'The floor moved, which shows the request was applied: {{ case.name }}'
+  ansible.builtin.assert:
+    that:
+      - (pull_trigger_pr_red_floor.content | ansible.builtin.b64decode | trim) == case.floor_after
+    fail_msg: the floor did not move
+    success_msg: 'the floor moved: {{ case.name }}'
+  when: case.floor_after is defined

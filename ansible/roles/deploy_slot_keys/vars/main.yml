@@ -1,0 +1,18 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs.
+#
+# Where the slot program is installed on the host. The program itself has one home,
+# hetzner/provision/, and the role reads it from the checkout the playbook runs from and
+# holds no copy and no link of it (a copy would be a second home that could drift).
+# role_path is this role's own directory, three levels below the repository root.
+# ansible/checks/test_deploy_slot_keys_single_home.py fails when the role holds a copy.
+deploy_slot_keys_programs_dir: '{{ role_path }}/../../../hetzner/provision'
+deploy_slot_keys_program_source: provision_deploy_slot.py
+deploy_slot_keys_program_path: /usr/local/sbin/branchleft-provision-deploy-slot
+deploy_slot_keys_program_mode: '0755'
+
+# The account, the paths and the forced-command shape are pinned in the module, not here:
+# ansible/checks/test_deploy_tooling_single_owner.py fails a task that names the deploy
+# wrapper's path, which only deploy_tooling installs. The module refuses to run a program
+# whose constants differ from its pins, and test_deploy_slot_keys_single_home.py holds the
+# pins to the program's constants and to deploy_tooling_wrapper_path.

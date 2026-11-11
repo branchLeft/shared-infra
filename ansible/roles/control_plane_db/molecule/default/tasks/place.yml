@@ -1,0 +1,12 @@
+---
+# Place a file the way the owner does, before a step. Takes place_path and
+# place_content, and optionally place_owner, place_group and place_mode (root, 1000
+# and 0640 by default, which are what the role requires).
+- name: 'Place {{ place_path }}'
+  ansible.builtin.copy:
+    content: '{{ place_content }}'
+    dest: '{{ place_path }}'
+    owner: '{{ place_owner | default("root") }}'
+    group: '{{ place_group | default("1000") }}'
+    mode: '{{ place_mode | default("0640") }}'
+  no_log: true

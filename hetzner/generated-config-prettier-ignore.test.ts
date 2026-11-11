@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * `render.test.ts` in `edge/` and `monitoring/` proves the committed files
  * equal what their renderer emits today. It says nothing about whether a
- * repo-wide `npm run format` would rewrite them tomorrow -- that gap is what
+ * repo-wide `pnpm run format` would rewrite them tomorrow -- that gap is what
  * let Prettier's YAML quote-style rewrite silently diverge from the renderer
  * once, and the two would fight over the same bytes on every future run
  * unless the formatter is kept off this list for good.
@@ -20,7 +20,7 @@ const GENERATED_FILES = [
   'hetzner/monitoring/stack/prometheus/prometheus.yml',
   'hetzner/monitoring/stack/prometheus/alerts.yml',
   'hetzner/monitoring/stack/alertmanager/alertmanager.yml.tmpl',
-  'hetzner/edge/stack/Caddyfile',
+  'hetzner/edge/stack/caddy/Caddyfile',
   'hetzner/edge/stack/crowdsec/acquis.d/appsec.yaml',
   'hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml',
   'hetzner/edge/validation/Caddyfile.enforcing',

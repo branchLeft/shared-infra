@@ -1,0 +1,26 @@
+# A placeholder tenant stack with the shape of the renderer's, for the role's test.
+name: '{{ item.slug }}'
+services:
+  app:
+    image: '{{ item.service_image | default("${IMAGE}") }}'
+    restart: 'unless-stopped'
+    user: '{{ item.uid }}:{{ item.uid }}'
+    mem_limit: '{{ item.memory | default("640m") }}'
+    ports:
+      - '{{ item.publish | default("10.20.2.30") }}:{{ item.port }}:2368'
+    environment:
+      url: 'https://news.{{ item.slug }}.example'
+      database__connection__password: '${GHOST_DB_PASSWORD:?set GHOST_DB_PASSWORD in /etc/branchleft/{{ item.slug }}.env}'
+      mail__options__auth__pass: '${GHOST_MAIL_PASSWORD:?set GHOST_MAIL_PASSWORD in /etc/branchleft/{{ item.slug }}.env}'
+    networks:
+      - 'default'
+      - 'branchleft-mail-{{ item.uid }}'
+    volumes:
+      - 'ghost-{{ item.slug }}-content:/var/lib/ghost/content'
+networks:
+  branchleft-mail-{{ item.uid }}:
+    name: 'branchleft-mail-{{ item.uid }}'
+    external: true
+volumes:
+  ghost-{{ item.slug }}-content:
+    external: true

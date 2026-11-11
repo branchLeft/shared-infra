@@ -1,0 +1,59 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness sets
+# ROLE_TEST_RUN_ID, so the instance name is unique to one run and a destroy can
+# only ever remove this run's container. Molecule's interpolation has no
+# "required variable" form, so when the variable is unset the name falls back to
+# one the Docker daemon rejects: the run fails at create, loudly, instead of
+# sharing a container name with another run.
+#
+# The refusals that matter (a file owned by somebody else, a mode of 0640, a
+# directory another user can write) can only be run as root in a container, which
+# is why this scenario exists: the role reads one file and changes nothing.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production
+    # hosts, trusted by digest. The digest is the pin; the tag is informational
+    # and moves weekly. It has Python, and the accounts the cases hand a file to.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # The image's own command starts systemd as the first process, and systemd
+    # needs a cgroup mount and a cgroup namespace mode that this scenario does
+    # not grant. The role runs no service, so a plain sleep keeps the container
+    # alive so Ansible can run in it. There is no cgroup mount, no cgroupns_mode,
+    # no tmpfs, no privileged mode and no added capability.
+    command: sleep infinity
+    # The container has no network at all: the role reads one file.
+    network_mode: none
+    # The image declares /sys/fs/cgroup as a volume and this scenario does not
+    # bind-mount it, so Docker makes an anonymous volume for every container
+    # started from the image. Molecule's destroy keeps a container's volumes
+    # unless told otherwise, and an anonymous volume carries no label to find it
+    # by, so each run would leave one behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 3 prints each task's result and
+    # the facts it set, so a task that handles an input and lacks no_log shows it
+    # in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '3'
+    # One docker exec for a task, not six: verify runs the role once for each
+    # refusal case, and CI gives the whole harness 45 minutes.
+    ANSIBLE_PIPELINING: 'true'
+  inventory:
+    group_vars:
+      all:
+        host_inputs_scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+verifier:
+  name: ansible

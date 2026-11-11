@@ -1,0 +1,61 @@
+---
+# A plain apply runs the untagged tasks below and no tenant step. Each guarded step is
+# imported with the never tag and its own step tag: Ansible runs a never task only when
+# that exact tag is named on the command line. Each step also needs its own step id in
+# tenant_onboarding_confirm (see the README, "The guard").
+
+# Refuse a confirmation that is not a step id, before any step reads it.
+# always: a request names a step tag with --tags, and an untagged task would be skipped
+# under that filter. These lines run on every request and every apply.
+- name: Refuse a confirmation that is not a step id
+  ansible.builtin.assert:
+    that:
+      - tenant_onboarding_confirm is string
+      - tenant_onboarding_confirm is match(tenant_onboarding_step_id_pattern)
+    quiet: true
+    fail_msg: 'REFUSED: tenant_onboarding_confirm is not a step id (one text value of capitals, digits and underscore, no line break).'
+  when: tenant_onboarding_confirm is not none and (tenant_onboarding_confirm | string | length) > 0
+  tags:
+    - always
+
+# The program's directory is named by the program's own path, and it is owned by root,
+# so the account that runs a tenant's compose unit cannot replace the program.
+- name: Create the directory the tenant volume program is installed in
+  ansible.builtin.file:
+    path: '{{ tenant_onboarding_program_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# Fetched as they are at the pinned ghost-platform commit, and each fetch is checked
+# against its pinned digest, so a file whose bytes differ fails the apply. Check mode
+# writes no file, so on a fresh host there is nowhere for a fetch to write; the fetches
+# are skipped in check mode and run for real.
+- name: Fetch the tenant volume program from ghost-platform
+  ansible.builtin.get_url:
+    url: '{{ tenant_onboarding_ghost_raw_base }}/app/provision/provision_tenant_volume.py'
+    dest: '{{ tenant_onboarding_program }}'
+    checksum: 'sha256:{{ tenant_onboarding_program_sha256 }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: not ansible_check_mode
+
+- name: Fetch the reserved-name register the program reads beside itself
+  ansible.builtin.get_url:
+    url: '{{ tenant_onboarding_ghost_raw_base }}/registers/tenant-names.json'
+    dest: '{{ tenant_onboarding_register }}'
+    checksum: 'sha256:{{ tenant_onboarding_register_sha256 }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: not ansible_check_mode
+
+# The guarded steps. Each is skipped by a plain apply and by any request that names a
+# different tag. The tag names are the ones a maintainer types after --tags.
+- name: Guarded step PROVISION_TENANT_VOLUMES
+  ansible.builtin.import_tasks: _volumes.yml
+  tags:
+    - never
+    - tenant_onboarding_provision_volumes

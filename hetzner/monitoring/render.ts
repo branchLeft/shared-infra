@@ -155,6 +155,14 @@ export const BLACKBOX_MODULE_SMTP_BANNER = 'smtp_banner';
 export const BLACKBOX_MODULE_TLS_CONNECT = 'tls_connect';
 
 /**
+ * The public bucket endpoint of the region the estate's Object Storage lives
+ * in (the Pulumi state bucket is on it). The probe needs no credential. The
+ * module of the same name is hand-written in stack/blackbox/blackbox.yml.
+ */
+export const OBJECT_STORAGE_ENDPOINT_HOST = 'hel1.your-objectstorage.com';
+export const BLACKBOX_MODULE_OBJECT_STORAGE = 'http_object_storage';
+
+/**
  * mx1 has no entry in the estate address plan -- it is not on this host's
  * private network, so there is no fixed private address to look one up by
  * -- so its DNS name is the address a probe uses, the same way blackbox_http
@@ -330,6 +338,22 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '      - target_label: __address__',
     `        replacement: 'blackbox-exporter:${BLACKBOX_EXPORTER_PORT}'`,
     '',
+    '  - job_name: blackbox_object_storage',
+    '    metrics_path: /probe',
+    '    params:',
+    `      module: ['${BLACKBOX_MODULE_OBJECT_STORAGE}']`,
+    '    static_configs:',
+    '      - targets:',
+    `          - https://${OBJECT_STORAGE_ENDPOINT_HOST}`,
+    `        labels: ${EDGE1_SERVICE_LABELS}`,
+    '    relabel_configs:',
+    '      - source_labels: [__address__]',
+    '        target_label: __param_target',
+    '      - source_labels: [__param_target]',
+    '        target_label: instance',
+    '      - target_label: __address__',
+    `        replacement: 'blackbox-exporter:${BLACKBOX_EXPORTER_PORT}'`,
+    '',
     '  - job_name: stalwart',
     '    scheme: https',
     `    metrics_path: ${STALWART_METRICS_PATH}`,
@@ -436,8 +460,11 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // Caddy-emitted counter local to edge1, the same class of signal as
     // ServiceFlapping above, not an external blackbox_exporter result.
     // Not scoped to members_magic_link_per_ip -- posture.ts's `rateLimit`
-    // is 'off' today, but the expression has no zone label at all, so the
-    // general zone is covered automatically the day that flips.
+    // is 'enforcing', and the expression has no zone label at all, so the
+    // general zones are covered with the magic-link one. It deliberately
+    // excludes 172.16.0.0/12 keys, so real clients collapsed onto a Docker
+    // bridge address would not raise it: the blackbox probes seeing 429 are
+    // the tripwire for that.
     '      - alert: RateLimitDecliningRealClients',
     '        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[15m]) > 0',
     '        labels:',
@@ -510,7 +537,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            it can read the database.',
     '            Check MySQL itself first (db1: docker ps, then the mysql',
     '            container logs). If MySQL is healthy, this is the exporter',
-    '            credential: mysqld_exporter v0.20.0 expands $ in a config value',
+    '            login, because mysqld_exporter v0.20.0 expands $ in a config value',
     '            as a shell variable, so a password containing one authenticates',
     '            as a truncated string while still serving 200. db/RUNBOOK-db.md',
     '            in branchLeft/ghost-platform carries the rotation.',
@@ -864,13 +891,13 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // Excludes blackbox_mail rather than naming blackbox_http: every
     // blackbox job is covered by exactly one alert, and a job with no
     // dedicated alert of its own should still fall through to this one.
-    '        expr: probe_success{job!="blackbox_mail"} == 0',
+    '        expr: probe_success{job!~"blackbox_mail|blackbox_object_storage"} == 0',
     '        for: 5m',
     '        labels:',
     '          severity: critical',
     '        annotations:',
     '          summary: "{{ $labels.instance }} failed its external probe for 5 minutes."',
-    '          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below."',
+    '          description: "The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below, and blackbox_object_storage, which has ObjectStorageProbeFailed."',
     '',
     // Warns before the certificate expires: Caddy renews automatically, so a
     // failed renewal shows only at hard expiry, when probe_success drops and
@@ -917,6 +944,41 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        annotations:',
     '          summary: "{{ $labels.instance }} failed its mail liveness probe for 5 minutes."',
     '          description: "smtp_banner and tls_connect validate the service, not just the socket -- a scan-banned or dead-backend connection completes the TCP handshake and then EOFs, so a plain connect check would stay green through this failure. A dedicated alertname rather than leaving this to BlackboxProbeFailed above: it is what the mailhost-deadman route in the Alertmanager template matches on, so this alert reaches a receiver that does not transit mx1 in addition to the mx1-routed email receiver. BlackboxProbeFailed excludes blackbox_mail, so exactly one of the two rules fires for a given probe."',
+    '',
+    '  - name: object-storage',
+    '    rules:',
+    '      - alert: ObjectStorageProbeFailed',
+    '        expr: probe_success{job="blackbox_object_storage"} == 0',
+    '        for: 15m',
+    '        labels:',
+    '          severity: critical',
+    '        annotations:',
+    '          summary: "{{ $labels.instance }} failed its object storage probe for 15 minutes."',
+    '          description: >-',
+    '            The bucket endpoint is probed over HTTPS and the probe reads a 403 as',
+    '            up: an anonymous request to the bare endpoint is refused by the service',
+    '            itself, which is the liveness signal here. A refused or timed-out',
+    '            connection held for 15 minutes is the outage this rule exists for.',
+    '            BlackboxProbeFailed excludes blackbox_object_storage, so exactly one of',
+    '            the two rules fires for a given probe.',
+    '',
+    '  - name: target-liveness',
+    '    rules:',
+    '      - alert: TargetDownUnmarked',
+    '        expr: up{expected_up!="false"} == 0',
+    '        for: 24h',
+    '        labels:',
+    '          severity: warning',
+    '        annotations:',
+    '          summary: "{{ $labels.job }} on {{ $labels.host }} has been unreachable for 24 hours with no expected_up mark."',
+    '          description: >-',
+    '            Covers what HostOrServiceDown cannot see: that rule reads',
+    '            up{expected_up="true"} only, so a target with no expected_up label at all',
+    '            had no alert for a sustained outage. A target marked expected_up="false"',
+    '            is excluded, because that mark says it is not expected yet;',
+    '            ExpectedDownTargetAnswering covers the mark going stale in the other',
+    '            direction. A target labelled "true" is also caught here at 24 hours,',
+    '            after HostOrServiceDown has paged it at 5 minutes.',
     '',
     // Stalwart's own counters, not a blackbox result: `probes` above watches
     // whether mx1 answers, this group watches what it does with the mail it

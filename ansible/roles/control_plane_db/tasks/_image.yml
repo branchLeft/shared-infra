@@ -1,0 +1,34 @@
+---
+# Pull the pinned image and check that its compiled program carries the text the
+# step needs, so an image that predates the step fails here, early, and not at the
+# program's own refusal. The importing file sets control_plane_db_image_needle.
+# A command is skipped in check mode, so nothing here runs in one.
+
+- name: Pull the pinned image
+  ansible.builtin.command:
+    argv:
+      - docker
+      - pull
+      - '{{ control_plane_db_apps_image }}'
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Read whether the image carries what the step needs
+  ansible.builtin.command:
+    argv: >-
+      {{ ['docker', 'run', '--rm', '--label', 'branchleft.task=portal-image-check']
+         + control_plane_db_container_limits
+         + ['-w', '/app/portal/data', control_plane_db_apps_image, 'node', '-e',
+            "console.log(require('fs').readFileSync('dist/provision/provisionPortal.js','utf8').includes('"
+            ~ control_plane_db_image_needle ~ "'))"] }}
+  register: control_plane_db_image_check
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Refuse an image that predates what the step needs
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_image_check.stdout | ansible.builtin.trim == 'true'
+    quiet: true
+    fail_msg: 'REFUSED: the image does not carry {{ control_plane_db_image_needle }}, so it predates this step. Pin a newer image.'
+  when: not ansible_check_mode

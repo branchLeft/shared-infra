@@ -223,30 +223,60 @@
   no_log: true
   diff: false
 
-# Section 5d, the environment file. It holds credentials, so it is made root
-# 0600 and empty first, and only then is anything written to it: no instant
-# exists when a value is in a wider file. A file already there is left as it is
-# (force: false), and the template task below sets owner and mode again. The
-# tasks that handle a value say no_log and diff: false; the register of neither
-# is kept.
+# Section 5d, the environment file. It holds credentials, so it is written in two
+# steps. An absent file is created empty at its final owner and mode, so a value
+# never sits in a file wider than that. A file already there is kept (force: false),
+# and its owner, group and mode are set back on every run before the content is
+# written, so a file widened by hand is closed again before any value goes into it.
+# The owner, group and mode come from backup_worker_secret_files in vars/main.yml,
+# the one home of those values. The tasks that handle a value say no_log and
+# diff: false; the register of neither is kept.
 - name: Create the environment file empty, closed to everyone but root
   ansible.builtin.copy:
     content: ''
     dest: '{{ backup_worker_env_file }}'
-    owner: root
-    group: root
-    mode: '0600'
+    owner: '{{ backup_worker_env_secret.owner }}'
+    group: '{{ backup_worker_env_secret.group }}'
+    mode: '{{ backup_worker_env_secret.mode }}'
     force: false
   no_log: true
   diff: false
+
+# The attributes are set on every run, and the task changes attributes only, never
+# content (ANS-16). It runs after the create-empty task and before the write: the
+# write goes through the existing file, which keeps the owner and mode it has, so an
+# attribute left wide until after the write would leave a value in a wide file. The
+# limit: the correction happens on each run, not continuously, so a file widened by
+# hand stays wide until the next run. The stat comes first because check mode creates
+# nothing, so a file still absent there is skipped.
+- name: Look at the environment file before its owner, group and mode are set
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    get_checksum: false
+  loop: '{{ backup_worker_secret_files }}'
+  register: backup_worker_secret_file_stats
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Set the owner, group and mode of the environment file on every run
+  ansible.builtin.file:
+    path: '{{ item.item.path }}'
+    state: file
+    owner: '{{ item.item.owner }}'
+    group: '{{ item.item.group }}'
+    mode: '{{ item.item.mode }}'
+  loop: '{{ backup_worker_secret_file_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode or item.stat.exists
 
 - name: Write the environment file
   ansible.builtin.template:
     src: backup-worker.env.j2
     dest: '{{ backup_worker_env_file }}'
-    owner: root
-    group: root
-    mode: '0600'
+    owner: '{{ backup_worker_env_secret.owner }}'
+    group: '{{ backup_worker_env_secret.group }}'
+    mode: '{{ backup_worker_env_secret.mode }}'
     backup: false
   no_log: true
   diff: false

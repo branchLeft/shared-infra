@@ -1,0 +1,11 @@
+---
+# The marker comes last, after the effect and every check of its output, so a step
+# that failed leaves none and is tried again on the next request. It holds the
+# marker's own name, no timestamp, so an unchanged marker reports no change.
+- name: Write the marker of the step after its effect succeeded
+  ansible.builtin.copy:
+    content: "{{ control_plane_db_marker }}\n"
+    dest: '{{ control_plane_db_state_dir }}/{{ control_plane_db_marker }}'
+    owner: root
+    group: root
+    mode: '0644'

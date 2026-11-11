@@ -90,7 +90,7 @@ class MergeGroupTriggerTests(unittest.TestCase):
                 self.assertRegex(block, r"(?m)^  push:")
 
     def test_workflows_that_publish_or_poll_do_not_run_on_merge_group(self):
-        for name in ("publish-hetzner-host.yml", "crowdsec-hub-pin-check.yml"):
+        for name in ("publish-hetzner-host.yml", "publish-edge-caddy.yml", "crowdsec-hub-pin-check.yml"):
             with self.subTest(workflow=name):
                 self.assertNotIn("merge_group", on_block(read(name)))
 
@@ -177,6 +177,27 @@ class MergeGroupTriggerTests(unittest.TestCase):
         push = push[: push.index(";;")]
         self.assertIn('echo "ansible=false" >> "$GITHUB_OUTPUT"', push)
         self.assertIn("exit 0", push)
+
+    def test_the_role_unit_step_is_in_the_lint_job_and_has_no_condition_of_its_own(self):
+        # The lint job runs on a merge-queue check only through the discover output, which
+        # the Decide step sets to true on merge_group. The role unit step must ride that
+        # same condition, with no `if:` of its own that could skip it on a queued check,
+        # and it must call the one script that holds the glob and the run.
+        text = read("ansible.yml")
+        lint = job_block(text, "lint")
+        self.assertEqual("needs.discover.outputs.ansible == 'true'", job_if(lint))
+        steps = [part for part in lint.split("\n      - name: ") if part.startswith("Run every role's unit tests")]
+        self.assertEqual(1, len(steps), "the lint job must hold exactly one role unit step")
+        self.assertNotIn("if:", steps[0])
+        # The run line is exact: a trailing `|| true` or a continue-on-error on the step or
+        # the job would let a failing role test pass the gate, so neither may appear.
+        run_lines = [line for line in steps[0].splitlines() if line.strip().startswith("run:")]
+        self.assertEqual(
+            ["        run: 'PYTHON=\"$RUNNER_TEMP/ansible-venv/bin/python\" ansible/checks/run_role_unit_tests.sh ansible'"],
+            run_lines,
+        )
+        self.assertNotIn("continue-on-error", steps[0])
+        self.assertNotIn("continue-on-error", lint)
 
 
 if __name__ == "__main__":

@@ -43,7 +43,7 @@ reviewed `pulumi up`.
 ```bash
 cd shared-infra/mail   # or the equivalent path in your checkout
 nvm use
-npm ci
+pnpm install --frozen-lockfile
 ```
 
 You need:

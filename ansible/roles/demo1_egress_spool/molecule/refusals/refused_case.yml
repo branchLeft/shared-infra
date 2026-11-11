@@ -1,0 +1,168 @@
+---
+# One case of the role's refusals, imported by converge.yml with converge_case set. The case
+# puts the host in one bad state, runs one of the role's own steps alone, and asserts that
+# the step refuses it with its own message. The state comes from the keys the case sets:
+#   files      files to replace: path, content, optional mode (default 0600)
+#   edits      files to edit with a regular expression: path, regexp, replace
+#   setup      commands to run, each an argv list, to put the host in the state
+#   standin    what the stand-in docker and drain endpoint report (tasks/standin_state.yml)
+#   restore    commands to run afterwards, each an argv list, to undo what setup did
+#   reload_policy  true to flush the policy chains and run the egress program again
+#              afterwards, which rebuilds the chains and puts back a missing jump
+# tasks_from names the step; expect is a phrase of the step's own message. A case with
+# accepted: true is a control: the same step on the host as prepared must not refuse, so a
+# step that refused everything would not pass every case.
+#
+# Everything the case changed is put back in every outcome: the files from a copy taken
+# first, the stand-ins from their defaults, and the firewall and units by the commands the
+# case gives. The case is skipped by Molecule's idempotence step (the tag below), and a
+# plan makes no change, so a check run skips it.
+- name: Run one case of the refusals
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    case_accepted: '{{ converge_case.accepted | default(false) | bool }}'
+    case_paths: >-
+      {{ ((converge_case.files | default([])) + (converge_case.edits | default([])))
+      | map(attribute='path') | unique | list }}
+  tasks:
+    - name: Prove the step refuses the state, or accepts it for a control
+      when: not ansible_check_mode
+      block:
+        - name: Keep the files the case changes
+          ansible.builtin.slurp:
+            src: '{{ item }}'
+          loop: '{{ case_paths }}'
+          register: demo1_egress_spool_case_kept
+          no_log: true
+
+        - name: Keep their modes
+          ansible.builtin.stat:
+            path: '{{ item }}'
+            follow: false
+          loop: '{{ case_paths }}'
+          register: demo1_egress_spool_case_kept_stat
+
+        - name: Replace the files the case replaces
+          ansible.builtin.copy:
+            content: '{{ item.content }}'
+            dest: '{{ item.path }}'
+            owner: root
+            group: root
+            mode: '{{ item.mode | default("0600") }}'
+          loop: '{{ converge_case.files | default([]) }}'
+          loop_control:
+            label: '{{ item.path }}'
+          no_log: true
+
+        - name: Edit the files the case edits
+          ansible.builtin.replace:
+            path: '{{ item.path }}'
+            regexp: '{{ item.regexp }}'
+            replace: '{{ item.replace }}'
+          loop: '{{ converge_case.edits | default([]) }}'
+          loop_control:
+            label: '{{ item.path }}'
+
+        - name: Run the commands that put the host in the state
+          ansible.builtin.command:
+            argv: '{{ item }}'
+          loop: '{{ converge_case.setup | default([]) }}'
+          loop_control:
+            label: '{{ item | join(" ") }}'
+          changed_when: true
+
+        - name: Make the stand-ins report what the case says
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/standin_state.yml'
+          vars:
+            standin_override: '{{ converge_case.standin }}'
+          when: converge_case.standin is defined
+
+        # The facts the role sets earlier in a real run are given here, as a run that
+        # reached this step would have them: nothing is pending, and no start failed.
+        - name: Run the step the case is for
+          ansible.builtin.include_role:
+            name: branchleft.demo1_egress_spool
+            tasks_from: '{{ converge_case.tasks_from }}'
+          vars:
+            demo1_egress_spool_egress_pending: false
+            demo1_egress_spool_spool_pending: false
+            demo1_egress_spool_start: {}
+
+        - name: Fail if the step accepted a state it must refuse
+          ansible.builtin.fail:
+            msg: 'The role accepted a host it must refuse: {{ converge_case.name }}.'
+          when: not case_accepted | bool
+      rescue:
+        - name: Fail if the control case was refused
+          ansible.builtin.fail:
+            msg: 'The control case was refused: {{ ansible_failed_result | to_json }}'
+          when: case_accepted | bool
+
+        - name: Assert the refusal was the one this case is for
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/expect.yml'
+          vars:
+            expect_phrase: '{{ converge_case.expect }}'
+          when: not case_accepted | bool
+      always:
+        - name: Put the files back, with the modes they had
+          ansible.builtin.copy:
+            content: '{{ item.0.content | b64decode }}'
+            dest: '{{ item.0.item }}'
+            owner: root
+            group: root
+            mode: '{{ item.1.stat.mode }}'
+          loop: '{{ (demo1_egress_spool_case_kept.results | default([])) | zip(demo1_egress_spool_case_kept_stat.results | default([])) | list }}'
+          loop_control:
+            label: '{{ item.0.item }}'
+          when: not ansible_check_mode
+          no_log: true
+
+        # The shared Compose unit allows five starts in fifteen minutes (StartLimitBurst in
+        # hetzner/provision/branchleft-compose@.service), and this scenario starts the spool
+        # unit once per case that stops it. Without this the later restores are refused by
+        # systemd with "attempted too often", which fails the restore and not the refusal under
+        # test. This clears the counter the test itself ran up. It changes nothing the role
+        # asserts.
+        - name: Clear the start counter the earlier cases ran up on the spool unit
+          ansible.builtin.command:
+            argv: [systemctl, reset-failed, 'branchleft-compose@mail-spool.service']
+          changed_when: false
+          when: not ansible_check_mode and (converge_case.restore | default([]) | length > 0)
+
+        - name: Run the commands that undo the state
+          ansible.builtin.command:
+            argv: '{{ item }}'
+          loop: '{{ converge_case.restore | default([]) }}'
+          loop_control:
+            label: '{{ item | join(" ") }}'
+          changed_when: true
+          when: not ansible_check_mode
+
+        # The egress program declares its two chains on every run, which empties a chain
+        # that exists, and inserts a jump only where it is absent. The chains are flushed
+        # first anyway, so that the result is one copy of each rule whichever way the
+        # firewall backend treats a declared chain that exists. A chain a case removed
+        # cannot be flushed, which is no failure here.
+        - name: Flush the policy chains where they exist
+          ansible.builtin.command:
+            argv: ['{{ item.0 }}', -t, filter, -F, '{{ item.1 }}']
+          loop: "{{ ['iptables', 'ip6tables'] | product(['BRANCHLEFT-DEMO-EGRESS', 'BRANCHLEFT-DEMO-INPUT']) | list }}"
+          loop_control:
+            label: '{{ item.0 }} {{ item.1 }}'
+          changed_when: true
+          failed_when: false
+          when: not ansible_check_mode and (converge_case.reload_policy | default(false) | bool)
+
+        - name: Run the egress program again
+          ansible.builtin.systemd_service:
+            name: branchleft-demo-egress.service
+            state: restarted
+          when: not ansible_check_mode and (converge_case.reload_policy | default(false) | bool)
+
+        - name: Put the stand-ins back to the healthy spool
+          ansible.builtin.include_tasks: '{{ playbook_dir }}/../default/tasks/standin_state.yml'
+          vars:
+            standin_override: {}
+          when: not ansible_check_mode and converge_case.standin is defined

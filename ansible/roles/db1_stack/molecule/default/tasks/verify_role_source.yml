@@ -198,7 +198,7 @@
       ansible.builtin.get_url: [url, dest, checksum, owner, group, mode]
       ansible.builtin.apt: [update_cache, deb, state, name, cache_valid_time]
       ansible.builtin.package_facts: [manager]
-      ansible.builtin.find: [paths, file_type, hidden]
+      ansible.builtin.find: [paths, file_type, hidden, patterns]
     # The task files an include may name, as the plain string the role writes.
     db1_stack_verify_include_targets:
       - main.yml
@@ -234,6 +234,33 @@
   loop_control:
     label: '{{ item.name | default("(no name)") }}'
   no_log: true
+
+# The tasks that read the apt source files and refuse an unmanaged one must run in
+# check mode, because the index refresh does not and a plan would otherwise pass a
+# host that the real run stops on. The test applies the role with the check_mode
+# keyword on the task, which makes every module check-only but does not set the
+# ansible_check_mode variable, so a condition on ansible_check_mode would go
+# unseen there. So the source is read instead: none of these tasks has a condition
+# that names check mode, and all four are found, so a rename cannot hide one. (The
+# read has a condition that skips a directory, which is not on check mode.)
+- name: Assert the tasks that refuse an unmanaged apt source file are not skipped in check mode
+  ansible.builtin.assert:
+    that:
+      - verify_source_refusal_tasks | length == 4
+      - verify_source_refusal_tasks | map(attribute='when', default='') | map('string') | select('search', 'check_mode') | list | length == 0
+    fail_msg: >-
+      One of the four tasks that list, read and refuse the apt source files is missing, renamed
+      or has a condition on check mode, so it could be skipped in a plan.
+    quiet: true
+  vars:
+    verify_source_refusal_names:
+      - List the entries of the apt sources directory that apt reads
+      - List the main apt source list
+      - Read each apt source entry
+      - Refuse an apt source file the role does not manage that names the MySQL repository
+    verify_source_refusal_tasks: >-
+      {{ db1_stack_verify_tasks_parsed | selectattr('name', 'defined')
+         | selectattr('name', 'in', verify_source_refusal_names) | list }}
 
 # An include runs another file of tasks, so its target must be one of the three the
 # files check above holds. Only the plain string the role writes passes: a
@@ -354,6 +381,7 @@
     db1_stack_verify_removal_values:
       db1_stack_legacy_files:
         - /etc/apt/sources.list.d/mysql-community.list
+        - /etc/apt/sources.list.d/mysql.list
         - /usr/share/keyrings/mysql.gpg
       db1_stack_exporter_cnf_path: /etc/branchleft/db-exporter.my.cnf
       db1_stack_legacy_drop_in: /etc/systemd/system/branchleft-compose@db.service.d/override.conf

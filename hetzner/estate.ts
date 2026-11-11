@@ -3,35 +3,43 @@ import * as pulumi from '@pulumi/pulumi';
 
 import { verifyEstateProject } from './projectGuard';
 
-/**
- * The hosts this repository owns: the edge, the monitoring host once it
- * splits off it, and `ops1` — a shared, product-agnostic operations host
- * (today self-hosted Calendly-equivalent booking + video calling), which
- * belongs here rather than in `ghost-platform` precisely because it has
- * nothing to do with the Ghost platform. The Ghost application and database
- * hosts are still homed in the Ghost platform repository and created by a
- * stack there, not by this one — `ops1` is not one of those; it is
- * shared estate infrastructure like `edge1`, just not edge-role.
- *
- * `Host` and the address plan come from `@branchleft/hetzner-host` — the same
- * package `ghost-platform` depends on for its own hosts — never from
- * `./index`, which constructs the network at module scope; importing it here
- * would put a second network in this stack's state.
- *
- * The program file sits in the package root while its Pulumi project sits in
- * `estate/`, so that both projects share one `node_modules`. That resolves
- * one `@pulumi/hcloud` version for `network.ts`'s own resources, and this
- * project's `@branchleft/hetzner-host` dependency exact-pins the same
- * version, so `Host`'s resources resolve it too. A provider version is part
- * of every resource's URN, and these resources attach to a network another
- * project owns.
- */
+// Narrative moved to hetzner/estate.md, "Header".
 
 /**
  * Refuses the whole program if `hcloud:token` addresses the mail project.
  * See `projectGuard.ts` for why the check is one-directional.
  */
 export const estateProjectVerified = verifyEstateProject();
+
+/**
+ * Resolves to `value` only once the project check has passed. An ungated
+ * resource is registered even when the check refuses, so every input that
+ * reaches a provider resource goes through this or through `gateRegistration`.
+ */
+const verified = <T>(value: pulumi.Input<T>): pulumi.Output<T> =>
+  pulumi.all([estateProjectVerified, value]).apply(([, resolved]) => resolved as T);
+
+/**
+ * Makes the firewall's name, the server's type and the primary IPs' names wait
+ * on the check, so a refused check registers none of them. Applied to each
+ * Host below, whose children these are.
+ */
+export const GATED_PROPERTY: Record<string, string> = {
+  'hcloud:index/firewall:Firewall': 'name',
+  'hcloud:index/server:Server': 'serverType',
+  'hcloud:index/primaryIp:PrimaryIp': 'name',
+};
+
+export const gateRegistration: pulumi.ResourceTransformation = (args) => {
+  const property = GATED_PROPERTY[args.type];
+  if (property === undefined) {
+    return undefined;
+  }
+  return {
+    props: { ...args.props, [property]: verified(args.props[property]) },
+    opts: args.opts,
+  };
+};
 
 const config = new pulumi.Config();
 
@@ -46,7 +54,9 @@ const config = new pulumi.Config();
 const networkStack = new pulumi.StackReference(
   'organization/branchleft-hetzner-network/production'
 );
-const networkId = networkStack.requireOutput('networkId').apply(String);
+// Gated directly: the server's network attachment is built from this value
+// outside the transformation's reach.
+const networkId = verified(networkStack.requireOutput('networkId').apply(String));
 
 const image = config.require('image');
 
@@ -59,17 +69,20 @@ const ownerSshKeyNames = config.requireObject<string[]>('ownerSshKeyNames');
  * traffic. Caddy, CrowdSec and the monitoring stack are delivered onto it
  * separately; nothing here installs them.
  */
-export const edge1 = new Host({
-  name: 'edge1',
-  role: 'edge',
-  location: ESTATE_LOCATION,
-  image,
-  ownerSshKeyNames,
-  networkId,
-  serverType: config.require('edge1ServerType'),
-  privateIp: HOST_IPS.edge1,
-  deployPublicKey: config.require('edge1DeployPublicKey'),
-});
+export const edge1 = new Host(
+  {
+    name: 'edge1',
+    role: 'edge',
+    location: ESTATE_LOCATION,
+    image,
+    ownerSshKeyNames,
+    networkId,
+    serverType: config.require('edge1ServerType'),
+    privateIp: HOST_IPS.edge1,
+    deployPublicKey: config.require('edge1DeployPublicKey'),
+  },
+  { transformations: [gateRegistration] }
+);
 
 export const edge1PublicIpv4 = edge1.publicIpv4;
 
@@ -77,39 +90,7 @@ export const edge1PublicIpv4 = edge1.publicIpv4;
  * from state rather than importing this program. */
 export const edge1PrivateIp = HOST_IPS.edge1;
 
-/**
- * Runs self-hosted Nextcloud (Calendar/Appointments booking + Talk video) —
- * shared collaboration infrastructure, not a Ghost tenant, so it is not
- * homed in `ghost-platform`. Private-only, like `db1`: reached through the
- * `edge1` jump host over the private network, per
- * `RUNBOOK-provision-host.md` §5, rather than carrying its own public IPs.
- * That keeps the estate's public attack surface unchanged by this host's
- * addition.
- *
- * **No container on this host may ever hold the Docker socket.** Nextcloud
- * AIO's master container needs exactly that to manage its own sibling
- * containers, which is root-equivalent host access — and `DOCKER-USER`
- * (what `app-host-isolation.sh` writes to) only filters Docker's *forward*
- * chain. It cannot bound a process with host root: that process can reach
- * any interface directly or simply flush the rules, so it is not a
- * containment boundary against this specific risk, whatever else it is
- * doing for a Ghost tenant's published ports. **Deploy plain Nextcloud
- * instead** — the official image(s) over ordinary Docker Compose, no
- * Docker-in-Docker orchestrator, no socket mount anywhere on this host.
- * That is what actually removes the risk, not an isolation policy layered
- * on top of accepting it.
- *
- * `app-host-isolation.sh` is still installed here, exactly as on any other
- * app host — nothing about running it here differs. `branchleft_docker_user_policy.sh`
- * self-identifies this host by its own address (`10.20.1.50`, the
- * `NO_DB_EXCEPTION_ADDRESSES` default) the same way it already
- * self-identifies `edge1` as the gateway, and skips the `db1` exception for
- * it automatically — not from a one-off environment variable, which
- * `branchleft-docker-user-policy.service` carries none of and which
- * therefore cannot survive to the next boot. That bounds an ordinary
- * container compromise; it was never being asked to bound a host-rooted
- * one, and nothing here claims it does.
- */
+// Narrative moved to hetzner/estate.md, "ops1".
 export const ops1 = new Host(
   {
     name: 'ops1',
@@ -132,6 +113,7 @@ export const ops1 = new Host(
     // the exact URNs this must match. It can go only after the production
     // stack has applied the rename; before that, removing it is a replace.
     aliases: [{ name: 'nextcloud1' }],
+    transformations: [gateRegistration],
   }
 );
 

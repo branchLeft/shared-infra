@@ -1,0 +1,83 @@
+---
+# The state edge1 is in today: the account, its sudoers file and its two key lines made by
+# hand. The password is '*', as a hand-made account has it, where the role makes '!'. The
+# sudoers text and the key lines are the role's own, as the first gated plan is expected to
+# find them. The marker is made last, so a file newer than it was written by the role.
+- name: Make the throwaway keys on the controller
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Make the directory for this run's throwaway keys
+      ansible.builtin.file:
+        path: '{{ scenario_key_dir }}'
+        state: directory
+        mode: '0700'
+
+    - name: Make one throwaway key pair for each key the scenario uses
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - 'PLACEHOLDER_{{ item }}'
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - apply
+        - check
+        - other_apply
+        - other_check
+        - stale
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the account by hand, with the password field '*'
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        system: true
+        create_home: true
+        shell: /bin/bash
+        password: '*'
+      no_log: true
+
+    - name: Write the sudoers file by hand
+      ansible.builtin.copy:
+        content: "{{ scenario_sudoers_lines | join('\n') }}\n"
+        dest: '{{ scenario_sudoers_path }}'
+        owner: root
+        group: root
+        mode: '0440'
+        validate: /usr/sbin/visudo -csf %s
+      no_log: true
+
+    - name: Make the key directory by hand
+      ansible.builtin.file:
+        path: '{{ scenario_home }}/.ssh'
+        state: directory
+        owner: '{{ scenario_user }}'
+        group: '{{ scenario_user }}'
+        mode: '0700'
+
+    - name: Write the two key lines by hand
+      ansible.builtin.copy:
+        content: "{{ scenario_key_lines | join('\n') }}\n"
+        dest: '{{ scenario_home }}/.ssh/authorized_keys'
+        owner: '{{ scenario_user }}'
+        group: '{{ scenario_user }}'
+        mode: '0600'
+      no_log: true
+
+    - name: Leave a marker newer than everything written above
+      ansible.builtin.copy:
+        content: "prepared\n"
+        dest: /var/tmp/hand-made.marker
+        owner: root
+        group: root
+        mode: '0644'

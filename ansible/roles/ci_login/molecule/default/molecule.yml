@@ -1,0 +1,79 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness sets
+# ROLE_TEST_RUN_ID, so the instance name is unique to one run and a destroy can
+# only ever remove this run's container. The hand_made scenario links to this file.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party test base with the same Debian release as the production
+    # hosts, trusted by digest (see the role README). The digest is the pin; the
+    # tag is informational and may since have moved on. It has sudo, visudo and
+    # Python in it. The scenario does not need systemd, so it sets none of the
+    # settings that run systemd: no cgroup mount, no cgroup namespace mode and no
+    # tmpfs. No privileged mode and no added capabilities.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # A plain sleep keeps the container alive so Ansible can run in it; the
+    # image's own command starts systemd, which needs settings granted nowhere here.
+    command: sleep infinity
+    # The image declares /sys/fs/cgroup as a volume, so Docker makes an anonymous
+    # volume for every container. Without this each run would leave one behind.
+    keep_volumes: false
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the
+    # controller, and verify reads it. Verbosity 1 prints each task's result
+    # with the arguments it was given, so a task that handles key material and
+    # lacks no_log shows the key in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '1'
+    # Print the diff of every run, not only of a run started with --diff. verify reads the
+    # sudoers diff from the log, and a caller that runs `molecule test` has no --diff run
+    # (delivery at github-workflows v1.0.16 ran it that way and the assertion failed).
+    # A task that handles key material hides its diff with diff: false (ANS-16), and the
+    # scan for key bodies in verify reads these diffs too.
+    ANSIBLE_DIFF_ALWAYS: 'true'
+  inventory:
+    # The values the scenario runs with, read by the prepare, converge and verify
+    # plays. The keys are made by prepare.yml for this run only.
+    group_vars:
+      all:
+        scenario_user: ansible-ci
+        scenario_home: /home/ansible-ci
+        scenario_sudoers_path: /etc/sudoers.d/ansible-ci
+        scenario_key_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/throwaway-keys"
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        scenario_apply_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/apply.pub') }}"
+        scenario_check_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/check.pub') }}"
+        scenario_other_apply_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/other_apply.pub') }}"
+        scenario_other_check_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/other_check.pub') }}"
+        scenario_stale_public: "{{ lookup('ansible.builtin.file', scenario_key_dir ~ '/stale.pub') }}"
+        scenario_keys:
+          - key: '{{ scenario_apply_public }}'
+            mode: apply
+          - key: '{{ scenario_check_public }}'
+            mode: check
+        scenario_other_keys:
+          - key: '{{ scenario_other_apply_public }}'
+            mode: apply
+          - key: '{{ scenario_other_check_public }}'
+            mode: check
+        # Written out here, not read from the role, so that a change to the role's
+        # lines fails the comparison. Quoted: a line with a colon and a space is a mapping.
+        scenario_sudoers_lines:
+          - 'Defaults!/usr/local/sbin/pull-trigger env_keep += "SSH_ORIGINAL_COMMAND"'
+          - 'ansible-ci ALL=(root) NOPASSWD: /usr/local/sbin/pull-trigger --mode apply, /usr/local/sbin/pull-trigger --mode check'
+        scenario_key_lines:
+          - 'restrict,command="sudo /usr/local/sbin/pull-trigger --mode apply" {{ scenario_apply_public }}'
+          - 'restrict,command="sudo /usr/local/sbin/pull-trigger --mode check" {{ scenario_check_public }}'
+verifier:
+  name: ansible

@@ -1,0 +1,60 @@
+---
+# Applies the role with one input made bad and requires that the role stops at the task
+# named in refused_task. Naming the task matters: a refusal for some other reason, a
+# mistyped role name included, must not count as the refusal under test. Inputs left out
+# take the scenario's good values.
+- name: Apply the role with input it must refuse
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.ci_login
+      vars:
+        ci_login_manage_keys: '{{ refused_manage_keys | default(true) }}'
+        ci_login_keys: '{{ refused_keys | default(scenario_keys) }}'
+
+    - name: Record that the role accepted the input
+      ansible.builtin.set_fact:
+        ci_login_refused_by: 'NOTHING: the role accepted the input'
+        ci_login_refused_message: ''
+  rescue:
+    - name: Record which task refused the input
+      ansible.builtin.set_fact:
+        ci_login_refused_by: '{{ ansible_failed_task.name }}'
+        ci_login_refused_message: '{{ ansible_failed_result.msg | default("") }}'
+
+# The key file must be exactly what the converge left, and the key the host retired must not
+# be in it. This runs before the check on the task, so a check that lets the input through
+# fails here, with the key file as the evidence.
+- name: Read the account's authorised keys after the refusal
+  ansible.builtin.command:
+    argv:
+      - cat
+      - '{{ scenario_home }}/.ssh/authorized_keys'
+  register: ci_login_refused_keys_after
+  changed_when: false
+  check_mode: false
+  no_log: true
+
+- name: Assert the retired key did not come back and the keys are as the converge left them
+  ansible.builtin.assert:
+    that:
+      - scenario_stale_public.split(' ')[1] not in ci_login_refused_keys_after.stdout
+      - ci_login_refused_keys_after.stdout_lines | sort == scenario_key_lines | sort
+    quiet: true
+
+- name: Assert the role stopped at the expected task
+  ansible.builtin.assert:
+    that:
+      - ci_login_refused_by == refused_task
+    fail_msg: 'Expected the role to stop at "{{ refused_task }}"; it stopped at "{{ ci_login_refused_by }}".'
+    quiet: true
+
+# For a refusal that must name which entry is wrong: the message holds the expected words.
+# A message that held a key would be caught by the log scan.
+- name: Assert the refusal names the entry it refused
+  ansible.builtin.assert:
+    that:
+      - refused_message_part in ci_login_refused_message
+    fail_msg: 'Expected the refusal to say "{{ refused_message_part }}"; it said "{{ ci_login_refused_message }}".'
+    quiet: true
+  when: refused_message_part is defined

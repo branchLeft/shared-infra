@@ -15,6 +15,17 @@ Wants=network-online.target
 # Full rationale and recovery: hetzner/README.md's "Deploys" section.
 AssertPathExists=/etc/branchleft/%i.image.env
 
+# A failed start is retried (see Restart= below), and this is what makes the
+# retry stop. Every start counts against it, `systemctl restart` included, so
+# a stack that cannot start ends `failed` after five starts in a quarter of an
+# hour -- the bound. Numbers, and what to do once it is hit: hetzner/README.md's
+# "Deploys" section.
+StartLimitIntervalSec=900
+# Five starts is one try and four retries. With the pause below that is two
+# minutes of retrying, which outlasts a `containerd` restart, and it leaves a
+# deploy's two explicit starts room after a short run of retries.
+StartLimitBurst=5
+
 [Service]
 Type=oneshot
 RemainAfterExit=yes
@@ -57,6 +68,17 @@ ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait
 # 90 second default, and a timeout there is indistinguishable from a genuine
 # deploy failure.
 TimeoutStartSec=600
+
+# A start that races a `containerd` restart fails with `Unavailable: error
+# reading from server: EOF` and would succeed a minute later; with no retry the
+# unit stayed `failed` until someone noticed. `on-failure` retries only a start
+# that failed, so a stop is never undone, and `systemctl restart` still returns
+# the failed start's exit code before the retry timer fires -- the signal
+# `branchleft-deploy` rolls back on. See hetzner/README.md's "Deploys" section.
+Restart=on-failure
+# Long enough for `containerd` and the daemon above it to be back, short enough
+# that a retry lands inside the quarter-hour limit above. Deploys section too.
+RestartSec=30s
 
 [Install]
 WantedBy=multi-user.target
