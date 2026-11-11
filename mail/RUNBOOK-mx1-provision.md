@@ -235,6 +235,38 @@ import for; 443 is part of the target rule set that runbook's step 6 applies.
 If the import has not run at all, 443 lands in the same `pulumi up` that opens
 25/465/587/993.
 
+## Mailbox provisioning script: design notes
+
+Provisions branchLeft's own mailboxes on Stalwart:
+real mailbox accounts for every local part in MAILBOXES, plus a per-mailbox
+Sieve script on each address in ROLE_ADDRESSES that copies inbound mail to
+rob@ (`redirect :copy`, RFC 3894).
+
+Mailbox accounts use the same "x:<Type>/get" / "x:<Type>/set" registry API
+family configure_stalwart.py already uses for listeners/domains
+(`x:Account/set`), but the per-mailbox Sieve script does not: despite the
+name, `x:SieveUserScript` is an admin-managed _global_ script (includable by
+name via Sieve's `:global`, RFC 6609), not a per-mailbox filter. The actual
+per-mailbox mechanism is the standard JMAP Sieve capability
+(`urn:ietf:params:jmap:sieve`, `SieveScript/set`) via blob upload + activate.
+See mail/RUNBOOK-mx1-provision.md#mailbox-provisioning for how this was
+verified and the live request/response evidence.
+
+Also note: `List<T>`-typed registry fields (`credentials`, `aliases`)
+serialize as a JSON object keyed "0", "1", ... not a JSON array.
+
+Idempotent: existing mailboxes are left alone (this script never rewrites a
+password once set -- that is rotate_admin_credential.py's model, not this
+one's); each role's Sieve script is left alone if a script of the same name
+already holds the same content and is active, otherwise corrected. A second
+run against fully-reconciled state makes only GET calls.
+
+Mailbox passwords are persisted at MAILBOX_CREDENTIALS_PATH (mode 600,
+root-owned, on-box only) _before_ the create call that sets them, not after
+-- see resolve_mailbox_secret and _reconcile_accounts for why. Never
+printed, never logged, never returned to the caller. See "Secrets" in
+mail/RUNBOOK-mx1-provision.md.
+
 ## Mailbox provisioning
 
 `dmarc@branchleft.co.uk` receives DMARC aggregate reports only. It has no forward to `rob@` and is deliberately not in `ROLE_ADDRESSES`: the reports are kept apart from people's mail, and `rob@` is not on that path (the owner's ruling on DMARC reports). It is a real mailbox like the others, so its generated password is recorded under the bare local part and never printed.
