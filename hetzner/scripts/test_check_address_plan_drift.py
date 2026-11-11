@@ -62,7 +62,7 @@ def nat_script(subnet_cidr: str = SUBNET_CIDR) -> str:
 
 
 def docker_user_policy_script(db1: str = DB1) -> str:
-    return f'DB_HOST="${{BRANCHLEFT_DOCKER_USER_POLICY_DB_HOST:-{db1}}}"\n'
+    return f'DEFAULT_DB_HOST = "{db1}"\n'
 
 
 def runbook(
@@ -123,7 +123,7 @@ class TreeBuilder:
         )
         self.write("ansible/roles/egress_nat/files/branchleft_nat.py", nat_script(nat_subnet))
         self.write(
-            "hetzner/provision/branchleft_docker_user_policy.sh",
+            "ansible/roles/deploy_tooling/files/branchleft_docker_user_policy.py",
             docker_user_policy_script(docker_user_policy_db1),
         )
         self.write(
@@ -224,7 +224,7 @@ class Edge1DriftTests(unittest.TestCase):
 
 class Db1DriftTests(unittest.TestCase):
     """db1's address is checked in two places this PR adds: the bare literal
-    branchleft_docker_user_policy.sh hardcodes as its DB_HOST default (no
+    branchleft_docker_user_policy.py hardcodes as its DEFAULT_DB_HOST (no
     repository checkout on the host to derive it from, same constraint
     branchleft_nat.py's DEFAULT_SUBNET literal already has), and the `/32` form the
     runbook's own verification block greps for against real `iptables -S`
@@ -237,7 +237,7 @@ class Db1DriftTests(unittest.TestCase):
             script_failures = [
                 f
                 for f in failures
-                if "branchleft_docker_user_policy.sh" in f and "10.20.1.20" in f and "10.20.1.25" in f
+                if "branchleft_docker_user_policy.py" in f and "10.20.1.20" in f and "10.20.1.25" in f
             ]
             self.assertEqual(len(script_failures), 1, failures)
 
@@ -302,11 +302,11 @@ class MissingLiteralTests(unittest.TestCase):
     def test_a_docker_user_policy_script_with_no_db1_literal_fails_rather_than_passing(self):
         with tempfile.TemporaryDirectory() as tmp:
             tree = TreeBuilder(pathlib.Path(tmp)).sound()
-            tree.write("hetzner/provision/branchleft_docker_user_policy.sh", "echo hello\n")
+            tree.write("ansible/roles/deploy_tooling/files/branchleft_docker_user_policy.py", "echo hello\n")
             failures = capd.check(tree.root)
             self.assertTrue(
                 any(
-                    "branchleft_docker_user_policy.sh" in f and "found none" in f
+                    "branchleft_docker_user_policy.py" in f and "found none" in f
                     for f in failures
                 ),
                 failures,

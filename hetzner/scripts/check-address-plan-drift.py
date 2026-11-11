@@ -233,7 +233,7 @@ def check(root: pathlib.Path) -> list[str]:
         plan,
     )
     failures += _check_literals(
-        root / "hetzner" / "provision" / "branchleft_docker_user_policy.sh",
+        root / "ansible" / "roles" / "deploy_tooling" / "files" / "branchleft_docker_user_policy.py",
         _BARE_IPV4_RE,
         plan.db1,
         "HOST_IPS.db1",

@@ -113,12 +113,13 @@ INPUT_KEYS = frozenset(
         PUSH_PLAYBOOK_INPUT,
     }
 )
-# The delivery may skip its lint and Molecule re-run only on the answer of the proof job, which
-# is true for a successful merge_group run of this exact commit (merge_group_proof.py). A static
-# true would skip it for a merge that never went through the queue, or refuse that merge.
+# The delivery never skips its lint and Molecule re-run. The merge queue runs the lint and the
+# unit tests only (the container shards ran on the pull request, not on the tree that is pushed),
+# so a successful queue run of the commit (merge_group_proof.py) says nothing about the
+# containers. The proof job stays, and its answer is no longer passed to the reusable workflow.
 PROOF_JOB = "queue-proof"
 PROOF_STEP = "proof"
-SKIP_EXPRESSION = "${{ needs.queue-proof.outputs.tested == 'true' }}"
+SKIP_VALUE = False
 PROOF_OUTPUTS = {"tested": "${{ steps.proof.outputs.tested }}"}
 # The check run the merge queue publishes for the gate: the name of the gate job of ansible.yml
 # (test_check_delivery.py reads it from there). The reusable workflow looks for it by this name.
@@ -220,10 +221,10 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
             "request gate runs, so a delivery tests a role as the gate does, got "
             f"{given.get('role-test-command')!r}"
         )
-    if given.get(SKIP_INPUT) != SKIP_EXPRESSION:
+    if given.get(SKIP_INPUT) is not SKIP_VALUE:
         findings.append(
-            f"with.{SKIP_INPUT} must be {SKIP_EXPRESSION!r}, so only a commit the proof job found "
-            f"tested by the merge queue skips the re-test, got {given.get(SKIP_INPUT)!r}"
+            f"with.{SKIP_INPUT} must be false, so a delivery re-runs the container shards the "
+            f"merge queue does not run, got {given.get(SKIP_INPUT)!r}"
         )
     if given.get(CHECK_NAME_INPUT) != GATE_CHECK_NAME:
         findings.append(

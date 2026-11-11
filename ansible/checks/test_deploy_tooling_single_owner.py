@@ -286,7 +286,8 @@ def second_owner_problems(
     ansible = roles.parent
     owned = role_vars.targets(role_vars.load_vars(roles / OWNER))
     shared = _shared_variables(ansible)
-    home = provision.resolve()
+    # A program lives in hetzner/provision or, when the owner holds it, in the owner's files/.
+    homes = {provision.resolve(), (roles / OWNER / "files").resolve()}
     problems: list[str] = []
     for role in sorted(entry for entry in roles.iterdir() if entry.is_dir()):
         if role.name == OWNER:
@@ -296,7 +297,9 @@ def second_owner_problems(
         read_exempt = allowed_programs.get(role.name, frozenset())
         exempt_programs = {target.program for target in owned if target.group in exempt_groups}
         digests = {
-            hashlib.sha256((provision / target.program).read_bytes()).hexdigest(): target.program
+            hashlib.sha256(
+                role_vars.program_file(target, roles / OWNER, provision).read_bytes()
+            ).hexdigest(): target.program
             for target in owned
             if target.program and target.program not in exempt_programs
         }
@@ -304,7 +307,7 @@ def second_owner_problems(
             shown = path.relative_to(roles).as_posix()
             if path.is_symlink():
                 target_path = path.resolve()
-                if target_path.parent == home and target_path.name in digests.values():
+                if target_path.parent in homes and target_path.name in digests.values():
                     problems.append(f"{shown} is a link to {target_path.name}")
             elif path.is_file():
                 copy = digests.get(hashlib.sha256(path.read_bytes()).hexdigest())
@@ -338,8 +341,11 @@ class TestSingleOwner(unittest.TestCase):
         (self.roles / OWNER / "vars").mkdir(parents=True)
         shutil.copy(role_vars.ROLE / "vars" / "main.yml", self.roles / OWNER / "vars" / "main.yml")
         (self.roles / "control_plane").mkdir()
-        for name in PROGRAMS:
-            (self.provision / name).write_bytes(f"home of {name}\n".encode())
+        (self.roles / OWNER / "files").mkdir()
+        for target in role_vars.targets(role_vars.load_vars()):
+            if target.program:
+                home = role_vars.program_file(target, self.roles / OWNER, self.provision)
+                home.write_bytes(f"home of {target.program}\n".encode())
 
     def found(self) -> list[str]:
         return second_owner_problems(self.roles, self.provision)
@@ -424,15 +430,19 @@ class TestSingleOwner(unittest.TestCase):
     def test_a_second_role_holding_a_copy_is_found(self) -> None:
         (self.roles / "other_role" / "files").mkdir(parents=True)
         copy = self.roles / "other_role" / "files" / "policy.sh"
-        copy.write_bytes((self.provision / "branchleft_docker_user_policy.sh").read_bytes())
+        copy.write_bytes(
+            (self.roles / OWNER / "files" / "branchleft_docker_user_policy.py").read_bytes()
+        )
         self.assertEqual(
             self.found(),
-            ["other_role/files/policy.sh is a copy of branchleft_docker_user_policy.sh"],
+            ["other_role/files/policy.sh is a copy of branchleft_docker_user_policy.py"],
         )
 
     def test_the_allowed_role_may_hold_a_copy_of_the_policy_program(self) -> None:
         copy = self.roles / "control_plane" / "policy.sh"
-        copy.write_bytes((self.provision / "branchleft_docker_user_policy.sh").read_bytes())
+        copy.write_bytes(
+            (self.roles / OWNER / "files" / "branchleft_docker_user_policy.py").read_bytes()
+        )
         self.assertEqual(self.found(), [])
 
     def test_the_allowed_role_may_not_hold_a_copy_of_the_wrapper(self) -> None:
@@ -452,9 +462,11 @@ class TestSingleOwner(unittest.TestCase):
     def test_the_same_copy_under_a_role_not_on_the_list_is_found(self) -> None:
         (self.roles / "not_listed").mkdir()
         copy = self.roles / "not_listed" / "policy.sh"
-        copy.write_bytes((self.provision / "branchleft_docker_user_policy.sh").read_bytes())
+        copy.write_bytes(
+            (self.roles / OWNER / "files" / "branchleft_docker_user_policy.py").read_bytes()
+        )
         self.assertEqual(
-            self.found(), ["not_listed/policy.sh is a copy of branchleft_docker_user_policy.sh"]
+            self.found(), ["not_listed/policy.sh is a copy of branchleft_docker_user_policy.py"]
         )
 
     def test_a_second_role_reading_a_program_by_path_is_found(self) -> None:
@@ -476,14 +488,14 @@ class TestSingleOwner(unittest.TestCase):
     def test_a_second_role_reading_a_program_through_a_variable_is_found(self) -> None:
         self.write_tasks(
             "other_role",
-            "other_role_source: '{{ other_role_dir }}/branchleft_docker_user_policy.sh'\n"
+            "other_role_source: '{{ other_role_dir }}/branchleft_docker_user_policy.py'\n"
             "other_role_dir: /srv/checkout/hetzner/provision\n",
             directory="vars",
         )
         self.assertEqual(
             self.found(),
             [
-                "other_role/vars/main.yml reads branchleft_docker_user_policy.sh,"
+                "other_role/vars/main.yml reads branchleft_docker_user_policy.py,"
                 " which the deploy_tooling role installs"
             ],
         )
@@ -780,13 +792,13 @@ class TestSingleOwner(unittest.TestCase):
         self.write_tasks(
             "other_role",
             "- ansible.builtin.copy:\n"
-            "    src: '{{ other_role_home }}/branchleft_docker_user_policy.sh'\n"
+            "    src: '{{ other_role_home }}/branchleft_docker_user_policy.py'\n"
             "    dest: /opt/x\n",
         )
         self.assertEqual(
             self.found(),
             [
-                "other_role/tasks/main.yml reads branchleft_docker_user_policy.sh,"
+                "other_role/tasks/main.yml reads branchleft_docker_user_policy.py,"
                 " which the deploy_tooling role installs"
             ],
         )
@@ -894,7 +906,7 @@ class TestSingleOwner(unittest.TestCase):
             "control_plane",
             "- ansible.builtin.copy:\n"
             "    src: '{{ role_path }}/../../../hetzner/provision/"
-            "branchleft_docker_user_policy.sh'\n"
+            "branchleft_docker_user_policy.py'\n"
             "    dest: /usr/local/sbin/branchleft-docker-user-policy\n"
             "- ansible.builtin.copy:\n"
             "    src: branchleft-docker-user-policy.service\n"
