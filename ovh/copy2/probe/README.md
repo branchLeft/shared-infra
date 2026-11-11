@@ -1,0 +1,55 @@
+# ovh/copy2/probe
+
+The lock probe for the second backup copy at OVHcloud London. The workflow `.github/workflows/ovh-copy2-probe.yml` runs it; nothing else does. It creates three throwaway buckets through the `probe` stack of the parent Pulumi project, checks how OVHcloud object lock behaves, and destroys everything in the same job.
+
+## Running it
+
+The workflow is dispatch-only and runs from `main`. The job waits on the protected environment `ovh-copy2-probe`: its required reviewer approves the run in the Actions tab before any step starts. That environment alone holds the two secrets `OVH_CLIENT_ID` and `OVH_CLIENT_SECRET`. The first step, `gate`, reads the environment and fails the job if it no longer has a required-reviewer rule and a branch policy.
+
+Cost: three empty buckets and one 5-byte object for a few minutes, in the London region, with no egress. It rounds to nothing.
+
+## The checks
+
+| Code | What it proves                                                     | How                                                                                         |
+| ---- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| P1   | A London bucket is reachable with the scoped credential            | List bucket A at the London endpoint; read its location.                                    |
+| P2   | Default retention is applied to a new object                       | Write one object to A; its retention is Governance for one day.                             |
+| P3   | A delete is refused, then allowed with bypass                      | Delete that version plainly, then with the bypass header; check it is held, then gone.      |
+| P4   | A second bucket refuses the credential                             | List and write bucket B, list bucket C, all with the credential that reaches only A.        |
+| P5   | A lock cannot be added to an existing bucket                       | A second credential, allowed to try, asks bucket B (no lock) for a one-day Governance lock. |
+| P6   | Compliance for one day is accepted as a default on an empty bucket | Read bucket C's default retention and list it; it is Compliance, one day and empty.         |
+
+P5 needs its own credential on purpose. With the credential that reaches only bucket A, a refusal on B would prove nothing but "not permitted". The second user, `zz-probe-admin`, may ask B for a lock and read C's settings, and can write or delete no object anywhere.
+
+Nothing is ever written to bucket C. An object under Compliance retention cannot be deleted by anyone, nor can its bucket.
+
+A row is PASS, FAIL (the platform did something other than expected) or ERROR (the check could not be carried out, so it proves nothing). A connection fault is an ERROR, never a refusal. Only a pass on every row keeps the step green. The table, with the observed result of each row, goes to the job summary.
+
+## Destroying
+
+The destroy step has `if: always()`, so it runs after a failed check, a failed create and a cancelled run. It empties bucket A (Governance bypass, which P3 has just shown works), then runs `pulumi destroy` up to three times, then reads the stack's state. Any resource left in the state, or any pending operation, makes the job red and is printed by name in an error annotation and in the summary. The summary states plainly whether everything was destroyed.
+
+Its limit: "destroyed" means Pulumi's state is empty after the destroy. A resource that OVHcloud created but Pulumi never recorded (a run killed mid-create) cannot be seen from here. After the first run, look at the OVHcloud console for anything named `zz-probe-`.
+
+## Secrets and state
+
+- The two OVHcloud secrets are read by the `up`, `check` and `destroy` steps only. The package install and the self-test never see them.
+- The Pulumi CLI gets a short allow-list of environment variables, not the runner's tokens.
+- The Pulumi backend is a `file://` directory under the runner's scratch area, with a random passphrase in a mode 0600 file there. Nothing is uploaded, cached or logged.
+- Every credential the stack mints is registered for masking before it is used, and scrubbed from check details.
+- The S3 client (`boto3`) is installed from `requirements.txt`: exact versions, a hash each, `--require-hashes`.
+
+## Files
+
+| File               | What it holds                                                             |
+| ------------------ | ------------------------------------------------------------------------- |
+| `probe.py`         | The four steps: `gate`, `up`, `check`, `destroy`.                         |
+| `probe_checks.py`  | P1 to P6 over the `Ops` interface.                                        |
+| `probe_s3.py`      | `Ops`, `S3Error` and the boto3 adapter (the only import of boto3).        |
+| `probe_stack.py`   | The Pulumi CLI as an argv list, and reading the state.                    |
+| `probe_report.py`  | Results, the summary table, the cleanup text, secret scrubbing.           |
+| `fake_s3.py`       | An in-memory stand-in for the three buckets, with a switch per behaviour. |
+| `test_*.py`        | Offline tests. They import no third-party package and contact nothing.    |
+| `requirements.txt` | The hashed lock for the S3 client.                                        |
+
+Run the tests with `python3 -m unittest discover -s probe -p 'test_*.py'` from `ovh/copy2`.

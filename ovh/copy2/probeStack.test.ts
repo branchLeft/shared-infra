@@ -75,6 +75,24 @@ describe('Pulumi.probe.yaml', () => {
     expect(users.find((user) => user.name === 'zz-probe-owner')?.s3Credential).toBe(false);
   });
 
+  it('gives the lock-attempt credential reach over buckets B and C only, and no object access', () => {
+    const admin = settings(PROJECT).users.find((user) => user.name === 'zz-probe-admin');
+    expect(admin?.s3Credential).toBe(true);
+    const statements = admin?.statements ?? [];
+    expect(new Set(statements.flatMap((statement) => statement.buckets))).toEqual(
+      new Set(['zz-probe-b', 'zz-probe-c'])
+    );
+    expect(statements.every((statement) => statement.effect === 'Allow')).toBe(true);
+    const actions = statements.flatMap((statement) => statement.actions);
+    expect(actions.filter((action) => /Object(?!LockConfiguration)|Bypass/.test(action))).toEqual(
+      []
+    );
+    const forC = statements.filter((statement) => statement.buckets.includes('zz-probe-c'));
+    expect(forC.flatMap((statement) => statement.actions)).not.toContain(
+      's3:PutBucketObjectLockConfiguration'
+    );
+  });
+
   it('carries no salt, no ciphertext and no run-specific suffix', () => {
     expect(Object.keys(file)).toEqual(['config']);
     expect(JSON.stringify(file.config)).not.toContain('secure');

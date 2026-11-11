@@ -1,0 +1,120 @@
+name: ovh-copy2-probe
+
+# Probes OVHcloud London object lock on throwaway buckets, then destroys them.
+# Run by hand from main (Actions tab, "Run workflow"). There is no schedule and
+# no pull-request trigger, so nothing here can start unattended. The job waits
+# on the protected `ovh-copy2-probe` environment: its required reviewer must
+# approve the run before any step starts, and that environment alone holds the
+# two OVHcloud secrets. What the probe creates, how it is destroyed and what the
+# summary shows are in ovh/copy2/probe/README.md.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Create, probe and destroy the lock-probe buckets
+    runs-on: ubuntu-latest
+    # Three empty buckets and one 5-byte object for a few minutes. The steps
+    # carry their own timeouts, so a hung step cannot starve the destroy step.
+    timeout-minutes: 90
+    if: github.ref == 'refs/heads/main'
+    environment: ovh-copy2-probe
+    # One probe at a time: two at once would double the buckets in the account.
+    concurrency:
+      group: ovh-copy2-probe
+      cancel-in-progress: false
+    # `packages: read` lets `pnpm install` fetch @branchleft/* from GitHub Packages.
+    permissions:
+      contents: read
+      packages: read
+    env:
+      PROBE_ENVIRONMENT: ovh-copy2-probe
+      OVH_ENDPOINT: ovh-eu
+      # Not a secret. Must equal allowedProjectId in ovh/copy2/Pulumi.probe.yaml:
+      # the project guard refuses a run where the two differ.
+      OVH_CLOUD_PROJECT_SERVICE: 5dd5eda4165c48fa80428816500bc992
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      # Fails the job before any secret is read when the environment has lost
+      # its required-reviewer rule or its branch policy: without them nothing
+      # held this run, and the environment key would be silently inert.
+      - id: gate
+        name: Refuse to run through an unprotected environment
+        timeout-minutes: 2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 ovh/copy2/probe/probe.py gate
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ovh/copy2/.nvmrc
+          cache: pnpm
+          cache-dependency-path: ovh/copy2/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      # No OVHcloud secret is in scope for the install: dependency scripts never see it.
+      - name: Install dependencies
+        timeout-minutes: 10
+        working-directory: ovh/copy2
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Create the probe's virtual environment
+        run: python3 -m venv "$RUNNER_TEMP/probe-venv"
+
+      - name: Install the probe's S3 client from the hashed lock
+        run: '"$RUNNER_TEMP/probe-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ovh/copy2/probe/requirements.txt'
+
+      # Offline, against fakes: a probe that cannot judge its own checks creates nothing.
+      - name: Self-test the probe
+        timeout-minutes: 5
+        run: python3 -m unittest discover -s ovh/copy2/probe -p 'test_*.py' -v
+
+      - id: up
+        name: Create the probe buckets
+        timeout-minutes: 20
+        env:
+          OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+          OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+        run: '"$RUNNER_TEMP/probe-venv/bin/python" ovh/copy2/probe/probe.py up'
+
+      - id: check
+        name: Run the lock checks
+        timeout-minutes: 15
+        env:
+          OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+          OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+        run: '"$RUNNER_TEMP/probe-venv/bin/python" ovh/copy2/probe/probe.py check'
+
+      # Runs on every outcome, a failed or cancelled run included. It empties
+      # bucket A, destroys the stack and fails the job for anything left over.
+      - id: destroy
+        name: Destroy every probe bucket and user
+        if: always() && steps.gate.outcome == 'success'
+        timeout-minutes: 25
+        env:
+          OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+          OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+        run: '"$RUNNER_TEMP/probe-venv/bin/python" ovh/copy2/probe/probe.py destroy'

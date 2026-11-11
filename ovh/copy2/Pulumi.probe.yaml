@@ -40,6 +40,29 @@ config:
             - s3:DeleteObjectVersion
             - s3:GetObjectRetention
             - s3:BypassGovernanceRetention
+    # Makes the two checks the probe credential cannot: it may ask bucket B to
+    # take a lock and may read bucket C's lock settings. Without a credential
+    # that is allowed to try, a refusal on B would only mean "not permitted".
+    # It can write and delete no object anywhere.
+    - name: zz-probe-admin
+      s3Credential: true
+      statements:
+        - sid: ProbeBucketBLockAttempt
+          effect: Allow
+          buckets: [zz-probe-b]
+          actions:
+            - s3:ListBucket
+            - s3:ListBucketVersions
+            - s3:GetBucketLocation
+            - s3:GetBucketObjectLockConfiguration
+            - s3:PutBucketObjectLockConfiguration
+        - sid: ProbeBucketCRead
+          effect: Allow
+          buckets: [zz-probe-c]
+          actions:
+            - s3:ListBucket
+            - s3:ListBucketVersions
+            - s3:GetBucketObjectLockConfiguration
   branchleft-ovh-copy2:buckets:
     # A: lock at creation, Governance, one day. The probe writes here.
     - name: zz-probe-a
