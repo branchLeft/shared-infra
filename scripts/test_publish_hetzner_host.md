@@ -20,6 +20,8 @@ The real workflow holds every pin:
   `# v1.2.0` comment, with the repository, signer workflow and tarball as literals and
   the ref taken from the `attest-ref` step (built from the packed version, never from
   `github.ref`), and no `if` or `continue-on-error`;
+- the attest-ref step echoes `ref=refs/tags/hetzner-host-v${VERSION}` into
+  `GITHUB_OUTPUT`, the tag form the trigger matches;
 - the steps run in the order pack, attest-ref, attest, publish; the publish step
   publishes the packed tarball with `--no-git-checks` and the run's `GITHUB_TOKEN`;
 - no other workflow in the directory runs `pnpm publish` or `npm publish` without
@@ -31,5 +33,6 @@ Each pin is broken in a copy of the file and must go red: the attest step remove
 a tag instead of a commit, a commit with no version comment, `id-token` dropped, a
 permission widened, a signing permission at the top level, the package directory
 published instead of the tarball, publish before attest, the ref read from
-`github.ref`, `continue-on-error` on the attest step, and a new unattested publish
+`github.ref`, `continue-on-error` on the attest step, an echoed ref missing the hyphen
+before the v (`hetzner-hostv`) or in a bare `v` form, and a new unattested publish
 workflow.
