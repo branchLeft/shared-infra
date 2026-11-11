@@ -2,7 +2,9 @@
 
 The collector drains exactly the hosts its descriptor directory names, and nothing else names a
 host. So the directory is the drain list, and these tests judge the role by what it leaves there.
-They run the role's own tasks (the host checks and the descriptor writes and removals, taken from
+The role removes only a descriptor it wrote itself, which it knows from a record directory of its
+own beside the descriptor directory, so a file put there by hand is never deleted. They run the
+role's own tasks (the host checks, the record, and the descriptor writes and removals, taken from
 `tasks/main.yml` as shipped) with Ansible on this machine, against a scratch directory. They touch
 no host. The directory is then read the way the collector reads it.
 
@@ -37,16 +39,24 @@ TASK_STARTS = (
     "Refuse two hosts",
     "Refuse a demo host",
     "Make the descriptor directory",
+    "Make the record directory",
+    "Note the descriptor file names",
+    "Look for the record",
+    "Note which descriptor files",
+    "Record each listed host",
     "Write each listed host",
     "Look for descriptor files",
     "Remove every descriptor",
+    "Forget each record",
 )
 DEMO = {"slug": "demo1", "kind": "demo", "app_host_ip": "10.20.1.100"}
 APP = {"slug": "app1", "kind": "tenant", "app_host_ip": "10.20.1.101"}
+THIRD = {"slug": "tenant3", "kind": "tenant", "app_host_ip": "10.20.1.103"}
 DEMO_DOMAIN = "demo.example"
 # The keys the collector's reader needs of a descriptor, and the only keys the role writes.
 DESCRIPTOR_KEYS = ["appHostIp", "expiresAt", "kind", "slug"]
 RUN_SECONDS = 120
+CRASH = "simulated crash"
 
 
 def ansible_playbook() -> str:
@@ -68,14 +78,16 @@ def role_tasks() -> list[dict[str, object]]:
     return cast("list[dict[str, object]]", YAML(typ="safe").load(TASKS.read_text(encoding="utf-8")))
 
 
-def play_tasks() -> list[dict[str, object]]:
+def play_tasks(crash_at: str | None = None) -> list[dict[str, object]]:
     """Return the drain-list tasks as shipped, without the root owner a scratch run cannot set.
 
     Dropping the owner and group is the one change. The scratch directory belongs to whoever runs
-    the test; the real run sets root, and the Molecule scenario checks that on a host.
+    the test; the real run sets root, and the Molecule scenario checks that on a host. With
+    `crash_at`, the task whose name starts with that text fails at once and the play stops there,
+    which stands for the run dying at that point.
     """
     picked = [t for t in role_tasks() if str(t.get("name", "")).startswith(TASK_STARTS)]
-    for task in picked:
+    for index, task in enumerate(picked):
         for value in task.values():
             if isinstance(value, dict):
                 value.pop("owner", None)
@@ -83,6 +95,8 @@ def play_tasks() -> list[dict[str, object]]:
         template = task.get("ansible.builtin.template")
         if isinstance(template, dict):
             template["src"] = str(TEMPLATE)
+        if crash_at is not None and str(task["name"]).startswith(crash_at):
+            picked[index] = {"name": task["name"], "ansible.builtin.fail": {"msg": CRASH}}
     return picked
 
 
@@ -111,7 +125,11 @@ class Scratch:
         self.home = Path(tempfile.mkdtemp(prefix="mail-collector-descriptors-"))
         test.addCleanup(shutil.rmtree, self.home, ignore_errors=True)
         self.directory = self.home / "descriptors"
+        self.records = self.home / "descriptors.owned"
         self.play = self.home / "play.yml"
+
+    def write_play(self, crash_at: str | None) -> None:
+        """Write the play that runs the role's drain-list tasks, with a crash point if asked."""
         writer = YAML()
         writer.default_flow_style = False
         play = [
@@ -124,19 +142,28 @@ class Scratch:
                     str(ROLE / "vars" / "main.yml"),
                     str(ROLE / "defaults" / "main.yml"),
                 ],
-                "tasks": play_tasks(),
+                "tasks": play_tasks(crash_at),
             }
         ]
         with self.play.open("w", encoding="utf-8") as handle:
             writer.dump(play, handle)
 
-    def run(self, hosts: object, domain: str = "", *, check: bool = False) -> Result:
+    def run(
+        self,
+        hosts: object,
+        domain: str = "",
+        *,
+        check: bool = False,
+        crash_at: str | None = None,
+    ) -> Result:
         """Run the play with a host list and a demo mail domain."""
+        self.write_play(crash_at)
         values = self.home / "values.json"
         values.write_text(
             json.dumps(
                 {
                     "mail_collector_descriptor_dir": str(self.directory),
+                    "mail_collector_descriptor_record_dir": str(self.records),
                     "mail_collector_hosts": hosts,
                     "mail_collector_demo_mail_domain": domain,
                     "ansible_python_interpreter": sys.executable,
@@ -169,6 +196,12 @@ class Scratch:
         if not self.directory.is_dir():
             return []
         return sorted(path.name for path in self.directory.iterdir())
+
+    def recorded(self) -> list[str]:
+        """Return the names the role has recorded as its own, or none if there is no record."""
+        if not self.records.is_dir():
+            return []
+        return sorted(path.name for path in self.records.iterdir())
 
     def put(self, name: str, text: str) -> None:
         """Put a file in the descriptor directory, as a stale or foreign one."""
@@ -245,25 +278,132 @@ class DrainListTests(unittest.TestCase):
         self.assertEqual(self.scratch.files(), [])
         self.assertEqual(self.scratch.drain_list(), [])
 
-    def test_a_descriptor_nobody_listed_is_removed_and_a_file_that_is_not_one_is_left(self) -> None:
-        self.scratch.put("hand-placed.json", "{}")
+    def test_a_file_the_role_did_not_write_survives_an_apply_whatever_it_is_called(self) -> None:
+        # Red against the old "remove every other .json" rule, green once only recorded files go.
+        self.scratch.put("other.json", "{}")
+        self.scratch.put(".x.json", "{}")
         self.scratch.put("notes.txt", "kept")
         self.assertFalse(self.scratch.run([APP]).failed)
-        self.assertEqual(self.scratch.files(), ["app1.json", "notes.txt"])
+        self.assertEqual(self.scratch.files(), [".x.json", "app1.json", "notes.txt", "other.json"])
+        again = self.scratch.run([APP])
+        self.assertEqual(again.recap("changed"), 0)
+        self.assertFalse(self.scratch.run([]).failed)
+        self.assertEqual(self.scratch.files(), [".x.json", "notes.txt", "other.json"])
 
-    def test_a_link_named_like_a_descriptor_is_removed_and_its_target_is_not(self) -> None:
+    def test_an_emptied_list_removes_only_what_the_role_wrote(self) -> None:
+        self.scratch.put("hand-placed.json", "{}")
+        self.assertFalse(self.scratch.run([DEMO, APP], DEMO_DOMAIN).failed)
+        self.assertEqual(self.scratch.files(), ["app1.json", "demo1.json", "hand-placed.json"])
+        self.assertFalse(self.scratch.run([]).failed)
+        self.assertEqual(self.scratch.files(), ["hand-placed.json"])
+        self.assertEqual(self.scratch.recorded(), [])
+
+    def test_a_hand_placed_file_with_a_listed_name_is_taken_over_then_removed_with_the_host(
+        self,
+    ) -> None:
+        # The role writes every listed host's descriptor, so a file already there under that name
+        # is replaced and from then on the role's own.
+        self.scratch.put("app1.json", "{}")
+        self.assertFalse(self.scratch.run([APP]).failed)
+        self.assertEqual(self.scratch.drain_list(), ["app1=10.20.1.101"])
+        self.assertFalse(self.scratch.run([]).failed)
+        self.assertEqual(self.scratch.files(), [])
+
+    def test_a_directory_named_like_a_recorded_descriptor_is_not_removed(self) -> None:
+        self.assertFalse(self.scratch.run([APP]).failed)
+        (self.scratch.directory / "app1.json").unlink()
+        (self.scratch.directory / "app1.json").mkdir()
+        (self.scratch.directory / "app1.json" / "inside").write_text("kept", encoding="utf-8")
+        self.assertFalse(self.scratch.run([]).failed)
+        self.assertEqual(self.scratch.files(), ["app1.json"])
+
+    def test_a_record_that_is_not_a_descriptor_name_removes_nothing(self) -> None:
+        # The record is read for names only, and only a plain descriptor name counts, so a record
+        # that was tampered with cannot point the removal outside the directory or at a dot-file.
+        self.scratch.put("keep.json", "{}")
+        self.scratch.put(".hidden.json", "{}")
+        self.scratch.records.mkdir(parents=True)
+        for name in ("keep.json.bak", ".hidden.json", "UPPER.json", "a_b.json"):
+            (self.scratch.records / name).write_text("", encoding="utf-8")
+        self.assertFalse(self.scratch.run([]).failed)
+        self.assertEqual(self.scratch.files(), [".hidden.json", "keep.json"])
+
+    def test_a_crash_before_the_removal_loses_no_file_the_role_wrote(self) -> None:
+        # The first run lists a and b. The second swaps b for c and dies before it removes b: c is
+        # written and b is still there. The third run lists a only and must remove both.
+        self.assertFalse(self.scratch.run([APP, DEMO], DEMO_DOMAIN).failed)
+        crashed = self.scratch.run([APP, THIRD], crash_at="Remove every descriptor")
+        self.assertTrue(crashed.failed)
+        self.assertIn(CRASH, crashed.output)
+        self.assertEqual(self.scratch.files(), ["app1.json", "demo1.json", "tenant3.json"])
+        self.assertFalse(self.scratch.run([APP]).failed)
+        self.assertEqual(self.scratch.files(), ["app1.json"])
+        self.assertEqual(self.scratch.recorded(), ["app1.json"])
+
+    def test_a_crash_after_the_removal_and_before_the_record_is_trimmed_loses_nothing(self) -> None:
+        self.assertFalse(self.scratch.run([APP, DEMO], DEMO_DOMAIN).failed)
+        crashed = self.scratch.run([APP], crash_at="Forget each record")
+        self.assertTrue(crashed.failed)
+        self.assertEqual(self.scratch.files(), ["app1.json"])
+        self.assertEqual(self.scratch.recorded(), ["app1.json", "demo1.json"])
+        self.assertFalse(self.scratch.run([APP]).failed)
+        self.assertEqual(self.scratch.recorded(), ["app1.json"])
+        self.assertEqual(self.scratch.run([APP]).recap("changed"), 0)
+
+    def test_a_crash_at_the_record_step_leaves_no_file_the_record_does_not_cover(self) -> None:
+        # Dying at the record step must leave nothing written that the record lacks: the record
+        # comes first, so the new host's file is not yet there. With the order reversed the file
+        # would be written and never recorded, and no later run would remove it.
+        self.assertFalse(self.scratch.run([APP]).failed)
+        crashed = self.scratch.run([APP, THIRD], crash_at="Record each listed host")
+        self.assertTrue(crashed.failed)
+        self.assertFalse(self.scratch.run([APP]).failed)
+        self.assertEqual(self.scratch.files(), ["app1.json"])
+
+    def test_a_crash_after_the_record_and_before_the_write_loses_nothing(self) -> None:
+        # The new host is recorded before its file is written, so a run that dies between the two
+        # leaves a record that names a file not yet there, and the next run still converges.
+        crashed = self.scratch.run([APP], crash_at="Write each listed host")
+        self.assertTrue(crashed.failed)
+        self.assertEqual(self.scratch.files(), [])
+        self.assertFalse(self.scratch.run([]).failed)
+        self.assertEqual(self.scratch.recorded(), [])
+
+    def test_a_link_named_like_a_recorded_descriptor_is_removed_and_its_target_is_not(self) -> None:
+        outside = self.scratch.home / "outside.json"
+        outside.write_text("target", encoding="utf-8")
+        self.assertFalse(self.scratch.run([APP]).failed)
+        (self.scratch.directory / "app1.json").unlink()
+        (self.scratch.directory / "app1.json").symlink_to(outside)
+        self.assertFalse(self.scratch.run([]).failed)
+        self.assertEqual(self.scratch.files(), [])
+        self.assertEqual(outside.read_text(encoding="utf-8"), "target")
+
+    def test_a_link_not_in_the_record_is_left_alone(self) -> None:
         outside = self.scratch.home / "outside.json"
         outside.write_text("target", encoding="utf-8")
         self.scratch.directory.mkdir(parents=True)
         (self.scratch.directory / "link.json").symlink_to(outside)
         self.assertFalse(self.scratch.run([]).failed)
-        self.assertEqual(self.scratch.files(), [])
-        self.assertEqual(outside.read_text(encoding="utf-8"), "target")
+        self.assertEqual(self.scratch.files(), ["link.json"])
 
     def test_a_plan_on_a_fresh_host_runs_and_writes_nothing(self) -> None:
         result = self.scratch.run([DEMO, APP], DEMO_DOMAIN, check=True)
         self.assertFalse(result.failed, result.output)
         self.assertEqual(self.scratch.files(), [])
+        self.assertEqual(self.scratch.recorded(), [])
+
+    def test_a_plan_on_a_settled_host_changes_nothing_and_a_plan_with_a_removal_does_not_remove(
+        self,
+    ) -> None:
+        self.assertFalse(self.scratch.run([DEMO, APP], DEMO_DOMAIN).failed)
+        settled = self.scratch.run([DEMO, APP], DEMO_DOMAIN, check=True)
+        self.assertEqual(settled.recap("changed"), 0)
+        plan = self.scratch.run([APP], check=True)
+        self.assertFalse(plan.failed, plan.output)
+        self.assertGreater(plan.recap("changed"), 0)
+        self.assertEqual(self.scratch.files(), ["app1.json", "demo1.json"])
+        self.assertEqual(self.scratch.recorded(), ["app1.json", "demo1.json"])
 
     def test_each_descriptor_holds_exactly_the_four_public_keys(self) -> None:
         self.assertFalse(self.scratch.run([DEMO, APP], DEMO_DOMAIN).failed)
@@ -288,6 +428,7 @@ class DrainListTests(unittest.TestCase):
         refused = self.scratch.run([DEMO], "")
         self.assertTrue(refused.failed)
         self.assertEqual(self.scratch.files(), ["stale.json"])
+        self.assertEqual(self.scratch.recorded(), [])
 
 
 class RefusalTests(unittest.TestCase):
@@ -385,17 +526,26 @@ class InterfaceTests(unittest.TestCase):
         self.assertNotIn("sentinel-value", text)
         self.assertNotIn("token", text)
 
-    def test_the_descriptor_tasks_write_only_inside_the_descriptor_directory(self) -> None:
-        directory = "{{ mail_collector_descriptor_dir }}/"
-        seen = 0
+    def test_the_descriptor_tasks_write_only_inside_the_two_directories(self) -> None:
+        directories = {
+            "descriptor": "{{ mail_collector_descriptor_dir }}/",
+            "record": "{{ mail_collector_descriptor_record_dir }}/",
+        }
+        seen = {"descriptor": 0, "record": 0}
         for task in play_tasks():
-            for module in ("ansible.builtin.template", "ansible.builtin.file"):
+            for module in (
+                "ansible.builtin.template",
+                "ansible.builtin.file",
+                "ansible.builtin.copy",
+            ):
                 args = task.get(module)
                 if not isinstance(args, dict) or str(task["name"]).startswith("Make the"):
                     continue
-                seen += 1
-                self.assertTrue(str(args.get("dest", args.get("path"))).startswith(directory))
-        self.assertEqual(seen, 2)
+                target = str(args.get("dest", args.get("path")))
+                kind = next((k for k, d in directories.items() if target.startswith(d)), None)
+                self.assertIsNotNone(kind, task["name"])
+                seen[str(kind)] += 1
+        self.assertEqual(seen, {"descriptor": 2, "record": 2})
 
 
 if __name__ == "__main__":

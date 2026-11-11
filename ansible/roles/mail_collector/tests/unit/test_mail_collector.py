@@ -575,6 +575,31 @@ class TaskTests(unittest.TestCase):
             render(str(args_of(remove)["path"]), {"item": "x.json"}).startswith(directory)
         )
 
+    def test_a_descriptor_is_recorded_before_it_is_written_and_forgotten_after_its_removal(
+        self,
+    ) -> None:
+        # The order is what keeps the record a superset of what the role wrote when a run dies.
+        names = [str(task["name"]) for task in tasks()]
+        order = [
+            next(i for i, n in enumerate(names) if n.startswith(start))
+            for start in (
+                "Record each listed host",
+                "Write each listed host",
+                "Remove every descriptor",
+                "Forget each recorded",
+            )
+        ]
+        self.assertEqual(order, sorted(order))
+        record = args_of(named("Record each listed host"))
+        self.assertEqual(
+            (record["owner"], record["group"], record["mode"]), ("root", "root", "0644")
+        )
+        self.assertEqual(record["content"], "")
+        directory = str(role_vars()["mail_collector_descriptor_dir"])
+        self.assertFalse(
+            str(role_vars()["mail_collector_descriptor_record_dir"]).startswith(directory + "/")
+        )
+
     def test_a_descriptor_is_roots_and_not_writable_by_anyone_else(self) -> None:
         write = args_of(named("Write each listed host"))
         self.assertEqual((write["owner"], write["group"], write["mode"]), ("root", "root", "0644"))

@@ -22,7 +22,7 @@
         - '{{ scenario_foreign_file }}'
       register: mail_collector_v_stats
 
-    - name: Require the unit to be installed, no settings to exist, docker never to have run and the hand-placed descriptors removed
+    - name: Require the unit to be installed, no settings to exist, docker never to have run and the hand-placed descriptors left
       ansible.builtin.assert:
         that:
           - not mail_collector_v_stats.results[0].stat.exists
@@ -31,8 +31,8 @@
           - mail_collector_v_stats.results[3].stat.isdir
           - mail_collector_v_stats.results[4].stat.isdir
           - not mail_collector_v_stats.results[5].stat.exists
-          - not mail_collector_v_stats.results[6].stat.exists
-          - not mail_collector_v_stats.results[7].stat.exists
+          - mail_collector_v_stats.results[6].stat.exists
+          - mail_collector_v_stats.results[7].stat.exists
           - mail_collector_v_stats.results[8].stat.exists
         quiet: true
 

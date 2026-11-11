@@ -54,6 +54,7 @@ provisioner:
         scenario_account: mail-collector
         scenario_config_dir: /etc/branchleft/mail-collector
         scenario_descriptor_dir: /etc/branchleft/mail-collector/descriptors
+        scenario_record_dir: /etc/branchleft/mail-collector/descriptors.owned
         scenario_descriptor_file: /etc/branchleft/mail-collector/descriptors/host-one.json
         scenario_stale_descriptor_file: /etc/branchleft/mail-collector/descriptors/gone.json
         scenario_foreign_file: /etc/branchleft/mail-collector/descriptors/notes.txt

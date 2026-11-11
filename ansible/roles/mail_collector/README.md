@@ -20,11 +20,11 @@ The role:
    and mode `0600`, and stops the run if it is not. It reads its owner and mode only, never its
    content and never a checksum of it.
 3. Makes the system account `mail-collector` (no login, no home) and its group.
-4. Makes `/etc/branchleft/mail-collector` (root's, `0755`), the descriptor directory inside it
-   (root's, `0755`) and `/var/lib/branchleft/mail-collector` (the account's, `0700`, which holds
+4. Makes `/etc/branchleft/mail-collector` (root's, `0755`), the descriptor directory and the record
+   directory inside it (both root's, `0755`) and `/var/lib/branchleft/mail-collector` (the account's, `0700`, which holds
    the collector's persistent state) with its `pins` directory (the account's, `0700`).
 5. Writes one descriptor into the descriptor directory for each host in `mail_collector_hosts`, and
-   removes every other `.json` file there (see The drain list).
+   removes only a descriptor it wrote itself (see The drain list).
 6. Writes `unit.env` (the image and the account's numeric ids) and, when the collector is meant to
    run, `collector.env` (the sending target and the drain surface's scheme and port). Both hold
    public values only.
@@ -105,8 +105,10 @@ a host. `mail_collector_hosts` is that list. Each entry holds exactly three keys
 
 For each entry the role writes `<slug>.json` (root's, `0644`) holding `slug`, `kind`, `appHostIp` and
 `expiresAt`, which is always `null`: a host leaves the drain list by leaving this list, not by a
-date. Then it removes every other `.json` file in the directory. A file that is not named `*.json`
-is left alone, because the collector never reads one.
+date. Then it removes a descriptor of a host that has left the list, but only if the role wrote it.
+The role knows which it wrote from its record: one empty file for each descriptor, named for it, in
+`descriptors.owned` beside the descriptor directory (not in it, because the collector reads every
+`.json` name in that one). A file the record does not name is never removed, whatever it is called.
 
 - **Why a role task.** The only route to ops1 is the gated apply (ANS-17), the values are public
   and a descriptor is a few lines of text, so a task that renders them from the repository adds no
@@ -126,8 +128,16 @@ is left alone, because the collector never reads one.
   `demo` or `tenant`, an address that is not private IPv4, two entries with one slug, and a demo
   host while `mail_collector_demo_mail_domain` is empty each stop the run with the directory as it
   was. The message names the entry's place in the list, never a value.
-- **Hand placement is replaced.** A descriptor put on ops1 by hand and not in the list is removed by
-  the next apply. Put the host in the list instead.
+- **Hand placement is left alone.** A descriptor put on ops1 by hand stays, and the collector drains
+  it, because the collector reads whatever `.json` file it finds. The role neither lists nor removes
+  it: put the host in the list, or remove the file yourself. A hand-placed file under a listed host's
+  name is replaced on the next apply and is the role's from then on.
+- **Order, so a crash forgets nothing.** The record names a host's file before the file is written,
+  and a record is dropped only after its descriptor is removed. A run that dies at any point leaves a
+  record that covers everything the role wrote, and the next run finishes the work. A record that
+  names a file not there is harmless. A directory or a name that is not a plain descriptor name
+  (lowercase letters, digits and hyphens, then `.json`) is never removed on the record's word, and a
+  link is unlinked and its target kept.
 
 ## State that survives a restart
 
@@ -174,16 +184,18 @@ names it.
 
 ## What it changes on a host
 
-| Path                                           | Owner     | Mode   | What                                                       |
-| ---------------------------------------------- | --------- | ------ | ---------------------------------------------------------- |
-| `/etc/branchleft/mail-collector`               | root      | `0755` | The directory of the files below                           |
-| `/etc/branchleft/mail-collector/descriptors`   | root      | `0755` | One JSON file per host in `mail_collector_hosts`, no other |
-| `.../descriptors/<slug>.json`                  | root      | `0644` | A host's descriptor: four public fields                    |
-| `/etc/branchleft/mail-collector/unit.env`      | root      | `0644` | The image and the account's ids, public values             |
-| `/etc/branchleft/mail-collector/collector.env` | root      | `0644` | The settings; absent while the collector is off            |
-| `/var/lib/branchleft/mail-collector`           | collector | `0700` | The collector's persistent state, written by the collector |
-| `/var/lib/branchleft/mail-collector/pins`      | collector | `0700` | The per-message target pins                                |
-| `/etc/systemd/system/mail-collector.service`   | root      | `0644` | The unit                                                   |
+| Path                                               | Owner     | Mode   | What                                                                     |
+| -------------------------------------------------- | --------- | ------ | ------------------------------------------------------------------------ |
+| `/etc/branchleft/mail-collector`                   | root      | `0755` | The directory of the files below                                         |
+| `/etc/branchleft/mail-collector/descriptors`       | root      | `0755` | One JSON file per host in `mail_collector_hosts`, and any placed by hand |
+| `.../descriptors/<slug>.json`                      | root      | `0644` | A host's descriptor: four public fields                                  |
+| `/etc/branchleft/mail-collector/descriptors.owned` | root      | `0755` | The record: one empty file for each descriptor the role wrote            |
+| `.../descriptors.owned/<slug>.json`                | root      | `0644` | Marks that descriptor as the role's to remove                            |
+| `/etc/branchleft/mail-collector/unit.env`          | root      | `0644` | The image and the account's ids, public values                           |
+| `/etc/branchleft/mail-collector/collector.env`     | root      | `0644` | The settings; absent while the collector is off                          |
+| `/var/lib/branchleft/mail-collector`               | collector | `0700` | The collector's persistent state, written by the collector               |
+| `/var/lib/branchleft/mail-collector/pins`          | collector | `0700` | The per-message target pins                                              |
+| `/etc/systemd/system/mail-collector.service`       | root      | `0644` | The unit                                                                 |
 
 It also makes the `mail-collector` account and group. It names, and never writes, the credentials
 file.
@@ -222,14 +234,16 @@ host. A second suite, `tests/unit/test_descriptors.py`, runs the role's own drai
 Ansible on the machine that runs the tests, against a scratch directory (no host), and reads the
 directory the way the collector reads it. It holds that a host missing from the list is missing from
 the drain list until it is listed, that a host removed from the list leaves the drain list, that a
-second run changes nothing, that a refused list leaves the directory as it was, and that a demo host
-with no demo mail domain stops the run. The Molecule `default` scenario converges twice with the
-inputs set, against stand-ins for `docker` and a made-up credentials file, with two hosts listed and
-a stale descriptor and a note already in the directory, and checks the files, owners and modes, the
-two descriptors, that the stale one is gone and the note is not, that the unit runs with the two env
-files, and that the owner's file is left alone. The `inert` scenario converges at the defaults and
-checks that nothing runs even with the credentials file in place, and that the hand-placed
-descriptors are removed.
+file the role did not write survives every apply (a hand-placed `.json`, a dot-file, a link), that a
+run killed at each step still lets the next one remove what an earlier run wrote, that a second run
+changes nothing, that a plan writes and removes nothing, that a refused list leaves the directory as
+it was, and that a demo host with no demo mail domain stops the run. The Molecule `default` scenario
+converges twice with the inputs set, against stand-ins for `docker` and a made-up credentials file,
+with two hosts listed and a hand-placed descriptor and a note already in the directory, and checks
+the files, owners and modes, the two descriptors and the record, that both hand-placed files are
+still there, that the unit runs with the two env files, and that the owner's file is left alone. The
+`inert` scenario converges at the defaults and checks that nothing runs even with the credentials
+file in place, and that the hand-placed descriptors are left alone.
 
 ## How it is delivered
 
@@ -257,7 +271,7 @@ unit and leaves the collector off.
   call is refused, a failed cycle, and the heartbeat is withheld. How the container reaches the
   address (bridge, or the host's network) is decided with that path, not here.
 - **The list is the owner's input.** The role writes whatever `mail_collector_hosts` holds and
-  nothing else; with the default empty list the directory is empty and the unit does not start.
+  nothing else; with the default empty list it writes none, and the unit does not start while the directory holds no file.
   The addresses are the owner's to set, and the one for a host behind a tunnel is the tunnel's
   alias, which does not exist yet. A removal reaches the directory at the next gated apply, not
   at once.

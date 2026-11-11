@@ -18,8 +18,9 @@ mail_collector_smtp_host: ''
 mail_collector_demo_mail_domain: ''
 # The hosts whose mail spool the collector drains, one entry each: slug, kind (demo or tenant) and
 # app_host_ip (the private address the collector dials, a host's alias address on ops1 when the
-# path to it is a tunnel). The role writes one descriptor file for each and removes every other
-# one, so this list is the drain list. Empty drains nothing.
+# path to it is a tunnel). The role writes one descriptor file for each and removes a descriptor it
+# wrote earlier when its host leaves the list; it never removes a file it did not write. Empty
+# adds no host.
 mail_collector_hosts: []
 mail_collector_smtp_port: 587
 mail_collector_smtp_secure: false

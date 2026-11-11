@@ -2,8 +2,9 @@
 # The role installs the mail collector on ops1 as a container unit. It makes the account the
 # collector runs as, its directories, the two public environment files and the unit, and starts
 # the unit only when the image is a real digest and a sending target is set. It never writes the
-# credentials file (the owner places it). It owns the descriptor directory's .json files: one for
-# each host in mail_collector_hosts, and none other, so the list is the drain list.
+# credentials file (the owner places it). It writes one descriptor for each host in
+# mail_collector_hosts and removes only a descriptor it wrote itself, so the list is the drain list
+# and a file put there by hand is never deleted.
 #
 # It touches only its own paths (vars/main.yml). Which host may apply it is the owner's list
 # (checks/host_roles.yml, R9); an in-role host test would be no control, because under the pull
@@ -246,9 +247,52 @@
     group: root
     mode: '0755'
 
-# --- The descriptors. One file for each host in the list, written first, then every other .json
-# file removed, so a host that leaves the list drops out on the next apply and the collector
-# forgets it at its next refresh. The collector reads only .json files and nothing else here.
+# --- The record of what the role wrote. One empty file in a directory of its own for each
+# descriptor the role has written, named for it. The role removes a descriptor only if the record
+# names it, so a file placed by hand is never deleted, whatever it is called. The record sits
+# outside the descriptor directory because the collector reads every .json name in that one.
+- name: Make the record directory
+  ansible.builtin.file:
+    path: '{{ mail_collector_descriptor_record_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Note the descriptor file names the listed hosts ask for
+  ansible.builtin.set_fact:
+    mail_collector_desired_files: >-
+      {{ mail_collector_hosts | map(attribute='slug') | product([mail_collector_descriptor_suffix]) | map('join') | sort | list }}
+
+# Read-only, so it also runs in check mode. A directory not yet made lists nothing.
+- name: Look for the record of the descriptors the role has written
+  ansible.builtin.find:
+    paths: '{{ mail_collector_descriptor_record_dir }}'
+    file_type: any
+    hidden: true
+    recurse: false
+    follow: false
+  register: mail_collector_record_found
+
+- name: Note which descriptor files the role has written
+  ansible.builtin.set_fact:
+    mail_collector_recorded_files: >-
+      {{ mail_collector_record_found.files | selectattr('isreg') | map(attribute='path') | map('basename')
+      | select('match', mail_collector_descriptor_name_pattern) | sort | list }}
+
+# --- The descriptors. The record names each host's file BEFORE the file is written, so a run that
+# dies after a write still leaves a record that covers it. A record that names a file not yet
+# written is harmless: the removal below only acts on a file that is there. The record is trimmed
+# LAST, after the removal, so a run that dies earlier forgets nothing it wrote.
+- name: Record each listed host's descriptor before writing it
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ mail_collector_descriptor_record_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ mail_collector_desired_files }}'
+
 # No handler: the collector re-reads the directory on its own refresh and is never restarted.
 - name: Write each listed host's descriptor
   ansible.builtin.template:
@@ -268,18 +312,26 @@
     paths: '{{ mail_collector_descriptor_dir }}'
     patterns: '*{{ mail_collector_descriptor_suffix }}'
     file_type: any
+    hidden: true
     recurse: false
     follow: false
   register: mail_collector_descriptor_found
 
-- name: Remove every descriptor file that no listed host names
+# A file that is not in the record is never listed here. A directory that bears a recorded name is
+# left alone, and a link is unlinked and its target kept.
+- name: Remove every descriptor file the role wrote that no listed host names
   ansible.builtin.file:
     path: '{{ mail_collector_descriptor_dir }}/{{ item }}'
     state: absent
   loop: >-
-    {{ mail_collector_descriptor_found.files | map(attribute='path') | map('basename')
-    | reject('in', mail_collector_hosts | map(attribute='slug') | product([mail_collector_descriptor_suffix]) | map('join') | list)
-    | sort | list }}
+    {{ mail_collector_descriptor_found.files | rejectattr('isdir') | map(attribute='path') | map('basename')
+    | intersect(mail_collector_recorded_files) | difference(mail_collector_desired_files) | sort | list }}
+
+- name: Forget each recorded descriptor that no listed host names
+  ansible.builtin.file:
+    path: '{{ mail_collector_descriptor_record_dir }}/{{ item }}'
+    state: absent
+  loop: '{{ mail_collector_recorded_files | difference(mail_collector_desired_files) | sort | list }}'
 
 - name: Make the state directory, owned by the collector account and closed to everyone else
   ansible.builtin.file:

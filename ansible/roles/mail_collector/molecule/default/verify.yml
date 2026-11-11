@@ -101,19 +101,38 @@
         - host-two
       register: mail_collector_v_descriptor_read
 
-    # One file for each listed host, holding the four public keys and nothing else; the stale
-    # descriptor of an earlier hand placement is gone; the file that is not a descriptor is not.
-    - name: Require one descriptor for each listed host, the stale one removed and a foreign file left
+    # One file for each listed host, holding the four public keys and nothing else; the descriptor
+    # placed by hand and not listed is still there, because the role removes only what it wrote.
+    - name: Require one descriptor for each listed host, a hand-placed descriptor and a foreign file left
       vars:
         written: '{{ mail_collector_v_descriptor_read.results | map(attribute="content") | map("b64decode") | map("from_json") | list }}'
         names: '{{ mail_collector_v_descriptors.files | map(attribute="path") | map("basename") | sort | list }}'
       ansible.builtin.assert:
         that:
-          - names == ['host-one.json', 'host-two.json', 'notes.txt']
+          - names == ['gone.json', 'host-one.json', 'host-two.json', 'notes.txt']
           - mail_collector_v_descriptors.files | selectattr('path', 'search', '[.]json$') | map(attribute='mode') | unique | list == ['0644']
           - mail_collector_v_descriptors.files | selectattr('path', 'search', '[.]json$') | map(attribute='pw_name') | unique | list == ['root']
           - "written[0] == {'appHostIp': '10.20.1.101', 'expiresAt': none, 'kind': 'tenant', 'slug': 'host-one'}"
           - "written[1] == {'appHostIp': '10.20.1.100', 'expiresAt': none, 'kind': 'demo', 'slug': 'host-two'}"
+        quiet: true
+
+    # The record names exactly the two descriptors the role wrote: not the hand-placed one.
+    - name: Look at the record of the descriptors the role wrote
+      ansible.builtin.find:
+        paths: '{{ scenario_record_dir }}'
+        file_type: any
+        hidden: true
+        recurse: false
+        follow: false
+      register: mail_collector_v_record
+
+    - name: Require the record to name the two listed hosts' descriptors and no other
+      ansible.builtin.assert:
+        that:
+          - mail_collector_v_record.files | map(attribute='path') | map('basename') | sort | list == ['host-one.json', 'host-two.json']
+          - mail_collector_v_record.files | map(attribute='mode') | unique | list == ['0644']
+          - mail_collector_v_record.files | map(attribute='pw_name') | unique | list == ['root']
+          - mail_collector_v_record.files | map(attribute='size') | unique | list == [0]
         quiet: true
 
     - name: Look at the unit's state
