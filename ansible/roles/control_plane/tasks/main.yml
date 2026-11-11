@@ -5,6 +5,34 @@
 # sign-in service (only on a host where the stack is not yet deployed), the stack's
 # unit and the deploy wrapper, and last the DOCKER-USER isolation policy.
 
+# ----- The host the stack shares with Nextcloud, settled before anything is written -----
+# Nextcloud's data is not rebuildable from configuration, and this host is its only copy. So
+# the run first refuses a configuration that names Nextcloud's project or volumes, then
+# refuses a host without room, and records what Nextcloud looks like. The module only reads,
+# so these run in check mode as well and a plan shows a refusal. The record is printed, and
+# holds no environment variable and no secret.
+- name: Refuse a deploy configured with Nextcloud's project name or one of its volume names
+  control_plane_preflight:
+    action: collisions
+    default_project: '{{ control_plane_project_name }}'
+    project_names: '{{ control_plane_project_names }}'
+    compose_documents: '{{ control_plane_compose_documents }}'
+
+- name: Refuse a host short of free memory or free disk and record Nextcloud before the deploy
+  control_plane_preflight:
+    action: snapshot
+    stack_project: '{{ control_plane_project_name }}'
+    min_available_memory_fresh_mib: '{{ control_plane_min_available_memory_fresh_mib }}'
+    min_available_memory_running_mib: '{{ control_plane_min_available_memory_running_mib }}'
+    min_free_disk_mib: '{{ control_plane_min_free_disk_mib }}'
+  register: control_plane_preflight_before
+  when: control_plane_preflight_reads_host | ansible.builtin.bool
+
+- name: Show the record taken before the deploy
+  ansible.builtin.debug:
+    var: control_plane_preflight_before.record
+  when: control_plane_preflight_reads_host | ansible.builtin.bool
+
 # ----- What the run needs, settled before anything is written -----
 # The two secrets are write-once, so a file that already holds a value never needs its
 # content given. A file that is absent or empty does, and without it the run stops here,
@@ -447,14 +475,14 @@
     state: absent
   when: control_plane_start_units | ansible.builtin.bool
 
-# The reconciler and its unit are stay-as-code programs: the role installs them
-# byte for byte from the repository and does not rewrite them. The installer the
+# The reconciler and its unit are programs the deploy_tooling role holds: this role installs
+# them byte for byte through links in its files/ and does not rewrite them. The installer the
 # runbook ran restarted the unit on every run; here the restart happens only
 # when the reconciler or its unit changed. The unit runs at every boot and is
 # PartOf docker.service, so it is reasserted after a Docker restart either way.
 - name: Install the DOCKER-USER isolation reconciler
   ansible.builtin.copy:
-    src: branchleft_docker_user_policy.sh
+    src: branchleft_docker_user_policy.py
     dest: '{{ control_plane_isolation_reconciler }}'
     owner: root
     group: root
@@ -487,3 +515,20 @@
   when:
     - control_plane_start_units | ansible.builtin.bool
     - control_plane_reconciler is ansible.builtin.changed or control_plane_isolation_unit_file is ansible.builtin.changed
+
+# ----- Nextcloud after the deploy -----
+# Last of all, so that everything the role did is inside the comparison. It fails the run when a
+# container, a volume or the Compose project of Nextcloud's differs from the record taken first.
+# If an earlier task failed the run has ended already and this one does not run.
+- name: Record Nextcloud after the deploy and fail if it changed
+  control_plane_preflight:
+    action: compare
+    stack_project: '{{ control_plane_project_name }}'
+    before: '{{ control_plane_preflight_before.record }}'
+  register: control_plane_preflight_after
+  when: control_plane_preflight_reads_host | ansible.builtin.bool
+
+- name: Show the records taken before and after the deploy
+  ansible.builtin.debug:
+    var: control_plane_preflight_after.record
+  when: control_plane_preflight_reads_host | ansible.builtin.bool
