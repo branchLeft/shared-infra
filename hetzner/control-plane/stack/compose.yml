@@ -35,6 +35,13 @@
 # under the host's measured available memory with a margin.
 name: control-plane
 
+# The edge's private address as ops1 sees it (hetzner-host/addressPlan.ts's HOST_IPS.edge1), the
+# one host that proxies to the two applications. They read it as their trusted proxy list
+# (PORTAL_TRUSTED_PROXIES, CONSOLE_TRUSTED_PROXIES), so the client address they log and
+# rate-limit on is the one the edge saw. Written once, taken by alias, and named in each
+# service's `environment:` because the env file only fills ${VAR} references. A test pins it.
+x-edge-private-address: &edge_private_address 10.20.1.10
+
 services:
   db:
     image: docker.io/library/postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -163,6 +170,7 @@ services:
       PORTAL_PUBLIC_ORIGIN: https://portal.publicpress.co.uk
       PORTAL_OUTPUTS_FILE: /run/secrets/identity-outputs
       PORTAL_DATABASE_URL_FILE: /run/secrets/portal-database-url
+      PORTAL_TRUSTED_PROXIES: *edge_private_address
       NODE_OPTIONS: --max-old-space-size=192
     secrets:
       - identity-outputs
@@ -203,6 +211,7 @@ services:
       CONSOLE_PUBLIC_ORIGIN: https://console.branchleft.co.uk
       CONSOLE_OUTPUTS_FILE: /run/secrets/identity-outputs
       CONSOLE_DATABASE_URL_FILE: /run/secrets/console-database-url
+      CONSOLE_TRUSTED_PROXIES: *edge_private_address
       NODE_OPTIONS: --max-old-space-size=192
     secrets:
       - identity-outputs

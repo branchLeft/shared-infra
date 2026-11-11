@@ -1,0 +1,7 @@
+---
+# The one input of the role, and not a secret (ANS-16). Empty means the role
+# prepares the stack and deploys nothing. A value is a digest of the attested
+# Percona Server image, written here in the same change that registers the digest
+# with the deploy program, so a reviewer sees both together. The role deploys it
+# once, on an empty host; it never replaces a running database's image.
+db_t1_image: ''

@@ -37,6 +37,10 @@ SECRETS = {
     # Both or neither: an unset repository secret is empty, and empty means no jump.
     "ssh_jump_host": "${{ secrets.SSH_JUMP_HOST }}",
     "ssh_jump_key": "${{ secrets.SSH_JUMP_KEY }}",
+    # The second hop, all three or none: an unset secret is empty and means no second hop.
+    "ssh_jump2_host": "${{ secrets.SSH_JUMP2_HOST }}",
+    "ssh_jump2_key": "${{ secrets.SSH_JUMP2_KEY }}",
+    "ssh_jump2_hosts": "${{ secrets.ANSIBLE_JUMP2_HOSTS }}",
 }
 # An exact tag (CI-5, and check_delivery.py), never a branch, a commit id or a major version.
 REUSABLE = re.compile(
@@ -108,7 +112,7 @@ def caller_findings(workflow: object) -> list[str]:
         )
     if job.get("secrets") != SECRETS:
         findings.append(
-            "secrets must name exactly the seven repository secrets and no apply key or inherit, "
+            "secrets must name exactly the ten repository secrets and no apply key or inherit, "
             f"got {job.get('secrets')!r}"
         )
     return findings
@@ -214,6 +218,42 @@ class DriftCallerTests(unittest.TestCase):
 
                 findings = self.weakened(drop_secret)
                 self.assertTrue(any("secrets must name exactly" in f for f in findings), findings)
+
+    def test_a_caller_without_a_second_jump_secret_is_named(self) -> None:
+        for name in ("ssh_jump2_host", "ssh_jump2_key", "ssh_jump2_hosts"):
+            with self.subTest(name=name):
+
+                def drop_secret(doc: dict[str, object], name: str = name) -> None:
+                    secrets = cast("dict[str, object]", self.job(doc)["secrets"])
+                    del secrets[name]
+
+                findings = self.weakened(drop_secret)
+                self.assertTrue(any("secrets must name exactly" in f for f in findings), findings)
+
+    def test_a_wrong_second_jump_secret_expression_is_named(self) -> None:
+        # The second hop's key is its own: never the first hop's, the check key or the apply key.
+        wrong = (
+            "",
+            "literal-value",
+            "${{ secrets.SSH_JUMP_KEY }}",
+            "${{ secrets.ANSIBLE_CHECK_KEY }}",
+            "${{ secrets.SSH_APPLY_KEY }}",
+            "${{ secrets.ANSIBLE_HOSTS }}",
+        )
+        for name in ("ssh_jump2_host", "ssh_jump2_key", "ssh_jump2_hosts"):
+            for value in wrong:
+                with self.subTest(name=name, value=value):
+
+                    def set_secret(
+                        doc: dict[str, object], name: str = name, value: str = value
+                    ) -> None:
+                        secrets = cast("dict[str, object]", self.job(doc)["secrets"])
+                        secrets[name] = value
+
+                    findings = self.weakened(set_secret)
+                    self.assertTrue(
+                        any("secrets must name exactly" in f for f in findings), findings
+                    )
 
     def test_a_wrong_jump_secret_expression_is_named(self) -> None:
         # The jump key must never be the check key, and a literal is no secret.

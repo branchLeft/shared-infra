@@ -1,0 +1,41 @@
+---
+# What the role expects to find on ops1 before it runs, and nothing of the role itself. The parents
+# are made by roles that run earlier on a real host (host_inputs for /etc/branchleft, and the
+# control plane and the Nextcloud stack for the others), so the test stands in for them here.
+# The canaries stand for the files of other roles and of the owner's data, which the role must
+# leave alone. ssh-keygen is what the role asserts and never installs, so it is installed here.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install the OpenSSH client, which supplies ssh-keygen
+      ansible.builtin.apt:
+        name: openssh-client
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Make the parent directories, as the roles that run before this one do
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /opt/branchleft
+        - /var/lib/branchleft
+        - /etc/branchleft/control-plane
+        - /var/lib/branchleft/control-plane
+        - /var/lib/nextcloud
+        - /var/lib/nextcloud/data
+
+    - name: Put a canary where another role's file would be
+      ansible.builtin.copy:
+        content: 'CANARY of {{ item }}, which the ring controller role must not touch.'
+        dest: '{{ item }}'
+        owner: root
+        group: root
+        mode: '0640'
+      loop: '{{ scenario_canaries }}'

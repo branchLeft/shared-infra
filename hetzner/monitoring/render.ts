@@ -460,8 +460,11 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // Caddy-emitted counter local to edge1, the same class of signal as
     // ServiceFlapping above, not an external blackbox_exporter result.
     // Not scoped to members_magic_link_per_ip -- posture.ts's `rateLimit`
-    // is 'off' today, but the expression has no zone label at all, so the
-    // general zone is covered automatically the day that flips.
+    // is 'enforcing', and the expression has no zone label at all, so the
+    // general zones are covered with the magic-link one. It deliberately
+    // excludes 172.16.0.0/12 keys, so real clients collapsed onto a Docker
+    // bridge address would not raise it: the blackbox probes seeing 429 are
+    // the tripwire for that.
     '      - alert: RateLimitDecliningRealClients',
     '        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[15m]) > 0',
     '        labels:',

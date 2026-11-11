@@ -1,16 +1,28 @@
 ---
-# The owner's values for the roles ops1 applies. check_enrolment.py (R10) allows this one key
-# and no other. It is the gated pull's step allow-list (pull_trigger_steps): the routine
-# control_plane_db steps ops1 may be asked to run. The program holds the closed list of ids and
-# fixes each tag to control_plane_db_ plus the id, and refuses a file that breaks either (the
-# role's README, "Step requests"). Strike an entry to stop that step being requested.
+# The owner's values for the roles ops1 applies. check_enrolment.py (R10) allows these seven keys
+# and no others: the step allow-list, the applications image, and five ring controller inputs.
+#
+# pull_trigger_steps is the gated pull's step allow-list: the routine control_plane_db steps
+# ops1 may be asked to run. The program holds the closed list of ids and fixes each tag to
+# control_plane_db_ plus the id, and refuses a file that breaks either (the role's README,
+# "Step requests"). Strike an entry to stop that step being requested.
 #
 # The words are typing guards in a public file, not secrets. What stops a step is the protected
 # environment whose only reviewer is the owner. The person dispatching reads the word here and
 # types it in; one that does not match the entry for that step is refused.
 #
-# control_plane_db_apps_image and control_plane_db_identity_hostnames are not set here. With
-# them unset every step refuses by name, which is the safe state until the image exists.
+# control_plane_db_apps_image is the applications image every step runs, pinned by digest as
+# NAME@sha256: and 64 lower-case hex digits (the role's control_plane_db_image_pattern; a tag is
+# not a pin). A plain apply runs no step, so setting it changes nothing on ops1 by itself: the
+# migrate marker is keyed by this digest, so the first migrate request after a new digest runs
+# the image's pending migrations and a repeat of the same digest is skipped. It is not the image
+# the running containers use: that is the deploy wrapper's pin (the control_plane role keeps the
+# running image unless control_plane_app_image is given), moved by
+# /usr/local/sbin/branchleft-deploy control-plane DIGEST. Moving this value to a newer digest is
+# a new migration request; the migrate step refuses an image that predates the migration login.
+#
+# control_plane_db_identity_hostnames is not set here. With it unset the identity step refuses
+# by name.
 pull_trigger_steps:
   - id: migrate
     tag: control_plane_db_migrate
@@ -21,3 +33,18 @@ pull_trigger_steps:
   - id: provision
     tag: control_plane_db_provision
     word: PROVISION-OPS1
+control_plane_db_apps_image: 'ghcr.io/branchleft/portal-apps@sha256:06f282c3701cc4ac192cf367c8e290a2c31bb8b77fc70c74555072f7d5631d28'
+#
+# The five ring_controller_host_ keys are the public inputs of the ring controller's host role.
+# All are empty text until the owner sets them, and an empty bundle digest keeps the controller's
+# timer disabled and stopped, so the role installs its units and makes its two keys and starts
+# nothing (the role's README, "Inert until a digest is set"). The role holds the shapes and
+# refuses a malformed value or a digest set with another input empty, naming the input and never
+# its value. The bundle digest and URL are set only when a bundle exists; the ledger URL, the
+# push remote and the remote's host-key line are set once the ledger's home is chosen. No repository
+# name is built into the role.
+ring_controller_host_bundle_sha256: ''
+ring_controller_host_bundle_url: ''
+ring_controller_host_ledger_url: ''
+ring_controller_host_ledger_push_remote: ''
+ring_controller_host_push_known_hosts: ''

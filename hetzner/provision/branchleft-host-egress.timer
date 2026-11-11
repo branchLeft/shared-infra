@@ -1,0 +1,17 @@
+# Re-runs branchleft-host-egress.service so a default route or resolver lost after
+# boot is put back within about a minute. The service is a no-op while both are
+# present, so the repeat changes nothing. Triggers the unit of the same name.
+[Unit]
+Description=branchLeft private host egress: periodic re-check (route + resolver)
+
+[Timer]
+# Shortly after boot, so the first run does not wait a full interval.
+OnBootSec=30s
+# Then about every minute after each run starts.
+OnUnitActiveSec=1min
+# Timers default to a one-minute accuracy window; this keeps the cadence real.
+AccuracySec=5s
+Unit=branchleft-host-egress.service
+
+[Install]
+WantedBy=timers.target

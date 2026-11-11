@@ -458,9 +458,11 @@ network loops that network's egress. The same ordering applies as for edge1 —
 the route and the forwarding must be live before a private-only host in that
 project is created, and `db-t1` stays off (`dbt1Enabled`) until they are. The
 forwarding has only been proven with Docker's FORWARD chain on edge1; prove it
-on `edge-t` with Docker running before `db-t1`'s first boot (for example from a
-network namespace on `edge-t` itself, which costs nothing), and record the
-result in the change that brings up `db-t1`.
+on `edge-t` with Docker running before `db-t1`'s first boot, and record the
+result in the change that brings up `db-t1`. The proof is scripted, from a network
+namespace on `edge-t` itself, which costs nothing: `tenants/RUNBOOK-edget-gateway-proof.md`
+runs it, with the red case (the masquerade deleted, then restored) and the SSH
+refusal probe.
 
 ### What this does not solve
 

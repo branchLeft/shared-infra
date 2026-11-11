@@ -51,6 +51,13 @@ branchleft.co.uk {
 		request_body {
 			max_size 1MiB
 		}
+		rate_limit {
+			zone website_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
 				key {http.request.remote.host}
@@ -84,6 +91,13 @@ www.branchleft.co.uk {
 	}
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		rate_limit {
+			zone website_redirect_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		redir https://branchleft.co.uk{uri} permanent
 	}
 }
@@ -121,6 +135,13 @@ blog.branchleft.co.uk {
 		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 64MiB
+		}
+		rate_limit {
+			zone blog_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
 		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
@@ -168,6 +189,13 @@ cloud.branchleft.co.uk {
 		request_body {
 			max_size 100MiB
 		}
+		rate_limit {
+			zone nextcloud1_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
 				key {http.request.remote.host}
@@ -201,6 +229,13 @@ book.branchleft.co.uk {
 	}
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		rate_limit {
+			zone nextcloud1_redirect_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		redir https://cloud.branchleft.co.uk{uri} permanent
 	}
 }
@@ -237,6 +272,13 @@ portal.publicpress.co.uk {
 		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 1MiB
+		}
+		rate_limit {
+			zone tenant-portal_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
 		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
@@ -291,6 +333,13 @@ console.branchleft.co.uk {
 		request_body {
 			max_size 1MiB
 		}
+		rate_limit {
+			zone owner-console_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
 				key {http.request.remote.host}
@@ -340,6 +389,13 @@ id.publicpress.co.uk {
 		request_body {
 			max_size 1MiB
 		}
+		rate_limit {
+			zone identity_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
 				key {http.request.remote.host}
@@ -386,6 +442,13 @@ ntfy.branchleft.co.uk {
 		request_body {
 			max_size 64KiB
 		}
+		rate_limit {
+			zone ntfy_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
 				key {http.request.remote.host}
@@ -422,6 +485,13 @@ publicpress.co.uk {
 		header Content-Security-Policy "default-src 'none'; script-src 'sha256-w/35BjbfbIobqf4027Od/3MrtXuoPOfz0mDmw8oBAMw='; style-src 'sha256-WitTrZr2RJmRb+kQYDiXpShVjJB36s9uUugm5Wdv1HQ='; img-src data:; font-src data:; connect-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
 		request_body {
 			max_size 1KiB
+		}
+		rate_limit {
+			zone publicpress-holding_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
 		}
 		appsec
 		header Content-Type "text/html; charset=utf-8"
@@ -496,6 +566,13 @@ http://edge-probe.invalid:8080 {
 	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		uri @break_glass_strip query -bl_break_glass
+		rate_limit {
+			zone probe_host_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
 				key {http.request.remote.host}
@@ -536,6 +613,13 @@ http://edge-probe.invalid:8080 {
 	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		uri @break_glass_strip query -bl_break_glass
+		rate_limit {
+			zone probe_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		rate_limit @members_magic_link {
 			zone members_magic_link_per_ip {
 				key {http.request.remote.host}

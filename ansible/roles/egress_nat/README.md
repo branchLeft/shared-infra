@@ -18,13 +18,18 @@ It does what two shell scripts did, in the same order:
    `branchleft_host_egress.sh` as `/usr/local/sbin/branchleft-host-egress` and
    `branchleft-host-egress.service` as its unit, makes systemd read the unit, enables
    it and runs it. This is for every host.
-2. `hetzner/provision/nat-gateway.sh`: the same for `branchleft_nat.sh` as
-   `/usr/local/sbin/branchleft-nat` and `branchleft-nat.service`. This is for the one
-   gateway host, and the role does it only when `egress_nat_gateway_enabled` is true.
+2. `hetzner/provision/nat-gateway.sh`: the same for the NAT gateway reconciler,
+   `files/branchleft_nat.py`, installed as `/usr/local/sbin/branchleft-nat`, with its unit
+   `files/branchleft-nat.service`. This is for the one gateway host, and the role does it
+   only when `egress_nat_gateway_enabled` is true. The bash program it replaces,
+   `hetzner/provision/branchleft_nat.sh`, is still installed by the hand installer
+   `nat-gateway.sh` until that installer is removed. Running the installer on a host where
+   the role applies would replace the Python program with the bash one, so it must not be run there.
 
-The two reconcilers themselves (`branchleft_host_egress.sh` and `branchleft_nat.sh`)
-are programs that stay as code. The role installs them and rewrites none: they are
-the files in `hetzner/provision`, and the copy tasks read them from there in place (below).
+The two reconcilers themselves are programs that stay as code. The role installs them and
+rewrites none. The host egress reconciler, `branchleft_host_egress.sh`, is in
+`hetzner/provision`; the NAT gateway reconciler, `branchleft_nat.py`, and its unit are in
+this role's `files/`. The copy tasks read each one in place (below).
 
 It does not:
 
@@ -63,7 +68,7 @@ named limits below describe.
 `egress_nat_gateway_enabled` (default false). None of the role's variables is a
 secret and the role handles no secret.
 
-`vars/main.yml` holds the constants of the two reconcilers (their source files, their
+`vars/main.yml` holds the constants of the two reconcilers (their source paths, their
 install paths and the unit names). They are not inputs; a caller cannot override them.
 
 The role leaves facts after a failed guard, which a caller or a test reads:
@@ -112,10 +117,12 @@ rule and two forwarding rules. The role does not touch those.
 
 ### One home for every file
 
-The role holds no copy of the files it delivers. Each copy task's `src` is the same-named
-file in `hetzner/provision`, built from `role_path` (`{{ role_path }}/../../../hetzner/provision/`),
-so a change to a reconciler or a unit in its own directory is what the next apply delivers,
-and the role cannot drift from it. `ansible/checks/check_role_paths.py` fails if another
+The role holds no copy of the files it delivers. Each copy task's `src` is the file itself,
+named in `vars/main.yml` from `role_path`: the host egress pair in `hetzner/provision`, and
+the NAT program and unit in `files/`. A change to one of them is what the next apply delivers,
+and the role cannot drift from it. The unit `branchleft-nat.service` also has a copy in
+`hetzner/provision`, which the hand installer `nat-gateway.sh` reads until that installer is
+removed; a unit test fails when the two copies differ. `ansible/checks/check_role_paths.py` fails if another
 role writes a path this role writes.
 
 ## The revert guard
@@ -195,14 +202,14 @@ Each row is an edit made with the editor, one run, and a restore. The run is the
 make the row's edit and run the command shown to see the message. The unit tests run in
 seconds; the scenario run is the harness over the role.
 
-| Control                                                   | The edit                                                                                   | The step that fails                                                        |
-| --------------------------------------------------------- | ------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| Masquerade is limited to the estate's subnet as source    | in `hetzner/provision/branchleft_nat.sh`, drop `-s "$SUBNET"` from the `MASQUERADE` rule   | harness `verify`: `egress_nat_verify_masquerade \| length == 1`            |
-| Forwarding stays one-way (return traffic only when known) | in the same file, drop `-m conntrack --ctstate ESTABLISHED,RELATED` from the return rule   | harness `verify`: `egress_nat_verify_forward_in \| length == 1`            |
-| A failed update puts the previous reconciler back         | in `tasks/_reconciler.yml`, make the task "Put the previous reconciler back" `when: false` | harness `converge`: the reconciler's checksum equals the earlier release's |
-| Only the gateway host gets the NAT half                   | in `tasks/main.yml`, replace the gateway task's `when` with `when: true`                   | unit test `test_nat_gateway_is_gated_on_the_switch`                        |
+| Control                                                   | The edit                                                                                          | The step that fails                                                        |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Masquerade is limited to the estate's subnet as source    | in `files/branchleft_nat.py`, drop `-s`, `subnet` from the `MASQUERADE` rule                      | harness `verify`: `egress_nat_verify_masquerade \| length == 1`            |
+| Forwarding stays one-way (return traffic only when known) | in the same file, drop `-m`, `conntrack`, `--ctstate`, `ESTABLISHED,RELATED` from the return rule | harness `verify`: `egress_nat_verify_forward_in \| length == 1`            |
+| A failed update puts the previous reconciler back         | in `tasks/_reconciler.yml`, make the task "Put the previous reconciler back" `when: false`        | harness `converge`: the reconciler's checksum equals the earlier release's |
+| Only the gateway host gets the NAT half                   | in `tasks/main.yml`, replace the gateway task's `when` with `when: true`                          | unit test `test_nat_gateway_is_gated_on_the_switch`                        |
 
-The first two edits are to the shell reconciler, not to the role, because the rule
+The first two edits are to the NAT reconciler, not to the role, because the rule
 shapes live there and the role delivers it unchanged; the scenario reads the rules the
 installed reconciler left, so it fails when the reconciler stops inserting the right ones.
 
@@ -231,20 +238,26 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after 
 approval of its protected environment. A plan job shows the host's diff in check mode
 first; after the approval the host pulls that exact commit of `main` and applies it, and
 a second run must report zero changes. Nothing is applied from a laptop. The role is
-wired into `ansible/playbooks/edge1.yml`, after `host_baseline` (Docker and `iptables`
-come from there) and before `ci_login`, and nowhere else. The live run waits on the gate.
-The switch `egress_nat_gateway_enabled` is set in edge1's play vars, not in an inventory
-(the inventory trees load no group variables), and the enrolment checker pins it to edge1
-in `HOST_PLAY_VARS` (R2) so the role entry stays bare and no other host can become a second
-gateway; `ansible/checks/test_egress_nat_single_gateway.py` holds that. The provisioning
-runbook's gateway step points at this role. The hand steps for a host that is not on the
-gateway list stay: `05-configure-host-egress.sh` is still run by hand there.
+wired into three playbooks, each after `host_baseline` (Docker and `iptables` come from
+there): `ansible/playbooks/edge1.yml` (before `ci_login`), `ansible/playbooks/edget.yml`
+(before `ci_jump`) and `ansible/playbooks/dbt1.yml` (before `deploy_verifier`), and no
+other. The live run waits on the gate.
+edge1 and edget are the two gateways. Their switch `egress_nat_gateway_enabled` is set in
+their play vars, not in an inventory (the inventory trees load no group variables), and the
+enrolment checker pins it to exactly those two hosts in `HOST_PLAY_VARS` (R2), so no other
+host can become a second gateway. dbt1 applies the role bare with the switch unset, which
+installs the host egress half only: the reconciler and unit that give a host with no public
+address its default route and resolver, and nothing that forwards traffic.
+`ansible/checks/test_egress_nat_single_gateway.py` holds all of that. The provisioning
+runbook's gateway step points at this role. The hand step `05-configure-host-egress.sh` stays
+for a host that no playbook applies this role to yet.
 
 ## How to change it safely
 
 1. To change what a reconciler does, change `hetzner/provision/branchleft_host_egress.sh`
-   or `hetzner/provision/branchleft_nat.sh`, and its own tests there; the role delivers
-   them as they are. To change a unit, change the `.service` file there. The role's unit
+   or `files/branchleft_nat.py`; the role delivers them as they are, and the NAT program's
+   tests are in `hetzner/provision/test_branchleft_nat.py`. To change a unit, change the
+   `.service` file there; for the NAT unit, change both copies so that they stay the same bytes. The role's unit
    test fails if a unit stops running the reconciler at the path the role installs it to.
 2. To change a path or a unit name, change `vars/main.yml`, the unit's `ExecStart`, and the
    paths in `molecule/default/verify.yml` and `converge.yml` together.

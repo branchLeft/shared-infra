@@ -378,3 +378,282 @@ describe('sshSourceIp', () => {
     expect(created.slice(before)).toEqual([]);
   });
 });
+
+describe('adopting a server made by hand', () => {
+  // What the engine is asked to do, not what the provider mock returns: the
+  // `ignoreChanges` list and the import id are request fields the mocks never
+  // see, so they are read where the SDK hands the request to the monitor.
+  type Registration = {
+    type: string;
+    name: string;
+    importId: string;
+    ignoreChanges: string[];
+    inputs: Record<string, unknown>;
+  };
+  type RegisterRequest = {
+    getType(): string;
+    getName(): string;
+    getImportid(): string;
+    getIgnorechangesList(): string[];
+    getObject(): { toJavaScript(): unknown };
+  };
+  const registrations: Registration[] = [];
+
+  beforeAll(() => {
+    const monitor = pulumi.runtime.getMonitor() as unknown as {
+      registerResource(req: RegisterRequest, callback: (err: unknown, resp: unknown) => void): void;
+    };
+    const register = monitor.registerResource.bind(monitor);
+    monitor.registerResource = (req, callback) => {
+      registrations.push({
+        type: req.getType(),
+        name: req.getName(),
+        importId: req.getImportid(),
+        ignoreChanges: req.getIgnorechangesList(),
+        inputs: req.getObject().toJavaScript() as Record<string, unknown>,
+      });
+      register(req, callback);
+    };
+  });
+
+  const SERVER = 'hcloud:index/server:Server';
+  const PRIMARY_IP = 'hcloud:index/primaryIp:PrimaryIp';
+  const FIREWALL_ATTACHMENT = 'hcloud:index/firewallAttachment:FirewallAttachment';
+
+  async function adopt(args: Record<string, unknown>) {
+    const before = registrations.length;
+    await build(args);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const made = registrations.slice(before);
+    const find = (type: string, name?: string) =>
+      made.find((r) => r.type === type && (name === undefined || r.name === name));
+    return { made, find };
+  }
+
+  const PUBLIC = {
+    role: 'edge',
+    privateIp: '10.20.1.210',
+    adopt: { serverId: '1001', ipv4Id: '2001', ipv6Id: '2002' },
+  };
+  const PRIVATE = { role: 'db', privateIp: '10.20.1.200', publicNetworking: false };
+
+  it('leaves a host with no adopt input exactly as it was: no import, the same three ignored fields', async () => {
+    const { made, find } = await adopt({ name: 'plain1', role: 'edge' });
+    expect(made.every((r) => r.importId === '')).toBe(true);
+    expect(find(SERVER)?.ignoreChanges).toEqual(['userData', 'image', 'sshKeys']);
+    expect(find(FIREWALL_ATTACHMENT)).toBeUndefined();
+    expect(find(SERVER)?.inputs.firewallIds).toBeDefined();
+  });
+
+  // A server this program creates has its public interface set at creation, so a
+  // change to the declared publicNets is a real change to apply, never to hide.
+  it.each([
+    ['public', { name: 'plain-pub', role: 'edge' }],
+    ['private-only', { name: 'plain-priv', ...PRIVATE }],
+  ] as const)(
+    'declares and does not ignore publicNets on a created %s host',
+    async (_label, args) => {
+      const { find } = await adopt(args);
+      expect(find(SERVER)?.ignoreChanges).not.toContain('publicNets');
+      expect(find(SERVER)?.inputs.publicNets).toBeDefined();
+    }
+  );
+
+  it('imports the server and both primary IPs by id, and creates no second pair', async () => {
+    const { made, find } = await adopt({ name: 'adopt-ids', ...PUBLIC });
+    expect(find(SERVER)?.importId).toBe('1001');
+    expect(find(PRIMARY_IP, 'adopt-ids-ipv4')?.importId).toBe('2001');
+    expect(find(PRIMARY_IP, 'adopt-ids-ipv6')?.importId).toBe('2002');
+    expect(made.filter((r) => r.type === PRIMARY_IP)).toHaveLength(2);
+  });
+
+  // The replacement control. userData, sshKeys and image are create-time-only at
+  // the provider: a console-made server differs from the component on all three,
+  // and a diff on any of them proposes destroying a live host. Red when any is
+  // dropped from the list; firewallIds is the fourth, because the owner's own
+  // firewall is on the server and the component must never plan to rewrite the set.
+  it.each(['import', 'converge'] as const)(
+    'never lets a create-time-only field plan a replacement, at the %s stage',
+    async (stage) => {
+      const { find } = await adopt({
+        name: `adopt-ignore-${stage}`,
+        ...PUBLIC,
+        adopt: { ...PUBLIC.adopt, stage },
+      });
+      const ignored = find(SERVER)?.ignoreChanges ?? [];
+      for (const field of ['userData', 'sshKeys', 'image', 'firewallIds']) {
+        expect(ignored, field).toContain(field);
+      }
+    }
+  );
+
+  // The power-off-and-delete control. The provider reads a server without ever
+  // setting its public_net, so an adopted server has none in state and the first
+  // apply sees the declared publicNets as changed. It then powers the server off,
+  // unassigns the primary IP on it and, because the old set held no id, deletes
+  // that primary IP before trying to assign the id it just deleted. Red when
+  // publicNets is dropped from the list for an adopted server at either stage.
+  it.each(['import', 'converge'] as const)(
+    'never lets publicNets power off the server and delete its primary IP, at the %s stage',
+    async (stage) => {
+      const { find } = await adopt({
+        name: `adopt-pubnets-${stage}`,
+        ...PUBLIC,
+        adopt: { ...PUBLIC.adopt, stage },
+      });
+      expect(find(SERVER)?.ignoreChanges).toContain('publicNets');
+    }
+  );
+
+  it('still declares the primary IPs as separate resources and the address ids on publicNets', async () => {
+    const { made, find } = await adopt({ name: 'adopt-pubnets-decl', ...PUBLIC });
+    expect(made.filter((r) => r.type === PRIMARY_IP)).toHaveLength(2);
+    const nets = find(SERVER)?.inputs.publicNets as { ipv4Enabled: boolean }[] | undefined;
+    expect(nets?.[0]?.ipv4Enabled).toBe(true);
+  });
+
+  it('declares no firewallIds on an adopted server, so its live set is never rewritten', async () => {
+    const { find } = await adopt({ name: 'adopt-fwids', ...PUBLIC });
+    expect(find(SERVER)?.inputs.firewallIds).toBeUndefined();
+  });
+
+  it('attaches its own firewall by attachment, which adds to the live set and removes nothing', async () => {
+    const { find } = await adopt({ name: 'adopt-fw', ...PUBLIC });
+    const attachment = find(FIREWALL_ATTACHMENT, 'adopt-fw-firewall-attachment');
+    expect(attachment).toBeDefined();
+    expect(attachment?.inputs.serverIds).toHaveLength(1);
+    expect(attachment?.inputs.firewallId).toBeDefined();
+  });
+
+  it('while importing, leaves alone only what the owner and the next stage settle', async () => {
+    const { find } = await adopt({ name: 'adopt-stage1', ...PUBLIC });
+    expect(find(SERVER)?.ignoreChanges).toEqual(
+      expect.arrayContaining(['deleteProtection', 'rebuildProtection', 'labels'])
+    );
+    for (const name of ['adopt-stage1-ipv4', 'adopt-stage1-ipv6']) {
+      expect(find(PRIMARY_IP, name)?.ignoreChanges).toEqual(
+        expect.arrayContaining(['name', 'autoDelete', 'deleteProtection', 'labels'])
+      );
+    }
+    // The addresses are imported by id as PrimaryIp resources, which is where they are
+    // checked; the server's own publicNets is ignored (see the control above).
+    expect(find(SERVER)?.ignoreChanges).toContain('publicNets');
+    expect(find(SERVER)?.ignoreChanges).not.toContain('networks');
+  });
+
+  it('at converge, declares protection, labels and address settings, so they are updated in place', async () => {
+    const { find } = await adopt({
+      name: 'adopt-stage2',
+      ...PUBLIC,
+      adopt: { ...PUBLIC.adopt, stage: 'converge' },
+    });
+    const ignored = [
+      ...(find(SERVER)?.ignoreChanges ?? []),
+      ...(find(PRIMARY_IP, 'adopt-stage2-ipv4')?.ignoreChanges ?? []),
+      ...(find(PRIMARY_IP, 'adopt-stage2-ipv6')?.ignoreChanges ?? []),
+    ];
+    for (const field of ['deleteProtection', 'rebuildProtection', 'labels', 'autoDelete', 'name']) {
+      expect(ignored, field).not.toContain(field);
+    }
+    expect(find(PRIMARY_IP, 'adopt-stage2-ipv4')?.inputs.autoDelete).toBe(false);
+    expect(find(PRIMARY_IP, 'adopt-stage2-ipv4')?.inputs.deleteProtection).toBe(true);
+  });
+
+  describe('a private-only host', () => {
+    it('imports the server alone and declares no primary IP', async () => {
+      const { made, find } = await adopt({
+        name: 'adopt-priv1',
+        ...PRIVATE,
+        adopt: { serverId: '1002' },
+      });
+      expect(find(SERVER)?.importId).toBe('1002');
+      expect(made.filter((r) => r.type === PRIMARY_IP)).toHaveLength(0);
+    });
+
+    it('leaves its network and public interface to the console steps while importing', async () => {
+      const { find } = await adopt({
+        name: 'adopt-priv2',
+        ...PRIVATE,
+        adopt: { serverId: '1002' },
+      });
+      expect(find(SERVER)?.ignoreChanges).toEqual(
+        expect.arrayContaining(['networks', 'publicNets'])
+      );
+    });
+
+    it('checks its network again at converge, but never rewrites its public interface', async () => {
+      const { find } = await adopt({
+        name: 'adopt-priv3',
+        ...PRIVATE,
+        adopt: { serverId: '1002', stage: 'converge' },
+      });
+      expect(find(SERVER)?.ignoreChanges).not.toContain('networks');
+      expect(find(SERVER)?.ignoreChanges).toContain('publicNets');
+      expect(find(SERVER)?.inputs.publicNets).toEqual([{ ipv4Enabled: false, ipv6Enabled: false }]);
+    });
+
+    // A Hetzner Cloud Firewall filters only a server's public interface, and a private-only
+    // host has none: the provider refuses the attachment with "no public network interfaces
+    // found, firewall cannot be attached to server". Red when a private-only host is given
+    // a FirewallAttachment at either stage. Its own Firewall stays declared (see below).
+    it.each(['import', 'converge'] as const)(
+      'never attaches a firewall to a private-only host, at the %s stage',
+      async (stage) => {
+        const { made, find } = await adopt({
+          name: `adopt-priv-fw-${stage}`,
+          ...PRIVATE,
+          adopt: { serverId: '1002', stage },
+        });
+        expect(
+          made.filter((r) => r.type === FIREWALL_ATTACHMENT),
+          'a private-only host has no public interface, so it must get no FirewallAttachment'
+        ).toHaveLength(0);
+        expect(
+          find('hcloud:index/firewall:Firewall'),
+          'the stack still declares its own Firewall for a private-only host'
+        ).toBeDefined();
+      }
+    );
+
+    it('never attaches a firewall to a private-only host that is not adopted', async () => {
+      const { made } = await adopt({ name: 'plain-priv-fw', ...PRIVATE });
+      expect(made.filter((r) => r.type === FIREWALL_ATTACHMENT)).toHaveLength(0);
+    });
+  });
+
+  // The public control: a public adopted host still gets exactly one attachment at each stage.
+  it.each(['import', 'converge'] as const)(
+    'attaches exactly one firewall to a public adopted host, at the %s stage',
+    async (stage) => {
+      const { made } = await adopt({
+        name: `adopt-pub-fw-${stage}`,
+        ...PUBLIC,
+        adopt: { ...PUBLIC.adopt, stage },
+      });
+      expect(
+        made.filter((r) => r.type === FIREWALL_ATTACHMENT),
+        'a public adopted host gets one FirewallAttachment'
+      ).toHaveLength(1);
+    }
+  );
+
+  describe('refuses a bad input before creating anything', () => {
+    it.each([
+      ['a non-numeric server id', { ...PUBLIC, adopt: { ...PUBLIC.adopt, serverId: 'edge-t' } }],
+      ['a zero-led server id', { ...PUBLIC, adopt: { ...PUBLIC.adopt, serverId: '0123' } }],
+      ['a public host with no IPv4 id', { ...PUBLIC, adopt: { serverId: '1001', ipv6Id: '2002' } }],
+      ['a public host with no IPv6 id', { ...PUBLIC, adopt: { serverId: '1001', ipv4Id: '2001' } }],
+      ['an unknown stage', { ...PUBLIC, adopt: { ...PUBLIC.adopt, stage: 'later' } }],
+      [
+        'a private-only host given a primary IP id',
+        { ...PRIVATE, adopt: { serverId: '1002', ipv6Id: '2002' } },
+      ],
+    ])('%s', (_label, args) => {
+      const before = created.length;
+      expect(() => new Host({ ...BASE, name: 'adopt-bad', ...args } as never)).toThrow(
+        /adopt|adopting/
+      );
+      expect(created.slice(before)).toEqual([]);
+    });
+  });
+});

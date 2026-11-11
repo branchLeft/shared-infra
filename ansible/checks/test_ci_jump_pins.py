@@ -44,6 +44,8 @@ HOMES = (
 OWNER_VARS = "ansible/owner_vars"
 SCAN_CITATION = ("ssh-check-hosts/action.yml", "v1.0.19", "line 434")
 ROLE_PREFIX = "ci_jump_"
+# The variables whose default is empty: the role ships with no address, destination or key.
+INERT_EMPTY = ("ci_jump_own_address", "ci_jump_destinations", "ci_jump_keys")
 # The jump account's name is the owner's secret. It is the one role variable that is not in an
 # owner_vars file: it reaches the role through the host's private inputs file, set by host_inputs.
 SECRET_VARIABLE = "ci_jump_user"  # noqa: S105
@@ -343,8 +345,42 @@ def _template_findings(root: Path, module: types.ModuleType) -> list[str]:
     return found
 
 
+def _enabled_findings(host: str, values: dict[str, object]) -> list[str]:
+    """The findings for a host whose file turns the role on: an address, destinations and keys.
+
+    What an address, a destination or a key may look like is the role's rule alone, in its
+    module; this holds only that none is missing or of the wrong shape, so a half-filled file
+    cannot pass for an enabled host.
+    """
+    found: list[str] = []
+    address = values.get("ci_jump_own_address")
+    if not isinstance(address, str) or not address:
+        found.append(f"owner_vars/{host}.yml enables ci_jump without ci_jump_own_address")
+    destinations = values.get("ci_jump_destinations")
+    if (
+        not isinstance(destinations, list)
+        or not destinations
+        or not all(isinstance(item, str) and item for item in destinations)
+    ):
+        found.append(
+            f"owner_vars/{host}.yml enables ci_jump without a list of ci_jump_destinations"
+        )
+    keys = values.get("ci_jump_keys")
+    if (
+        not isinstance(keys, list)
+        or not keys
+        or not all(isinstance(item, dict) and set(item) == {"key"} for item in keys)
+    ):
+        found.append(f"owner_vars/{host}.yml enables ci_jump without a list of ci_jump_keys")
+    return found
+
+
 def _interface_findings(root: Path, role: Path) -> list[str]:
-    """The spec, the defaults and every owner's file name the same variables, and ship inert."""
+    """The spec, the defaults and every owner's file name the same variables.
+
+    The defaults ship inert. A host's file ships the defaults too, unless it turns the role on
+    (the flag true), and then it must bring an address, destinations and keys.
+    """
     found: list[str] = []
     spec = yaml.safe_load((role / "meta" / "argument_specs.yml").read_text(encoding="utf-8"))
     options = set(spec["argument_specs"]["main"]["options"])
@@ -363,6 +399,13 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
         found.append(f"{SECRET_VARIABLE} must not be a required argument (it is optional input)")
     if defaults.get("ci_jump_manage_keys") is not False:
         found.append("ci_jump_manage_keys must default to false")
+    # The role ships inert: no default carries an address, a destination or a key. This is the
+    # pin on the role itself; a host that enables the role is judged by its own file below.
+    found.extend(
+        f"{name} must default to empty (the role must ship inert)"
+        for name in INERT_EMPTY
+        if defaults.get(name) not in ("", [])
+    )
     carrying = {
         host: values
         for host, values in _owner_files(root).items()
@@ -377,12 +420,16 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
             )
         if in_file - {SECRET_VARIABLE} != options - {SECRET_VARIABLE}:
             found.append(f"owner_vars/{host}.yml names other ci_jump variables than the spec")
-        if any(
+        if values.get("ci_jump_manage_keys") is True:
+            # The owner has turned the role on for this host: the values it brings must be
+            # complete, because the role refuses a missing address, destination or key.
+            found.extend(_enabled_findings(host, values))
+        elif any(
             values.get(name) != value for name, value in defaults.items() if name != SECRET_VARIABLE
         ):
             found.append(
                 f"owner_vars/{host}.yml does not ship the role's defaults"
-                " (the role must ship inert)"
+                " (a host that does not enable the role must ship it inert)"
             )
     # Every host that lists the role has its own owner's file with the variables, and the account's
     # name in the host's private inputs row, so the loader sets it before the role runs.
@@ -767,19 +814,89 @@ class Sabotage(unittest.TestCase):
             "ci_jump_manage_keys must default to false",
         )
 
-    def test_an_owner_file_that_ships_the_role_on_is_red(self) -> None:
+    def _enabled(self) -> dict[str, object]:
+        """The values of a host the owner has turned the role on for, complete."""
+        return {
+            "ci_jump_manage_keys": True,
+            "ci_jump_own_address": "10.0.0.7",
+            "ci_jump_destinations": ["10.0.0.7", "db-t1"],
+            "ci_jump_keys": [{"key": f"{KEY_TYPE} {SAMPLE_BODY} a comment"}],
+        }
+
+    def _findings_with_owner_file(self, host: str, values: dict[str, object]) -> list[str]:
+        """The findings with one host's owner file replaced, then the file put back and green."""
+        path = self.root / OWNER_VARS / f"{host}.yml"
+        original = path.read_text(encoding="utf-8")
+        path.write_text(yaml.safe_dump(values), encoding="utf-8")
+        red = problems(self.root)
+        path.write_text(original, encoding="utf-8")
+        self.assertEqual(problems(self.root), [])
+        return red
+
+    def test_a_host_the_owner_has_enabled_is_accepted(self) -> None:
+        """The positive case: a complete enabled file passes every other pin of this file."""
+        self.assertEqual(self._findings_with_owner_file("edget", self._enabled()), [])
+
+    def test_an_enabled_host_that_carries_the_account_name_is_red(self) -> None:
+        values = self._enabled() | {SECRET_VARIABLE: SAMPLE_NAME}
+        red = self._findings_with_owner_file("edget", values)
+        self.assertTrue(any("carries ci_jump_user" in finding for finding in red), red)
+
+    def test_an_enabled_host_with_partial_values_is_red(self) -> None:
+        for name, value, expected in (
+            ("ci_jump_own_address", "", "without ci_jump_own_address"),
+            ("ci_jump_destinations", [], "without a list of ci_jump_destinations"),
+            ("ci_jump_destinations", "10.0.0.7", "without a list of ci_jump_destinations"),
+            ("ci_jump_destinations", ["10.0.0.7", 22], "without a list of ci_jump_destinations"),
+            ("ci_jump_keys", [], "without a list of ci_jump_keys"),
+            ("ci_jump_keys", [{"key": "k", "to": ["x"]}], "without a list of ci_jump_keys"),
+        ):
+            with self.subTest(name=name, value=value):
+                red = self._findings_with_owner_file("edget", self._enabled() | {name: value})
+                self.assertTrue(any(expected in finding for finding in red), red)
+
+    def test_an_enabled_host_that_leaves_a_variable_out_is_red(self) -> None:
+        values = {k: v for k, v in self._enabled().items() if k != "ci_jump_keys"}
+        red = self._findings_with_owner_file("edget", values)
+        self.assertTrue(any("names other ci_jump variables than the spec" in f for f in red), red)
+
+    def test_a_host_that_is_not_enabled_but_holds_values_is_red(self) -> None:
+        """Destinations or keys under a flag that is off are not inert: only the flag set to true
+        (the bool) turns a host's file into an enabled one."""
+        for flag in (False, "true", 1):
+            with self.subTest(flag=flag):
+                red = self._findings_with_owner_file(
+                    "edget", self._enabled() | {"ci_jump_manage_keys": flag}
+                )
+                self.assertTrue(any("does not ship the role's defaults" in f for f in red), red)
+
+    def test_a_default_that_carries_a_destination_is_red(self) -> None:
         self._red_then_green(
-            f"{OWNER_VARS}/edge1.yml",
-            "ci_jump_manage_keys: false",
-            "ci_jump_manage_keys: true",
-            "does not ship the role's defaults",
+            f"{ROLE}/defaults/main.yml",
+            "ci_jump_destinations: []",
+            "ci_jump_destinations: ['10.0.0.7']",
+            "ci_jump_destinations must default to empty",
+        )
+
+    def test_a_default_that_carries_an_address_or_a_key_is_red(self) -> None:
+        self._red_then_green(
+            f"{ROLE}/defaults/main.yml",
+            "ci_jump_own_address: ''",
+            "ci_jump_own_address: '10.0.0.7'",
+            "ci_jump_own_address must default to empty",
+        )
+        self._red_then_green(
+            f"{ROLE}/defaults/main.yml",
+            "ci_jump_keys: []",
+            "ci_jump_keys: [{key: a}]",
+            "ci_jump_keys must default to empty",
         )
 
     def test_an_owner_file_that_publishes_the_account_name_is_red(self) -> None:
         self._red_then_green(
             f"{OWNER_VARS}/edge1.yml",
-            "ci_jump_keys: []",
-            "ci_jump_keys: []\nci_jump_user: gate-hopper",
+            "ci_jump_manage_keys: true",
+            "ci_jump_manage_keys: true\nci_jump_user: gate-hopper",
             "carries ci_jump_user",
         )
 

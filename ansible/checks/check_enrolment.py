@@ -63,9 +63,22 @@ JUMP_VARS = frozenset(
 # keys, nor the keys without the role.
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
+APPS_IMAGE_KEY = "control_plane_db_apps_image"
+# The five inputs of the ring_controller_host role. Each is public text that is empty until the
+# owner sets it, and an empty digest keeps the controller's timer off. The role holds the shapes
+# (its vars/main.yml patterns), so only the type is read here, as for APPS_IMAGE_KEY.
+RING_CONTROLLER_TEXT_KEYS = frozenset(
+    (
+        "ring_controller_host_bundle_sha256",
+        "ring_controller_host_bundle_url",
+        "ring_controller_host_ledger_url",
+        "ring_controller_host_ledger_push_remote",
+        "ring_controller_host_push_known_hosts",
+    )
+)
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS,
-    "ops1": frozenset(("pull_trigger_steps",)),
+    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)) | RING_CONTROLLER_TEXT_KEYS,
 }
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
@@ -156,6 +169,7 @@ HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
     "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
     "edget": {"egress_nat_gateway_enabled": True},
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
+    "dbt1": {"deploy_tooling_host_class": "internal"},
 }
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
 HOST_ROLES_FILE = "checks/host_roles.yml"
@@ -747,6 +761,15 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     problems: list[str] = []
     if STEPS_KEY in doc:
         problems.extend(_step_shape_problems(doc[STEPS_KEY]))
+    # Only that it is text. That it is NAME@sha256: and 64 hex digits is the role's pattern
+    # (control_plane_db_image_pattern), which test_step_allowlist.py reads by name.
+    if APPS_IMAGE_KEY in doc and not isinstance(doc[APPS_IMAGE_KEY], str):
+        problems.append(f"{APPS_IMAGE_KEY} must be text")
+    problems.extend(
+        f"{key} must be text"
+        for key in sorted(RING_CONTROLLER_TEXT_KEYS)
+        if key in doc and not isinstance(doc[key], str)
+    )
     problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")

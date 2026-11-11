@@ -697,9 +697,9 @@ function probeBlock(
     // whenever that block is missing -- and a verification step that passes
     // with the thing it verifies absent is not a verification step. This is
     // what makes RUNBOOK-edge.md §8b(4a) discriminating, and it is why the
-    // marker must survive into the committed posture rather than depending on
-    // the separate general zones, which render only under `rateLimit:
-    // 'enforcing'`.
+    // marker is a plain `header` line here rather than something that depends
+    // on the general throttle zones: those render only under `rateLimit:
+    // 'enforcing'`, and a marker has to survive a posture that turns them off.
     `\theader ${PROBE_MARKER_HEADER} ${marker}`,
     '\trespond 204',
     '}'

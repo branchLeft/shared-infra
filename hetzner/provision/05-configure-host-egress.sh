@@ -18,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 RECONCILER=/usr/local/sbin/branchleft-host-egress
 UNIT=/etc/systemd/system/branchleft-host-egress.service
+TIMER=/etc/systemd/system/branchleft-host-egress.timer
 
 # Mode 0755 with root ownership is load-bearing rather than conventional:
 # systemd runs this file as root at every boot, so a group- or world-writable
@@ -37,12 +38,30 @@ else
     echo "05-configure-host-egress: wrote $UNIT and reloaded systemd"
 fi
 
+# The timer re-runs the reconciler about once a minute, so a default route or
+# resolver lost after boot (not only one missing at boot) is put back. Installed
+# and reloaded the same way as the unit above.
+if [[ -f "$TIMER" ]] && cmp -s "$SCRIPT_DIR/branchleft-host-egress.timer" "$TIMER"; then
+    echo "05-configure-host-egress: $TIMER already up to date, no-op"
+else
+    install -m 0644 -o root -g root "$SCRIPT_DIR/branchleft-host-egress.timer" "$TIMER"
+    systemctl daemon-reload
+    echo "05-configure-host-egress: wrote $TIMER and reloaded systemd"
+fi
+
 systemctl enable branchleft-host-egress.service >/dev/null
+systemctl enable branchleft-host-egress.timer >/dev/null
 
 # `restart`, not `start`. The unit is a RemainAfterExit oneshot, so once it
 # has succeeded systemd considers it active and `start` is a no-op -- which
 # would leave a freshly installed reconciler unrun until the next reboot.
 systemctl restart branchleft-host-egress.service
 systemctl --no-pager --lines=0 status branchleft-host-egress.service >/dev/null
+
+# `restart`, as for the unit above: a timer already active keeps the schedule it
+# was loaded with, so a changed timer file takes effect only on a restart. This
+# runs once per provisioning, so resetting the countdown costs nothing.
+systemctl restart branchleft-host-egress.timer
+systemctl --no-pager --lines=0 status branchleft-host-egress.timer >/dev/null
 
 echo "05-configure-host-egress: done"

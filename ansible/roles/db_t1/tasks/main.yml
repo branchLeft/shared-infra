@@ -1,0 +1,145 @@
+---
+# Order matters. The input and the compose-file checks come first and change nothing.
+# The directories, the compose file and the configuration are delivered next, because
+# the deploy program reads the compose file before it writes a pin. The pin, the
+# secret file checks and the deploy are in tasks/_pin.yml, last, so a refusal there
+# leaves the delivered files in place and nothing started.
+#
+# The role holds no secret. It never reads the database's root value: tasks/_pin.yml
+# checks the shape of the owner-placed file with no output and no value in a result.
+
+# ----- The input -----
+
+- name: Refuse an image that is not pinned by digest in the organisation's registry
+  ansible.builtin.include_tasks: _inputs.yml
+
+# ----- A second compose file would replace or extend the checked one -----
+
+- name: Look for a second compose file or a compose environment file in the project directory
+  ansible.builtin.stat:
+    path: '{{ db_t1_project_directory }}/{{ item }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ db_t1_other_compose_names }}'
+  loop_control:
+    label: '{{ item }}'
+  register: db_t1_other_compose_files
+
+- name: Refuse a second compose file or a compose environment file in the project directory
+  ansible.builtin.assert:
+    that:
+      - db_t1_other_compose_files.results | selectattr('stat.exists') | list | length == 0
+    quiet: true
+    fail_msg: >-
+      {{ db_t1_project_directory }} holds a compose file or environment file other than
+      compose.yml. Compose reads it in place of, or merged into, the file the deploy
+      program checks, which could swap the image or publish a port. Remove it by hand.
+
+# ----- The directories -----
+
+- name: Create the configuration directory the unit reads
+  ansible.builtin.file:
+    path: '{{ db_t1_config_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the directory the deploy program installs stacks into
+  ansible.builtin.file:
+    path: '{{ db_t1_stack_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the stack's project directory
+  ansible.builtin.file:
+    path: '{{ db_t1_project_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# In check mode the directories above are not created, so the tasks that need them are
+# gated on the stat that follows each creation (ANS-10).
+- name: Look at the stack's project directory
+  ansible.builtin.stat:
+    path: '{{ db_t1_project_directory }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_project_directory_stat
+
+- name: Create the directory the MySQL configuration is mounted from
+  ansible.builtin.file:
+    path: '{{ db_t1_cnf_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: db_t1_project_directory_stat.stat.exists
+
+- name: Create the run directory that holds the socket directory
+  ansible.builtin.file:
+    path: '{{ db_t1_run_directory }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: db_t1_project_directory_stat.stat.exists
+
+# Owned by the user mysqld runs as inside the container, and 0755: only that user and
+# root can add an entry, so no other local account can put a socket or a link there
+# before mysqld does. Every client that authenticates as root opens a socket in this
+# directory, so a squatter would receive the root value.
+- name: Create the socket directory the database shares with the host
+  ansible.builtin.file:
+    path: '{{ db_t1_socket_directory }}'
+    state: directory
+    owner: '{{ db_t1_container_uid }}'
+    group: root
+    mode: '0755'
+  when: db_t1_project_directory_stat.stat.exists
+
+- name: Look at the directory the configuration is rendered into
+  ansible.builtin.stat:
+    path: '{{ db_t1_cnf_directory }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: db_t1_cnf_directory_stat
+
+# ----- The files -----
+
+# The diff is not shown (ANS-16): the file sets an environment variable named like a
+# credential from another variable, which the plan's secret scan would withhold the
+# whole plan of the host over. The file holds no value; the reviewed pull request is
+# where it is read. Skipped when the directory does not exist yet, which is check mode
+# on a fresh host (ANS-10).
+- name: Render the compose file the deploy program reads
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: '{{ db_t1_compose_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: db_t1_project_directory_stat.stat.exists
+  diff: false
+
+- name: Render the MySQL configuration the database mounts
+  ansible.builtin.template:
+    src: branchleft.cnf.j2
+    dest: '{{ db_t1_cnf_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when:
+    - db_t1_project_directory_stat.stat.exists
+    - db_t1_cnf_directory_stat.stat.exists
+
+# ----- The unit, the pin and the one deploy -----
+
+- name: Pin the image and start the stack once, on an empty host
+  ansible.builtin.include_tasks: _pin.yml

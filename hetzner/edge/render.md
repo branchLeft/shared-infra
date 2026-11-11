@@ -434,6 +434,12 @@ failure would take the magic-link path down with the general one. Whoever evalua
 CDN owns changing this line to a trusted-proxy configuration in the same change, never
 afterwards.
 
+The same key can also fail without a CDN: if the edge's container networking presents
+real clients as a Docker bridge address (for example `172.18.0.1` behind the docker-proxy),
+every collapsed client shares one budget per zone. This module cannot see that; the
+owner-run percentile and bridge-address check in `RUNBOOK-edge.md` §10a is what looks
+for it before the general throttle is applied live.
+
 ## `protectionChain`: handler evaluation order
 
 The handler chain, in evaluation order: throttle runs **before** the WAF, which is the
@@ -442,3 +448,14 @@ at priority 1000–1003, ahead of the throttle at 2000). The retired edge evalua
 shared fleet; this one evaluates on two vCPUs, so a flood that reached the WAF first would
 spend exactly the capacity the throttle exists to protect. The observable difference is
 confined to a client that is both flooding and attacking: it is answered 429 rather than 403.
+
+### What the general throttle covers
+
+`protectionChain` is called by four block builders, so the one `rateLimit` posture
+field throttles all four: `siteBlock` (zone `<site>_per_ip`), `redirectBlock` (zone
+`<site>_redirect_per_ip`), `staticBlock` (zone `<site>_per_ip`, the `publicpress.co.uk`
+holding page) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
+loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` never calls
+`protectionChain`. Under the committed posture that is one general `rate_limit` directive
+per throttled block, each in its own zone, and `render.test.ts` counts them per kind
+from the registries.

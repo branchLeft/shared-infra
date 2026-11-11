@@ -165,7 +165,7 @@ a host's only route off the subnet is the network's own gateway, and Hetzner
 resolves that against this table. It is unprotected on purpose — deleting it
 detaches nothing and loses no state, and moving the gateway to another host
 has to stay an ordinary apply. The forwarding at the far end is not Pulumi's:
-the `egress_nat` role installs it on edge1 (the reconciler is `provision/branchleft_nat.sh`), and
+the `egress_nat` role installs it on edge1 (the reconciler is `ansible/roles/egress_nat/files/branchleft_nat.py`), and
 `RUNBOOK-provision-host.md` carries the order the two have to happen in.
 
 Addresses are static and listed in `@branchleft/hetzner-host`'s `addressPlan.ts`
@@ -431,6 +431,12 @@ Hetzner console and rescue system, not a password.
 
 ## Deploys
 
+A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`) is
+verified before the wrapper pins it. The verifier runs with no GitHub credential, and the design is
+fail-closed: a host with no credential refuses every registered deploy. The verifier and its pinned
+gh come from the `deploy_verifier` role, applied on `edge1`, `app1`, `ops1` and `db1`. See
+`provision/branchleft_deploy.md`, "The verifier runs with no credential" and "Live checks, in order".
+
 `branchleft-deploy <stack> <image@sha256:...>` — or `branchleft-deploy --slot
 <stack>` with the reference on stdin, for a slot key — is the whole of what CI
 can do as root. It refuses anything but a digest-pinned reference, refuses a
@@ -568,11 +574,13 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@demo-sidecar`, which is no instance    | nowhere: the sidecar's image pin file, read by `branchLeft/ghost-platform`'s `demo-host/provision`       | no                |
 | `branchleft-compose@broker`, which is not an instance      | nowhere: the broker program has its own unit, built from `branchLeft/ghost-platform`'s `services/broker` | no                |
 | `branchleft-compose@backup-worker`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
+| `branchleft-compose@ring-controller`                       | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@state-copy`                            | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@restore-drill`                         | nowhere: a systemd unit, not a Compose stack                                                             | no                |
 | `branchleft-compose@ntfy-pager`, which is not an instance  | nowhere: the pager's secrets file, `/etc/branchleft/ntfy-pager.env`, written by the `ntfy_pager` role    | no                |
 | `branchleft-compose@mail-spool`                            | nowhere: `branchLeft/ghost-platform`'s `render-core` golden, fetched by the `demo1_egress_spool` role    | no                |
 | `branchleft-compose@status`, which is not an instance      | nowhere: the project directory of the `status_page` role's plain `docker compose` Gatus page             | no                |
+| `branchleft-compose@dbt1`                                  | nowhere: rendered from a template by the `db_t1` role of `branchLeft/shared-infra`                       | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that

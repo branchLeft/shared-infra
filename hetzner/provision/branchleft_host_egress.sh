@@ -75,13 +75,35 @@ fi
 # *a* bash) -- `set -e` would otherwise abort here on a host with no
 # candidate at all, since an empty match makes `grep` itself the pipeline's
 # failing last command inside a plain command substitution.
-candidate_routes="$(
+# The subnet route is not always in the table when this runs: at boot the
+# network brings it up after network-online.target has been reached, so one
+# look is not enough. Polled for a bounded total, then given up on. Both
+# values are overridable so the tests can run the wait in a second; production
+# takes the defaults (120 s total, one look every 5 s).
+ROUTE_WAIT_SECONDS="${BRANCHLEFT_EGRESS_ROUTE_WAIT_SECONDS:-120}"
+ROUTE_POLL_SECONDS="${BRANCHLEFT_EGRESS_ROUTE_POLL_SECONDS:-5}"
+if (( ROUTE_POLL_SECONDS < 1 )); then
+    ROUTE_POLL_SECONDS=1
+fi
+
+find_candidate_routes() {
     ip -4 route show \
         | grep ' via ' \
         | grep -v '^default ' \
         | grep -v "^${METADATA_ADDRESS} " \
         || true
-)"
+}
+
+candidate_routes="$(find_candidate_routes)"
+polls_left=$(( ROUTE_WAIT_SECONDS / ROUTE_POLL_SECONDS ))
+if [[ -z "$candidate_routes" && "$polls_left" -gt 0 ]]; then
+    echo "branchleft-host-egress: no private subnet route yet, waiting up to ${ROUTE_WAIT_SECONDS}s for it" >&2
+fi
+while [[ -z "$candidate_routes" && "$polls_left" -gt 0 ]]; do
+    sleep "$ROUTE_POLL_SECONDS"
+    polls_left=$(( polls_left - 1 ))
+    candidate_routes="$(find_candidate_routes)"
+done
 
 if [[ -z "$candidate_routes" ]]; then
     echo "branchleft-host-egress: no private subnet route found to derive a gateway from" >&2

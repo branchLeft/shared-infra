@@ -50,7 +50,7 @@ describe('edge-t', () => {
   it('is a public server of the ruled type, in the estate location', () => {
     const server = named(TYPES.server, 'edge-t');
     expect(server, 'a server named edge-t').toBeDefined();
-    expect(server?.inputs.serverType).toBe('cpx22');
+    expect(server?.inputs.serverType).toBe('cx23');
     expect(server?.inputs.location).toBe('nbg1');
     expect(server?.inputs.image).toBe('debian-13');
     const publicNets = server?.inputs.publicNets as { ipv4Enabled: boolean }[] | undefined;
