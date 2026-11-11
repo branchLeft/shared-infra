@@ -15,3 +15,37 @@
         state: present
         update_cache: true
         cache_valid_time: 3600
+
+    # The unit's sandboxing needs mount namespaces and a cgroup BPF filter, which an
+    # unprivileged test container does not have, so the broker would fail to start with
+    # status 226 before any of the role's code is exercised. This test-only drop-in sets
+    # the sandbox directives back to their defaults and changes nothing else about the
+    # unit. The sandboxed start under real systemd is proven by the broker's own boot
+    # test in its repository, not here. The role's own tasks never write this directory.
+    - name: Create the directory of the test-only drop-in
+      ansible.builtin.file:
+        path: /etc/systemd/system/branchleft-broker.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install the test-only drop-in that lifts the unit's sandbox in the container
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/branchleft-broker.service.d/10-test-container.conf
+        owner: root
+        group: root
+        mode: '0644'
+        content: |
+          [Service]
+          ProtectSystem=no
+          ProtectHome=no
+          PrivateTmp=no
+          ProtectControlGroups=no
+          ProtectProc=default
+          PrivateIPC=no
+          RemoveIPC=no
+          ReadWritePaths=
+          ReadOnlyPaths=
+          IPAddressDeny=
+          IPAddressAllow=
