@@ -179,7 +179,8 @@ BOOTSTRAP_GUARD_PATHS = [
 # safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
 # whole role is the owner's, its module, units, environment template and the tests that hold them
 # included. The ring controller role also installs the unit that hands its root-only key to a
-# service account, and safety_service installs the unit that mounts the channel key and the hash-source credential.
+# service account, and safety_service installs the unit that mounts the channel key and the
+# hash-source credential.
 KEY_ROLE_PATHS = [
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
