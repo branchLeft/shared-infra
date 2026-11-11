@@ -38,7 +38,7 @@ WRAPPER_ROLES = frozenset({"deploy_tooling", "control_plane", "db1_stack", "webs
 
 # The hosts that run the wrapper, one playbook each. Another host that applies a wrapper role
 # fails test_only_the_listed_wrapper_hosts_apply_a_wrapper_role until it is listed here.
-WRAPPER_PLAYBOOKS = frozenset({"edge1", "app1", "ops1", "db1", "dbt1"})
+WRAPPER_PLAYBOOKS = frozenset({"edge1", "app1", "ops1", "db1", "dbt1", "appt1"})
 
 PINS = (
     "deploy_verifier_gh_version",

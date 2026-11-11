@@ -73,6 +73,7 @@ export const APP_HOST_IPS = {
  */
 export const TENANTS_HOST_IPS = {
   dbT1: '10.20.1.200',
+  appT1: '10.20.1.201',
   edgeT: '10.20.1.210',
 } as const;
 

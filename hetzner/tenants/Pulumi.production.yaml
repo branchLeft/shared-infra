@@ -45,4 +45,10 @@ config:
   branchleft-hetzner-tenants:dbt1Adopt:
     serverId: 174988939
     stage: converge
-  # app-t1 has no stack in this repository yet; see the runbook's app-t1 section.
+  # app-t1 is declared in the program behind `appt1Enabled`, which is absent here, so
+  # the stack plans nothing for it. CX23 is the owner's ruling of 7 Nov 2026, as for the
+  # two hosts above. The owner sets `appt1Enabled`, `appt1DeployPublicKey` and `appt1Adopt`
+  # (`serverId`, `stage: converge`) in the change that brings the hand-made server under
+  # the stack: see the runbook's app-t1 section. The deploy key is generated at adoption and
+  # does not exist yet, so none is committed.
+  branchleft-hetzner-tenants:appt1ServerType: cx23

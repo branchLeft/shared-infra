@@ -708,14 +708,23 @@ the token and the passphrase salt never do (`CLAUDE.md`). Reverting a working-co
 
 ## app-t1
 
-No such stack exists in this repository yet: `app-t1` appears only in `hetzner/projects.ts`, READMEs and tests, so the holding firewall `hold-no-inbound` stays on app-t1, and the final delete of `hold-no-inbound` in this runbook is not part of this series. When the app host stack is written, `app-t1` is adopted the same
-way, with the same `adopt` argument on the same `Host`, set from that stack's config,
-and its console state is one of the two cases above. Its steps are step 2 (the case),
-step 9 (network attach, bootstrap, leftover address removal, confirming it is
-private-only), and the converge update, in that order and with the same stops. As for `db-t1`
-(step 10), `hold-no-inbound` is not detached from it, and the stack attaches no
-firewall to it. Its register address is that stack's, and is not
-recorded here.
+`app-t1` is declared in `hetzner/tenants.ts` behind `appt1Enabled`, which the stack file does
+not set, so a merge of that change plans and creates nothing. Its register address is
+`10.20.1.201` (`TENANTS_HOST_IPS.appT1`), its type is CX23 and its location is `nbg1`, as for the
+other two. It is adopted the same way as `db-t1`, with the same `adopt` argument on the same
+`Host`, and its console state is one of the two cases above. Its steps are step 2 (the case),
+step 9 (network attach at `10.20.1.201`, bootstrap, leftover address removal, confirming it is
+private-only), and the converge update, in that order and with the same stops.
+
+The owner's change that brings it under the stack sets `appt1Enabled: "true"`,
+`appt1DeployPublicKey` (the public half of the key generated at step 8, for app-t1) and
+`appt1Adopt` (`serverId`, `stage: converge`) in `Pulumi.production.yaml`, and nothing else. Before
+the apply, the preview must show an import of the server and updates in place, and no create:
+a create in the preview means `appt1Adopt` is missing or misspelled, and is not applied. The
+plan then goes through `assert-no-hetzner-deletes.py` as for `db-t1`.
+
+As for `db-t1` (step 10), `hold-no-inbound` is not detached from it, and the stack attaches no
+firewall to it. The final delete of `hold-no-inbound` is not part of this series.
 
 ## If something goes wrong
 
