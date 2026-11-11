@@ -11,17 +11,21 @@ name: Ansible
 # changed, and the rest run only when they did. Where nothing changed the job
 # passes after a checkout and one diff.
 #
-# Four kinds of job. `discover` lists the roles and patterns, each with every
+# Kinds of job. `discover` lists the roles and patterns, each with every
 # Molecule scenario it has, and the fresh role skeleton from the repository tree,
-# and then narrows that list to what this run needs (ansible/checks/ci_select.py).
+# narrows that list to what this run needs (ansible/checks/ci_select.py), and splits
+# the kept shards by the one list in ansible/checks/blocking_shards.json.
 # `quick-lint` runs the two cheap checks, yamllint and the shard selection's tests.
 # `lint` runs the static checks once, all of them, alongside the shards. `shard` runs
-# the harness once per entry `discover` kept, and only after `quick-lint` has passed,
-# so a malformed file is red in minutes and costs no container time; it does not wait
-# for the full `lint`, which the gate job still requires. A new pattern or a new
-# scenario needs no edit here. The gate job, named `Lint and test the Ansible roles`,
-# is the one check the ruleset requires; it needs every other job and fails
-# unless each of them succeeded.
+# the harness once per blocking entry, and `shard-advisory` once per advisory entry, both
+# only after `quick-lint` has passed, so a malformed file is red in minutes and costs no
+# container time; neither waits for the full `lint`, which the gate job still requires.
+# A new pattern or a new scenario needs no edit here and starts advisory. The gate job,
+# named `Lint and test the Ansible roles`, is the one check the ruleset requires; it
+# needs discover, the two lints and the blocking shards, and fails unless each of them
+# succeeded. It does not wait for, or read, an advisory shard: that shard shows red on its
+# own check line, and `report` lists every red one in the step summary. Scheduled and manual
+# runs treat every shard as blocking, and a red scheduled run opens one issue (`daily-issue`).
 #
 # What runs, by event:
 #   - a pull request: lint, and the shards of the roles and patterns it changed (and of
@@ -30,15 +34,18 @@ name: Ansible
 #     does a change to one of the three checks files the shards read (ci_select.py,
 #     check_pins.py, pip-requirements.txt). Any other file under ansible/checks/ runs the
 #     lint job only;
-#   - the merge queue: the same choice, made from the queue entry's own diff
-#     (base_sha..head_sha of the merge_group event), by the same rules. The entry is
-#     tested on the tree it will merge into, so this is the last check before `main`;
-#   - the weekly schedule (and a manual run): lint and every shard, whatever changed. It
-#     is what catches drift in the external images and collections that no diff shows,
-#     and it saves the tool environment's cache on `main`, where every other run can
-#     restore it;
-#   - a push to `main`: nothing. The pushed tree is the tree the merge queue tested, so
-#     a lint here would repeat the one that just passed. Delivery still runs its own.
+#   - the merge queue: the cheap checks only, made from the queue entry's own diff
+#     (base_sha..head_sha of the merge_group event): the lint, with the unit tests of the
+#     roles and the checks. The container shards do not run there: the pull request ran
+#     them on its own head and they passed. The gate job accepts the skipped shard job
+#     for that event alone, and for no other;
+#   - the daily schedule (and a manual run): lint and every shard, whatever changed, every
+#     shard blocking for the run's own result. It is what catches drift in the external
+#     images and collections that no diff shows, and it saves the tool environment's cache
+#     on `main`, where every other run can restore it;
+#   - a push to `main`: nothing. The pushed tree is the tree the merge queue linted, so
+#     a lint here would repeat the one that just passed. Delivery runs its own lint and
+#     every shard, because the queue did not run the shards.
 #
 # The tools and the `ansible` package, which carries the collections, install
 # from ansible/requirements.txt at exact versions, each file checked against its
@@ -55,18 +62,18 @@ on:
   # The merge queue tests a queued pull request on a gh-readonly-queue/main/...
   # ref, and only this event reports checks there. No `paths:` filter (merge_group
   # supports none, and this workflow has none). Under it the first job diffs the
-  # entry's base_sha against its head_sha, and ci_select.py keeps the shards that diff
-  # calls for, by the rules a pull request has: a shared file runs every shard. A
-  # base or head the runner cannot resolve runs everything.
+  # entry's base_sha against its head_sha, and the lint runs when an Ansible input
+  # changed. A base or head the runner cannot resolve runs the lint. The shard job
+  # is skipped for this event (its condition names it), whatever ci_select.py keeps.
   merge_group:
     types: [checks_requested]
   # The full sweep. Nothing in a diff shows an external image or a collection that
-  # moved, so once a week every shard runs on `main` as it stands. Only the default
-  # branch is scheduled, so this is also the run whose cache every other run can read.
-  # The minute is off the hour so it does not queue with every other job that starts
-  # on it.
+  # moved, so once a day every shard runs on `main` as it stands, each one blocking for
+  # this run's result. Only the default branch is scheduled, so this is also the run whose
+  # cache every other run can read. The minute is off the hour so it does not queue with
+  # every other job that starts on it. It replaces the weekly sweep.
   schedule:
-    - cron: '23 3 * * 1'
+    - cron: '41 2 * * *'
   # The same sweep by hand, to seed the cache or to check a drift report.
   workflow_dispatch:
 
@@ -88,6 +95,10 @@ jobs:
       ansible: ${{ steps.changes.outputs.ansible }}
       shards: ${{ steps.shards.outputs.shards }}
       matrix: ${{ steps.shards.outputs.matrix }}
+      blocking: ${{ steps.split.outputs.blocking }}
+      blocking_matrix: ${{ steps.split.outputs.blocking_matrix }}
+      advisory: ${{ steps.split.outputs.advisory }}
+      advisory_matrix: ${{ steps.split.outputs.advisory_matrix }}
     steps:
       # Full history, so the base commit of the diff below exists on the runner.
       - name: Checkout
@@ -134,11 +145,11 @@ jobs:
           set -euo pipefail
           # Which two commits to compare. A push to main has none: main takes only what the
           # merge queue tested, so the lint that passed there is not repeated here. Anything
-          # that is not a pull request or a queue entry (the weekly sweep, a manual run, an
+          # that is not a pull request or a queue entry (the scheduled sweep, a manual run, an
           # event nobody planned for) runs every check and diffs nothing.
           case "$EVENT_NAME" in
             push)
-              echo "A push to main is the tree the merge queue already tested, so there is nothing to run."
+              echo "A push to main is the tree the merge queue already linted, and the delivery workflow runs the shards, so there is nothing to run."
               echo "ansible=false" >> "$GITHUB_OUTPUT"
               exit 0
               ;;
@@ -211,7 +222,21 @@ jobs:
           if [ -n "$CHANGED_FILES" ]; then
             args+=(--changed-file "$CHANGED_FILES")
           fi
-          python3 ansible/checks/ci_select.py "${args[@]}" >> "$GITHUB_OUTPUT"
+          python3 ansible/checks/ci_select.py "${args[@]}" > "$RUNNER_TEMP/selection.txt"
+          cat "$RUNNER_TEMP/selection.txt" >> "$GITHUB_OUTPUT"
+
+      # The kept shards, split by the one list of blocking shards. A scheduled or manual run
+      # makes every shard blocking. A list that names an unknown shard, repeats one, or is
+      # out of order fails this step, and so the gate (the discover result is required).
+      - name: Split the shards into blocking and advisory
+        id: split
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: >-
+          python3 ansible/checks/blocking_shards.py split
+          --event "$EVENT_NAME"
+          --all-file "$RUNNER_TEMP/all-shards.json"
+          --selection-file "$RUNNER_TEMP/selection.txt" >> "$GITHUB_OUTPUT"
 
   # The quick gate: the two checks that are cheap and that a malformed change breaks first,
   # yamllint over ansible/ and the tests of the shard selection. The shards wait for this job
@@ -291,7 +316,7 @@ jobs:
       # restore an old environment). The install steps run only on a miss; every file in
       # the lock was checked against its recorded hash when the entry was made, and a
       # changed lock changes the key. A pull request's cache is read from its own ref and
-      # from `main`'s, and written to its own ref only; the weekly sweep writes `main`'s.
+      # from `main`'s, and written to its own ref only; the daily sweep writes `main`'s.
       - name: Name the Python the tool environment is built with
         id: python
         run: echo "version=$(python3 --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
@@ -378,8 +403,9 @@ jobs:
       # with nothing under them would pass in silence. The step covers every such role and
       # has no list to edit. The tests of these programs are run by the step "Run every role's
       # unit tests" below, from the same directory with files/ on the path, so this step runs
-      # only the type check and the lint. A role with a library/ is checked by the step below; a
-      # role whose pyproject.toml names no files/ path is covered by neither.
+      # only the type check and the lint. A role with a library/ is checked by the step below,
+      # together with any program in its files/; a role whose pyproject.toml names no files/
+      # path is covered by neither.
       - name: Check each role's own program in files/
         run: |
           set -euo pipefail
@@ -433,11 +459,17 @@ jobs:
               echo "$role has a library/ and no tests/unit/, so its module is not tested."
               exit 1
             fi
+            # A role that also ships a program in files/ is checked with its module: its
+            # pyproject.toml names both directories as the mypy_path.
+            checked_dirs=(library)
+            if compgen -G "$role/files/*.py" > /dev/null; then
+              checked_dirs+=(files)
+            fi
             (
               cd "$role"
-              "$bin/mypy" --strict library tests/unit
-              "$bin/ruff" check library tests
-              "$bin/ruff" format --check library tests
+              "$bin/mypy" --strict "${checked_dirs[@]}" tests/unit
+              "$bin/ruff" check "${checked_dirs[@]}" tests
+              "$bin/ruff" format --check "${checked_dirs[@]}" tests
             )
             echo "::endgroup::"
             checked=$((checked + 1))
@@ -457,6 +489,10 @@ jobs:
       - name: Run every role's unit tests
         run: 'PYTHON="$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/run_role_unit_tests.sh ansible'
 
+  # The blocking shards: the ones named in ansible/checks/blocking_shards.json, and every
+  # shard on a scheduled or manual run. The gate job waits for this job and fails with it.
+  # The job name `Harness: <shard id>` is what the report, the daily issue and
+  # advisory_passes.py read the shard id from (ansible/checks/shard_results.py).
   shard:
     name: 'Harness: ${{ matrix.name }}'
     # Only after the quick gate has passed: a malformed YAML file or a broken shard selection
@@ -464,10 +500,16 @@ jobs:
     # waited for here; the gate job still fails unless it succeeded. A failed or skipped quick
     # gate skips every shard, and the gate job fails on that result too.
     needs: [discover, quick-lint]
-    if: needs.discover.outputs.ansible == 'true' && needs.discover.outputs.shards == 'true'
+    # The merge queue does not run the shards: the pull request ran them on its own head and
+    # they passed, and a queue re-run repeated them. The event name decides, never a
+    # result, and the gate job below accepts the skip for that event alone.
+    if: >-
+      needs.discover.outputs.ansible == 'true' &&
+      needs.discover.outputs.blocking == 'true' &&
+      github.event_name != 'merge_group'
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.discover.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.discover.outputs.blocking_matrix) }}
     # Pinned until the harness is verified on the next Ubuntu LTS image.
     runs-on: ubuntu-24.04
     # The longest shard, ansible/roles/db1_grants, runs about 3,000 tasks, each a docker
@@ -499,7 +541,7 @@ jobs:
       # restore an old environment). The install steps run only on a miss; every file in
       # the lock was checked against its recorded hash when the entry was made, and a
       # changed lock changes the key. A pull request's cache is read from its own ref and
-      # from `main`'s, and written to its own ref only; the weekly sweep writes `main`'s.
+      # from `main`'s, and written to its own ref only; the daily sweep writes `main`'s.
       - name: Name the Python the tool environment is built with
         id: python
         run: echo "version=$(python3 --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
@@ -556,15 +598,96 @@ jobs:
         if: matrix.kind == 'skeleton'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$RUNNER_TEMP/skeleton-probe/skeleton_probe"'
 
+  # The advisory shards: every kept shard that is not on the list. The same steps as `shard`
+  # (ansible/checks/test_ci_gate_order.py holds the two equal), under another name. The
+  # gate job does not need this job and nothing reads its result: a red advisory shard shows
+  # red on its own check line, and `report` lists it. It never runs on a scheduled or manual run,
+  # where discover makes every shard blocking.
+  shard-advisory:
+    name: 'Advisory harness: ${{ matrix.name }}'
+    needs: [discover, quick-lint]
+    if: >-
+      needs.discover.outputs.ansible == 'true' &&
+      needs.discover.outputs.advisory == 'true' &&
+      github.event_name != 'merge_group'
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.discover.outputs.advisory_matrix) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Refuse the entry that stands for no shard
+        if: matrix.kind != 'role' && matrix.kind != 'skeleton'
+        env:
+          SHARD_NAME: ${{ matrix.name }}
+        run: |
+          echo "The matrix entry '$SHARD_NAME' is not a role, a pattern or the skeleton."
+          exit 1
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Name the Python the tool environment is built with
+        id: python
+        run: echo "version=$(python3 --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the tool environment
+        id: venv
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/ansible-venv
+          key: ansible-venv-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.version }}-${{ hashFiles('ansible/requirements.txt', 'ansible/checks/pip-requirements.txt') }}
+
+      - name: Create the tool environment
+        if: steps.venv.outputs.cache-hit != 'true'
+        run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
+
+      - name: Install the pinned pip
+        if: steps.venv.outputs.cache-hit != 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
+
+      - name: Install the pinned tools
+        if: steps.venv.outputs.cache-hit != 'true'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
+
+      - name: Check the installed set and list the collections
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/ansible-venv/bin/pip" check
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" collection list
+
+      - name: Run the harness over this role or pattern, for this scenario
+        if: matrix.kind == 'role'
+        env:
+          SHARD_PATH: ${{ matrix.path }}
+          SHARD_SCENARIO: ${{ matrix.scenario }}
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$SHARD_PATH" --scenario "$SHARD_SCENARIO"'
+
+      - name: Create a role from the skeleton
+        if: matrix.kind == 'skeleton'
+        run: >-
+          "$RUNNER_TEMP/ansible-venv/bin/ansible-galaxy" role init
+          --role-skeleton ansible/role_skeleton
+          --init-path "$RUNNER_TEMP/skeleton-probe" skeleton_probe
+
+      - name: Run the harness over the new role with no edits
+        if: matrix.kind == 'skeleton'
+        run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$RUNNER_TEMP/skeleton-probe/skeleton_probe"'
+
   # The required check. Its name is fixed by ruleset 20952655, which requires
   # exactly `Lint and test the Ansible roles`; a matrix job would rename its
   # checks, so this one job stays. It runs even when a needed job failed or was
   # skipped, and it fails unless each needed job succeeded. When discover found
-  # no Ansible input change (or a push to main), the other two jobs are skipped on purpose and the
-  # gate passes. When it found inputs but no shard to run (a
-  # pull request or queue entry that changed only files no shard reads), the quick gate and the full
-  # lint must pass and the shard job is skipped on purpose. A shard job that is skipped when discover
-  # chose shards, because the quick gate failed or for any other reason, fails the gate.
+  # no Ansible input change (or a push to main), the other jobs are skipped on purpose and the
+  # gate passes. When it found inputs but no blocking shard to run (a pull request or queue
+  # entry that changed only files no shard reads, or only advisory shards), the quick gate and
+  # the full lint must pass and the shard job is skipped on purpose. A blocking shard job that is
+  # skipped when discover chose blocking shards, because the quick gate failed or for any other
+  # reason, fails the gate, except in the merge queue, where the shard job is skipped by its
+  # condition and the event name says so. The gate reads no advisory result: it does not need
+  # `shard-advisory`, so it does not wait for it.
   roles:
     name: Lint and test the Ansible roles
     needs: [discover, quick-lint, lint, shard]
@@ -576,10 +699,11 @@ jobs:
         env:
           DISCOVER: ${{ needs.discover.result }}
           ANSIBLE: ${{ needs.discover.outputs.ansible }}
-          SHARDS: ${{ needs.discover.outputs.shards }}
+          BLOCKING: ${{ needs.discover.outputs.blocking }}
           QUICK: ${{ needs.quick-lint.result }}
           LINT: ${{ needs.lint.result }}
-          SHARD: ${{ needs.shard.result }}
+          BLOCKING_RESULT: ${{ needs.shard.result }}
+          EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
           if [ "$DISCOVER" != "success" ]; then
@@ -604,17 +728,75 @@ jobs:
             echo "The full lint must succeed too; it runs alongside the shards and a merge needs it."
             exit 1
           fi
-          if [ "$SHARDS" = "false" ]; then
-            echo "The lint passed and no shard was needed, so the shard job was skipped on purpose."
+          if [ "$BLOCKING" = "false" ]; then
+            echo "The lint passed and no blocking shard was needed, so the shard job was skipped on purpose."
             exit 0
           fi
-          if [ "$SHARDS" != "true" ]; then
-            echo "The discover job did not report whether shards are needed: '$SHARDS'"
+          if [ "$BLOCKING" != "true" ]; then
+            echo "The discover job did not report whether blocking shards are needed: '$BLOCKING'"
             exit 1
           fi
-          if [ "$SHARD" != "success" ]; then
-            echo "The shard job reported: $SHARD"
-            echo "Every chosen shard must report success."
+          if [ "$EVENT" = "merge_group" ] && [ "$BLOCKING_RESULT" = "skipped" ]; then
+            echo "The merge queue does not run the container shards: the pull request ran them and they passed."
+            echo "The lint and the quick gate succeeded, which is all the queue asks."
+            exit 0
+          fi
+          if [ "$BLOCKING_RESULT" != "success" ]; then
+            echo "The blocking shard job reported: $BLOCKING_RESULT"
+            echo "Every chosen blocking shard must report success."
             exit 1
           fi
-          echo "Every job succeeded: discover, the quick gate, the full lint and every chosen shard."
+          echo "Every job succeeded: discover, the quick gate, the full lint and every chosen blocking shard."
+
+  # The list of every container test result of the run, for the approver: how many blocking
+  # and advisory shards passed and failed, and one table of every red shard. It runs after
+  # every shard job, never fails the run for a red shard (the gate and the shard lines do
+  # that), and reads the Actions API with a read-only token. Not a required check.
+  report:
+    name: Container test report
+    needs: [discover, shard, shard-advisory]
+    if: >-
+      always() &&
+      needs.discover.outputs.ansible == 'true' &&
+      github.event_name != 'merge_group'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Write the container test results to the step summary
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 ansible/checks/shard_results.py report --run-id "$RUN_ID" >> "$GITHUB_STEP_SUMMARY"
+
+  # A red scheduled run opens one plain issue, or comments on the one still open. It
+  # starts, mentions and labels nothing that wakes anyone: a title with the date, the run
+  # link, the failed shard ids and the label `ci-red-daily`. The only job that can write issues.
+  daily-issue:
+    name: Daily run issue
+    needs: [roles]
+    if: always() && github.event_name == 'schedule' && needs.roles.result == 'failure'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open or extend the day's issue
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+        run: python3 ansible/checks/daily_red_issue.py --run-id "$RUN_ID"

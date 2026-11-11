@@ -1,15 +1,15 @@
 ---
 # dbt1: the logical name of the database host db-t1 (HOST_NAME allows [a-z][a-z0-9]*; the
-# server and its hostname keep the hyphen). Under the gated pull. Six roles, in order: the
+# server and its hostname keep the hyphen). Under the gated pull. Seven roles, in order: the
 # Ansible toolchain the host runs this playbook with, the trigger that runs it, the host
 # baseline (sshd drop-in, unattended upgrades, fail2ban, Docker CE), the host egress
 # reconciler (egress_nat, with the gateway switch left at its default, off: this host is no
-# NAT gateway), the deploy verifier (deploy_verifier) and the deploy tooling (deploy_tooling,
-# class internal: the wrapper and the compose unit, no firewall policy). The host has no private inputs,
-# so host_inputs is not applied and its row is absent from checks/host_roles.yml. The gateway
-# switch is not set here and this host's HOST_PLAY_VARS row pins the deploy tooling class
-# alone, so checks/test_egress_nat_single_gateway.py holds that this host stays off the
-# gateway list.
+# NAT gateway), the deploy verifier (deploy_verifier), the deploy wrapper and compose unit
+# (deploy_tooling, class internal: no policy program, set in HOST_PLAY_VARS), and the tenant
+# database stack (db_t1), last, so a refusal in it holds nothing else back. The host has no
+# private inputs, so host_inputs is not applied and its row is absent from
+# checks/host_roles.yml. The gateway switch is not set here, so
+# checks/test_egress_nat_single_gateway.py holds that this host stays off the gateway list.
 #
 # The host's trigger runs this file on a signed checkout with the inventory `localhost,`,
 # which loads no group variables, so every value the roles read comes from vars_files: the
@@ -39,3 +39,4 @@
     - role: ../roles/egress_nat # noqa: role-name[path]
     - role: ../roles/deploy_verifier # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
+    - role: ../roles/db_t1 # noqa: role-name[path]

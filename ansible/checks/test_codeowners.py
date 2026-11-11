@@ -178,7 +178,8 @@ BOOTSTRAP_GUARD_PATHS = [
 
 # safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
 # whole role is the owner's, its module, units, environment template and the tests that hold them
-# included. The ring controller role also installs the unit of a service that holds a push key.
+# included. The ring controller role also installs the unit of a service that holds a push key,
+# and safety_service installs the unit that mounts the channel key and the hash-source credential.
 KEY_ROLE_PATHS = [
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
@@ -194,7 +195,20 @@ KEY_ROLE_PATHS = [
     "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_units.py",
     "ansible/roles/ring_controller_host/molecule/default/verify.yml",
     "ansible/roles/ring_controller_host/README.md",
+    "ansible/roles/safety_service/tasks/main.yml",
+    "ansible/roles/safety_service/vars/main.yml",
+    "ansible/roles/safety_service/meta/argument_specs.yml",
+    "ansible/roles/safety_service/files/content-safety.service",
+    "ansible/roles/safety_service/templates/service.env.j2",
+    "ansible/roles/safety_service/templates/config.json.j2",
+    "ansible/roles/safety_service/tests/unit/test_safety_service.py",
+    "ansible/roles/safety_service/molecule/default/verify.yml",
+    "ansible/roles/safety_service/README.md",
 ]
+
+# The image-scan exemption file (SEC-5): each entry is an exception to the image scan, so each is
+# the owner's to review. It arrives with the edge-caddy image change, so it need not exist yet.
+IMAGE_SCAN_PATHS = [".image-scan-exemptions.json"]
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
@@ -297,6 +311,9 @@ class CodeownersTests(unittest.TestCase):
 
     def test_the_bootstrap_guards_are_owned_by_the_owner(self) -> None:
         self.assert_owned(BOOTSTRAP_GUARD_PATHS)
+
+    def test_the_image_scan_exemption_file_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(IMAGE_SCAN_PATHS)
 
     def test_the_standards_template_paths_are_owned_by_the_owner(self) -> None:
         self.assert_owned(

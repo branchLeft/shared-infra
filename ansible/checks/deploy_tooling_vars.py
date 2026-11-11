@@ -35,7 +35,12 @@ class RoleVarsError(Exception):
 
 @dataclass(frozen=True)
 class Target:
-    """One path the role makes true: where it is, its mode, and for a file the program it is."""
+    """One path the role makes true: where it is, its mode, and for a file the program it is.
+
+    ``home`` is where the program's file is held: ``provision`` (hetzner/provision, the default)
+    or ``role`` (the role's own files/). ``hand_source`` is the file name a hand-run installer
+    installs the same path from, when that differs from ``program``; it is empty otherwise.
+    """
 
     group: str
     label: str
@@ -43,6 +48,8 @@ class Target:
     mode: str
     kind: str
     program: str
+    home: str = "provision"
+    hand_source: str = ""
 
 
 def load_vars(role: Path = ROLE) -> dict[str, object]:
@@ -103,6 +110,8 @@ def targets(variables: dict[str, object]) -> list[Target]:
                     mode=_text(entry, "mode", variables),
                     kind=_text(entry, "kind", variables),
                     program=_text(entry, "program", variables),
+                    home=_text(entry, "home", variables) or "provision",
+                    hand_source=_text(entry, "hand_source", variables),
                 )
             )
     return found
@@ -133,3 +142,8 @@ def program_names(variables: dict[str, object]) -> tuple[str, ...]:
     added there is covered by every check that reads this, and no check restates the list.
     """
     return tuple(sorted({target.program for target in targets(variables) if target.program}))
+
+
+def program_file(target: Target, role: Path, provision: Path) -> Path:
+    """Return where the file of a target's program is held: the role's files/ or provision."""
+    return (role / "files" if target.home == "role" else provision) / target.program

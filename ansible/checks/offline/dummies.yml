@@ -34,3 +34,11 @@ overrides:
   tunnel_account_db1_source_address:
     type: str
     value: 10.0.0.5
+  # The numeric ids of the service account, read from the host's account database while the role
+  # runs. Throwaway ids; getent gives them as text.
+  safety_service_uid:
+    type: str
+    value: '990'
+  safety_service_gid:
+    type: str
+    value: '990'

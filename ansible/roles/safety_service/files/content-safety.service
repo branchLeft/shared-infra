@@ -1,0 +1,33 @@
+# The content-safety service, run as a container by the safety_service role. Installed as a static
+# file, never templated: the image and the account's numeric id come from the environment file.
+#
+# It only dials. Nothing here publishes a port, and the container has no listener to publish.
+# Only the configuration, the signing key and the hash-source credential are mounted, read-only,
+# and the audit directory read-write; the container's own filesystem is read-only. A missing
+# configuration, key or credential means the unit does not start (a condition, not a failure), and
+# the service itself refuses to start without its credential.
+[Unit]
+Description=Content-safety service, dials each host and returns verdicts
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/branchleft/safety-service/config.json
+ConditionPathExists=/etc/branchleft/content-safety/channel-signing.key
+ConditionPathExists=/etc/branchleft/arachnid/username
+ConditionPathExists=/etc/branchleft/arachnid/password
+StartLimitIntervalSec=600
+StartLimitBurst=5
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/branchleft/safety-service/service.env
+ExecStartPre=-/usr/bin/docker rm --force content-safety
+ExecStart=/usr/bin/docker run --rm --name content-safety --user ${SAFETY_SERVICE_USER} --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL --security-opt no-new-privileges --volume /etc/branchleft/safety-service:/etc/branchleft/safety-service:ro --volume /etc/branchleft/content-safety:/etc/branchleft/content-safety:ro --volume /etc/branchleft/arachnid:/etc/branchleft/arachnid:ro --volume /var/lib/branchleft/safety-service:/var/lib/branchleft/safety-service:rw --env SAFETY_SERVICE_CONFIG=/etc/branchleft/safety-service/config.json ${SAFETY_SERVICE_IMAGE}
+ExecStop=/usr/bin/docker stop --time 15 content-safety
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -820,6 +820,24 @@ class CheckedInZoneTest(unittest.TestCase):
         for selector in ("v1-ed25519-20260811._domainkey", "v1-rsa-20260811._domainkey"):
             self.assertTrue(any(v.startswith('"v=DKIM1;') for v in rrsets[(selector, "TXT")][1]))
 
+    def test_blog_sending_domain_records_match_mx1(self):
+        rrsets = self.zone.rrsets
+        self.assertEqual(rrsets[("blog", "MX")], rrsets[("@", "MX")])
+        (mx1_v4,) = rrsets[("mx1", "A")][1]
+        (mx1_v6,) = rrsets[("mx1", "AAAA")][1]
+        self.assertEqual(
+            rrsets[("blog", "TXT")][1],
+            frozenset({f'"v=spf1 ip4:{mx1_v4} ip6:{mx1_v6} -all"'}),
+        )
+
+    def test_blog_dkim_name_is_probed_and_holds_a_real_key_or_nothing(self):
+        selector = "bl._domainkey.blog"
+        self.assertIn(selector, self.zone.probe_names)
+        if (selector, "TXT") in self.zone.rrsets:
+            (value,) = self.zone.rrsets[(selector, "TXT")][1]
+            key_shape = r'^"v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkq[A-Za-z0-9+/=" ]+"$'
+            self.assertRegex(value, key_shape)
+
     def test_every_record_name_is_probed(self):
         self.assertTrue({name for name, _ in self.zone.rrsets} <= set(self.zone.probe_names))
 

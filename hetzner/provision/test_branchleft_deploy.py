@@ -593,7 +593,7 @@ TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 # sha256 of hetzner/provision/branchleft-verify-image, the host copy of
 # ghost-platform's scripts/verify-image-attestation.sh. Change the copy and this
 # constant in the same change, and carry the change to ghost-platform's script.
-VERIFIER_SHA256 = "2342896f33a659a85697a586223b5d970d92082b02f6f3bd7ea2c7637a71cd0d"
+VERIFIER_SHA256 = "4739d9e574c5448ce5720e28668c9b03b978f19c2a3a2ef0caec25438ce30fa5"
 
 # The verifier's whole environment, exactly. Nothing is inherited from the host,
 # and no GitHub credential is in it: the host holds none. A change to any value

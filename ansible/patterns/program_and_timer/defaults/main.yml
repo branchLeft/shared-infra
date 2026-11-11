@@ -1,5 +1,5 @@
 ---
-program_and_timer_program_src: example_program.sh
+program_and_timer_program_src: example_program.py
 program_and_timer_program_dir: /usr/local/lib/program_and_timer
 program_and_timer_program_name: program.sh
 program_and_timer_service_user: ''

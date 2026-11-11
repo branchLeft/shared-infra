@@ -65,7 +65,7 @@
       ansible.builtin.assert:
         that:
           - packages_and_downloads_verify_tool.stat.exists
-          - packages_and_downloads_verify_tool.stat.checksum == 'a3bd5f9c3e07f25cedd25229122fb95c63ebfc7b4358efdf2bae2e1c708bf1f7'
+          - packages_and_downloads_verify_tool.stat.checksum == '1739977f34eab4e9f88f2872b66f1f2b44f13090ce9bb309b9615ad9f1728e22'
           - packages_and_downloads_verify_tool.stat.mode == '0755'
           - packages_and_downloads_verify_tool.stat.pw_name == 'root'
         success_msg: The tool matches its pinned sha256 and is executable by root.

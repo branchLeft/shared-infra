@@ -1,0 +1,10 @@
+---
+# All three inputs are public data. The image is the one build the service runs, pinned by digest;
+# a bump is a change to this line and nothing else. The other two are empty, and empty means
+# inert: the account, the directories and the unit are installed, no configuration is written and
+# the service is held disabled and stopped. The owner sets them in a later change, once the hash
+# source's origin is known and a first host is ready to be dialled. The shapes are in
+# vars/main.yml, named in meta/argument_specs.yml, and held to both by the unit tests.
+safety_service_image: ghcr.io/branchleft/content-safety@sha256:306cb9b35751a65de78d14ac2fd6076431270a5371d6c544e94549e4991f4b98
+safety_service_arachnid_base_url: ''
+safety_service_hosts: []

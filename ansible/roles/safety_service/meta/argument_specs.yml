@@ -1,0 +1,48 @@
+---
+argument_specs:
+  main:
+    short_description: Install the content-safety service as a container unit, off until its inputs are set
+    description: >-
+      Makes the account the service runs as, its two directories and a unit that runs the
+      digest-pinned image with only the configuration, the signing key, the hash-source
+      credential and the audit directory mounted. Writes the configuration from the inputs below
+      and holds the unit disabled and stopped until the hash source's origin and at least one host
+      are set. Every input is public data and none is a secret: the hash-source credential and
+      the signing key are files on the host, placed by the owner and by another role.
+    author: branchLeft
+    options:
+      safety_service_image:
+        type: str
+        default: ghcr.io/branchleft/content-safety@sha256:306cb9b35751a65de78d14ac2fd6076431270a5371d6c544e94549e4991f4b98
+        description: >-
+          The image the unit runs, as ghcr.io/branchleft/content-safety@sha256: and 64 lowercase
+          hex digits. A tag is not a pin and is refused.
+      safety_service_arachnid_base_url:
+        type: str
+        default: ''
+        description: >-
+          The origin of the hash source the service asks, an https origin with no path, user
+          name, query or fragment, or empty. Empty keeps the service off.
+      safety_service_hosts:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The hosts the service dials, one entry each. Empty keeps the service off. A host never
+          dials the service and holds no credential for it.
+        options:
+          id:
+            type: str
+            required: true
+            description: The host's name in the audit trail and the log, 1 to 64 of letters, digits, dot, underscore and hyphen.
+          kind:
+            type: str
+            required: true
+            choices:
+              - demo
+              - tenant
+            description: The estate the host belongs to, which decides what an exact match asks of it.
+          endpoint:
+            type: str
+            required: true
+            description: The https origin the service dials for that host, with no path, credential, query or fragment.

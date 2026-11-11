@@ -1,0 +1,58 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. A path, a name or a mode the
+# service depends on must not be moved by a play variable (ansible/README.md, variable
+# precedence). The role writes only under its own two directories and its one unit file.
+#
+# The service runs as this account, in a container, with nothing else of the host mounted. The
+# account is made here and the signing key's owner is set to it by the playbook, so the service
+# can read the key and nothing else on ops1 can.
+safety_service_account: content-safety
+
+# Asserted and never made or changed. /etc/branchleft is made by host_inputs (R11), and
+# /var/lib/branchleft by the roles that run before this one on ops1.
+safety_service_parents:
+  - /etc/branchleft
+  - /var/lib/branchleft
+
+# The role's own paths. The configuration and the environment are public values and root's. The
+# state directory holds the audit trail and is the account's alone.
+safety_service_config_dir: /etc/branchleft/safety-service
+safety_service_config_file: /etc/branchleft/safety-service/config.json
+safety_service_env_file: /etc/branchleft/safety-service/service.env
+safety_service_state_dir: /var/lib/branchleft/safety-service
+safety_service_audit_file: /var/lib/branchleft/safety-service/audit.jsonl
+
+# Paths the role names and never writes. The directory is made, and its key written, by the
+# safety_channel_key role, which refuses any file in it that is not the key: so the hash-source
+# credential cannot live there. Held equal to that role's constants by
+# tests/unit/test_safety_service.py, since a role does not import another (ANS-12).
+safety_service_secrets_dir: /etc/branchleft/content-safety
+safety_service_signing_key_file: /etc/branchleft/content-safety/channel-signing.key
+
+# The hash-source credential is a username and a password, two files in a directory of their own.
+# The role makes the directory (account's, closed to everyone else); the owner places the two files.
+safety_service_credential_dir: /etc/branchleft/arachnid
+safety_service_username_file: /etc/branchleft/arachnid/username
+safety_service_password_file: /etc/branchleft/arachnid/password
+
+safety_service_unit_dir: /etc/systemd/system
+safety_service_unit: content-safety.service
+safety_service_docker: /usr/bin/docker
+
+# How long a "no known match" is kept before the hash is asked about again. The service caps it
+# at seven days; a day keeps the figure well inside the cap.
+safety_service_negative_ttl_ms: 86400000
+
+# The shapes the inputs must have when set. They end in \Z, not $, so a trailing line break does
+# not pass. None admits a space, a quote, a backslash, a dollar sign or a hash, so a value is one
+# plain word in the environment file and the configuration.
+safety_service_image_pattern: '^ghcr\.io/branchleft/content-safety@sha256:[0-9a-f]{64}\Z'
+safety_service_origin_pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?\Z'
+safety_service_host_id_pattern: '^[A-Za-z0-9._-]{1,64}\Z'
+safety_service_host_kinds:
+  - demo
+  - tenant
+safety_service_host_keys:
+  - endpoint
+  - id
+  - kind
