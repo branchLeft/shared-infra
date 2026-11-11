@@ -575,6 +575,10 @@ class TaskTests(unittest.TestCase):
             render(str(args_of(remove)["path"]), {"item": "x.json"}).startswith(directory)
         )
 
+    def test_a_descriptor_is_roots_and_not_writable_by_anyone_else(self) -> None:
+        write = args_of(named("Write each listed host"))
+        self.assertEqual((write["owner"], write["group"], write["mode"]), ("root", "root", "0644"))
+
     def test_the_hosts_are_judged_and_the_demo_domain_required_before_anything_changes(
         self,
     ) -> None:
