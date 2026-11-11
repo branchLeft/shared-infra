@@ -10,17 +10,21 @@ import { buildStack } from './stack';
 
 /**
  * The committed probe stack file, read as the engine would read it. It carries
- * the project marker. It stays UNSET until the owner reports the id of the
- * probe project, and the first tests pin that the program refuses the committed
- * file, accepts a well-formed id only when the config and the environment
- * agree, and refuses a mismatch, a missing variable and a malformed id.
+ * the owner's project id. The first tests pin that the committed file names a
+ * well-formed id, that the program refuses the UNSET marker and any other value
+ * the environment may carry, accepts a well-formed id only when the config and
+ * the environment agree, and refuses a mismatch, a missing variable and a
+ * malformed id.
  */
 
 const NS = 'branchleft-ovh-copy2';
 const FILE = join(__dirname, 'Pulumi.probe.yaml');
+// The probe project's id, reported by the owner; not a secret.
+const COMMITTED = '5dd5eda4165c48fa80428816500bc992';
 // Fixtures shaped like project ids, not any real project.
 const PROJECT = '0123456789abcdef0123456789abcdef';
 const OTHER_PROJECT = 'fedcba9876543210fedcba9876543210';
+const UNSET = 'UNSET';
 
 type StackFile = { config: Record<string, unknown> };
 
@@ -46,19 +50,30 @@ beforeAll(async () => {
 });
 
 describe('Pulumi.probe.yaml', () => {
-  it('commits no project id until the owner reports one: it is UNSET', () => {
-    expect(own('allowedProjectId')).toBe('UNSET');
+  it('commits the owner-reported project id as allowedProjectId', () => {
+    expect(own('allowedProjectId')).toBe(COMMITTED);
+    expect(COMMITTED).toMatch(/^[0-9a-f]{32}$/);
   });
 
-  it('is refused as committed, even when the environment names a well-formed project', () => {
+  it('is accepted as committed only when the environment names the same project', () => {
     const committed = settings(own('allowedProjectId') as string);
+    const stack = buildStack(committed, { OVH_CLOUD_PROJECT_SERVICE: COMMITTED });
+    expect(Object.keys(stack.buckets)).toEqual(['zz-probe-a', 'zz-probe-b', 'zz-probe-c']);
     expect(() => buildStack(committed, { OVH_CLOUD_PROJECT_SERVICE: PROJECT })).toThrow(
+      /not the allowed project/
+    );
+    expect(() => buildStack(committed, {})).toThrow(/is not set/);
+  });
+
+  it('refuses the UNSET marker, whatever the environment names', () => {
+    const unset = settings(UNSET);
+    expect(() => buildStack(unset, { OVH_CLOUD_PROJECT_SERVICE: PROJECT })).toThrow(
       /allowedProjectId is not set/
     );
-    expect(() => buildStack(committed, { OVH_CLOUD_PROJECT_SERVICE: 'UNSET' })).toThrow(
+    expect(() => buildStack(unset, { OVH_CLOUD_PROJECT_SERVICE: UNSET })).toThrow(
       /allowedProjectId is not set/
     );
-    expect(() => buildStack(committed, {})).toThrow(/allowedProjectId is not set/);
+    expect(() => buildStack(unset, {})).toThrow(/allowedProjectId is not set/);
   });
 
   it('is accepted only when the config and the environment name the same well-formed project', () => {

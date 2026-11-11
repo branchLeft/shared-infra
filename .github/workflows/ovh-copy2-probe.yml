@@ -34,11 +34,11 @@ jobs:
     env:
       PROBE_ENVIRONMENT: ovh-copy2-probe
       OVH_ENDPOINT: ovh-eu
-      # Not a secret. Must equal allowedProjectId in ovh/copy2/Pulumi.probe.yaml:
-      # the project guard refuses a run where the two differ. Both stay UNSET
-      # until the owner reports the id of the probe project, and the first
-      # step below fails the run while this is not a 32-character hex id.
-      OVH_CLOUD_PROJECT_SERVICE: UNSET
+      # Not a secret. The owner's id for the probe project. Must equal
+      # allowedProjectId in ovh/copy2/Pulumi.probe.yaml: the project guard
+      # refuses a run where the two differ. The first step below fails the run
+      # unless this is a 32-character hex id.
+      OVH_CLOUD_PROJECT_SERVICE: 5dd5eda4165c48fa80428816500bc992
 
     steps:
       # First, before checkout and before any secret is read: a run that does
@@ -49,7 +49,7 @@ jobs:
         run: |
           pattern='^[0-9a-f]{32}$'
           if ! [[ "${OVH_CLOUD_PROJECT_SERVICE:-}" =~ $pattern ]]; then
-            echo "::error title=Probe project id not set::OVH_CLOUD_PROJECT_SERVICE is not a 32-character hex project id. The probe cannot run until a pull request writes the owner's project id into this workflow and into ovh/copy2/Pulumi.probe.yaml."
+            echo "::error title=Probe project id not set::OVH_CLOUD_PROJECT_SERVICE is not a 32-character hex project id. The probe cannot run unless this workflow and ovh/copy2/Pulumi.probe.yaml carry the same project id."
             exit 1
           fi
 

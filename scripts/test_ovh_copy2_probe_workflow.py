@@ -27,6 +27,8 @@ ENVIRONMENT = "ovh-copy2-probe"
 SECRET_NAMES = ("OVH_CLIENT_ID", "OVH_CLIENT_SECRET")
 SECRET_STEPS = ("up", "check", "destroy")
 UNSET = "UNSET"
+# The probe project's id, reported by the owner; not a secret.
+COMMITTED = "5dd5eda4165c48fa80428816500bc992"
 # A fixture shaped like a project id, not any real one.
 WELL_FORMED = "0123456789abcdef0123456789abcdef"
 
@@ -73,11 +75,9 @@ def markers(stack_source: str, workflow_source: str) -> tuple[str, str]:
 
 
 def markers_agree(stack_source: str, workflow_source: str) -> bool:
-    """True for two equal UNSET markers or two equal well-formed ids, else False."""
+    """True only for two equal well-formed ids; UNSET or a mismatch is False."""
     allowed, in_workflow = markers(stack_source, workflow_source)
-    return allowed == in_workflow and bool(
-        re.fullmatch(rf"{UNSET}|[0-9a-f]{{32}}", allowed)
-    )
+    return allowed == in_workflow and bool(re.fullmatch(r"[0-9a-f]{32}", allowed))
 
 
 def with_stack_id(stack_source: str, value: str) -> str:
@@ -144,12 +144,13 @@ class EnvironmentTests(unittest.TestCase):
         self.assertTrue(markers_agree(stack_source, text()))
         allowed, in_workflow = markers(stack_source, text())
         self.assertEqual(allowed, in_workflow)
-        self.assertRegex(allowed, rf"^({UNSET}|[0-9a-f]{{32}})$")
+        self.assertRegex(allowed, r"^[0-9a-f]{32}$")
+        self.assertEqual(COMMITTED, allowed)
 
     def test_a_pair_that_differs_is_refused(self) -> None:
         stack_source = PROBE_STACK_FILE.read_text(encoding="utf-8")
         one_sided = text().replace(
-            f"OVH_CLOUD_PROJECT_SERVICE: {UNSET}",
+            f"OVH_CLOUD_PROJECT_SERVICE: {COMMITTED}",
             f"OVH_CLOUD_PROJECT_SERVICE: {WELL_FORMED}",
         )
         self.assertNotEqual(text(), one_sided)
@@ -162,20 +163,26 @@ class EnvironmentTests(unittest.TestCase):
     def test_a_well_formed_pair_is_accepted_only_when_both_places_match(self) -> None:
         stack_source = PROBE_STACK_FILE.read_text(encoding="utf-8")
         both = text().replace(
-            f"OVH_CLOUD_PROJECT_SERVICE: {UNSET}",
+            f"OVH_CLOUD_PROJECT_SERVICE: {COMMITTED}",
             f"OVH_CLOUD_PROJECT_SERVICE: {WELL_FORMED}",
         )
         self.assertTrue(markers_agree(with_stack_id(stack_source, WELL_FORMED), both))
         self.assertFalse(markers_agree(stack_source, both))
 
-    def test_the_committed_marker_is_unset_until_the_owner_reports_the_id(
-        self,
-    ) -> None:
+    def test_an_unset_pair_is_refused_by_the_comparison(self) -> None:
+        stack_source = PROBE_STACK_FILE.read_text(encoding="utf-8")
+        both_unset = text().replace(
+            f"OVH_CLOUD_PROJECT_SERVICE: {COMMITTED}",
+            f"OVH_CLOUD_PROJECT_SERVICE: {UNSET}",
+        )
+        self.assertFalse(markers_agree(with_stack_id(stack_source, UNSET), both_unset))
+
+    def test_the_committed_pair_is_the_owner_reported_id_in_both_places(self) -> None:
         allowed, in_workflow = markers(
             PROBE_STACK_FILE.read_text(encoding="utf-8"), text()
         )
-        self.assertEqual(UNSET, allowed)
-        self.assertEqual(UNSET, in_workflow)
+        self.assertEqual(COMMITTED, allowed)
+        self.assertEqual(COMMITTED, in_workflow)
 
 
 class ProjectStepTests(unittest.TestCase):
