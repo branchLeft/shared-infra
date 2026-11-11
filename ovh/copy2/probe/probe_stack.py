@@ -1,8 +1,8 @@
 """The Pulumi CLI, driven for the probe stack against a throwaway file backend.
 
 Commands run as an argv list with no shell. A fake `Runner` stands in for the
-CLI in the tests. Output that can carry a secret (`stack output --show-secrets`,
-`stack export`) is captured and never printed.
+CLI in the tests. Output that can carry a secret (the stack outputs read with
+secrets shown, and `stack export`) is captured and never printed.
 """
 
 from __future__ import annotations

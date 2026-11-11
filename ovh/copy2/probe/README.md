@@ -31,6 +31,8 @@ A row is PASS, FAIL (the platform did something other than expected) or ERROR (t
 
 The destroy step has `if: always()`, so it runs after a failed check, a failed create and a cancelled run. It empties bucket A (Governance bypass, which P3 has just shown works), then runs `pulumi destroy` up to three times, then reads the stack's state. Any resource left in the state, or any pending operation, makes the job red and is printed by name in an error annotation and in the summary. The summary states plainly whether everything was destroyed.
 
+If OVHcloud accepts the lock request that P5 sends to bucket B, P5 is a FAIL and bucket B is left with a one-day Governance default that cannot be removed: a lock, once set, stays. That does not stop the cleanup, because the lock is a bucket default and bucket B never holds an object: the probe writes nothing to B, the P4 write to B is sent with a credential that cannot reach it, and the lock-attempt credential has no object action. `pulumi destroy` then deletes B as it deletes A and C, which also carry a default lock and are empty (A after the bypass delete above). What is not verified: no OVHcloud call has been made, so whether OVHcloud deletes an empty bucket that carries a default lock, Compliance on C included, is an assumption the first run tests. If it refuses, the bucket stays in the state, the job is red, and the bucket is named in the error annotation and in the summary. An empty bucket costs nothing worth counting.
+
 Its limit: "destroyed" means Pulumi's state is empty after the destroy. A resource that OVHcloud created but Pulumi never recorded (a run killed mid-create) cannot be seen from here. After the first run, look at the OVHcloud console for anything named `zz-probe-`.
 
 ## Secrets and state
@@ -40,6 +42,8 @@ Its limit: "destroyed" means Pulumi's state is empty after the destroy. A resour
 - The Pulumi backend is a `file://` directory under the runner's scratch area, with a random passphrase in a mode 0600 file there. Nothing is uploaded, cached or logged.
 - Every credential the stack mints is registered for masking before it is used, and scrubbed from check details.
 - The S3 client (`boto3`) is installed from `requirements.txt`: exact versions, a hash each, `--require-hashes`.
+- The Pulumi OVHcloud provider is pinned to an exact version (`@ovhcloud/pulumi-ovh` in `package.json`) but its plugin binary is fetched at the first `pulumi up` and is not checked against a checksum. Pulumi's `plugin install` accepts `--checksum`, but the expected SHA256 of the release archive has to be read from the provider's published release, and that was not obtained here: nothing was downloaded and no value is guessed. Adding a pinned install step is a follow-up that needs that value. Until then the plugin comes from the provider's GitHub release at the pinned version, runs only in the job that holds the OVHcloud secrets, and the run needs the owner's approval first.
+- The stack outputs are read with secrets shown, in `probe_stack.py` only. That output is captured, never printed, and each credential is registered for masking before it is used.
 
 ## Files
 
