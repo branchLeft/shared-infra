@@ -9,16 +9,15 @@ import { PROBE_PREFIX, type Settings } from './configGuard';
 import { buildStack } from './stack';
 
 /**
- * The committed probe stack file, read as the engine would read it. It ships
- * with the project id unset, so the first test is the one that matters most
- * today: nothing can be created from this file until the owner's id replaces
- * the marker. The rest prove the file is already correct, so that supplying the
- * id is the only edit left.
+ * The committed probe stack file, read as the engine would read it. It carries
+ * the owner's OVHcloud project id, and the first tests pin that the program
+ * accepts exactly that id when the environment agrees, and refuses UNSET, a
+ * different id and a missing variable.
  */
 
 const NS = 'branchleft-ovh-copy2';
 const FILE = join(__dirname, 'Pulumi.probe.yaml');
-const PROJECT = '0123456789abcdef0123456789abcdef';
+const PROJECT = '5dd5eda4165c48fa80428816500bc992';
 
 type StackFile = { config: Record<string, unknown> };
 
@@ -44,18 +43,23 @@ beforeAll(async () => {
 });
 
 describe('Pulumi.probe.yaml', () => {
-  it('ships the project id unset, and the program refuses it', () => {
-    expect(own('allowedProjectId')).toBe('UNSET');
-    expect(() =>
-      buildStack(settings(String(own('allowedProjectId'))), {
-        OVH_CLOUD_PROJECT_SERVICE: PROJECT,
-      })
-    ).toThrow(/allowedProjectId is not set/);
+  it('commits exactly the owner project id', () => {
+    expect(own('allowedProjectId')).toBe(PROJECT);
+    expect(PROJECT).toMatch(/^[0-9a-f]{32}$/);
   });
 
-  it('is accepted by every guard once the owner supplies a project id', () => {
+  it('is accepted when the environment names the same project', () => {
     const stack = buildStack(settings(PROJECT), { OVH_CLOUD_PROJECT_SERVICE: PROJECT });
     expect(Object.keys(stack.buckets)).toEqual(['zz-probe-a', 'zz-probe-b', 'zz-probe-c']);
+  });
+
+  it('still refuses UNSET, a different id and a missing variable', () => {
+    const env = { OVH_CLOUD_PROJECT_SERVICE: PROJECT };
+    expect(() => buildStack(settings('UNSET'), env)).toThrow(/allowedProjectId is not set/);
+    expect(() =>
+      buildStack(settings(PROJECT), { OVH_CLOUD_PROJECT_SERVICE: '0'.repeat(32) })
+    ).toThrow(/not the allowed project/);
+    expect(() => buildStack(settings(PROJECT), {})).toThrow(/is not set/);
   });
 
   it('names only probe buckets, each locked for one day at most', () => {

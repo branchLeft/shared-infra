@@ -1,9 +1,8 @@
 # The probe stack: three throwaway buckets and two users, made, exercised and
 # destroyed inside one job. Nothing here may outlive the run.
 #
-# `allowedProjectId` is UNSET on purpose. The program refuses UNSET (see
-# projectGuard.ts), so this stack creates nothing until the project's owner
-# supplies the OVHcloud project id and it is committed here in place of UNSET.
+# `allowedProjectId` is the OVHcloud Public Cloud project the owner created for
+# this probe. The program refuses UNSET and any other shape (see projectGuard.ts).
 # The id is not a secret. The workflow must also export the same id as
 # OVH_CLOUD_PROJECT_SERVICE; the guard refuses a run where the two differ.
 #
@@ -16,7 +15,7 @@
 # generates a throwaway passphrase and a fresh salt for its own backend.
 config:
   ovh:endpoint: ovh-eu
-  branchleft-ovh-copy2:allowedProjectId: UNSET
+  branchleft-ovh-copy2:allowedProjectId: 5dd5eda4165c48fa80428816500bc992
   branchleft-ovh-copy2:users:
     # Owns the buckets and never receives an S3 credential.
     - name: zz-probe-owner
