@@ -1,0 +1,113 @@
+{
+  "repository": "branchLeft/ghost-platform",
+  "consumers": [
+    {
+      "name": "db1_backup_timers",
+      "host": "db1",
+      "commit": {
+        "file": "ansible/roles/db1_backup_timers/vars/main.yml",
+        "key": "db1_backup_timers_ghost_commit"
+      },
+      "sources": [
+        {
+          "file": "ansible/roles/db1_backup_timers/vars/main.yml",
+          "key": "db1_backup_timers_provision_files",
+          "shape": "strings",
+          "prefix": "db/provision/"
+        },
+        {
+          "file": "ansible/roles/db1_backup_timers/vars/main.yml",
+          "key": "db1_backup_timers_recovery_files",
+          "shape": "strings",
+          "prefix": "db/recovery/"
+        },
+        {
+          "file": "ansible/roles/db1_backup_timers/vars/main.yml",
+          "key": "db1_backup_timers_units",
+          "shape": "strings",
+          "prefix": "db/provision/"
+        }
+      ]
+    },
+    {
+      "name": "db1_grants",
+      "host": "db1",
+      "commit": {
+        "file": "ansible/roles/db1_grants/vars/main.yml",
+        "key": "db1_grants_source_commit"
+      },
+      "sources": [
+        {
+          "file": "ansible/roles/db1_grants/vars/main.yml",
+          "key": "db1_grants_program_sha256",
+          "shape": "keys",
+          "prefix": "db/provision/"
+        }
+      ]
+    },
+    {
+      "name": "backup_worker",
+      "host": "ops1",
+      "commit": {
+        "file": "ansible/roles/backup_worker/defaults/main.yml",
+        "key": "backup_worker_source_sha"
+      },
+      "sources": [
+        {
+          "file": "ansible/roles/backup_worker/defaults/main.yml",
+          "key": "backup_worker_release_files",
+          "shape": "path_field",
+          "prefix": ""
+        }
+      ]
+    },
+    {
+      "name": "tenant_onboarding",
+      "host": "app1 (role not yet in a playbook)",
+      "commit": {
+        "file": "ansible/roles/tenant_onboarding/vars/main.yml",
+        "key": "tenant_onboarding_ghost_commit"
+      },
+      "sources": [
+        {
+          "path": "app/provision/provision_tenant_volume.py"
+        },
+        {
+          "path": "registers/tenant-names.json"
+        }
+      ]
+    },
+    {
+      "name": "breakglass_grant_host",
+      "host": "app1",
+      "commit": {
+        "file": "ansible/roles/breakglass_grant_host/defaults/main.yml",
+        "key": "breakglass_grant_host_source_commit"
+      },
+      "sources": [
+        {
+          "file": "ansible/roles/breakglass_grant_host/vars/main.yml",
+          "key": "breakglass_grant_host_files",
+          "shape": "path_field",
+          "prefix": "adapters/sso/scripts/"
+        }
+      ]
+    },
+    {
+      "name": "breakglass_mint_host",
+      "host": "ops1",
+      "commit": {
+        "file": "ansible/roles/breakglass_mint_host/defaults/main.yml",
+        "key": "breakglass_mint_host_source_commit"
+      },
+      "sources": [
+        {
+          "file": "ansible/roles/breakglass_mint_host/vars/main.yml",
+          "key": "breakglass_mint_host_files",
+          "shape": "path_field",
+          "prefix": "adapters/sso/scripts/"
+        }
+      ]
+    }
+  ]
+}
