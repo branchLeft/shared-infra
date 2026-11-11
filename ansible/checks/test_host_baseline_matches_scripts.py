@@ -18,6 +18,9 @@ from pathlib import Path
 import check_enrolment
 import jinja2  # type: ignore[import-untyped]
 import yaml  # type: ignore[import-untyped]
+from ansible.errors import AnsibleUndefinedVariable  # type: ignore[import-untyped]
+from ansible.parsing.dataloader import DataLoader  # type: ignore[import-untyped]
+from ansible.template import Templar, trust_as_template  # type: ignore[import-untyped]
 from check_enrolment import ROOT
 
 PROVISION = ROOT / "hetzner" / "provision"
@@ -151,6 +154,54 @@ def _rendered_jail(ignoreip_none: bool = False) -> str:
     return env.from_string(text).render(variables)
 
 
+def _sets_key(node: object, key: str) -> bool:
+    """Return whether the parsed YAML assigns `key` anywhere, as a mapping key at any depth."""
+    if isinstance(node, dict):
+        return key in node or any(_sets_key(value, key) for value in node.values())
+    if isinstance(node, list):
+        return any(_sets_key(item, key) for item in node)
+    return False
+
+
+def _assert_refuses(case: dict[str, object], drop: str | None = None) -> bool:
+    """Return whether the role's ignoreip assert would refuse, evaluated by Ansible's templar.
+
+    The variables are the role's defaults with `case` laid over them, as the role sees them, and
+    `drop` removed. The task's `when` is evaluated first: a false `when` skips the task, so it
+    refuses nothing. Each `that` item is then evaluated, and the task fails on the first that is
+    false or that cannot be evaluated (an undefined variable fails the play too).
+
+    Raises:
+        AssertionError: the task file holds no ignoreip assert, or more than one.
+    """
+    defaults = yaml.safe_load((ROLE / "defaults" / "main.yml").read_text(encoding="utf-8"))
+    variables = {**defaults, **case}
+    variables.pop(drop, None)
+    tasks = yaml.safe_load(ASSERT_TASKS.read_text(encoding="utf-8"))
+    asserts = [
+        task
+        for task in tasks
+        if "ansible.builtin.assert" in task and "ignoreip" in str(task["ansible.builtin.assert"])
+    ]
+    if len(asserts) != 1:
+        message = f"{ASSERT_TASKS.name} holds {len(asserts)} ignoreip asserts, not one"
+        raise AssertionError(message)
+    task = asserts[0]
+    templar = Templar(loader=DataLoader(), variables=variables)
+    try:
+        conditions = task.get("when", [])
+        for condition in [conditions] if isinstance(conditions, str | bool) else conditions:
+            if not templar.evaluate_conditional(trust_as_template(str(condition))):
+                return False
+        that = task["ansible.builtin.assert"]["that"]
+        return not all(
+            templar.evaluate_conditional(trust_as_template(item))
+            for item in ([that] if isinstance(that, str) else that)
+        )
+    except AnsibleUndefinedVariable:
+        return True
+
+
 class HostBaselineMatchesScripts(unittest.TestCase):
     def test_each_role_file_is_byte_for_byte_its_script_heredoc(self) -> None:
         for relative, script_name, position in PAIRS:
@@ -226,19 +277,29 @@ class Mx1OptOut(unittest.TestCase):
         self.assertEqual(role_file, bodies[0].encode("utf-8"))
         self.assertEqual(hashlib.sha256(role_file).hexdigest(), MX1_DROPIN_SHA256)
 
-    def test_the_ignore_list_is_asserted_on_every_host(self) -> None:
-        # The assert has no `when`, so an empty input refuses whether or not the opt-out is set.
-        tasks = yaml.safe_load(ASSERT_TASKS.read_text(encoding="utf-8"))
-        asserts = [
-            task
-            for task in tasks
-            if "ansible.builtin.assert" in task
-            and "ignoreip" in str(task["ansible.builtin.assert"])
-        ]
-        self.assertEqual(len(asserts), 1)
-        self.assertNotIn("when", asserts[0])
-        expressions = asserts[0]["ansible.builtin.assert"]["that"]
-        self.assertTrue(any(IGNOREIP_PATTERN in str(item) for item in expressions), expressions)
+    def test_the_ignore_list_assert_refuses_an_empty_list_whatever_the_opt_out_is(self) -> None:
+        # The assert is evaluated by Ansible's own templar, so a `when` or an `or` that lets an
+        # empty list through is red, which a match on the task's text would not see.
+        self.assertTrue(_assert_refuses({JAIL_INPUT: ""}), "opt-out unset, empty list")
+        self.assertTrue(_assert_refuses({JAIL_INPUT: "", OPT_OUT_KEY: False}), "opt-out false")
+        self.assertTrue(_assert_refuses({JAIL_INPUT: "", OPT_OUT_KEY: True}), "opt-out true")
+        self.assertTrue(_assert_refuses({JAIL_INPUT: "10.0.0.1\nbantime = 0"}), "two lines")
+        self.assertTrue(_assert_refuses({}, drop=JAIL_INPUT), "ignore list missing")
+
+    def test_the_ignore_list_assert_passes_a_valid_list_whatever_the_opt_out_is(self) -> None:
+        valid = "127.0.0.1/8 ::1 10.20.1.10"
+        self.assertFalse(_assert_refuses({JAIL_INPUT: valid}), "opt-out unset")
+        self.assertFalse(_assert_refuses({JAIL_INPUT: valid, OPT_OUT_KEY: False}))
+        self.assertFalse(_assert_refuses({JAIL_INPUT: valid, OPT_OUT_KEY: True}))
+
+    def test_no_playbook_but_the_mx1_one_sets_the_opt_out(self) -> None:
+        setters = sorted(
+            path.relative_to(ROOT).as_posix()
+            for tree in (ROOT / "ansible" / "playbooks", ROOT / "ansible" / "owner_vars")
+            for path in tree.rglob("*.yml")
+            if _sets_key(yaml.safe_load(path.read_text(encoding="utf-8")), OPT_OUT_KEY)
+        )
+        self.assertEqual(setters, [MX1_PLAYBOOK.relative_to(ROOT).as_posix()])
 
     def test_the_pattern_refuses_an_empty_ignore_list(self) -> None:
         self.assertIsNone(re.match(IGNOREIP_PATTERN, ""))
