@@ -85,27 +85,69 @@ Held by `_compose_check.yml` on the template, by `_readback.yml` on the running 
 
 ## The drain-port rule
 
-A published Docker port is a DNAT in `nat`, which bypasses the host's `INPUT` chain, so the rule
-lives in `DOCKER-USER`, the chain Docker leaves for the host. The sibling firewall rules on the
-estate use the same chain and match on the original destination (`--ctorigdst`,
-`--ctorigdstport`) because by the time `DOCKER-USER` sees the packet its destination is the
-container. This rule adds `--ctdir ORIGINAL`, so only the client-to-server direction is judged and
-replies are never dropped:
+A published Docker port is a DNAT in `nat`, which bypasses the host's `INPUT` chain, so the rules
+live in `DOCKER-USER`, the chain Docker leaves for the host and evaluates first in `FORWARD`. By
+the time a packet reaches it the DNAT has already run, so its destination is the container's
+address and port, and the original destination is known only through conntrack.
+
+There are two ways a packet reaches the drain listener, and the role closes both with two rules,
+`DROP` for every source but ops1, kept as the first and second rules of the chain:
+
+1. A connection made to the published address, `10.20.1.10:<drain port>`. Docker's DNAT rewrites it
+   to the container, `172.29.250.2:8081`.
+2. A connection sent straight to the container's address. The platform network's default route
+   points at this host, which forwards (the `egress_nat` role turns forwarding on), so any
+   platform host can address `172.29.250.2:8081`, and on Docker's documented defaults its own
+   `DOCKER` chain accepts a forwarded packet to a published container port.
 
 ```
+-p tcp -d 172.29.250.2 --dport 8081 ! -s 10.20.1.50 -j DROP
 -p tcp -m conntrack --ctorigdst 10.20.1.10 --ctorigdstport <drain port> --ctdir ORIGINAL ! -s 10.20.1.50 -j DROP
 ```
 
-The program (`files/branchleft_sweego_drain_rule.py`, installed at
-`/usr/local/sbin/branchleft-sweego-drain-rule`) inserts it at position 1, and when it is already
-there checks that it is the first rule. Anything it cannot decide (no `iptables`, no
-`DOCKER-USER`, an unexpected exit status) is a refusal, never a guess. Its boot unit
-(`branchleft-sweego-drain-rule.service`) runs after `docker.service` and is `PartOf` it, so a
-Docker restart, which rebuilds the chain, loads the rule again.
+The first rule matches the packet where it is in `FORWARD`, so it covers both ways in. The second
+is the same limit by the original destination, kept so that the published address stays guarded
+even if the container's address were ever to change. It adds `--ctdir ORIGINAL`, so only the
+client-to-server direction is judged and replies are never dropped. A reply has the platform host
+as its destination, not the container, so the first rule never catches one either.
 
-Default deny is the rule's shape: the one allowed source is named, everything else to that port is
-dropped. A source given as a network, a wildcard or loopback is refused by the program, and so is
-a source equal to the host's own address.
+What the rules drop, and what they leave:
+
+| Traffic                                                                | Result                                        |
+| ---------------------------------------------------------------------- | --------------------------------------------- |
+| Any forwarded connection to `172.29.250.2:8081`, source not ops1       | Dropped (rule 1), by whatever address it used |
+| Any forwarded connection to `10.20.1.10:<drain port>`, source not ops1 | Dropped (rule 1 after DNAT, and rule 2)       |
+| ops1 (`10.20.1.50`) to either of those                                 | Passes, and still needs the bearer token      |
+| Another container on this host to `10.20.1.10:<drain port>`            | Dropped, as any source but ops1               |
+| This host's own processes to the drain port                            | Not seen (below, "Limits")                    |
+| Anything to the webhook port                                           | Not limited by this role (above)              |
+
+The program (`files/branchleft_sweego_drain_rule.py`, installed at
+`/usr/local/sbin/branchleft-sweego-drain-rule`) inserts rule 1 at position 1 and rule 2 at position 2. When a rule is already there it checks that it is at its place, and a rule present anywhere else
+is a refusal, not a repair, because a rule under an accept is not a rule. A rule an earlier version
+left as the only one is kept and gains the new one above it. Anything it cannot decide (no
+`iptables`, no `DOCKER-USER`, an unexpected exit status) is a refusal, never a guess. It matches the
+`iptables -S` lines by their pieces, each ended at a space, the end of the line or a `/32`, and a
+negated `-d` or `--dport` is not taken for the match. A source given as a network, a wildcard or
+loopback is refused, and so is a source equal to the published or the container address.
+
+Its boot unit (`branchleft-sweego-drain-rule.service`) runs after `docker.service` and is `PartOf`
+it, so a Docker restart, which leaves `DOCKER-USER` as it is, runs the program again to check it.
+
+### Ordering against the NAT unit
+
+`egress_nat` writes two rules to the same chain from its own unit, `branchleft-nat.service`, which
+is also `After=docker.service` and also inserts at the top. With no order between the two units,
+the one that ran second would sit above the other, and at a boot where the NAT unit ran last the
+drain-port rules would be rules 3 and 4, which this role then refuses at every pull. The drain-rule
+unit therefore says `After=branchleft-nat.service` (an order only: it neither requires nor wants
+the NAT unit, which stays the egress role's), so the NAT rules go in first and the drain-port rules
+are inserted above them. The NAT rules match only traffic going out of, or coming back from, the
+uplink, so they never touch a packet for the drain port.
+
+What this proves and what it does not: the unit text names the order, and a unit test holds it. It
+has not been run through a reboot, so the first boot after the role is applied on edge1 is the
+proof (below, "Limits").
 
 ## Interface
 
@@ -164,12 +206,17 @@ Named here, not hidden:
   the HMAC, not by the firewall.
 - The drain rule trusts the source address. Another host on the private network could forge ops1's
   address; the bearer token is the second factor.
+- Rule 1 is reasoned from the documented defaults of Docker (its own chain accepts a forwarded
+  packet to a published container port) and of the platform network (its default route leads to
+  this host). Neither was observed on a real edge1, and the role does not rely on Docker refusing
+  such traffic itself.
 - Processes on edge1 itself reach the drain port through Docker's own proxy, which does not pass
   through `DOCKER-USER`. They still need the token.
 - IPv4 only. Nothing is published on IPv6.
 - A rule left for an old port is not removed when the port changes. Remove it by hand.
-- Whether the receiver starts before its rule at a cold boot is held by the unit ordering and by
-  `restart: on-failure:5`, and is proven only by a reboot drill on the real host.
+- Whether the receiver starts before its rule at a cold boot, and whether the drain-port rules
+  are rules 1 and 2 after one (the order against the NAT unit), is held by the unit ordering and
+  by `restart: on-failure:5`, and is proven only by a reboot drill on the real host.
 
 ## How to test
 

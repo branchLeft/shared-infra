@@ -292,10 +292,26 @@ class RuleUnitAdmitsOps1Alone(unittest.TestCase):
             self.option("--allow-source"), constant("sweego_receiver_drain_peer_address")
         )
 
+    def test_the_rule_also_names_the_container_address_and_port_the_compose_file_gives(
+        self,
+    ) -> None:
+        """The post-DNAT match: a packet sent to the container's address, not the published one.
+
+        Held to the compose file, so the rule and the container cannot drift apart.
+        """
+        environment = as_dict(receiver()["environment"])
+        self.assertEqual(self.option("--container-address"), environment["WEBHOOK_DRAIN_HOST"])
+        self.assertEqual(self.option("--container-port"), environment["WEBHOOK_DRAIN_PORT"])
+        service_networks = as_dict(as_dict(receiver()["networks"])["receiver"])
+        self.assertEqual(self.option("--container-address"), service_networks["ipv4_address"])
+        published = str(as_list(receiver()["ports"])[1])
+        self.assertTrue(published.endswith(":" + self.option("--container-port")), published)
+
     def test_the_unit_takes_no_environment_and_no_other_option(self) -> None:
         words = self.exec_start()
         self.assertEqual(
-            [w for w in words if w.startswith("--")], ["--address", "--port", "--allow-source"]
+            [w for w in words if w.startswith("--")],
+            ["--address", "--port", "--allow-source", "--container-address", "--container-port"],
         )
         self.assertNotIn("Environment", render("branchleft-sweego-drain-rule.service.j2"))
 
@@ -304,6 +320,28 @@ class RuleUnitAdmitsOps1Alone(unittest.TestCase):
         self.assertRegex(text, r"(?m)^After=.*docker\.service")
         self.assertRegex(text, r"(?m)^PartOf=docker\.service$")
         self.assertRegex(text, r"(?m)^WantedBy=multi-user\.target$")
+
+    def test_the_unit_is_ordered_after_the_nat_unit_so_the_start_order_is_fixed(self) -> None:
+        """Both units insert at the top of DOCKER-USER; the later one decides who is first.
+
+        Without this After, the order at boot is whichever systemd happens to run first, and the
+        drain-port rules could be left below the NAT rules, which the role then refuses.
+        """
+        text = render("branchleft-sweego-drain-rule.service.j2")
+        nat = str(constant("sweego_receiver_nat_unit_name"))
+        self.assertRegex(text, rf"(?m)^After=.*\b{re.escape(nat)}\b")
+
+    def test_the_unit_only_waits_for_the_nat_unit_and_does_not_pull_it_in(self) -> None:
+        text = render("branchleft-sweego-drain-rule.service.j2")
+        nat = str(constant("sweego_receiver_nat_unit_name"))
+        for line in text.splitlines():
+            if line.startswith(("Requires=", "Wants=", "BindsTo=", "Requisite=", "PartOf=")):
+                self.assertNotIn(nat, line)
+
+    def test_the_nat_unit_name_is_the_one_the_egress_role_installs(self) -> None:
+        # The role is not imported (ANS-12), so the name is written out and held to its file.
+        nat = str(constant("sweego_receiver_nat_unit_name"))
+        self.assertTrue((ROLE.parent / "egress_nat" / "files" / nat).is_file(), nat)
 
     def test_the_receivers_unit_is_ordered_after_and_bound_to_the_rule_unit(self) -> None:
         content = str(constant("sweego_receiver_dropin_content"))

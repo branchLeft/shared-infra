@@ -63,6 +63,10 @@ sweego_receiver_container_token_path: /run/secrets/webhook-drain-token
 sweego_receiver_program_src: branchleft_sweego_drain_rule.py
 sweego_receiver_program_dest: /usr/local/sbin/branchleft-sweego-drain-rule
 sweego_receiver_rule_unit_name: branchleft-sweego-drain-rule.service
+# The unit of the egress_nat role that puts the estate's NAT rules in the same chain. The rule
+# unit is ordered after it. That role is not imported (ANS-12), so the name is written out here
+# and a test holds it to that role's unit file.
+sweego_receiver_nat_unit_name: branchleft-nat.service
 sweego_receiver_rule_unit_dest: /etc/systemd/system/branchleft-sweego-drain-rule.service
 
 # Shapes. \Z, not $, so a trailing newline does not pass.

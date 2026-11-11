@@ -1,8 +1,8 @@
 ---
 # Internal to the role. Installs the drain-port rule program and its boot unit, enables the
-# unit and runs the program again when either file changed, then reads the rule back from the
-# kernel and asserts it is the first rule of DOCKER-USER. The program builds the rule; this
-# role never writes a firewall rule itself. Nothing here reads from the network.
+# unit and runs the program again when either file changed, then reads the rules back from the
+# kernel and asserts they are the first two rules of DOCKER-USER. The program builds the rules;
+# this role never writes a firewall rule itself. Nothing here reads from the network.
 
 # Mode 0755 and root ownership are load-bearing: systemd runs this file as root at every
 # boot, so a group- or world-writable copy is a root shell for whoever can write it. The
@@ -63,7 +63,7 @@
   register: sweego_receiver_rule_unit_start
   when: sweego_receiver_rule_unit_now.stat.exists
 
-# What a real run would still change. The read-back asserts the loaded rule, which a plan on a
+# What a real run would still change. The read-back asserts the loaded rules, which a plan on a
 # host that has not been given the program cannot show.
 - name: Work out whether this run changes the drain-port rule
   ansible.builtin.set_fact:
@@ -99,27 +99,41 @@
   check_mode: false
   when: not ansible_check_mode or not (sweego_receiver_rule_pending | bool)
 
-# The rule is read as the first rule of the chain: a rule under an earlier accept is not a
-# rule. The pieces are the ones the program writes, each ended at a space, the end of the
-# line or a /32, so a longer number that starts with the same digits is not taken for it.
-- name: Refuse a chain whose first rule is not the drain-port rule
+# The rules are read as the first two rules of the chain: a rule under an earlier accept is
+# not a rule. The first drops by the container's address and port (where a packet is after
+# Docker's DNAT, and where one routed straight to the container arrives); the second by the
+# original destination. The pieces are the ones the program writes, each ended at a space, the
+# end of the line or a /32, so a longer number that starts with the same digits is not taken
+# for it, and a negated `-d` or `--dport` is not taken for the match.
+- name: Refuse a chain whose first two rules are not the drain-port rules
   ansible.builtin.assert:
     that:
       - sweego_receiver_first_rule | length > 0
-      - sweego_receiver_first_rule is search('--ctorigdst ' ~ sweego_receiver_private_address ~ '(/32)?( |$)')
-      - sweego_receiver_first_rule is search('--ctorigdstport ' ~ sweego_receiver_drain_port ~ '( |$)')
-      - sweego_receiver_first_rule is search('--ctdir ORIGINAL( |$)')
+      - sweego_receiver_first_rule is search('(?<!! )-d ' ~ sweego_receiver_container_address ~ '(/32)?( |$)')
+      - sweego_receiver_first_rule is search('(?<!! )--dport ' ~ sweego_receiver_container_drain_port ~ '( |$)')
+      - sweego_receiver_first_rule is search('-p tcp( |$)')
       - sweego_receiver_first_rule is search('! -s ' ~ sweego_receiver_drain_peer_address ~ '(/32)?( |$)')
       - sweego_receiver_first_rule is search('-j DROP$')
+      - sweego_receiver_second_rule | length > 0
+      - sweego_receiver_second_rule is search('--ctorigdst ' ~ sweego_receiver_private_address ~ '(/32)?( |$)')
+      - sweego_receiver_second_rule is search('--ctorigdstport ' ~ sweego_receiver_drain_port ~ '( |$)')
+      - sweego_receiver_second_rule is search('--ctdir ORIGINAL( |$)')
+      - sweego_receiver_second_rule is search('! -s ' ~ sweego_receiver_drain_peer_address ~ '(/32)?( |$)')
+      - sweego_receiver_second_rule is search('-j DROP$')
     quiet: true
     fail_msg: >-
-      The first rule of DOCKER-USER is not the drain-port rule: it should drop a connection to
+      The first two rules of DOCKER-USER are not the drain-port rules: they should drop a
+      connection to {{ sweego_receiver_container_address }}:{{ sweego_receiver_container_drain_port }}
+      (the container, as a packet is after DNAT or routed straight to it) and a connection to
       {{ sweego_receiver_private_address }}:{{ sweego_receiver_drain_port }} from any source but
-      {{ sweego_receiver_drain_peer_address }}. The first rule is: {{ sweego_receiver_first_rule | default('none') }}.
-      Without it the drain port is open to the private network.
+      {{ sweego_receiver_drain_peer_address }}. The first rules are: {{ sweego_receiver_first_rule | default('none') }}
+      then {{ sweego_receiver_second_rule | default('none') }}.
+      Without them the drain port is open to the private network.
   vars:
-    sweego_receiver_first_rule: >-
-      {{ sweego_receiver_chain_now.stdout_lines | default([]) | select('match', '^-A DOCKER-USER ') | list | first | default('') }}
+    sweego_receiver_chain_rules: >-
+      {{ sweego_receiver_chain_now.stdout_lines | default([]) | select('match', '^-A DOCKER-USER ') | list }}
+    sweego_receiver_first_rule: '{{ sweego_receiver_chain_rules[0] | default("") }}'
+    sweego_receiver_second_rule: '{{ sweego_receiver_chain_rules[1] | default("") }}'
   when: not ansible_check_mode or not (sweego_receiver_rule_pending | bool)
 
 - name: Ask systemd for the drain-port rule unit

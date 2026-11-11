@@ -21,6 +21,8 @@ PROGRAM = ROLE / "files" / "branchleft_sweego_drain_rule.py"
 ADDRESS = "10.20.1.10"
 PORT = "8081"
 SOURCE = "10.20.1.50"
+CONTAINER = "172.29.250.2"
+CONTAINER_PORT = "8081"
 
 FAKE_IPTABLES = """#!{python}
 import os
@@ -39,7 +41,7 @@ def canonical(rule):
     out = []
     previous = ""
     for item in rule:
-        if previous in ("-s", "--ctorigdst") and "/" not in item:
+        if previous in ("-s", "-d", "--ctorigdst") and "/" not in item:
             item = item + "/32"
         out.append(item)
         previous = item
@@ -82,12 +84,37 @@ sys.exit(64)
 """
 
 
-def canonical_rule(address: str = ADDRESS, port: str = PORT, source: str = SOURCE) -> str:
-    """The rule as `iptables -S` prints it: every address carries its /32."""
+def canonical_original(address: str = ADDRESS, port: str = PORT, source: str = SOURCE) -> str:
+    """The original-destination rule as `iptables -S` prints it: every address carries its /32."""
     return (
         f"-p tcp -m conntrack --ctorigdst {address}/32 --ctorigdstport {port} "
         f"--ctdir ORIGINAL ! -s {source}/32 -j DROP"
     )
+
+
+def canonical_after_dnat(
+    container: str = CONTAINER, port: str = CONTAINER_PORT, source: str = SOURCE
+) -> str:
+    """The post-DNAT rule as `iptables -S` prints it."""
+    return f"-p tcp -d {container}/32 --dport {port} ! -s {source}/32 -j DROP"
+
+
+def canonical_rules() -> list[str]:
+    """Both rules, in the order the program leaves them: post-DNAT first."""
+    return [canonical_after_dnat(), canonical_original()]
+
+
+def standard_arguments(**replace: str) -> list[str]:
+    """The five options of the estate's values; a keyword replaces one by its option name."""
+    values = {
+        "address": ADDRESS,
+        "port": PORT,
+        "allow-source": SOURCE,
+        "container-address": CONTAINER,
+        "container-port": CONTAINER_PORT,
+    }
+    values.update({key.replace("_", "-"): value for key, value in replace.items()})
+    return [item for key, value in values.items() for item in (f"--{key}", value)]
 
 
 class Run:
@@ -149,24 +176,30 @@ class Run:
 
     def standard(self, **environment: str) -> subprocess.CompletedProcess[str]:
         """Run the program with the estate's three values."""
-        return self.go(
-            "--address", ADDRESS, "--port", PORT, "--allow-source", SOURCE, **environment
-        )
+        return self.go(*standard_arguments(), **environment)
 
 
 class RuleIsInstalled(unittest.TestCase):
-    """The rule goes in once, first, and drops every source but the one."""
+    """Both rules go in once, as the first two, and drop every source but the one."""
 
-    def test_absent_rule_is_inserted_first_with_every_piece(self) -> None:
+    def test_absent_rules_are_inserted_first_and_second_with_every_piece(self) -> None:
         run = Run(self)
         result = run.standard()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(run.chain(), [canonical_rule()])
+        self.assertEqual(run.chain(), canonical_rules())
         insert = run.inserts()
-        self.assertEqual(len(insert), 1)
+        self.assertEqual(len(insert), 2)
         for piece in (
             "-I DOCKER-USER 1",
             "-p tcp",
+            f"-d {CONTAINER}",
+            f"--dport {CONTAINER_PORT}",
+            f"! -s {SOURCE}",
+            "-j DROP",
+        ):
+            self.assertIn(piece, insert[0])
+        for piece in (
+            "-I DOCKER-USER 2",
             "-m conntrack",
             f"--ctorigdst {ADDRESS}",
             f"--ctorigdstport {PORT}",
@@ -174,73 +207,154 @@ class RuleIsInstalled(unittest.TestCase):
             f"! -s {SOURCE}",
             "-j DROP",
         ):
-            self.assertIn(piece, insert[0])
+            self.assertIn(piece, insert[1])
 
-    def test_rule_goes_above_an_existing_rule(self) -> None:
+    def test_the_post_dnat_destination_is_matched(self) -> None:
+        """A connection sent straight to the container's address is dropped as well.
+
+        Without this rule only a connection made to the published address is judged, and a host
+        that routes to the container address (the default route of the platform network leads to
+        this host, which forwards) reaches the drain listener with the token as its only guard.
+        """
+        run = Run(self)
+        run.standard()
+        direct = [rule for rule in run.chain() if f"-d {CONTAINER}/32" in rule]
+        self.assertEqual(len(direct), 1)
+        self.assertIn(f"--dport {CONTAINER_PORT}", direct[0])
+        self.assertIn(f"! -s {SOURCE}/32", direct[0])
+        self.assertTrue(direct[0].endswith("-j DROP"))
+
+    def test_the_rules_go_above_an_existing_rule(self) -> None:
         run = Run(self)
         run.put_chain("-j RETURN")
         self.assertEqual(run.standard().returncode, 0)
-        self.assertEqual(run.chain(), [canonical_rule(), "-j RETURN"])
+        self.assertEqual(run.chain(), [*canonical_rules(), "-j RETURN"])
 
-    def test_the_rule_drops_and_never_accepts(self) -> None:
+    def test_the_rules_drop_and_never_accept(self) -> None:
         run = Run(self)
         run.standard()
-        self.assertTrue(run.chain()[0].endswith("-j DROP"))
+        for rule in run.chain():
+            self.assertTrue(rule.endswith("-j DROP"))
         self.assertNotIn("ACCEPT", " ".join(run.calls()))
 
     def test_a_second_run_inserts_nothing(self) -> None:
         run = Run(self)
         self.assertEqual(run.standard().returncode, 0)
         self.assertEqual(run.standard().returncode, 0)
-        self.assertEqual(len(run.inserts()), 1)
-        self.assertEqual(run.chain(), [canonical_rule()])
+        self.assertEqual(len(run.inserts()), 2)
+        self.assertEqual(run.chain(), canonical_rules())
 
-    def test_the_rule_names_only_the_source_it_is_given(self) -> None:
+    def test_the_rules_name_only_the_values_they_are_given(self) -> None:
         run = Run(self)
-        result = run.go("--address", ADDRESS, "--port", "9100", "--allow-source", "10.20.1.99")
+        result = run.go(
+            *standard_arguments(port="9100", allow_source="10.20.1.99", container_port="9101")
+        )
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(run.chain(), [canonical_rule(port="9100", source="10.20.1.99")])
+        self.assertEqual(
+            run.chain(),
+            [
+                canonical_after_dnat(port="9101", source="10.20.1.99"),
+                canonical_original(port="9100", source="10.20.1.99"),
+            ],
+        )
+
+    def test_a_chain_with_only_the_old_rule_gains_the_new_one_above_it(self) -> None:
+        """The rule an earlier version left (the original destination alone) is kept as rule 2."""
+        run = Run(self)
+        run.put_chain(canonical_original(), "-j RETURN")
+        result = run.standard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(run.chain(), [*canonical_rules(), "-j RETURN"])
+        self.assertEqual(len(run.inserts()), 1)
+
+    def test_a_deleted_second_rule_is_put_back_as_the_second(self) -> None:
+        run = Run(self)
+        run.put_chain(canonical_after_dnat(), "-j RETURN")
+        self.assertEqual(run.standard().returncode, 0)
+        self.assertEqual(run.chain(), [*canonical_rules(), "-j RETURN"])
 
 
 class RuleIsNotTrustedWhereItIsNotFirst(unittest.TestCase):
     """A rule under an accept is not a rule: the program says so and stops."""
 
-    def test_present_but_second_is_refused_and_nothing_is_inserted(self) -> None:
+    def test_present_but_below_an_accept_is_refused_and_nothing_is_inserted(self) -> None:
         run = Run(self)
-        run.put_chain("-s 172.17.0.0/16 -j ACCEPT", canonical_rule())
+        run.put_chain("-s 172.17.0.0/16 -j ACCEPT", *canonical_rules())
         result = run.standard()
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("not its first rule", result.stderr)
+        self.assertIn("is not rule 1", result.stderr)
+        self.assertEqual(run.inserts(), [])
+
+    def test_the_second_rule_below_an_accept_is_refused(self) -> None:
+        run = Run(self)
+        run.put_chain(canonical_after_dnat(), "-s 172.17.0.0/16 -j ACCEPT", canonical_original())
+        result = run.standard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not rule 2", result.stderr)
+        self.assertEqual(run.inserts(), [])
+
+    def test_the_two_rules_in_the_wrong_order_are_refused(self) -> None:
+        run = Run(self)
+        run.put_chain(canonical_original(), canonical_after_dnat())
+        result = run.standard()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not rule 1", result.stderr)
         self.assertEqual(run.inserts(), [])
 
     def test_a_longer_port_is_not_taken_for_the_rule(self) -> None:
         run = Run(self)
-        run.put_chain(canonical_rule(port="80810"))
+        run.put_chain(canonical_original(port="80810"))
         self.assertEqual(run.standard().returncode, 0)
-        self.assertEqual(run.chain()[0], canonical_rule())
+        self.assertEqual(run.chain()[:2], canonical_rules())
+
+    def test_a_longer_container_port_is_not_taken_for_the_rule(self) -> None:
+        rule = program.after_dnat_rule(CONTAINER, CONTAINER_PORT, SOURCE)
+        self.assertTrue(rule.matches(canonical_after_dnat()))
+        self.assertFalse(rule.matches(canonical_after_dnat(port="80810")))
+
+    def test_a_longer_container_address_is_not_taken_for_the_rule(self) -> None:
+        rule = program.after_dnat_rule(CONTAINER, CONTAINER_PORT, SOURCE)
+        self.assertFalse(rule.matches(canonical_after_dnat(container="172.29.250.22")))
 
     def test_a_longer_source_is_not_taken_for_the_rule(self) -> None:
-        self.assertFalse(
-            program.is_the_rule(canonical_rule(source="10.20.1.500"), ADDRESS, PORT, SOURCE)
-        )
-        self.assertTrue(program.is_the_rule(canonical_rule(), ADDRESS, PORT, SOURCE))
+        original = program.original_destination_rule(ADDRESS, PORT, SOURCE)
+        after = program.after_dnat_rule(CONTAINER, CONTAINER_PORT, SOURCE)
+        self.assertFalse(original.matches(canonical_original(source="10.20.1.500")))
+        self.assertFalse(after.matches(canonical_after_dnat(source="10.20.1.500")))
+        self.assertTrue(original.matches(canonical_original()))
+        self.assertTrue(after.matches(canonical_after_dnat()))
 
     def test_a_rule_that_allows_the_source_instead_of_dropping_the_rest_is_not_the_rule(
         self,
     ) -> None:
-        allow = (
-            f"-p tcp -m conntrack --ctorigdst {ADDRESS}/32 --ctorigdstport {PORT} "
-            f"--ctdir ORIGINAL -s {SOURCE}/32 -j DROP"
-        )
-        self.assertFalse(program.is_the_rule(allow, ADDRESS, PORT, SOURCE))
+        for rule, line in (
+            (
+                program.original_destination_rule(ADDRESS, PORT, SOURCE),
+                canonical_original().replace("! -s", "-s"),
+            ),
+            (
+                program.after_dnat_rule(CONTAINER, CONTAINER_PORT, SOURCE),
+                canonical_after_dnat().replace("! -s", "-s"),
+            ),
+        ):
+            self.assertFalse(rule.matches(line))
 
     def test_a_rule_that_accepts_is_not_the_rule(self) -> None:
-        accept = canonical_rule().replace("-j DROP", "-j ACCEPT")
-        self.assertFalse(program.is_the_rule(accept, ADDRESS, PORT, SOURCE))
+        for rule, line in (
+            (program.original_destination_rule(ADDRESS, PORT, SOURCE), canonical_original()),
+            (program.after_dnat_rule(CONTAINER, CONTAINER_PORT, SOURCE), canonical_after_dnat()),
+        ):
+            self.assertFalse(rule.matches(line.replace("-j DROP", "-j ACCEPT")))
 
     def test_a_rule_for_both_directions_is_not_the_rule(self) -> None:
-        both = canonical_rule().replace("--ctdir ORIGINAL ", "")
-        self.assertFalse(program.is_the_rule(both, ADDRESS, PORT, SOURCE))
+        both = canonical_original().replace("--ctdir ORIGINAL ", "")
+        self.assertFalse(program.original_destination_rule(ADDRESS, PORT, SOURCE).matches(both))
+
+    def test_a_negated_destination_or_port_is_not_the_post_dnat_rule(self) -> None:
+        """`! -d` and `! --dport` drop everything else, which leaves the drain port open."""
+        rule = program.after_dnat_rule(CONTAINER, CONTAINER_PORT, SOURCE)
+        self.assertFalse(rule.matches(canonical_after_dnat().replace("-d ", "! -d ")))
+        self.assertFalse(rule.matches(canonical_after_dnat().replace("--dport", "! --dport")))
 
 
 class ProgramRefusesWhenItCannotKnow(unittest.TestCase):
@@ -275,42 +389,62 @@ class ProgramRefusesWhenItCannotKnow(unittest.TestCase):
 class ProgramRefusesBadArguments(unittest.TestCase):
     """Every value is checked before iptables is asked anything."""
 
-    def refused(self, *arguments: str) -> None:
-        """Assert the arguments are refused with status 2 and no call to iptables."""
+    def refused(self, **replace: str) -> None:
+        """Assert the values are refused with status 2 and no call to iptables."""
         run = Run(self)
-        result = run.go(*arguments)
+        result = run.go(*standard_arguments(**replace))
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertEqual(run.calls(), [])
 
     def test_a_wildcard_source_is_refused(self) -> None:
-        self.refused("--address", ADDRESS, "--port", PORT, "--allow-source", "0.0.0.0")  # noqa: S104 -- the value being refused
+        self.refused(allow_source="0.0.0.0")  # noqa: S104 -- the value being refused
 
     def test_a_network_for_a_source_is_refused(self) -> None:
-        self.refused("--address", ADDRESS, "--port", PORT, "--allow-source", "10.20.1.0/24")
+        self.refused(allow_source="10.20.1.0/24")
 
     def test_a_loopback_source_is_refused(self) -> None:
-        self.refused("--address", ADDRESS, "--port", PORT, "--allow-source", "127.0.0.1")
+        self.refused(allow_source="127.0.0.1")
 
     def test_a_wildcard_address_is_refused(self) -> None:
-        self.refused("--address", "0.0.0.0", "--port", PORT, "--allow-source", SOURCE)  # noqa: S104
+        self.refused(address="0.0.0.0")  # noqa: S104 -- the value being refused
+
+    def test_a_wildcard_container_address_is_refused(self) -> None:
+        self.refused(container_address="0.0.0.0")  # noqa: S104 -- the value being refused
+
+    def test_a_network_for_the_container_address_is_refused(self) -> None:
+        self.refused(container_address="172.29.250.0/29")
 
     def test_a_privileged_port_is_refused(self) -> None:
-        self.refused("--address", ADDRESS, "--port", "80", "--allow-source", SOURCE)
+        self.refused(port="80")
+
+    def test_a_privileged_container_port_is_refused(self) -> None:
+        self.refused(container_port="80")
 
     def test_a_port_out_of_range_is_refused(self) -> None:
-        self.refused("--address", ADDRESS, "--port", "65536", "--allow-source", SOURCE)
+        self.refused(port="65536")
 
     def test_a_port_that_is_not_a_number_is_refused(self) -> None:
-        self.refused("--address", ADDRESS, "--port", "8081; reboot", "--allow-source", SOURCE)
+        self.refused(port="8081; reboot")
+        self.refused(container_port="8081; reboot")
 
     def test_a_source_equal_to_the_address_is_refused(self) -> None:
-        self.refused("--address", ADDRESS, "--port", PORT, "--allow-source", ADDRESS)
+        self.refused(allow_source=ADDRESS)
+
+    def test_a_source_equal_to_the_container_address_is_refused(self) -> None:
+        self.refused(allow_source=CONTAINER)
+
+    def test_the_two_addresses_being_one_is_refused(self) -> None:
+        self.refused(container_address=ADDRESS)
 
     def test_a_missing_argument_is_refused(self) -> None:
-        self.refused("--address", ADDRESS, "--port", PORT)
+        run = Run(self)
+        result = run.go("--address", ADDRESS, "--port", PORT, "--allow-source", SOURCE)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(run.calls(), [])
 
     def test_a_hostname_is_refused(self) -> None:
-        self.refused("--address", "edge1", "--port", PORT, "--allow-source", SOURCE)
+        self.refused(address="edge1")
+        self.refused(container_address="receiver")
 
 
 class ProgramIsRunAsRoot(unittest.TestCase):

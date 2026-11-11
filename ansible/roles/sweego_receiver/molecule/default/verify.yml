@@ -63,9 +63,32 @@
       changed_when: false
       failed_when: sweego_receiver_verify_leak.rc != 1
 
-    # The rule, asked with -C so the match is the firewall's own, and as the first rule of
-    # the chain by -S. The values are written out here.
-    - name: Ask the firewall whether the drain-port rule is present
+    # The rules, asked with -C so the match is the firewall's own, and as the first two rules of
+    # the chain by -S. The values are written out here. The first is on the container's own
+    # address and port, which is what a packet carries after Docker's DNAT and what a packet
+    # routed straight to the container carries; the second is on the published address.
+    - name: Ask the firewall whether the post-DNAT drain-port rule is present
+      ansible.builtin.command:
+        argv:
+          - iptables
+          - -t
+          - filter
+          - -C
+          - DOCKER-USER
+          - -p
+          - tcp
+          - -d
+          - 172.29.250.2
+          - --dport
+          - '8081'
+          - '!'
+          - -s
+          - 10.20.1.50
+          - -j
+          - DROP
+      changed_when: false
+
+    - name: Ask the firewall whether the original-destination drain-port rule is present
       ansible.builtin.command:
         argv:
           - iptables
@@ -96,13 +119,18 @@
       register: sweego_receiver_verify_chain
       changed_when: false
 
-    - name: Assert the rule is the first of the chain, once, and that no rule admits the port
+    - name: Assert the rules are the first two of the chain, once each, and that no rule admits the port
       ansible.builtin.assert:
         that:
           - sweego_receiver_verify_chain.stdout_lines[1] is search('-j DROP$')
+          - sweego_receiver_verify_chain.stdout_lines[1] is search('(?<!! )-d 172.29.250.2/32')
+          - sweego_receiver_verify_chain.stdout_lines[1] is search('(?<!! )--dport 8081( |$)')
           - sweego_receiver_verify_chain.stdout_lines[1] is search('! -s 10.20.1.50')
-          - sweego_receiver_verify_chain.stdout_lines[1] is search('--ctorigdstport 18081')
+          - sweego_receiver_verify_chain.stdout_lines[2] is search('-j DROP$')
+          - sweego_receiver_verify_chain.stdout_lines[2] is search('! -s 10.20.1.50')
+          - sweego_receiver_verify_chain.stdout_lines[2] is search('--ctorigdstport 18081')
           - sweego_receiver_verify_chain.stdout_lines | select('search', '--ctorigdstport 18081') | list | length == 1
+          - sweego_receiver_verify_chain.stdout_lines | select('search', '--dport 8081') | list | length == 1
           - sweego_receiver_verify_chain.stdout_lines | select('search', '-j ACCEPT') | list | length == 0
           - sweego_receiver_verify_chain.stdout_lines | last == '-A DOCKER-USER -j RETURN'
         quiet: true

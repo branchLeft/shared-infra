@@ -38,10 +38,12 @@
       register: sweego_receiver_refusals_verify_chain
       changed_when: false
 
-    - name: Assert the drain-port rule is in the chain once, first, after all the cases
+    - name: Assert the drain-port rules are in the chain once each, first and second, after all the cases
       ansible.builtin.assert:
         that:
           - sweego_receiver_refusals_verify_chain.stdout_lines | select('search', '--ctorigdstport 18081') | list | length == 1
-          - sweego_receiver_refusals_verify_chain.stdout_lines[1] is search('--ctorigdstport 18081')
+          - sweego_receiver_refusals_verify_chain.stdout_lines | select('search', '--dport 8081') | list | length == 1
+          - sweego_receiver_refusals_verify_chain.stdout_lines[1] is search('(?<!! )-d 172.29.250.2/32')
+          - sweego_receiver_refusals_verify_chain.stdout_lines[2] is search('--ctorigdstport 18081')
         quiet: true
         fail_msg: '{{ sweego_receiver_refusals_verify_chain.stdout_lines }}'

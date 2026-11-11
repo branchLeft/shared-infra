@@ -50,6 +50,7 @@
           - sweego_receiver_refusals_traces.results | map(attribute='stat.exists') | select | list | length == 0
           - sweego_receiver_refusals_chain.stdout_lines | length == 2
           - sweego_receiver_refusals_chain.stdout_lines | select('search', 'ctorigdstport') | list | length == 0
+          - sweego_receiver_refusals_chain.stdout_lines | select('search', '--dport 8081') | list | length == 0
         quiet: true
         fail_msg: A run refused for a missing secret still wrote to the host.
       when: not ansible_check_mode
