@@ -368,9 +368,9 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
             with self.subTest(leg=leg):
                 self.assertNotEqual([], steps, f"the {leg} leg holds no step of its own")
         for name in ENVIRONMENT_STEPS:
-            steps = [s for s in items(get(lint, "steps")) if get(s, "name") == name]
-            self.assertEqual(1, len(steps))
-            self.assertNotIn("matrix.part", str(get(steps[0], "if")), name)
+            matching = [s for s in items(get(lint, "steps")) if get(s, "name") == name]
+            self.assertEqual(1, len(matching))
+            self.assertNotIn("matrix.part", str(get(matching[0], "if")), name)
         for leg, expected in LINT_LEG_STEPS.items():
             with self.subTest(leg=leg, kind="steps"):
                 self.assertEqual(list(expected), named[leg])
