@@ -237,9 +237,11 @@ If the import has not run at all, 443 lands in the same `pulumi up` that opens
 
 ## Mailbox provisioning
 
+`dmarc@branchleft.co.uk` receives DMARC aggregate reports only. It has no forward to `rob@` and is deliberately not in `ROLE_ADDRESSES`: the reports are kept apart from people's mail, and `rob@` is not on that path (the owner's ruling on DMARC reports). It is a real mailbox like the others, so its generated password is recorded under the bare local part and never printed.
+
 `50-provision-mailboxes.sh` runs `provision_mailboxes.py`, which creates real
 mailbox accounts — `rob@`, `contact@`, `info@`, `sales@`, `complaints@`,
-`abuse@`, `blog@`, `acme@`, `alerts@`, `noreply@` and `psl@` at `branchleft.co.uk` (`MAILBOXES`) — each with
+`abuse@`, `blog@`, `acme@`, `alerts@`, `noreply@`, `psl@` and `dmarc@` at `branchleft.co.uk` (`MAILBOXES`) — each with
 its own storage, not an alias, and gives each role address (not `rob@`;
 `ROLE_ADDRESSES`) a per-mailbox Sieve script that copies inbound mail to
 `rob@` without suppressing the original delivery. `blog@` gets a mailbox and
@@ -378,6 +380,12 @@ without a second protocol. Result, all four pairs:
 | info@        | yes                    | yes                 |
 | sales@       | yes                    | yes                 |
 | complaints@  | yes                    | yes                 |
+
+`dmarc@` has no forward, so its check is the reverse of the table: send one
+test message to `dmarc@branchleft.co.uk` the same way, with a unique nonce in
+the subject, then run the same admin `Email/query` against `dmarc@` and
+against `rob@`. It passes only if the message is in `dmarc@` and `rob@` holds
+no copy of it.
 
 `rob@` received exactly the four expected copies and nothing unaccounted
 for; each role mailbox received exactly its own test message. No credential

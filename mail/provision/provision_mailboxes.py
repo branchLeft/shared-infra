@@ -64,7 +64,7 @@ MAIL_DOMAIN = os.environ.get("MAIL_DOMAIN", "branchleft.co.uk")
 # -- and for psl@ -- the role contact published in the Public Suffix List
 # entry for sites.publicpress.co.uk, which the list's maintainers email and
 # expect answered within 30 days, see mail/RUNBOOK-mx1-provision.md#mailbox-provisioning).
-MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply", "psl")
+MAILBOXES = ("rob", "contact", "info", "sales", "complaints", "abuse", "blog", "acme", "alerts", "noreply", "psl", "dmarc")
 
 # The ones that get a copy-forward to rob@ -- rob@ itself gets no script.
 # Exactly one `redirect` each, never two: a second is dropped at delivery while

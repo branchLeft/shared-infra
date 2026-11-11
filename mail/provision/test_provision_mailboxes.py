@@ -36,9 +36,16 @@ class MailboxesAndRoleAddressesTests(unittest.TestCase):
         for role in ROLE_ADDRESSES:
             self.assertIn(role, MAILBOXES)
 
-    def test_exactly_eleven_mailboxes_ten_role_addresses(self):
-        self.assertEqual(len(MAILBOXES), 11)
+    def test_exactly_twelve_mailboxes_ten_role_addresses(self):
+        self.assertEqual(len(MAILBOXES), 12)
         self.assertEqual(len(ROLE_ADDRESSES), 10)
+
+    def test_dmarc_is_a_mailbox_and_not_a_role_address(self):
+        # The owner's ruling on DMARC reports: they are kept apart from
+        # people's mail, and rob@ is not on the path. A role address gets a
+        # copy-forward to rob@; dmarc@ must not.
+        self.assertIn("dmarc", MAILBOXES)
+        self.assertNotIn("dmarc", ROLE_ADDRESSES)
 
     def test_forward_target_is_rob_at_the_mail_domain(self):
         self.assertEqual(FORWARD_TARGET, "rob@branchleft.co.uk")
@@ -505,6 +512,28 @@ class CredentialLabelUniquenessTests(unittest.TestCase):
 
     def test_alertmanager_has_its_own_label(self):
         self.assertIn("alerting-submission", self._labels())
+
+
+class DmarcMailboxTests(unittest.TestCase):
+    """dmarc@branchleft.co.uk receives DMARC aggregate reports only. It is a
+    real mailbox and has no copy-forward to rob@ (the owner's ruling on
+    DMARC reports). The forward is decided by ROLE_ADDRESSES alone, so the
+    check is that main() reconciles a forwarding script for every role
+    address and for no other mailbox."""
+
+    def test_main_reconciles_a_forwarding_script_for_role_addresses_only(self):
+        sieve_locals = []
+        with mock.patch.object(pm, "_load_admin_credentials", return_value=("admin", "s")), \
+             mock.patch.object(pm, "_get_domain_id", return_value="d1"), \
+             mock.patch.object(pm, "_reconcile_accounts", return_value={m: f"id-{m}" for m in MAILBOXES}), \
+             mock.patch.object(
+                 pm, "_reconcile_role_sieve_script",
+                 side_effect=lambda auth, local, account_id: sieve_locals.append(local) or False,
+             ), \
+             mock.patch("sys.stdout", io.StringIO()):
+            self.assertEqual(pm.main(), 0)
+        self.assertEqual(sieve_locals, list(ROLE_ADDRESSES))
+        self.assertNotIn("dmarc", sieve_locals)
 
 
 if __name__ == "__main__":
