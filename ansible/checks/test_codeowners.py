@@ -206,6 +206,15 @@ KEY_ROLE_PATHS = [
     "ansible/roles/safety_service/README.md",
 ]
 
+# branchleft_promote.py runs as root on a tenant host and decides which signed image the
+# wrapper is handed, so it, its notes and the tests that hold its refusals are the owner's alone.
+HOST_APPLIER_PATHS = [
+    "hetzner/provision/branchleft_promote.py",
+    "hetzner/provision/branchleft_promote.md",
+    "hetzner/provision/test_branchleft_promote.py",
+    "hetzner/provision/test_branchleft_promote_wrapper_contract.py",
+]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -271,6 +280,9 @@ class CodeownersTests(unittest.TestCase):
 
     def test_the_pull_roles_and_sudoers_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(PULL_ROLE_PATHS)
+
+    def test_the_host_applier_and_its_tests_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(HOST_APPLIER_PATHS)
 
     def test_the_host_inputs_loader_is_owned_by_the_owner(self) -> None:
         self.assert_owned(HOST_INPUTS_PATHS)
@@ -341,6 +353,7 @@ class CodeownersTests(unittest.TestCase):
             + SEEDING_TOOL_PATHS
             + BOOTSTRAP_GUARD_PATHS
             + KEY_ROLE_PATHS
+            + HOST_APPLIER_PATHS
         )
         for path in ESTATE_PATHS + GATE_PATHS + owned + UNOWNED_PATHS:
             if path in stands_for_more:
