@@ -1,7 +1,7 @@
 # ansible/tools
 
-This folder holds `pull_bootstrap.py`, `seed_host_inputs.py` and the three demo1 bootstrap guards,
-described in the last section. The narrative of the first two lived in the module docstrings until
+This folder holds `pull_bootstrap.py`, `seed_host_inputs.py`, the three demo1 bootstrap guards
+(described after them) and `carry_broker_release.py` (the last section). The narrative of the first two lived in the module docstrings until
 the CMT-3 gate required it cut below 11 lines; the constraints they stated are kept here in full.
 
 ## pull_bootstrap.py: the bootstrap record
@@ -196,3 +196,50 @@ when exactly one image came back and its `RepoDigests` hold the pinned digest (u
 The pattern and the service are the `demo1_egress_spool` role's, held equal by a test. The two
 fixtures are real `docker image inspect` output (Docker 29, containerd image store) for a loaded
 image queried by its digest-form reference, and for an absent one.
+
+## carry_broker_release.py: a verified broker release, carried into the role
+
+`broker_deploy` fetches nothing: it takes a release's files from its own `files/releases/VERSION/`
+and holds each to a sha256 in `broker_deploy_release_pins`, so a reviewed commit chooses the
+release. This tool makes that one commit's content from a release tarball the owner has verified.
+It runs on a workstation in the pinned environment, never on a host, and reads no network.
+
+Order of the owner's steps (the broker runbook's section "Release artifact and how to verify it"
+holds the download and the attestation commands):
+
+1. Download the tarball and its bundle, and run `gh attestation verify` as the runbook prints it,
+   with the tag's signer workflow and source ref. The digest the verify output names for the
+   tarball is the one given below; it is not read from the `.sha256` file of the release page.
+2. Run the tool without `--write`. It prints the pins and `carry=CHECKED`, and changes nothing.
+3. Run it with `--write`, from a worktree of `main`, then commit the files and the defaults change
+   in one pull request.
+
+Usage:
+
+    carry_broker_release.py --version X.Y.Z --tarball FILE --tarball-sha256 HEX [--write]
+
+What it refuses, each with `carry=REFUSED reason=CODE` and exit 1, before anything is written:
+`version_not_major_minor_patch`, `digest_not_64_lower_hex`, `tarball_not_a_plain_file`,
+`tarball_unreadable`, `tarball_too_large`, `tarball_digest_differs` (the bytes are not the attested
+digest), `not_a_gzip_tarball`, `too_many_members`, `path_not_plain` (a member name outside the
+role's path rule: absolute, dot-dot, a leading dot, a space), `repeated_path`,
+`member_not_a_plain_file` (a link, device or pipe), `release_too_large`, `file_is_also_a_directory`,
+`no_entry_point` (no `broker.mjs`), `defaults_not_placeholders`, `defaults_do_not_read_back`,
+`release_already_carried`. `path_escapes_release` and `write_did_not_read_back` stop the write
+itself and remove what it made. An unknown argument exits 2 with `reason=usage_error` and is never
+shown. Nothing read from the tarball is printed except the member paths that passed the path rule
+and their digests.
+
+The tool never extracts with `tarfile`: it reads each regular file's bytes, writes it with an
+exclusive create that does not follow a link, mode 0644, and reads it back. The role's defaults
+are edited only where they are the two placeholder lines (`broker_deploy_release_version: ''` and
+`broker_deploy_release_pins: {}`, each exactly once), so a tree that already pins a release is
+changed by hand. The result is parsed back as YAML and must equal the version and pins, with every
+path and digest quoted so a path such as `true` or a digest of digits stays text. If the defaults
+cannot be replaced, the release directory is removed again.
+
+The tool does not verify an attestation, and a pin proves the bytes did not change since they were
+chosen, not that CI built them: the owner's verify step above is what ties the digest to the
+release workflow. `test_carry_broker_release` runs the role's own `_release_pin.yml` with
+ansible-playbook against what the tool wrote, and holds the path rule, the entry point and the
+two placeholder lines to the role.
