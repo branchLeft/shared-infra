@@ -58,6 +58,14 @@ export interface EdgeSite {
    */
   discardRoute?: string;
   /**
+   * One literal path of a site that exists only to receive signed callbacks
+   * from an outside sender. Set, the edge proxies `POST` on that path alone,
+   * answers 405 to any other method on it and 404 to every other path, and
+   * throttles it in a zone of its own. Why, and what it lets through:
+   * `hetzner/edge/render.md`, "`siteBlock`: inbound webhook".
+   */
+  inboundWebhookPath?: string;
+  /**
    * Where the Hetzner edge proxies this site. Absent means the site has no
    * private-network backend yet: it is skipped entirely by the Caddy renderer,
    * which is what keeps the edge from requesting a certificate for a hostname

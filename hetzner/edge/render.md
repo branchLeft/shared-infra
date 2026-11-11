@@ -330,6 +330,52 @@ path, and GitHub's JSON payloads are not exposed to rules built for form posts. 
 answers ahead of the `appsec` line, rather than editing that line, keeps the rendered change
 additions-only. The renderer accepts only a plain literal path.
 
+## `siteBlock`: inbound webhook
+
+`EdgeSite.inboundWebhookPath` marks a site that exists only to receive signed callbacks
+from one outside sender, and renders through `webhookSiteBlock` instead of the Ghost-shaped
+`siteBlock` body. The sender authenticates each delivery with a signature the receiver
+checks; the edge's job is to bound what can reach the receiver at all.
+
+What the block lets through, and nothing else:
+
+- `POST` on the one literal path, with a body of at most the site's `requestBodyMaxSize`
+  (16 KiB for the shipped entry), from a client under the dedicated throttle, the general
+  throttle, CrowdSec and AppSec, to the one upstream the entry names.
+- Every other method on that path gets 405 with `Allow: POST`, from the edge.
+- Every other request on the hostname gets 404, from the edge. The final `respond 404` is
+  matcher-less and last, so a case the lines above forgot fails closed.
+- The receiver's private drain listener is a different port and is never named here: the
+  block contains exactly one upstream address.
+
+Why a separate block rather than a path matcher added to the Ghost one: the Ghost block
+defines the members magic-link matcher and its shared zone on every site, inertly. A
+webhook block that carried them would name a zone and a matcher of the login-mail route.
+It carries none of the Ghost matchers, so it shares no zone, matcher, upstream or process
+with that route; the test file asserts each.
+
+The dedicated zone (`<site>_inbound_per_ip`, keyed on the direct peer like the others)
+applies to the matched `POST` only and sits after the general throttle, which is the
+unchanged one every site has. It is not keyed on posture: a posture setting that could
+switch it off would leave a public route with only the general budget. The budget is
+`WEBHOOK_RATE_LIMIT_EVENTS` per `WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` (`posture.md`).
+
+Path matching is Caddy's: case-insensitive, dot segments cleaned, escapes decoded, `*` not
+used. A request for `/Webhook` is proxied as sent and the receiver, which compares the path
+exactly, answers its own 404.
+
+Not proven here: Caddy's behaviour against a real sender (the 413 a sender sees for an
+oversize body, the 429 it sees past the budget, the 404 and 405) was not run; the rendered
+file is only parsed by `caddy validate` in CI. Whether AppSec's rules flag a real callback
+payload is unknown, and a 403 would be retried by the sender. Caddy's read timeouts are
+server-wide in the global block, so slow-sender protection for this route is whatever the
+global block says, and changing it affects every site.
+
+`edge1` as the upstream host: `resolvePrivateAddress` refuses `edge1` on every port but
+those in `EDGE_HOST_ALLOWED_PORTS`, so the entry cannot render once its port is named
+until that set gains the receiver's port. That is one deliberate line in this file, made
+when the port is known and reviewed as a widening of what the edge proxies to.
+
 ## `siteBlock`: `request_body` ordering
 
 Ahead of everything else, including request_body -- see hstsDirective's own comment for
