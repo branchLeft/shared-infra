@@ -42,15 +42,6 @@ overrides:
   safety_service_gid:
     type: str
     value: '990'
-  # The two host ports of the Sweego receiver, which the owner names. Throwaway numbers that
-  # differ and are unprivileged, so the compose file validates (a dummy int would publish the
-  # same port twice).
-  sweego_receiver_port:
-    type: int
-    value: 18080
-  sweego_receiver_drain_port:
-    type: int
-    value: 18081
   # The numeric ids of the collector account, read from the host's account database while the
   # role runs. Throwaway ids; getent gives them as text.
   mail_collector_uid:
@@ -67,6 +58,15 @@ overrides:
       - slug: offline-dummy
         kind: tenant
         app_host_ip: 10.0.0.40
+  # The two host ports of the Sweego receiver, which the owner names. Throwaway numbers that
+  # differ and are unprivileged, so the compose file validates (a dummy int would publish the
+  # same port twice).
+  sweego_receiver_port:
+    type: int
+    value: 18080
+  sweego_receiver_drain_port:
+    type: int
+    value: 18081
   # The result of the spool paths plan, which the role registers at run time. One throwaway path
   # through a jump host, so every template of the role renders. The key is a throwaway public key.
   spool_paths_plan_result:
