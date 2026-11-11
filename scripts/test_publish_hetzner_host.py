@@ -42,6 +42,7 @@ ATTEST_WITH = {
     "signer-workflow": "branchLeft/shared-infra/.github/workflows/publish-hetzner-host.yml",
     "ref": "${{ steps.attest-ref.outputs.ref }}",
 }
+ATTEST_REF_LINE = 'echo "ref=refs/tags/hetzner-host-v${VERSION}" >> "$GITHUB_OUTPUT"'
 NPM_PUBLISH = re.compile(r"\b(?:pnpm|npm)\s+publish\b")
 
 
@@ -125,6 +126,12 @@ def problems(text: str, *, other_workflows: dict[str, str] | None = None) -> lis
         found.append(f"a publish step running `{PUBLISH_COMMAND}` is required")
     if ref is None:
         found.append("the attest-ref step is required")
+    elif ATTEST_REF_LINE not in [
+        line.strip() for line in str(steps[ref].get("run", "")).splitlines()
+    ]:
+        found.append(
+            f"the attest-ref step must echo the tag form `{ATTEST_REF_LINE}`, found {steps[ref].get('run')!r}"
+        )
     if None not in (pack, ref, attest_at, publish) and not (
         pack < ref < attest_at < publish
     ):  # type: ignore[operator]
@@ -232,6 +239,24 @@ class PublishHetznerHostSabotageTests(unittest.TestCase):
         self.assert_red(
             self.mutate("${{ steps.attest-ref.outputs.ref }}", "${{ github.ref }}"),
             "attest inputs",
+        )
+
+    def test_an_echoed_ref_missing_the_hyphen_before_v_is_red(self) -> None:
+        self.assert_red(
+            self.mutate(
+                "ref=refs/tags/hetzner-host-v${VERSION}",
+                "ref=refs/tags/hetzner-hostv${VERSION}",
+            ),
+            "must echo the tag form",
+        )
+
+    def test_an_echoed_ref_in_a_bare_version_tag_form_is_red(self) -> None:
+        self.assert_red(
+            self.mutate(
+                "ref=refs/tags/hetzner-host-v${VERSION}",
+                "ref=refs/tags/v${VERSION}",
+            ),
+            "must echo the tag form",
         )
 
     def test_continue_on_error_on_the_attest_step_is_red(self) -> None:
