@@ -138,13 +138,18 @@ download are only reported, not made.
 
 ## Known limits
 
-- The Node runtime is still downloaded from nodejs.org, so a host whose egress allows
-  the package mirrors only cannot fetch it, and the check that holds demo1's roles to no
-  fetch (`ansible/checks/test_demo1_no_github_fetch.py`) refuses this role's `get_url` while
-  the role is on demo1's playbook. A host that already has the pinned version skips the
-  download. Where the runtime comes from instead is an open decision: a package from the
-  mirrors (a different version from the pinned one), a wider egress allowlist, or a carried
-  runtime (no archive may be committed under `ansible/`).
+- The Node runtime is downloaded from nodejs.org, over https on the default port, and
+  demo1's egress allowlist holds that one host besides the package mirrors, for this
+  download alone. The owner decided it: the pinned Node version, its sha256 as the get_url
+  `checksum`, no other host. The check that holds demo1's roles to no fetch
+  (`ansible/checks/test_demo1_no_github_fetch.py`) lets through this one `get_url` and
+  refuses any other: a download with no checksum, from another host (a suffix of nodejs.org
+  included, or GitHub), from another role or another file of this role, a second `get_url` in
+  `tasks/main.yml`, a second place that sets `broker_deploy_node_base_url`, or a pin that is
+  not a sha256. Changing the base url or the url shape is a change to that test. The check
+  reads this role's text; the host's own firewall is not read by it. A variable passed at
+  run time could still move the base url (the pull route passes none, and the checksum
+  must still match). A host that already has the pinned version skips the download.
 - No verify key is carried yet: the file and its digest are empty until the owner commits
   both (see "Inputs"), and the role refuses until then.
 - The attestation is not verified by the role, only the pinned digests (see "How the
