@@ -1,0 +1,97 @@
+---
+# What the role expects to find on ops1 before it runs, and nothing of the role itself. The parents
+# are made by roles that run earlier on a real host, so the test stands in for them. The
+# credentials file and one descriptor stand for what the owner and the descriptor feed provide: the
+# file holds made-up text, never a credential, and the descriptor is a made-up file. Docker is
+# what the role asserts and never installs, so a stand-in client takes its place: it records the
+# arguments of `docker run` and stays up, as the collector would.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the parent directories, as the roles that run before this one do
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /var/lib/branchleft
+        - /etc/branchleft/control-plane
+        - /var/lib/nextcloud
+        - /var/lib/nextcloud/data
+
+    - name: Put a canary where another role's file would be
+      ansible.builtin.copy:
+        content: 'CANARY of {{ item }}, which the mail collector role must not touch.'
+        dest: '{{ item }}'
+        owner: root
+        group: root
+        mode: '0640'
+      loop: '{{ scenario_canaries }}'
+
+    - name: Make the directories the owner and the descriptor feed fill
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - '{{ scenario_config_dir }}'
+        - '{{ scenario_descriptor_dir }}'
+
+    - name: Put made-up text where the owner's credentials file would be, closed to everyone but root
+      ansible.builtin.copy:
+        content: 'NOT-A-REAL-SECRET stand-in for {{ scenario_credentials_file }}'
+        dest: '{{ scenario_credentials_file }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    - name: Put a made-up descriptor where the descriptor feed would put one
+      ansible.builtin.copy:
+        content: '{}'
+        dest: '{{ scenario_descriptor_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install a stand-in docker client that records its arguments and stays up
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          case "$1" in
+            run)
+              printf '%s\n' "$@" > {{ scenario_docker_args_file }}
+              exec sleep 3600
+              ;;
+            *)
+              exit 0
+              ;;
+          esac
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install a stand-in docker service, so the unit's requirement is met
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Stand-in for the Docker daemon in the role test
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+        dest: /etc/systemd/system/docker.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Load the stand-in service
+      ansible.builtin.systemd_service:
+        daemon_reload: true

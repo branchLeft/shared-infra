@@ -1,0 +1,59 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. A path, a name or a mode the
+# collector depends on must not be moved by a play variable (ansible/README.md, variable
+# precedence). The role writes only under its own two directories and its one unit file.
+#
+# The collector runs as this account, in a container, with nothing else of the host mounted.
+mail_collector_account: mail-collector
+
+# Asserted and never made or changed. /etc/branchleft is made by host_inputs (R11), and
+# /var/lib/branchleft by the roles that run before this one on ops1.
+mail_collector_parents:
+  - /etc/branchleft
+  - /var/lib/branchleft
+
+# The role's own paths. The two environment files hold public values and are root's. The
+# descriptor directory is what the collector drains from: one JSON file per host it may drain,
+# and nothing else names a host. The role makes it and leaves it empty; whatever fills it is
+# another change's. The state directory holds the record of what was already submitted.
+mail_collector_config_dir: /etc/branchleft/mail-collector
+mail_collector_descriptor_dir: /etc/branchleft/mail-collector/descriptors
+mail_collector_unit_env_file: /etc/branchleft/mail-collector/unit.env
+mail_collector_env_file: /etc/branchleft/mail-collector/collector.env
+mail_collector_state_dir: /var/lib/branchleft/mail-collector
+
+# The one file the role names and never writes. The owner places it, root's and mode 0600, with
+# the sending user and password, the drain token and the heartbeat URL, one NAME=value per line.
+# If it exists and is not root's and 0600, the role stops (it never reads it).
+mail_collector_credentials_file: /etc/branchleft/mail-collector/credentials.env
+mail_collector_credentials_mode: '0600'
+
+# Where the directories appear inside the container, and the three places the collector keeps what
+# must outlive a restart: the record of submitted messages, the per-message target pins and the
+# Sweego usage counters. All three sit under the state directory, which is the one persistent
+# volume; with any of them unset or elsewhere the collector holds that state in memory only, and a
+# restart forgets it. The tasks refuse a run where any of the three is empty or not under it.
+mail_collector_container_descriptor_dir: /descriptors
+mail_collector_container_state_dir: /state
+mail_collector_container_dedupe_file: /state/dedupe.json
+mail_collector_container_pin_dir: /state/pins
+mail_collector_container_sweego_usage_file: /state/sweego-usage.json
+mail_collector_host_pin_dir: /var/lib/branchleft/mail-collector/pins
+
+mail_collector_unit_dir: /etc/systemd/system
+mail_collector_unit: mail-collector.service
+mail_collector_docker: /usr/bin/docker
+
+# The image the role refuses to run: the default, shaped like a pin and pointing at nothing.
+mail_collector_image_placeholder: ghcr.io/branchleft/mail-collector@sha256:0000000000000000000000000000000000000000000000000000000000000000
+
+# The shapes the inputs must have when set. They end in \Z, not $, so a trailing line break does
+# not pass. None admits a space, a quote, a backslash, a dollar sign or a hash, so a value is one
+# plain word in the environment file.
+mail_collector_image_pattern: '^ghcr\.io/branchleft/mail-collector@sha256:[0-9a-f]{64}\Z'
+mail_collector_state_path_tail_pattern: '/[A-Za-z0-9][A-Za-z0-9._/-]*\Z'
+mail_collector_smtp_host_pattern: '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\Z'
+mail_collector_demo_mail_domain_pattern: '^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z'
+mail_collector_shim_schemes:
+  - http
+  - https

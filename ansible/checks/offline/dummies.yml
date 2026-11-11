@@ -42,6 +42,14 @@ overrides:
   safety_service_gid:
     type: str
     value: '990'
+  # The numeric ids of the collector account, read from the host's account database while the
+  # role runs. Throwaway ids; getent gives them as text.
+  mail_collector_uid:
+    type: str
+    value: '991'
+  mail_collector_gid:
+    type: str
+    value: '991'
   # The two host ports of the Sweego receiver, which the owner names. Throwaway numbers that
   # differ and are unprivileged, so the compose file validates (a dummy int would publish the
   # same port twice).
