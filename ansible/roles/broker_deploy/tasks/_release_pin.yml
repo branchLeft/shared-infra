@@ -1,38 +1,88 @@
 ---
 # Internal to the role: included from main.yml before the host is read or anything is
-# written. The release is a tarball the role carries, built and attested by the broker's
-# release workflow. It is hashed where the role runs and held to the sha256 pinned for its
-# version, so a tarball that is missing, is a link, or is not the pinned one stops the run
-# here with nothing written. Reading is not a change, so this runs in check mode too.
-- name: Refuse a release version that is not MAJOR.MINOR.PATCH or has no pin
+# written. The release is the files of a CI-built, attested release, carried in the role
+# under broker_deploy_release_dir/VERSION/. Each file is hashed where the role runs and held
+# to the sha256 pinned for it, and the directory must hold those files and no others, no
+# link among them. A release that is missing a file, has an extra one, has a changed byte,
+# or holds a link stops the run here with nothing written. Reading is not a change, so this
+# runs in check mode too.
+- name: Refuse a release version that is not MAJOR.MINOR.PATCH or has no pinned files
   ansible.builtin.assert:
     that:
       - broker_deploy_release_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
       - broker_deploy_release_version in broker_deploy_release_pins
-      - broker_deploy_release_pins[broker_deploy_release_version] is match('^[0-9a-f]{64}\Z')
+      - broker_deploy_release_pins[broker_deploy_release_version] is mapping
+      - "'broker.mjs' in broker_deploy_release_pins[broker_deploy_release_version]"
     quiet: true
     fail_msg: >-
-      The release version must be MAJOR.MINOR.PATCH and must have a pin of 64 lower-case hex
-      digits in broker_deploy_release_pins. Nothing has been written to the host.
+      The release version must be MAJOR.MINOR.PATCH and must have pinned files, including
+      broker.mjs, in broker_deploy_release_pins. No release is carried in the role until its
+      files and pins are added. Nothing has been written to the host.
 
-- name: Hash the release tarball where the role runs
+# A path is plain: letters, digits, dot, underscore, hyphen and slash, starting with a letter or
+# digit, and no dot-dot segment, so a pin cannot name a file outside the release.
+- name: Refuse a pinned path or digest of the wrong shape
+  ansible.builtin.assert:
+    that:
+      - item.key is match('^[A-Za-z0-9][A-Za-z0-9._/-]*\Z')
+      - item.key is not search('(^|/)\.\.(/|\Z)')
+      - item.value is string
+      - item.value is match('^[0-9a-f]{64}\Z')
+    quiet: true
+    fail_msg: >-
+      A pinned path must be a plain relative path with no dot-dot segment, and its pin 64 lower-case
+      hex digits. Nothing has been written to the host.
+  loop: '{{ broker_deploy_release_pins[broker_deploy_release_version] | dict2items }}'
+  loop_control:
+    label: '{{ item.key }}'
+
+- name: List what the role carries for this release, without following a link
+  ansible.builtin.find:
+    paths: '{{ broker_deploy_release_dir }}/{{ broker_deploy_release_version }}'
+    recurse: true
+    file_type: any
+    hidden: true
+    follow: false
+  delegate_to: localhost
+  become: false
+  register: broker_deploy_release_found
+
+- name: Refuse a release that holds a link, a missing file or a file that is not pinned
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_release_found.files | selectattr('islnk') | list | length == 0
+      - >-
+        broker_deploy_release_found.files | rejectattr('isdir') | map(attribute='path')
+        | map('relpath', broker_deploy_release_dir ~ '/' ~ broker_deploy_release_version)
+        | sort | list
+        == broker_deploy_release_pins[broker_deploy_release_version].keys() | sort | list
+    quiet: true
+    fail_msg: >-
+      The files carried for release {{ broker_deploy_release_version }} are not exactly the files
+      pinned for it, or one of them is a link. Nothing has been written to the host.
+
+- name: Hash each pinned file where the role runs
   ansible.builtin.stat:
-    path: '{{ broker_deploy_release_dir }}/broker-bundle-{{ broker_deploy_release_version }}.tar.gz'
+    path: '{{ broker_deploy_release_dir }}/{{ broker_deploy_release_version }}/{{ item.key }}'
     follow: false
     checksum_algorithm: sha256
   delegate_to: localhost
   become: false
-  register: broker_deploy_release_stat
+  loop: '{{ broker_deploy_release_pins[broker_deploy_release_version] | dict2items }}'
+  loop_control:
+    label: '{{ item.key }}'
+  register: broker_deploy_release_stats
 
-- name: Refuse a release tarball that is missing, is not a plain file or is not the pinned one
+- name: Refuse a release file that is not a plain file or does not have its pinned sha256
   ansible.builtin.assert:
     that:
-      - broker_deploy_release_stat.stat.exists
-      - broker_deploy_release_stat.stat.isreg
-      - not broker_deploy_release_stat.stat.islnk
-      - broker_deploy_release_stat.stat.checksum == broker_deploy_release_pins[broker_deploy_release_version]
+      - item.stat.exists
+      - item.stat.isreg
+      - item.stat.checksum == item.item.value
     quiet: true
     fail_msg: >-
-      broker-bundle-{{ broker_deploy_release_version }}.tar.gz is missing from the role's release
-      directory, is not a plain file, or does not have its pinned sha256
-      ({{ broker_deploy_release_pins[broker_deploy_release_version] }}). Nothing has been written to the host.
+      {{ item.item.key }} of release {{ broker_deploy_release_version }} is not a plain file or does not
+      have its pinned sha256 ({{ item.item.value }}). Nothing has been written to the host.
+  loop: '{{ broker_deploy_release_stats.results }}'
+  loop_control:
+    label: '{{ item.item.key }}'

@@ -8,11 +8,13 @@
   gather_subset: [min]
   vars:
     broker_deploy_node_arch: "{{ 'arm64' if ansible_facts.architecture == 'aarch64' else 'x64' }}"
-    # A stand-in release tarball packed from this scenario's files/bundle, and its
-    # pin, which a unit test holds to the tarball's bytes. Not a broker artefact.
+    # A stand-in release in this scenario's files/release/0.0.1, and its pins, which a unit
+    # test holds to the files' bytes. Not a broker artefact.
     broker_deploy_release_version: '0.0.1'
     broker_deploy_release_pins:
-      '0.0.1': '91b1f00714c275a064dfe61643240cf011830ee0a90c94ee823c2bb61f6ae3b8'
+      '0.0.1':
+        broker.mjs: '711c0e0ad72f113932a64c2fa2404ccd4fb910e53d2f215a4405b14aceb2dd9e'
+        plugins/stand-in-plugin.mjs: 'efb57eb573605707a6d367920ccb1d9e39a0a10f52ca2c3fc990b2983eca3396'
     broker_deploy_release_dir: '{{ playbook_dir }}/files/release'
     # A stand-in for the owner's public key. Not a real key.
     broker_deploy_verify_key_src: '{{ playbook_dir }}/files/verify-key-stand-in.bin'

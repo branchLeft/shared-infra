@@ -4,9 +4,9 @@
 # the unit, and last the start and the wait for the broker's answer.
 
 # The inputs are checked before anything is downloaded or written. The release
-# tarball must be the one pinned for its version, and the Node digest must be
-# pinned to a published sha256.
-- name: Hold the release tarball to its pinned sha256
+# files must be exactly the ones pinned for its version, and the Node digest must
+# be pinned to a published sha256.
+- name: Hold the release files to their pinned sha256
   ansible.builtin.include_tasks: _release_pin.yml
 
 - name: Refuse a Node digest that is not a pinned sha256
@@ -203,11 +203,11 @@
   ansible.builtin.meta: flush_handlers
 
 # One decision for the restart: did the release, the key, the environment file or the unit
-# change in this run. A task skipped in check mode registers changed as false.
+# change in this run.
 - name: Work out whether what the broker runs changed in this run
   ansible.builtin.set_fact:
     broker_deploy_inputs_changed: >-
-      {{ [broker_deploy_unpacked, broker_deploy_unpack_report, broker_deploy_link_result,
+      {{ [broker_deploy_release_copy, broker_deploy_link_result,
       broker_deploy_key_result, broker_deploy_env_result, broker_deploy_unit_result]
       | map(attribute='changed') | select | list | length > 0 }}
 

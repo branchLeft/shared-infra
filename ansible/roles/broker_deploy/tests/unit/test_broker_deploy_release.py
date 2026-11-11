@@ -3,9 +3,9 @@
 The pin check and the release delivery are task files, so they are run, not read: a small play
 in a scratch directory includes them with every path of the role moved into the scratch tree and
 the owner set to the account that runs the test. Nothing here touches a host or a container. They
-prove what a read of the YAML cannot: that a tarball that is not the pinned one stops the run
-before anything is written, that a plan shows the unpack and writes nothing, that an apply unpacks
-once and links the release, and that the next run changes nothing.
+prove what a read of the YAML cannot: that a release whose files are not exactly the pinned ones
+stops the run before anything is written, that a plan writes nothing, that an apply delivers the
+files once and links the release, and that the next run changes nothing.
 
 A missing ansible-playbook is a failure, not a skip: the suite of a role is a control.
 """
@@ -13,9 +13,7 @@ A missing ansible-playbook is a failure, not a skip: the suite of a role is a co
 from __future__ import annotations
 
 import grp
-import gzip
 import hashlib
-import io
 import json
 import os
 import pwd
@@ -23,20 +21,15 @@ import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import unittest
 from dataclasses import dataclass
 from pathlib import Path
 
 ROLE = Path(__file__).resolve().parents[2]
-FIXTURE_VERSION = "0.0.1"
-FIXTURE = (
-    ROLE / "molecule" / "default" / "files" / "release" / f"broker-bundle-{FIXTURE_VERSION}.tar.gz"
-)
-REPORT = "Report in check mode that the pinned release would be unpacked"
-TASK_LINE = re.compile(r"^TASK \[(?P<name>.*?)\] \*+$")
-RESULT_LINE = re.compile(r"^(?P<status>ok|changed|skipping|fatal|failed): \[localhost\]")
+SCENARIO_RELEASE = ROLE / "molecule" / "default" / "files" / "release"
+VERSION = "0.0.1"
+REFUSED = "are not exactly the files pinned"
 
 
 @dataclass
@@ -45,25 +38,12 @@ class Outcome:
 
     code: int
     output: str
-    statuses: dict[str, str]
 
     @property
     def changed(self) -> int:
         """Return the recap's changed count."""
         found = re.search(r"changed=(\d+)", self.output)
         return int(found.group(1)) if found else -1
-
-    def status_of(self, fragment: str) -> str:
-        """Return the status of the one task whose name contains the fragment.
-
-        Raises:
-            AssertionError: there is not exactly one such task.
-        """
-        names = [name for name in self.statuses if fragment in name]
-        if len(names) != 1:
-            message = f"expected one task named like {fragment!r}, found {names}"
-            raise AssertionError(message)
-        return self.statuses[names[0]]
 
 
 def ansible_playbook() -> Path:
@@ -79,71 +59,34 @@ def ansible_playbook() -> Path:
     return found
 
 
-def parse(output: str) -> dict[str, str]:
-    """Return each task's last status from the default callback's text."""
-    statuses: dict[str, str] = {}
-    current = ""
-    for line in output.splitlines():
-        task = TASK_LINE.match(line)
-        if task:
-            current = task.group("name")
-            continue
-        result = RESULT_LINE.match(line)
-        if result and current:
-            statuses[current] = result.group("status")
-    return statuses
-
-
 def sha256(path: Path) -> str:
     """Return the sha256 of a file."""
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def has_gnu_tar() -> bool:
-    """Return whether the tar the unarchive module would pick is GNU tar, which it requires."""
-    for name in ("gtar", "tar"):
-        found = shutil.which(name)
-        if found:
-            # The command is a fixed name from the PATH with a fixed flag.
-            done = subprocess.run([found, "--version"], capture_output=True, text=True, check=False)  # noqa: S603
-            return "GNU tar" in done.stdout
-    return False
-
-
-GNU_TAR = has_gnu_tar()
-NEEDS_GNU_TAR = unittest.skipUnless(
-    GNU_TAR, "the unarchive module needs GNU tar; the shards run on Linux, where it is the default"
-)
-
-
-def other_release(version_text: str) -> bytes:
-    """Return a small release tarball whose entry point says which version it is."""
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w") as archive:
-        data = f"// release {version_text}\n".encode()
-        info = tarfile.TarInfo("broker.mjs")
-        info.size = len(data)
-        info.mtime = 0
-        info.mode = 0o644
-        archive.addfile(info, io.BytesIO(data))
-    return gzip.compress(buffer.getvalue(), mtime=0)
+def pins_of(release: Path) -> dict[str, str]:
+    """Return the pins of every file under a release directory, by relative path."""
+    return {
+        str(path.relative_to(release)): sha256(path)
+        for path in sorted(release.rglob("*"))
+        if path.is_file()
+    }
 
 
 class Lab(unittest.TestCase):
-    """A scratch tree holding the release directory, the releases directory and a runner."""
+    """A scratch tree holding the carried release, the releases directory and a runner."""
 
     def setUp(self) -> None:
-        """Make the scratch tree with the fixture release in the role's release directory."""
+        """Copy the scenario's stand-in release into a scratch release directory."""
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name).resolve()
         self.release_dir = self.root / "carried"
-        self.release_dir.mkdir()
+        self.carried = self.release_dir / VERSION
+        shutil.copytree(SCENARIO_RELEASE / VERSION, self.carried)
         self.releases = self.root / "opt" / "releases"
         self.current = self.root / "opt" / "current"
-        self.tarball = self.release_dir / f"broker-bundle-{FIXTURE_VERSION}.tar.gz"
-        self.tarball.write_bytes(FIXTURE.read_bytes())
-        self.pins = {FIXTURE_VERSION: sha256(FIXTURE)}
+        self.pins = {VERSION: pins_of(self.carried)}
         self.play = self.root / "play.yml"
         self.play.write_text(
             "- hosts: localhost\n"
@@ -160,10 +103,10 @@ class Lab(unittest.TestCase):
 
     def run_role(
         self,
-        version: str = FIXTURE_VERSION,
+        version: str = VERSION,
         *,
         check: bool = False,
-        pins: dict[str, str] | None = None,
+        pins: dict[str, dict[str, str]] | None = None,
     ) -> Outcome:
         """Run the pin check and the release tasks once."""
         variables: dict[str, object] = {
@@ -193,32 +136,29 @@ class Lab(unittest.TestCase):
         done = subprocess.run(  # noqa: S603
             command, capture_output=True, text=True, check=False, env=environment, timeout=180
         )
-        output = done.stdout + done.stderr
-        return Outcome(done.returncode, output, parse(output))
+        return Outcome(done.returncode, done.stdout + done.stderr)
 
 
 class PlanAndApply(Lab):
     """What the plan shows and what the apply does."""
 
-    def test_a_plan_shows_the_unpack_and_writes_nothing(self) -> None:
+    def test_a_plan_writes_nothing(self) -> None:
         outcome = self.run_role(check=True)
         self.assertEqual(outcome.code, 0, outcome.output)
-        self.assertEqual(outcome.status_of(REPORT), "changed")
+        self.assertGreaterEqual(outcome.changed, 1)
         self.assertFalse(self.releases.exists())
         self.assertFalse(self.current.exists())
 
-    @NEEDS_GNU_TAR
-    def test_the_apply_unpacks_the_release_and_points_the_link_at_it(self) -> None:
+    def test_the_apply_delivers_the_files_and_points_the_link_at_them(self) -> None:
         outcome = self.run_role()
         self.assertEqual(outcome.code, 0, outcome.output)
-        release = self.releases / FIXTURE_VERSION
-        self.assertTrue((release / "broker.mjs").is_file())
-        self.assertTrue((release / "plugins" / "stand-in-plugin.mjs").is_file())
+        release = self.releases / VERSION
+        for relative in self.pins[VERSION]:
+            self.assertEqual(sha256(release / relative), self.pins[VERSION][relative])
+            self.assertEqual((release / relative).stat().st_mode & 0o022, 0)
         self.assertTrue(self.current.is_symlink())
         self.assertEqual(self.current.resolve(), release.resolve())
-        self.assertEqual(outcome.status_of(REPORT), "skipping")
 
-    @NEEDS_GNU_TAR
     def test_the_next_run_and_the_next_plan_change_nothing(self) -> None:
         first = self.run_role()
         self.assertEqual(first.code, 0, first.output)
@@ -228,22 +168,33 @@ class PlanAndApply(Lab):
         plan = self.run_role(check=True)
         self.assertEqual(plan.code, 0, plan.output)
         self.assertEqual(plan.changed, 0, plan.output)
-        self.assertEqual(plan.status_of(REPORT), "skipping")
 
-    @NEEDS_GNU_TAR
+    def test_a_byte_changed_on_the_host_is_put_back_and_the_plan_shows_it(self) -> None:
+        self.assertEqual(self.run_role().code, 0)
+        installed = self.releases / VERSION / "broker.mjs"
+        installed.write_text("// changed on the host\n", encoding="utf-8")
+        plan = self.run_role(check=True)
+        self.assertEqual(plan.code, 0, plan.output)
+        self.assertGreaterEqual(plan.changed, 1)
+        self.assertEqual(installed.read_text(encoding="utf-8"), "// changed on the host\n")
+        self.assertEqual(self.run_role().code, 0)
+        self.assertEqual(sha256(installed), self.pins[VERSION]["broker.mjs"])
+
     def test_a_new_version_gets_its_own_directory_and_the_old_one_stays(self) -> None:
         self.assertEqual(self.run_role().code, 0)
-        newer = self.release_dir / "broker-bundle-0.0.2.tar.gz"
-        newer.write_bytes(other_release("0.0.2"))
-        pins = {**self.pins, "0.0.2": sha256(newer)}
+        newer = self.release_dir / "0.0.2"
+        newer.mkdir()
+        (newer / "broker.mjs").write_text("// release 0.0.2\n", encoding="utf-8")
+        pins = {**self.pins, "0.0.2": pins_of(newer)}
         outcome = self.run_role("0.0.2", pins=pins)
         self.assertEqual(outcome.code, 0, outcome.output)
         self.assertEqual(self.current.resolve(), (self.releases / "0.0.2").resolve())
-        self.assertTrue((self.releases / FIXTURE_VERSION / "broker.mjs").is_file())
         self.assertEqual(
             (self.releases / "0.0.2" / "broker.mjs").read_text(encoding="utf-8"),
             "// release 0.0.2\n",
         )
+        old = self.releases / VERSION / "broker.mjs"
+        self.assertEqual(sha256(old), self.pins[VERSION]["broker.mjs"])
 
 
 class Refusals(Lab):
@@ -256,23 +207,35 @@ class Refusals(Lab):
         self.assertFalse(self.releases.exists(), "a release directory was made")
         self.assertFalse(self.current.exists(), "the current link was made")
 
-    def test_a_tarball_that_is_not_the_pinned_one_is_refused(self) -> None:
-        self.tarball.write_bytes(self.tarball.read_bytes() + b"\0")
+    def test_a_file_that_is_not_the_pinned_one_is_refused(self) -> None:
+        (self.carried / "broker.mjs").write_text("// not the pinned bytes\n", encoding="utf-8")
         self.refused(self.run_role(), "does not have its pinned sha256")
 
-    def test_a_tarball_that_is_missing_is_refused(self) -> None:
-        self.tarball.unlink()
-        self.refused(self.run_role(), "is missing from the role's release")
+    def test_a_pinned_file_that_is_missing_is_refused(self) -> None:
+        (self.carried / "plugins" / "stand-in-plugin.mjs").unlink()
+        self.refused(self.run_role(), REFUSED)
 
-    def test_a_tarball_that_is_a_link_is_refused(self) -> None:
-        real = self.root / "elsewhere.tar.gz"
-        real.write_bytes(FIXTURE.read_bytes())
-        self.tarball.unlink()
-        self.tarball.symlink_to(real)
-        self.refused(self.run_role(), "does not have its pinned sha256")
+    def test_a_file_that_is_not_pinned_is_refused(self) -> None:
+        (self.carried / "plugins" / "extra.mjs").write_text("// not pinned\n", encoding="utf-8")
+        self.refused(self.run_role(), REFUSED)
+
+    def test_a_hidden_file_that_is_not_pinned_is_refused(self) -> None:
+        (self.carried / ".hidden").write_text("// not pinned\n", encoding="utf-8")
+        self.refused(self.run_role(), REFUSED)
+
+    def test_a_link_in_the_release_is_refused(self) -> None:
+        real = self.root / "elsewhere.mjs"
+        real.write_bytes((self.carried / "broker.mjs").read_bytes())
+        (self.carried / "broker.mjs").unlink()
+        (self.carried / "broker.mjs").symlink_to(real)
+        self.refused(self.run_role(), REFUSED)
+
+    def test_a_release_directory_that_is_missing_is_refused(self) -> None:
+        shutil.rmtree(self.carried)
+        self.refused(self.run_role(), REFUSED)
 
     def test_a_check_mode_run_refuses_too(self) -> None:
-        self.tarball.write_bytes(b"not the release")
+        (self.carried / "broker.mjs").write_text("// not the pinned bytes\n", encoding="utf-8")
         self.refused(self.run_role(check=True), "does not have its pinned sha256")
 
     def test_a_version_that_is_not_a_plain_version_is_refused(self) -> None:
@@ -280,18 +243,31 @@ class Refusals(Lab):
             with self.subTest(version=version):
                 self.refused(self.run_role(version), "must be MAJOR.MINOR.PATCH")
 
-    def test_a_version_with_no_pin_is_refused(self) -> None:
-        self.refused(self.run_role("0.0.2"), "must be MAJOR.MINOR.PATCH")
+    def test_a_version_with_no_pins_is_refused(self) -> None:
+        cases: list[dict[str, dict[str, str]]] = [
+            {},
+            {VERSION: {}},
+            {VERSION: {"plugins/stand-in-plugin.mjs": "0" * 64}},
+        ]
+        for pins in cases:
+            with self.subTest(pins=pins):
+                self.refused(self.run_role(pins=pins), "must be MAJOR.MINOR.PATCH")
 
-    def test_a_pin_that_is_not_a_lower_case_sha256_is_refused(self) -> None:
-        for pin in (
-            self.pins[FIXTURE_VERSION].upper(),
-            self.pins[FIXTURE_VERSION][:-1],
-            "sha256:" + self.pins[FIXTURE_VERSION],
-        ):
-            with self.subTest(pin=pin):
+    def test_a_path_or_pin_of_the_wrong_shape_is_refused(self) -> None:
+        good = self.pins[VERSION]["broker.mjs"]
+        bad = {
+            "uppercase digest": {"broker.mjs": good.upper()},
+            "short digest": {"broker.mjs": good[:-1]},
+            "prefixed digest": {"broker.mjs": "sha256:" + good},
+            "dot-dot path": {"broker.mjs": good, "../broker.mjs": good},
+            "absolute path": {"broker.mjs": good, "/etc/passwd": good},
+            "leading dot": {"broker.mjs": good, ".hidden": good},
+        }
+        for name, pins in bad.items():
+            with self.subTest(name):
                 self.refused(
-                    self.run_role(pins={FIXTURE_VERSION: pin}), "must be MAJOR.MINOR.PATCH"
+                    self.run_role(pins={VERSION: pins}),
+                    "A pinned path must be a plain relative path",
                 )
 
 

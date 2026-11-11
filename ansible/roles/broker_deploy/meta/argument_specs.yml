@@ -3,9 +3,9 @@ argument_specs:
   main:
     short_description: Install the broker's Node, pinned CI release, state, key, environment file and unit, and run the broker
     description: >-
-      Pins the Node runtime the broker runs on, unpacks one pinned release of
+      Pins the Node runtime the broker runs on, delivers one pinned release of
       the broker's bundle (built and attested by the broker's release workflow,
-      carried in the role) and points the current link at it, creates the
+      its files carried in the role) and points the current link at it, creates the
       broker account and its state directories, installs the public half of the
       request-signing key and the environment file, installs the broker's
       systemd unit, enables and starts it, restarts it when the release, the
@@ -19,24 +19,24 @@ argument_specs:
         type: str
         description: >-
           The broker release to run, as MAJOR.MINOR.PATCH. It names the release
-          directory under the releases directory and the tarball
-          broker-bundle-VERSION.tar.gz in the release directory of the role. A
-          release directory that already holds its entry point is not unpacked
-          again.
-        default: '0.1.0'
+          directory under the releases directory and the directory of the
+          release's files under the release directory of the role. Empty until a
+          release is carried; the role refuses an empty version.
+        default: ''
       broker_deploy_release_pins:
         type: dict
         description: >-
-          The sha256 of each release tarball, as 64 lower-case hex digits, by
-          version. The role refuses, before it writes anything, a tarball that
-          is not the one pinned for its version. A digest is not a secret.
-        default:
-          '0.1.0': '6410ecb830f6dd01ff46a459aa3e352e613b241378a4dc24f17f4bd50c4fc864'
+          The release files by version: for each version a mapping from the path
+          of each file, relative to the release and including broker.mjs, to its
+          sha256 as 64 lower-case hex digits. The role refuses, before it writes
+          anything, a release whose files are not exactly those pinned, byte for
+          byte, or that holds a link. A digest is not a secret.
+        default: {}
       broker_deploy_release_dir:
         type: path
         description: >-
-          Directory on the machine that runs the role that holds the release
-          tarballs. Nothing is fetched from the network.
+          Directory on the machine that runs the role that holds one directory
+          of files per release version. Nothing is fetched from the network.
         default: '{{ role_path }}/files/releases'
       broker_deploy_verify_key_src:
         type: path

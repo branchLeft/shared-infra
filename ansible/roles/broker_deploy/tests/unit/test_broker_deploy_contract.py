@@ -1,18 +1,15 @@
 """What the broker_deploy files must agree on, read from the files.
 
 The behaviour tests run the release tasks; these hold the facts that no run of them shows:
-the pins are well formed and have their files, the Molecule release is the one its pin names
-and is what its source directory holds, the readiness port is the environment file's port,
-and the pin check comes before any task that writes to the host.
+the pins are well formed and have their files, the Molecule release is the one its pins name,
+the readiness port is the environment file's port, and the pin check comes before any task
+that writes to the host.
 """
 
 from __future__ import annotations
 
-import gzip
 import hashlib
-import io
 import re
-import tarfile
 import unittest
 from pathlib import Path
 from typing import cast
@@ -23,11 +20,12 @@ ROLE = Path(__file__).resolve().parents[2]
 SHARDS = ROLE / "molecule" / "default"
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\Z")
 DIGEST = re.compile(r"^[0-9a-f]{64}\Z")
-TARBALL = re.compile(r"^broker-bundle-([0-9]+\.[0-9]+\.[0-9]+)\.tar\.gz\Z")
+PLAIN_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 # Modules that only read, decide or refuse: a task of any other module is a write to the host.
 READ_ONLY_MODULES = frozenset(
     {
         "ansible.builtin.assert",
+        "ansible.builtin.find",
         "ansible.builtin.stat",
         "ansible.builtin.set_fact",
         "ansible.builtin.include_tasks",
@@ -66,34 +64,40 @@ def tasks(path: Path) -> list[dict[str, object]]:
     return cast("list[dict[str, object]]", document)
 
 
-def sha256(data: bytes) -> str:
-    """Return the sha256 of the bytes."""
-    return hashlib.sha256(data).hexdigest()
+def sha256(path: Path) -> str:
+    """Return the sha256 of a file."""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def files_under(directory: Path) -> set[str]:
+    """Return the relative paths of the files under a directory."""
+    return {str(path.relative_to(directory)) for path in directory.rglob("*") if path.is_file()}
 
 
 class Pins(unittest.TestCase):
     """The pinned releases."""
 
     def setUp(self) -> None:
-        """Read the defaults, the constants and the spec."""
+        """Read the defaults and the spec."""
         self.defaults = mapping(ROLE / "defaults" / "main.yml")
-        self.pins = cast("dict[str, str]", self.defaults["broker_deploy_release_pins"])
+        self.pins = cast("dict[str, dict[str, str]]", self.defaults["broker_deploy_release_pins"])
         specs = mapping(ROLE / "meta" / "argument_specs.yml")
-        options = cast(
-            "dict[str, dict[str, object]]",
-            cast("dict[str, dict[str, object]]", specs["argument_specs"])["main"]["options"],
-        )
-        self.options = options
+        main = cast("dict[str, dict[str, object]]", specs["argument_specs"])["main"]
+        self.options = cast("dict[str, dict[str, object]]", main["options"])
 
-    def test_every_pin_is_a_version_with_a_lower_case_sha256(self) -> None:
-        self.assertTrue(self.pins)
-        for version, digest in self.pins.items():
+    def test_every_pin_is_a_version_of_plain_paths_with_lower_case_sha256(self) -> None:
+        for version, files in self.pins.items():
             with self.subTest(version=version):
                 self.assertRegex(version, VERSION)
-                self.assertRegex(digest, DIGEST)
+                self.assertIn("broker.mjs", files)
+                for path, digest in files.items():
+                    self.assertRegex(path, PLAIN_PATH)
+                    self.assertNotIn("..", path.split("/"))
+                    self.assertRegex(digest, DIGEST)
 
-    def test_the_default_version_is_pinned(self) -> None:
-        self.assertIn(self.defaults["broker_deploy_release_version"], self.pins)
+    def test_the_default_version_is_empty_or_pinned(self) -> None:
+        version = self.defaults["broker_deploy_release_version"]
+        self.assertTrue(version == "" or version in self.pins)
 
     def test_the_spec_defaults_are_the_defaults(self) -> None:
         for name in (
@@ -104,55 +108,38 @@ class Pins(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.options[name]["default"], self.defaults[name])
 
-    def test_a_release_the_role_carries_is_pinned_and_is_the_pinned_bytes(self) -> None:
+    def test_a_release_the_role_carries_is_pinned_exactly(self) -> None:
         carried = ROLE / "files" / "releases"
         if not carried.is_dir():
             return
-        for path in sorted(carried.iterdir()):
-            with self.subTest(file=path.name):
-                found = TARBALL.match(path.name)
-                if found is None:
-                    self.fail("a file that is not a release tarball")
-                self.assertTrue(path.is_file() and not path.is_symlink())
-                self.assertEqual(sha256(path.read_bytes()), self.pins.get(found.group(1)))
+        for release in sorted(carried.iterdir()):
+            with self.subTest(release=release.name):
+                self.assertTrue(release.is_dir() and not release.is_symlink())
+                self.assertIn(release.name, self.pins)
+                self.assertEqual(files_under(release), set(self.pins[release.name]))
+                for path, digest in self.pins[release.name].items():
+                    self.assertEqual(sha256(release / path), digest)
+
+    def test_every_pinned_version_has_its_files(self) -> None:
+        carried = ROLE / "files" / "releases"
+        for version in self.pins:
+            with self.subTest(version=version):
+                self.assertTrue((carried / version).is_dir())
 
 
 class MoleculeRelease(unittest.TestCase):
-    """The release the container test installs is the stand-in bundle, packed, and its pin."""
+    """The stand-in release the container test installs is the one its converge pins."""
 
-    def setUp(self) -> None:
-        """Read the converge play's pin and the tarball."""
+    def test_the_converge_pins_are_the_stand_in_files(self) -> None:
         converge = cast("list[dict[str, object]]", load(SHARDS / "converge.yml"))
         play_vars = cast("dict[str, object]", converge[0]["vars"])
-        self.version = cast("str", play_vars["broker_deploy_release_version"])
-        self.pin = cast("dict[str, str]", play_vars["broker_deploy_release_pins"])[self.version]
-        self.path = SHARDS / "files" / "release" / f"broker-bundle-{self.version}.tar.gz"
-
-    def test_the_tarball_is_the_one_the_converge_pins(self) -> None:
-        self.assertEqual(sha256(self.path.read_bytes()), self.pin)
-
-    def test_the_tarball_holds_exactly_the_stand_in_bundle_with_root_owner_and_plain_modes(
-        self,
-    ) -> None:
-        source = SHARDS / "files" / "bundle"
-        expected = {str(p.relative_to(source)): p for p in source.rglob("*")}
-        with tarfile.open(
-            fileobj=io.BytesIO(gzip.decompress(self.path.read_bytes())), mode="r:"
-        ) as archive:
-            members = {member.name.rstrip("/"): member for member in archive.getmembers()}
-            self.assertEqual(set(members), set(expected))
-            for name, member in members.items():
-                with self.subTest(member=name):
-                    self.assertEqual((member.uid, member.gid), (0, 0))
-                    if expected[name].is_dir():
-                        self.assertTrue(member.isdir())
-                        self.assertEqual(member.mode, 0o755)
-                    else:
-                        extracted = archive.extractfile(member)
-                        if extracted is None:
-                            self.fail(f"{name} is not a regular member")
-                        self.assertEqual(extracted.read(), expected[name].read_bytes())
-                        self.assertEqual(member.mode, 0o644)
+        version = cast("str", play_vars["broker_deploy_release_version"])
+        pins = cast("dict[str, dict[str, str]]", play_vars["broker_deploy_release_pins"])[version]
+        release = SHARDS / "files" / "release" / version
+        self.assertEqual(files_under(release), set(pins))
+        for path, digest in pins.items():
+            with self.subTest(path=path):
+                self.assertEqual(sha256(release / path), digest)
 
 
 class Agreements(unittest.TestCase):
@@ -167,10 +154,8 @@ class Agreements(unittest.TestCase):
     def test_the_unit_name_is_the_units_file_name(self) -> None:
         constants = mapping(ROLE / "vars" / "main.yml")
         defaults = mapping(ROLE / "defaults" / "main.yml")
-        self.assertEqual(
-            constants["broker_deploy_unit_name"],
-            Path(str(defaults["broker_deploy_unit_path"])).name,
-        )
+        unit_path = Path(str(defaults["broker_deploy_unit_path"]))
+        self.assertEqual(constants["broker_deploy_unit_name"], unit_path.name)
         self.assertTrue((ROLE / "files" / str(constants["broker_deploy_unit_name"])).is_file())
 
 
@@ -180,14 +165,12 @@ class Order(unittest.TestCase):
     def test_only_reads_and_refusals_come_before_the_pin_check(self) -> None:
         main = tasks(ROLE / "tasks" / "main.yml")
         names = [task.get("name") for task in main]
-        at = names.index("Hold the release tarball to its pinned sha256")
+        at = names.index("Hold the release files to their pinned sha256")
         self.assertEqual(main[at].get("ansible.builtin.include_tasks"), "_release_pin.yml")
         for task in main[:at]:
-            modules = set(task) & {key for key in task if key.startswith("ansible.builtin.")}
+            modules = {key for key in task if key.startswith("ansible.builtin.")}
             with self.subTest(task=task.get("name")):
-                self.assertTrue(
-                    modules <= READ_ONLY_MODULES, f"{task.get('name')} writes before the pin check"
-                )
+                self.assertTrue(modules <= READ_ONLY_MODULES, f"{task.get('name')} writes first")
 
     def test_the_pin_check_reads_and_refuses_and_writes_nothing(self) -> None:
         for task in tasks(ROLE / "tasks" / "_release_pin.yml"):
@@ -212,8 +195,7 @@ class Order(unittest.TestCase):
             if "register" in task
         }
         for register in (
-            "broker_deploy_unpacked",
-            "broker_deploy_unpack_report",
+            "broker_deploy_release_copy",
             "broker_deploy_link_result",
             "broker_deploy_key_result",
             "broker_deploy_env_result",
