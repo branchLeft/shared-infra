@@ -1,6 +1,6 @@
 ---
-# Every task that handles a private key's text has no_log and diff: false: the scan at the end
-# reads the log of this play too. The keys are read only from the throwaway container of this run.
+# Every task that handles the private key's text has no_log and diff: false: the scan at the end
+# reads the log of this play too. The key is read only from the throwaway container of this run.
 - name: Verify
   hosts: all
   gather_facts: false
@@ -15,14 +15,11 @@
         get_attributes: false
       loop:
         - '{{ scenario_config_dir }}'
-        - '{{ scenario_keys_dir }}'
-        - '{{ scenario_ledger_key }}'
-        - '{{ scenario_ledger_pub }}'
-        - '{{ scenario_push_key }}'
-        - '{{ scenario_push_pub }}'
+        - '{{ scenario_key_dir }}'
+        - '{{ scenario_key }}'
+        - '{{ scenario_public }}'
         - '{{ scenario_state_dir }}'
         - '{{ scenario_env_file }}'
-        - '{{ scenario_known_hosts }}'
         - '{{ scenario_service }}'
         - '{{ scenario_timer }}'
       register: ring_controller_host_v_stats
@@ -33,24 +30,22 @@
           {{ dict(ring_controller_host_v_stats.results | map(attribute='item')
           | zip(ring_controller_host_v_stats.results | map(attribute='stat'))) }}
 
-    # The private keys are mode 0600 in a 0700 directory, owned by the service account and by
-    # no other account, with one link each. Nothing wider anywhere.
-    - name: Require the keys and the directories to have the owner and mode the role means
+    # The private key is root's with mode 0400, alone in a 0700 root directory, with one link. The
+    # public half is root's and world-readable. Nothing about the key belongs to the service account.
+    - name: Require the key and the directories to have the owner and mode the role means
       ansible.builtin.assert:
         that:
-          - ring_controller_host_v_by_path[scenario_keys_dir].isdir
-          - ring_controller_host_v_by_path[scenario_keys_dir].mode == '0700'
-          - ring_controller_host_v_by_path[scenario_keys_dir].pw_name == scenario_account
-          - ring_controller_host_v_by_path[scenario_ledger_key].isreg
-          - ring_controller_host_v_by_path[scenario_ledger_key].mode == '0600'
-          - ring_controller_host_v_by_path[scenario_ledger_key].pw_name == scenario_account
-          - ring_controller_host_v_by_path[scenario_ledger_key].nlink == 1
-          - ring_controller_host_v_by_path[scenario_push_key].isreg
-          - ring_controller_host_v_by_path[scenario_push_key].mode == '0600'
-          - ring_controller_host_v_by_path[scenario_push_key].pw_name == scenario_account
-          - ring_controller_host_v_by_path[scenario_push_key].nlink == 1
-          - ring_controller_host_v_by_path[scenario_ledger_pub].mode == '0644'
-          - ring_controller_host_v_by_path[scenario_push_pub].mode == '0644'
+          - ring_controller_host_v_by_path[scenario_key_dir].isdir
+          - ring_controller_host_v_by_path[scenario_key_dir].mode == '0700'
+          - ring_controller_host_v_by_path[scenario_key_dir].pw_name == 'root'
+          - ring_controller_host_v_by_path[scenario_key].isreg
+          - ring_controller_host_v_by_path[scenario_key].mode == '0400'
+          - ring_controller_host_v_by_path[scenario_key].pw_name == 'root'
+          - ring_controller_host_v_by_path[scenario_key].gr_name == 'root'
+          - ring_controller_host_v_by_path[scenario_key].nlink == 1
+          - ring_controller_host_v_by_path[scenario_public].isreg
+          - ring_controller_host_v_by_path[scenario_public].mode == '0444'
+          - ring_controller_host_v_by_path[scenario_public].pw_name == 'root'
           - ring_controller_host_v_by_path[scenario_state_dir].isdir
           - ring_controller_host_v_by_path[scenario_state_dir].mode == '0700'
           - ring_controller_host_v_by_path[scenario_state_dir].pw_name == scenario_account
@@ -58,25 +53,46 @@
           - ring_controller_host_v_by_path[scenario_config_dir].pw_name == 'root'
           - ring_controller_host_v_by_path[scenario_env_file].mode == '0644'
           - ring_controller_host_v_by_path[scenario_env_file].pw_name == 'root'
-          - ring_controller_host_v_by_path[scenario_known_hosts].mode == '0644'
           - ring_controller_host_v_by_path[scenario_service].pw_name == 'root'
           - ring_controller_host_v_by_path[scenario_timer].pw_name == 'root'
         quiet: true
 
     - name: List the key directory, to require that nothing else is in it
       ansible.builtin.find:
-        paths: '{{ scenario_keys_dir }}'
+        paths: '{{ scenario_key_dir }}'
         hidden: true
         file_type: any
       register: ring_controller_host_v_listing
 
-    - name: Require exactly the two pairs and no temporary file
+    - name: Require exactly the key and no temporary file
       ansible.builtin.assert:
         that:
-          - >-
-            ring_controller_host_v_listing.files | map(attribute='path') | sort
-            == [scenario_ledger_key, scenario_ledger_pub, scenario_push_key, scenario_push_pub] | sort
+          - ring_controller_host_v_listing.files | map(attribute='path') | list == [scenario_key]
         quiet: true
+
+    # The service account cannot read the key on disk. The control comes with it: root can, so a
+    # probe that fails for the account is a probe that looked at a file that is there.
+    - name: Try to read the key as the service account
+      ansible.builtin.command:
+        argv: [runuser, -u, '{{ scenario_account }}', --, test, -r, '{{ scenario_key }}']
+      register: ring_controller_host_v_account_reads
+      changed_when: false
+      failed_when: false
+
+    - name: Try to read the key as root, as the control
+      ansible.builtin.command:
+        argv: [test, -r, '{{ scenario_key }}']
+      register: ring_controller_host_v_root_reads
+      changed_when: false
+      failed_when: false
+
+    - name: Require the account to be unable to read the key and root to be able to
+      ansible.builtin.assert:
+        that:
+          - ring_controller_host_v_account_reads.rc != 0
+          - ring_controller_host_v_root_reads.rc == 0
+        quiet: true
+        fail_msg: The service account can read the record-signing key on disk, or the probe cannot tell.
 
     # --- Inert: no digest means no link, no release, a disabled and stopped timer.
     - name: Look for the current link and any release
@@ -135,6 +151,7 @@
         that:
           - "'ConditionPathExists=' ~ scenario_current ~ '/bin/ring-controller' in ring_controller_host_v_unit_text"
           - "'User=' ~ scenario_account in ring_controller_host_v_unit_text"
+          - "('LoadCredential=record-signing:' ~ scenario_key) in ring_controller_host_v_unit_text"
           - ring_controller_host_v_unit_text is not search('(?m)^\s*PrivateNetwork\s*=')
           - "'%i' not in ring_controller_host_v_unit_text"
           - "'@' not in ring_controller_host_v_unit_text"
@@ -195,23 +212,11 @@
         quiet: true
         fail_msg: The PATH of the unit resolves a claude, or the probe cannot tell that it does.
 
-    # --- The public halves are the ones the apply printed, with the fingerprint ssh-keygen gives.
-    - name: Read the public files
+    # --- The public half is the one the apply printed, in the form the controller reads (SPKI).
+    - name: Read the public file
       ansible.builtin.slurp:
-        src: '{{ item }}'
-      loop:
-        - '{{ scenario_ledger_pub }}'
-        - '{{ scenario_push_pub }}'
-      register: ring_controller_host_v_pubs
-
-    - name: Ask ssh-keygen for each public half's fingerprint
-      ansible.builtin.command:
-        argv: [/usr/bin/ssh-keygen, -l, -f, '{{ item }}']
-      loop:
-        - '{{ scenario_ledger_pub }}'
-        - '{{ scenario_push_pub }}'
-      register: ring_controller_host_v_fingerprints
-      changed_when: false
+        src: '{{ scenario_public }}'
+      register: ring_controller_host_v_pub
 
     - name: Read the log of the runs so far
       ansible.builtin.set_fact:
@@ -219,112 +224,82 @@
       no_log: true
       diff: false
 
-    - name: Hold the public lines and fingerprints
+    - name: Hold the public lines
       ansible.builtin.set_fact:
-        ring_controller_host_v_ledger_pub: '{{ (ring_controller_host_v_pubs.results[0].content | b64decode) | trim }}'
-        ring_controller_host_v_push_pub: '{{ (ring_controller_host_v_pubs.results[1].content | b64decode) | trim }}'
-        ring_controller_host_v_ledger_fp: '{{ ring_controller_host_v_fingerprints.results[0].stdout.split()[1] }}'
-        ring_controller_host_v_push_fp: '{{ ring_controller_host_v_fingerprints.results[1].stdout.split()[1] }}'
+        ring_controller_host_v_pub_lines: '{{ (ring_controller_host_v_pub.content | b64decode).splitlines() }}'
 
-    - name: Require the printed halves and fingerprints to be the files' and ssh-keygen's
+    # The 12 fixed bytes of an Ed25519 SubjectPublicKeyInfo come out as the same 16 characters at
+    # the start of every such key, then 43 characters and one padding sign for the 32 key bytes.
+    - name: Require the printed half to be the file's, and the file to be one SPKI key
       ansible.builtin.assert:
         that:
-          - ring_controller_host_v_ledger_pub is match('^ssh-ed25519 [A-Za-z0-9+/]+=* ring-controller-ledger-signing$')
-          - ring_controller_host_v_push_pub is match('^ssh-ed25519 [A-Za-z0-9+/]+=* ring-controller-ledger-push$')
-          - ring_controller_host_v_ledger_fp != ring_controller_host_v_push_fp
-          - >-
-            ('Ring controller ledger-signing public half: ' ~ ring_controller_host_v_ledger_pub
-            ~ ' fingerprint ' ~ ring_controller_host_v_ledger_fp) in ring_controller_host_v_log
-          - >-
-            ('Ring controller push public half: ' ~ ring_controller_host_v_push_pub
-            ~ ' fingerprint ' ~ ring_controller_host_v_push_fp) in ring_controller_host_v_log
+          - ring_controller_host_v_pub_lines | length == 3
+          - ring_controller_host_v_pub_lines[0] == '-----BEGIN PUBLIC KEY-----'
+          - ring_controller_host_v_pub_lines[1] is match('^MCowBQYDK2VwAyEA[A-Za-z0-9+/]{43}=$')
+          - ring_controller_host_v_pub_lines[2] == '-----END PUBLIC KEY-----'
+          - "'Ring controller record-signing public half (SPKI PEM)' in ring_controller_host_v_log"
+          - ring_controller_host_v_pub_lines[1] in ring_controller_host_v_log
         quiet: true
-      no_log: true
 
-    # --- A further apply changes nothing and prints the same fingerprints. The inode and the
-    # mtime of each private key are the same afterwards, so the file was not rewritten.
-    - name: Look at both private keys before a rerun
+    # --- A further apply changes nothing and prints the same half. The inode and the mtime of the
+    # private key are the same afterwards, so the file was not rewritten.
+    - name: Look at the private key before a rerun
       ansible.builtin.stat:
-        path: '{{ item }}'
+        path: '{{ scenario_key }}'
         get_checksum: false
-      loop:
-        - '{{ scenario_ledger_key }}'
-        - '{{ scenario_push_key }}'
       register: ring_controller_host_v_before
 
     - name: Apply the role again, as a rerun does
       ansible.builtin.include_role:
         name: branchleft.ring_controller_host
 
-    - name: Look at both private keys after the rerun
+    - name: Look at the private key after the rerun
       ansible.builtin.stat:
-        path: '{{ item }}'
+        path: '{{ scenario_key }}'
         get_checksum: false
-      loop:
-        - '{{ scenario_ledger_key }}'
-        - '{{ scenario_push_key }}'
       register: ring_controller_host_v_after
 
-    - name: Require the rerun to have changed nothing, made no key and left the files alone
+    - name: Require the rerun to have changed nothing, made no key and left the file alone
       ansible.builtin.assert:
         that:
-          - ring_controller_host_keys_result is not changed
-          - ring_controller_host_keys_result.created | length == 0
-          - ring_controller_host_keys_result.adopted | length == 0
-          - ring_controller_host_keys_result.public_changed | length == 0
-          - ring_controller_host_keys_result.temp_cleaned == 0
-          - ring_controller_host_keys_result.ledger_signing_public == ring_controller_host_v_ledger_pub
-          - ring_controller_host_keys_result.push_public == ring_controller_host_v_push_pub
-          - ring_controller_host_keys_result.ledger_signing_fingerprint == ring_controller_host_v_ledger_fp
-          - ring_controller_host_keys_result.push_fingerprint == ring_controller_host_v_push_fp
-          - ring_controller_host_v_after.results[0].stat.inode == ring_controller_host_v_before.results[0].stat.inode
-          - ring_controller_host_v_after.results[0].stat.mtime == ring_controller_host_v_before.results[0].stat.mtime
-          - ring_controller_host_v_after.results[1].stat.inode == ring_controller_host_v_before.results[1].stat.inode
-          - ring_controller_host_v_after.results[1].stat.mtime == ring_controller_host_v_before.results[1].stat.mtime
+          - ring_controller_host_record_key_result is not changed
+          - not ring_controller_host_record_key_result.created
+          - not ring_controller_host_record_key_result.adopted
+          - ring_controller_host_record_key_result.temp_cleaned == 0
+          - ring_controller_host_record_key_result.public_key == (ring_controller_host_v_pub.content | b64decode)
+          - ring_controller_host_v_after.stat.inode == ring_controller_host_v_before.stat.inode
+          - ring_controller_host_v_after.stat.mtime == ring_controller_host_v_before.stat.mtime
         quiet: true
       no_log: true
 
-    # --- The log and every file the run left on the controller hold no part of a private key.
-    # The tokens are the secret-specific lines of each key (every full base64 line after the
-    # first, which holds the seed and never the constant header line), the whole body joined,
-    # and the form slurp prints the file in. They live in hidden facts and are used only by
-    # hidden tasks.
-    - name: Read both private keys
+    # --- The log and every file the run left on the controller hold no part of the private key.
+    # They live in hidden facts and are used only by hidden tasks.
+    - name: Read the private key
       ansible.builtin.slurp:
-        src: '{{ item }}'
-      loop:
-        - '{{ scenario_ledger_key }}'
-        - '{{ scenario_push_key }}'
-      register: ring_controller_host_v_key_reads
+        src: '{{ scenario_key }}'
+      register: ring_controller_host_v_key_read
       no_log: true
 
-    - name: Hold the tokens a leak of either key would contain
+    - name: Hold the key's body line
       ansible.builtin.set_fact:
-        ring_controller_host_v_ledger_body: >-
-          {{ (ring_controller_host_v_key_reads.results[0].content | b64decode).splitlines()[1:-1] }}
-        ring_controller_host_v_push_body: >-
-          {{ (ring_controller_host_v_key_reads.results[1].content | b64decode).splitlines()[1:-1] }}
+        ring_controller_host_v_key_body: >-
+          {{ (ring_controller_host_v_key_read.content | b64decode).splitlines()[1] }}
       no_log: true
       diff: false
 
-    # The first body line is mostly the constant header and the last is a short tail, so the
-    # per-line tokens are the full lines between them.
+    # The PEM body is one line holding the whole key, and slurp prints the file as base64 of the
+    # text, so those two are the forms a leak would take. Each is long enough to be specific.
     - name: Hold the tokens as one list
       ansible.builtin.set_fact:
         ring_controller_host_v_tokens: >-
-          {{ (ring_controller_host_v_ledger_body[1:] | select('match', '^.{60}') | list)
-          + [ring_controller_host_v_ledger_body | join('')]
-          + [ring_controller_host_v_key_reads.results[0].content]
-          + (ring_controller_host_v_push_body[1:] | select('match', '^.{60}') | list)
-          + [ring_controller_host_v_push_body | join('')]
-          + [ring_controller_host_v_key_reads.results[1].content] }}
+          {{ [ring_controller_host_v_key_body, ring_controller_host_v_key_read.content] }}
       no_log: true
       diff: false
 
-    - name: Require enough tokens, each long enough to be specific to its key
+    - name: Require the tokens to be long enough to be specific to the key
       ansible.builtin.assert:
         that:
-          - ring_controller_host_v_tokens | length >= 12
+          - ring_controller_host_v_tokens | length == 2
           - ring_controller_host_v_tokens | map('length') | min >= 60
         quiet: true
       no_log: true
@@ -343,16 +318,16 @@
       ansible.builtin.assert:
         that:
           - "'SCENARIO_LOG_CANARY' in ring_controller_host_v_log"
-          - "'Make the ledger-signing key and the push key if they are absent' in ring_controller_host_v_log"
+          - "'Make the record-signing key if it is absent' in ring_controller_host_v_log"
           - "('SCENARIO_SCAN_CONTROL ' ~ scenario_scan_control) in ring_controller_host_v_log"
         fail_msg: The log lacks the canary, a role task name or the scan control, so an empty scan would prove nothing.
         quiet: true
 
-    - name: Require the log to hold no token of either key
+    - name: Require the log to hold no token of the key
       ansible.builtin.assert:
         that:
           - ring_controller_host_v_tokens | select('in', ring_controller_host_v_log) | list | length == 0
-        fail_msg: A private key, or its slurp form, is in the Ansible log.
+        fail_msg: The private key, or its slurp form, is in the Ansible log.
         quiet: true
       no_log: true
 
@@ -387,6 +362,6 @@
         that:
           - ring_controller_host_v_tree_tokens.results | map(attribute='files') | map('length') | sum == 0
           - ring_controller_host_v_tree_control.files | length > 0
-        fail_msg: A private key is in a file on the controller, or the control scan found nothing.
+        fail_msg: The private key is in a file on the controller, or the control scan found nothing.
         quiet: true
       no_log: true

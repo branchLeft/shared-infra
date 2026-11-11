@@ -9,6 +9,11 @@
 # The environment is the one file named below, which holds public values only, and a fixed PATH.
 # Nothing here names a model key or an agent binary; the controller refuses to run with one in
 # its environment, and that refusal lives with the controller, not in this file.
+#
+# The record-signing key stays root's, mode 0400, in a root-only directory. The load line below
+# makes systemd, which is root, read it and hand the controller a private copy in the directory
+# its own environment names, readable by the service account for this run only and gone after.
+# The account never reads the file on disk, and no helper, sudoers entry or second daemon is added.
 [Unit]
 Description=Ring controller, one release step per tick
 After=network-online.target
@@ -21,6 +26,7 @@ Type=oneshot
 User=ring-controller
 Group=ring-controller
 EnvironmentFile=/etc/branchleft/ring-controller/ring-controller.env
+LoadCredential=record-signing:/etc/branchleft/ring-controller/record-signing/record-signing.key
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 ExecStart=/opt/branchleft/ring-controller/current/bin/ring-controller
 TimeoutStartSec=1800

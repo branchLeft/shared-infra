@@ -5,7 +5,7 @@
 # role must stop with (absent for a control that must be accepted); commands, argv lists that make
 # the bad state; files, to put in place after the commands (path, content, mode); restore, argv
 # lists that put the host back; changes, true for the one accepted case that may change a path;
-# the five inputs (digest, url, ledger, remote, hosts), each empty
+# the three inputs (digest, url, ledger), each empty
 # unless the case sets it; forbidden, texts the message must not hold; absent, paths that must not
 # exist afterwards; modes, paths and the mode each must still have.
 #
@@ -19,64 +19,70 @@
     ring_controller_host_refusals_cases:
       - name: control, the host as delivered
 
-      # --- The keys: states the role must refuse to make good by itself.
-      - name: a private key that has gone while its public half is still there
+      # --- The key: states the role must refuse to make good by itself.
+      - name: a key that has gone while its public half is still there
         commands:
-          - [mv, '{{ scenario_ledger_key }}', /root/lost-key]
+          - [mv, '{{ scenario_key }}', /root/lost-key]
         restore:
-          - [mv, /root/lost-key, '{{ scenario_ledger_key }}']
-        expect: 'E-KEY-LOST: {{ scenario_ledger_key }}'
+          - [mv, /root/lost-key, '{{ scenario_key }}']
+        expect: 'E-KEY-LOST: {{ scenario_public }}'
         absent:
-          - '{{ scenario_ledger_key }}'
-      - name: a ledger key readable by its group
+          - '{{ scenario_key }}'
+      - name: a key readable by its group
         commands:
-          - [chmod, '0640', '{{ scenario_ledger_key }}']
+          - [chmod, '0440', '{{ scenario_key }}']
         restore:
-          - [chmod, '0600', '{{ scenario_ledger_key }}']
-        expect: 'E-KEY-MODE-WIDE: {{ scenario_ledger_key }}'
+          - [chmod, '0400', '{{ scenario_key }}']
+        expect: 'E-KEY-MODE-WIDE: {{ scenario_key }}'
         modes:
-          - path: '{{ scenario_ledger_key }}'
-            mode: '0640'
-      - name: a push key readable by others
+          - path: '{{ scenario_key }}'
+            mode: '0440'
+      - name: a key readable by others
         commands:
-          - [chmod, '0604', '{{ scenario_push_key }}']
+          - [chmod, '0404', '{{ scenario_key }}']
         restore:
-          - [chmod, '0600', '{{ scenario_push_key }}']
-        expect: 'E-KEY-MODE-WIDE: {{ scenario_push_key }}'
+          - [chmod, '0400', '{{ scenario_key }}']
+        expect: 'E-KEY-MODE-WIDE: {{ scenario_key }}'
         modes:
-          - path: '{{ scenario_push_key }}'
-            mode: '0604'
+          - path: '{{ scenario_key }}'
+            mode: '0404'
+      - name: a key that the service account owns
+        commands:
+          - [chown, 'ring-controller', '{{ scenario_key }}']
+        restore:
+          - [chown, 'root', '{{ scenario_key }}']
+        expect: 'E-KEY-OWNER: {{ scenario_key }}'
       - name: a link in the key's place
         commands:
-          - [mv, '{{ scenario_push_key }}', /root/real-key]
-          - [ln, -s, /root/real-key, '{{ scenario_push_key }}']
+          - [mv, '{{ scenario_key }}', /root/real-key]
+          - [ln, -s, /root/real-key, '{{ scenario_key }}']
         restore:
-          - [rm, -f, '{{ scenario_push_key }}']
-          - [mv, /root/real-key, '{{ scenario_push_key }}']
-        expect: 'E-KEY-OPEN: {{ scenario_push_key }}'
+          - [rm, -f, '{{ scenario_key }}']
+          - [mv, /root/real-key, '{{ scenario_key }}']
+        expect: 'E-KEY-OPEN: {{ scenario_key }}'
       - name: a key with a second hard link
         commands:
-          - [ln, '{{ scenario_push_key }}', /root/push-link]
+          - [ln, '{{ scenario_key }}', /root/key-link]
         restore:
-          - [rm, -f, /root/push-link]
-        expect: 'E-KEY-LINKED: {{ scenario_push_key }}'
+          - [rm, -f, /root/key-link]
+        expect: 'E-KEY-LINKED: {{ scenario_key }}'
       - name: a key file that is not a key
         commands:
-          - [mv, '{{ scenario_push_key }}', /root/real-key]
+          - [mv, '{{ scenario_key }}', /root/real-key]
         files:
-          - path: '{{ scenario_push_key }}'
-            content: "not an OpenSSH key\n"
-            mode: '0600'
+          - path: '{{ scenario_key }}'
+            content: "not a key\n"
+            mode: '0400'
         restore:
-          - [rm, -f, '{{ scenario_push_key }}']
-          - [mv, /root/real-key, '{{ scenario_push_key }}']
-        expect: 'E-KEY-FORM: {{ scenario_push_key }}'
+          - [rm, -f, '{{ scenario_key }}']
+          - [mv, /root/real-key, '{{ scenario_key }}']
+        expect: 'E-KEY-FORM: {{ scenario_key }}'
       - name: a file of someone else's in the key directory
         commands:
-          - [touch, '{{ scenario_keys_dir }}/notes.txt']
+          - [touch, '{{ scenario_key_dir }}/notes.txt']
         restore:
-          - [rm, -f, '{{ scenario_keys_dir }}/notes.txt']
-        expect: 'E-DIR-FOREIGN: {{ scenario_keys_dir }}/notes.txt'
+          - [rm, -f, '{{ scenario_key_dir }}/notes.txt']
+        expect: 'E-DIR-FOREIGN: {{ scenario_key_dir }}/notes.txt'
 
       # --- What the role stands on.
       - name: a parent directory that others can write
@@ -85,20 +91,12 @@
         restore:
           - [chmod, '0755', /etc/branchleft]
         expect: "A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it."
-      - name: an ssh-keygen that others can write
-        commands:
-          - [chmod, 'g+w', /usr/bin/ssh-keygen]
-        restore:
-          - [chmod, 'g-w', /usr/bin/ssh-keygen]
-        expect: "ssh-keygen is missing, is not a regular file, is not root's or can be changed by others. The role does not install it."
 
       # --- The inputs, each refused before anything is changed, with no value in the message.
       - name: a digest in capitals
         digest: '{{ ring_controller_host_refusals_wrong_hex }}'
         url: '{{ scenario_bundle_url }}'
         ledger: '{{ scenario_ledger_url }}'
-        remote: '{{ scenario_push_remote }}'
-        hosts: '{{ scenario_known_hosts_line }}'
         expect: ring_controller_host_bundle_sha256 must be empty or 64 lowercase hex digits.
         forbidden:
           - '{{ ring_controller_host_refusals_wrong_hex }}'
@@ -106,8 +104,6 @@
         digest: '{{ scenario_digest }}'
         url: http://bundle.example.test/ring-controller.tar.gz
         ledger: '{{ scenario_ledger_url }}'
-        remote: '{{ scenario_push_remote }}'
-        hosts: '{{ scenario_known_hosts_line }}'
         expect: ring_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
         forbidden:
           - http://bundle.example.test
@@ -117,8 +113,6 @@
         digest: '{{ scenario_digest }}'
         url: https://u:p@bundle.example.test/ring-controller.tar.gz
         ledger: '{{ scenario_ledger_url }}'
-        remote: '{{ scenario_push_remote }}'
-        hosts: '{{ scenario_known_hosts_line }}'
         expect: ring_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
         forbidden:
           - u:p@
@@ -127,49 +121,21 @@
         expect: ring_controller_host_ledger_url must be empty or an https URL with no user name, password, query or fragment.
         forbidden:
           - token=x
-      - name: a push remote that is not ssh
-        remote: https://git.example.test/example-org/example-ledger.git
-        expect: ring_controller_host_ledger_push_remote must be empty or ssh://git@HOST/ORG/REPO.git.
-        forbidden:
-          - git.example.test
-      - name: a known-hosts line with a key type the role does not accept
-        hosts: git.example.test ssh-dss AAAAB3NzaC1kc3M=
-        expect: ring_controller_host_push_known_hosts must be empty or one known_hosts line with a host, a key type and a key.
-        forbidden:
-          - ssh-dss
       - name: a digest with no bundle URL
         digest: '{{ scenario_digest }}'
         ledger: '{{ scenario_ledger_url }}'
-        remote: '{{ scenario_push_remote }}'
-        hosts: '{{ scenario_known_hosts_line }}'
         expect: ring_controller_host_bundle_url is empty while ring_controller_host_bundle_sha256 is set.
         absent:
           - /opt/branchleft/ring-controller/releases/{{ scenario_digest }}
       - name: a digest with no ledger URL
         digest: '{{ scenario_digest }}'
         url: '{{ scenario_bundle_url }}'
-        remote: '{{ scenario_push_remote }}'
-        hosts: '{{ scenario_known_hosts_line }}'
         expect: ring_controller_host_ledger_url is empty while ring_controller_host_bundle_sha256 is set.
-      - name: a digest with no push remote
-        digest: '{{ scenario_digest }}'
-        url: '{{ scenario_bundle_url }}'
-        ledger: '{{ scenario_ledger_url }}'
-        hosts: '{{ scenario_known_hosts_line }}'
-        expect: ring_controller_host_ledger_push_remote is empty while ring_controller_host_bundle_sha256 is set.
-      - name: a digest with no known-hosts line
-        digest: '{{ scenario_digest }}'
-        url: '{{ scenario_bundle_url }}'
-        ledger: '{{ scenario_ledger_url }}'
-        remote: '{{ scenario_push_remote }}'
-        expect: ring_controller_host_push_known_hosts is empty while ring_controller_host_bundle_sha256 is set.
 
       # The last control: well-formed inputs and no digest are accepted, and this one changes the
-      # environment file and the known-hosts file, so it is the one case that may change a path.
+      # environment file, so it is the one case that may change a path.
       - name: control, every input set and no digest
         ledger: '{{ scenario_ledger_url }}'
-        remote: '{{ scenario_push_remote }}'
-        hosts: '{{ scenario_known_hosts_line }}'
         changes: true
   tasks:
     - name: Run each case
