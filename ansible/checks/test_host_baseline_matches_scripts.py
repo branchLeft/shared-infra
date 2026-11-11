@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 import check_enrolment
-import jinja2  # type: ignore[import-untyped]
+import jinja2
 import yaml  # type: ignore[import-untyped]
 from ansible.errors import AnsibleUndefinedVariable  # type: ignore[import-untyped]
 from ansible.parsing.dataloader import DataLoader  # type: ignore[import-untyped]
