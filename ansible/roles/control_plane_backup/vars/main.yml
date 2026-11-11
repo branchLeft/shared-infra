@@ -1,0 +1,17 @@
+---
+# Constants of the service, not inputs: role variables outrank every value a
+# caller passes. The program holds the same paths (a unit test pins each pair).
+control_plane_backup_program_dir: /opt/branchleft/control-plane-backup
+control_plane_backup_program_name: branchleft_control_plane_backup.py
+control_plane_backup_program_path: '{{ control_plane_backup_program_dir }}/{{ control_plane_backup_program_name }}'
+
+# On-host copies: outside the stack's own volumes, readable by root alone.
+control_plane_backup_root: /var/backups/branchleft/control-plane
+
+# The file the program reads the estate recipient and copy 1's put key from. The
+# backup_restore role writes it; this role never reads or writes its content.
+control_plane_backup_env_file: /etc/branchleft/state-copy.env
+
+control_plane_backup_unit_dir: /etc/systemd/system
+control_plane_backup_service_unit: branchleft-control-plane-backup.service
+control_plane_backup_timer_unit: branchleft-control-plane-backup.timer
