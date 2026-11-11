@@ -12,7 +12,7 @@ this file covers where the pages come from.
 | `src/journey.html`       | The page served at `/`, from `<title>` to the end of the body. The head's title, description and canonical link are read from its first lines.   |
 | `src/ghost-hosting.html` | The page served at `/ghost-hosting`, same shape.                                                                                                 |
 | `src/*.html`, `*.css`    | Partials the two pages share (prices, pop-ups, footer, script, the animation, the register block) and the stylesheets, one per page plus shared. |
-| `assets/`                | Fonts and the headshot, embedded as `data:` URIs at build time.                                                                                  |
+| `assets/`                | Fonts and the headshot as base64 text (`*.b64`), embedded as `data:` URIs at build time.                                                         |
 | `build.ts`               | Reads all of the above and returns each page as a complete document.                                                                             |
 | `dist/`                  | The committed build, one file per page. `render.test.ts` fails when it differs from what the sources build.                                      |
 
@@ -59,20 +59,21 @@ file. The address is also shown as selectable text beside the button.
 ## Fonts and image
 
 Embedded as `data:` URIs because the pages fetch nothing; the policy admits `font-src data:`
-for that reason.
+for that reason. Each is committed as base64 text, `<name>.b64`, because the repository tracks no
+binary files; the checksums below are of the decoded bytes.
 
-- `assets/jost.woff2`: `@fontsource-variable/jost@5.3.0`, latin-subset variable woff2
+- `assets/jost.woff2.b64`: `@fontsource-variable/jost@5.3.0`, latin-subset variable woff2
   (`jost-latin-wght-normal.woff2`), SIL OFL 1.1; the same file `@branchleft/brand-publicpress`
   embeds. SHA-256 `7726a5cd6f3c0e876c028ea2a643d45f7aad4b0f164b70966c669f4a4668f4b9`.
-- `assets/syne-branchleft.woff2`: the branchLeft wordmark face, the ten glyphs of "branchLeft"
+- `assets/syne-branchleft.woff2.b64`: the branchLeft wordmark face, the ten glyphs of "branchLeft"
   subset from `@branchleft/brand-branchleft@0.3.0`'s `Syne-VariableFont_wght.woff2` (source SHA-256
   `8d0710f0bc5d9a7899376e97edc680fe66474e5a6a4b6b475f55af13679521ff`) with
   `uv run --with fonttools --with brotli pyftsubset <source> --text=branchLeft --flavor=woff2`.
   SIL OFL 1.1. SHA-256 `9fed958f9efb48206e59d2c42f0ee2b93889f584922ba488fb9739cbe3075560`.
-- `assets/courier-prime.woff2`: `CourierPrime-Regular.woff2` from `components`,
+- `assets/courier-prime.woff2.b64`: `CourierPrime-Regular.woff2` from `components`,
   `packages/brand-publicpress/src/styles/fonts/CourierPrime/`, SIL OFL 1.1. SHA-256
   `f09844e1f4fe9e67df2cc77474519e68756d559b4648278b9dd4f03c8ac9c31f`.
-- `assets/headshot-320.webp`: the 320px headshot published in the `website` repository's
+- `assets/headshot-320.webp.b64`: the 320px headshot published in the `website` repository's
   `public/people/`. SHA-256 `a5a5d2e0d6208ef1ced8c698fa1399b67ec438969a4afaaf610f1eef9473ecd9`.
 
 The wordmark, the branchLeft mark and the favicon are rendered from `@branchleft/components` at

@@ -19,11 +19,11 @@ export const REGISTER_SUBJECT = 'Register interest in PublicPress';
 
 /** The body of the pre-filled email: what the visitor is asked to say. */
 export const REGISTER_BODY = [
-  'Your name:',
+  'Name:',
   '',
-  'Your outlet or organisation:',
+  'Outlet or organisation:',
   '',
-  'What you publish on today:',
+  'What do you publish on today?',
   '',
 ].join('\r\n');
 

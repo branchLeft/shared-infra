@@ -77,7 +77,7 @@ hostname: no per-site or per-path exemption.
 
 It throttles every block built through `protectionChain` in `render.ts`: the
 servable site blocks, the redirect blocks (zone `<site>_redirect_per_ip`),
-the static blocks (the `publicpress.co.uk` holding page), and both probe
+the static blocks (the `publicpress.co.uk` site), and both probe
 blocks (`probe_host_per_ip`, `probe_per_ip`). Only the `:9091` metrics
 listener is exempt, because `metricsBlock` never calls `protectionChain`.
 

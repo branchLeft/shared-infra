@@ -1446,9 +1446,9 @@ describe('the publicpress.co.uk site', () => {
       const params = new URLSearchParams(query);
       expect(params.get('subject')).toBe('Register interest in PublicPress');
       const body = params.get('body') ?? '';
-      expect(body).toContain('Your name:');
-      expect(body).toContain('Your outlet or organisation:');
-      expect(body).toContain('What you publish on today:');
+      expect(body).toContain('Name:');
+      expect(body).toContain('Outlet or organisation:');
+      expect(body).toContain('What do you publish on today?');
       expect(page.html).toContain(`<span class="reg-addr">${REGISTER_ADDRESS}</span>`);
       expect(page.html).toContain('<h2 id="register-heading">Be there from the start.</h2>');
       expect(page.html).toContain("Tell us who you are and we'll be in touch before we launch.");

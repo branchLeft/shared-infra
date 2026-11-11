@@ -30,8 +30,9 @@ const SRC = join(__dirname, 'src');
 const ASSETS = join(__dirname, 'assets');
 
 const source = (name: string): string => readFileSync(join(SRC, name), 'utf8');
+/** An asset kept as base64 text (`<name>.b64`), as a `data:` URI. */
 const dataUri = (file: string, type: string): string =>
-  `data:${type};base64,${readFileSync(join(ASSETS, file)).toString('base64')}`;
+  `data:${type};base64,${readFileSync(join(ASSETS, `${file}.b64`), 'utf8').trim()}`;
 
 /** A mark from `@branchleft/components` as inline markup in single-quoted attributes. */
 function markupOf(element: ReactElement): string {

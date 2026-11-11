@@ -271,9 +271,11 @@ SCANNED_SUFFIXES = frozenset(
         ".asc",
         ".authoring",
         ".conf",
+        ".css",
         ".enforcing",
         ".golden",
         ".gotmpl",
+        ".html",
         ".in",
         ".j2",
         ".js",
@@ -307,6 +309,11 @@ UNSCANNED_SUFFIXES: dict[str, str] = {
         "raw bytes, not text. The one file of this type is a Molecule stand-in "
         "for a public key, 32 zero bytes, and a binary holds no prose or "
         "configuration anybody authored for a name to be written down in."
+    ),
+    ".b64": (
+        "base64 of third-party font files and one image, embedded in the "
+        "publicpress.co.uk pages. A blob holds no prose or configuration anybody "
+        "authored, and the pages that embed it are scanned."
     ),
 }
 
