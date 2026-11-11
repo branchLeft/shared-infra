@@ -64,6 +64,7 @@ ZONES: tuple[str, ...] = (
     "hetzner-host/",
     "mail/",
     "scripts/",
+    "docs/",
     ".github/",
     ".claude/",
 )

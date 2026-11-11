@@ -51,6 +51,7 @@ passes to raise. The control case (the real code passes) runs first in each.
 | m      | the event rule is dropped                              |
 | n      | the universal list forgets `ci.yml`                    |
 | o, p   | a step names a path, or a root file, outside its entry |
+| q      | `docs/` leaves the zones, so a docs-only change runs   |
 
 `test_trace_reads.py` does the same for the run-time trace: a fixture that reads
 `ansible/x` must exit non-zero, a clean one must exit zero.
