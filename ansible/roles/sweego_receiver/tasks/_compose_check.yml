@@ -1,0 +1,92 @@
+---
+# Internal to the role: included second from main.yml, before anything is checked against the
+# host or written. The compose file is rendered once from the role's template and parsed, not
+# searched, so a value in quotes or a comment is judged by what YAML says it is. The file is
+# then held to the posture the host depends on, so a template edit that drops a control is
+# refused here, at the plan, and not found on the host. The same posture is held again on the
+# running container by _readback.yml.
+- name: Render the compose file from the role's template
+  ansible.builtin.set_fact:
+    sweego_receiver_compose_text: "{{ lookup('ansible.builtin.template', 'compose.yml.j2') }}"
+
+- name: Parse the compose file
+  ansible.builtin.set_fact:
+    sweego_receiver_compose_doc: '{{ sweego_receiver_compose_text | ansible.builtin.from_yaml }}'
+
+- name: Refuse a compose file that is not exactly the receiver, and one that is not hardened
+  ansible.builtin.assert:
+    that:
+      - sweego_receiver_compose_doc.services is ansible.builtin.mapping
+      - sweego_receiver_compose_doc.services.keys() | ansible.builtin.list == ['receiver']
+      - sweego_receiver_compose_doc.include is ansible.builtin.undefined
+      - sweego_receiver_service.build is ansible.builtin.undefined
+      - sweego_receiver_service.extends is ansible.builtin.undefined
+      - sweego_receiver_service.user == sweego_receiver_uid ~ ':' ~ sweego_receiver_gid
+      - sweego_receiver_service.read_only is ansible.builtin.sameas true
+      - sweego_receiver_service.cap_drop == ['ALL']
+      - sweego_receiver_service.cap_add is ansible.builtin.undefined
+      - sweego_receiver_service.security_opt == ['no-new-privileges:true']
+      - sweego_receiver_service.privileged is ansible.builtin.undefined
+      - sweego_receiver_service.network_mode is ansible.builtin.undefined
+      - sweego_receiver_service.pid is ansible.builtin.undefined
+      - sweego_receiver_service.ipc is ansible.builtin.undefined
+      - sweego_receiver_service.devices is ansible.builtin.undefined
+      - sweego_receiver_service.volumes_from is ansible.builtin.undefined
+      - sweego_receiver_service.healthcheck is ansible.builtin.defined
+      - sweego_receiver_service.restart is ansible.builtin.defined
+      - sweego_receiver_service.mem_limit is ansible.builtin.defined
+      - sweego_receiver_service.image is ansible.builtin.match('^\$\{IMAGE:\?')
+    quiet: true
+    fail_msg: >-
+      The compose file is not the receiver alone as a hardened container: it must run the single
+      service receiver as the fixed non-root account, with a read-only root filesystem, every
+      capability dropped, no-new-privileges, no privileged mode, host network, host pid or ipc,
+      device, build or extends, a healthcheck, a restart policy and a memory limit, and take its
+      image from the pin file.
+  vars:
+    sweego_receiver_service: '{{ sweego_receiver_compose_doc.services.receiver }}'
+
+# Published ports: the two the role is given, each on edge1's private address, nothing else.
+# Not 0.0.0.0, not a bare port, not the loopback.
+- name: Refuse a compose file that publishes anything but the two ports on edge1's private address
+  ansible.builtin.assert:
+    that:
+      - sweego_receiver_compose_doc.services.receiver.ports == sweego_receiver_expected_ports
+    quiet: true
+    fail_msg: >-
+      The compose file must publish exactly {{ sweego_receiver_expected_ports }} and nothing else.
+      Every port is bound to edge1's private address {{ sweego_receiver_private_address }}, never to
+      all addresses and never to the public one.
+  vars:
+    sweego_receiver_expected_ports:
+      - '{{ sweego_receiver_private_address }}:{{ sweego_receiver_port }}:{{ sweego_receiver_container_public_port }}'
+      - '{{ sweego_receiver_private_address }}:{{ sweego_receiver_drain_port }}:{{ sweego_receiver_container_drain_port }}'
+
+# The mounts are the secret files read-only, and the state directory. No Docker socket, and no
+# other path of the host. A secret reaches the container as a file, never as an environment
+# value: the environment holds paths to those files and nothing else.
+- name: Refuse a compose file whose mounts or environment are not the expected ones
+  ansible.builtin.assert:
+    that:
+      - sweego_receiver_service.volumes | ansible.builtin.sort == sweego_receiver_expected_volumes | ansible.builtin.sort
+      - sweego_receiver_service.volumes | ansible.builtin.select('search', 'docker.sock') | ansible.builtin.list | length == 0
+      - sweego_receiver_service.environment.keys() | ansible.builtin.sort == sweego_receiver_expected_environment | ansible.builtin.sort
+      - sweego_receiver_service.environment.WEBHOOK_SECRET_FILE == sweego_receiver_container_secret_path
+      - sweego_receiver_service.environment.WEBHOOK_DRAIN_TOKEN_FILE == sweego_receiver_container_token_path
+    quiet: true
+    fail_msg: >-
+      The compose file mounts or sets something it should not. It mounts the secret files read-only
+      and the state directory {{ sweego_receiver_state_dir }}, and sets only the receiver's own
+      names, with the secrets as paths to files.
+  vars:
+    sweego_receiver_service: '{{ sweego_receiver_compose_doc.services.receiver }}'
+    sweego_receiver_expected_volumes: >-
+      {{ [sweego_receiver_signing_secret_file ~ ':' ~ sweego_receiver_container_secret_path ~ ':ro',
+      sweego_receiver_drain_token_file ~ ':' ~ sweego_receiver_container_token_path ~ ':ro',
+      sweego_receiver_state_dir ~ ':' ~ sweego_receiver_container_state_dir]
+      + ([sweego_receiver_previous_signing_secret_file ~ ':' ~ sweego_receiver_container_previous_secret_path ~ ':ro']
+      if sweego_receiver_has_previous | bool else []) }}
+    sweego_receiver_expected_environment: >-
+      {{ ['WEBHOOK_HOST', 'WEBHOOK_PORT', 'WEBHOOK_DRAIN_HOST', 'WEBHOOK_DRAIN_PORT', 'WEBHOOK_STATE_DIR',
+      'WEBHOOK_SECRET_FILE', 'WEBHOOK_DRAIN_TOKEN_FILE']
+      + (['WEBHOOK_SECRET_FILE_PREVIOUS'] if sweego_receiver_has_previous | bool else []) }}

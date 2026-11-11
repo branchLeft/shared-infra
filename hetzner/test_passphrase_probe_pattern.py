@@ -124,6 +124,10 @@ ALLOWLIST: dict[tuple[str, str], tuple[int, str]] = {
         'scripts/pulumi-stack-inventory.json',
         '"evidence": "Re-wrapped the same way as branchleft-ghost-provisioning/blog; pulumi stack export --show-secrets succeeded afterwards. secrets_providers read back from the gs://branchleft-blog-pulumi-state checkpoint: passphrase, salt prefix v1:rLDLxMTFD, matching the value placed in the PULUMI_SALT_BLOG repository secret, 33 resources. Wrapped by a newly minted 32-character passphrase, escrowed in the platform owner\'s password manager and set as PULUMI_CONFIG_PASSPHRASE on branchLeft/ghost-tenant-blog before the re-wrap; the stored copy was independently re-typed and verified. Post-merge deploy green: \\"Restore the stack\'s encryption salt\\" and the delete-guard both passed, and Apply reported 31 unchanged with no creates, updates, deletes or replaces."',
     ): (1, 'recorded past-tense evidence of a completed re-wrap, data not a command or instruction'),
+    (
+        "ovh/copy2/probe/probe_stack.py",
+        '["stack", "output", "--stack", self._stack, "--json", "--show-secrets"],',
+    ): (1, 'reads the probe credentials into job memory to use them, never as a decrypt proof; captured, masked, never printed'),
 }
 
 

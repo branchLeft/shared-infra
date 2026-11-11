@@ -5,7 +5,7 @@ name: CI
 # before its apply job runs. The guardrails, the deploy pipelines and why there
 # is no preview job on pull requests are in .github/workflows/ci.md.
 #
-# Seven check jobs skip their own steps when a pull request or merge queue entry
+# Eight check jobs skip their own steps when a pull request or merge queue entry
 # changes nothing they read; the path map and the rules are in scripts/ci_skip.md
 # (and scripts/ci_skip.py). Every other check job always runs in full.
 
@@ -321,6 +321,73 @@ jobs:
       # answer is permanent and appears in no later diff.
       - name: Unit tests
         run: pnpm run test
+
+  ovh-copy2-checks:
+    name: Type check + test (ovh/copy2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The OVHcloud second-copy project: its own package.json and provider tree,
+    # so its own job. Credential-free and mock-only; it contacts no OVHcloud
+    # API. No plan or apply job exists for it yet.
+    defaults:
+      run:
+        working-directory: ovh/copy2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Decides from the changed paths whether the steps below need to run. The
+      # job reads only ovh/copy2/ (scripts/ci_skip.py UNITS); the job and its
+      # required check still report either way (scripts/ci_skip.md).
+      - name: Decide whether this job's inputs changed
+        id: skip
+        uses: ./.github/actions/ci-skip
+        with:
+          unit: ovh-copy2-checks
+
+      - name: Setup pnpm
+        if: steps.skip.outputs.run != 'false'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        if: steps.skip.outputs.run != 'false'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ovh/copy2/.nvmrc
+          cache: pnpm
+          cache-dependency-path: ovh/copy2/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        if: steps.skip.outputs.run != 'false'
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Type check
+        if: steps.skip.outputs.run != 'false'
+        run: pnpm exec tsc --noEmit
+
+      - name: Unit tests
+        if: steps.skip.outputs.run != 'false'
+        run: pnpm run test
+
+      # The lock-probe's Python (ovh/copy2/probe), against an in-memory S3 and a
+      # fake Pulumi CLI. The tests import no third-party package, so nothing is
+      # installed; they are the same ones the probe workflow runs before it
+      # creates anything.
+      - name: Set up Python (probe tests)
+        if: steps.skip.outputs.run != 'false'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Probe unit tests
+        if: steps.skip.outputs.run != 'false'
+        run: python3 -m unittest discover -s probe -p 'test_*.py' -v
 
   hetzner-provision-checks:
     name: Lint + test (hetzner/provision)

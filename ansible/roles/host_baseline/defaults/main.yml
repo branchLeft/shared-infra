@@ -4,3 +4,9 @@
 # It lives here, not in argument_specs, because an argument spec default is not set as a
 # variable when the role runs through import_role (the converge of the check-fresh scenario).
 host_baseline_fail2ban_ignoreip: 127.0.0.1/8 ::1 10.20.1.10
+
+# The opt-out. A host that must write no ignoreip line at all sets this true, deliberately; it
+# defaults to false, so every other host keeps the ignore list above. When true the jail
+# carries no ignoreip line, and host_baseline_fail2ban_ignoreip is still checked (it must hold
+# a value), so an empty input refuses on every host.
+host_baseline_fail2ban_ignoreip_none: false

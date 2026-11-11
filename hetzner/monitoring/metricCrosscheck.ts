@@ -265,6 +265,12 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
     'backup_worker.py, in branchLeft/ghost-platform, on ops1; dump_nightly.py, on db1',
   backup_worker_lock_aborts_total:
     'backup_worker.py, in branchLeft/ghost-platform, on ops1; dump_nightly.py, on db1',
+  // The pager gauge, written by the monitoring_stack Ansible role (ansible/roles/monitoring_stack)
+  // to the textfile directory the stack's node-exporter reads. The writer is a role task,
+  // not a Python collector under this root, so nothing here can scan it; a unit test in the
+  // role pins the name to this rule's expression.
+  branchleft_pager_route_configured:
+    'the monitoring_stack Ansible role, a textfile gauge on the monitoring host',
   // db1's own dump and binlog shipper, written by the two scripts named
   // here to the textfile directory db1's node_exporter reads. The source
   // is branchLeft/ghost-platform's db/provision, not scannable from here.

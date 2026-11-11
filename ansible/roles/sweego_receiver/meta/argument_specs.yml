@@ -1,0 +1,50 @@
+---
+argument_specs:
+  main:
+    short_description: Run the Sweego complaint receiver on edge1 and limit its drain port to ops1
+    description: >-
+      Checks the host (edge1, Docker running with a DOCKER-USER chain, the shared compose
+      template unit) and the two secret files the owner placed (root-owned, group 31100, mode
+      0440, never read), then installs the drain-port rule program and its boot unit, runs it,
+      and reads the rule back as the first rule of DOCKER-USER. Only then does it place the
+      compose project for the receiver, a drop-in that orders the receiver's unit after and
+      bound to the rule's unit, and enable the unit; it starts the unit when the image pin
+      file the deploy wrapper writes is present, and reads the running container back (healthy,
+      read-only, every capability dropped, running as the fixed account, published on edge1's
+      private address only). It writes no secret, no token and no image pin, opens no inbound
+      port, and holds no value of the signing secret or the drain token.
+    author: branchLeft
+    options:
+      sweego_receiver_port:
+        type: int
+        required: true
+        description: >-
+          The host port the receiver's public listener is published on, on edge1's private
+          address. The edge route proxies to this port. Whole number from 1024 to 65535,
+          different from the drain port.
+      sweego_receiver_drain_port:
+        type: int
+        required: true
+        description: >-
+          The host port the receiver's drain listener is published on, on edge1's private
+          address. The rule admits connections to it from ops1 alone. Whole number from 1024
+          to 65535, different from the public port.
+      sweego_receiver_signing_secret_file:
+        type: str
+        description: >-
+          Absolute path of the file that holds the signing secret from the Sweego dashboard.
+          One name directly under /etc/branchleft. The owner places it, root-owned, group
+          31100, mode 0440. The role checks it and never reads it.
+        default: /etc/branchleft/sweego-receiver-signing-secret
+      sweego_receiver_previous_signing_secret_file:
+        type: str
+        description: >-
+          Absolute path of the optional second signing secret kept while a rotation is in
+          progress, placed the same way. Empty means none.
+        default: ''
+      sweego_receiver_drain_token_file:
+        type: str
+        description: >-
+          Absolute path of the file that holds the bearer token the collector presents to the
+          drain listener. One name directly under /etc/branchleft, placed like the secret.
+        default: /etc/branchleft/sweego-receiver-drain-token

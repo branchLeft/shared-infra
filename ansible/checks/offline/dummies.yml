@@ -50,3 +50,12 @@ overrides:
   mail_collector_gid:
     type: str
     value: '991'
+  # The two host ports of the Sweego receiver, which the owner names. Throwaway numbers that
+  # differ and are unprivileged, so the compose file validates (a dummy int would publish the
+  # same port twice).
+  sweego_receiver_port:
+    type: int
+    value: 18080
+  sweego_receiver_drain_port:
+    type: int
+    value: 18081
