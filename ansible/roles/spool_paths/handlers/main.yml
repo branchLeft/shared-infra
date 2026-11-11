@@ -1,0 +1,13 @@
+---
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Reloading reads the new files, makes the dummy interface if it is new and reconfigures the
+# interface when its network file changed. Skipped in check mode with a stated reason (ANS-10):
+# check mode writes no file, so there is nothing for the manager to read.
+- name: Reload the network manager
+  ansible.builtin.command:
+    argv: [networkctl, reload]
+  changed_when: true
+  when: not ansible_check_mode

@@ -67,3 +67,27 @@ overrides:
       - slug: offline-dummy
         kind: tenant
         app_host_ip: 10.0.0.40
+  # The result of the spool paths plan, which the role registers at run time. One throwaway path
+  # through a jump host, so every template of the role renders. The key is a throwaway public key.
+  spool_paths_plan_result:
+    type: dict
+    value:
+      paths:
+        - slug: offline-dummy
+          alias: 10.250.0.5
+          ssh_host: 10.20.1.50
+          ssh_port: 22
+          spool_port: 8095
+          host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFhA+RWfOtSFhqoJe+knrml4N8qG+5YKd2bGyC2VIQJp
+          jump:
+            host: 192.0.2.20
+            port: 22
+            host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFhA+RWfOtSFhqoJe+knrml4N8qG+5YKd2bGyC2VIQJp
+      stale: []
+  # The far-host account's two inputs, which the role reads from root-only files at run time.
+  # Throwaway values: a documentation address and a throwaway public key.
+  spool_path_account_in:
+    type: dict
+    value:
+      from_address: 192.0.2.1
+      public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFhA+RWfOtSFhqoJe+knrml4N8qG+5YKd2bGyC2VIQJp

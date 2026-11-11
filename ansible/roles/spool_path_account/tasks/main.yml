@@ -1,0 +1,271 @@
+---
+# The role gives ops1 one unprivileged account on this host. The account has no shell, and its one
+# key may be used only from the address the owner names, only to open a connection to the spool's
+# drain port on this host's loopback address. It runs nothing and opens no other port. The role
+# opens no port of its own and adds no firewall rule: the path rides the host's existing ssh.
+#
+# It is inert until the owner has placed both input files. It never writes an input and never shows
+# a value (ANS-16). Which host may apply it is the owner's list (checks/host_roles.yml, R9).
+
+- name: Refuse a drain port that is not a whole number from 1 to 65535
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_spool_port is integer
+      - spool_path_account_spool_port is not boolean
+      - spool_path_account_spool_port >= 1
+      - spool_path_account_spool_port <= 65535
+    quiet: true
+    fail_msg: spool_path_account_spool_port must be a whole number from 1 to 65535.
+
+# --- Which inputs are there. No checksum, no mime type and no attributes are asked for: a result
+# that fails an assert is printed whole, and a checksum of an address is the address.
+- name: Look at the inputs directory's parent and the inputs directory
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop:
+    - '{{ spool_path_account_inputs_parent }}'
+    - '{{ spool_path_account_inputs_dir }}'
+  register: spool_path_account_dir_stats
+  check_mode: false
+
+- name: Refuse a parent that is not a root-owned directory only root can change
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_dir_stats.results[0].stat.exists
+      - spool_path_account_dir_stats.results[0].stat.isdir
+      - spool_path_account_dir_stats.results[0].stat.uid == 0
+      - not spool_path_account_dir_stats.results[0].stat.wgrp
+      - not spool_path_account_dir_stats.results[0].stat.woth
+    quiet: true
+    fail_msg: The directory above the inputs directory is missing, is a link, is not root's or can be changed by others.
+
+- name: Refuse an inputs directory that is not a root-only directory
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_dir_stats.results[1].stat.isdir
+      - spool_path_account_dir_stats.results[1].stat.pw_name == 'root'
+      - spool_path_account_dir_stats.results[1].stat.gr_name == 'root'
+      - spool_path_account_dir_stats.results[1].stat.mode == '0700'
+    quiet: true
+    fail_msg: The inputs directory must be owned by root and group root with mode 0700. The owner places the inputs there once.
+  when: spool_path_account_dir_stats.results[1].stat.exists
+
+- name: Look at each input file
+  ansible.builtin.stat:
+    path: '{{ spool_path_account_inputs_dir }}/{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ spool_path_account_input_names }}'
+  register: spool_path_account_input_stats
+  check_mode: false
+  when: spool_path_account_dir_stats.results[1].stat.exists
+
+- name: Note which inputs are there
+  ansible.builtin.set_fact:
+    spool_path_account_found: >-
+      {{ (spool_path_account_input_stats.results | selectattr('stat', 'defined') | selectattr('stat.exists') | list)
+      if spool_path_account_dir_stats.results[1].stat.exists else [] }}
+    spool_path_account_present: >-
+      {{ (spool_path_account_input_stats.results | selectattr('stat', 'defined') | selectattr('stat.exists') | list | length)
+      if spool_path_account_dir_stats.results[1].stat.exists else 0 }}
+
+# One without the other is a half-set account: refused, so it never reads as set up.
+- name: Refuse one input without the other
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_present | int in [0, spool_path_account_input_names | length]
+    quiet: true
+    fail_msg: One of the two input files is there and the other is not. Place both or neither.
+
+- name: Refuse an input file that is a link or is not root-only
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'root'
+      - item.stat.mode == '0600'
+    quiet: true
+    fail_msg: An input file is not a regular file owned by root with mode 0600.
+  loop: '{{ spool_path_account_found }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# --- Not set up: take down what the role wrote and leave the rest. The account stays, because
+# removing an account is not the role's to do.
+- name: Remove the account's key file and sshd settings when the inputs are not placed
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ spool_path_account_sshd_dropin }}'
+    - '{{ spool_path_account_authorized_keys_file }}'
+  when: spool_path_account_present | int == 0
+  notify: Reload sshd
+
+# --- Set up: read the inputs, never show them.
+- name: Read the inputs into memory for this run
+  ansible.builtin.slurp:
+    src: '{{ spool_path_account_inputs_dir }}/{{ item }}'
+  loop: '{{ spool_path_account_input_names }}'
+  register: spool_path_account_raw
+  no_log: true
+  check_mode: false
+  when: spool_path_account_present | int > 0
+
+- name: Hold the inputs by name for this run
+  ansible.builtin.set_fact:
+    spool_path_account_in: >-
+      {{ dict(spool_path_account_input_names
+              | zip(spool_path_account_raw.results | map(attribute='content') | map('b64decode') | map('trim') | list)) }}
+  no_log: true
+  when: spool_path_account_present | int > 0
+
+- name: Refuse a from address that is not one IPv4 address
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_in.from_address is match(spool_path_account_ipv4_pattern)
+    quiet: true
+    fail_msg: The from address must be one IPv4 address. It is not shown here.
+  when: spool_path_account_present | int > 0
+  no_log: true
+
+- name: Refuse a public key that is not one ed25519 line
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_in.public_key is match(spool_path_account_key_pattern)
+    quiet: true
+    fail_msg: The public key must be one line, 'ssh-ed25519 <base64>' with an optional comment. It is not shown here.
+  when: spool_path_account_present | int > 0
+  no_log: true
+
+# The load-bearing control: the drain port listens on this host's loopback address and nowhere
+# else, so no connection can reach it except through the account's forward. It is read before the
+# account gets a key, so a bad bind stops the run with nothing opened.
+- name: Read where the drain port listens
+  spool_path_listener_check:
+    port: '{{ spool_path_account_spool_port }}'
+    loopback: '{{ spool_path_account_loopback }}'
+  register: spool_path_account_listener
+  when: spool_path_account_present | int > 0
+
+- name: Refuse a drain port that does not listen on the loopback address only
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_listener.loopback
+      - spool_path_account_listener.others | length == 0
+    quiet: true
+    fail_msg: The drain port is not listening on the loopback address only. The path rests on that bind, so the run stops before the account gets a key.
+  when: spool_path_account_present | int > 0
+
+- name: Look up the account
+  ansible.builtin.command:
+    argv: [getent, passwd, '{{ spool_path_account_user }}']
+  register: spool_path_account_passwd
+  changed_when: false
+  failed_when: spool_path_account_passwd.rc not in [0, 2]
+  check_mode: false
+  when: spool_path_account_present | int > 0
+
+# A shell the role did not give is never changed silently: the role refuses.
+- name: Refuse an existing account that has a login shell
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_passwd.rc == 2 or (spool_path_account_passwd.stdout.split(':') | last) == spool_path_account_nologin
+    quiet: true
+    fail_msg: The account already exists with a login shell. The role does not change an existing account's shell.
+  when: spool_path_account_present | int > 0
+
+- name: Create the account with no login shell and no password
+  ansible.builtin.user:
+    name: '{{ spool_path_account_user }}'
+    system: true
+    create_home: false
+    home: /nonexistent
+    shell: '{{ spool_path_account_nologin }}'
+    password_lock: true
+  when: spool_path_account_present | int > 0
+
+- name: Look at the sshd drop-in directory
+  ansible.builtin.stat:
+    path: '{{ spool_path_account_sshd_config_dir }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: spool_path_account_dropin_dir
+  check_mode: false
+  when: spool_path_account_present | int > 0
+
+- name: Refuse a host without the sshd drop-in directory
+  ansible.builtin.assert:
+    that:
+      - spool_path_account_dropin_dir.stat.exists
+      - spool_path_account_dropin_dir.stat.isdir
+    quiet: true
+    fail_msg: The sshd drop-in directory is missing. Is OpenSSH installed on this host?
+  when: spool_path_account_present | int > 0
+
+- name: Make the directory of the account's key file
+  ansible.builtin.file:
+    path: '{{ spool_path_account_authorized_keys_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: spool_path_account_present | int > 0
+
+# The key file holds the from address, so no diff is shown (ANS-16) and no checksum is asked for.
+# Both files are written, then the whole sshd configuration is checked with them in place. If sshd
+# refuses it, both files are taken back out and the run stops: the account then has no key file and
+# cannot log in, which is the closed state. The check does not run in check mode, so a bad file shows
+# as a change in a plan and fails only at apply (ANS-10).
+- name: Write the account's key and sshd settings, and take them back out if sshd refuses them
+  when: spool_path_account_present | int > 0
+  block:
+    - name: Write the account's key with its restrictions
+      ansible.builtin.template:
+        src: authorized_keys.j2
+        dest: '{{ spool_path_account_authorized_keys_file }}'
+        owner: root
+        group: root
+        mode: '0644'
+      no_log: true
+      diff: false
+      notify: Reload sshd
+
+    - name: Write the sshd settings for the account
+      ansible.builtin.template:
+        src: sshd-drop-in.conf.j2
+        dest: '{{ spool_path_account_sshd_dropin }}'
+        owner: root
+        group: root
+        mode: '0644'
+      notify: Reload sshd
+
+    - name: Check the whole sshd configuration with both files in place
+      ansible.builtin.command:
+        argv: ['{{ spool_path_account_sshd }}', -t]
+      changed_when: false
+      when: not ansible_check_mode
+  rescue:
+    - name: Take the key and the sshd settings back out
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: absent
+      loop:
+        - '{{ spool_path_account_sshd_dropin }}'
+        - '{{ spool_path_account_authorized_keys_file }}'
+
+    - name: Stop, with the account left unable to log in
+      ansible.builtin.fail:
+        msg: sshd refused the account's settings. The key and the settings are removed, so the account cannot log in.
+
+# Applied at once, so a changed file is in force before the run ends.
+- name: Apply the sshd settings
+  ansible.builtin.meta: flush_handlers

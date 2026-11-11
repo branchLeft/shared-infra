@@ -1,0 +1,312 @@
+---
+# The role holds one supervised ssh forward from ops1 to the spool drain port of each host a
+# descriptor names. The hosts to reach are derived from the collector's descriptor directory, the
+# same one the collector drains from, and from the owner's table of where each host is. A host no
+# descriptor names gets no configuration, no unit, no alias and so no listener.
+#
+# The role never creates, reads or removes a private key, or the file that names a jump account.
+# The owner places them, and a path's unit starts only once its key is there.
+#
+# It touches only its own paths (vars/main.yml). Which host may apply it is the owner's list
+# (checks/host_roles.yml, R9); an in-role host test would be no control, because under the pull
+# inventory_hostname is localhost.
+
+# --- Inputs first, refused before any task changes anything. No message names a value (ANS-16).
+# The argument spec coerces a wrong type rather than rejecting it, so these reject it too.
+- name: Refuse a host table that is not a list, an alias block that is not text and a bad port
+  ansible.builtin.assert:
+    that:
+      - spool_paths_hosts is sequence
+      - spool_paths_hosts is not string
+      - spool_paths_hosts is not mapping
+      - spool_paths_alias_block is string
+      - spool_paths_shim_port is integer
+      - spool_paths_shim_port is not boolean
+      - spool_paths_shim_port >= 1
+      - spool_paths_shim_port <= 65535
+    quiet: true
+    fail_msg: spool_paths_hosts must be a list, spool_paths_alias_block text and spool_paths_shim_port a whole number from 1 to 65535.
+
+# --- What the role stands on. It asserts these and never makes or changes them.
+- name: Look at the parent directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  loop: '{{ spool_paths_parents }}'
+  register: spool_paths_parent_stats
+
+- name: Require each parent to be a root-owned directory that only root can change
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.isdir
+      - item.stat.uid == 0
+      - not item.stat.wgrp
+      - not item.stat.woth
+    quiet: true
+    fail_msg: A parent directory of the role is missing, is a link, is not root's or can be changed by others. The role does not make or change it.
+  loop: '{{ spool_paths_parent_stats.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+# --- The derived list. Read only, so a plan shows what an apply will do. A refusal names a host by
+# its place in the list or by its slug and never shows a value.
+- name: Work out which hosts a descriptor names and the owner's table can reach
+  spool_paths_plan:
+    descriptor_dir: '{{ spool_paths_descriptor_dir }}'
+    config_dir: '{{ spool_paths_dir }}'
+    marker: '{{ spool_paths_marker }}'
+    hosts: '{{ spool_paths_hosts }}'
+    alias_block: '{{ spool_paths_alias_block }}'
+    reserved_blocks: '{{ spool_paths_reserved_blocks }}'
+  register: spool_paths_plan_result
+
+# Slugs are public names. A host named by a descriptor with no table row is left to its own address
+# (a host on ops1's own network needs no path), and a table row no descriptor names stays idle.
+- name: Say which hosts get a path and which are left out
+  ansible.builtin.debug:
+    msg:
+      - 'paths held: {{ spool_paths_plan_result.paths | map(attribute="slug") | list }}'
+      - 'descriptors with no table row, no path: {{ spool_paths_plan_result.unlisted }}'
+      - 'table rows no descriptor names, no path: {{ spool_paths_plan_result.unreached }}'
+      - 'descriptor files that are not usable, no path: {{ spool_paths_plan_result.invalid }}'
+
+- name: Require the ssh client when a path is to be held
+  ansible.builtin.stat:
+    path: '{{ spool_paths_ssh }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: spool_paths_ssh_stat
+  when: spool_paths_plan_result.paths | length > 0
+
+- name: Refuse a path when the ssh client is not a root-owned file only root can change
+  ansible.builtin.assert:
+    that:
+      - spool_paths_ssh_stat.stat.exists
+      - spool_paths_ssh_stat.stat.isreg
+      - spool_paths_ssh_stat.stat.uid == 0
+      - not spool_paths_ssh_stat.stat.wgrp
+      - not spool_paths_ssh_stat.stat.woth
+    quiet: true
+    fail_msg: The ssh client is missing, is not a regular file, is not root's or can be changed by others. The role does not install it.
+  when: spool_paths_plan_result.paths | length > 0
+
+# --- The directory and the unit. Both are harmless with no path: the directory is where the owner
+# places keys, and a template unit with no instance does nothing.
+- name: Make the role's directory, closed to everyone but root
+  ansible.builtin.file:
+    path: '{{ spool_paths_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '{{ spool_paths_dir_mode }}'
+
+- name: Install the path unit
+  ansible.builtin.copy:
+    src: '{{ spool_paths_unit }}'
+    dest: '{{ spool_paths_unit_dir }}/{{ spool_paths_unit }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd manager
+
+# --- Take down a path whose descriptor is gone, before its files. The collector role runs first and
+# has already removed the descriptor, so this never takes a path down ahead of its descriptor.
+- name: Look at the installed unit
+  ansible.builtin.stat:
+    path: '{{ spool_paths_unit_dir }}/{{ spool_paths_unit }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: spool_paths_unit_stat
+
+- name: Load the unit before it is handled
+  ansible.builtin.meta: flush_handlers
+
+- name: Stop and disable the path of each host no descriptor names now
+  ansible.builtin.systemd_service:
+    name: '{{ spool_paths_instance_prefix }}{{ item }}{{ spool_paths_instance_suffix }}'
+    enabled: false
+    state: stopped
+  loop: '{{ spool_paths_plan_result.stale }}'
+  when: spool_paths_unit_stat.stat.exists
+
+- name: Remove the files of each path no descriptor names now, never a key
+  ansible.builtin.file:
+    path: '{{ item.0 }}/{{ item.1 }}{{ item.2 }}'
+    state: absent
+  loop: >-
+    {{ [spool_paths_dir] | product(spool_paths_plan_result.stale, [spool_paths_conf_suffix, spool_paths_known_hosts_suffix]) | list }}
+  loop_control:
+    label: '{{ item.1 }}{{ item.2 }}'
+
+- name: Remove the jump conditions of each path no descriptor names now
+  ansible.builtin.file:
+    path: '{{ spool_paths_unit_dir }}/{{ spool_paths_instance_prefix }}{{ item }}{{ spool_paths_instance_suffix }}.d/jump.conf'
+    state: absent
+  loop: '{{ spool_paths_plan_result.stale }}'
+  notify: Reload systemd manager
+
+# --- One configuration file and one pinned known_hosts file for each path. Public values only.
+- name: Write the client configuration of each path
+  ansible.builtin.template:
+    src: path.conf.j2
+    dest: '{{ spool_paths_dir }}/{{ item.slug }}{{ spool_paths_conf_suffix }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ spool_paths_plan_result.paths }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  register: spool_paths_conf_written
+
+- name: Write the pinned host keys of each path
+  ansible.builtin.template:
+    src: known_hosts.j2
+    dest: '{{ spool_paths_dir }}/{{ item.slug }}{{ spool_paths_known_hosts_suffix }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ spool_paths_plan_result.paths }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  register: spool_paths_known_hosts_written
+
+# A path through a jump host needs the owner's jump key and the file naming the jump account, so
+# its unit carries two more start conditions in a drop-in. A path with no jump carries none.
+- name: Make the drop-in directory of each path that goes through a jump host
+  ansible.builtin.file:
+    path: '{{ spool_paths_unit_dir }}/{{ spool_paths_instance_prefix }}{{ item.slug }}{{ spool_paths_instance_suffix }}.d'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop: '{{ spool_paths_plan_result.paths | selectattr("jump") | list }}'
+  loop_control:
+    label: '{{ item.slug }}'
+
+- name: Write the jump conditions of each path that goes through a jump host
+  ansible.builtin.template:
+    src: jump-conditions.conf.j2
+    dest: '{{ spool_paths_unit_dir }}/{{ spool_paths_instance_prefix }}{{ item.slug }}{{ spool_paths_instance_suffix }}.d/jump.conf'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ spool_paths_plan_result.paths | selectattr("jump") | list }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  register: spool_paths_jump_written
+  notify: Reload systemd manager
+
+- name: Remove the jump conditions of each path that no longer goes through a jump host
+  ansible.builtin.file:
+    path: '{{ spool_paths_unit_dir }}/{{ spool_paths_instance_prefix }}{{ item.slug }}{{ spool_paths_instance_suffix }}.d/jump.conf'
+    state: absent
+  loop: '{{ spool_paths_plan_result.paths | rejectattr("jump") | list }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  notify: Reload systemd manager
+
+# --- The aliases. The files exist only while a path does, so landing the role adds no interface.
+# Once made, the interface stays until the host restarts: the network manager does not delete one
+# whose file is removed, but it does drop the addresses.
+- name: Make the network manager's directory
+  ansible.builtin.file:
+    path: '{{ spool_paths_networkd_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: spool_paths_plan_result.paths | length > 0
+
+- name: Write the dummy interface that carries the aliases
+  ansible.builtin.copy:
+    src: branchleft-spool-paths.netdev
+    dest: '{{ spool_paths_netdev_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: spool_paths_plan_result.paths | length > 0
+  notify: Reload the network manager
+
+- name: Write the alias address of each path
+  ansible.builtin.template:
+    src: spool-paths.network.j2
+    dest: '{{ spool_paths_network_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: spool_paths_plan_result.paths | length > 0
+  notify: Reload the network manager
+
+- name: Remove the interface files when no path is held
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ spool_paths_network_file }}'
+    - '{{ spool_paths_netdev_file }}'
+  when: spool_paths_plan_result.paths | length == 0
+  notify: Reload the network manager
+
+# --- Hold each path to the state the inputs ask for. A path's unit is enabled whenever the host is
+# named. It is started only once the owner's key (and for a jump, the jump key and account file) is
+# there, because a started unit whose conditions fail would report a change on every run. Presence
+# is read from a listing of file names; no key is opened, hashed or read.
+- name: List the key files the owner has placed
+  ansible.builtin.find:
+    paths: '{{ spool_paths_dir }}'
+    patterns:
+      - '*{{ spool_paths_key_suffix }}'
+      - '*{{ spool_paths_jump_user_suffix }}'
+    file_type: file
+    hidden: false
+    recurse: false
+    follow: false
+    get_checksum: false
+  register: spool_paths_owner_files
+  check_mode: false
+
+- name: Note which paths have everything the owner places
+  ansible.builtin.set_fact:
+    spool_paths_ready: >-
+      {%- set names = spool_paths_owner_files.files | map(attribute='path') | map('basename') | list -%}
+      {%- set ns = namespace(ready=[]) -%}
+      {%- for path in spool_paths_plan_result.paths -%}
+      {%- set own = (path.slug ~ spool_paths_key_suffix) in names -%}
+      {%- set hop = (not path.jump) or ((path.slug ~ spool_paths_jump_key_suffix) in names and (path.slug ~ spool_paths_jump_user_suffix) in names) -%}
+      {%- if own and hop -%}{%- set ns.ready = ns.ready + [path.slug] -%}{%- endif -%}
+      {%- endfor -%}
+      {{ ns.ready | to_json }}
+    spool_paths_changed: >-
+      {{ (spool_paths_conf_written.results + spool_paths_known_hosts_written.results + spool_paths_jump_written.results)
+      | selectattr('changed') | map(attribute='item.slug') | unique | list | to_json }}
+
+- name: Enable the path of each named host
+  ansible.builtin.systemd_service:
+    name: '{{ spool_paths_instance_prefix }}{{ item.slug }}{{ spool_paths_instance_suffix }}'
+    enabled: true
+  loop: '{{ spool_paths_plan_result.paths }}'
+  loop_control:
+    label: '{{ item.slug }}'
+  when: spool_paths_unit_stat.stat.exists
+
+# A changed file restarts that one path and no other, so a change to one host never cuts another's.
+- name: Restart each ready path whose files changed
+  ansible.builtin.systemd_service:
+    name: '{{ spool_paths_instance_prefix }}{{ item }}{{ spool_paths_instance_suffix }}'
+    state: restarted
+  loop: '{{ spool_paths_ready | intersect(spool_paths_changed) | list }}'
+  when: spool_paths_unit_stat.stat.exists and not ansible_check_mode
+
+- name: Start each ready path whose files did not change
+  ansible.builtin.systemd_service:
+    name: '{{ spool_paths_instance_prefix }}{{ item }}{{ spool_paths_instance_suffix }}'
+    state: started
+  loop: '{{ spool_paths_ready | difference(spool_paths_changed) | list }}'
+  when: spool_paths_unit_stat.stat.exists

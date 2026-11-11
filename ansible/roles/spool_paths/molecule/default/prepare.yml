@@ -1,0 +1,60 @@
+---
+# What the role expects to find on ops1 before it runs, and nothing of the role itself. The parent
+# directory is made by a role that runs earlier on a real host, and the descriptor is what the
+# collector role writes, so the test stands in for both. The network manager and the ssh client are
+# what the role asserts or calls and never installs, so stand-ins take their place: the client
+# stays up as a path would, and the network manager records that it was asked to reload. No key is
+# placed, so a path's unit is enabled and left stopped, which is the closed state.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the parent directories, as the roles that run before this one do
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /etc/branchleft/control-plane
+        - /etc/branchleft/mail-collector
+        - '{{ scenario_descriptor_dir }}'
+
+    - name: Put a canary where another role's file would be
+      ansible.builtin.copy:
+        content: 'CANARY of {{ item }}, which the spool paths role must not touch.'
+        dest: '{{ item }}'
+        owner: root
+        group: root
+        mode: '0640'
+      loop: '{{ scenario_canaries }}'
+
+    - name: Put the descriptor of one host where the collector role writes it
+      ansible.builtin.copy:
+        content: '{"slug": "host-one", "kind": "demo", "appHostIp": "{{ scenario_alias }}", "expiresAt": null}'
+        dest: '{{ scenario_descriptor_dir }}/host-one.json'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install a stand-in ssh client that stays up
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          exec sleep 3600
+        dest: /usr/bin/ssh
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install a stand-in networkctl that records that it was asked to reload
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          printf '%s\n' "$*" >> {{ scenario_networkctl_calls }}
+        dest: /usr/local/bin/networkctl
+        owner: root
+        group: root
+        mode: '0755'

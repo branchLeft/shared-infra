@@ -1,0 +1,46 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the files of other roles before the role runs
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: '{{ scenario_canaries }}'
+      register: spool_paths_untouched_before
+
+    # The table names two hosts and only one has a descriptor, so only that one may get a path.
+    - name: Apply the role with a table of two hosts, one of them named by a descriptor
+      ansible.builtin.include_role:
+        name: branchleft.spool_paths
+      vars:
+        spool_paths_alias_block: '{{ scenario_alias_block }}'
+        spool_paths_hosts:
+          - slug: host-one
+            ssh_host: '{{ scenario_far_host }}'
+            spool_port: 8095
+            host_key: '{{ scenario_host_key }}'
+          - slug: host-two
+            ssh_host: 192.0.2.11
+            spool_port: 8095
+            host_key: '{{ scenario_host_key }}'
+
+    - name: Look at the same files after the role has run
+      ansible.builtin.stat:
+        path: '{{ item }}'
+      loop: '{{ scenario_canaries }}'
+      register: spool_paths_untouched_after
+
+    - name: Require the files of other roles to be exactly as they were
+      ansible.builtin.assert:
+        that:
+          - item.0.stat.exists
+          - item.1.stat.inode == item.0.stat.inode
+          - item.1.stat.mtime == item.0.stat.mtime
+          - item.1.stat.mode == item.0.stat.mode
+          - item.1.stat.checksum == item.0.stat.checksum
+        quiet: true
+        fail_msg: A file the role does not own was changed.
+      loop: '{{ spool_paths_untouched_before.results | zip(spool_paths_untouched_after.results) | list }}'
+      loop_control:
+        label: '{{ item.0.item }}'

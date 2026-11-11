@@ -22,6 +22,10 @@
 # NAT rule would give them a way. The per-host role list in checks/host_roles.yml
 # holds both of these, and broker_deploy, off this playbook.
 
+# spool_path_account follows the spool role. It gives the collector's ssh path one account on this
+# host that can open the spool's loopback drain port and nothing else. It is inert until the owner
+# has placed its two input files, and it opens no port and adds no firewall rule.
+#
 # The roles have no secret and no required input, so the only variables file is the
 # shared pull values and the host's trust file, which hold the signer list and nothing
 # else. The inventory has no entry for the host: a playbook and its trust file enrol it.
@@ -47,3 +51,4 @@
     - role: ../roles/pull_trigger # noqa: role-name[path]
     - role: ../roles/demo1_build # noqa: role-name[path]
     - role: ../roles/demo1_egress_spool # noqa: role-name[path]
+    - role: ../roles/spool_path_account # noqa: role-name[path]

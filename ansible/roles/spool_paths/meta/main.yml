@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  standalone: true
+  author: branchLeft
+  # Molecule derives a fully qualified role name from the namespace, or from
+  # the author when there is none, and refuses an upper-case author.
+  namespace: branchleft
+  description: Holds one supervised ssh forward from ops1 to each host's spool drain port, for each host a descriptor names.
+  license: PolyForm-Shield-1.0.0
+  min_ansible_version: '2.21.5'

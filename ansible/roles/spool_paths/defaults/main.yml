@@ -1,0 +1,21 @@
+---
+# Every input is public data. None is a secret: a path's private key, and the jump account's name,
+# are root-only files the owner places (vars/main.yml names them), never a value here.
+#
+# The owner's table of far hosts, one entry each. A row is used only while a descriptor in the
+# collector's descriptor directory names the same slug: the descriptor supplies the address the
+# path binds on ops1, and the row says where the far host is. Empty builds no path.
+#   slug        the host's name, equal to its descriptor's slug
+#   ssh_host    the address or name ops1 dials: the far host's public address, or its private
+#               address when the path goes through a jump host
+#   ssh_port    optional, 22 unless set
+#   spool_port  the far host's drain port, bound on its loopback
+#   host_key    the far host's public key, one type and base64 body
+#   jump        optional; host, host_key and port (22 unless set) of the jump host
+spool_paths_hosts: []
+# The IPv4 block every alias address must sit in, chosen after reading ops1's routing table. It
+# must be set before any path is built, and it must avoid 10.20.0.0/16 and ops1's Docker bridges.
+spool_paths_alias_block: ''
+# The port every host's drain surface is reached on: the collector's own shim port. A test holds it
+# equal to the collector role's default.
+spool_paths_shim_port: 8080

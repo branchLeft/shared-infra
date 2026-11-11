@@ -1,0 +1,5 @@
+---
+# The port the far host's spool drain listener is bound to on its loopback address. The demo host's
+# spool publishes 8095, which a test holds equal to the demo role's own default. The account's key
+# may open this port and no other.
+spool_path_account_spool_port: 8095

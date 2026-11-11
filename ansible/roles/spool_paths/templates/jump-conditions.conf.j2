@@ -1,0 +1,6 @@
+{{ spool_paths_marker }}
+# A path through a jump host starts only when the owner has placed the jump key and the file that
+# names the jump account.
+[Unit]
+ConditionPathExists={{ spool_paths_dir }}/{{ item.slug }}{{ spool_paths_jump_key_suffix }}
+ConditionPathExists={{ spool_paths_dir }}/{{ item.slug }}{{ spool_paths_jump_user_suffix }}
