@@ -1,13 +1,13 @@
 ---
 argument_specs:
   main:
-    short_description: Make the ring controller's keys and install its units, off until a digest is set
+    short_description: Make the ring controller's record-signing key and install its units, off until a digest is set
     description: >-
-      Makes the ring controller's two OpenSSH keys the first time and never again, prints their
-      public halves, installs a digest-pinned bundle when one is named, installs the service and
-      timer units and an environment file of public values, and holds the timer disabled until a
-      bundle digest is set. Every input is public data and none is a secret. An empty digest means
-      the units are installed and inert.
+      Makes the ring controller's record-signing key (root's, mode 0400) the first time and never
+      again, writes and prints its public half, installs a digest-pinned bundle when one is named,
+      installs the service and timer units and an environment file of public values, and holds the
+      timer disabled until a bundle digest is set. Every input is public data and none is a
+      secret. An empty digest means the units are installed and inert.
     author: branchLeft
     options:
       ring_controller_host_bundle_sha256:
@@ -16,7 +16,7 @@ argument_specs:
         description: >-
           The sha256 of the ring controller bundle, 64 lowercase hex digits, or empty. Empty means
           no bundle is fetched, no link is made and the timer is held disabled and stopped. When set,
-          the other four inputs must be set too.
+          the bundle URL and the ledger URL must be set too.
       ring_controller_host_bundle_url:
         type: str
         default: ''
@@ -27,15 +27,3 @@ argument_specs:
         type: str
         default: ''
         description: The public https URL the controller reads and reports the ledger at.
-      ring_controller_host_ledger_push_remote:
-        type: str
-        default: ''
-        description: >-
-          The git remote the controller pushes the signed ledger to, as
-          ssh://git@HOST/ORG/REPO.git. No repository name is built into the role.
-      ring_controller_host_push_known_hosts:
-        type: str
-        default: ''
-        description: >-
-          The remote's public host key as one known_hosts line, so the push pins the host. It is
-          written to a file beside the keys.

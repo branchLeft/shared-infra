@@ -281,7 +281,7 @@ class HostRoleLists(unittest.TestCase):
         self._list_file(text.replace("  - status_page\n", "", 1))
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
-    # Safety class: ring_controller_host generates two keys on a host that holds the owner's
+    # Safety class: ring_controller_host generates a signing key on a host that holds the owner's
     # calendar data, so it is on ops1's list and on no other host's. The control is the list,
     # which is the owner's merge. Green first: the real tree passes and the role is on exactly
     # one list. Red when the role is added to app1's or edge1's list and either host's playbook

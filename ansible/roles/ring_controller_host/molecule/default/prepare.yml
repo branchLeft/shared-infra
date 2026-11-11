@@ -3,18 +3,11 @@
 # are made by roles that run earlier on a real host (host_inputs for /etc/branchleft, and the
 # control plane and the Nextcloud stack for the others), so the test stands in for them here.
 # The canaries stand for the files of other roles and of the owner's data, which the role must
-# leave alone. ssh-keygen is what the role asserts and never installs, so it is installed here.
+# leave alone.
 - name: Prepare the instance
   hosts: all
   gather_facts: false
   tasks:
-    - name: Install the OpenSSH client, which supplies ssh-keygen
-      ansible.builtin.apt:
-        name: openssh-client
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
-
     - name: Make the parent directories, as the roles that run before this one do
       ansible.builtin.file:
         path: '{{ item }}'

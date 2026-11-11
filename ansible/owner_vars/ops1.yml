@@ -35,16 +35,13 @@ pull_trigger_steps:
     word: PROVISION-OPS1
 control_plane_db_apps_image: 'ghcr.io/branchleft/portal-apps@sha256:06f282c3701cc4ac192cf367c8e290a2c31bb8b77fc70c74555072f7d5631d28'
 #
-# The five ring_controller_host_ keys are the public inputs of the ring controller's host role.
+# The three ring_controller_host_ keys are the public inputs of the ring controller's host role.
 # All are empty text until the owner sets them, and an empty bundle digest keeps the controller's
-# timer disabled and stopped, so the role installs its units and makes its two keys and starts
-# nothing (the role's README, "Inert until a digest is set"). The role holds the shapes and
+# timer disabled and stopped, so the role installs its units and makes its record-signing key and
+# starts nothing (the role's README, "Inert until a digest is set"). The role holds the shapes and
 # refuses a malformed value or a digest set with another input empty, naming the input and never
-# its value. The bundle digest and URL are set only when a bundle exists; the ledger URL, the
-# push remote and the remote's host-key line are set once the ledger's home is chosen. No repository
-# name is built into the role.
+# its value. The bundle digest and URL are set only when a bundle exists; the ledger URL is set
+# once the ledger's home is chosen. No repository name is built into the role.
 ring_controller_host_bundle_sha256: ''
 ring_controller_host_bundle_url: ''
 ring_controller_host_ledger_url: ''
-ring_controller_host_ledger_push_remote: ''
-ring_controller_host_push_known_hosts: ''

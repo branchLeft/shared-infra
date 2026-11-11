@@ -4,8 +4,6 @@
   gather_facts: false
   vars:
     ring_controller_host_ledger_url: '{{ scenario_ledger_url }}'
-    ring_controller_host_ledger_push_remote: '{{ scenario_push_remote }}'
-    ring_controller_host_push_known_hosts: '{{ scenario_known_hosts_line }}'
   tasks:
     - name: Look at the good bundle
       ansible.builtin.stat:
@@ -63,21 +61,16 @@
         quiet: true
         fail_msg: A bundle with the wrong digest left files behind.
 
-    # --- The environment file and the known-hosts file carry exactly the inputs.
-    - name: Read the environment file and the known-hosts file
+    # --- The environment file carries the input.
+    - name: Read the environment file
       ansible.builtin.slurp:
-        src: '{{ item }}'
-      loop:
-        - '{{ scenario_env_file }}'
-        - '{{ scenario_known_hosts }}'
+        src: '{{ scenario_env_file }}'
       register: ring_controller_host_v_reads
 
-    - name: Require the files to hold the inputs and nothing else
+    - name: Require the file to hold the input
       ansible.builtin.assert:
         that:
-          - "('RING_CONTROLLER_LEDGER_URL=' ~ scenario_ledger_url) in (ring_controller_host_v_reads.results[0].content | b64decode).splitlines()"
-          - "('RING_CONTROLLER_LEDGER_PUSH_REMOTE=' ~ scenario_push_remote) in (ring_controller_host_v_reads.results[0].content | b64decode).splitlines()"
-          - ring_controller_host_v_reads.results[1].content | b64decode == scenario_known_hosts_line ~ '\n'
+          - "('RING_CONTROLLER_LEDGER_URL=' ~ scenario_ledger_url) in (ring_controller_host_v_reads.content | b64decode).splitlines()"
         quiet: true
 
     # --- With a digest the timer is on. Without one it is held off again, and a digest again

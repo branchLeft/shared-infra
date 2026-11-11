@@ -45,8 +45,6 @@
             ring_controller_host_bundle_sha256: "{{ ring_controller_host_refusals_case.digest | default('') }}"
             ring_controller_host_bundle_url: "{{ ring_controller_host_refusals_case.url | default('') }}"
             ring_controller_host_ledger_url: "{{ ring_controller_host_refusals_case.ledger | default('') }}"
-            ring_controller_host_ledger_push_remote: "{{ ring_controller_host_refusals_case.remote | default('') }}"
-            ring_controller_host_push_known_hosts: "{{ ring_controller_host_refusals_case.hosts | default('') }}"
 
         - name: Note that the role accepted
           ansible.builtin.set_fact:

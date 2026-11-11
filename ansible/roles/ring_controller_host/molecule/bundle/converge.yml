@@ -2,12 +2,10 @@
 - name: Converge
   hosts: all
   gather_facts: false
-  # The four inputs besides the digest and the URL are the same in every apply here. Play
-  # variables outrank a role's defaults, which is where the role keeps its five inputs.
+  # The ledger URL is the same in every apply here. Play variables outrank a role's defaults,
+  # which is where the role keeps its three inputs.
   vars:
     ring_controller_host_ledger_url: '{{ scenario_ledger_url }}'
-    ring_controller_host_ledger_push_remote: '{{ scenario_push_remote }}'
-    ring_controller_host_push_known_hosts: '{{ scenario_known_hosts_line }}'
   tasks:
     - name: Look at the two bundles built in prepare
       ansible.builtin.stat:
