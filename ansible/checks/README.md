@@ -376,9 +376,12 @@ The rules for the list:
   offline on recorded answers (`advisory_passes_fixture.json`).
 - The approver records every red advisory shard of the pull request, from the `report` job's
   table, on the pull request.
-- A red daily run opens one issue (`daily_red_issue.py`), titled with the date, with the run
-  link and the failed shard ids and the one label `ci-red-daily`, or comments on the one still
-  open. Nothing there mentions, assigns or prompts anyone or anything.
+- A red daily run is red on its own status and writes its date, the run link and the failed
+  shard ids to its step summary (`daily_red_issue.py --summary`, job `daily-summary`, read
+  permissions only). No workflow in this repository grants `issues: write` except the drift
+  check caller, which `test_ci_gate_order.py` allowlists until its reusable workflow moves.
+  The program's issue-opening code is not run by any workflow now. Nothing there mentions,
+  assigns or prompts anyone or anything.
 
 Two things to know. A new role or scenario starts advisory: it is on no list until a pull
 request puts it there. And the delivery workflow (`ansible-delivery.yml`) runs the harness
