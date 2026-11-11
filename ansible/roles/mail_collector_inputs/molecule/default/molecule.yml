@@ -44,7 +44,7 @@ provisioner:
         # Where the role looks. The role's own constants, spelled out here so that a change of a
         # constant fails the scenario instead of following it.
         scenario_directory: /etc/branchleft/mail-collector
-        scenario_secrets: /etc/branchleft/mail-collector/secrets.env
+        scenario_credentials: /etc/branchleft/mail-collector/credentials.env
         scenario_descriptors: /etc/branchleft/mail-collector/descriptors
         scenario_descriptor: /etc/branchleft/mail-collector/descriptors/example.json
         # Three values the log scan looks for. None is a credential.

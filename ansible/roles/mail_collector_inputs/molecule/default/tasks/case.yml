@@ -18,9 +18,13 @@
 
     - name: Apply the role and note whether it accepted
       block:
-        - name: Apply the role
+        # The hosts a case lists stand for the owner's list, which the role reads and counts. A case
+        # that lists none passes an empty list, so one case's list never reaches the next.
+        - name: Apply the role, with the hosts the case lists
           ansible.builtin.include_role:
             name: branchleft.mail_collector_inputs
+          vars:
+            mail_collector_hosts: '{{ scenario_case.hosts | default([]) }}'
 
         - name: Note that the role accepted
           ansible.builtin.set_fact:
@@ -46,7 +50,7 @@
   always:
     - name: Remove the file a link case moved aside
       ansible.builtin.file:
-        path: '{{ scenario_secrets }}.real'
+        path: '{{ scenario_credentials }}.real'
         state: absent
 
     - name: Put the directory back to what the owner made
@@ -64,7 +68,7 @@
           COLLECTOR_HEARTBEAT_URL={{ scenario_value_url }}
           COLLECTOR_SMTP_USER=example-submission-user
           COLLECTOR_SMTP_PASS={{ scenario_value_pass }}
-        dest: '{{ scenario_secrets }}'
+        dest: '{{ scenario_credentials }}'
         owner: root
         group: root
         mode: '0600'

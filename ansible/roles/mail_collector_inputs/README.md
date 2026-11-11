@@ -22,10 +22,14 @@ The role runs one read-only module, `mail_collector_inputs_check`, and acts on w
    (`COLLECTOR_` and capitals, digits and underscores); no key twice; the drain token, the
    dead-man's-switch URL, the submission user and the submission password each present and of a
    safe shape; the URL a Healthchecks ping address; the drain token at least 32 characters.
-3. Once the file exists and holds the URL, it requires at least one plain `*.json` file in the
-   descriptor directory. A collector given a real URL and an empty drain list pings nothing, so the
+3. Once the file exists and holds the URL, it requires a host to be named: at least one plain
+   `*.json` file in the descriptor directory, or at least one host in the owner's list,
+   `mail_collector_hosts`. A collector given a real URL and an empty drain list pings nothing, so the
    check turns Down and pages, by the standing ruling "zero hosts pages"; the role refuses that pair in
-   the plan instead.
+   the plan instead. The list counts because the collector's role writes the descriptors after this
+   check runs (see "Where it runs"), so on first setup a listed host has no file yet. Without that
+   allowance the owner could not place the file before the apply that writes the descriptor, and the
+   plan after it would refuse.
 
 It does **not**: install, start or stop the collector (the collector's own role does), write the
 input file, write a descriptor, read a value into a variable, a fact, a log or a return value,
@@ -39,14 +43,20 @@ The role takes no argument ([`meta/argument_specs.yml`](meta/argument_specs.yml)
 constants in [`vars/main.yml`](vars/main.yml): role variables outrank every play and inventory value,
 and the pull route has no `-e`, so a caller cannot point the check at another file.
 
-| Constant                               | Value                                        |
-| -------------------------------------- | -------------------------------------------- |
-| `mail_collector_inputs_secrets_path`   | `/etc/branchleft/mail-collector/secrets.env` |
-| `mail_collector_inputs_descriptor_dir` | `/etc/branchleft/mail-collector/descriptors` |
+| Constant                                 | Value                                            |
+| ---------------------------------------- | ------------------------------------------------ |
+| `mail_collector_inputs_credentials_path` | `/etc/branchleft/mail-collector/credentials.env` |
+| `mail_collector_inputs_descriptor_dir`   | `/etc/branchleft/mail-collector/descriptors`     |
 
-The descriptor path is the collector's `COLLECTOR_DESCRIPTOR_DIR`. Both paths must equal what the
-collector's own role uses; one place has to change when that role fixes its layout (see "Named
-limits").
+The descriptor path is the collector's `COLLECTOR_DESCRIPTOR_DIR`, and the credentials file is the
+one the collector's unit passes to the container with `--env-file`. Both paths must equal what the
+collector's own role uses: `ansible/checks/test_mail_collector_paths_agree.py` holds the two roles to
+one literal each, so a rename in either role alone goes red.
+
+The role also reads one variable it never sets, `mail_collector_hosts`, the owner's list of hosts to
+drain (the collector's role takes it from `owner_vars/ops1.yml`), and passes only its length, a
+count, to the module. With the collector's role absent the variable is undefined and the count is
+zero.
 
 ## What the file looks like
 
@@ -83,7 +93,7 @@ line or a value.
 | `heartbeat-url-shape` | The URL is not a plain Healthchecks ping address                                                        |
 | `drain-token-short`   | The drain token is under 32 characters                                                                  |
 | `descriptor-dir`      | The descriptor directory is missing or cannot be listed                                                 |
-| `no-host-named`       | The URL is set and no plain `*.json` file is in the descriptor directory                                |
+| `no-host-named`       | The URL is set, no plain `*.json` file is in the descriptor directory and no host is listed             |
 
 ## What pages, and where
 
@@ -129,21 +139,43 @@ The module has unit tests. From `ansible/roles/mail_collector_inputs`:
 PYTHONPATH=files:library python -m unittest discover -b -s tests/unit -p 'test_*.py'
 ```
 
-Four controls are proven by sabotage; break the named line, see the named test go red, restore:
+Six controls are proven by sabotage; break the named line, see the named test go red, restore:
 
-| Break                                                         | Test that goes red                             |
-| ------------------------------------------------------------- | ---------------------------------------------- |
-| In `check_inputs`, drop `and count == 0` so no host is needed | `test_heartbeat_with_no_descriptor_is_refused` |
-| In `placed_by_owner`, drop the mode comparison                | `test_group_readable_file_is_refused`          |
-| In `parse`, drop the `COLLECTOR_KEY` match                    | `test_unknown_key_is_refused`                  |
-| In `parse`, put the line's text into the `line-shape` code    | `test_no_result_carries_a_value`               |
+| Break                                                                             | Test that goes red                                                     |
+| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| In `check_inputs`, drop `and count == 0` so no host is needed                     | `test_heartbeat_with_no_descriptor_is_refused`                         |
+| In `check_inputs`, drop `and declared_hosts <= 0` so only a file names a host     | `test_a_host_the_owner_listed_counts_before_its_descriptor_is_written` |
+| In `check_inputs`, change `declared_hosts <= 0` to `declared_hosts < 0` (too lax) | `test_no_host_listed_and_no_descriptor_is_still_refused`               |
+| In `placed_by_owner`, drop the mode comparison                                    | `test_group_readable_file_is_refused`                                  |
+| In `parse`, drop the `COLLECTOR_KEY` match                                        | `test_unknown_key_is_refused`                                          |
+| In `parse`, put the line's text into the `line-shape` code                        | `test_no_result_carries_a_value`                                       |
 
 ## How it is delivered
 
 `ansible/playbooks/ops1.yml` applies it just before the ring controller's role (which stays last), and `ansible/checks/host_roles.yml` lists it for
-`ops1`. A merge of this role changes nothing on a host: delivery is a gated plan, the `ansible-hosts`
+`ops1`. When the collector's role is applied too, this role goes immediately before it (see "Where it
+runs"). A merge of this role changes nothing on a host: delivery is a gated plan, the `ansible-hosts`
 approval, an apply, then a second run that reports zero changes. Until the owner places the file, the
 role's only output is the line saying the collector's inputs are not placed yet.
+
+## Where it runs
+
+Before the collector's role, immediately. The check is read-only, and a refusal stops the play for
+the whole host, so putting it first means a wrong file is refused before the collector's role writes
+a descriptor or asks for the unit to start. That is why the listed hosts count (above): the
+descriptors are written by the role that runs after. `test_mail_collector_paths_agree.py` holds the
+order once both roles are applied on `ops1`.
+
+First setup, with no hand step: the owner lists a host in `owner_vars/ops1.yml` and the delivery
+applies it, which writes the descriptor and leaves the unit off for want of the credentials; the
+owner then places the credentials file; the next delivery's plan finds the file, the descriptor and
+the listed host and passes, and the apply starts the unit. Placing the credentials first and listing
+the host in the same change also passes, because the list counts.
+
+Removing the last listed host while the credentials file holds a heartbeat address is the one
+refusal left, by design: with no host listed and no descriptor the check refuses. A running collector
+whose last descriptor has been removed carries on with an empty list and pages. To retire the last
+host, move the credentials file aside first, and remove the host after.
 
 ## How to change it safely
 
@@ -156,8 +188,8 @@ role's only output is the line saying the collector's inputs are not placed yet.
 
 ## Named limits
 
-- The paths are this role's choice. The collector's own role is built separately and may place its
-  input file and descriptor directory elsewhere; one constant each changes here when it does.
+- The two paths are held equal to the collector's role by `test_mail_collector_paths_agree.py`; one
+  constant each changes here and there together.
 - The role cannot tell a real credential from a made-up one of the right shape. Only mx1 (for the
   submission pair), the spool (for the drain token) and Healthchecks (for the URL) can.
 - Descriptors are counted, not validated: a `.json` file that the collector's own schema check

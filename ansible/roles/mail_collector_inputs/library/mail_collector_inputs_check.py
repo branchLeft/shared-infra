@@ -24,20 +24,22 @@ DOCUMENTATION = r"""
 module: mail_collector_inputs_check
 short_description: Check the mail collector's input file and that its drain list is not empty
 description:
-  - Reads the file at I(secrets_path) and returns fixed codes for what is wrong with it. A line,
+  - Reads the file at I(credentials_path) and returns fixed codes for what is wrong with it. A line,
     a value and a key outside the collector's own names are never returned.
   - Refuses a file that is not a regular file owned by root with mode 0600, in a directory that
     root owns and nobody else can write.
   - Requires the drain token, the dead-man's-switch URL and the submission user and password.
     Requires the URL to be a Healthchecks ping address and the token to be long enough.
-  - Requires at least one descriptor file in I(descriptor_dir) once the file is present, because
-    a collector with an empty drain list withholds every heartbeat ping and so pages.
+  - Requires a host to be named once the file is present, because a collector with an empty drain
+    list withholds every heartbeat ping and so pages. A host is named when I(descriptor_dir) holds
+    a descriptor file or when I(declared_hosts) is above zero, because the role that writes
+    descriptors runs after this check and a host the owner has listed has no file until it does.
   - An absent file is reported as I(present=false) with no problem.
 version_added: "1.0.0"
 author:
   - branchLeft
 options:
-  secrets_path:
+  credentials_path:
     description: Absolute path of the owner-placed input file.
     type: path
     required: true
@@ -45,6 +47,10 @@ options:
     description: Absolute path of the directory of descriptor files the collector drains from.
     type: path
     required: true
+  declared_hosts:
+    description: How many hosts the owner has listed for the collector to drain, a count only.
+    type: int
+    default: 0
 attributes:
   check_mode:
     support: full
@@ -57,8 +63,9 @@ attributes:
 EXAMPLES = r"""
 - name: Check the collector's inputs
   mail_collector_inputs_check:
-    secrets_path: /etc/branchleft/mail-collector/secrets.env
+    credentials_path: /etc/branchleft/mail-collector/credentials.env
     descriptor_dir: /etc/branchleft/mail-collector/descriptors
+    declared_hosts: 1
   register: mail_collector_inputs_result
   no_log: true
   diff: false
@@ -254,21 +261,22 @@ def count_descriptors(directory: str) -> int | None:
 
 
 def check_inputs(
-    secrets_path: str,
+    credentials_path: str,
     descriptor_dir: str,
     *,
+    declared_hosts: int = 0,
     owner_uid: int = ROOT,
     owner_gid: int = ROOT,
 ) -> Result:
     """Check the input file and the descriptor directory, and return codes only."""
     result = Result()
-    if not os.path.lexists(secrets_path):
+    if not os.path.lexists(credentials_path):
         return result
     result.present = True
-    if directory_problem(os.path.dirname(secrets_path), owner_uid, owner_gid):
+    if directory_problem(os.path.dirname(credentials_path), owner_uid, owner_gid):
         result.problems.append(E_DIRECTORY)
     try:
-        lines = read_lines(secrets_path, owner_uid, owner_gid)
+        lines = read_lines(credentials_path, owner_uid, owner_gid)
     except OSError:
         result.problems.append(E_READ)
         return result
@@ -282,7 +290,7 @@ def check_inputs(
         result.problems.append(E_DESCRIPTORS)
     else:
         result.descriptor_count = count
-        if HEARTBEAT_URL in found and count == 0:
+        if HEARTBEAT_URL in found and count == 0 and declared_hosts <= 0:
             result.problems.append(E_NO_HOST)
     return result
 
@@ -291,17 +299,20 @@ def main() -> None:
     """Run as an Ansible module."""
     module = AnsibleModule(
         argument_spec={
-            "secrets_path": {"type": "path", "required": True},
+            "credentials_path": {"type": "path", "required": True},
             "descriptor_dir": {"type": "path", "required": True},
+            "declared_hosts": {"type": "int", "default": 0},
         },
         supports_check_mode=True,
     )
-    secrets_path = str(module.params["secrets_path"])
+    credentials_path = str(module.params["credentials_path"])
     descriptor_dir = str(module.params["descriptor_dir"])
-    if not os.path.isabs(secrets_path) or not os.path.isabs(descriptor_dir):
+    if not os.path.isabs(credentials_path) or not os.path.isabs(descriptor_dir):
         module.fail_json(msg="mail_collector_inputs_check: both paths must be absolute")
     try:
-        result = check_inputs(secrets_path, descriptor_dir)
+        result = check_inputs(
+            credentials_path, descriptor_dir, declared_hosts=int(module.params["declared_hosts"])
+        )
     except OSError as error:
         # The errno name only: a fixed code finds the cause without naming a line.
         name = errno.errorcode.get(error.errno or 0, "UNKNOWN")

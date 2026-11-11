@@ -7,8 +7,13 @@
 
 - name: Check the collector's input file and its descriptor directory
   mail_collector_inputs_check:
-    secrets_path: '{{ mail_collector_inputs_secrets_path }}'
+    credentials_path: '{{ mail_collector_inputs_credentials_path }}'
     descriptor_dir: '{{ mail_collector_inputs_descriptor_dir }}'
+    # The number of hosts the owner has listed for the collector, read here and never set. The
+    # collector's role writes a descriptor for each after this check, so a listed host counts
+    # as named before its file exists. With the collector's role absent the variable is undefined
+    # and the count is zero.
+    declared_hosts: '{{ mail_collector_hosts | default([]) | length }}'
   register: mail_collector_inputs_result
   failed_when: false
   no_log: true

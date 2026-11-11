@@ -8,7 +8,7 @@
     scenario_cases:
       - name: group-readable file is refused
         commands:
-          - [chmod, '0640', '{{ scenario_secrets }}']
+          - [chmod, '0640', '{{ scenario_credentials }}']
         expect: file-mode
       - name: world-writable directory is refused
         commands:
@@ -18,41 +18,49 @@
         commands:
           - [rm, -f, '{{ scenario_descriptor }}']
         expect: no-host-named
+      # The collector's role writes descriptors after this check, so on first setup the owner's list
+      # is the only thing that names a host. One listed host is enough; the others stay refused.
+      - name: a listed host counts before its descriptor is written (control)
+        commands:
+          - [rm, -f, '{{ scenario_descriptor }}']
+        hosts:
+          - slug: example-host
+        expect: accepted
       - name: a link in place of the file is refused
         commands:
-          - [mv, '{{ scenario_secrets }}', '{{ scenario_secrets }}.real']
-          - [ln, -s, '{{ scenario_secrets }}.real', '{{ scenario_secrets }}']
+          - [mv, '{{ scenario_credentials }}', '{{ scenario_credentials }}.real']
+          - [ln, -s, '{{ scenario_credentials }}.real', '{{ scenario_credentials }}']
         expect: file-mode
       - name: a short drain token is refused
         commands:
           - - sed
             - -i
             - 's/^COLLECTOR_DRAIN_TOKEN=.*/COLLECTOR_DRAIN_TOKEN=short/'
-            - '{{ scenario_secrets }}'
+            - '{{ scenario_credentials }}'
         expect: drain-token-short
       - name: a heartbeat URL on another host is refused
         commands:
           - - sed
             - -i
             - 's#^COLLECTOR_HEARTBEAT_URL=.*#COLLECTOR_HEARTBEAT_URL=https://example.com/x#'
-            - '{{ scenario_secrets }}'
+            - '{{ scenario_credentials }}'
         expect: heartbeat-url-shape
       - name: a missing submission user is refused
         commands:
-          - [sed, -i, '/^COLLECTOR_SMTP_USER=/d', '{{ scenario_secrets }}']
+          - [sed, -i, '/^COLLECTOR_SMTP_USER=/d', '{{ scenario_credentials }}']
         expect: 'missing-key:COLLECTOR_SMTP_USER'
       - name: a key outside the collector's names is refused
         commands:
-          - [sh, -c, 'echo NODE_OPTIONS=x >> {{ scenario_secrets }}']
+          - [sh, -c, 'echo NODE_OPTIONS=x >> {{ scenario_credentials }}']
         expect: unknown-key
       - name: an absent file is not a fault (control)
         commands:
-          - [rm, -f, '{{ scenario_secrets }}']
+          - [rm, -f, '{{ scenario_credentials }}']
         expect: accepted
   tasks:
     - name: Look at the input file
       ansible.builtin.stat:
-        path: '{{ scenario_secrets }}'
+        path: '{{ scenario_credentials }}'
         get_checksum: false
         get_mime: false
         get_attributes: false

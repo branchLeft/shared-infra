@@ -49,22 +49,26 @@ class Fixture:
         self.directory.chmod(0o755)
         self.descriptors = self.directory / "descriptors"
         self.descriptors.mkdir(mode=0o755)
-        self.secrets = self.directory / "secrets.env"
+        self.credentials = self.directory / "credentials.env"
 
     def write(self, values: dict[str, str], *, mode: int = 0o600, extra: str = "") -> None:
         """Write the input file with these keys and this mode."""
         text = "".join(f"{key}={value}\n" for key, value in values.items()) + extra
-        self.secrets.write_text(text)
-        self.secrets.chmod(mode)
+        self.credentials.write_text(text)
+        self.credentials.chmod(mode)
 
     def name_a_host(self) -> None:
         """Put one descriptor file in the descriptor directory."""
         (self.descriptors / "demo.json").write_text("{}")
 
-    def run(self) -> check.Result:
-        """Run the check as the test's own user."""
+    def run(self, declared_hosts: int = 0) -> check.Result:
+        """Run the check as the test's own user, with this many hosts listed by the owner."""
         return check.check_inputs(
-            str(self.secrets), str(self.descriptors), owner_uid=UID, owner_gid=GID
+            str(self.credentials),
+            str(self.descriptors),
+            declared_hosts=declared_hosts,
+            owner_uid=UID,
+            owner_gid=GID,
         )
 
 
@@ -149,6 +153,31 @@ class HostNamedTest(unittest.TestCase):
             result = f.run()
         self.assertIn(check.E_NO_HOST, result.problems)
 
+    def test_a_host_the_owner_listed_counts_before_its_descriptor_is_written(self) -> None:
+        # The role that writes descriptors runs after this check, so on first setup the owner's
+        # list is the only thing that names a host. Without this the credentials could not be
+        # placed before the apply that writes the descriptor, nor the plan after them pass.
+        with fixture() as f:
+            f.write(GOOD)
+            result = f.run(declared_hosts=1)
+        self.assertEqual([], result.problems)
+        self.assertEqual(0, result.descriptor_count)
+
+    def test_no_host_listed_and_no_descriptor_is_still_refused(self) -> None:
+        # The control for the one above: the allowance is the listed count, nothing looser.
+        for declared in (0, -1):
+            with self.subTest(declared=declared), fixture() as f:
+                f.write(GOOD)
+                result = f.run(declared_hosts=declared)
+                self.assertEqual({check.E_NO_HOST}, set(result.problems))
+
+    def test_a_listed_host_does_not_excuse_a_descriptor_directory_that_cannot_be_read(self) -> None:
+        with fixture() as f:
+            f.write(GOOD)
+            f.descriptors.rmdir()
+            result = f.run(declared_hosts=2)
+        self.assertIn(check.E_DESCRIPTORS, result.problems)
+
     def test_missing_descriptor_directory_is_named(self) -> None:
         with fixture() as f:
             f.write(GOOD)
@@ -186,7 +215,7 @@ class FileTest(unittest.TestCase):
             real = f.root / "real.env"
             real.write_text("".join(f"{k}={v}\n" for k, v in GOOD.items()))
             real.chmod(0o600)
-            f.secrets.symlink_to(real)
+            f.credentials.symlink_to(real)
             f.name_a_host()
             result = f.run()
         self.assertEqual([check.E_FILE], result.problems)
@@ -194,20 +223,20 @@ class FileTest(unittest.TestCase):
     def test_second_hard_link_is_refused(self) -> None:
         with fixture() as f:
             f.write(GOOD)
-            os.link(f.secrets, f.root / "second.env")
+            os.link(f.credentials, f.root / "second.env")
             f.name_a_host()
             result = f.run()
         self.assertEqual([check.E_FILE], result.problems)
 
     def test_directory_in_place_of_the_file_is_refused(self) -> None:
         with fixture() as f:
-            f.secrets.mkdir()
+            f.credentials.mkdir()
             result = f.run()
         self.assertEqual([check.E_FILE], result.problems)
 
     def test_fifo_in_place_of_the_file_is_refused_without_blocking(self) -> None:
         with fixture() as f:
-            os.mkfifo(f.secrets, 0o600)
+            os.mkfifo(f.credentials, 0o600)
             result = f.run()
         self.assertEqual([check.E_FILE], result.problems)
 
@@ -216,7 +245,7 @@ class FileTest(unittest.TestCase):
             f.write(GOOD)
             f.name_a_host()
             result = check.check_inputs(
-                str(f.secrets), str(f.descriptors), owner_uid=UID + 1, owner_gid=GID
+                str(f.credentials), str(f.descriptors), owner_uid=UID + 1, owner_gid=GID
             )
         self.assertIn(check.E_FILE, result.problems)
 

@@ -4,7 +4,7 @@
 #
 # The file the owner places, root-only, holding the collector's drain token, its dead-man's-switch
 # URL and its submission user and password. The role never writes it and never returns a line.
-mail_collector_inputs_secrets_path: /etc/branchleft/mail-collector/secrets.env
+mail_collector_inputs_credentials_path: /etc/branchleft/mail-collector/credentials.env
 
 # The directory the collector reads descriptors from (COLLECTOR_DESCRIPTOR_DIR). One plain
 # .json file in it names a host. With none, a collector given a real heartbeat URL withholds

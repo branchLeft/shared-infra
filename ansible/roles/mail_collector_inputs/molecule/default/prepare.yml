@@ -34,7 +34,7 @@
           COLLECTOR_HEARTBEAT_URL={{ scenario_value_url }}
           COLLECTOR_SMTP_USER=example-submission-user
           COLLECTOR_SMTP_PASS={{ scenario_value_pass }}
-        dest: '{{ scenario_secrets }}'
+        dest: '{{ scenario_credentials }}'
         owner: root
         group: root
         mode: '0600'
