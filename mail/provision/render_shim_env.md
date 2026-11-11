@@ -21,7 +21,9 @@ The script reads the single digest out of the compose file compose itself reads
 (`SHIM_COMPOSE_PATH`) and renders that digest's contract. Today the one listed
 digest is the `smtp-delivery` contract, which renders `SMTP_PASS` from
 `blog-shim-bulk-submission`. The `drain` contract renders `SHIM_DRAIN_TOKEN`
-from `shim-drain-token`, and no digest selects it yet.
+from `shim-drain-token`, plus the literal `SHIM_DRAIN_OUTCOMES=true`, which the
+shim reads as an exact `true` to register `POST /drain/outcomes`. No digest
+selects the `drain` contract yet.
 
 A digest the table does not list is refused, with nothing written. The env of an
 image nobody described is a guess, and a wrong guess stops the container at
