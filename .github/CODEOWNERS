@@ -196,7 +196,7 @@
 # The image-scan exemption file (SEC-5): every entry is a reviewed exception to the image scan, so the owner reviews each one.
 /.image-scan-exemptions.json             @branchLeft/branchleft-admin
 
-# The shared set from branchLeft/standards templates/codeowners at the v0.8.6 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above with the gate files.
+# The shared set from branchLeft/standards templates/codeowners at the v0.8.8 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above with the gate files.
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
 /.docs-lint*             @branchLeft/branchleft-admin
