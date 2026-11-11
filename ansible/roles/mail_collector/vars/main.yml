@@ -14,10 +14,14 @@ mail_collector_parents:
 
 # The role's own paths. The two environment files hold public values and are root's. The
 # descriptor directory is what the collector drains from: one JSON file per host it may drain,
-# and nothing else names a host. The role makes it and leaves it empty; whatever fills it is
-# another change's. The state directory holds the record of what was already submitted.
+# and nothing else names a host. The role writes one for each host in mail_collector_hosts and
+# removes only a descriptor it wrote itself. The record directory is how it knows: one empty file
+# for each descriptor it has written, named for it. It sits beside the descriptor directory, not
+# in it, because the collector reads every .json name it finds in that one. The state directory
+# holds the record of what was already submitted.
 mail_collector_config_dir: /etc/branchleft/mail-collector
 mail_collector_descriptor_dir: /etc/branchleft/mail-collector/descriptors
+mail_collector_descriptor_record_dir: /etc/branchleft/mail-collector/descriptors.owned
 mail_collector_unit_env_file: /etc/branchleft/mail-collector/unit.env
 mail_collector_env_file: /etc/branchleft/mail-collector/collector.env
 mail_collector_state_dir: /var/lib/branchleft/mail-collector
@@ -57,3 +61,26 @@ mail_collector_demo_mail_domain_pattern: '^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-
 mail_collector_shim_schemes:
   - http
   - https
+
+# A descriptor is one JSON file per host, named for its slug, that holds exactly these four keys
+# and nothing else (the collector reads only these). The three the owner supplies are public:
+# a host's name, whether it is a demo, and the private address the collector dials. expiresAt is
+# always null, because a host's descriptor ends by the host leaving the list, not by a date.
+mail_collector_host_keys:
+  - app_host_ip
+  - kind
+  - slug
+mail_collector_host_kinds:
+  - demo
+  - tenant
+mail_collector_descriptor_suffix: .json
+# A file name the role could have written: a slug and the suffix. The record is read for names
+# only, and only a name of this shape counts, so a damaged record cannot point a removal at a
+# dot-file or a path.
+mail_collector_descriptor_name_pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?[.]json\Z'
+# Lowercase, digits and hyphens, no leading or trailing hyphen, at most 63 characters.
+mail_collector_slug_pattern: '^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\Z'
+# A private IPv4 address in 10/8, 172.16/12 or 192.168/16, written in plain form (no leading zeros).
+mail_collector_octet: '(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])'
+mail_collector_private_blocks: '(10\.{{ mail_collector_octet }}|172\.(1[6-9]|2[0-9]|3[01])|192\.168)'
+mail_collector_private_ipv4_pattern: '^{{ mail_collector_private_blocks }}\.{{ mail_collector_octet }}\.{{ mail_collector_octet }}\Z'

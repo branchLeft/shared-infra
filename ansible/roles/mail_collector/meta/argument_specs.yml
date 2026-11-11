@@ -7,7 +7,8 @@ argument_specs:
       unit that runs the digest-pinned image with only the descriptor directory (read-only) and its
       state directory mounted and no published port. Holds the unit disabled and stopped until the
       image is a real digest and a sending target is set; even then the unit starts only when the
-      descriptor directory holds a file and the owner has placed the credentials file. Every input
+      descriptor directory holds a file and the owner has placed the credentials file. The
+      descriptor directory holds one file for each host in mail_collector_hosts and no other .json file. Every input
       is public data and none is a secret.
     author: branchLeft
     options:
@@ -31,6 +32,32 @@ argument_specs:
           The shared demo mail domain, a bare domain with no scheme, no at sign and no space, or
           empty. It is the one domain a demo host's header From may carry. Empty holds every demo
           host's mail, unsent and unacked, which is the safe state.
+      mail_collector_hosts:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The hosts whose mail spool the collector drains. The role writes one descriptor file for
+          each entry into the descriptor directory and removes every other .json file there, so the
+          list is the drain list. Each entry holds exactly the three public keys below and nothing
+          else; a descriptor never carries a secret. A demo host needs the demo mail domain to be
+          set, or the run stops.
+        options:
+          slug:
+            type: str
+            required: true
+            description: The host's name, lowercase letters, digits and hyphens, unique in the list. It names the descriptor file.
+          kind:
+            type: str
+            required: true
+            choices:
+              - demo
+              - tenant
+            description: Whether the host serves demo sites or a paying tenant's.
+          app_host_ip:
+            type: str
+            required: true
+            description: The private IPv4 address the collector dials to reach the host's drain surface.
       mail_collector_smtp_port:
         type: int
         default: 587
