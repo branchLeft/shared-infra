@@ -375,6 +375,20 @@ jobs:
         if: steps.skip.outputs.run != 'false'
         run: pnpm run test
 
+      # The lock-probe's Python (ovh/copy2/probe), against an in-memory S3 and a
+      # fake Pulumi CLI. The tests import no third-party package, so nothing is
+      # installed; they are the same ones the probe workflow runs before it
+      # creates anything.
+      - name: Set up Python (probe tests)
+        if: steps.skip.outputs.run != 'false'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Probe unit tests
+        if: steps.skip.outputs.run != 'false'
+        run: python3 -m unittest discover -s probe -p 'test_*.py' -v
+
   hetzner-provision-checks:
     name: Lint + test (hetzner/provision)
     runs-on: ubuntu-latest

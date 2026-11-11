@@ -2,7 +2,7 @@
 
 The Pulumi project `branchleft-ovh-copy2`: the second backup copy at OVHcloud London. It declares Object Storage users, their S3 credentials, their S3 policies and the buckets, all from stack config, behind two guards.
 
-Only the probe stack exists. The probe makes three throwaway buckets, exercises object lock against them and destroys everything in the same job. There is no production stack yet, no workflow and no state backend: the probe's workflow supplies an ephemeral `file://` backend of its own.
+Only the probe stack exists. The probe makes three throwaway buckets, exercises object lock against them and destroys everything in the same job. It is run by the dispatch-only workflow `.github/workflows/ovh-copy2-probe.yml`, driven by the scripts in `probe/` (see `probe/README.md`). There is no production stack yet and no persistent state backend: the probe's workflow supplies an ephemeral `file://` backend of its own.
 
 ## Files
 
@@ -12,7 +12,8 @@ Only the probe stack exists. The probe makes three throwaway buckets, exercises 
 | `stack.ts`          | `buildStack`: runs both guards, then registers users, credentials, policies, buckets.  |
 | `projectGuard.ts`   | Refuses any OVHcloud project other than the one the stack config allows.               |
 | `configGuard.ts`    | Refuses bucket configuration that could lock too long or leave a real bucket exposed.  |
-| `Pulumi.probe.yaml` | The probe stack's config. `allowedProjectId` is the owner's OVHcloud project id.       |
+| `Pulumi.probe.yaml` | The probe stack's config. `allowedProjectId` is the probe project id.                  |
+| `probe/`            | The probe's Python: the lock checks, the Pulumi driver, the summary table, and tests.  |
 | `*.test.ts`         | Mock-runtime tests for each guard, for the wiring, and for the committed probe config. |
 
 ## The project guard
@@ -57,4 +58,4 @@ pnpm run typecheck
 pnpm run test
 ```
 
-CI runs the same in the `ovh-copy2-checks` job. It uses mocks only and contacts no OVHcloud API.
+CI runs the same in the `ovh-copy2-checks` job, plus the probe's Python tests (`python3 -m unittest discover -s probe -p 'test_*.py'`). It uses mocks only and contacts no OVHcloud API.

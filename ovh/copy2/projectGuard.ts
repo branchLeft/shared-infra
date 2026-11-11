@@ -18,7 +18,7 @@
  * an issue, and the message needs only to say which side is wrong.
  */
 
-/** What the probe stack file carries until the owner supplies the project id. */
+/** The marker the stack file carries when no project id has been supplied. */
 export const UNSET_MARKER = 'UNSET';
 
 /** A Public Cloud project id: 32 lower-case hex characters. */
@@ -33,7 +33,7 @@ export const PROJECT_ENV = 'OVH_CLOUD_PROJECT_SERVICE';
 export function assertProject(allowed: string, addressed: string | undefined): string {
   if (allowed === UNSET_MARKER) {
     throw new Error(
-      `allowedProjectId is not set: the stack config still carries ${UNSET_MARKER}. ` +
+      `allowedProjectId is not set: the stack config carries ${UNSET_MARKER}. ` +
         'The project id is supplied by the owner and committed in the stack file; nothing is created until it is.'
     );
   }

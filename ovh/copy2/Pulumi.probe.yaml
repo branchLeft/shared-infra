@@ -1,10 +1,11 @@
 # The probe stack: three throwaway buckets and two users, made, exercised and
 # destroyed inside one job. Nothing here may outlive the run.
 #
-# `allowedProjectId` is the OVHcloud Public Cloud project the owner created for
-# this probe. The program refuses UNSET and any other shape (see projectGuard.ts).
-# The id is not a secret. The workflow must also export the same id as
-# OVH_CLOUD_PROJECT_SERVICE; the guard refuses a run where the two differ.
+# `allowedProjectId` is the OVHcloud Public Cloud project created for this probe,
+# the id the owner reported at the probe setup step. The program refuses UNSET
+# and any other shape (see projectGuard.ts). The id is not a secret. The
+# workflow must carry the same value as OVH_CLOUD_PROJECT_SERVICE; the guard
+# refuses a run where the two differ.
 #
 # `nameSuffix` is not committed: the job sets it per run, so each bucket name
 # is `<name>-<suffix>` and no two runs collide. configGuard.ts holds the
@@ -40,6 +41,29 @@ config:
             - s3:DeleteObjectVersion
             - s3:GetObjectRetention
             - s3:BypassGovernanceRetention
+    # Makes the two checks the probe credential cannot: it may ask bucket B to
+    # take a lock and may read bucket C's lock settings. Without a credential
+    # that is allowed to try, a refusal on B would only mean "not permitted".
+    # It can write and delete no object anywhere.
+    - name: zz-probe-admin
+      s3Credential: true
+      statements:
+        - sid: ProbeBucketBLockAttempt
+          effect: Allow
+          buckets: [zz-probe-b]
+          actions:
+            - s3:ListBucket
+            - s3:ListBucketVersions
+            - s3:GetBucketLocation
+            - s3:GetBucketObjectLockConfiguration
+            - s3:PutBucketObjectLockConfiguration
+        - sid: ProbeBucketCRead
+          effect: Allow
+          buckets: [zz-probe-c]
+          actions:
+            - s3:ListBucket
+            - s3:ListBucketVersions
+            - s3:GetBucketObjectLockConfiguration
   branchleft-ovh-copy2:buckets:
     # A: lock at creation, Governance, one day. The probe writes here.
     - name: zz-probe-a
