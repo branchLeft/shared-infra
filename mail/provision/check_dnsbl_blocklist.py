@@ -17,6 +17,7 @@ import json
 import logging
 import logging.handlers
 import os
+import re
 import socket
 import stat
 import struct
@@ -118,6 +119,21 @@ DNSBLS: tuple[DnsblSpec, ...] = (
     ),
 )
 
+# Domain blocklists: the sending domains are looked up by name, not by address.
+# DOMAIN_SENTINEL is Spamhaus's documented DBL test point, listed by design.
+DOMAIN_DBL_ZONE = "dbl.spamhaus.org"
+DOMAIN_SENTINEL = "dbltest.com"
+DOMAIN_DBL_DELISTING_URL = "https://check.spamhaus.org/"
+SENDING_DOMAINS_VARIABLE = "DNSBL_SENDING_DOMAINS"
+# Config point: a tenant's sending domain is not checked until it is listed
+# here or in SENDING_DOMAINS_VARIABLE. Confirm this list before relying on it.
+DEFAULT_SENDING_DOMAINS: tuple[str, ...] = (
+    "branchleft.co.uk",
+    "publicpress.co.uk",
+    "trypublicpress.co.uk",
+)
+_DOMAIN_RE = re.compile(r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}")
+
 
 @dataclass(frozen=True)
 class ResolutionOutcome:
@@ -167,7 +183,11 @@ def classify_outcome(outcome: ResolutionOutcome) -> Verdict:
 
 
 def evaluate_dnsbl(
-    spec: DnsblSpec, sentinel_outcome: ResolutionOutcome, target_outcome: ResolutionOutcome
+    spec: DnsblSpec,
+    sentinel_outcome: ResolutionOutcome,
+    target_outcome: ResolutionOutcome,
+    *,
+    sentinel_label: str = SENTINEL_LISTED_IP,
 ) -> CheckResult:
     """Pure: combine a zone's self-test (sentinel_outcome, for
     SENTINEL_LISTED_IP) with the real target's lookup into one verdict. The
@@ -181,7 +201,7 @@ def evaluate_dnsbl(
             spec,
             Verdict.ZONE_UNRESPONSIVE,
             detail=(
-                f"self-test sentinel {SENTINEL_LISTED_IP} did not come back listed "
+                f"self-test sentinel {sentinel_label} did not come back listed "
                 f"(got {sentinel_verdict.value}) -- zone may be dead, unreachable, or "
                 "rate-limiting this host; target result not trusted this run"
             ),
@@ -246,6 +266,54 @@ def run_checks(
         sentinel_outcome = resolver(build_query_name(SENTINEL_LISTED_IP, spec.zone), RESOLVE_TIMEOUT_SECONDS)
         target_outcome = resolver(build_query_name(ip, spec.zone), RESOLVE_TIMEOUT_SECONDS)
         results.append(evaluate_dnsbl(spec, sentinel_outcome, target_outcome))
+    new_state, alerts = build_alert(previous_state, results)
+    return new_state, alerts, results
+
+
+def build_domain_query_name(domain: str, zone: str = DOMAIN_DBL_ZONE) -> str:
+    """Pure: the DBL query name for a sending domain. Raises ValueError for
+    anything that is not a plain lowercase hostname, so a bad entry in the
+    configuration stops the run rather than being queried as junk."""
+    if not _DOMAIN_RE.fullmatch(domain):
+        raise ValueError(f"not a plain lowercase domain name: {domain!r}")
+    return f"{domain}.{zone}"
+
+
+def domain_dnsbl_spec(domain: str) -> DnsblSpec:
+    """Pure: the spec one sending domain is reported under."""
+    return DnsblSpec(
+        f"dbl:{domain}",
+        f"Spamhaus DBL for {domain}",
+        DOMAIN_DBL_ZONE,
+        DOMAIN_DBL_DELISTING_URL,
+    )
+
+
+def resolve_sending_domains(raw: str | None) -> tuple[str, ...]:
+    """Pure: the configured sending domains, or the default list when unset.
+    Entries are split on commas, trimmed and lowercased. Validation happens
+    where each one is queried, so a malformed entry fails the run loudly."""
+    if raw is None or not raw.strip():
+        return DEFAULT_SENDING_DOMAINS
+    return tuple(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+def run_domain_checks(
+    domains: Iterable[str],
+    resolver: Callable[[str, int], ResolutionOutcome],
+    previous_state: dict[str, str],
+) -> tuple[dict[str, str], list[str], list[CheckResult]]:
+    """Each sending domain against the DBL, with the DBL's test point as the
+    self-test. The same zone-trust rule as the IP check applies: a zone that
+    does not list the test point is never read as a clean domain."""
+    results = []
+    for domain in domains:
+        spec = domain_dnsbl_spec(domain)
+        sentinel_outcome = resolver(build_domain_query_name(DOMAIN_SENTINEL), RESOLVE_TIMEOUT_SECONDS)
+        target_outcome = resolver(build_domain_query_name(domain), RESOLVE_TIMEOUT_SECONDS)
+        results.append(
+            evaluate_dnsbl(spec, sentinel_outcome, target_outcome, sentinel_label=DOMAIN_SENTINEL)
+        )
     new_state, alerts = build_alert(previous_state, results)
     return new_state, alerts, results
 
@@ -721,6 +789,13 @@ def main(argv: list[str] | None = None) -> int:
         target = TARGET_IP or resolve_target_address(TARGET_HOST)
         previous_state = _load_state(STATE_PATH)
         new_state, alerts, results = run_checks(target, DNSBLS, resolve_a_records, previous_state)
+        domains = resolve_sending_domains(os.environ.get(SENDING_DOMAINS_VARIABLE))
+        domain_state, domain_alerts, domain_results = run_domain_checks(
+            domains, resolve_a_records, previous_state
+        )
+        new_state.update(domain_state)
+        alerts.extend(domain_alerts)
+        results.extend(domain_results)
         _save_state(STATE_PATH, new_state)
     except Exception:
         # Anything unhandled here (disk pressure, permissions drift, a
