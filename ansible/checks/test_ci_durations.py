@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "ansible.yml"
-TEST_CHECKS = re.compile(r"- name: Test the checks\n\s+run: (?P<command>.+)")
+TEST_CHECKS = re.compile(r"- name: Test the checks\n(?:\s+if: .+\n)?\s+run: (?P<command>.+)")
 DURATIONS = re.compile(r" --durations [1-9][0-9]*'?$")
 
 
