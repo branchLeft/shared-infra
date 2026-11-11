@@ -26,6 +26,12 @@ PR_TRIGGERS = {"pull_request", "pull_request_target"}
 CONCURRENCY_KEYS = {"group", "cancel-in-progress"}
 ABSENT = object()
 
+# The workflows that queue their runs on one shared group instead of keying it on the run.
+# Each is reached by a push to main alone and never cancels, so a second run waits for the
+# first. The registry is literal: a new entry is an edit to this test, which a reviewer sees.
+SERIALISED = {"ansible-delivery.yml": "ansible-delivery-serialise"}
+SERIALISED_TRIGGERS = {"push"}
+
 # The only ${{ }} terms a run-keyed group may be built from. The run id is
 # accepted only as one of these, never as text in a literal or a quoted string.
 EXPRESSION = re.compile(r"\$\{\{(.*?)\}\}", re.DOTALL)
@@ -223,6 +229,27 @@ def top_level_problems(name: str, config: object, pull_request: bool) -> list[st
     return found
 
 
+def serialised_problems(name: str, data: dict, triggers: set[str]) -> list[str]:
+    """A listed workflow has exactly the serialising block and is reached by a push alone.
+
+    The block never cancels, so a later run waits behind the running one. A pull request or
+    queue trigger is refused: either would let a check run hold the delivery's group.
+    """
+    expected = {"group": SERIALISED[name], "cancel-in-progress": False}
+    found = []
+    if data.get("concurrency") != expected:
+        found.append(
+            f"{name}: top-level concurrency is not the serialising block {expected!r}: "
+            f"{data.get('concurrency')!r}"
+        )
+    if triggers != SERIALISED_TRIGGERS:
+        found.append(
+            f"{name}: a serialised workflow may be triggered by {sorted(SERIALISED_TRIGGERS)} only, "
+            f"not {sorted(triggers)}"
+        )
+    return found
+
+
 def merge_group_problems(name: str, data: dict, pull_request: bool) -> list[str]:
     config = data.get("concurrency")
     group = config.get("group") if isinstance(config, dict) else None
@@ -339,7 +366,9 @@ def violations(name: str, text: str, others: tuple[tuple[str, object, str], ...]
         return [f"{name}: {error}"]
     pull_request = bool(names & PR_TRIGGERS)
     found: list[str] = []
-    if "concurrency" in data:
+    if name in SERIALISED:
+        found += serialised_problems(name, data, names)
+    elif "concurrency" in data:
         found += top_level_problems(name, data["concurrency"], pull_request)
     elif pull_request:
         found.append(f"{name}: pull_request workflow has no top-level concurrency block")
@@ -1046,6 +1075,78 @@ class RealTreeMutationTests(unittest.TestCase):
         broken = text.replace(PR_BLOCK, PR_BLOCK.replace("github.event.pull_request.number || github.run_id", "github.ref"))
         self.assertNotEqual(broken, text)
         self.assert_refused("ci.yml", broken, "not the run-keyed block")
+
+
+SERIALISING_BLOCK = "concurrency:\n  group: ansible-delivery-serialise\n  cancel-in-progress: false\n"
+
+
+class SerialisedWorkflowTests(unittest.TestCase):
+    """The delivery queues its runs on one group and never cancels one."""
+
+    def read(self, name: str) -> str:
+        return (WORKFLOWS / name).read_text(encoding="utf-8")
+
+    def assert_refused(self, name: str, text: str, fragment: str) -> None:
+        found = violations(name, text)
+        self.assertTrue(any(fragment in line for line in found), f"{fragment!r} not in {found!r}")
+
+    def test_the_real_delivery_workflow_holds_the_serialising_block(self):
+        self.assertIn(SERIALISING_BLOCK, self.read("ansible-delivery.yml"))
+        self.assertEqual(SERIALISED["ansible-delivery.yml"], "ansible-delivery-serialise")
+
+    def test_delivery_without_its_block_is_refused(self):
+        text = self.read("ansible-delivery.yml")
+        self.assertIn(SERIALISING_BLOCK, text)
+        self.assert_refused("ansible-delivery.yml", text.replace(SERIALISING_BLOCK, ""), "not the serialising block")
+
+    def test_delivery_that_cancels_is_refused(self):
+        text = self.read("ansible-delivery.yml")
+        broken = text.replace(SERIALISING_BLOCK, SERIALISING_BLOCK.replace("false", "true"))
+        self.assertNotEqual(broken, text)
+        self.assert_refused("ansible-delivery.yml", broken, "not the serialising block")
+
+    def test_delivery_that_cancels_on_the_pull_request_expression_is_refused(self):
+        text = self.read("ansible-delivery.yml")
+        broken = text.replace(SERIALISING_BLOCK, SERIALISING_BLOCK.replace("false", PR_EXPRESSION))
+        self.assertNotEqual(broken, text)
+        self.assert_refused("ansible-delivery.yml", broken, "not the serialising block")
+
+    def test_delivery_on_another_group_is_refused(self):
+        text = self.read("ansible-delivery.yml")
+        broken = text.replace("ansible-delivery-serialise", "ansible-apply-x")
+        self.assertNotEqual(broken, text)
+        self.assert_refused("ansible-delivery.yml", broken, "not the serialising block")
+
+    def test_delivery_reached_by_a_pull_request_or_the_queue_is_refused(self):
+        text = self.read("ansible-delivery.yml")
+        for extra in ("  pull_request:\n", "  merge_group:\n    types: [checks_requested]\n"):
+            with self.subTest(extra=extra):
+                broken = text.replace("on:\n  push:\n    branches: [main]\n", f"on:\n  push:\n    branches: [main]\n{extra}", 1)
+                self.assertNotEqual(broken, text)
+                self.assert_refused("ansible-delivery.yml", broken, "may be triggered by ['push'] only")
+
+    def test_a_shared_group_is_allowed_only_for_a_listed_workflow(self):
+        # The same block in any other workflow is still a group shared across runs.
+        text = PUSH_ON + SERIALISING_BLOCK + JOBS
+        self.assert_refused("another.yml", text, "shared across runs")
+        self.assertEqual(violations("ansible-delivery.yml", text), [])
+
+    def test_a_job_literal_equal_to_the_serialising_group_is_refused_in_another_workflow(self):
+        other = PUSH_ON + "jobs:\n  check:\n    runs-on: ubuntu-latest\n" + job_concurrency("false", "ansible-delivery-serialise")
+        documents = [("ansible-delivery.yml", PUSH_ON + SERIALISING_BLOCK + JOBS), ("other.yml", other)]
+        found = violations("other.yml", other, others_for("other.yml", documents))
+        self.assertTrue(any("same group as the top level of ansible-delivery.yml" in line for line in found), found)
+
+    def test_every_workflow_that_calls_the_gated_apply_is_listed(self):
+        # A caller of the gated apply reaches hosts; a second one added without a listing would
+        # run beside the delivery, so it must be listed here or run on a schedule alone.
+        callers = []
+        for path in workflow_files():
+            text = path.read_text(encoding="utf-8")
+            if "ansible-gated-apply.yml@" in text:
+                callers.append(path.name)
+        self.assertIn("ansible-delivery.yml", callers)
+        self.assertEqual([name for name in callers if name not in SERIALISED], [])
 
 
 class ScriptsSuiteDependencyTests(unittest.TestCase):

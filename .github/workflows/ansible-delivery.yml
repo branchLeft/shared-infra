@@ -49,6 +49,18 @@ permissions:
   contents: read
   actions: read
 
+# One delivery at a time. A push that lands while another delivery is still running waits for
+# it instead of running beside it. Nothing is cancelled: a delivery may be waiting on its
+# environment approval, and a later push must not cancel it. GitHub keeps one waiting run per
+# group, so a burst of merges leaves the running delivery and the newest push. The name is
+# its own: the reusable workflow's plan and apply jobs hold ansible-plan-* and ansible-apply-*
+# groups, and a workflow group equal to one of those would wait on its own run. Pinned by
+# scripts/test_workflow_concurrency.py, which allows a shared top-level group only for the
+# workflows it lists, and only when they never cancel.
+concurrency:
+  group: ansible-delivery-serialise
+  cancel-in-progress: false
+
 jobs:
   # Finds whether the merge queue ran the Ansible workflow, to a green result, on exactly this
   # commit (ansible/checks/merge_group_proof.py holds the rule). The answer no longer skips

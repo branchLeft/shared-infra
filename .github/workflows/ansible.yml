@@ -124,6 +124,15 @@ jobs:
       # change must start the lint job, and a file named one by one is the one the next edit forgets.
       # The other mail/ files (the Pulumi project) cost one lint run; no shard reads them.
       #
+      # The last entry, `.`, is the whole repository. Three of the lint job's checks enumerate the
+      # checkout instead of naming files: ansible/checks/test_no_new_script_dependents.py lists every
+      # tracked file, and test_no_new_hand_installers.py and test_no_new_hand_runbook_steps.py walk
+      # it. A change to any file can fail one of them, so a pull request that touched only scripts/
+      # once merged a red `main`. A directory named one by one cannot be complete, and a new top-level
+      # path would be the one the list forgot. ansible/checks/test_ci_watched_paths.py finds those
+      # checks from their own source and fails if the filter does not cover every tracked file.
+      # Watching decides only whether the lint runs; the shards are still ci_select.py's choice.
+      #
       # The full list of changed files is kept for ci_select.py, NUL-separated and with
       # renames shown as a delete and an add, so a moved role names both places.
       - name: Decide whether the Ansible inputs changed
@@ -174,6 +183,7 @@ jobs:
             hetzner-host/cloudInit.ts
             hetzner-host/pullBootstrapFixed.json
             mail/
+            .
           )
           git diff --name-only -z --no-renames "$base" "$head" > "$RUNNER_TEMP/changed-files.z"
           echo "changed=$RUNNER_TEMP/changed-files.z" >> "$GITHUB_OUTPUT"
