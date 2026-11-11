@@ -1,0 +1,164 @@
+---
+# Internal to the role. Reads the running receiver back from the host and asserts what the
+# posture depends on. Everything here only reads, so it runs in check mode as well as an apply
+# (ANS-10), except where there is nothing running to read: a host with no image pin yet, or a
+# plan that would still deliver or start the receiver. Each of those says so in a visible line,
+# so a skip does not read as a pass. An apply with a pin always reads.
+- name: Say the running receiver is not verified because there is no image pin yet
+  ansible.builtin.debug:
+    msg: >-
+      Running receiver NOT verified and NOT started: {{ sweego_receiver_image_env_path }} does not exist.
+      The deploy wrapper writes it, and needs the compose file this run delivered. Run it for the
+      stack sweego-receiver, then apply again.
+  when: not sweego_receiver_image_env_stat.stat.exists
+
+- name: Say the running receiver is not verified in a plan that would still deliver it
+  ansible.builtin.debug:
+    msg: >-
+      Running receiver NOT verified: this plan would still deliver or start the receiver, so the
+      container, its ports and its drain endpoint are read only by a run that applies.
+  when: ansible_check_mode and sweego_receiver_image_env_stat.stat.exists and (sweego_receiver_stack_pending | bool)
+
+- name: Read the receiver back
+  when:
+    - sweego_receiver_image_env_stat.stat.exists
+    - not ansible_check_mode or not (sweego_receiver_stack_pending | bool)
+  block:
+    - name: Ask systemd for the receiver's unit
+      ansible.builtin.systemd_service:
+        name: '{{ sweego_receiver_compose_unit }}'
+      register: sweego_receiver_unit_state
+
+    - name: Refuse a receiver unit that is not active now and enabled for boot
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_unit_state.status.ActiveState == 'active'
+          - sweego_receiver_unit_state.status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: >-
+          {{ sweego_receiver_compose_unit }} is not active, or is not enabled for boot.
+          An AssertPathExists failure on the image pin file leaves a unit inactive, not failed.
+
+    # systemd reports the effective list, drop-ins included.
+    - name: Refuse a receiver unit that is not ordered after, and bound to, the drain-port rule's unit
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_rule_unit_name in (sweego_receiver_unit_state.status.After | default('')).split()
+          - sweego_receiver_rule_unit_name in (sweego_receiver_unit_state.status.Requires | default('')).split()
+        quiet: true
+        fail_msg: >-
+          {{ sweego_receiver_compose_unit }} is not ordered after, and bound to, {{ sweego_receiver_rule_unit_name }}.
+          Without that ordering the receiver can start before the drain-port rule is loaded.
+          The role writes the drop-in {{ sweego_receiver_dropin_dest }} for it.
+
+    - name: Read the container
+      ansible.builtin.command:
+        argv: ['{{ sweego_receiver_docker }}', inspect, '{{ sweego_receiver_container }}']
+      register: sweego_receiver_container_inspect
+      changed_when: false
+      check_mode: false
+
+    - name: Read the listeners on the two published ports
+      ansible.builtin.command:
+        argv: [ss, -H, -ltn]
+      register: sweego_receiver_listeners
+      changed_when: false
+      check_mode: false
+
+    # An unauthenticated call to the drain listener, from the host itself (so through the
+    # Docker proxy, not the DOCKER-USER rule). It proves the listener is up and demands a token.
+    - name: Call the drain endpoint with no token
+      ansible.builtin.uri:
+        url: 'http://{{ sweego_receiver_private_address }}:{{ sweego_receiver_drain_port }}/drain'
+        method: GET
+        use_proxy: false
+        follow_redirects: none
+        timeout: 10
+      register: sweego_receiver_drain_call
+      failed_when: false
+      check_mode: false
+
+    - name: Read the image the pin file names
+      ansible.builtin.set_fact:
+        sweego_receiver_pinned_image: >-
+          {{ (sweego_receiver_image_env_raw.content | ansible.builtin.b64decode).splitlines() | first | ansible.builtin.regex_replace('^IMAGE=', '') }}
+        sweego_receiver_inspected: '{{ (sweego_receiver_container_inspect.stdout | ansible.builtin.from_json)[0] }}'
+
+    # The pin file is the one source of the image. A container that runs another image was
+    # started before the pin moved.
+    - name: Refuse a container that runs another image than the pin file names
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_inspected.Config.Image == sweego_receiver_pinned_image
+        quiet: true
+        fail_msg: >-
+          The container {{ sweego_receiver_container }} does not run the image the pin file
+          {{ sweego_receiver_image_env_path }} names. It runs {{ (sweego_receiver_inspected.Config | default({})).Image | default('no image') }};
+          the file names {{ sweego_receiver_pinned_image }}. Restart {{ sweego_receiver_compose_unit }} after a change to the pin file.
+
+    - name: Refuse a container that is not running and healthy
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_inspected.State.Running is ansible.builtin.sameas true
+          - sweego_receiver_inspected.State.Health.Status == 'healthy'
+        quiet: true
+        fail_msg: >-
+          The container {{ sweego_receiver_container }} is not running and healthy
+          ({{ (sweego_receiver_inspected.State.Health | default({})).Status | default('no health status') }}).
+
+    - name: Refuse a container that is not the hardened one
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_inspected.HostConfig.ReadonlyRootfs is ansible.builtin.sameas true
+          - sweego_receiver_inspected.HostConfig.Privileged is ansible.builtin.sameas false
+          - sweego_receiver_inspected.HostConfig.CapDrop == ['ALL']
+          - (sweego_receiver_inspected.HostConfig.CapAdd | default([], true)) | length == 0
+          - sweego_receiver_inspected.HostConfig.SecurityOpt == ['no-new-privileges:true']
+          - sweego_receiver_inspected.Config.User == sweego_receiver_uid ~ ':' ~ sweego_receiver_gid
+          - sweego_receiver_inspected.HostConfig.NetworkMode != 'host'
+          - sweego_receiver_inspected.Mounts | map(attribute='Source') | select('search', 'docker.sock') | list | length == 0
+        quiet: true
+        fail_msg: >-
+          The container {{ sweego_receiver_container }} is not read-only, unprivileged, stripped of every
+          capability, under no-new-privileges, run as {{ sweego_receiver_uid }}:{{ sweego_receiver_gid }}, off the host network
+          and clear of the Docker socket.
+
+    - name: Refuse a container that publishes anything but the two ports on edge1's private address
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_inspected.HostConfig.PortBindings | length == 2
+          - >-
+            sweego_receiver_inspected.HostConfig.PortBindings[sweego_receiver_container_public_port ~ '/tcp']
+            == [{'HostIp': sweego_receiver_private_address, 'HostPort': sweego_receiver_port | string}]
+          - >-
+            sweego_receiver_inspected.HostConfig.PortBindings[sweego_receiver_container_drain_port ~ '/tcp']
+            == [{'HostIp': sweego_receiver_private_address, 'HostPort': sweego_receiver_drain_port | string}]
+        quiet: true
+        fail_msg: >-
+          The container's published ports are not exactly {{ sweego_receiver_private_address }}:{{ sweego_receiver_port }}
+          and {{ sweego_receiver_private_address }}:{{ sweego_receiver_drain_port }}.
+
+    - name: Refuse a listener on either port that is not on edge1's private address alone
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_found | sort == sweego_receiver_wanted | sort
+        quiet: true
+        fail_msg: >-
+          The listeners on ports {{ sweego_receiver_port }} and {{ sweego_receiver_drain_port }} are
+          {{ sweego_receiver_found }}, not exactly {{ sweego_receiver_wanted }}. Neither may listen on all addresses.
+      vars:
+        sweego_receiver_wanted:
+          - '{{ sweego_receiver_private_address }}:{{ sweego_receiver_port }}'
+          - '{{ sweego_receiver_private_address }}:{{ sweego_receiver_drain_port }}'
+        sweego_receiver_found: >-
+          {{ sweego_receiver_listeners.stdout | ansible.builtin.regex_findall('(?m)^LISTEN\s+\d+\s+\d+\s+(\S+)\s')
+          | select('search', ':(' ~ sweego_receiver_port ~ '|' ~ sweego_receiver_drain_port ~ ')$') | list }}
+
+    - name: Refuse a drain endpoint that answers a call with no token
+      ansible.builtin.assert:
+        that:
+          - sweego_receiver_drain_call.status | default(0) == 401
+        quiet: true
+        fail_msg: >-
+          An unauthenticated GET /drain on {{ sweego_receiver_private_address }}:{{ sweego_receiver_drain_port }}
+          did not return 401 (it returned {{ sweego_receiver_drain_call.status | default('no response') }}).

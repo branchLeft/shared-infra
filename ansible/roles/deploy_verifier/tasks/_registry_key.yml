@@ -1,0 +1,132 @@
+---
+# The registry read key. The owner places /etc/branchleft/registry/docker; this role only looks.
+# It never writes, fetches or prints anything in it. A host with no such directory is anonymous
+# toward the registry, which is how public images pull, so an absent directory is reported and not
+# refused. A directory that is there is held to its shape, because a wrong mode or a second
+# registry in it is a credential in the wrong place.
+#
+# Check mode (ANS-10). Every task here is a read and runs in check mode, as it does on apply.
+# The config file is read (slurp) to judge its shape. The content never leaves the one task that
+# derives booleans from it: both tasks that touch it are no_log and diff-free, the facts are
+# truth values and a count, and the register is emptied in an always section (ANS-16).
+
+# ----- The directory and the file -----
+
+- name: Look at the registry read key directory
+  ansible.builtin.stat:
+    path: '{{ deploy_verifier_registry_docker_dir }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: deploy_verifier_registry_dir
+  check_mode: false
+
+- name: Say when the host holds no registry read key
+  ansible.builtin.debug:
+    msg: >-
+      deploy_verifier: no registry read key at {{ deploy_verifier_registry_docker_dir }}. The host
+      pulls and verifies anonymously, which serves public images only.
+  when: not (deploy_verifier_registry_dir.stat.exists | default(false))
+
+- name: Refuse a registry read key directory that is not root's, 0700, and a plain directory
+  ansible.builtin.assert:
+    that:
+      - deploy_verifier_registry_dir.stat.isdir
+      - not deploy_verifier_registry_dir.stat.islnk
+      - deploy_verifier_registry_dir.stat.pw_name == 'root'
+      - deploy_verifier_registry_dir.stat.gr_name == 'root'
+      - deploy_verifier_registry_dir.stat.mode == '0700'
+    fail_msg: >-
+      deploy_verifier refused (rule: registry key directory): {{ deploy_verifier_registry_docker_dir }}
+      must be a plain directory owned by root:root with mode 0700. The role does not change it. Put
+      it right by hand, then run the role again.
+    quiet: true
+  when: deploy_verifier_registry_dir.stat.exists | default(false)
+
+- name: Look at the registry read key config file
+  ansible.builtin.stat:
+    path: '{{ deploy_verifier_registry_config }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: deploy_verifier_registry_file
+  check_mode: false
+  when: deploy_verifier_registry_dir.stat.exists | default(false)
+
+- name: Refuse a registry read key config that is not root's, 0600, and a plain file
+  ansible.builtin.assert:
+    that:
+      - deploy_verifier_registry_file.stat.exists
+      - deploy_verifier_registry_file.stat.isreg
+      - not deploy_verifier_registry_file.stat.islnk
+      - deploy_verifier_registry_file.stat.pw_name == 'root'
+      - deploy_verifier_registry_file.stat.gr_name == 'root'
+      - deploy_verifier_registry_file.stat.mode == '0600'
+    fail_msg: >-
+      deploy_verifier refused (rule: registry key file): {{ deploy_verifier_registry_config }} must
+      be a plain file owned by root:root with mode 0600, and it must be there when its directory is.
+      The role does not change it. Put it right by hand, then run the role again.
+    quiet: true
+  when: deploy_verifier_registry_dir.stat.exists | default(false)
+
+# ----- What is in the file, as truth values only -----
+
+# Read-only, so it runs in check mode. The truth values are literal keys, because a set_fact of a
+# whole templated mapping sets nothing and does not fail. The parse failing is the one case that
+# is not a truth value, so it is turned into a named refusal in the rescue.
+- name: Judge the shape of the registry read key config without keeping its content
+  when: deploy_verifier_registry_dir.stat.exists | default(false)
+  block:
+    - name: Read the registry read key config
+      ansible.builtin.slurp:
+        src: '{{ deploy_verifier_registry_config }}'
+      register: deploy_verifier_registry_slurp
+      no_log: true
+      check_mode: false
+
+    - name: Reduce the registry read key config to truth values
+      ansible.builtin.set_fact:
+        deploy_verifier_registry_is_object: '{{ deploy_verifier_registry_doc is mapping }}'
+        deploy_verifier_registry_only_host: >-
+          {{ (deploy_verifier_registry_doc.auths | default({})) is mapping
+             and (deploy_verifier_registry_doc.auths | default({})).keys() | list
+             == [deploy_verifier_registry_host] }}
+        deploy_verifier_registry_has_entry: >-
+          {{ ((deploy_verifier_registry_doc.auths | default({}))[deploy_verifier_registry_host]
+             | default({})).auth | default('') | length > 0 }}
+        deploy_verifier_registry_helpers: >-
+          {{ ['credsStore', 'credHelpers'] | select('in', deploy_verifier_registry_doc) | list
+             | length }}
+      vars:
+        deploy_verifier_registry_doc: '{{ deploy_verifier_registry_slurp.content | b64decode | from_json }}'
+      no_log: true
+      diff: false
+  rescue:
+    - name: Refuse a registry read key config that cannot be read as JSON
+      ansible.builtin.fail:
+        msg: >-
+          deploy_verifier refused (rule: registry key content): {{ deploy_verifier_registry_config }}
+          could not be read as a JSON object. The role prints nothing from it. Replace it by hand,
+          then run the role again.
+  always:
+    - name: Empty what the read left behind
+      ansible.builtin.set_fact:
+        deploy_verifier_registry_slurp: {}
+      no_log: true
+
+- name: Refuse a registry read key config that holds anything but an entry for the one registry
+  ansible.builtin.assert:
+    that:
+      - deploy_verifier_registry_is_object | bool
+      - deploy_verifier_registry_only_host | bool
+      - deploy_verifier_registry_has_entry | bool
+      - deploy_verifier_registry_helpers | int == 0
+    fail_msg: >-
+      deploy_verifier refused (rule: registry key content): {{ deploy_verifier_registry_config }}
+      must hold an auth entry for {{ deploy_verifier_registry_host }} and for no other registry,
+      and no credential helper. The role prints nothing from it. Replace it by hand, then run the
+      role again.
+    quiet: true
+  when: deploy_verifier_registry_dir.stat.exists | default(false)

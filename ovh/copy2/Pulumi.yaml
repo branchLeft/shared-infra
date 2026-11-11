@@ -1,0 +1,10 @@
+name: branchleft-ovh-copy2
+runtime: nodejs
+
+# No `backend:` is pinned yet. The probe stack runs against an ephemeral
+# `file://` backend that its workflow supplies and throws away with the run, so
+# there is no state location to name. The production stack, when it exists,
+# pins its own persistent backend here before it is first applied: `pulumi
+# login` is global state, and a project that does not name its backend is one
+# login away from being operated against the wrong one.
+description: The second backup copy at OVHcloud London - Object Storage users, S3 credentials, user policies and buckets, driven by stack config and held by a project guard and a config guard. A separate Pulumi project from the Hetzner stacks - a different provider, a different account and a different blast radius.

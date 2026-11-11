@@ -34,12 +34,21 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
     name: Build & Publish to GitHub Packages
     runs-on: ubuntu-latest
+    # The one job that packs, attests and publishes. `id-token` and
+    # `attestations` are held by this job alone, for the build attestation
+    # (see the Attest step). A job-level block replaces the top-level one, so
+    # `contents` and `packages` are restated: the job's other permissions are
+    # exactly what it held before.
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     # Only 3 successful runs exist (observed 0.27-0.4min) -- too few for a
     # real p95, so a generous bound chosen deliberately rather than derived.
     timeout-minutes: 20
@@ -131,7 +140,35 @@ jobs:
       - name: Build
         run: pnpm run build
 
+      # Pack once, attest that file, publish that same file: the bytes
+      # attested are the bytes published.
+      - name: Pack
+        run: pnpm pack --out ./hetzner-host.tgz
+
+      # The ref the attested run must have is built from the version inside the
+      # tarball just packed, never from the ref that triggered the run: an
+      # identity read from the run being checked would agree with itself.
+      - name: Name the ref the attestation must carry
+        id: attest-ref
+        run: |
+          set -euo pipefail
+          VERSION="$(tar -xOzf ./hetzner-host.tgz package/package.json | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
+          echo "ref=refs/tags/hetzner-host-v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # A composite action's steps start in the workspace root, not in this
+      # job's default working directory, so the tarball path carries it.
+      - name: Attest the tarball
+        uses: branchLeft/github-workflows/.github/actions/attest-npm-tarball@a2175a416b57f950fed891837f88f2d1a31e00f4 # v1.2.0
+        with:
+          tarball: hetzner-host/hetzner-host.tgz
+          repo: branchLeft/shared-infra
+          signer-workflow: branchLeft/shared-infra/.github/workflows/publish-hetzner-host.yml
+          ref: ${{ steps.attest-ref.outputs.ref }}
+
+      # `--no-git-checks` stays: with a tarball argument pnpm 11.17.0 still
+      # runs its git checks, so dropping it fails a run whose checkout is
+      # not on a clean branch head.
       - name: Publish
-        run: pnpm publish --no-git-checks
+        run: pnpm publish ./hetzner-host.tgz --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

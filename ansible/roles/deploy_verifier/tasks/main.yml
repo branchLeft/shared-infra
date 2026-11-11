@@ -257,3 +257,9 @@
     owner: root
     group: root
     mode: '0700'
+
+# ----- The registry read key -----
+
+# Checked last and never written: the owner places the key. See _registry_key.yml.
+- name: Check the registry read key the owner places
+  ansible.builtin.import_tasks: _registry_key.yml

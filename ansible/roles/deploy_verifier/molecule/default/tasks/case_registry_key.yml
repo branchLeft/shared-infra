@@ -1,0 +1,66 @@
+---
+# One case of the registry read key check. The container is root and short-lived, so the case
+# builds the real directory and removes it again. The values below are made up for the case.
+# Inputs: case_name, case_dir_mode (empty for no directory), case_file_mode and case_content (empty
+# for no file), case_expect ('pass' or the words the refusal must contain).
+
+# Reset everything an earlier case left behind (a register or fact outlives its task).
+- name: Reset what the previous case left
+  ansible.builtin.set_fact:
+    deploy_verifier_case_outcome: ''
+    deploy_verifier_registry_dir: {}
+    deploy_verifier_registry_file: {}
+    deploy_verifier_registry_slurp: {}
+    deploy_verifier_registry_is_object: ''
+    deploy_verifier_registry_only_host: ''
+    deploy_verifier_registry_has_entry: ''
+    deploy_verifier_registry_helpers: ''
+
+- name: Remove the key directory
+  ansible.builtin.file:
+    path: '{{ deploy_verifier_registry_docker_dir }}'
+    state: absent
+
+- name: Build the key directory the case asks for
+  ansible.builtin.file:
+    path: '{{ deploy_verifier_registry_docker_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '{{ case_dir_mode }}'
+  when: case_dir_mode != ''
+
+- name: Place the config file the case asks for
+  ansible.builtin.copy:
+    content: '{{ case_content }}'
+    dest: '{{ deploy_verifier_registry_config }}'
+    owner: root
+    group: root
+    mode: '{{ case_file_mode }}'
+  when: case_content != ''
+  no_log: true
+  diff: false
+
+- name: Run the check
+  block:
+    - name: Include the role's check
+      ansible.builtin.include_tasks: ../../../tasks/_registry_key.yml
+    - name: Note that the check passed
+      ansible.builtin.set_fact:
+        deploy_verifier_case_outcome: pass
+  rescue:
+    - name: Note which rule refused
+      ansible.builtin.set_fact:
+        deploy_verifier_case_outcome: '{{ ansible_failed_result.msg | default("") }}'
+
+- name: Assert the case ended as it should
+  ansible.builtin.assert:
+    that:
+      - (case_expect == 'pass' and deploy_verifier_case_outcome == 'pass') or (case_expect != 'pass' and case_expect in deploy_verifier_case_outcome)
+    fail_msg: 'case {{ case_name }}: expected {{ case_expect }}, got {{ deploy_verifier_case_outcome | truncate(200) }}'
+    quiet: true
+
+- name: Remove the key directory again
+  ansible.builtin.file:
+    path: '{{ deploy_verifier_registry_docker_dir }}'
+    state: absent

@@ -216,6 +216,13 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "is held by that role's unit tests, and the deploy wrapper refuses a Compose "
         "file with a service that declares none."
     ),
+    "sweego-receiver": (
+        "An instance of the template on edge1, started through the shared unit. Its Compose "
+        "text is rendered from a Jinja template by the ansible/roles/sweego_receiver role of "
+        "branchLeft/shared-infra and is never committed as a Compose file, and the scan reads "
+        "only `*/stack/compose.yml`, so it cannot read this one. Its health signal is held by "
+        "that role's unit tests, which parse the rendered file and refuse a service without one."
+    ),
 }
 
 # The stack-name rule the deploy wrapper actually applies, reused rather than

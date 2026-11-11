@@ -39,6 +39,12 @@ EnvironmentFile=/etc/branchleft/%i.image.env
 # automated path. Only branchleft-deploy writes the file above.
 EnvironmentFile=-/etc/branchleft/%i.env
 
+# The registry read key's docker config, for the pull. A directory that is not
+# there is anonymous access, so a public image still pulls. The directory is
+# placed by the owner and checked by the deploy_verifier role; this unit never
+# writes it. See branchleft_deploy.md, "The registry read key".
+Environment=DOCKER_CONFIG=/etc/branchleft/registry/docker
+
 ExecStartPre=/usr/bin/docker compose pull --quiet
 # `--wait` waits for *healthy* only where the service declares a healthcheck;
 # without one it waits for *running*, which a crash-looping container is. That

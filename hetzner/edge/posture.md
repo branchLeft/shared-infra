@@ -55,7 +55,13 @@ and no address is banned, because the IP-decision handler stays out of the
 route.
 
 `enforcing` adds the in-band AppSec configuration and the IP-decision
-handler.
+handler. It is the committed value.
+
+In every posture a slow or unreachable checker lets the request through: the
+AppSec verdict is bounded (`appsec_timeout`) and then waived
+(`appsec_fail_open`), and the bouncer's hard-fail switch is never rendered, so
+a stopped CrowdSec leaves the last decisions in force rather than refusing
+traffic. `render.test.ts` pins each of those three.
 
 ## rateLimit
 

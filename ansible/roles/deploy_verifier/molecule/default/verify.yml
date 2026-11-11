@@ -63,3 +63,72 @@
           - "('gh version ' ~ deploy_verifier_gh_version ~ ' ') in deploy_verifier_verify_gh.stdout"
         fail_msg: The installed gh is not the pinned release.
         quiet: true
+
+    # The registry read key check, case by case. Each case builds the directory in this
+    # container, runs the role's own check file and removes the directory again.
+    - name: Run each case of the registry read key check
+      ansible.builtin.include_tasks: tasks/case_registry_key.yml
+      vars:
+        case_name: '{{ item.name }}'
+        case_dir_mode: '{{ item.dir_mode }}'
+        case_file_mode: '{{ item.file_mode }}'
+        case_content: '{{ item.content }}'
+        case_expect: '{{ item.expect }}'
+      loop:
+        - name: no key placed
+          dir_mode: ''
+          file_mode: ''
+          content: ''
+          expect: pass
+        - name: key placed for the one registry
+          dir_mode: '0700'
+          file_mode: '0600'
+          content: '{"auths": {"ghcr.io": {"auth": "SENTINELVALUE"}}}'
+          expect: pass
+        - name: directory open to others
+          dir_mode: '0755'
+          file_mode: '0600'
+          content: '{"auths": {"ghcr.io": {"auth": "SENTINELVALUE"}}}'
+          expect: registry key directory
+        - name: file open to others
+          dir_mode: '0700'
+          file_mode: '0644'
+          content: '{"auths": {"ghcr.io": {"auth": "SENTINELVALUE"}}}'
+          expect: registry key file
+        - name: directory without a file
+          dir_mode: '0700'
+          file_mode: ''
+          content: ''
+          expect: registry key file
+        - name: a second registry beside the first
+          dir_mode: '0700'
+          file_mode: '0600'
+          content: '{"auths": {"ghcr.io": {"auth": "SENTINELVALUE"}, "docker.io": {"auth": "SENTINELVALUE"}}}'
+          expect: registry key content
+        - name: another registry only
+          dir_mode: '0700'
+          file_mode: '0600'
+          content: '{"auths": {"docker.io": {"auth": "SENTINELVALUE"}}}'
+          expect: registry key content
+        - name: an entry with no auth
+          dir_mode: '0700'
+          file_mode: '0600'
+          content: '{"auths": {"ghcr.io": {}}}'
+          expect: registry key content
+        - name: a credential helper named
+          dir_mode: '0700'
+          file_mode: '0600'
+          content: '{"auths": {"ghcr.io": {"auth": "SENTINELVALUE"}}, "credsStore": "helper"}'
+          expect: registry key content
+        - name: not JSON
+          dir_mode: '0700'
+          file_mode: '0600'
+          content: 'SENTINELVALUE'
+          expect: registry key content
+        - name: JSON that is not an object
+          dir_mode: '0700'
+          file_mode: '0600'
+          content: '["SENTINELVALUE"]'
+          expect: registry key content
+      loop_control:
+        label: '{{ item.name }}'

@@ -41,7 +41,7 @@
 
     - name: Put the volume program stand-in in place
       ansible.builtin.copy:
-        src: standin-volume-program
+        src: standin-volume-program.py
         dest: '{{ tenant_compose_volume_program }}'
         owner: root
         group: root
@@ -49,7 +49,7 @@
 
     - name: Put the compose unit's command stand-in in place
       ansible.builtin.copy:
-        src: standin-compose-up
+        src: standin-compose-up.py
         dest: /usr/local/bin/standin-compose-up
         owner: root
         group: root

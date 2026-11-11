@@ -27,7 +27,7 @@
       - '{{ inventory_dir }}'
       - --extra-vars
       - '{{ {"edge_stack_source_dir": edge_stack_verify_crash_source, "edge_stack_stale_acquis": ["/proc/1/environ"]} | to_json }}'
-      - '{{ playbook_dir }}/apply.yml'
+      - '{{ playbook_dir }}/../default/apply.yml'
   delegate_to: localhost
   register: edge_stack_verify_crash_result
   changed_when: false

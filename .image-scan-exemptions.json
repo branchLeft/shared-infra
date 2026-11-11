@@ -1,0 +1,12 @@
+{
+  "exemptions": [
+    {
+      "vulnerability": "GHSA-mgcc-cww5-fp2q",
+      "package": "github.com/go-jose/go-jose/v3",
+      "image": "ghcr.io/branchleft/edge-caddy",
+      "reason": "No patched go-jose/v3 release exists: the advisory lists no first patched version and v3.0.5 is the latest v3 release (also CVE-2026-116587). The DoS is in parsing JWKs that contain RSA keys. The module is linked into the built binary through smallstep certificates' ACME and CA packages. Reachability is NOT shown: govulncheck reports nothing, but it does not read this advisory. The owner must confirm the code path before this entry is relied on.",
+      "granted": "2026-11-10",
+      "expires": "2026-12-10"
+    }
+  ]
+}

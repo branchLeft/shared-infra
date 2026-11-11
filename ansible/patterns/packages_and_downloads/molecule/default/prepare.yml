@@ -16,8 +16,8 @@
 
     - name: Place the pinned tool fixture next to the test
       ansible.builtin.copy:
-        src: example-tool-v1
-        dest: /srv/packages-and-downloads/example-tool-v1
+        src: example-tool-v1.py
+        dest: /srv/packages-and-downloads/example-tool-v1.py
         owner: root
         group: root
         mode: '0644'
