@@ -245,6 +245,18 @@ hetzner/provision/test_compose_unit_contract.md:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/run-all.sh
   - mail/provision/run-all.sh
+hetzner/provision/test_run_all.py:
+  - hetzner/provision/00-harden-ssh.sh
+  - hetzner/provision/05-configure-host-egress.sh
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - hetzner/provision/20-install-docker.sh
+  - hetzner/provision/30-install-deploy-tooling.sh
+  - hetzner/provision/nat-gateway.sh
+  - hetzner/provision/run-all.sh
+  - mail/provision/00-harden-ssh.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/20-install-docker.sh
+  - mail/provision/run-all.sh
 hetzner/scripts/test-control-plane-port-policy.sh:
   - hetzner/provision/branchleft_docker_user_policy.sh
 hetzner/scripts/test-spool-bridge-egress.sh:
