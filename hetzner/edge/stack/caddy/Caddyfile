@@ -523,6 +523,13 @@ sites.publicpress.co.uk {
 		request_body {
 			max_size 1KiB
 		}
+		rate_limit {
+			zone sites-tenant-signals_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
 		appsec
 		@file_0 path /robots.txt
 		header @file_0 Content-Type "text/plain; charset=utf-8"
