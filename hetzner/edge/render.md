@@ -376,6 +376,18 @@ those in `EDGE_HOST_ALLOWED_PORTS`, so the entry cannot render once its port is 
 until that set gains the receiver's port. That is one deliberate line in this file, made
 when the port is known and reviewed as a widening of what the edge proxies to.
 
+### Naming the hostname
+
+Naming the hostname is one change with three parts, and `webhookDns.test.ts` goes red
+until all three are there: the `WEBHOOK_HOSTNAME` constant in `sites.ts`; one `A` record
+for it in the matching zone file under `hetzner/dns/`, at the address the edge's other
+hostnames use, with its owner name added to that file's `probe_names`; and the port in
+`EDGE_HOST_ALLOWED_PORTS`. The record is not committed ahead of the name: a placeholder
+in a zone file would be applied to production DNS, and a name the registry does not claim
+would answer for a host that serves nothing. The same test refuses a hostname that is
+not a real lowercase DNS name, so an ALL_CAPS placeholder cannot reach a rendered
+configuration. The record's apply, like every DNS apply, is the owner's.
+
 ## `siteBlock`: `request_body` ordering
 
 Ahead of everything else, including request_body -- see hstsDirective's own comment for
