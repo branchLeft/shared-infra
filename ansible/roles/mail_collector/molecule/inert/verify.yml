@@ -17,9 +17,12 @@
         - '{{ scenario_state_dir }}'
         - '{{ scenario_descriptor_dir }}'
         - '{{ scenario_docker_args_file }}'
+        - '{{ scenario_descriptor_file }}'
+        - '{{ scenario_stale_descriptor_file }}'
+        - '{{ scenario_foreign_file }}'
       register: mail_collector_v_stats
 
-    - name: Require the unit to be installed, no settings to exist and docker never to have run
+    - name: Require the unit to be installed, no settings to exist, docker never to have run and the hand-placed descriptors removed
       ansible.builtin.assert:
         that:
           - not mail_collector_v_stats.results[0].stat.exists
@@ -28,6 +31,9 @@
           - mail_collector_v_stats.results[3].stat.isdir
           - mail_collector_v_stats.results[4].stat.isdir
           - not mail_collector_v_stats.results[5].stat.exists
+          - not mail_collector_v_stats.results[6].stat.exists
+          - not mail_collector_v_stats.results[7].stat.exists
+          - mail_collector_v_stats.results[8].stat.exists
         quiet: true
 
     - name: Look at the unit's state
@@ -35,7 +41,7 @@
         name: mail-collector.service
       register: mail_collector_v_unit
 
-    - name: Require the unit to be disabled and not running, though a descriptor and the credentials file are in place
+    - name: Require the unit to be disabled and not running, though the credentials file is in place
       ansible.builtin.assert:
         that:
           - mail_collector_v_unit.status.UnitFileState != 'enabled'

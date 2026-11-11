@@ -67,7 +67,8 @@
         unit_lines: '{{ (mail_collector_v_read.results[1].content | b64decode).splitlines() | reject("match", "^#") | list }}'
       ansible.builtin.assert:
         that:
-          - public_lines | length == 9
+          - public_lines | length == 10
+          - "'COLLECTOR_DEMO_MAIL_DOMAIN=demo.example' in public_lines"
           - "'COLLECTOR_DESCRIPTOR_DIR=/descriptors' in public_lines"
           - "'COLLECTOR_DEDUPE_STATE_PATH=/state/dedupe.json' in public_lines"
           - "'COLLECTOR_PIN_STATE_DIR=/state/pins' in public_lines"
@@ -81,6 +82,38 @@
           - unit_lines | length == 2
           - "unit_lines[0] == 'MAIL_COLLECTOR_IMAGE=' ~ scenario_image"
           - "unit_lines[1] == 'MAIL_COLLECTOR_USER=' ~ getent_passwd[scenario_account][1] ~ ':' ~ getent_passwd[scenario_account][2]"
+        quiet: true
+
+    - name: Look at the descriptor directory
+      ansible.builtin.find:
+        paths: '{{ scenario_descriptor_dir }}'
+        file_type: any
+        hidden: true
+        recurse: false
+        follow: false
+      register: mail_collector_v_descriptors
+
+    - name: Read the descriptors the role wrote
+      ansible.builtin.slurp:
+        src: '{{ scenario_descriptor_dir }}/{{ item }}.json'
+      loop:
+        - host-one
+        - host-two
+      register: mail_collector_v_descriptor_read
+
+    # One file for each listed host, holding the four public keys and nothing else; the stale
+    # descriptor of an earlier hand placement is gone; the file that is not a descriptor is not.
+    - name: Require one descriptor for each listed host, the stale one removed and a foreign file left
+      vars:
+        written: '{{ mail_collector_v_descriptor_read.results | map(attribute="content") | map("b64decode") | map("from_json") | list }}'
+        names: '{{ mail_collector_v_descriptors.files | map(attribute="path") | map("basename") | sort | list }}'
+      ansible.builtin.assert:
+        that:
+          - names == ['host-one.json', 'host-two.json', 'notes.txt']
+          - mail_collector_v_descriptors.files | selectattr('path', 'search', '[.]json$') | map(attribute='mode') | unique | list == ['0644']
+          - mail_collector_v_descriptors.files | selectattr('path', 'search', '[.]json$') | map(attribute='pw_name') | unique | list == ['root']
+          - "written[0] == {'appHostIp': '10.20.1.101', 'expiresAt': none, 'kind': 'tenant', 'slug': 'host-one'}"
+          - "written[1] == {'appHostIp': '10.20.1.100', 'expiresAt': none, 'kind': 'demo', 'slug': 'host-two'}"
         quiet: true
 
     - name: Look at the unit's state

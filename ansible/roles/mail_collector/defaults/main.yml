@@ -16,6 +16,11 @@ mail_collector_smtp_host: ''
 # The platform's shared demo mail domain: the one domain a demo host's header From may carry.
 # Empty is the safe state: the collector then holds every demo host's mail, unsent and unacked.
 mail_collector_demo_mail_domain: ''
+# The hosts whose mail spool the collector drains, one entry each: slug, kind (demo or tenant) and
+# app_host_ip (the private address the collector dials, a host's alias address on ops1 when the
+# path to it is a tunnel). The role writes one descriptor file for each and removes every other
+# one, so this list is the drain list. Empty drains nothing.
+mail_collector_hosts: []
 mail_collector_smtp_port: 587
 mail_collector_smtp_secure: false
 mail_collector_shim_scheme: http

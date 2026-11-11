@@ -52,10 +52,21 @@
         mode: '0600'
       no_log: true
 
-    - name: Put a made-up descriptor where the descriptor feed would put one
+    - name: Put made-up descriptors where an earlier hand placement would have put them
       ansible.builtin.copy:
         content: '{}'
-        dest: '{{ scenario_descriptor_file }}'
+        dest: '{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - '{{ scenario_descriptor_file }}'
+        - '{{ scenario_stale_descriptor_file }}'
+
+    - name: Put a file that is not a descriptor in the descriptor directory
+      ansible.builtin.copy:
+        content: 'NOTE, not a descriptor, which the mail collector role must leave alone.'
+        dest: '{{ scenario_foreign_file }}'
         owner: root
         group: root
         mode: '0644'

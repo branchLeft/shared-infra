@@ -3,10 +3,10 @@
   hosts: all
   gather_facts: false
   tasks:
-    - name: Look at the files of other roles, and at the descriptor, before the role runs
+    - name: Look at the files of other roles, and at the file that is not a descriptor, before the role runs
       ansible.builtin.stat:
         path: '{{ item }}'
-      loop: '{{ scenario_canaries + [scenario_descriptor_file] }}'
+      loop: '{{ scenario_canaries + [scenario_foreign_file] }}'
       register: mail_collector_untouched_before
 
     # The owner's file is looked at without a checksum: a digest of a credential is a credential's
@@ -25,11 +25,19 @@
         mail_collector_smtp_host: '{{ scenario_smtp_host }}'
         mail_collector_smtp_port: 465
         mail_collector_smtp_secure: true
+        mail_collector_demo_mail_domain: demo.example
+        mail_collector_hosts:
+          - slug: host-one
+            kind: tenant
+            app_host_ip: 10.20.1.101
+          - slug: host-two
+            kind: demo
+            app_host_ip: 10.20.1.100
 
     - name: Look at the same files after the role has run
       ansible.builtin.stat:
         path: '{{ item }}'
-      loop: '{{ scenario_canaries + [scenario_descriptor_file] }}'
+      loop: '{{ scenario_canaries + [scenario_foreign_file] }}'
       register: mail_collector_untouched_after
 
     - name: Look at the owner's credentials file after the role has run
@@ -38,8 +46,8 @@
         get_checksum: false
       register: mail_collector_credentials_after
 
-    # The role touches nothing outside its own paths, and neither the owner's file nor a descriptor
-    # is its own. Each keeps its inode, mtime, mode, owner and checksum across the role's run; the
+    # The role touches nothing outside its own paths, and neither the owner's file nor a file that is
+    # not a descriptor is its own. Each keeps its inode, mtime, mode, owner and checksum across the role's run; the
     # idempotence step runs this play again, so both runs are held to it.
     - name: Require the files the role does not own to be exactly as they were
       ansible.builtin.assert:

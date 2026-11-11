@@ -21,12 +21,14 @@ The role:
    content and never a checksum of it.
 3. Makes the system account `mail-collector` (no login, no home) and its group.
 4. Makes `/etc/branchleft/mail-collector` (root's, `0755`), the descriptor directory inside it
-   (root's, `0755`, left empty) and `/var/lib/branchleft/mail-collector` (the account's, `0700`,
-   which holds the collector's persistent state) with its `pins` directory (the account's, `0700`).
-5. Writes `unit.env` (the image and the account's numeric ids) and, when the collector is meant to
+   (root's, `0755`) and `/var/lib/branchleft/mail-collector` (the account's, `0700`, which holds
+   the collector's persistent state) with its `pins` directory (the account's, `0700`).
+5. Writes one descriptor into the descriptor directory for each host in `mail_collector_hosts`, and
+   removes every other `.json` file there (see The drain list).
+6. Writes `unit.env` (the image and the account's numeric ids) and, when the collector is meant to
    run, `collector.env` (the sending target and the drain surface's scheme and port). Both hold
    public values only.
-6. Installs the unit `mail-collector.service` as a static file, then holds it enabled and started
+7. Installs the unit `mail-collector.service` as a static file, then holds it enabled and started
    when the collector is meant to run and disabled and stopped when it is not.
 
 The collector is **meant to run** only when `mail_collector_image` is a real digest (the default is
@@ -34,8 +36,7 @@ a placeholder of all zeros, which the role refuses to run) and `mail_collector_s
 Either missing keeps it off, so landing the role changes nothing about what the host does until the
 owner sets them.
 
-The role does not place the credentials file (the owner does), does not fill the descriptor
-directory, does not pull the image ahead of the first start (Docker pulls it by digest when the
+The role does not place the credentials file (the owner does), does not pull the image ahead of the first start (Docker pulls it by digest when the
 unit first runs), does not choose the sending target, and does not build the path from `ops1` to
 any host's drain surface. See Named limits.
 
@@ -69,13 +70,16 @@ never names the value (ANS-16). None is a secret.
 | `mail_collector_smtp_secure` | `false`                                                  | `true` for implicit TLS, `false` for STARTTLS                      |
 | `mail_collector_shim_scheme` | `http`                                                   | The scheme every host's drain surface is reached on                |
 | `mail_collector_shim_port`   | `8080`                                                   | The port every host's drain surface is reached on                  |
+| `mail_collector_hosts`       | `[]`                                                     | The hosts the collector drains, one entry each (The drain list)    |
 
 `mail_collector_demo_mail_domain` is optional and empty by default. It is the platform's shared demo
 mail domain, the one domain a demo host's header From may carry, and the role writes it as
-`COLLECTOR_DEMO_MAIL_DOMAIN` only when set. Empty is the safe state: the collector then holds every
-demo host's mail, unsent and unacked, and logs `demo_mail_domain_not_set` at start-up. When set it
-must be a bare domain, with no scheme, no at sign and no space, or the run stops before anything
-changes.
+`COLLECTOR_DEMO_MAIL_DOMAIN` only when set. Empty is the safe state while no demo host is named: the
+collector then holds every demo host's mail, unsent and unacked, and logs `demo_mail_domain_not_set`
+at start-up. When set it must be a bare domain, with no scheme, no at sign and no space, or the run
+stops before anything changes. Once a demo host is in `mail_collector_hosts` it must be set, or the
+run stops (The drain list): a demo host named with its mail silently held would look live and send
+nothing.
 
 The sending target is an input, not something the role decides. The owner sets these in a later
 change, to the digest the collector's image workflow printed and attested.
@@ -87,6 +91,43 @@ An empty or malformed `mail_collector_image` stops the run at its first task, be
 changes. The all-zero default is the one value that passes that check and is held off by the run
 rule instead: the host's play carries the default, so stopping on it would fail every apply of the
 host until the owner sets a digest.
+
+## The drain list
+
+The collector drains the hosts its descriptor directory names and no others, and nothing else names
+a host. `mail_collector_hosts` is that list. Each entry holds exactly three keys, all public:
+
+| Key           | Meaning                                                                    |
+| ------------- | -------------------------------------------------------------------------- |
+| `slug`        | The host's name: lowercase letters, digits and hyphens, unique in the list |
+| `kind`        | `demo` or `tenant`                                                         |
+| `app_host_ip` | The private IPv4 address the collector dials (10/8, 172.16/12, 192.168/16) |
+
+For each entry the role writes `<slug>.json` (root's, `0644`) holding `slug`, `kind`, `appHostIp` and
+`expiresAt`, which is always `null`: a host leaves the drain list by leaving this list, not by a
+date. Then it removes every other `.json` file in the directory. A file that is not named `*.json`
+is left alone, because the collector never reads one.
+
+- **Why a role task.** The only route to ops1 is the gated apply (ANS-17), the values are public
+  and a descriptor is a few lines of text, so a task that renders them from the repository adds no
+  second delivery path, no credential and no new host-side program. A pull from another host would
+  need a route and a key from ops1, and a file copied by hand would never track the list.
+- **A removed host drops out.** Removing an entry removes its file at the next gated apply. The
+  collector re-reads the directory every `COLLECTOR_DESCRIPTOR_REFRESH_MS` (5 seconds unless set)
+  and drains only what it finds, so the host is dropped within one refresh period of that apply.
+  The collector is not restarted for a descriptor change. Emptying the list empties the directory,
+  and a running collector then withholds every heartbeat ping, which is the alarm.
+- **No secret.** The argument spec refuses any key but the three, and the template names the four
+  fields it writes and never iterates the entry, so there is nowhere for a token or a password to
+  go. The address is the private one the estate already publishes in `addressPlan.ts`, or an alias
+  on ops1 when the path to the host is a tunnel.
+- **Refused before anything is written.** A key besides the three, a missing key, a slug that is not
+  a plain lowercase name (so a file name cannot climb out of the directory), a kind that is not
+  `demo` or `tenant`, an address that is not private IPv4, two entries with one slug, and a demo
+  host while `mail_collector_demo_mail_domain` is empty each stop the run with the directory as it
+  was. The message names the entry's place in the list, never a value.
+- **Hand placement is replaced.** A descriptor put on ops1 by hand and not in the list is removed by
+  the next apply. Put the host in the list instead.
 
 ## State that survives a restart
 
@@ -136,7 +177,8 @@ names it.
 | Path                                           | Owner     | Mode   | What                                                       |
 | ---------------------------------------------- | --------- | ------ | ---------------------------------------------------------- |
 | `/etc/branchleft/mail-collector`               | root      | `0755` | The directory of the files below                           |
-| `/etc/branchleft/mail-collector/descriptors`   | root      | `0755` | Left empty; one JSON file per host the collector may drain |
+| `/etc/branchleft/mail-collector/descriptors`   | root      | `0755` | One JSON file per host in `mail_collector_hosts`, no other |
+| `.../descriptors/<slug>.json`                  | root      | `0644` | A host's descriptor: four public fields                    |
 | `/etc/branchleft/mail-collector/unit.env`      | root      | `0644` | The image and the account's ids, public values             |
 | `/etc/branchleft/mail-collector/collector.env` | root      | `0644` | The settings; absent while the collector is off            |
 | `/var/lib/branchleft/mail-collector`           | collector | `0700` | The collector's persistent state, written by the collector |
@@ -144,7 +186,7 @@ names it.
 | `/etc/systemd/system/mail-collector.service`   | root      | `0644` | The unit                                                   |
 
 It also makes the `mail-collector` account and group. It names, and never writes, the credentials
-file and any descriptor.
+file.
 
 ## What the unit runs
 
@@ -176,11 +218,18 @@ They hold the unit to its flags, mounts, start conditions and restart policy (an
 able to find each way the unit could be loosened), render both environment files and hold them to the
 names the collector reads, hold the run rule (a real image and a sending host, or off), the order of
 refusal before change, that the credentials file is never written, and the shapes of the image and
-host. The Molecule `default` scenario converges twice with the inputs set, against stand-ins for
-`docker`, a made-up credentials file and a made-up descriptor, and checks the files, owners and
-modes, that the unit runs with the two env files, and that the owner's file and the descriptor are
-left alone. The `inert` scenario converges at the defaults and checks that nothing runs even with a
-descriptor and a credentials file in place.
+host. A second suite, `tests/unit/test_descriptors.py`, runs the role's own drain-list tasks with
+Ansible on the machine that runs the tests, against a scratch directory (no host), and reads the
+directory the way the collector reads it. It holds that a host missing from the list is missing from
+the drain list until it is listed, that a host removed from the list leaves the drain list, that a
+second run changes nothing, that a refused list leaves the directory as it was, and that a demo host
+with no demo mail domain stops the run. The Molecule `default` scenario converges twice with the
+inputs set, against stand-ins for `docker` and a made-up credentials file, with two hosts listed and
+a stale descriptor and a note already in the directory, and checks the files, owners and modes, the
+two descriptors, that the stale one is gone and the note is not, that the unit runs with the two env
+files, and that the owner's file is left alone. The `inert` scenario converges at the defaults and
+checks that nothing runs even with the credentials file in place, and that the hand-placed
+descriptors are removed.
 
 ## How it is delivered
 
@@ -207,8 +256,11 @@ unit and leaves the collector off.
   address that lets a container on `ops1` reach a host's drain surface. Until that exists every drain
   call is refused, a failed cycle, and the heartbeat is withheld. How the container reaches the
   address (bridge, or the host's network) is decided with that path, not here.
-- **Nothing fills the descriptor directory.** The role makes it and leaves it empty. What keeps it
-  current from the real descriptors is another change's, and until it exists the unit does not start.
+- **The list is the owner's input.** The role writes whatever `mail_collector_hosts` holds and
+  nothing else; with the default empty list the directory is empty and the unit does not start.
+  The addresses are the owner's to set, and the one for a host behind a tunnel is the tunnel's
+  alias, which does not exist yet. A removal reaches the directory at the next gated apply, not
+  at once.
 - **The first start needs the image to be pullable.** The role does not pull ahead of the start. If
   the package is private the unit fails to start and the cause is the pull, not the role.
 - **A condition is not an alarm.** A unit whose settings, descriptor or credentials are missing stays

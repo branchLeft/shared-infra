@@ -2,8 +2,8 @@
 # The role installs the mail collector on ops1 as a container unit. It makes the account the
 # collector runs as, its directories, the two public environment files and the unit, and starts
 # the unit only when the image is a real digest and a sending target is set. It never writes the
-# credentials file (the owner places it) and never fills the descriptor directory (a host is
-# drained only when a descriptor names it, and nothing here names one).
+# credentials file (the owner places it). It owns the descriptor directory's .json files: one for
+# each host in mail_collector_hosts, and none other, so the list is the drain list.
 #
 # It touches only its own paths (vars/main.yml). Which host may apply it is the owner's list
 # (checks/host_roles.yml, R9); an in-role host test would be no control, because under the pull
@@ -35,6 +35,54 @@
       - mail_collector_demo_mail_domain | length == 0 or mail_collector_demo_mail_domain is match(mail_collector_demo_mail_domain_pattern)
     quiet: true
     fail_msg: mail_collector_demo_mail_domain must be empty or a bare domain, with no scheme, no at sign and no space.
+
+# The drain list. Each entry is judged before anything is written, so a bad entry leaves the
+# directory as it was. A message names the entry by its place in the list, never by a value.
+- name: Refuse a host list that is not a list
+  ansible.builtin.assert:
+    that:
+      - mail_collector_hosts is sequence
+      - mail_collector_hosts is not string
+      - mail_collector_hosts is not mapping
+    quiet: true
+    fail_msg: mail_collector_hosts must be a list.
+
+- name: Refuse a host entry that is malformed
+  ansible.builtin.assert:
+    that:
+      - item is mapping
+      - item.keys() | sort | list == mail_collector_host_keys
+      - item.slug is string
+      - item.slug is match(mail_collector_slug_pattern)
+      - item.kind is string
+      - item.kind in mail_collector_host_kinds
+      - item.app_host_ip is string
+      - item.app_host_ip is match(mail_collector_private_ipv4_pattern)
+    quiet: true
+    fail_msg: >-
+      A mail_collector_hosts entry must hold exactly slug, kind and app_host_ip, a slug of
+      lowercase letters, digits and hyphens, a kind of demo or tenant, and a private IPv4 address.
+  loop: '{{ mail_collector_hosts }}'
+  loop_control:
+    label: host {{ ansible_loop.index }}
+    extended: true
+
+- name: Refuse two hosts with one slug
+  ansible.builtin.assert:
+    that:
+      - mail_collector_hosts | map(attribute='slug') | list | unique | list | length == mail_collector_hosts | length
+    quiet: true
+    fail_msg: Two mail_collector_hosts entries share a slug, and the collector refuses a duplicate.
+
+# Empty holds demo mail unsent and unacked. That is the safe state while no demo host is named,
+# and the silent failure once one is: a demo host in the list with no domain set would look live
+# and send nothing.
+- name: Refuse a demo host in the list when no demo mail domain is set
+  ansible.builtin.assert:
+    that:
+      - mail_collector_hosts | selectattr('kind', 'equalto', 'demo') | list | length == 0 or mail_collector_demo_mail_domain | length > 0
+    quiet: true
+    fail_msg: A mail_collector_hosts entry is a demo host, so mail_collector_demo_mail_domain must be set.
 
 - name: Refuse a port that is not a whole number from 1 to 65535
   ansible.builtin.assert:
@@ -190,13 +238,48 @@
     group: root
     mode: '0755'
 
-- name: Make the descriptor directory, left empty
+- name: Make the descriptor directory
   ansible.builtin.file:
     path: '{{ mail_collector_descriptor_dir }}'
     state: directory
     owner: root
     group: root
     mode: '0755'
+
+# --- The descriptors. One file for each host in the list, written first, then every other .json
+# file removed, so a host that leaves the list drops out on the next apply and the collector
+# forgets it at its next refresh. The collector reads only .json files and nothing else here.
+# No handler: the collector re-reads the directory on its own refresh and is never restarted.
+- name: Write each listed host's descriptor
+  ansible.builtin.template:
+    src: descriptor.json.j2
+    dest: '{{ mail_collector_descriptor_dir }}/{{ item.slug }}{{ mail_collector_descriptor_suffix }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop: '{{ mail_collector_hosts }}'
+  loop_control:
+    label: '{{ item.slug }}'
+
+# Read-only, so it also runs in check mode. A directory not yet made is reported as skipped, not
+# as a failure, and lists nothing.
+- name: Look for descriptor files in the directory
+  ansible.builtin.find:
+    paths: '{{ mail_collector_descriptor_dir }}'
+    patterns: '*{{ mail_collector_descriptor_suffix }}'
+    file_type: any
+    recurse: false
+    follow: false
+  register: mail_collector_descriptor_found
+
+- name: Remove every descriptor file that no listed host names
+  ansible.builtin.file:
+    path: '{{ mail_collector_descriptor_dir }}/{{ item }}'
+    state: absent
+  loop: >-
+    {{ mail_collector_descriptor_found.files | map(attribute='path') | map('basename')
+    | reject('in', mail_collector_hosts | map(attribute='slug') | product([mail_collector_descriptor_suffix]) | map('join') | list)
+    | sort | list }}
 
 - name: Make the state directory, owned by the collector account and closed to everyone else
   ansible.builtin.file:

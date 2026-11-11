@@ -60,6 +60,15 @@ FORBIDDEN_MODULES = {"shell", "command", "script", "raw", "slurp", "pipe", "fetc
 CHANGING_MODULES = {"group", "user", "file", "copy", "template", "systemd_service", "meta"}
 
 
+class _Item(str):
+    """A loop item that is a file name and also has the `slug` of a host entry."""
+
+    @property
+    def slug(self) -> str:
+        """Return a slug, so a template that reads `item.slug` renders."""
+        return "x"
+
+
 def load(path: Path) -> object:
     """Load a YAML file with the safe loader."""
     return YAML(typ="safe").load(path.read_text(encoding="utf-8"))
@@ -519,7 +528,12 @@ class TaskTests(unittest.TestCase):
             if module_of(task) not in WRITING_MODULES:
                 continue
             args = args_of(task)
-            seen.extend(render(str(args[key])) for key in ("dest", "path") if key in args)
+            # The loop item stands in as a descriptor entry or a file name, whichever the task
+            # loops over; either way the path is built under the descriptor directory.
+            variables = {"item": _Item("x.json")}
+            seen.extend(
+                render(str(args[key]), variables) for key in ("dest", "path") if key in args
+            )
         self.assertGreaterEqual(len(seen), 6)
         outside = [p for p in seen if not p.startswith(ALLOWED_PREFIXES)]
         self.assertEqual(outside, [])
@@ -529,23 +543,125 @@ class TaskTests(unittest.TestCase):
         for task in tasks():
             if module_of(task) in WRITING_MODULES:
                 dest = str(args_of(task).get("dest", args_of(task).get("path", "")))
-                self.assertNotEqual(render(dest), credentials, task.get("name"))
+                self.assertNotEqual(
+                    render(dest, {"item": _Item("x")}), credentials, task.get("name")
+                )
         text = (ROLE / "tasks" / "main.yml").read_text(encoding="utf-8")
         # It is named by a stat and an assert only, and a stat of it takes no checksum.
         stat = args_of(named("Look at the credentials file"))
         self.assertIs(stat["get_checksum"], False)
         self.assertEqual(text.count("mail_collector_credentials_file"), 1)
 
-    def test_the_role_leaves_the_descriptor_directory_empty(self) -> None:
+    def test_the_role_writes_descriptors_only_from_the_host_list_and_only_inside_their_directory(
+        self,
+    ) -> None:
         make = args_of(named("Make the descriptor directory"))
         self.assertEqual(make["state"], "directory")
+        directory = str(role_vars()["mail_collector_descriptor_dir"]) + "/"
+        writers = [
+            task
+            for task in tasks()
+            if module_of(task) in {"copy", "template"}
+            and render(str(args_of(task)["dest"]), {"item": _Item("x")}).startswith(directory)
+        ]
+        self.assertEqual(
+            [task["name"] for task in writers], ["Write each listed host's descriptor"]
+        )
+        self.assertEqual(writers[0]["loop"], "{{ mail_collector_hosts }}")
+        self.assertEqual(args_of(writers[0])["src"], "descriptor.json.j2")
+        remove = named("Remove every descriptor")
+        self.assertEqual(args_of(remove)["state"], "absent")
+        self.assertTrue(
+            render(str(args_of(remove)["path"]), {"item": "x.json"}).startswith(directory)
+        )
+
+    def test_the_hosts_are_judged_and_the_demo_domain_required_before_anything_changes(
+        self,
+    ) -> None:
+        first_change = next(i for i, t in enumerate(tasks()) if module_of(t) in CHANGING_MODULES)
+        for start in (
+            "Refuse a host list",
+            "Refuse a host entry",
+            "Refuse two hosts",
+            "Refuse a demo host",
+        ):
+            with self.subTest(start=start):
+                self.assertLess(tasks().index(named(start)), first_change)
+
+    def test_a_host_entry_must_hold_exactly_three_public_keys_with_well_formed_values(self) -> None:
+        check = named("Refuse a host entry")
+        good = {"slug": "demo-1", "kind": "demo", "app_host_ip": "10.20.1.100"}
+        self.assertEqual(sorted(good), role_vars()["mail_collector_host_keys"])
+        for address in ("10.0.0.1", "10.255.255.254", "172.16.0.1", "172.31.255.1", "192.168.1.1"):
+            with self.subTest(address=address):
+                self.assertTrue(holds(check, {"item": {**good, "app_host_ip": address}}))
+        for kind in ("demo", "tenant"):
+            self.assertTrue(holds(check, {"item": {**good, "kind": kind}}))
+        self.assertTrue(holds(check, {"item": {**good, "slug": "a"}}))
+        self.assertTrue(holds(check, {"item": {**good, "slug": "a" * 63}}))
+        bad_entries: list[object] = [
+            {**good, "token": "x"}, {**good, "password": "x"}, {**good, "expires_at": "x"},
+            {k: v for k, v in good.items() if k != "slug"},
+            {k: v for k, v in good.items() if k != "kind"},
+            {k: v for k, v in good.items() if k != "app_host_ip"},
+            {}, "demo1", ["demo1"], None,
+            *({**good, "app_host_ip": a} for a in (
+                "8.8.8.8", "127.0.0.1", "10.0.0", "10.0.0.256", "10.020.1.1", "172.15.0.1",
+                "172.32.0.1", "192.169.0.1", "10.0.0.1:8080", "10.0.0.1/8", "example.test", "",
+                "10.0.0.1 ", "10.0.0.1\n", "::1", "1.10.0.0.1", 10, None,
+            )),
+            *({**good, "slug": s} for s in (
+                "", "../x", "a/b", "A", "demo_1", "-a", "a-", "a b", ".json", "a.json", "a\n",
+                "a" * 64, 1, None,
+            )),
+            *({**good, "kind": k} for k in ("", "Demo", "other", "tenant ", None)),
+        ]  # fmt: skip
+        for entry in bad_entries:
+            with self.subTest(entry=str(entry)[:50]):
+                self.assertFalse(holds(check, {"item": entry}))
+
+    def test_two_hosts_with_one_slug_are_refused_and_two_with_two_are_not(self) -> None:
+        check = named("Refuse two hosts")
+        one = {"slug": "a", "kind": "tenant", "app_host_ip": "10.0.0.1"}
+        two = {**one, "slug": "b"}
+        self.assertTrue(holds(check, {"mail_collector_hosts": []}))
+        self.assertTrue(holds(check, {"mail_collector_hosts": [one, two]}))
+        self.assertFalse(
+            holds(check, {"mail_collector_hosts": [one, {**one, "app_host_ip": "10.0.0.2"}]})
+        )
+
+    def test_the_list_must_be_a_list(self) -> None:
+        check = named("Refuse a host list")
+        self.assertTrue(holds(check, {"mail_collector_hosts": []}))
+        for bad in ("demo1", {"a": "b"}):
+            with self.subTest(bad=str(bad)):
+                self.assertFalse(holds(check, {"mail_collector_hosts": bad}))
+
+    def test_a_demo_host_needs_the_demo_mail_domain(self) -> None:
+        check = named("Refuse a demo host")
+        demo = {"slug": "d", "kind": "demo", "app_host_ip": "10.0.0.1"}
+        tenant = {**demo, "kind": "tenant"}
+        for hosts, domain, ok in (
+            ([], "", True),
+            ([tenant], "", True),
+            ([demo], "", False),
+            ([tenant, demo], "", False),
+            ([demo], "demo.example", True),
+            ([tenant], "demo.example", True),
+        ):
+            with self.subTest(kinds=[h["kind"] for h in hosts], domain=domain):
+                variables = {
+                    "mail_collector_hosts": hosts,
+                    "mail_collector_demo_mail_domain": domain,
+                }
+                self.assertIs(holds(check, variables), ok)
+
+    def test_the_collector_is_not_restarted_for_a_descriptor_change(self) -> None:
+        # The collector re-reads the directory on its own refresh; a restart would drop its
+        # in-memory state for nothing.
         for task in tasks():
-            if module_of(task) in {"copy", "template"}:
-                dest = render(str(args_of(task)["dest"]))
-                self.assertFalse(
-                    dest.startswith(str(role_vars()["mail_collector_descriptor_dir"]) + "/"),
-                    task.get("name"),
-                )
+            if "descriptor" in str(task.get("name", "")).lower():
+                self.assertNotIn("notify", task, task.get("name"))
 
     def test_a_placed_credentials_file_must_be_roots_and_mode_0600_or_the_run_stops(self) -> None:
         check = named("Require a placed credentials file")
