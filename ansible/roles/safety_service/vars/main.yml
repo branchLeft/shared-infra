@@ -23,12 +23,17 @@ safety_service_state_dir: /var/lib/branchleft/safety-service
 safety_service_audit_file: /var/lib/branchleft/safety-service/audit.jsonl
 
 # Paths the role names and never writes. The directory is made, and its key written, by the
-# safety_channel_key role; the credential is placed there by the owner. Held equal to that
-# role's constants by tests/unit/test_safety_service.py, since a role does not import another
-# (ANS-12).
+# safety_channel_key role, which refuses any file in it that is not the key: so the hash-source
+# credential cannot live there. Held equal to that role's constants by
+# tests/unit/test_safety_service.py, since a role does not import another (ANS-12).
 safety_service_secrets_dir: /etc/branchleft/content-safety
 safety_service_signing_key_file: /etc/branchleft/content-safety/channel-signing.key
-safety_service_credential_file: /etc/branchleft/content-safety/arachnid-credential
+
+# The hash-source credential is a username and a password, two files in a directory of their own.
+# The role makes the directory (account's, closed to everyone else); the owner places the two files.
+safety_service_credential_dir: /etc/branchleft/arachnid
+safety_service_username_file: /etc/branchleft/arachnid/username
+safety_service_password_file: /etc/branchleft/arachnid/password
 
 safety_service_unit_dir: /etc/systemd/system
 safety_service_unit: content-safety.service

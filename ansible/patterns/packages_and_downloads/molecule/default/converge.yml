@@ -11,9 +11,9 @@
       vars:
         packages_and_downloads_downloads:
           # Sets only the mode: owner and group come from the role's variables.
-          - url: file:///srv/packages-and-downloads/example-tool-v1
+          - url: file:///srv/packages-and-downloads/example-tool-v1.py
             dest: /usr/local/bin/example-tool
-            checksum: sha256:a3bd5f9c3e07f25cedd25229122fb95c63ebfc7b4358efdf2bae2e1c708bf1f7
+            checksum: sha256:1739977f34eab4e9f88f2872b66f1f2b44f13090ce9bb309b9615ad9f1728e22
             mode: '0755'
           # Sets no owner, group or mode.
           - url: file:///srv/packages-and-downloads/example-pinned-tool_1.0.0_all.deb

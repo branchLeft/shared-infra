@@ -1,0 +1,6 @@
+---
+# The default scenario's verify.yml, which runs the cases whose home is this scenario's name
+# (edge_stack_verify_homes) and the checks that run in every scenario. Imported, not copied,
+# so the cases have one home.
+- name: Verify as the default scenario does
+  ansible.builtin.import_playbook: ../default/verify.yml

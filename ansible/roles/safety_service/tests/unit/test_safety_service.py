@@ -37,6 +37,7 @@ SERVICE_HOST_KEYS = {"id", "kind", "safety", "endpoint"}
 ENV_NAMES = ["SAFETY_SERVICE_IMAGE", "SAFETY_SERVICE_USER"]
 ALLOWED_PREFIXES = (
     "/etc/branchleft/safety-service",
+    "/etc/branchleft/arachnid",
     "/var/lib/branchleft/safety-service",
     "/etc/systemd/system/content-safety.service",
 )
@@ -142,6 +143,7 @@ def unit_problems(text: str) -> list[str]:
     """Return what is wrong with the unit: each way it could run with more than it is meant to."""
     start = " ".join(unit_values(text, "ExecStart"))
     secrets = str(role_vars()["safety_service_secrets_dir"])
+    credentials = str(role_vars()["safety_service_credential_dir"])
     problems = []
     for flag in ("--read-only", "--cap-drop ALL", "--security-opt no-new-privileges"):
         if flag not in start:
@@ -156,6 +158,8 @@ def unit_problems(text: str) -> list[str]:
             problems.append(f"has {forbidden.strip()}")
     if f"--volume {secrets}:{secrets}:ro" not in start:
         problems.append("secrets directory is not mounted read-only")
+    if f"--volume {credentials}:{credentials}:ro" not in start:
+        problems.append("credential directory is not mounted read-only")
     for volume in re.findall(r"--volume (\S+)", start):
         if volume.endswith((":rw", ":ro")) is False:
             problems.append(f"volume without a mode: {volume}")
@@ -176,16 +180,17 @@ class UnitFileTests(unittest.TestCase):
         for marker in ("{{", "{%", "%i", "%I"):
             self.assertNotIn(marker, self.text)
 
-    def test_the_unit_runs_only_when_the_configuration_the_key_and_the_credential_exist(
+    def test_the_unit_runs_only_when_the_configuration_the_key_and_both_credential_files_exist(
         self,
     ) -> None:
         # A condition that is not met leaves the unit inactive instead of failing, and the service
         # would refuse to start without its credential in any case: no path to a running service
-        # without all three.
+        # without all four.
         expected = [
             role_vars()["safety_service_config_file"],
             role_vars()["safety_service_signing_key_file"],
-            role_vars()["safety_service_credential_file"],
+            role_vars()["safety_service_username_file"],
+            role_vars()["safety_service_password_file"],
         ]
         self.assertEqual(unit_values(self.text, "ConditionPathExists"), expected)
 
@@ -203,6 +208,7 @@ class UnitFileTests(unittest.TestCase):
             start.replace("--rm ", "--rm --network host "),
             start.replace("--rm ", "--rm --volume /var/run/docker.sock:/var/run/docker.sock:rw "),
             start.replace("/etc/branchleft/content-safety:ro", "/etc/branchleft/content-safety:rw"),
+            start.replace("/etc/branchleft/arachnid:ro", "/etc/branchleft/arachnid:rw"),
             start.replace("--rm ", "--rm --env HASH_SOURCE_CREDENTIAL=x "),
             start.replace("--rm ", "--rm --env-file /etc/branchleft/x.env "),
         ]
@@ -216,10 +222,16 @@ class UnitFileTests(unittest.TestCase):
         start = unit_values(self.text, "ExecStart")[0]
         config = str(role_vars()["safety_service_config_dir"])
         secrets = str(role_vars()["safety_service_secrets_dir"])
+        credentials = str(role_vars()["safety_service_credential_dir"])
         state = str(role_vars()["safety_service_state_dir"])
         self.assertEqual(
             re.findall(r"--volume (\S+)", start),
-            [f"{config}:{config}:ro", f"{secrets}:{secrets}:ro", f"{state}:{state}:rw"],
+            [
+                f"{config}:{config}:ro",
+                f"{secrets}:{secrets}:ro",
+                f"{credentials}:{credentials}:ro",
+                f"{state}:{state}:rw",
+            ],
         )
 
     def test_the_unit_names_no_credential_value_and_no_agent_or_model_key(self) -> None:
@@ -273,13 +285,14 @@ class RenderedFilesTests(unittest.TestCase):
         config = self.config()
         arachnid = cast("dict[str, object]", config["arachnid"])
         channel = cast("dict[str, object]", config["channel"])
-        self.assertEqual(arachnid["credentialFile"], role_vars()["safety_service_credential_file"])
+        self.assertEqual(arachnid["usernameFile"], role_vars()["safety_service_username_file"])
+        self.assertEqual(arachnid["passwordFile"], role_vars()["safety_service_password_file"])
         self.assertEqual(channel["signingKeyFile"], role_vars()["safety_service_signing_key_file"])
         self.assertEqual(
             cast("dict[str, object]", config["audit"])["file"],
             role_vars()["safety_service_audit_file"],
         )
-        self.assertEqual(set(arachnid), {"baseUrl", "credentialFile"})
+        self.assertEqual(set(arachnid), {"baseUrl", "usernameFile", "passwordFile"})
         self.assertNotRegex(
             CONFIG_TEMPLATE.read_text(encoding="utf-8"), r"lookup|query|slurp|vault"
         )
@@ -315,9 +328,15 @@ class PinsTests(unittest.TestCase):
             role_vars()["safety_service_signing_key_file"],
             f"{directory}/{key_vars['safety_channel_key_key_name']}",
         )
-        # The credential is a file the owner places in that same directory.
-        self.assertEqual(
-            str(role_vars()["safety_service_credential_file"]).rsplit("/", 1)[0], directory
+        # The credential is never in the key's directory: the key role refuses any other file there
+        # (E-DIR-FOREIGN), so an apply would fail on a credential placed beside the key.
+        credentials = str(role_vars()["safety_service_credential_dir"])
+        self.assertNotEqual(credentials, directory)
+        self.assertFalse(credentials.startswith(directory + "/"))
+        for name in ("safety_service_username_file", "safety_service_password_file"):
+            self.assertEqual(str(role_vars()[name]).rsplit("/", 1)[0], credentials, name)
+        self.assertNotEqual(
+            role_vars()["safety_service_username_file"], role_vars()["safety_service_password_file"]
         )
 
     def test_the_role_writes_nothing_in_the_secrets_directory(self) -> None:
