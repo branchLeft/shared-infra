@@ -266,9 +266,15 @@ class NoGithubFetchTest(unittest.TestCase):
     def test_the_real_tree_fetches_nothing(self) -> None:
         self.assertEqual([], fetch_findings(ROOT))
 
-    def test_the_playbook_applies_the_four_roles_the_check_reads(self) -> None:
+    def test_the_playbook_applies_the_five_roles_the_check_reads(self) -> None:
         self.assertEqual(
-            ["ansible_runtime", "pull_trigger", "demo1_build", "demo1_egress_spool"],
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "demo1_build",
+                "demo1_egress_spool",
+                "spool_path_account",
+            ],
             playbook_roles(ROOT),
         )
 

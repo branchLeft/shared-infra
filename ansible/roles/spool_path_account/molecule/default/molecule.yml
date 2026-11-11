@@ -1,0 +1,65 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness
+# sets ROLE_TEST_RUN_ID, so the instance name is unique to one run and a
+# destroy can only ever remove this run's container.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # Third-party systemd test base on Debian 13, the release every production host runs,
+    # trusted by digest. The digest is the pin; the tag is informational and moves weekly. The
+    # role installs a unit and holds its state, so the platform runs systemd as PID 1, a
+    # platform the author justifies here, per ANS-15.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    # Pre-built, so that the reference can carry a digest.
+    pre_build_image: true
+    # Destroy removes the container's anonymous volumes. This scenario's cgroup bind mount means
+    # none is created; the key guards against one if the mount is ever dropped.
+    keep_volumes: false
+    # No privileged mode and no added capabilities. The mounts, the cgroup namespace and the
+    # command below are the whole set this image needs to run systemd (measured by the
+    # files_and_units pattern, which this block copies). The host cgroup namespace is a stated
+    # exception (ANS-15): on a cgroup v2 host a private namespace over the read-write cgroup
+    # mount makes systemd exit at once, and the host namespace is the least privilege that works.
+    # The test image is trusted by digest and the job holds no credentials.
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    # Start systemd as the init process, the image's own CMD.
+    command: /lib/systemd/systemd
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  env:
+    # Every Ansible run of this scenario appends its output to one log on the controller, and
+    # verify reads it. Verbosity 3 prints each task's result with the arguments it was given, so
+    # a task that handles a key and lacks no_log shows it in the log, and verify fails (ANS-16).
+    ANSIBLE_LOG_PATH: '${MOLECULE_EPHEMERAL_DIRECTORY}/ansible.log'
+    ANSIBLE_VERBOSITY: '3'
+  inventory:
+    group_vars:
+      all:
+        scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
+        scenario_ephemeral_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+        # The role's own constants, spelled out here so that a change of a constant fails the
+        # scenario instead of being followed by it.
+        scenario_inputs_dir: /etc/branchleft/spool-path-account
+        scenario_keys_dir: /etc/ssh/branchleft-spool-path
+        scenario_key_file: /etc/ssh/branchleft-spool-path/authorized_keys
+        scenario_dropin: /etc/ssh/sshd_config.d/42-branchleft-spool-path.conf
+        scenario_account: spoolpath
+        scenario_spool_port: 8095
+        scenario_sshd_calls: /run/standin-sshd-calls
+        # Test values, never real: a documentation address and a made-up public key.
+        scenario_from_address: 192.0.2.50
+        scenario_public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl test-only
+verifier:
+  name: ansible

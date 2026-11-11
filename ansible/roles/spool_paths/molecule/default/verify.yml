@@ -1,0 +1,99 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at what the role made for the host a descriptor names
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_dir }}'
+        - '{{ scenario_dir }}/host-one.conf'
+        - '{{ scenario_dir }}/host-one.known_hosts'
+        - '{{ scenario_unit }}'
+        - '{{ scenario_netdev }}'
+        - '{{ scenario_network }}'
+      register: spool_paths_v_stats
+
+    - name: Require each to exist with the owner and mode the role means
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.mode == ('0700' if item.item == scenario_dir else '0644')
+        quiet: true
+      loop: '{{ spool_paths_v_stats.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Look for anything the role made for the host no descriptor names
+      ansible.builtin.find:
+        paths:
+          - '{{ scenario_dir }}'
+          - /etc/systemd/system
+        patterns:
+          - '*host-two*'
+        recurse: true
+        hidden: true
+      register: spool_paths_v_idle
+
+    - name: Require that host to have no configuration, no pinned key and no unit
+      ansible.builtin.assert:
+        that: spool_paths_v_idle.matched == 0
+        quiet: true
+        fail_msg: A host no descriptor names got something from the role.
+
+    - name: Read the configuration of the host a descriptor names
+      ansible.builtin.slurp:
+        src: '{{ scenario_dir }}/host-one.conf'
+      register: spool_paths_v_conf
+
+    - name: Require it to forward the alias to the far loopback and to name no secret
+      ansible.builtin.assert:
+        that:
+          - ('LocalForward ' ~ scenario_alias ~ ':8080 127.0.0.1:8095') in (spool_paths_v_conf.content | b64decode)
+          - "'ExitOnForwardFailure yes' in (spool_paths_v_conf.content | b64decode)"
+          - "'StrictHostKeyChecking yes' in (spool_paths_v_conf.content | b64decode)"
+        quiet: true
+
+    - name: Ask systemd whether the path is enabled and running
+      ansible.builtin.command:
+        argv: [systemctl, '{{ item }}', branchleft-spool-path@host-one.service]
+      loop: [is-enabled, is-active]
+      register: spool_paths_v_state
+      changed_when: false
+      failed_when: false
+
+    - name: Require it enabled, and left stopped because the owner has placed no key
+      ansible.builtin.assert:
+        that:
+          - spool_paths_v_state.results[0].stdout == 'enabled'
+          - spool_paths_v_state.results[1].stdout == 'inactive'
+        quiet: true
+        fail_msg: The path must be enabled and, with no key placed, must not be running.
+
+    - name: Require that the network manager was asked to reload
+      ansible.builtin.stat:
+        path: '{{ scenario_networkctl_calls }}'
+      register: spool_paths_v_networkctl
+      failed_when: not spool_paths_v_networkctl.stat.exists
+
+    # Verbosity 3 prints each task's arguments, so a value the role should have hidden would be in
+    # the log (ANS-16). The role holds only public data, so any private key text is a finding.
+    - name: Look in the log of the whole run for private key text
+      ansible.builtin.command:
+        argv: [grep, -c, -E, 'PRIVATE KEY', '{{ scenario_log_path }}']
+      delegate_to: localhost
+      register: spool_paths_v_log
+      changed_when: false
+      failed_when: spool_paths_v_log.stdout | int != 0 and spool_paths_v_log.rc != 1
+      become: false
+
+    - name: Require the log to hold none
+      ansible.builtin.assert:
+        that: spool_paths_v_log.stdout | int == 0
+        quiet: true

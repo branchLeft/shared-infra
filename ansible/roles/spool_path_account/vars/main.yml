@@ -1,0 +1,31 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. A path, a name or a flag the
+# account's confinement depends on must not be moved by a play variable.
+#
+# The account ops1's path logs in as. A test holds the name equal to the one the ops1 role dials.
+spool_path_account_user: spoolpath
+spool_path_account_nologin: /usr/sbin/nologin
+spool_path_account_loopback: 127.0.0.1
+
+# The run-time inputs are two root-only files the owner places once: the address the account's key
+# may be used from, and the public half of the key ops1 holds. The role reads them and never writes
+# them. Neither is committed. With neither present the role is inert, and with one it refuses.
+spool_path_account_inputs_parent: /etc/branchleft
+spool_path_account_inputs_dir: /etc/branchleft/spool-path-account
+spool_path_account_input_names:
+  - from_address
+  - public_key
+
+spool_path_account_sshd_service: ssh
+spool_path_account_sshd: /usr/sbin/sshd
+spool_path_account_sshd_config_dir: /etc/ssh/sshd_config.d
+spool_path_account_sshd_dropin: /etc/ssh/sshd_config.d/42-branchleft-spool-path.conf
+spool_path_account_authorized_keys_dir: /etc/ssh/branchleft-spool-path
+spool_path_account_authorized_keys_file: /etc/ssh/branchleft-spool-path/authorized_keys
+
+# Shapes, matched with \Z so a trailing line break does not pass. The from address is one IPv4
+# address: the address this host sees the path arrive from (the gateway's address on a host
+# with a public interface, the jump host's private address on a private-only one).
+spool_path_account_octet: '(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])'
+spool_path_account_ipv4_pattern: '^{{ spool_path_account_octet }}(?:\.{{ spool_path_account_octet }}){3}\Z'
+spool_path_account_key_pattern: '^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}(?: [A-Za-z0-9@._-]{1,64})?\Z'

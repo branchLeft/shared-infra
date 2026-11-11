@@ -1,0 +1,5 @@
+# The dummy interface that carries each path's alias address. systemd-networkd owns it, and no path
+# unit does, so an address stays in place whether or not a path is up.
+[NetDev]
+Name=spoolpaths
+Kind=dummy

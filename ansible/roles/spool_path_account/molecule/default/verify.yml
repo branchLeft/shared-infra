@@ -1,0 +1,103 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at what the role made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_keys_dir }}'
+        - '{{ scenario_key_file }}'
+        - '{{ scenario_dropin }}'
+      register: spool_path_account_v_stats
+
+    - name: Require each to be root's and not writable by anyone else
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - not item.stat.wgrp
+          - not item.stat.woth
+        quiet: true
+      loop: '{{ spool_path_account_v_stats.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
+    - name: Read the key file
+      ansible.builtin.slurp:
+        src: '{{ scenario_key_file }}'
+      register: spool_path_account_v_key
+      no_log: true
+
+    - name: Require the key line to carry every restriction and the made-up key
+      ansible.builtin.assert:
+        that:
+          - (spool_path_account_v_key.content | b64decode).startswith('restrict,port-forwarding,')
+          - ('permitopen="127.0.0.1:' ~ scenario_spool_port ~ '"') in (spool_path_account_v_key.content | b64decode)
+          - ('from="' ~ scenario_from_address ~ '"') in (spool_path_account_v_key.content | b64decode)
+          - '''command="/usr/sbin/nologin"'' in (spool_path_account_v_key.content | b64decode)'
+          - (spool_path_account_v_key.content | b64decode).count('ssh-ed25519') == 1
+          - "'test-only' not in (spool_path_account_v_key.content | b64decode)"
+        quiet: true
+      no_log: true
+
+    - name: Look the account up
+      ansible.builtin.getent:
+        database: passwd
+        key: '{{ scenario_account }}'
+
+    - name: Require it to have no login shell
+      ansible.builtin.assert:
+        that: getent_passwd[scenario_account][5] == '/usr/sbin/nologin'
+        quiet: true
+
+    - name: Read the sshd settings
+      ansible.builtin.slurp:
+        src: '{{ scenario_dropin }}'
+      register: spool_path_account_v_dropin
+
+    - name: Require the settings to confine the one account
+      ansible.builtin.assert:
+        that:
+          - ('Match User ' ~ scenario_account) in (spool_path_account_v_dropin.content | b64decode)
+          - "'ForceCommand /usr/sbin/nologin' in (spool_path_account_v_dropin.content | b64decode)"
+          - "'GatewayPorts no' in (spool_path_account_v_dropin.content | b64decode)"
+        quiet: true
+
+    - name: Require sshd to have been asked to check the whole configuration
+      ansible.builtin.command:
+        argv: [grep, -c, '^-t$', '{{ scenario_sshd_calls }}']
+      register: spool_path_account_v_checked
+      changed_when: false
+      failed_when: spool_path_account_v_checked.stdout | int < 1
+
+    - name: Look in the log of the whole run for the made-up inputs
+      ansible.builtin.command:
+        argv:
+          [
+            grep,
+            -c,
+            -F,
+            -e,
+            '{{ scenario_from_address }}',
+            -e,
+            'AAAAC3NzaC1lZDI1NTE5',
+            '{{ scenario_log_path }}',
+          ]
+      delegate_to: localhost
+      register: spool_path_account_v_log
+      changed_when: false
+      failed_when: spool_path_account_v_log.rc > 1
+      become: false
+      no_log: true
+
+    - name: Require the log to hold none of them
+      ansible.builtin.assert:
+        that: spool_path_account_v_log.stdout | int == 0
+        quiet: true
+        fail_msg: A value the role should have hidden is in the log of the run.

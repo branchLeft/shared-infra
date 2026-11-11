@@ -44,6 +44,7 @@ ops1:
   - control_plane_db
   - node_exporter
   - mail_collector
+  - spool_paths
   - ring_controller_host
 app1:
   - host_inputs
@@ -78,6 +79,7 @@ dbt1:
 demo1:
   - demo1_build
   - demo1_egress_spool
+  - spool_path_account
 # mx1, the mail host. One role after the pull roles: the host baseline only. It has no
 # private inputs, so host_inputs is not listed. The mail stack is not enrolled here.
 mx1:

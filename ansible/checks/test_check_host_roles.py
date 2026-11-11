@@ -73,9 +73,10 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
-# (it asserts the directory control_plane makes), the node exporter, mail_collector, and
+# (it asserts the directory control_plane makes), the node exporter, mail_collector, then
+# spool_paths (it reads the descriptors mail_collector writes, so it follows), and
 # ring_controller_host last of all so its failure holds nothing else back, and demo1's two build
-# roles.
+# roles and the spool_path_account role after them.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -107,6 +108,7 @@ APPLIED_ON_MAIN = {
         "control_plane_db",
         "node_exporter",
         "mail_collector",
+        "spool_paths",
         "ring_controller_host",
     ],
     "app1": [
@@ -128,7 +130,7 @@ APPLIED_ON_MAIN = {
         "node_exporter",
         "db1_grants",
     ],
-    "demo1": ["demo1_build", "demo1_egress_spool"],
+    "demo1": ["demo1_build", "demo1_egress_spool", "spool_path_account"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {
@@ -328,6 +330,31 @@ class HostRoleLists(unittest.TestCase):
         self._list_file(text.replace("  - mail_collector\n", "", 1))
         self._assert_refused("ops1", "role mail_collector is not on ops1's list")
 
+    # Safety class: spool_paths holds the ssh key to every spool, so it is on ops1's list and on no
+    # other host's, and spool_path_account, the account that key logs in as, is on demo1's list and
+    # on no other host's. The control is the list, which is the owner's merge. Green first: the
+    # real tree passes and each role is on exactly one list. Red when either is added to another
+    # host's playbook, and red when either is dropped from its own host's list.
+    def test_the_spool_path_roles_are_each_on_one_hosts_list(self) -> None:
+        self.assertEqual(check(ROOT), [])
+        for role, home in (("spool_paths", "ops1"), ("spool_path_account", "demo1")):
+            holders = [host for host, names in self.listed.items() if role in names]
+            self.assertEqual(holders, [home])
+            for host in ("app1", "edge1"):
+                with self.subTest(role=role, host=host):
+                    self._playbook(host, _entry(role))
+                    self._assert_refused(host, f"role {role} is not on {host}'s list")
+
+    def test_a_spool_path_role_dropped_from_its_list_is_refused(self) -> None:
+        for role, home in (("spool_paths", "ops1"), ("spool_path_account", "demo1")):
+            with self.subTest(role=role):
+                path = self.ansible / HOST_ROLES_FILE
+                text = path.read_text(encoding="utf-8")
+                self.assertIn(f"  - {role}\n", text, "the sabotage matched nothing")
+                self._list_file(text.replace(f"  - {role}\n", "", 1))
+                self._assert_refused(home, f"role {role} is not on {home}'s list")
+                self._list_file(text)
+
     # Safety class: db1 is the production database host. It applies the two pull roles, the loader
     # of its private inputs, the host baseline, the stack, the backup timers, the node exporter,
     # then the grants, and none of the other roles on its list, which R9 allows because a playbook
@@ -429,10 +456,13 @@ class HostRoleLists(unittest.TestCase):
                 "control_plane_db",
                 "node_exporter",
                 "mail_collector",
+                "spool_paths",
                 "ring_controller_host",
             ],
         )
         self.assertEqual(names[-1], "ring_controller_host")
+        # The paths role reads the descriptors the collector role writes, so it follows that role.
+        self.assertLess(names.index("mail_collector"), names.index("spool_paths"))
         self.assertLess(names.index("backup_worker"), names.index("backup_restore"))
         # The database role asserts the directory the control plane makes, so it follows it.
         self.assertLess(names.index("control_plane"), names.index("control_plane_db"))
@@ -499,8 +529,18 @@ class HostRoleLists(unittest.TestCase):
         text = (ROOT / "ansible" / "playbooks" / "demo1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
         self.assertEqual(
-            names, ["ansible_runtime", "pull_trigger", "demo1_build", "demo1_egress_spool"]
+            names,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "demo1_build",
+                "demo1_egress_spool",
+                "spool_path_account",
+            ],
         )
+        # The account's read-back of the drain port needs the spool running, so it follows the role
+        # that starts it.
+        self.assertLess(names.index("demo1_egress_spool"), names.index("spool_path_account"))
         self.assertEqual(check(ROOT), [])
         for name in ("host_baseline", "egress_nat", "broker_deploy"):
             with self.subTest(role=name):
@@ -511,10 +551,10 @@ class HostRoleLists(unittest.TestCase):
         (self.ansible / "playbooks" / "demo1.yml").write_text(self.real["demo1"], encoding="utf-8")
         path = self.ansible / HOST_ROLES_FILE
         listed = path.read_text(encoding="utf-8")
-        line = "demo1:\n  - demo1_build\n  - demo1_egress_spool\n"
+        line = "demo1:\n  - demo1_build\n  - demo1_egress_spool\n  - spool_path_account\n"
         self.assertIn(line, listed, "the sabotage matched nothing")
         self._list_file(listed.replace(line, "", 1))
-        for name in ("demo1_build", "demo1_egress_spool"):
+        for name in ("demo1_build", "demo1_egress_spool", "spool_path_account"):
             with self.subTest(role=name, list="deleted"):
                 self._assert_refused("demo1", f"role {name} is not on demo1's list")
 
