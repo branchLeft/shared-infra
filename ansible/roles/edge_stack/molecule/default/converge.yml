@@ -58,7 +58,7 @@
       when: not edge_stack_converge_existing.stat.exists and not ansible_check_mode
 
     # The containers' view of the two single-file mounts: a hard link, so the view
-    # follows the inode and not the name (standin-docker.sh).
+    # follows the inode and not the name (standin-docker).
     - name: Give the containers their view of the single-file mounts
       ansible.builtin.file:
         src: '{{ edge_stack_converge_dir }}/{{ item.src }}'

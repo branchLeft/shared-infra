@@ -1,11 +1,31 @@
-#!/bin/sh
-# TEST STAND-IN for dig, installed by prepare.yml ahead of the real one on PATH. The test
-# instance has no resolver of its own to ask, and the answer must not depend on the network.
-# It records each call, and answers an address, unless the switch dig_empty is set, which
-# is a resolver that answers nothing.
-state=/var/lib/standin-docker
-printf '%s\n' "$*" >> "$state/dig.log"
-if [ -e "$state/flags/dig_empty" ]; then
-  exit 0
-fi
-echo 192.0.2.53
+#!/usr/bin/python3 -I
+"""TEST STAND-IN for dig, installed by prepare.yml ahead of the real one on PATH.
+
+The test instance has no resolver of its own to ask, and the answer must not depend on the
+network. It records each call, and answers an address, unless the switch dig_empty is set,
+which is a resolver that answers nothing.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+STATE = "/var/lib/standin-docker"
+
+
+def main(argv: list[str]) -> int:
+    """Record the call and answer it."""
+    try:
+        with open(os.path.join(STATE, "dig.log"), "a", encoding="utf-8") as handle:
+            handle.write(" ".join(argv) + "\n")
+    except OSError:
+        pass
+    if os.path.exists(os.path.join(STATE, "flags", "dig_empty")):
+        return 0
+    print("192.0.2.53")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

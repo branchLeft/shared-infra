@@ -197,7 +197,7 @@ check. Verify does these things, in order:
 
 ## Limits
 
-- The sshd in the container is a stand-in (`molecule/default/files/sshd-stub.sh`):
+- The sshd in the container is a stand-in (`molecule/default/files/sshd-stub`):
   the pinned test image has no OpenSSH server. It answers `sshd -t` and `sshd -T`
   from the drop-ins on disk, refuses keywords it does not know and keywords
   outside a Match block, evaluates only the `all`, `User` and `Address` criteria

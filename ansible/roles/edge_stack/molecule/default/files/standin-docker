@@ -1,0 +1,251 @@
+#!/usr/bin/python3 -I
+"""Test stand-in for docker, installed by prepare.yml. It is not a Docker and proves nothing about
+the real one. What it does, and the flag files in /run that make it fail or lie, is in README.md,
+"How to test it".
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import hashlib
+import os
+import sys
+
+CALLS = "/var/log/docker-standin.calls"
+PROJECT = "/opt/branchleft/edge"
+VIEW = "/var/lib/standin-mount"
+EXPECTED_ENV_FILES = " /etc/branchleft/edge.image.env /etc/branchleft/edge.env"
+IMAGE_ENV = "/etc/branchleft/edge.image.env"
+NEW_PIN = (
+    "IMAGE=ghcr.io/branchleft/edge-caddy@sha256:"
+    "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+)
+PIN_CHANGE_FLAG = "/run/standin.pin.change"
+COMPOSE_EDIT_FLAG = "/run/standin.compose.edit"
+RUNNING_FILE = "/run/standin.running"
+CROWDSEC_CONFIG = "config.yaml.local"
+CROWDSEC_ACQUIS_PREFIX = "/etc/crowdsec-acquis.d/"
+CADDY_FILE_ARG = "/etc/caddy/Caddyfile"
+RUN_MOUNT_PATTERN = "/*:/etc/caddy/Caddyfile:ro"
+
+
+def flag(path: str) -> bool:
+    """Return whether a flag file exists."""
+    return os.path.exists(path)
+
+
+def append(path: str, text: str) -> None:
+    """Append text to a file, ignoring a failed write as the shell's redirection did."""
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError:
+        pass
+
+
+def write(path: str, text: str) -> None:
+    """Replace a file's content, ignoring a failed write as the shell's redirection did."""
+    try:
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError:
+        pass
+
+
+def remove(path: str) -> None:
+    """Remove a file if it exists, as rm -f does."""
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def contains(path: str, needle: bytes) -> bool:
+    """Return whether a file holds the bytes; a file that cannot be read holds nothing."""
+    try:
+        with open(path, "rb") as handle:
+            return needle in handle.read()
+    except OSError:
+        return False
+
+
+def full_sha(path: str) -> str | None:
+    """Return the sha256 of a file in hex, or None when it cannot be read."""
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def short_sha(path: str) -> str:
+    """Return the first twelve hex digits of a file's sha256, or nothing when it cannot be read."""
+    digest = full_sha(path)
+    return "" if digest is None else digest[:12]
+
+
+def force_link(source: str, target: str) -> None:
+    """Hard-link source over target, replacing it, as ln -f does."""
+    try:
+        if os.path.lexists(target):
+            os.remove(target)
+        os.link(source, target)
+    except OSError:
+        pass
+
+
+def run(args: list[str]) -> int:
+    """Answer `docker run ... caddy validate`: the candidate mounted at /etc/caddy/Caddyfile."""
+    candidate = ""
+    for arg in args:
+        if fnmatch.fnmatchcase(arg, RUN_MOUNT_PATTERN):
+            candidate = arg.split(":", 1)[0]
+    if candidate == "":
+        print("standin: no volume mounts a file at /etc/caddy/Caddyfile", file=sys.stderr)
+        return 2
+    if contains(candidate, b"BROKEN-CADDYFILE"):
+        print("Error: adapting config using caddyfile: broken")
+        return 1
+    # A deploy that moves the pin after the validation read it: the next read of the file is the
+    # apply's. The flag is used once. The new digest is a valid one, so only a comparison with the
+    # pin that was validated can refuse it.
+    if flag(PIN_CHANGE_FLAG):
+        remove(PIN_CHANGE_FLAG)
+        write(IMAGE_ENV, NEW_PIN + "\n")
+    print("Valid configuration")
+    return 0
+
+
+def crowdsec_checksum(path_arg: str) -> int:
+    """Answer `exec crowdsec sha256sum PATH` for the two files the role reads."""
+    if path_arg == "/etc/crowdsec/config.yaml.local":
+        source = os.path.join(VIEW, CROWDSEC_CONFIG)
+    elif path_arg.startswith(CROWDSEC_ACQUIS_PREFIX):
+        source = os.path.join(
+            PROJECT, "crowdsec", "acquis.d", path_arg[len(CROWDSEC_ACQUIS_PREFIX) :]
+        )
+    else:
+        return 1
+    digest = full_sha(source)
+    if digest is None:
+        return 1
+    print(f"{digest}  {path_arg}")
+    return 0
+
+
+def crowdsec_listing() -> int:
+    """Answer `exec crowdsec ls`: the names in the acquisition directory, as ls -1 prints them."""
+    try:
+        names = os.listdir(os.path.join(PROJECT, "crowdsec", "acquis.d"))
+    except OSError:
+        names = []
+    for name in sorted(name for name in names if not name.startswith(".")):
+        print(name)
+    return 0
+
+
+def execute(service: str, command: str, arg2: str) -> int:
+    """Answer `docker compose exec` for the services and commands the role calls."""
+    if service == "crowdsec" and command == "cscli":
+        return 1 if flag("/run/standin.lapi.down") else 0
+    if service == "crowdsec" and command == "ls":
+        return crowdsec_listing()
+    if service == "crowdsec" and command == "sha256sum":
+        return crowdsec_checksum(arg2)
+    if service == "caddy" and command == "caddy":
+        if flag("/run/standin.fail.reload"):
+            return 1
+        caddyfile = os.path.join(PROJECT, "caddy", "Caddyfile")
+        append(CALLS, f"RELOAD caddyfile={short_sha(caddyfile)}\n")
+        return 0
+    if service == "caddy" and command == "sha256sum":
+        if flag("/run/standin.stale.caddy"):
+            print(f"{'0' * 64}  {arg2}")
+            return 0
+        digest = full_sha(os.path.join(VIEW, "Caddyfile"))
+        if digest is None:
+            return 1
+        print(f"{digest}  {arg2}")
+        return 0
+    return 1
+
+
+def compose(args: list[str]) -> int:
+    """Answer `docker compose` with the project directory, env files and file the role names."""
+    have_project = False
+    env_files = ""
+    compose_file = ""
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        value = args[index + 1] if index + 1 < len(args) else ""
+        if arg == "--project-directory":
+            have_project = have_project or value == PROJECT
+            index += 2
+        elif arg == "--env-file":
+            env_files += " " + value
+            index += 2
+        elif arg == "-f":
+            compose_file = value
+            index += 2
+        else:
+            break
+    if not have_project:
+        print(f"standin: compose was called without --project-directory {PROJECT}", file=sys.stderr)
+        return 2
+    if env_files != EXPECTED_ENV_FILES:
+        print(f"standin: compose was called with env files '{env_files}'", file=sys.stderr)
+        return 2
+    sub = args[index] if index < len(args) else ""
+    params = args[index + 1 :]
+    if sub == "config":
+        if flag(COMPOSE_EDIT_FLAG):
+            remove(COMPOSE_EDIT_FLAG)
+            append(
+                compose_file, "# case: the candidate carries a line the repository's file lacks\n"
+            )
+        if contains(compose_file, b"BROKEN-COMPOSE"):
+            return 1
+        digest = full_sha(compose_file)
+        append(CALLS, f"VALIDATED-COMPOSE sha={'' if digest is None else digest}\n")
+        return 0
+    if sub == "ps":
+        if flag(RUNNING_FILE):
+            try:
+                with open(RUNNING_FILE, "rb") as handle:
+                    sys.stdout.buffer.write(handle.read())
+            except OSError:
+                pass
+        return 0
+    if sub == "restart":
+        if flag("/run/standin.fail.crowdsec"):
+            return 1
+        source = os.path.join(PROJECT, "crowdsec", CROWDSEC_CONFIG)
+        force_link(source, os.path.join(VIEW, CROWDSEC_CONFIG))
+        append(CALLS, f"RESTART-CROWDSEC config={short_sha(source)}\n")
+        return 0
+    if sub == "exec":
+        # The role calls `exec -T SERVICE COMMAND ARG`: the first word after exec is the flag.
+        after_flag = params[1:]
+        service = after_flag[0] if after_flag else ""
+        after_service = after_flag[1:]
+        command = after_service[0] if after_service else ""
+        arg2 = after_service[1] if len(after_service) > 1 else ""
+        return execute(service, command, arg2)
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    """Record the call, then answer the three top-level commands the role makes."""
+    append(CALLS, "docker " + " ".join(argv) + "\n")
+    if not argv:
+        return 0
+    if argv[0] == "run":
+        return run(argv[1:])
+    if argv[0] == "compose":
+        return compose(argv[1:])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
