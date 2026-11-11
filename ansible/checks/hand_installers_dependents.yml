@@ -221,6 +221,9 @@ hetzner/provision/test_00_harden_ssh.py:
   - hetzner/provision/run-all.sh
   - mail/provision/00-harden-ssh.sh
   - mail/provision/run-all.sh
+hetzner/provision/test_10_harden_updates_fail2ban.py:
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
 hetzner/provision/test_20_install_docker.py:
   - hetzner/provision/20-install-docker.sh
   - mail/provision/20-install-docker.sh
