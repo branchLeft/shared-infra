@@ -39,7 +39,7 @@ in `UNITS` with `mail/provision/`, not in `ALWAYS_RUN`. Every job reachable on
    raises: run.
 4. The diff is empty: run.
 5. A changed path is outside every zone (`ansible/`, `hetzner/`, `hetzner-host/`,
-   `mail/`, `scripts/`, `.github/`, `.claude/`): run. Root-level files and unknown
+   `mail/`, `scripts/`, `docs/`, `.github/`, `.claude/`): run. Root-level files and unknown
    directories are in this case.
 6. A changed path is one the job reads (`UNITS`), or one that changes the skip
    machinery itself (`UNIVERSAL`: `ci.yml`, the ci-skip action, `ci_skip.py`,

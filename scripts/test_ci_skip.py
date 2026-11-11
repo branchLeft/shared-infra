@@ -69,6 +69,7 @@ READ_BY_NONE = [
     ".github/workflows/ansible.yml",
     ".github/CODEOWNERS",
     ".claude/settings.json",
+    "docs/ansible-handbook.md",
 ]
 UNIVERSAL_PATHS = [
     ".github/workflows/ci.yml",
@@ -77,7 +78,7 @@ UNIVERSAL_PATHS = [
     "scripts/trace_reads.py",
 ]
 # Outside every zone: the map has never heard of them, so every job runs.
-UNMAPPED = ["README.md", "package.json", "sites.ts", ".nvmrc", "docs/x.md", "newdir/x.txt", "ansible"]
+UNMAPPED = ["README.md", "package.json", "sites.ts", ".nvmrc", "newdir/x.txt", "ansible"]
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 
@@ -291,6 +292,9 @@ class MutantTests(unittest.TestCase):
 
     def test_a_if_an_unmapped_path_no_longer_fails_open(self):
         self.assert_decisions_catch("not in_any(path, ZONES)", "False")
+
+    def test_q_a_docs_only_change_runs_every_skippable_job_again(self):
+        self.assert_decisions_catch('    "scripts/",\n    "docs/",\n', '    "scripts/",\n')
 
     def test_b_an_empty_diff_skips(self):
         self.assert_decisions_catch('return True, "the diff is empty"', 'return False, "the diff is empty"')
