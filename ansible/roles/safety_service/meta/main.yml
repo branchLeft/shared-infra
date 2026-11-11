@@ -1,0 +1,10 @@
+---
+galaxy_info:
+  standalone: true
+  author: branchLeft
+  # Molecule derives a fully qualified role name from the namespace, or from
+  # the author when there is none, and refuses an upper-case author.
+  namespace: branchleft
+  description: Installs the content-safety service on ops1 as a container unit that dials each host, held off until its inputs are set.
+  license: PolyForm-Shield-1.0.0
+  min_ansible_version: '2.21.5'

@@ -22,6 +22,10 @@ TARGET_LISTS = (
     "deploy_tooling_common_file_targets",
     "deploy_tooling_app_file_targets",
 )
+# The host classes the role takes (meta/argument_specs.yml). Classes gateway and internal
+# get the common file targets; only app also gets the policy program and its unit.
+HOST_CLASSES = ("app", "gateway", "internal")
+_CLASSES_WITH_POLICY = frozenset({"app"})
 _REFERENCE = re.compile(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}")
 
 
@@ -31,7 +35,12 @@ class RoleVarsError(Exception):
 
 @dataclass(frozen=True)
 class Target:
-    """One path the role makes true: where it is, its mode, and for a file the program it is."""
+    """One path the role makes true: where it is, its mode, and for a file the program it is.
+
+    ``home`` is where the program's file is held: ``provision`` (hetzner/provision, the default)
+    or ``role`` (the role's own files/). ``hand_source`` is the file name a hand-run installer
+    installs the same path from, when that differs from ``program``; it is empty otherwise.
+    """
 
     group: str
     label: str
@@ -39,6 +48,8 @@ class Target:
     mode: str
     kind: str
     program: str
+    home: str = "provision"
+    hand_source: str = ""
 
 
 def load_vars(role: Path = ROLE) -> dict[str, object]:
@@ -99,9 +110,29 @@ def targets(variables: dict[str, object]) -> list[Target]:
                     mode=_text(entry, "mode", variables),
                     kind=_text(entry, "kind", variables),
                     program=_text(entry, "program", variables),
+                    home=_text(entry, "home", variables) or "provision",
+                    hand_source=_text(entry, "hand_source", variables),
                 )
             )
     return found
+
+
+def file_targets_for_class(variables: dict[str, object], host_class: str) -> list[Target]:
+    """Return the file targets a host of ``host_class`` gets, in the order the role lists them.
+
+    Every class gets the common file targets. Only class app also gets the policy program and
+    its unit (the app list). The directories are not files and are left out.
+
+    Raises:
+        RoleVarsError: the class is not one the role takes.
+    """
+    if host_class not in HOST_CLASSES:
+        message = f"{host_class!r} is not a host class the role takes"
+        raise RoleVarsError(message)
+    groups = {"deploy_tooling_common_file_targets"}
+    if host_class in _CLASSES_WITH_POLICY:
+        groups.add("deploy_tooling_app_file_targets")
+    return [t for t in targets(variables) if t.group in groups and t.kind == "file"]
 
 
 def program_names(variables: dict[str, object]) -> tuple[str, ...]:
@@ -111,3 +142,8 @@ def program_names(variables: dict[str, object]) -> tuple[str, ...]:
     added there is covered by every check that reads this, and no check restates the list.
     """
     return tuple(sorted({target.program for target in targets(variables) if target.program}))
+
+
+def program_file(target: Target, role: Path, provision: Path) -> Path:
+    """Return where the file of a target's program is held: the role's files/ or provision."""
+    return (role / "files" if target.home == "role" else provision) / target.program

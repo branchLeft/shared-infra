@@ -1,0 +1,35 @@
+name: ci-skip
+description: >-
+  Says whether one ci.yml job's later steps need to run, from the paths the pull
+  request or merge queue entry changes. Output `run` is `false` only when every
+  changed path is mapped and none is one this job reads; anything else, an error
+  included, leaves it `true` or unset, and a step guarded by `!= 'false'` runs.
+  The rules are in scripts/ci_skip.md.
+
+inputs:
+  unit:
+    description: The calling job's own key in ci.yml, which is its key in scripts/ci_skip.py.
+    required: true
+
+outputs:
+  run:
+    description: "'false' when the job's later steps may be skipped, otherwise 'true'."
+    value: ${{ steps.decide.outputs.run }}
+
+runs:
+  using: composite
+  steps:
+    # A composite step does not inherit the calling job's working-directory
+    # default, and the checkout is the repository root, so say so.
+    - name: Decide from the changed paths
+      id: decide
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      env:
+        UNIT: ${{ inputs.unit }}
+        EVENT_NAME: ${{ github.event_name }}
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
+      # If the script cannot run at all, say run=true: a crash widens, never skips.
+      run: |
+        python3 scripts/ci_skip.py --unit "$UNIT" | tee -a "$GITHUB_OUTPUT" || echo "run=true" >> "$GITHUB_OUTPUT"

@@ -703,13 +703,12 @@ pulumi refresh --preview-only
 Record the config in git. The ids, the stage and the two public deploy keys are not
 secret. The stack file gets `edgetAdopt`, `dbt1Adopt` (both with `stage:
 converge`), `dbt1Enabled: "true"`, `edgetDeployPublicKey` and `dbt1DeployPublicKey`;
-the token and the passphrase salt never do (`CLAUDE.md`). Revert the working-copy
-token as step 6 of `../RUNBOOK-estate-project-move.md` describes, and open that as
-its own change.
+the token and the passphrase salt never do (`CLAUDE.md`). Reverting a working-copy
+`hcloud:token` is not needed when the token is supplied through the `HCLOUD_TOKEN` environment variable, as nothing is then written to the working copy. Only if the token was set in the working copy with `pulumi config set`, revert it as step 6 of `../RUNBOOK-estate-project-move.md` describes, and open that as its own change.
 
 ## app-t1
 
-`app-t1` is declared by the app host stack, not by this one. It is adopted the same
+No such stack exists in this repository yet: `app-t1` appears only in `hetzner/projects.ts`, READMEs and tests, so the holding firewall `hold-no-inbound` stays on app-t1, and the final delete of `hold-no-inbound` in this runbook is not part of this series. When the app host stack is written, `app-t1` is adopted the same
 way, with the same `adopt` argument on the same `Host`, set from that stack's config,
 and its console state is one of the two cases above. Its steps are step 2 (the case),
 step 9 (network attach, bootstrap, leftover address removal, confirming it is

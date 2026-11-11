@@ -162,7 +162,7 @@ export const edgeT = new Host(
 /**
  * The tenants network's default route, via edge-t. The same construction as
  * the estate's (`network.ts`): `internetEgressRoute` validates the gateway,
- * and `provision/branchleft_nat.sh`, run on edge-t by the `egress_nat` role,
+ * and `ansible/roles/egress_nat/files/branchleft_nat.py`, run on edge-t by the `egress_nat` role,
  * is what makes the address at the other end forward.
  *
  * The network id goes through `verified`, because a resource declared outside
