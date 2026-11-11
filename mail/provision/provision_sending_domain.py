@@ -57,10 +57,12 @@ RSA_BITS = 2048
 
 DKIM_KEY_TAGS = {"Dkim1RsaSha256": "rsa", "Dkim1Ed25519Sha256": "ed25519"}
 
-# p=none: the domain is new and warming, and aggregate reports need a
-# receiving mailbox this domain does not have. Alignment is strict because
-# every message from it is signed by us.
-DMARC_VALUE = "v=DMARC1; p=none; adkim=s; aspf=s"
+# p=none: the domain is new and warming. Alignment is strict because every
+# message from it is signed by us. rua asks receivers for aggregate reports,
+# sent to the address the apex record already publishes. A report address on
+# another domain is only honoured once that domain publishes an authorisation
+# record (RFC 7489 section 7.1), which is a separate platform-side change.
+DMARC_VALUE = "v=DMARC1; p=none; rua=mailto:rob@branchleft.co.uk; adkim=s; aspf=s"
 
 _LABEL = r"(?!-)[a-z0-9-]{1,63}(?<!-)"
 _DOMAIN_RE = re.compile(rf"^(?:{_LABEL}\.)+[a-z]{{2,63}}$")
