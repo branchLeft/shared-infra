@@ -28,13 +28,15 @@
 - name: Refuse a host class the role cannot act on, or an app host with no policy variant
   ansible.builtin.assert:
     that:
-      - deploy_tooling_host_class in ['app', 'gateway']
-      - deploy_tooling_host_class == 'gateway' or deploy_tooling_policy_variant in ['standard', 'protected_no_db']
+      - deploy_tooling_host_class in ['app', 'gateway', 'internal']
+      - deploy_tooling_host_class in ['gateway', 'internal'] or deploy_tooling_policy_variant in ['standard', 'protected_no_db']
     fail_msg: >-
       A host of class app must name its policy variant: deploy_tooling_policy_variant is
       standard or protected_no_db, and is {{ deploy_tooling_policy_variant }} here.
     quiet: true
 
+# Classes gateway and internal get the common targets only: the wrapper, the template
+# unit, the directories and the sudoers read. Only class app gets the policy program.
 - name: Work out which files this host class gets
   ansible.builtin.set_fact:
     deploy_tooling_file_targets: >-
@@ -144,8 +146,8 @@
     label: '{{ item.item.path }}'
   when: (item.stat.islnk | default(false)) or (item.stat.isdir | default(false))
 
-# The programs are read from hetzner/provision/, so the bytes installed are the bytes
-# of the one copy there and the role holds none. The template unit is copied and never
+# The wrapper and the template unit are read from hetzner/provision/, so the bytes installed
+# are the bytes of the one copy there and the role holds none. The template unit is copied and never
 # enabled or restarted: a restart of an instance redeploys a tenant's stack, and
 # only the deploy wrapper does that.
 - name: Install the deploy wrapper and the compose template unit
@@ -162,7 +164,7 @@
 
 - name: Install the policy program and its unit
   ansible.builtin.copy:
-    src: '{{ deploy_tooling_programs_dir }}/{{ item.program }}'
+    src: '{{ deploy_tooling_role_files_dir }}/{{ item.program }}'
     dest: '{{ item.path }}'
     owner: root
     group: root

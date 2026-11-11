@@ -1,0 +1,21 @@
+---
+# A host of class internal gets the gateway's set of files and none of the isolation:
+# the wrapper and the template unit, no policy program, no policy unit and no firewall
+# rule. It is named apart from the gateway so that a host's class, not its address, is
+# what the role reads, and no variant is given to it.
+- name: Apply the role to a host of class internal
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: internal
+    run_variant: not_applicable
+
+- name: Assert the internal host has the wrapper and none of the isolation
+  ansible.builtin.include_tasks: assert_gateway.yml
+
+# The check-mode run of the same class must pass on the host the apply above configured.
+- name: Apply the role to the internal host in check mode
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_check: true
+    run_class: internal
+    run_variant: not_applicable
