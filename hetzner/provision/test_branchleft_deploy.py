@@ -55,6 +55,29 @@ class FakeRun:
         return subprocess.CompletedProcess(argv, code, stdout=stdout, stderr=stderr)
 
 
+class CapturingRun(FakeRun):
+    """A FakeRun that also reads the files a gh call names while the call is running.
+
+    The check's temporary copies are gone once it returns, so what gh would have been
+    given is read here, during the call: the contents of the artifact and the bundle,
+    and the paths themselves.
+    """
+
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.seen_files = []
+        self.paths = []
+
+    def __call__(self, argv, **kwargs):
+        if argv and argv[:3] == [bd.VERIFIER_GH, "attestation", "verify"]:
+            artifact = argv[3]
+            bundle = argv[argv.index("--bundle") + 1]
+            with open(artifact, "rb") as first, open(bundle, "rb") as second:
+                self.seen_files.append((first.read(), second.read()))
+            self.paths.append((artifact, bundle))
+        return super().__call__(argv, **kwargs)
+
+
 class StackNameTests(unittest.TestCase):
     def test_accepts_plain_names(self):
         for name in ("edge", "ghost-tenant-one", "mon1"):
@@ -802,6 +825,259 @@ class AttestationTests(unittest.TestCase):
         )
         with open(path, "rb") as handle:
             self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), VERIFIER_SHA256)
+
+
+IDENTITY_FLAGS = (
+    "--repo",
+    "--signer-workflow",
+    "--source-ref",
+    "--cert-oidc-issuer",
+    "--deny-self-hosted-runners",
+)
+
+
+class OfflineAttestationTests(unittest.TestCase):
+    """A registered image with a carried bundle is verified with no registry and no API.
+
+    The carrier leaves the image manifest's exact bytes and its sigstore bundle in
+    ATTESTATION_DIR; the trusted root is a root-owned file on the host. The manifest
+    must hash to the digest being deployed, and gh then checks the same identity as
+    the online path against that file. Every refusal leaves the pin and the stack as
+    they were.
+    """
+
+    MANIFEST = b'{"schemaVersion":2,"config":{"digest":"sha256:STUB"}}'
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        root = self.directory.name
+        self.config_dir = os.path.join(root, "etc")
+        self.stack_dir = os.path.join(root, "opt")
+        self.carried_dir = os.path.join(root, "carried")
+        self.trusted_root = os.path.join(root, "trusted_root.jsonl")
+        for path in (self.config_dir, os.path.join(self.stack_dir, "edge"), self.carried_dir):
+            os.makedirs(path)
+        with open(os.path.join(self.stack_dir, "edge", "compose.yml"), "w") as handle:
+            handle.write(
+                "services:\n  app:\n    image: ${IMAGE}\n"
+                "    healthcheck:\n      test: ['CMD', 'true']\n"
+            )
+        self.digest = hashlib.sha256(self.MANIFEST).hexdigest()
+        self.image = f"ghcr.io/branchleft/ghost-tenant@sha256:{self.digest}"
+        self.write(self.trusted_root, b'{"mediaType":"STUB_TRUSTED_ROOT"}\n')
+        os.chmod(self.trusted_root, 0o600)
+        self.carry(self.MANIFEST, b'{"mediaType":"STUB_BUNDLE"}\n')
+        for name, value in (
+            ("ATTESTATION_DIR", self.carried_dir),
+            ("TRUSTED_ROOT", self.trusted_root),
+        ):
+            patcher = mock.patch.object(bd, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    @staticmethod
+    def write(path, data):
+        with open(path, "wb") as handle:
+            handle.write(data)
+
+    def carry(self, manifest, bundle, digest=None):
+        digest = digest or self.digest
+        self.write(os.path.join(self.carried_dir, f"{digest}.manifest.json"), manifest)
+        self.write(os.path.join(self.carried_dir, f"{digest}.bundle.jsonl"), bundle)
+
+    def deploy(self, run, image=None):
+        bd.deploy(
+            "edge",
+            image or self.image,
+            config_dir=self.config_dir,
+            stack_dir=self.stack_dir,
+            run=run,
+        )
+
+    def env_path(self):
+        return bd.image_env_path("edge", self.config_dir)
+
+    def assert_refused_with_no_host_change(self, run, *, gh_calls):
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual(len(run.calls), gh_calls)
+        for call in run.calls:
+            self.assertEqual(call[0], bd.VERIFIER_GH)
+
+    def test_a_carried_bundle_is_verified_by_gh_with_the_online_identity_and_no_oci_read(self):
+        run = CapturingRun([0, 0])
+        self.deploy(run)
+        argv = run.calls[0]
+        self.assertEqual(argv[:3], [bd.VERIFIER_GH, "attestation", "verify"])
+        self.assertNotIn("--bundle-from-oci", argv)
+        self.assertFalse([part for part in argv if part.startswith("oci://")])
+        self.assertEqual(argv[argv.index("--repo") + 1], bd.ATTESTED_REPO)
+        self.assertEqual(argv[argv.index("--signer-workflow") + 1], TENANT_SIGNER)
+        self.assertEqual(argv[argv.index("--source-ref") + 1], "refs/heads/main")
+        self.assertEqual(
+            argv[argv.index("--cert-oidc-issuer") + 1],
+            "https://token.actions.githubusercontent.com",
+        )
+        self.assertIn("--deny-self-hosted-runners", argv)
+        self.assertEqual(argv[argv.index("--custom-trusted-root") + 1], self.trusted_root)
+        self.assertEqual(run.calls[1], ["systemctl", "restart", "branchleft-compose@edge"])
+        self.assertEqual(bd.read_current_image(self.env_path()), self.image)
+
+    def test_gh_is_given_the_exact_manifest_bytes_that_hash_to_the_digest(self):
+        run = CapturingRun([0, 0])
+        self.deploy(run)
+        self.assertEqual(run.seen_files[0][0], self.MANIFEST)
+        self.assertEqual(run.seen_files[0][1], b'{"mediaType":"STUB_BUNDLE"}\n')
+
+    def test_the_identity_flags_match_the_vendored_online_verifier(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "branchleft-verify-image")
+        with open(path, encoding="utf-8") as handle:
+            script = handle.read()
+        run = CapturingRun([0, 0])
+        self.deploy(run)
+        for flag in IDENTITY_FLAGS:
+            with self.subTest(flag=flag):
+                self.assertIn(flag, script)
+                self.assertIn(flag, run.calls[0])
+
+    def test_the_environment_is_fixed_holds_only_the_local_gate_value_and_has_no_stdin(self):
+        run = CapturingRun([0, 0])
+        held = {"GH_TOKEN": "ghs_" + "x" * 36, "GITHUB_TOKEN": "ghs_" + "y" * 36}
+        with mock.patch.dict(os.environ, held):
+            self.deploy(run)
+        env = dict(run.kwargs[0]["env"])
+        gate = env.pop("GH_TOKEN")
+        self.assertEqual(env, EXPECTED_VERIFIER_ENV)
+        self.assertEqual(gate, "placeholder-not-a-credential")
+        self.assertEqual(run.kwargs[0]["stdin"], subprocess.DEVNULL)
+
+    def test_a_manifest_that_does_not_hash_to_the_digest_is_refused_without_running_gh(self):
+        self.carry(self.MANIFEST + b" ", b'{"mediaType":"STUB_BUNDLE"}\n')
+        run = CapturingRun([0, 0])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(run)
+        self.assertIn("does not hash to", str(raised.exception))
+        self.assert_refused_with_no_host_change(run, gh_calls=0)
+
+    def test_a_bundle_carried_for_another_digest_is_refused(self):
+        other = hashlib.sha256(b"another image").hexdigest()
+        self.carry(b"another image", b'{"mediaType":"STUB_BUNDLE"}\n', digest=other)
+        os.unlink(os.path.join(self.carried_dir, f"{self.digest}.manifest.json"))
+        run = CapturingRun([0, 0])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(run)
+        self.assert_refused_with_no_host_change(run, gh_calls=0)
+
+    def test_a_gh_refusal_for_the_wrong_signer_or_forged_bundle_refuses_the_deploy(self):
+        run = CapturingRun([(1, "", "no matching attestation: signer workflow mismatch")])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(run)
+        self.assertIn("is not attested by", str(raised.exception))
+        self.assertIn(TENANT_SIGNER, str(raised.exception))
+        self.assert_refused_with_no_host_change(run, gh_calls=1)
+
+    def test_the_signer_comes_from_the_register_and_never_from_carried_material(self):
+        self.carry(self.MANIFEST, b'{"signer":"branchLeft/ghost-platform/.github/workflows/evil.yml"}\n')
+        run = CapturingRun([0, 0])
+        self.deploy(run)
+        self.assertEqual(run.calls[0][run.calls[0].index("--signer-workflow") + 1], TENANT_SIGNER)
+
+    def test_a_missing_bundle_or_manifest_is_refused_not_sent_to_the_online_path(self):
+        for suffix in ("bundle.jsonl", "manifest.json"):
+            with self.subTest(missing=suffix):
+                self.carry(self.MANIFEST, b"{}\n")
+                os.unlink(os.path.join(self.carried_dir, f"{self.digest}.{suffix}"))
+                run = CapturingRun([0, 0])
+                with self.assertRaises(bd.DeployError):
+                    self.deploy(run)
+                self.assertFalse(
+                    [call for call in run.calls if call[0] == bd.VERIFIER],
+                    "no fallback to the online verifier",
+                )
+                self.assert_refused_with_no_host_change(run, gh_calls=0)
+
+    def test_a_missing_trusted_root_is_refused(self):
+        os.unlink(self.trusted_root)
+        run = CapturingRun([0, 0])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(run)
+        self.assertIn("trusted root", str(raised.exception))
+        self.assert_refused_with_no_host_change(run, gh_calls=0)
+
+    def test_a_trusted_root_anyone_else_can_write_is_refused(self):
+        os.chmod(self.trusted_root, 0o666)
+        run = CapturingRun([0, 0])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(run)
+        self.assert_refused_with_no_host_change(run, gh_calls=0)
+
+    def test_a_trusted_root_that_is_a_link_is_refused(self):
+        target = self.trusted_root + ".real"
+        os.rename(self.trusted_root, target)
+        os.symlink(target, self.trusted_root)
+        run = CapturingRun([0, 0])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(run)
+        self.assert_refused_with_no_host_change(run, gh_calls=0)
+
+    def test_a_carried_file_that_is_a_link_is_refused(self):
+        bundle = os.path.join(self.carried_dir, f"{self.digest}.bundle.jsonl")
+        os.unlink(bundle)
+        os.symlink(self.trusted_root, bundle)
+        run = CapturingRun([0, 0])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(run)
+        self.assert_refused_with_no_host_change(run, gh_calls=0)
+
+    def test_an_oversize_carried_file_is_refused(self):
+        self.carry(self.MANIFEST, b"x" * (bd.CARRIED_FILE_LIMIT + 1))
+        run = CapturingRun([0, 0])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(run)
+        self.assert_refused_with_no_host_change(run, gh_calls=0)
+
+    def test_a_missing_gh_is_refused(self):
+        def missing(argv, **kwargs):
+            raise FileNotFoundError(argv[0])
+
+        with self.assertRaises(bd.DeployError):
+            self.deploy(missing)
+        self.assertFalse(os.path.exists(self.env_path()))
+
+    def test_the_temporary_copies_do_not_outlive_the_check(self):
+        run = CapturingRun([0, 0])
+        self.deploy(run)
+        for path in run.paths[0]:
+            self.assertFalse(os.path.exists(path))
+
+    def test_an_image_with_no_carried_bundle_still_takes_the_online_path_unchanged(self):
+        other_digest = "e" * 64
+        image = f"ghcr.io/branchleft/ghost-tenant@sha256:{other_digest}"
+        run = FakeRun([0, 0])
+        self.deploy(run, image=image)
+        self.assertEqual(
+            run.calls[0],
+            [
+                bd.VERIFIER,
+                f"ghcr.io/branchleft/ghost-tenant@sha256:{other_digest}",
+                bd.ATTESTED_REPO,
+                TENANT_SIGNER,
+                "--bundle-from-oci",
+            ],
+        )
+
+    def test_a_carried_bundle_never_makes_an_unregistered_image_verified_or_unverified(self):
+        mysql = f"docker.io/library/mysql@sha256:{self.digest}"
+        run = FakeRun([0])
+        self.deploy(run, image=mysql)
+        self.assertEqual(run.calls, [["systemctl", "restart", "branchleft-compose@edge"]])
+
+    def test_a_tag_or_port_spelling_with_a_carried_bundle_is_verified_the_same_way(self):
+        image = f"ghcr.io:443/branchleft/ghost-tenant:v1@sha256:{self.digest}"
+        run = CapturingRun([(1, "", "mismatch")])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(run, image=image)
+        self.assert_refused_with_no_host_change(run, gh_calls=1)
 
 
 class SlotStdinTests(unittest.TestCase):

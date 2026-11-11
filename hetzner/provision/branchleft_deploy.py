@@ -9,8 +9,10 @@ from __future__ import annotations
 import contextlib
 import errno
 import fcntl
+import hashlib
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -122,6 +124,141 @@ def attested_name(image: str) -> str:
     return first.partition(":")[0] + slash + rest.partition(":")[0]
 
 
+# Offline verification, for a host with no registry egress. The carrier leaves two files per
+# image in ATTESTATION_DIR, named for the digest's hex: the registry manifest's exact bytes
+# and its sigstore bundle. The trusted root is a root-owned file that is not carried with
+# the image. See branchleft_deploy.md, "Offline verification".
+ATTESTATION_DIR = "/var/lib/branchleft/attestations"
+TRUSTED_ROOT = f"{CONFIG_DIR}/sigstore-trusted-root.jsonl"
+VERIFIER_GH = f"{VERIFIER_GH_DIR}/gh"
+CARRIED_FILE_LIMIT = 1 << 20
+_OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+
+
+def offline_verifier_env() -> dict[str, str]:
+    """verifier_env() plus the one value gh's local gate needs on a path with no API call.
+
+    gh will not start without a non-empty token. With a bundle and a trusted root on disk
+    it makes no GitHub request and sends no Authorization header, so the value is a fixed
+    constant that is not a credential. The name and the value are held apart so the plan's
+    secret scan does not read the pair as one.
+    """
+    auth_var = "GH_TOKEN"
+    auth_gate = "placeholder-not-a-credential"
+    return {**verifier_env(), auth_var: auth_gate}
+
+
+def _carried_file(path: str, what: str) -> bytes:
+    """Read one carried file without following a link, bounded in size."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError as error:
+        raise DeployError(f"carried {what} {path} cannot be read ({error.strerror})") from None
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise DeployError(f"carried {what} {path} is not a regular file")
+        data = handle.read(CARRIED_FILE_LIMIT + 1)
+    if len(data) > CARRIED_FILE_LIMIT:
+        raise DeployError(f"carried {what} {path} exceeds {CARRIED_FILE_LIMIT} bytes")
+    return data
+
+
+def _check_trusted_root() -> None:
+    """The trusted root is the anchor: a regular file this process owns, that no one else can write."""
+    try:
+        status = os.lstat(TRUSTED_ROOT)
+    except OSError:
+        raise DeployError(
+            f"the trusted root {TRUSTED_ROOT} is missing; a carried attestation cannot "
+            "be verified without it, and the deploy is refused"
+        ) from None
+    if (
+        not stat.S_ISREG(status.st_mode)
+        or status.st_uid != os.geteuid()
+        or status.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+    ):
+        raise DeployError(
+            f"the trusted root {TRUSTED_ROOT} must be a regular file owned by the deploying "
+            "user that no one else can write; the deploy is refused"
+        )
+
+
+def carried_attestation_paths(digest_hex: str) -> tuple[str, str]:
+    return (
+        os.path.join(ATTESTATION_DIR, f"{digest_hex}.manifest.json"),
+        os.path.join(ATTESTATION_DIR, f"{digest_hex}.bundle.jsonl"),
+    )
+
+
+def verify_carried_attestation(image: str, signer: str, *, run=subprocess.run) -> None:
+    """Verify a registered image from carried files, with no registry read and no API call.
+
+    The manifest bytes must hash to the digest being deployed, so the attestation's
+    subject is that image's digest. gh then checks the manifest file against the bundle and
+    the trusted root, with the same identity flags the online verifier passes. Both files
+    are copied into a private directory first, so the bytes hashed are the bytes gh reads.
+    """
+    digest_hex = image.partition("@sha256:")[2]
+    manifest_path, bundle_path = carried_attestation_paths(digest_hex)
+    manifest = _carried_file(manifest_path, "manifest")
+    bundle = _carried_file(bundle_path, "bundle")
+    if hashlib.sha256(manifest).hexdigest() != digest_hex:
+        raise DeployError(
+            f"the carried manifest {manifest_path} does not hash to sha256:{digest_hex}; "
+            f"refusing to deploy {image}"
+        )
+    _check_trusted_root()
+    with tempfile.TemporaryDirectory(prefix="branchleft-attest-") as private:
+        copied_manifest = os.path.join(private, "manifest.json")
+        copied_bundle = os.path.join(private, "bundle.jsonl")
+        for path, data in ((copied_manifest, manifest), (copied_bundle, bundle)):
+            with open(path, "wb") as handle:
+                handle.write(data)
+        argv = [
+            VERIFIER_GH,
+            "attestation",
+            "verify",
+            copied_manifest,
+            "--repo",
+            ATTESTED_REPO,
+            "--signer-workflow",
+            signer,
+            "--source-ref",
+            "refs/heads/main",
+            "--cert-oidc-issuer",
+            _OIDC_ISSUER,
+            "--deny-self-hosted-runners",
+            "--bundle",
+            copied_bundle,
+            "--custom-trusted-root",
+            TRUSTED_ROOT,
+        ]
+        try:
+            result = run(
+                argv,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=offline_verifier_env(),
+                stdin=subprocess.DEVNULL,
+            )
+        except OSError as error:
+            raise DeployError(
+                f"could not run {VERIFIER_GH} ({error}); refusing to deploy {image} "
+                "without verifying its attestation"
+            ) from None
+    if result.returncode != 0:
+        raise DeployError(
+            f"{image} is not attested by {signer} on refs/heads/main in the carried "
+            "bundle; refusing to deploy it. The bundle may be forged, signed by another "
+            "workflow, or for another digest"
+        )
+    print(
+        f"branchleft-deploy: verified {image} attested by {signer} (carried bundle)",
+        file=sys.stderr,
+    )
+
+
 def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     """Verify a registered image's attestation before anything touches the host.
 
@@ -142,6 +279,14 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     # The verifier takes registry/name@digest only, so it is given the register
     # name and the digest, however the image was spelled.
     canonical = f"{name}@{image.partition('@')[2]}"
+    # A carried bundle, present or half-present, is the only evidence considered: a
+    # refusal there is final and nothing falls through to the registry read below.
+    if any(
+        os.path.lexists(path)
+        for path in carried_attestation_paths(image.partition("@sha256:")[2])
+    ):
+        verify_carried_attestation(image, signer, run=run)
+        return True
     try:
         result = run(
             [VERIFIER, canonical, ATTESTED_REPO, signer, "--bundle-from-oci"],

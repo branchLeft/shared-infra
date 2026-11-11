@@ -213,8 +213,10 @@ An image this host deploys is checked for its build attestation before the
 lock, the pin write or any restart. `ATTESTED_IMAGES` is the register: each
 attested image name and the one workflow whose attestation it must carry, both
 under `branchLeft/ghost-platform`. The check runs `VERIFIER`, the host copy of
-ghost-platform's `scripts/verify-image-attestation.sh`, always with
-`--bundle-from-oci`, and any non-zero exit refuses the deploy.
+ghost-platform's `scripts/verify-image-attestation.sh`, with
+`--bundle-from-oci`, and any non-zero exit refuses the deploy. An image with a
+carried bundle is verified offline instead (see "Offline verification"); the
+online path is not changed.
 
 It fails closed. A missing verifier, an unknown digest, an unsigned image and
 an image signed by another workflow are all refused, and each refusal leaves
@@ -283,6 +285,50 @@ verifier. gh writes its TUF cache and a device id under the verifier's `HOME`
 (`.cache/gh`, `.local/state/gh`) and no `config.yml` or `hosts.yml`, so the role's
 credential-file refusal does not trip on a second apply; the directory is empty only
 until the first check.
+
+### Offline verification
+
+`--bundle-from-oci` reads the bundle and the image's digest from the registry and
+fetches the Sigstore trust root from the TUF mirrors, so it needs egress to both. A
+host with no registry egress verifies from files instead, with no registry read and no
+GitHub API call.
+
+For a registered image, `verify_attestation` first looks in `ATTESTATION_DIR`
+(`/var/lib/branchleft/attestations`) for `<digest hex>.manifest.json` and
+`<digest hex>.bundle.jsonl`. If either exists, only that evidence is considered and a
+refusal is final: nothing falls back to the registry read. If neither exists, the
+online path above runs unchanged. The deploy command line is unchanged and gains no
+option.
+
+`verify_carried_attestation` then:
+
+1. Reads each carried file without following a link, as a regular file of at most
+   `CARRIED_FILE_LIMIT` bytes, and copies both into a private temporary directory, so
+   the bytes hashed are the bytes gh reads.
+2. Refuses unless the sha256 of the manifest bytes equals the digest being deployed.
+   An image's digest is the hash of its manifest, so this ties the carried manifest to
+   the image the pin names.
+3. Refuses unless `TRUSTED_ROOT` (`/etc/branchleft/sigstore-trusted-root.jsonl`) is a
+   regular file owned by the deploying user that no one else can write. The trusted
+   root is the anchor and is never carried with the image: the carrier can write
+   `ATTESTATION_DIR` and nothing else here.
+4. Runs the pinned gh as `gh attestation verify <manifest copy> --bundle <bundle copy>
+--custom-trusted-root TRUSTED_ROOT`, with the identity flags the online verifier
+   passes: `--repo`, the register's `--signer-workflow`, `--source-ref refs/heads/main`,
+   the Actions OIDC issuer and `--deny-self-hosted-runners`. The signer comes from
+   `ATTESTED_IMAGES`, never from carried material. gh's environment is
+   `verifier_env()` plus the local token gate constant described above.
+
+A tampered manifest, a bundle for another digest, a forged bundle, the wrong signer, a
+missing file, a missing or loosely held trusted root and a linked or oversize carried
+file are each refused before the pin is written. `test_branchleft_deploy.py` proves
+the digest check and the gh refusal by sabotage.
+
+Not proven by the tests: that gh accepts a manifest file as its artifact with a real
+bundle and a real trusted root on a host with every route closed, and that the image
+the host loads has the manifest digest the carrier signed. Those are the live checks.
+Installing `TRUSTED_ROOT`, creating `ATTESTATION_DIR` and shipping the files with an
+image are host and carrier changes, outside this program.
 
 ### Installing the verifier and gh
 
