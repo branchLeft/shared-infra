@@ -108,6 +108,27 @@ class Pins(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.options[name]["default"], self.defaults[name])
 
+    def test_the_spec_defaults_of_the_verify_key_are_the_defaults(self) -> None:
+        for name in ("broker_deploy_verify_key_src", "broker_deploy_verify_key_sha256"):
+            with self.subTest(name=name):
+                self.assertNotIn("required", self.options[name])
+                self.assertEqual(self.options[name]["default"], self.defaults[name])
+
+    def test_the_verify_key_pin_is_empty_or_the_carried_files_digest(self) -> None:
+        digest = cast("str", self.defaults["broker_deploy_verify_key_sha256"])
+        carried = ROLE / "files" / "broker-verify-key.bin"
+        self.assertEqual(
+            self.defaults["broker_deploy_verify_key_src"],
+            "{{ role_path }}/files/broker-verify-key.bin",
+        )
+        if digest == "":
+            self.assertFalse(carried.exists(), "a key file is carried with no pin")
+            return
+        self.assertRegex(digest, DIGEST)
+        self.assertTrue(carried.is_file() and not carried.is_symlink())
+        self.assertEqual(carried.stat().st_size, 32)
+        self.assertEqual(sha256(carried), digest)
+
     def test_a_release_the_role_carries_is_pinned_exactly(self) -> None:
         carried = ROLE / "files" / "releases"
         if not carried.is_dir():
@@ -140,6 +161,13 @@ class MoleculeRelease(unittest.TestCase):
         for path, digest in pins.items():
             with self.subTest(path=path):
                 self.assertEqual(sha256(release / path), digest)
+
+    def test_the_converge_pins_the_stand_in_key(self) -> None:
+        converge = cast("list[dict[str, object]]", load(SHARDS / "converge.yml"))
+        play_vars = cast("dict[str, object]", converge[0]["vars"])
+        key = SHARDS / "files" / "verify-key-stand-in.bin"
+        self.assertEqual(play_vars["broker_deploy_verify_key_sha256"], sha256(key))
+        self.assertEqual(key.stat().st_size, 32)
 
 
 class Agreements(unittest.TestCase):

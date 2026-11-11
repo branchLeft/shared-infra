@@ -25,7 +25,7 @@ It is built from the `monitoring_stack` role and the patterns under `ansible/pat
 | `/var/lib/branchleft/broker-slots/admin-keys/`    | broker      | 0700                  | none                                                                         |
 | `/opt/branchleft/broker/releases/<version>/`      | root        | dirs 0755, files 0644 | the pinned release files, `broker_deploy_release_dir`                        |
 | `/opt/branchleft/broker/current` (link)           | root        | link                  | the release directory                                                        |
-| `/etc/branchleft/broker-verify-key.bin`           | root:broker | 0640                  | `broker_deploy_verify_key_src`                                               |
+| `/etc/branchleft/broker-verify-key.bin`           | root:broker | 0640                  | `broker_deploy_verify_key_src`, held to `broker_deploy_verify_key_sha256`    |
 | `/etc/branchleft/broker.env`                      | root        | 0600                  | `templates/broker.env.j2`, the shipped template with the slots-file line set |
 | `/etc/sudoers.d/branchleft-slot`                  | root        | 0440                  | `templates/branchleft-slot.sudoers.j2`, one literal line per invocation      |
 | `/etc/systemd/system/branchleft-broker.service`   | root        | 0644                  | `files/branchleft-broker.service`                                            |
@@ -77,13 +77,17 @@ nothing).
 
 ## Inputs
 
-The one input with no default must be given:
+Every input has a default, because a playbook entry for this role carries no variables. The
+two that stay empty until the owner carries them make the role refuse before it writes anything.
 
-- `broker_deploy_verify_key_src`: a path on the controller to the 32-byte public
-  key.
-
-The release is `broker_deploy_release_version` (empty until one is carried), its digests are
-in `broker_deploy_release_pins`, and the files are in `broker_deploy_release_dir`.
+- The release is `broker_deploy_release_version` (empty until one is carried), its digests are
+  in `broker_deploy_release_pins`, and the files are in `broker_deploy_release_dir`.
+- The request-signing public key is the 32-byte file `files/broker-verify-key.bin` of this role
+  (`broker_deploy_verify_key_src`), held to the sha256 in `broker_deploy_verify_key_sha256`
+  (empty until the key is carried). The role refuses an empty or malformed digest, a file that
+  is missing, a link, not 32 bytes, or not that digest. Carrying the key is one change that adds
+  the file and sets the digest, so a key is chosen by a reviewed change; the role does not say
+  whose key it is, and the owner decides that.
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) documents all of them. None
 of them is a secret. The private half of the key never reaches the role.
@@ -135,9 +139,14 @@ download are only reported, not made.
 ## Known limits
 
 - The Node runtime is still downloaded from nodejs.org, so a host whose egress allows
-  the package mirrors only cannot run this role until the runtime has another source.
-- The verify key has no source in a pushed commit yet: `broker_deploy_verify_key_src` is
-  a path the caller supplies.
+  the package mirrors only cannot fetch it, and the check that holds demo1's roles to no
+  fetch (`ansible/checks/test_demo1_no_github_fetch.py`) refuses this role's `get_url` while
+  the role is on demo1's playbook. A host that already has the pinned version skips the
+  download. Where the runtime comes from instead is an open decision: a package from the
+  mirrors (a different version from the pinned one), a wider egress allowlist, or a carried
+  runtime (no archive may be committed under `ansible/`).
+- No verify key is carried yet: the file and its digest are empty until the owner commits
+  both (see "Inputs"), and the role refuses until then.
 - The attestation is not verified by the role, only the pinned digests (see "How the
   release arrives").
 - The sandboxed start of the unit is proven by the broker's own boot test, not by this

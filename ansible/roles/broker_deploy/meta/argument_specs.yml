@@ -40,11 +40,19 @@ argument_specs:
         default: '{{ role_path }}/files/releases'
       broker_deploy_verify_key_src:
         type: path
-        required: true
         description: >-
-          Path on the controller of the 32-byte public half of the broker's
-          request-signing key. The private half never leaves the owner's
-          workstation and is not an input to this role.
+          Path on the machine that runs the role of the 32-byte public half of
+          the broker's request-signing key. The private half never leaves the
+          owner's workstation and is not an input to this role.
+        default: '{{ role_path }}/files/broker-verify-key.bin'
+      broker_deploy_verify_key_sha256:
+        type: str
+        description: >-
+          The sha256 of that file as 64 lower-case hex digits. The role refuses,
+          before it writes anything, a key file that is not exactly 32 bytes or
+          does not have this digest, and refuses an empty value. A digest is not
+          a secret.
+        default: ''
       broker_deploy_node_version:
         type: str
         description: The Node version the broker runs, as it appears in the download path.
