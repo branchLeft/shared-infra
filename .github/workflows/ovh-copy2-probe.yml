@@ -1,0 +1,178 @@
+name: OVH copy2 probe
+
+# Makes the three throwaway London buckets of ovh/copy2 (probe stack), exercises
+# object lock on them, and destroys them again in the same run. Dispatched by
+# hand and approved by the owner: the environment below holds the only copy of
+# the OVHcloud service-account secret and carries the required-reviewer rule.
+# The rules, the checks and what a run leaves behind are in ovh/copy2/README.md
+# and ovh/copy2/probe_object_lock.md; the pins are in
+# scripts/test_ovh_copy2_probe_workflow.py.
+#
+# Never Compliance on anything the probe writes to, and never a lock longer than
+# one day: the preflight step refuses a stack file that says otherwise, and
+# refuses while allowedProjectId is still UNSET.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: Create, probe, destroy (London)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The deployment-branch policy of the environment is main only; this is the
+    # same rule stated where the run is read.
+    if: github.ref == 'refs/heads/main'
+
+    # The environment holds OVH_CLIENT_ID and OVH_CLIENT_SECRET (CRED-7), set by
+    # the owner, and pauses the run until the owner approves it. A second run
+    # waits behind a first and never cancels it: a cancelled run could leave
+    # buckets behind with the state gone.
+    environment: ovh-copy2-probe
+
+    concurrency:
+      group: ovh-copy2-probe
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      packages: read
+
+    steps:
+      # If the job is running and no required-reviewer rule exists, nothing
+      # paused it. Fail before any credential is read rather than run unattended.
+      - name: Refuse to run through an ungated environment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          reviewers=$(gh api "repos/${GITHUB_REPOSITORY}/environments/ovh-copy2-probe" \
+            --jq '[.protection_rules[]? | select(.type == "required_reviewers")] | length')
+          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac
+          if [ "${reviewers}" -eq 0 ]; then
+            echo "::error::the ovh-copy2-probe environment has no required-reviewer rule, so the approval gate is not real." >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install the YAML parser the preflight reads the stack file with
+        run: python3 -m pip install --quiet pyyaml==6.0.3
+
+      # Refuses an UNSET project id, a Compliance lock on anything the probe
+      # writes to, a retention above one day and a missing secret, before any
+      # dependency is installed or any resource is addressed. It exports the
+      # project id (not secret) for the program's own guard to compare.
+      - name: Preflight
+        env:
+          OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+          OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+        run: python3 ovh/copy2/probe_object_lock.py preflight --stack-file ovh/copy2/Pulumi.probe.yaml
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: ovh/copy2/.nvmrc
+          cache: pnpm
+          cache-dependency-path: ovh/copy2/pnpm-lock.yaml
+          registry-url: https://npm.pkg.github.com
+
+      # No OVHcloud secret is in this step's environment: dependency install
+      # scripts run here.
+      - name: Install dependencies
+        working-directory: ovh/copy2
+        run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Pulumi CLI
+        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+
+      - name: Prepare an ephemeral state backend
+        run: python3 ovh/copy2/probe_object_lock.py backend --state-dir "${RUNNER_TEMP}/pulumi-state"
+
+      - name: Create the probe stack
+        id: init
+        working-directory: ovh/copy2
+        run: |
+          pulumi login "${PULUMI_BACKEND_URL}"
+          pulumi stack init probe --secrets-provider passphrase
+
+      - name: Name the buckets for this run
+        working-directory: ovh/copy2
+        run: pulumi config set --stack probe nameSuffix "${PROBE_SUFFIX}"
+
+      - name: Create the buckets
+        id: up
+        working-directory: ovh/copy2
+        env:
+          OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+          OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+        run: pulumi up --stack probe --yes
+
+      # The S3 pair is read from the stack outputs into the pipe and nowhere
+      # else: it is not echoed, not written to a file, and the script masks it
+      # before it does anything with it.
+      - name: Probe object lock
+        id: probe
+        working-directory: ovh/copy2
+        run: |
+          set -o pipefail
+          pulumi stack output --stack probe --json --show-secrets \
+            | python3 probe_object_lock.py probe --results-dir "${RUNNER_TEMP}/ovh-probe-result"
+
+      # Removes every object version the probe left, so the destroy below is
+      # not blocked by a Governance-locked version.
+      - name: Purge object versions
+        id: cleanup
+        if: always() && steps.init.outcome == 'success' && steps.up.outcome != 'skipped'
+        continue-on-error: true
+        working-directory: ovh/copy2
+        run: |
+          set -o pipefail
+          pulumi stack output --stack probe --json --show-secrets \
+            | python3 probe_object_lock.py cleanup
+
+      # Always runs once the stack exists, whatever happened above.
+      - name: Destroy the probe
+        id: destroy
+        if: always() && steps.init.outcome == 'success'
+        working-directory: ovh/copy2
+        env:
+          OVH_CLIENT_ID: ${{ secrets.OVH_CLIENT_ID }}
+          OVH_CLIENT_SECRET: ${{ secrets.OVH_CLIENT_SECRET }}
+        run: pulumi destroy --stack probe --yes
+
+      - name: Write the lifecycle to the job summary
+        if: always()
+        env:
+          INIT: ${{ steps.init.outcome }}
+          UP: ${{ steps.up.outcome }}
+          PROBE: ${{ steps.probe.outcome }}
+          CLEANUP: ${{ steps.cleanup.outcome }}
+          DESTROY: ${{ steps.destroy.outcome }}
+        run: >-
+          python3 ovh/copy2/probe_object_lock.py finish
+          --init "${INIT}" --up "${UP}" --probe "${PROBE}" --cleanup "${CLEANUP}" --destroy "${DESTROY}"
+
+      - name: Upload the result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ovh-copy2-probe-result
+          path: ${{ runner.temp }}/ovh-probe-result/
+          if-no-files-found: ignore
+          retention-days: 30

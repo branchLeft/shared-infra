@@ -121,6 +121,14 @@ describe('assertBuckets, shape', () => {
     expect(() => assertBuckets([probe({ region: 'uk' })])).toThrow(/upper-case/);
   });
 
+  it('refuses every region but UK, though GRA and SBG are well formed', () => {
+    for (const region of ['GRA', 'SBG', 'BHS', 'DE', 'UKX']) {
+      expect(() => assertBuckets([probe({ region })])).toThrow(/region must be UK/);
+    }
+    expect(() => assertBuckets([real({ region: 'GRA' })])).toThrow(/region must be UK/);
+    expect(() => assertBuckets([probe({ region: 'UK' })])).not.toThrow();
+  });
+
   it('reports every violation in one message', () => {
     let message = '';
     try {

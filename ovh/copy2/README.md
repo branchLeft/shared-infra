@@ -2,18 +2,19 @@
 
 The Pulumi project `branchleft-ovh-copy2`: the second backup copy at OVHcloud London. It declares Object Storage users, their S3 credentials, their S3 policies and the buckets, all from stack config, behind two guards.
 
-Only the probe stack exists. The probe makes three throwaway buckets, exercises object lock against them and destroys everything in the same job. There is no production stack yet, no workflow and no state backend: the probe's workflow supplies an ephemeral `file://` backend of its own.
+Only the probe stack exists. The probe makes three throwaway buckets, exercises object lock against them and destroys everything in the same job. There is no production stack yet and no persistent state backend: the probe's workflow (`.github/workflows/ovh-copy2-probe.yml`, below) supplies an ephemeral `file://` backend of its own.
 
 ## Files
 
-| File                | What it holds                                                                          |
-| ------------------- | -------------------------------------------------------------------------------------- |
-| `index.ts`          | Reads the stack config and the environment, calls `buildStack`, exports the outputs.   |
-| `stack.ts`          | `buildStack`: runs both guards, then registers users, credentials, policies, buckets.  |
-| `projectGuard.ts`   | Refuses any OVHcloud project other than the one the stack config allows.               |
-| `configGuard.ts`    | Refuses bucket configuration that could lock too long or leave a real bucket exposed.  |
-| `Pulumi.probe.yaml` | The probe stack's config. `allowedProjectId` is `UNSET` until the owner supplies it.   |
-| `*.test.ts`         | Mock-runtime tests for each guard, for the wiring, and for the committed probe config. |
+| File                   | What it holds                                                                                        |
+| ---------------------- | ---------------------------------------------------------------------------------------------------- |
+| `index.ts`             | Reads the stack config and the environment, calls `buildStack`, exports the outputs.                 |
+| `stack.ts`             | `buildStack`: runs both guards, then registers users, credentials, policies, buckets.                |
+| `projectGuard.ts`      | Refuses any OVHcloud project other than the one the stack config allows.                             |
+| `configGuard.ts`       | Refuses bucket configuration that could lock too long or leave a real bucket exposed.                |
+| `Pulumi.probe.yaml`    | The probe stack's config. `allowedProjectId` is `UNSET` until the owner supplies it.                 |
+| `probe_object_lock.py` | The probe workflow's own steps: preflight, backend, probe, cleanup, finish (`probe_object_lock.md`). |
+| `*.test.ts`            | Mock-runtime tests for each guard, for the wiring, and for the committed probe config.               |
 
 ## The project guard
 
@@ -27,7 +28,7 @@ Applied to the final bucket names, suffix included, and reported all at once:
 - Compliance mode is allowed only on a `zz-probe-*` bucket, and there is no override;
 - every other bucket must set `protect: true`, and is also created with `retainOnDelete`;
 - an object lock needs versioning `ENABLED`, a whole number of days and a known mode;
-- names are unique and well formed, regions are upper-case.
+- names are unique and well formed, and the region is exactly `UK` (OVHcloud London): `GRA`, `SBG` and every other region are refused.
 
 Compliance retention cannot be shortened or removed, and a bucket holding a locked version cannot be deleted until it expires. That is why the limit is on what may be declared rather than on what is written.
 
@@ -43,6 +44,10 @@ All keys sit under the project namespace `branchleft-ovh-copy2`.
 | `buckets`          | list   | `name`, `region`, `versioning`, optional `objectLock`, `ownerUser`, `protect`. |
 
 Credentials for the provider come from the environment (`OVH_ENDPOINT`, `OVH_CLIENT_ID`, `OVH_CLIENT_SECRET`) and are never written to config. The S3 secret each credential resource generates is exported as a secret output.
+
+## The probe workflow
+
+`.github/workflows/ovh-copy2-probe.yml` is dispatched by hand and runs in the `ovh-copy2-probe` environment, which holds `OVH_CLIENT_ID` and `OVH_CLIENT_SECRET` and pauses for the owner's approval. It refuses to run while `allowedProjectId` is `UNSET`, creates the probe stack on an ephemeral backend, probes object lock, purges and destroys in `always()` steps, and uploads the result as a workflow artifact and a job summary. Only three steps see the secrets. The workflow and the script are owner paths.
 
 ## Provider
 

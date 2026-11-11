@@ -58,6 +58,8 @@ export interface Settings {
 
 const BUCKET_NAME = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 const REGION = /^[A-Z0-9]+$/;
+/** The only region this project may address: OVHcloud London (S3 region `uk`). */
+export const ALLOWED_REGION = 'UK';
 const MODES: readonly string[] = ['COMPLIANCE', 'GOVERNANCE'];
 
 export const isProbe = (name: string): boolean => name.startsWith(PROBE_PREFIX);
@@ -79,6 +81,10 @@ export function bucketViolations(buckets: readonly BucketConfig[]): string[] {
     seen.add(bucket.name);
     if (!REGION.test(bucket.region)) {
       problems.push(`${label}: region must be upper-case, such as UK`);
+    } else if (bucket.region !== ALLOWED_REGION) {
+      problems.push(
+        `${label}: region must be ${ALLOWED_REGION}, the only region this project may address`
+      );
     }
 
     const lock = bucket.objectLock;
