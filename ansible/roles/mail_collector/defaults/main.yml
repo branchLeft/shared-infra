@@ -1,0 +1,19 @@
+---
+# Every input is public data. None is a secret: the sending credential, the drain token and the
+# heartbeat URL are a root-only file the owner places (vars/main.yml names it), never a value here.
+#
+# The image is a placeholder that refuses to run: the right shape, a digest of all zeros. The role
+# installs everything and holds the unit disabled and stopped until the owner replaces it with the
+# digest the collector's image workflow printed. A bump is a change to this one line.
+#
+# The sending target is an input and is not chosen here. Empty keeps the collector off. Port and
+# secure follow the collector's own defaults (587, STARTTLS).
+#
+# The shim scheme and port say how every host's drain surface is reached from ops1. The path to
+# each host is not this role's: it is another change's, and until it exists no host is reachable.
+mail_collector_image: ghcr.io/branchleft/mail-collector@sha256:0000000000000000000000000000000000000000000000000000000000000000
+mail_collector_smtp_host: ''
+mail_collector_smtp_port: 587
+mail_collector_smtp_secure: false
+mail_collector_shim_scheme: http
+mail_collector_shim_port: 8080

@@ -1,0 +1,113 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the files the role made
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_config_dir }}'
+        - '{{ scenario_descriptor_dir }}'
+        - '{{ scenario_env_file }}'
+        - '{{ scenario_unit_env_file }}'
+        - '{{ scenario_state_dir }}'
+        - '{{ scenario_unit }}'
+      register: mail_collector_v_stats
+
+    - name: Name each file's facts by its path
+      ansible.builtin.set_fact:
+        mail_collector_v_by_path: >-
+          {{ dict(mail_collector_v_stats.results | map(attribute='item')
+          | zip(mail_collector_v_stats.results | map(attribute='stat'))) }}
+
+    - name: Require the files to have the owner and mode the role means
+      ansible.builtin.assert:
+        that:
+          - mail_collector_v_by_path[scenario_config_dir].isdir
+          - mail_collector_v_by_path[scenario_config_dir].mode == '0755'
+          - mail_collector_v_by_path[scenario_config_dir].pw_name == 'root'
+          - mail_collector_v_by_path[scenario_descriptor_dir].isdir
+          - mail_collector_v_by_path[scenario_descriptor_dir].mode == '0755'
+          - mail_collector_v_by_path[scenario_descriptor_dir].pw_name == 'root'
+          - mail_collector_v_by_path[scenario_env_file].mode == '0644'
+          - mail_collector_v_by_path[scenario_env_file].pw_name == 'root'
+          - mail_collector_v_by_path[scenario_unit_env_file].mode == '0644'
+          - mail_collector_v_by_path[scenario_unit_env_file].pw_name == 'root'
+          - mail_collector_v_by_path[scenario_state_dir].isdir
+          - mail_collector_v_by_path[scenario_state_dir].mode == '0700'
+          - mail_collector_v_by_path[scenario_state_dir].pw_name == scenario_account
+          - mail_collector_v_by_path[scenario_unit].pw_name == 'root'
+        quiet: true
+
+    - name: Read the two environment files
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ scenario_env_file }}'
+        - '{{ scenario_unit_env_file }}'
+      register: mail_collector_v_read
+
+    - name: Name the account's numeric ids
+      ansible.builtin.getent:
+        database: passwd
+        key: '{{ scenario_account }}'
+
+    - name: Require the settings to hold the inputs, the two paths and nothing else
+      vars:
+        public_lines: '{{ (mail_collector_v_read.results[0].content | b64decode).splitlines() | reject("match", "^#") | list }}'
+        unit_lines: '{{ (mail_collector_v_read.results[1].content | b64decode).splitlines() | reject("match", "^#") | list }}'
+      ansible.builtin.assert:
+        that:
+          - public_lines | length == 7
+          - "'COLLECTOR_DESCRIPTOR_DIR=/descriptors' in public_lines"
+          - "'COLLECTOR_DEDUPE_STATE_PATH=/state/dedupe.json' in public_lines"
+          - "'COLLECTOR_SMTP_HOST=' ~ scenario_smtp_host in public_lines"
+          - "'COLLECTOR_SMTP_PORT=465' in public_lines"
+          - "'COLLECTOR_SMTP_SECURE=true' in public_lines"
+          - public_lines | select('match', 'COLLECTOR_(SMTP_(USER|PASS)|DRAIN_TOKEN|HEARTBEAT_URL)=') | list | length == 0
+          - unit_lines | length == 2
+          - "unit_lines[0] == 'MAIL_COLLECTOR_IMAGE=' ~ scenario_image"
+          - "unit_lines[1] == 'MAIL_COLLECTOR_USER=' ~ getent_passwd[scenario_account][1] ~ ':' ~ getent_passwd[scenario_account][2]"
+        quiet: true
+
+    - name: Look at the unit's state
+      ansible.builtin.systemd_service:
+        name: mail-collector.service
+      register: mail_collector_v_unit
+
+    - name: Require the unit to be enabled and running
+      ansible.builtin.assert:
+        that:
+          - mail_collector_v_unit.status.UnitFileState == 'enabled'
+          - mail_collector_v_unit.status.ActiveState == 'active'
+          - mail_collector_v_unit.status.Restart == 'always'
+        quiet: true
+
+    - name: Read what the unit ran the stand-in docker client with
+      ansible.builtin.slurp:
+        src: '{{ scenario_docker_args_file }}'
+      register: mail_collector_v_args
+
+    - name: Require the container to run as the account, read-only, with no published port and the two files
+      vars:
+        run_args: '{{ (mail_collector_v_args.content | b64decode).splitlines() }}'
+      ansible.builtin.assert:
+        that:
+          - run_args[0] == 'run'
+          - "'--read-only' in run_args"
+          - "'--cap-drop' in run_args"
+          - "'--user' in run_args"
+          - "run_args[run_args.index('--user') + 1] == getent_passwd[scenario_account][1] ~ ':' ~ getent_passwd[scenario_account][2]"
+          - "'--publish' not in run_args"
+          - "'--privileged' not in run_args"
+          - "'--network' not in run_args"
+          - run_args | select('equalto', '--env-file') | list | length == 2
+          - 'scenario_env_file in run_args'
+          - 'scenario_credentials_file in run_args'
+          - run_args[-1] == scenario_image
+        quiet: true

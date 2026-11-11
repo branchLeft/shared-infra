@@ -179,7 +179,8 @@ BOOTSTRAP_GUARD_PATHS = [
 # safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
 # whole role is the owner's, its module, units, environment template and the tests that hold them
 # included. The ring controller role also installs the unit of a service that holds a push key,
-# and safety_service installs the unit that mounts the channel key and the hash-source credential.
+# safety_service installs the unit that mounts the channel key and the hash-source credential,
+# and mail_collector installs the unit that passes the owner's credentials file to the collector.
 KEY_ROLE_PATHS = [
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
@@ -204,6 +205,15 @@ KEY_ROLE_PATHS = [
     "ansible/roles/safety_service/tests/unit/test_safety_service.py",
     "ansible/roles/safety_service/molecule/default/verify.yml",
     "ansible/roles/safety_service/README.md",
+    "ansible/roles/mail_collector/tasks/main.yml",
+    "ansible/roles/mail_collector/vars/main.yml",
+    "ansible/roles/mail_collector/meta/argument_specs.yml",
+    "ansible/roles/mail_collector/files/mail-collector.service",
+    "ansible/roles/mail_collector/templates/unit.env.j2",
+    "ansible/roles/mail_collector/templates/collector.env.j2",
+    "ansible/roles/mail_collector/tests/unit/test_mail_collector.py",
+    "ansible/roles/mail_collector/molecule/default/verify.yml",
+    "ansible/roles/mail_collector/README.md",
 ]
 
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything

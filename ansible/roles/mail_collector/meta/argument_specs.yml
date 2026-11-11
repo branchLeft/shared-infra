@@ -1,0 +1,45 @@
+---
+argument_specs:
+  main:
+    short_description: Install the mail collector as a container unit, off until the image and the sending target are set
+    description: >-
+      Makes the account the collector runs as, its directories, the public environment files and a
+      unit that runs the digest-pinned image with only the descriptor directory (read-only) and its
+      state directory mounted and no published port. Holds the unit disabled and stopped until the
+      image is a real digest and a sending target is set; even then the unit starts only when the
+      descriptor directory holds a file and the owner has placed the credentials file. Every input
+      is public data and none is a secret.
+    author: branchLeft
+    options:
+      mail_collector_image:
+        type: str
+        default: ghcr.io/branchleft/mail-collector@sha256:0000000000000000000000000000000000000000000000000000000000000000
+        description: >-
+          The image the unit runs, as ghcr.io/branchleft/mail-collector@sha256: and 64 lowercase
+          hex digits. A tag is not a pin and is refused. The default is all zeros: a placeholder
+          the role refuses to run.
+      mail_collector_smtp_host:
+        type: str
+        default: ''
+        description: >-
+          The host name of the SMTP submission endpoint the collector sends through, or empty.
+          Empty keeps the collector off. The user and password are in the owner's credentials file.
+      mail_collector_smtp_port:
+        type: int
+        default: 587
+        description: The submission port, 1 to 65535.
+      mail_collector_smtp_secure:
+        type: bool
+        default: false
+        description: True for implicit TLS on the submission port, false for STARTTLS.
+      mail_collector_shim_scheme:
+        type: str
+        default: http
+        choices:
+          - http
+          - https
+        description: The scheme every host's drain surface is reached on.
+      mail_collector_shim_port:
+        type: int
+        default: 8080
+        description: The port every host's drain surface is reached on, 1 to 65535.

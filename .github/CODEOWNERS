@@ -98,6 +98,8 @@
 /ansible/roles/safety_channel_key/       @branchLeft/branchleft-admin
 # ring_controller_host generates the ring controller's ledger-signing key and push key on ops1 as root, publishes their public halves, and installs the unit that will run the controller as a service account, so the whole role is the owner's to review.
 /ansible/roles/ring_controller_host/     @branchLeft/branchleft-admin
+# mail_collector installs the unit on ops1 that runs the collector with the sending credentials, the drain token and the heartbeat URL passed in from a file the owner places, so the unit's mounts and flags decide who can read them and the whole role is the owner's to review.
+/ansible/roles/mail_collector/            @branchLeft/branchleft-admin
 # safety_service runs the content-safety service on ops1 as a container with the hash-source credential and the channel signing key mounted, so the unit's mounts and flags decide who can read both and the whole role is the owner's to review.
 /ansible/roles/safety_service/           @branchLeft/branchleft-admin
 # Each host's trusted signer list is the trust anchor of the pull. An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root. The reusable gated apply exists in branchLeft/github-workflows, but nothing here calls it, so no gate on a role edit is wired.
