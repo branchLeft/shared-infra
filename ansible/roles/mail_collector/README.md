@@ -70,6 +70,13 @@ never names the value (ANS-16). None is a secret.
 | `mail_collector_shim_scheme` | `http`                                                   | The scheme every host's drain surface is reached on                |
 | `mail_collector_shim_port`   | `8080`                                                   | The port every host's drain surface is reached on                  |
 
+`mail_collector_demo_mail_domain` is optional and empty by default. It is the platform's shared demo
+mail domain, the one domain a demo host's header From may carry, and the role writes it as
+`COLLECTOR_DEMO_MAIL_DOMAIN` only when set. Empty is the safe state: the collector then holds every
+demo host's mail, unsent and unacked, and logs `demo_mail_domain_not_set` at start-up. When set it
+must be a bare domain, with no scheme, no at sign and no space, or the run stops before anything
+changes.
+
 The sending target is an input, not something the role decides. The owner sets these in a later
 change, to the digest the collector's image workflow printed and attested.
 

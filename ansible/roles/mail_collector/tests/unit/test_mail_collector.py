@@ -89,7 +89,7 @@ def render(text: str, variables: Mapping[str, object] | None = None) -> str:
     merged: dict[str, object] = {**role_defaults(), **role_vars(), **(variables or {})}
     # Ansible text, unit files and environment files, never HTML, so there is nothing to escape.
     environment = jinja2.Environment(  # noqa: S701
-        undefined=jinja2.StrictUndefined, keep_trailing_newline=True
+        undefined=jinja2.StrictUndefined, keep_trailing_newline=True, trim_blocks=True
     )
     # Ansible's own filters, so a template is judged by what it does on a host.
     environment.filters.update(FilterModule().filters())
@@ -340,6 +340,28 @@ class RenderedFilesTests(unittest.TestCase):
     def test_the_secure_flag_renders_false_by_default(self) -> None:
         self.assertEqual(self.public()["COLLECTOR_SMTP_SECURE"], "false")
 
+    def test_the_demo_mail_domain_is_written_only_when_set_and_empty_means_demo_mail_is_held(
+        self,
+    ) -> None:
+        # Unset, the collector holds every demo host's mail unsent and unacked, the safe state, so
+        # the default writes no line at all rather than an empty one.
+        self.assertEqual(role_defaults()["mail_collector_demo_mail_domain"], "")
+        self.assertNotIn("COLLECTOR_DEMO_MAIL_DOMAIN", self.public())
+        text = render(
+            ENV_TEMPLATE.read_text(encoding="utf-8"),
+            {
+                "mail_collector_smtp_host": "s.example",
+                "mail_collector_demo_mail_domain": "demo.example",
+            },
+        )
+        pairs = [line.split("=", 1) for line in text.splitlines() if line and line[0] != "#"]
+        names = [name for name, _ in pairs]
+        self.assertEqual(
+            names, [*PUBLIC_NAMES[:5], "COLLECTOR_DEMO_MAIL_DOMAIN", *PUBLIC_NAMES[5:]]
+        )
+        self.assertEqual(dict(pairs)["COLLECTOR_DEMO_MAIL_DOMAIN"], "demo.example")
+        self.assertNotIn("\n\n", text.split("COLLECTOR_DESCRIPTOR_DIR", 1)[1])
+
     def test_the_container_paths_are_the_ones_the_unit_mounts(self) -> None:
         values = self.public()
         self.assertEqual(
@@ -456,6 +478,18 @@ class InterfaceTests(unittest.TestCase):
         ):
             self.assertIsNone(pattern.match(bad), bad)
 
+    def test_the_demo_mail_domain_is_a_bare_domain(self) -> None:
+        pattern = self.pattern("mail_collector_demo_mail_domain_pattern")
+        for good in ("demo.example", "a.b.c.example", "xn--bcher-kva.example", "a-b.example"):
+            self.assertTrue(pattern.match(good), good)
+        for bad in (
+            "", "demo", "https://demo.example", "demo.example/", "user@demo.example",
+            "@demo.example", "demo.example ", " demo.example", "de mo.example", "demo.example\n",
+            "demo.example:25", "-demo.example", "demo-.example", ".demo.example", "demo..example",
+            "demo.example.", "demo_x.example", "demo.example, other.example", "*.demo.example",
+        ):  # fmt: skip
+            self.assertIsNone(pattern.match(bad), bad)
+
     def test_a_sending_host_is_one_plain_host_name(self) -> None:
         pattern = self.pattern("mail_collector_smtp_host_pattern")
         for good in ("a", "submit.example", "a-b.c.example", "x" * 253):
@@ -529,6 +563,21 @@ class TaskTests(unittest.TestCase):
         text = "\n".join(str(t) for t in before)
         for name in role_defaults():
             self.assertIn(name, text)
+
+    def test_a_demo_mail_domain_that_is_set_and_not_a_bare_domain_stops_the_run(self) -> None:
+        check = named("Refuse a demo mail domain")
+        self.assertEqual(module_of(check), "assert")
+        first_change = next(i for i, t in enumerate(tasks()) if module_of(t) in CHANGING_MODULES)
+        self.assertLess(tasks().index(check), first_change)
+        for good in ("", "demo.example", "a.b.example"):
+            with self.subTest(good=good):
+                self.assertTrue(holds(check, {"mail_collector_demo_mail_domain": good}))
+        for bad in (
+            "https://demo.example", "user@demo.example", "demo.example ", "de mo.example",
+            "demo", "demo.example\n", "demo.example:25", ("a" * 63 + ".") * 4 + "example",
+        ):  # fmt: skip
+            with self.subTest(bad=bad[:30]):
+                self.assertFalse(holds(check, {"mail_collector_demo_mail_domain": bad}))
 
     def test_an_empty_or_unpinned_image_stops_the_run_before_anything_changes(self) -> None:
         # Fail closed: the digest has no default that passes as set. An empty value, a tag and a

@@ -24,6 +24,13 @@ argument_specs:
         description: >-
           The host name of the SMTP submission endpoint the collector sends through, or empty.
           Empty keeps the collector off. The user and password are in the owner's credentials file.
+      mail_collector_demo_mail_domain:
+        type: str
+        default: ''
+        description: >-
+          The shared demo mail domain, a bare domain with no scheme, no at sign and no space, or
+          empty. It is the one domain a demo host's header From may carry. Empty holds every demo
+          host's mail, unsent and unacked, which is the safe state.
       mail_collector_smtp_port:
         type: int
         default: 587

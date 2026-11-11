@@ -53,6 +53,7 @@ mail_collector_image_placeholder: ghcr.io/branchleft/mail-collector@sha256:00000
 mail_collector_image_pattern: '^ghcr\.io/branchleft/mail-collector@sha256:[0-9a-f]{64}\Z'
 mail_collector_state_path_tail_pattern: '/[A-Za-z0-9][A-Za-z0-9._/-]*\Z'
 mail_collector_smtp_host_pattern: '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\Z'
+mail_collector_demo_mail_domain_pattern: '^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\Z'
 mail_collector_shim_schemes:
   - http
   - https

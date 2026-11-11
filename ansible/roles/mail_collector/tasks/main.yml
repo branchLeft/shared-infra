@@ -27,6 +27,15 @@
     quiet: true
     fail_msg: mail_collector_smtp_host must be empty or a plain host name.
 
+- name: Refuse a demo mail domain that is set and is not a bare domain
+  ansible.builtin.assert:
+    that:
+      - mail_collector_demo_mail_domain is string
+      - mail_collector_demo_mail_domain | length <= 253
+      - mail_collector_demo_mail_domain | length == 0 or mail_collector_demo_mail_domain is match(mail_collector_demo_mail_domain_pattern)
+    quiet: true
+    fail_msg: mail_collector_demo_mail_domain must be empty or a bare domain, with no scheme, no at sign and no space.
+
 - name: Refuse a port that is not a whole number from 1 to 65535
   ansible.builtin.assert:
     that:
