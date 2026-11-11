@@ -16,7 +16,8 @@
 # no release pinned this playbook stops at that role and changes nothing on the host. Its inputs
 # are role defaults, because a playbook entry carries no variables (R2). Its Node runtime is
 # fetched from nodejs.org, pinned by its sha256: the one download the no-fetch test above lets
-# through, and the one host besides the package mirrors that this host's egress allowlist holds.
+# through. That test holds the roles' text to this one host; it does not read or set the host's
+# own egress rules, which nothing in this repository enforces.
 
 # host_baseline is not applied here. The egress role needs Docker's DOCKER-USER
 # chain and refuses the host, by name, when Docker is not running; the host's

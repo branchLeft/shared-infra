@@ -88,7 +88,9 @@ two that stay empty until the owner carries them make the role refuse before it 
   is missing, a link, not 32 bytes, or not that digest. Changing the key is one change that
   replaces the file and the digest, and a test holds the file to the key's hex and to the digest,
   so a key is chosen by a reviewed change. The private half stays with the owner and never reaches
-  the role.
+  the role. The file's place and the digest are role defaults, so a run-time `-e` could point
+  `broker_deploy_verify_key_src` at another 32-byte file and give its digest; the pull route
+  passes no `-e` of its own, and a run by hand with one is outside the signed route.
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) documents all of them. None
 of them is a secret. The private half of the key never reaches the role.

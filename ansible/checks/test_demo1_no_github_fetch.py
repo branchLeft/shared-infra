@@ -14,15 +14,12 @@ from the tree:
   role's pins, every pin has its file, and each file has its pinned sha256;
 * each of the two roles checks its vendored files right after its inputs, before any other step.
 
-The one download is broker_deploy's Node runtime, read from the parsed YAML: see
-download_problems for what must hold. A get_url with no checksum, on another host, on GitHub, in
-another role or in another file of the role is still a finding.
+The one download is broker_deploy's Node runtime (see download_problems). Any other get_url is
+still a finding.
 
 Not covered, and named: the vendored files themselves are not scanned (they are upstream's text,
-held to their pins, and the host runs them), and nothing here compares them with
-branchLeft/ghost-platform. The README of each role says so. This test holds the roles' text to
-the allowlist; it does not read the host's own firewall, and a variable passed at run time
-could still move the base url (the pull route passes none, and the checksum still has to match).
+held to their pins, and the host runs them), nothing here compares them with
+branchLeft/ghost-platform, and the host's own firewall is not read. The README of each role says so.
 """
 
 from __future__ import annotations
