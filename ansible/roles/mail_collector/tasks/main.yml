@@ -52,6 +52,28 @@
     quiet: true
     fail_msg: mail_collector_smtp_secure must be true or false, and mail_collector_shim_scheme http or https.
 
+# The three places the collector keeps state across a restart (pins, the record of submitted
+# messages, the Sweego usage counters) must each be set and sit under the one persistent volume the
+# unit mounts. Anything else leaves that state in memory, and a restart forgets pins, dedupe and
+# the usage counters without a sign. Refused here, before anything changes, whatever the cause: an
+# empty value, a path elsewhere, a path that climbs out with two dots.
+- name: Refuse a state path that is empty or not under the persistent state directory
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item | length > 0
+      - item is match('^' ~ mail_collector_container_state_dir ~ mail_collector_state_path_tail_pattern)
+      - "'..' not in item"
+    quiet: true
+    fail_msg: A mail_collector state path is empty or is not under the persistent state directory.
+  loop:
+    - '{{ mail_collector_container_dedupe_file }}'
+    - '{{ mail_collector_container_pin_dir }}'
+    - '{{ mail_collector_container_sweego_usage_file }}'
+  loop_control:
+    label: state path {{ ansible_loop.index }}
+    extended: true
+
 # The collector runs only with a real image and a sending target. Either missing keeps it off, so
 # a half-set pair is inert and not a service that cannot start. The default image is the
 # placeholder: it has the shape of a pin and points at nothing, so it never counts as set.
@@ -170,6 +192,18 @@
 - name: Make the state directory, owned by the collector account and closed to everyone else
   ansible.builtin.file:
     path: '{{ mail_collector_state_dir }}'
+    state: directory
+    owner: '{{ mail_collector_account }}'
+    group: '{{ mail_collector_account }}'
+    mode: '0700'
+  when: mail_collector_account_present
+
+# The pins live in a directory of their own inside the state directory. The collector would make
+# it on its first write; making it here gives it the account and mode the role means, and a plan
+# that shows it.
+- name: Make the pin directory, owned by the collector account and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ mail_collector_host_pin_dir }}'
     state: directory
     owner: '{{ mail_collector_account }}'
     group: '{{ mail_collector_account }}'

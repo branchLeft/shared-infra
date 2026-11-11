@@ -19,6 +19,7 @@ from typing import cast
 
 import jinja2
 from ansible.plugins.filter.core import FilterModule
+from ansible.plugins.test.core import TestModule
 from ruamel.yaml import YAML
 
 ROLE = Path(__file__).resolve().parents[2]
@@ -34,6 +35,8 @@ IMAGE = "ghcr.io/branchleft/mail-collector@sha256:" + "a" * 64
 PUBLIC_NAMES = [
     "COLLECTOR_DESCRIPTOR_DIR",
     "COLLECTOR_DEDUPE_STATE_PATH",
+    "COLLECTOR_PIN_STATE_DIR",
+    "COLLECTOR_SWEEGO_USAGE_STATE_PATH",
     "COLLECTOR_SMTP_HOST",
     "COLLECTOR_SMTP_PORT",
     "COLLECTOR_SMTP_SECURE",
@@ -90,6 +93,7 @@ def render(text: str, variables: Mapping[str, object] | None = None) -> str:
     )
     # Ansible's own filters, so a template is judged by what it does on a host.
     environment.filters.update(FilterModule().filters())
+    environment.tests.update(TestModule().tests())
     for _ in range(5):
         merged = {key: _render_value(environment, value, merged) for key, value in merged.items()}
     return environment.from_string(text).render(**merged)
@@ -104,6 +108,16 @@ def _render_value(
     if isinstance(value, list):
         return [_render_value(environment, item, scope) for item in value]
     return value
+
+
+def holds(task: dict[str, object], variables: Mapping[str, object]) -> bool:
+    """Return whether every condition of an assert task holds for the variables.
+
+    Each condition is judged as Ansible judges it: rendered with the role's own variables, the
+    Ansible filters and the Ansible tests (`match`), so a refusal is proven by the task as shipped.
+    """
+    conditions = cast("list[str]", args_of(task)["that"])
+    return all(render("{{ " + c + " }}", variables) == "True" for c in conditions)
 
 
 def module_of(task: dict[str, object]) -> str | None:
@@ -335,6 +349,58 @@ class RenderedFilesTests(unittest.TestCase):
         dedupe = values["COLLECTOR_DEDUPE_STATE_PATH"]
         self.assertTrue(dedupe.startswith(str(role_vars()["mail_collector_container_state_dir"])))
 
+    def test_the_three_state_settings_are_set_and_under_the_persistent_volume_the_unit_mounts(
+        self,
+    ) -> None:
+        # Unset, the collector keeps pins, the record of submitted messages and the Sweego usage
+        # counters in memory only. All three are written, each under the one directory the unit
+        # mounts read-write, which is the host's persistent state directory.
+        values = self.public()
+        state = str(role_vars()["mail_collector_container_state_dir"])
+        start = unit_values(UNIT.read_text(encoding="utf-8"), "ExecStart")[0]
+        self.assertIn(f"{role_vars()['mail_collector_state_dir']}:{state}:rw", start)
+        for name in (
+            "COLLECTOR_DEDUPE_STATE_PATH",
+            "COLLECTOR_PIN_STATE_DIR",
+            "COLLECTOR_SWEEGO_USAGE_STATE_PATH",
+        ):
+            with self.subTest(name=name):
+                self.assertTrue(values[name].startswith(state + "/"), values[name])
+        self.assertEqual(
+            values["COLLECTOR_PIN_STATE_DIR"], role_vars()["mail_collector_container_pin_dir"]
+        )
+        # The pin directory the role makes on the host is the one the container sees as the pins.
+        host_pins = str(role_vars()["mail_collector_host_pin_dir"])
+        host_state = str(role_vars()["mail_collector_state_dir"])
+        pin_dir = str(role_vars()["mail_collector_container_pin_dir"])
+        self.assertEqual(host_pins.removeprefix(host_state), pin_dir.removeprefix(state))
+
+    def test_no_rendered_file_holds_a_secret_name_or_anything_but_plain_words(self) -> None:
+        # The files are public text. A name that smells of a credential, or a value that is not one
+        # plain word, is where a secret would hide; the check is shown able to find one below.
+        smell = re.compile(r"(?i)pass|secret|token|key|credential|heartbeat")
+        rendered = [
+            render(
+                ENV_TEMPLATE.read_text(encoding="utf-8"), {"mail_collector_smtp_host": "s.example"}
+            ),
+            render(
+                UNIT_ENV_TEMPLATE.read_text(encoding="utf-8"),
+                {"mail_collector_uid": "921", "mail_collector_gid": "922"},
+            ),
+        ]
+        for text in rendered:
+            for line in (line for line in text.splitlines() if line and line[0] != "#"):
+                name, value = line.split("=", 1)
+                self.assertNotRegex(
+                    name.removeprefix("COLLECTOR_").removeprefix("MAIL_COLLECTOR_"), smell
+                )
+                self.assertRegex(value, r"^[A-Za-z0-9./:@_-]*\Z", name)
+        # The control: a planted credential line is found by both halves of the check.
+        planted = "COLLECTOR_SMTP_PASS=hunter2 and more\n"
+        name, value = planted.split("=", 1)
+        self.assertRegex(name.removeprefix("COLLECTOR_"), smell)
+        self.assertIsNone(re.match(r"^[A-Za-z0-9./:@_-]*\Z", value.rstrip("\n")))
+
     def test_the_unit_environment_holds_the_image_and_the_account_and_nothing_else(self) -> None:
         text = render(
             UNIT_ENV_TEMPLATE.read_text(encoding="utf-8"),
@@ -376,6 +442,7 @@ class InterfaceTests(unittest.TestCase):
         pattern = self.pattern("mail_collector_image_pattern")
         self.assertTrue(pattern.match(IMAGE))
         for bad in (
+            "",
             "ghcr.io/branchleft/mail-collector:latest",
             "ghcr.io/branchleft/mail-collector:" + "a" * 64,
             "ghcr.io/branchleft/mail-collector",
@@ -462,6 +529,66 @@ class TaskTests(unittest.TestCase):
         text = "\n".join(str(t) for t in before)
         for name in role_defaults():
             self.assertIn(name, text)
+
+    def test_an_empty_or_unpinned_image_stops_the_run_before_anything_changes(self) -> None:
+        # Fail closed: the digest has no default that passes as set. An empty value, a tag and a
+        # value that is not a string all fail the assert, so the run stops at the first task.
+        check = tasks()[0]
+        self.assertEqual(module_of(check), "assert")
+        self.assertIn("mail_collector_image", str(check))
+        self.assertTrue(holds(check, {"mail_collector_image": IMAGE}))
+        for bad in ("", "ghcr.io/branchleft/mail-collector:latest", "sha256:" + "a" * 64, "\n"):
+            with self.subTest(image=bad[:30]):
+                self.assertFalse(holds(check, {"mail_collector_image": bad}))
+        # The all-zero placeholder is the one value that passes the assert and is held off by the
+        # run rule instead; the host's play carries the default, so a stop there would fail every
+        # apply of ops1 until the owner sets a digest.
+        self.assertTrue(
+            holds(check, {"mail_collector_image": role_defaults()["mail_collector_image"]})
+        )
+
+    def test_a_state_path_that_is_empty_or_not_under_the_persistent_directory_stops_the_run(
+        self,
+    ) -> None:
+        check = named("Refuse a state path")
+        self.assertEqual(module_of(check), "assert")
+        # The loop covers each of the three paths the collector keeps state in, and the assert is
+        # the first change-free gate: it sits before every task that changes the host.
+        self.assertEqual(
+            check["loop"],
+            [
+                "{{ mail_collector_container_dedupe_file }}",
+                "{{ mail_collector_container_pin_dir }}",
+                "{{ mail_collector_container_sweego_usage_file }}",
+            ],
+        )
+        first_change = next(i for i, t in enumerate(tasks()) if module_of(t) in CHANGING_MODULES)
+        self.assertLess(tasks().index(check), first_change)
+        for good in (
+            "/state/dedupe.json",
+            "/state/pins",
+            "/state/sweego-usage.json",
+            "/state/a/b-c_d.json",
+        ):
+            with self.subTest(good=good):
+                self.assertTrue(holds(check, {"item": good}))
+        for bad in (
+            "", "/elsewhere/dedupe.json", "/state", "/state/", "/statefoo/x", "/state/../etc/x",
+            "/state/a b", "state/x", "/state/x\n", "/state/.hidden/../x",
+        ):  # fmt: skip
+            with self.subTest(bad=bad):
+                self.assertFalse(holds(check, {"item": bad}))
+
+    def test_the_pin_directory_is_made_by_the_role_for_the_account_and_closed_to_everyone_else(
+        self,
+    ) -> None:
+        make = named("Make the pin directory")
+        self.assertEqual(module_of(make), "file")
+        pins = args_of(make)
+        self.assertEqual(pins["state"], "directory")
+        self.assertEqual(pins["mode"], "0700")
+        self.assertEqual(pins["owner"], "{{ mail_collector_account }}")
+        self.assertEqual(pins["path"], "{{ mail_collector_host_pin_dir }}")
 
     def test_the_collector_runs_only_with_a_real_image_and_a_sending_host(self) -> None:
         fact = args_of(named("Note whether the collector is meant to run"))

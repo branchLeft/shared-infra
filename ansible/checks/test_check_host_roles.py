@@ -74,7 +74,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector, and
-# ring_controller_host last of all so its failure holds nothing else back, and demo1's two build roles.
+# ring_controller_host last of all so its failure holds nothing else back, and demo1's two build
+# roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [

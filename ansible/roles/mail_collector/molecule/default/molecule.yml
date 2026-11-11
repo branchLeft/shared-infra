@@ -59,6 +59,7 @@ provisioner:
         scenario_unit_env_file: /etc/branchleft/mail-collector/unit.env
         scenario_credentials_file: /etc/branchleft/mail-collector/credentials.env
         scenario_state_dir: /var/lib/branchleft/mail-collector
+        scenario_pin_dir: /var/lib/branchleft/mail-collector/pins
         scenario_unit: /etc/systemd/system/mail-collector.service
         scenario_docker_args_file: /run/standin-docker-args
         # Test values, never real: an image digest of nothing, and a sending host that resolves

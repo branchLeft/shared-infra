@@ -16,6 +16,7 @@
         - '{{ scenario_env_file }}'
         - '{{ scenario_unit_env_file }}'
         - '{{ scenario_state_dir }}'
+        - '{{ scenario_pin_dir }}'
         - '{{ scenario_unit }}'
       register: mail_collector_v_stats
 
@@ -41,6 +42,9 @@
           - mail_collector_v_by_path[scenario_state_dir].isdir
           - mail_collector_v_by_path[scenario_state_dir].mode == '0700'
           - mail_collector_v_by_path[scenario_state_dir].pw_name == scenario_account
+          - mail_collector_v_by_path[scenario_pin_dir].isdir
+          - mail_collector_v_by_path[scenario_pin_dir].mode == '0700'
+          - mail_collector_v_by_path[scenario_pin_dir].pw_name == scenario_account
           - mail_collector_v_by_path[scenario_unit].pw_name == 'root'
         quiet: true
 
@@ -63,13 +67,17 @@
         unit_lines: '{{ (mail_collector_v_read.results[1].content | b64decode).splitlines() | reject("match", "^#") | list }}'
       ansible.builtin.assert:
         that:
-          - public_lines | length == 7
+          - public_lines | length == 9
           - "'COLLECTOR_DESCRIPTOR_DIR=/descriptors' in public_lines"
           - "'COLLECTOR_DEDUPE_STATE_PATH=/state/dedupe.json' in public_lines"
+          - "'COLLECTOR_PIN_STATE_DIR=/state/pins' in public_lines"
+          - "'COLLECTOR_SWEEGO_USAGE_STATE_PATH=/state/sweego-usage.json' in public_lines"
           - "'COLLECTOR_SMTP_HOST=' ~ scenario_smtp_host in public_lines"
           - "'COLLECTOR_SMTP_PORT=465' in public_lines"
           - "'COLLECTOR_SMTP_SECURE=true' in public_lines"
           - public_lines | select('match', 'COLLECTOR_(SMTP_(USER|PASS)|DRAIN_TOKEN|HEARTBEAT_URL)=') | list | length == 0
+          - "'NOT-A-REAL-SECRET' not in (mail_collector_v_read.results[0].content | b64decode)"
+          - "'NOT-A-REAL-SECRET' not in (mail_collector_v_read.results[1].content | b64decode)"
           - unit_lines | length == 2
           - "unit_lines[0] == 'MAIL_COLLECTOR_IMAGE=' ~ scenario_image"
           - "unit_lines[1] == 'MAIL_COLLECTOR_USER=' ~ getent_passwd[scenario_account][1] ~ ':' ~ getent_passwd[scenario_account][2]"

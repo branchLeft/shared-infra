@@ -28,11 +28,17 @@ mail_collector_state_dir: /var/lib/branchleft/mail-collector
 mail_collector_credentials_file: /etc/branchleft/mail-collector/credentials.env
 mail_collector_credentials_mode: '0600'
 
-# Where the directories appear inside the container, and the file the collector keeps its record
-# of submitted messages in.
+# Where the directories appear inside the container, and the three places the collector keeps what
+# must outlive a restart: the record of submitted messages, the per-message target pins and the
+# Sweego usage counters. All three sit under the state directory, which is the one persistent
+# volume; with any of them unset or elsewhere the collector holds that state in memory only, and a
+# restart forgets it. The tasks refuse a run where any of the three is empty or not under it.
 mail_collector_container_descriptor_dir: /descriptors
 mail_collector_container_state_dir: /state
 mail_collector_container_dedupe_file: /state/dedupe.json
+mail_collector_container_pin_dir: /state/pins
+mail_collector_container_sweego_usage_file: /state/sweego-usage.json
+mail_collector_host_pin_dir: /var/lib/branchleft/mail-collector/pins
 
 mail_collector_unit_dir: /etc/systemd/system
 mail_collector_unit: mail-collector.service
@@ -45,6 +51,7 @@ mail_collector_image_placeholder: ghcr.io/branchleft/mail-collector@sha256:00000
 # not pass. None admits a space, a quote, a backslash, a dollar sign or a hash, so a value is one
 # plain word in the environment file.
 mail_collector_image_pattern: '^ghcr\.io/branchleft/mail-collector@sha256:[0-9a-f]{64}\Z'
+mail_collector_state_path_tail_pattern: '/[A-Za-z0-9][A-Za-z0-9._/-]*\Z'
 mail_collector_smtp_host_pattern: '^[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\Z'
 mail_collector_shim_schemes:
   - http

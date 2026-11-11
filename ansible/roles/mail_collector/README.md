@@ -22,7 +22,7 @@ The role:
 3. Makes the system account `mail-collector` (no login, no home) and its group.
 4. Makes `/etc/branchleft/mail-collector` (root's, `0755`), the descriptor directory inside it
    (root's, `0755`, left empty) and `/var/lib/branchleft/mail-collector` (the account's, `0700`,
-   which holds the record of submitted messages).
+   which holds the collector's persistent state) with its `pins` directory (the account's, `0700`).
 5. Writes `unit.env` (the image and the account's numeric ids) and, when the collector is meant to
    run, `collector.env` (the sending target and the drain surface's scheme and port). Both hold
    public values only.
@@ -76,6 +76,29 @@ change, to the digest the collector's image workflow printed and attested.
 The paths, the account and the unit's flags are constants in `vars/main.yml` and the unit file, not
 inputs: an inventory value cannot move them.
 
+An empty or malformed `mail_collector_image` stops the run at its first task, before anything
+changes. The all-zero default is the one value that passes that check and is held off by the run
+rule instead: the host's play carries the default, so stopping on it would fail every apply of the
+host until the owner sets a digest.
+
+## State that survives a restart
+
+The collector keeps three things on disk, and with any one unset it keeps that thing in memory only
+and a restart forgets it: the record of submitted messages, the per-message target pins and the
+Sweego usage counters. `collector.env` sets all three, each under `/state`, the container's view of
+the state directory the unit mounts read-write:
+
+- `COLLECTOR_DEDUPE_STATE_PATH=/state/dedupe.json`, the record of submitted messages;
+- `COLLECTOR_PIN_STATE_DIR=/state/pins`, the per-message target pins;
+- `COLLECTOR_SWEEGO_USAGE_STATE_PATH=/state/sweego-usage.json`, the Sweego usage counters.
+
+On the host these are under `/var/lib/branchleft/mail-collector`. The state directory and the pin directory are the account's, mode `0700`. A task refuses the run,
+before anything changes, if any of the three is empty or is not under `/state`.
+
+The collector writes marker files beside these (for the usage counters,
+`sweego-usage.json.initialised`). They record that a file once existed, so that a lost volume is not
+read as a fresh allowance. Clearing one is the owner's act, on the host, and this role never does it.
+
 ## The owner's credentials file
 
 `/etc/branchleft/mail-collector/credentials.env`, root's, mode `0600`, one `NAME=value` per line, and
@@ -109,7 +132,8 @@ names it.
 | `/etc/branchleft/mail-collector/descriptors`   | root      | `0755` | Left empty; one JSON file per host the collector may drain |
 | `/etc/branchleft/mail-collector/unit.env`      | root      | `0644` | The image and the account's ids, public values             |
 | `/etc/branchleft/mail-collector/collector.env` | root      | `0644` | The settings; absent while the collector is off            |
-| `/var/lib/branchleft/mail-collector`           | collector | `0700` | The record of submitted messages, written by the collector |
+| `/var/lib/branchleft/mail-collector`           | collector | `0700` | The collector's persistent state, written by the collector |
+| `/var/lib/branchleft/mail-collector/pins`      | collector | `0700` | The per-message target pins                                |
 | `/etc/systemd/system/mail-collector.service`   | root      | `0644` | The unit                                                   |
 
 It also makes the `mail-collector` account and group. It names, and never writes, the credentials
@@ -184,7 +208,11 @@ unit and leaves the collector off.
   inactive without failing, so nothing pages on it from here. The heartbeat's silence does.
 - **The test platform is a container with stand-ins.** It proves files, owners, modes and that the
   unit runs a command with the right arguments; it does not prove the collector drains or sends.
-- **The record of submitted messages is not backed up by this role.** It lives in the state directory.
+- **The state is not backed up by this role.** It lives in the state directory.
+- **The dropped-recipient report needs the spool's opt-in.** The collector reports dropped recipients
+  to each spool's `POST /drain/outcomes`, which a spool serves only with `SHIM_DRAIN_OUTCOMES=true` in
+  its own environment; otherwise it answers 404 and the report does nothing. That setting belongs to
+  the spool's environment, which this role does not render.
 
 ## Clauses this role exercises
 
