@@ -85,9 +85,12 @@ Throwaway secrets are searched for in every request's output and in the whole ru
 
 ## How it is delivered
 
-Nowhere yet. No playbook applies this role: the mail host is not in the production inventory,
-and the gated pull's step allow-list holds only the control plane's three steps. Wiring it is
-separate, owner-reviewed work, and the hand procedure in the mail runbooks is unchanged.
+`playbooks/mx1.yml` applies this role, after `host_baseline` and `mx1_stack`, as a plain apply
+only: it places the programs and runs none of them. The gated pull's step allow-list holds only
+the control plane's three steps, and `owner_vars/mx1.yml` may not carry one (R10), so no step of
+this role can be requested through the pull. The hand procedure in the mail runbooks is
+unchanged, and so is the owner's merge of any change to this role. A run that touches mx1 is the
+owner's to approve.
 
 ## How to change it safely
 
@@ -110,6 +113,6 @@ separate, owner-reviewed work, and the hand procedure in the mail runbooks is un
   administrator credential file is absent, so the role never takes the program's bootstrap path.
 - **The stand-in proves the calls and the guards, not the reconcile.** The happy-path cases for
   `configure` and `mailboxes` are not in the container test; the first live run proves them.
-- **No step can be requested yet**, and a change under `mail/provision` alone does not reselect
+- **No step can be requested through the pull**, and a change under `mail/provision` alone does not reselect
   this role's test: the change detection knows only the Hetzner program directories.
 - **`mail_reconcilers_step` set in an inventory defeats the second key.**

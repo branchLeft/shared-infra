@@ -2,11 +2,11 @@
 
 This role keeps the mail host's two Compose projects (Stalwart, and the mailgun-shim with its Caddy
 front) and its local recursive resolver in step with the repository, and delivers the hourly
-DNSBL check. It is Part 1 of moving the hand scripts `mail/provision/30`, `63`, `65` and `70`
-into Ansible: the role, its tests and these docs. No playbook applies it yet; that wiring is
-[branchLeft/shared-infra#352](https://github.com/branchLeft/shared-infra/issues/352), and until it
-lands the scripts stay the way to run those four steps (`hand_installers.yml` lists them as
-`pending-role`, role `mx1_stack`).
+DNSBL check. It replaces the hand scripts `mail/provision/30`, `63`, `65` and `70`. The mail
+host's playbook, `playbooks/mx1.yml`, applies it after `host_baseline` and before
+`mail_reconcilers`, so it reaches the host only through the gated delivery. The scripts are due
+for removal (`hand_installers.yml` lists them as `pending-role`, role `mx1_stack`); they stay on
+disk until a gated apply has converged the host, and nothing may add a caller to one.
 
 This README is written for a maintainer who is new to the repository. It follows the order the
 standard sets for a role README (ANS-14).
@@ -322,11 +322,14 @@ passed.
 Delivery to a host is ANS-17: only the gated workflow, run against `main` after the approval of its
 protected environment. A plan job shows the host's diff in check mode first; after the approval the
 host pulls that exact commit and applies it, and a second run must report zero changes. Nothing is
-applied from a laptop. This role is applied by no playbook yet
-([branchLeft/shared-infra#352](https://github.com/branchLeft/shared-infra/issues/352)). The first
-gated apply is after the reboot of `mail/RUNBOOK-mx1-reboot.md`, outside a send window; the owner
-chooses its date. The hand scripts stay the documented path until then, and `hand_installers.yml`
-keeps them as `pending-role` against this role.
+applied from a laptop. `playbooks/mx1.yml` applies this role, with the owner's values in
+`owner_vars/mx1.yml` and the host's signer list in `trust/mx1.yml`. mx1 is the mail host and a run
+that touches it is the owner's to approve. The first gated apply is after the reboot of
+`mail/RUNBOOK-mx1-reboot.md`, outside a send window; the owner chooses its date, and reads its
+plan first: `host_baseline` adds its own `01-` sshd drop-in beside the older file, and nothing in
+this role removes a file. The host's gated pull must be set up by the owner before that run
+(the signer list, the pull trigger and its CI route); until then nothing reaches the host, and
+`hand_installers.yml` keeps the scripts as `pending-role` against this role.
 
 ## How to change it safely
 

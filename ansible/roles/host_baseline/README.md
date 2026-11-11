@@ -53,7 +53,10 @@ input, `host_baseline_fail2ban_ignoreip`: the addresses and ranges the sshd jail
 never bans, one line of space-separated IP addresses and CIDR ranges. Its default
 is the list the baseline has always written, loopback and edge1's private address
 (`127.0.0.1/8 ::1 10.20.1.10`), so a host that already has the jail reports no
-change. Setting it changes only the `ignoreip` line of the jail. A value with a
+change. Setting it changes only the `ignoreip` line of the jail. The empty text is a value:
+the jail is then written with no `ignoreip` line at all, which is the jail a host outside the
+estate's network (mx1) already carries, so adopting the role on it leaves the file as it is.
+`test_host_baseline_ignoreip.py` holds both renderings and the pattern. A value with a
 newline, or any character other than hex digits, `:`, `.`, `/` and space, is refused
 before the jail is written, so a host name is refused too. Every other value the role writes is the same on every
 container host. None of the role's values is a secret and the role handles no
@@ -280,7 +283,10 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. A plan job shows the host's diff in
 check mode first; after the approval the host pulls that exact commit of `main`
 and applies it, and a second run must report zero changes. Nothing is applied
-from a laptop. This role is not applied to any host yet.
+from a laptop. A host applies the role when its row in `ansible/checks/host_roles.yml` names it, and
+mx1 is one of them. The mail host's earlier hardening wrote the same four lines to
+`99-branchleft-hardening.conf`: the first apply there adds the `01-` file beside it, and the
+role removes nothing, so the old file stays until the owner removes it.
 
 ## How to change it safely
 

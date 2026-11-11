@@ -29,6 +29,10 @@ allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/a
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
 the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, then
 `roles/db1_backup_timers`, then `roles/db1_grants` last; `roles/tunnel_account` is left out of it.
+`playbooks/mx1.yml` (the mail host) applies the two pull roles, then `roles/host_baseline`,
+`roles/mx1_stack` and `roles/mail_reconcilers`, the last as a plain apply that places programs and
+runs none; `owner_vars/mx1.yml` holds the one key R10 allows for it, the jail's ignore list, and
+no step allow-list.
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
 `roles/broker_deploy`.

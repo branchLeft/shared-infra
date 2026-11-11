@@ -16,6 +16,7 @@ argument_specs:
         type: str
         description: >-
           The addresses and ranges the sshd jail never bans, one line of
-          space-separated IP addresses and CIDR ranges. The default exempts
-          loopback and edge1's private address. Changing it changes only the
-          ignoreip line of the jail.
+          space-separated IP addresses and CIDR ranges, or the empty text. The
+          default exempts loopback and edge1's private address. Changing it
+          changes only the ignoreip line of the jail, and the empty text writes
+          no ignoreip line.

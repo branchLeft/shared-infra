@@ -303,19 +303,33 @@ class InstallListTests(unittest.TestCase):
 
     def test_the_programs_are_read_in_place_and_placed_with_the_explicit_mode(self) -> None:
         self.assertEqual(_vars()["mail_reconcilers_programs_dir"], "{{ role_path }}/../../../mail/provision")
-        place = next(t for t in _tasks("main.yml") if _module(t) == "copy")
-        self.assertEqual(
-            place["ansible.builtin.copy"],
-            {
-                "src": "{{ mail_reconcilers_programs_dir }}/{{ item.program }}",
-                "dest": "{{ mail_reconcilers_install_dir }}/{{ item.program }}",
-                "owner": "root",
-                "group": "root",
-                "mode": "{{ item.mode }}",
-            },
-        )
-        self.assertEqual(place["loop"], "{{ mail_reconcilers_installed }}")
+        places = [t for t in _tasks("main.yml") if _module(t) == "copy"]
+        self.assertEqual(len(places), 2, "one task whose diff is hidden and one that shows it")
+        for place in places:
+            self.assertEqual(
+                place["ansible.builtin.copy"],
+                {
+                    "src": "{{ mail_reconcilers_programs_dir }}/{{ item.program }}",
+                    "dest": "{{ mail_reconcilers_install_dir }}/{{ item.program }}",
+                    "owner": "root",
+                    "group": "root",
+                    "mode": "{{ item.mode }}",
+                },
+            )
         self.assertFalse((ROLE / "files").exists(), "the programs have one home, mail/provision")
+
+    def test_the_two_placing_tasks_split_the_install_list_and_only_one_hides_its_diff(self) -> None:
+        hidden, shown = (t for t in _tasks("main.yml") if _module(t) == "copy")
+        filtered = "{{ mail_reconcilers_installed | %sattr('program', 'in', mail_reconcilers_installed_hidden) | list }}"
+        self.assertEqual(hidden["loop"], filtered % "select")
+        self.assertEqual(shown["loop"], filtered % "reject")
+        self.assertIs(hidden["diff"], False)
+        self.assertNotIn("diff", shown)
+
+    def test_the_hidden_list_names_only_installed_programs_once_each(self) -> None:
+        names = cast(list[str], _vars()["mail_reconcilers_installed_hidden"])
+        self.assertEqual(len(set(names)), len(names))
+        self.assertLessEqual(set(names), {e["program"] for e in self._installed()})
 
 
 if __name__ == "__main__":

@@ -1,0 +1,14 @@
+---
+# The owner's values for the roles mx1 applies. check_enrolment.py (R10) allows this one key and
+# no other.
+#
+# host_baseline_fail2ban_ignoreip is the sshd jail's ignore list. The role's default exempts
+# loopback and edge1's private address, which carries the CI and owner routes to the hosts in the
+# estate's network. The mail stack attaches mx1 to no network, and the jail it has today carries
+# no ignore line, so the value here is empty: the role then writes no ignoreip line and the jail
+# stays byte for byte what it is.
+#
+# There is no pull_trigger_steps key. R10 does not allow one for this host, so no step of
+# mail_reconcilers (configure, mailboxes, mint, collector) can be requested through the gated
+# pull: the role only places its programs on the host.
+host_baseline_fail2ban_ignoreip: ''

@@ -76,8 +76,13 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
         "ring_controller_host_push_known_hosts",
     )
 )
+# The one input of the host_baseline role, the sshd jail's ignore list. Only mx1 sets it: every
+# other host keeps the role's default. An empty text is a value (the role then writes no ignore
+# line), so it is read as text and no further.
+IGNOREIP_KEY = "host_baseline_fail2ban_ignoreip"
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS,
+    "mx1": frozenset((IGNOREIP_KEY,)),
     "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)) | RING_CONTROLLER_TEXT_KEYS,
 }
 OWNER_VARS_KEYS = {
@@ -765,6 +770,9 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     # (control_plane_db_image_pattern), which test_step_allowlist.py reads by name.
     if APPS_IMAGE_KEY in doc and not isinstance(doc[APPS_IMAGE_KEY], str):
         problems.append(f"{APPS_IMAGE_KEY} must be text")
+    # What an address list may hold is the role's rule alone (host_baseline, its ignoreip assert).
+    if IGNOREIP_KEY in doc and not isinstance(doc[IGNOREIP_KEY], str):
+        problems.append(f"{IGNOREIP_KEY} must be text")
     problems.extend(
         f"{key} must be text"
         for key in sorted(RING_CONTROLLER_TEXT_KEYS)

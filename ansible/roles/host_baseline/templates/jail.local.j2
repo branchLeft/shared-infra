@@ -5,4 +5,6 @@ backend = systemd
 maxretry = 5
 findtime = 10m
 bantime = 1h
+{% if host_baseline_fail2ban_ignoreip | length > 0 %}
 ignoreip = {{ host_baseline_fail2ban_ignoreip }}
+{% endif %}

@@ -56,6 +56,28 @@ mail_reconcilers_installed:
   - { program: 67-provision-collector-submission-credential.sh, mode: '0755' }
   - { program: 68-provision-zitadel-submission-credential.sh, mode: '0755' }
 
+# The programs above whose diff the plan does not show: each holds a line the plan's secret scan
+# reads as a credential assignment, and they cannot be reworded from here. The rest are placed by
+# a task that shows its diff. ansible/checks/test_plan_diff_scan.py fails if a program listed here
+# has no such line, or if one left out of it has.
+mail_reconcilers_installed_hidden:
+  - 61-provision-blog-submission-credential.sh
+  - 62-provision-shim-submission-credential.sh
+  - 64-provision-alerting-submission-credential.sh
+  - 66-provision-nextcloud-submission-credential.sh
+  - 67-provision-collector-submission-credential.sh
+  - 68-provision-zitadel-submission-credential.sh
+  - check_collector_sender_scope.py
+  - check_zitadel_sender_scope.py
+  - configure_stalwart.py
+  - list_and_clear_blocked_ips.py
+  - provision_collector_submission_credential.py
+  - provision_mailboxes.py
+  - provision_sending_domain.py
+  - provision_website_submission_credential.py
+  - provision_zitadel_submission_credential.py
+  - trigger_acme_renewal.py
+
 # What is not placed, and whose it is. mx1_stack is the mail host's stack role, which
 # owns these files; check_role_paths.py cannot tell two roles apart when a destination
 # is a loop item, so a unit test holds this role off every one of them. The two

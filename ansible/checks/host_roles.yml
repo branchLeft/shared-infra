@@ -77,3 +77,12 @@ dbt1:
 demo1:
   - demo1_build
   - demo1_egress_spool
+# mx1, the mail host. Three roles after the pull roles, no host_inputs: the host has no private
+# inputs file, so the loader has nothing to read (R11 applies only when it is listed).
+# host_baseline comes first for the Docker the stack needs. mail_reconcilers is on this list for
+# its plain apply, which places programs and runs none; owner_vars/mx1.yml holds no step
+# allow-list (R10), so none of its steps can be requested through the pull.
+mx1:
+  - host_baseline
+  - mx1_stack
+  - mail_reconcilers

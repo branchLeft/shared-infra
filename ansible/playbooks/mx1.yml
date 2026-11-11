@@ -1,0 +1,42 @@
+---
+# mx1: the mail host, under the gated pull. Five roles, in order: the Ansible toolchain the host
+# runs this playbook with, the trigger that runs it, the host baseline (sshd drop-in, unattended
+# upgrades, fail2ban, Docker CE), the mail host's two Compose projects, local resolver and DNSBL
+# check (mx1_stack, which needs the Docker the baseline installs), and last the mail reconcilers
+# (mail_reconcilers), which on this route only place their programs under /root/mail-provision.
+# No step of that role can be requested: owner_vars/mx1.yml may not carry a step allow-list (R10),
+# so a plain apply is the only run it gets here. The order is the one the mail host's provisioning
+# sequence has always had for these parts.
+#
+# The host has no private inputs file, so host_inputs is not applied and its row is absent from
+# checks/host_roles.yml. The first apply on a host that already runs mail is read in a plan before
+# anything is approved, and the reboot that restores `docker exec` comes first (the mx1_stack
+# README, "Requirements").
+#
+# The host's trigger runs this file on a signed checkout with the inventory `localhost,`, which
+# loads no group variables, so every value the roles read comes from vars_files: the shared
+# includes, mx1's own trust file and its owner_vars file.
+- name: Bring mx1 under the pull
+  hosts: all
+  gather_facts: false
+  vars:
+    enrolled_host: mx1
+  vars_files:
+    - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
+    - '{{ playbook_dir }}/../trust/mx1.yml'
+    - '{{ playbook_dir }}/../owner_vars/mx1.yml'
+  pre_tasks:
+    - name: Refuse a run that is not mx1's
+      ansible.builtin.include_tasks: includes/refuse_other_hosts.yml
+    - name: Refuse an empty signer list
+      ansible.builtin.include_tasks: includes/require_signers.yml
+  # The roles live in ansible/roles/ (ANS-13), one level above this directory. A
+  # path works from any directory, which the host trigger and the lint do not share.
+  roles:
+    - role: ../roles/ansible_runtime # noqa: role-name[path]
+      vars:
+        ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
+    - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/mx1_stack # noqa: role-name[path]
+    - role: ../roles/mail_reconcilers # noqa: role-name[path]
