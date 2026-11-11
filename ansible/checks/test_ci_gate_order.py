@@ -14,12 +14,13 @@ import unittest
 from pathlib import Path
 
 from ruamel.yaml import YAML
+from shard_results import ADVISORY_PREFIX, BLOCKING_PREFIX
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 
 # The jobs that restore the tool environment and so carry the same install steps.
-TOOL_JOBS = ("quick-lint", "lint", "shard")
+TOOL_JOBS = ("quick-lint", "lint", "shard", "shard-advisory")
 
 # The steps that build or restore the tool environment. The quick gate copies these from the
 # full lint, so a test holds the copy equal to the original and the two cannot drift.
@@ -63,10 +64,10 @@ LINT_STEPS_THAT_STILL_RUN = (
 OK = {
     "DISCOVER": "success",
     "ANSIBLE": "true",
-    "SHARDS": "true",
+    "BLOCKING": "true",
     "QUICK": "success",
     "LINT": "success",
-    "SHARD": "success",
+    "BLOCKING_RESULT": "success",
     "EVENT": "pull_request",
 }
 # What the shard job's condition must say about the merge queue, and the one event it is keyed on.
@@ -79,58 +80,70 @@ GATE_TABLE: tuple[tuple[str, dict[str, str], int], ...] = (
     ("the quick gate passed and the full lint failed", {"LINT": "failure"}, 1),
     ("the quick gate passed and the full lint was skipped", {"LINT": "skipped"}, 1),
     ("the quick gate passed and the full lint was cancelled", {"LINT": "cancelled"}, 1),
-    ("the lint failed and the shards were skipped", {"LINT": "failure", "SHARD": "skipped"}, 1),
-    ("a chosen shard failed", {"SHARD": "failure"}, 1),
-    ("a chosen shard was skipped", {"SHARD": "skipped"}, 1),
+    (
+        "the lint failed and the shards were skipped",
+        {"LINT": "failure", "BLOCKING_RESULT": "skipped"},
+        1,
+    ),
+    ("a chosen shard failed", {"BLOCKING_RESULT": "failure"}, 1),
+    ("a chosen shard was skipped", {"BLOCKING_RESULT": "skipped"}, 1),
     ("discover failed", {"DISCOVER": "failure"}, 1),
     ("discover did not say whether inputs changed", {"ANSIBLE": ""}, 1),
-    ("discover did not say whether shards are needed", {"SHARDS": ""}, 1),
+    ("discover did not say whether shards are needed", {"BLOCKING": ""}, 1),
     (
         "no Ansible input changed",
-        {"ANSIBLE": "false", "QUICK": "skipped", "LINT": "skipped", "SHARD": "skipped"},
+        {"ANSIBLE": "false", "QUICK": "skipped", "LINT": "skipped", "BLOCKING_RESULT": "skipped"},
         0,
     ),
-    ("no shard was needed", {"SHARDS": "false", "SHARD": "skipped"}, 0),
+    ("no shard was needed", {"BLOCKING": "false", "BLOCKING_RESULT": "skipped"}, 0),
     (
         "no shard was needed and the full lint failed",
-        {"SHARDS": "false", "SHARD": "skipped", "LINT": "failure"},
+        {"BLOCKING": "false", "BLOCKING_RESULT": "skipped", "LINT": "failure"},
         1,
     ),
     (
         "no shard was needed and the quick gate failed",
-        {"SHARDS": "false", "SHARD": "skipped", "QUICK": "failure"},
+        {"BLOCKING": "false", "BLOCKING_RESULT": "skipped", "QUICK": "failure"},
         1,
     ),
-    ("a chosen shard was cancelled", {"SHARD": "cancelled"}, 1),
+    ("a chosen shard was cancelled", {"BLOCKING_RESULT": "cancelled"}, 1),
     # The merge queue skips the container shards on purpose, because the pull request already
     # passed them; the lint and the quick gate still decide the queue's result.
     (
         "queue: lint passed and the shards were skipped",
-        {"EVENT": "merge_group", "SHARD": "skipped"},
+        {"EVENT": "merge_group", "BLOCKING_RESULT": "skipped"},
         0,
     ),
     (
         "queue: the full lint failed and the shards were skipped",
-        {"EVENT": "merge_group", "SHARD": "skipped", "LINT": "failure"},
+        {"EVENT": "merge_group", "BLOCKING_RESULT": "skipped", "LINT": "failure"},
         1,
     ),
     (
         "queue: the quick gate failed and the shards were skipped",
-        {"EVENT": "merge_group", "SHARD": "skipped", "QUICK": "failure"},
+        {"EVENT": "merge_group", "BLOCKING_RESULT": "skipped", "QUICK": "failure"},
         1,
     ),
     (
         "queue: the quick gate was skipped and the shards were skipped",
-        {"EVENT": "merge_group", "SHARD": "skipped", "QUICK": "skipped"},
+        {"EVENT": "merge_group", "BLOCKING_RESULT": "skipped", "QUICK": "skipped"},
         1,
     ),
     (
         "queue: discover failed",
-        {"EVENT": "merge_group", "SHARD": "skipped", "DISCOVER": "failure"},
+        {"EVENT": "merge_group", "BLOCKING_RESULT": "skipped", "DISCOVER": "failure"},
         1,
     ),
-    ("queue: a shard that ran and failed", {"EVENT": "merge_group", "SHARD": "failure"}, 1),
-    ("queue: a shard that was cancelled", {"EVENT": "merge_group", "SHARD": "cancelled"}, 1),
+    (
+        "queue: a shard that ran and failed",
+        {"EVENT": "merge_group", "BLOCKING_RESULT": "failure"},
+        1,
+    ),
+    (
+        "queue: a shard that was cancelled",
+        {"EVENT": "merge_group", "BLOCKING_RESULT": "cancelled"},
+        1,
+    ),
     ("queue: a shard that ran and passed", {"EVENT": "merge_group"}, 0),
     (
         "queue: no Ansible input changed",
@@ -139,25 +152,28 @@ GATE_TABLE: tuple[tuple[str, dict[str, str], int], ...] = (
             "ANSIBLE": "false",
             "QUICK": "skipped",
             "LINT": "skipped",
-            "SHARD": "skipped",
+            "BLOCKING_RESULT": "skipped",
         },
         0,
     ),
     # Only the queue may skip a chosen shard, and the event name decides it, never a result.
-    ("pull request: the shards were skipped", {"SHARD": "skipped"}, 1),
-    ("schedule: the shards were skipped", {"EVENT": "schedule", "SHARD": "skipped"}, 1),
+    ("pull request: the shards were skipped", {"BLOCKING_RESULT": "skipped"}, 1),
+    ("schedule: the shards were skipped", {"EVENT": "schedule", "BLOCKING_RESULT": "skipped"}, 1),
     (
         "manual run: the shards were skipped",
-        {"EVENT": "workflow_dispatch", "SHARD": "skipped"},
+        {"EVENT": "workflow_dispatch", "BLOCKING_RESULT": "skipped"},
         1,
     ),
-    ("no event name: the shards were skipped", {"EVENT": "", "SHARD": "skipped"}, 1),
+    ("no event name: the shards were skipped", {"EVENT": "", "BLOCKING_RESULT": "skipped"}, 1),
 )
 
 
 def load(path: Path) -> object:
     """Return a YAML file's document."""
     return YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+
+
+ANSIBLE_WORKFLOW = load(WORKFLOWS / "ansible.yml")
 
 
 def get(node: object, *path: str | int) -> object:
@@ -237,7 +253,17 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
     def test_the_jobs_the_rest_of_this_file_reads_exist(self) -> None:
         # A control: an empty read would make every test below pass.
         self.assertLessEqual(
-            {"discover", "quick-lint", "lint", "shard", "roles"}, keys(get(self.workflow, "jobs"))
+            {
+                "discover",
+                "quick-lint",
+                "lint",
+                "shard",
+                "shard-advisory",
+                "roles",
+                "report",
+                "daily-issue",
+            },
+            keys(get(self.workflow, "jobs")),
         )
 
     def test_the_shards_wait_for_the_quick_gate_and_not_for_the_full_lint(self) -> None:
@@ -299,33 +325,63 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
         for step in items(get(lint, "steps")):
             self.assertIsNone(get(step, "continue-on-error"), get(step, "name"))
 
-    def test_the_shards_run_only_when_discover_chose_some(self) -> None:
-        condition = str(get(self.job("shard"), "if"))
-        self.assertIn("needs.discover.outputs.shards == 'true'", condition)
-        self.assertIn("needs.discover.outputs.ansible == 'true'", condition)
+    def test_each_shard_job_runs_only_when_discover_chose_some_of_its_kind(self) -> None:
+        for name, output in (("shard", "blocking"), ("shard-advisory", "advisory")):
+            condition = str(get(self.job(name), "if"))
+            with self.subTest(job=name):
+                self.assertIn(f"needs.discover.outputs.{output} == 'true'", condition)
+                self.assertIn("needs.discover.outputs.ansible == 'true'", condition)
+                self.assertEqual(
+                    f"${{{{ fromJSON(needs.discover.outputs.{output}_matrix) }}}}",
+                    get(self.job(name), "strategy", "matrix"),
+                )
 
     def test_discover_publishes_the_choice(self) -> None:
         outputs = keys(get(self.job("discover"), "outputs"))
-        self.assertLessEqual({"ansible", "matrix", "shards"}, outputs)
+        self.assertLessEqual(
+            {"ansible", "matrix", "shards", "blocking", "blocking_matrix"}
+            | {"advisory", "advisory_matrix"},
+            outputs,
+        )
 
     def test_the_entry_that_stands_for_no_shard_is_refused(self) -> None:
-        refusal = get(self.job("shard"), "steps", 0)
-        self.assertIn("matrix.kind != 'role'", str(get(refusal, "if")))
-        self.assertIn("exit 1", str(get(refusal, "run")))
+        for name in ("shard", "shard-advisory"):
+            refusal = get(self.job(name), "steps", 0)
+            with self.subTest(job=name):
+                self.assertIn("matrix.kind != 'role'", str(get(refusal, "if")))
+                self.assertIn("exit 1", str(get(refusal, "run")))
 
-    def test_the_gate_needs_every_job_and_fails_on_a_lint_that_did_not_pass(self) -> None:
+    def test_the_advisory_job_runs_the_same_steps_as_the_blocking_job(self) -> None:
+        # The copy is held equal step for step, so a fix to one cannot miss the other.
+        shard, advisory = self.job("shard"), self.job("shard-advisory")
+        self.assertEqual(get(shard, "steps"), get(advisory, "steps"))
+        for key in ("runs-on", "timeout-minutes", "needs"):
+            self.assertEqual(get(shard, key), get(advisory, key), key)
+        self.assertEqual(False, get(advisory, "strategy", "fail-fast"))
+        self.assertIsNone(get(advisory, "continue-on-error"))
+        self.assertIsNone(get(shard, "continue-on-error"))
+
+    def test_the_shard_jobs_are_named_the_way_the_readers_of_the_results_expect(self) -> None:
+        # shard_results.py reads the shard id from the job name; a rename here silently
+        # empties the report, the daily issue and the pass counter.
+        self.assertEqual(f"{BLOCKING_PREFIX}${{{{ matrix.name }}}}", get(self.job("shard"), "name"))
+        self.assertEqual(
+            f"{ADVISORY_PREFIX}${{{{ matrix.name }}}}", get(self.job("shard-advisory"), "name")
+        )
+
+    def test_the_gate_needs_every_job_but_the_advisory_shards_and_the_reports(self) -> None:
         gate = self.job("roles")
         self.assertEqual({"discover", "quick-lint", "lint", "shard"}, needs(gate))
         self.assertEqual("always()", str(get(gate, "if")).strip())
         self.assertIn('[ "$QUICK" != "success" ]', script(gate))
         self.assertIn('[ "$LINT" != "success" ]', script(gate))
-        self.assertIn('[ "$SHARD" != "success" ]', script(gate))
+        self.assertIn('[ "$BLOCKING_RESULT" != "success" ]', script(gate))
 
     def test_the_gate_reads_each_result_from_the_job_it_names(self) -> None:
         env = get(self.job("roles"), "steps", 0, "env")
         self.assertEqual("${{ needs.quick-lint.result }}", get(env, "QUICK"))
         self.assertEqual("${{ needs.lint.result }}", get(env, "LINT"))
-        self.assertEqual("${{ needs.shard.result }}", get(env, "SHARD"))
+        self.assertEqual("${{ needs.shard.result }}", get(env, "BLOCKING_RESULT"))
         self.assertEqual("${{ needs.discover.result }}", get(env, "DISCOVER"))
 
     def test_the_quick_gate_is_refused_after_discover_and_before_the_lint(self) -> None:
@@ -337,7 +393,7 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
             text.index('[ "$QUICK" != "success" ]'), text.index('[ "$LINT" != "success" ]')
         )
         self.assertLess(
-            text.index('[ "$LINT" != "success" ]'), text.index('[ "$SHARDS" = "false" ]')
+            text.index('[ "$LINT" != "success" ]'), text.index('[ "$BLOCKING" = "false" ]')
         )
 
     def test_the_gate_settles_every_outcome_the_way_the_table_says(self) -> None:
@@ -368,12 +424,13 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
             for name, job in (jobs.items() if isinstance(jobs, dict) else [])
             if "run_harness.py" in script(job)
         ]
-        self.assertEqual(["shard"], shard_jobs, "a control: the harness runs in the shard job")
+        self.assertEqual(
+            ["shard", "shard-advisory"], shard_jobs, "a control: the harness runs in two jobs"
+        )
         for name in shard_jobs:
             condition = str(get(self.job(name), "if"))
             with self.subTest(job=name):
                 self.assertIn(QUEUE_SKIP, condition)
-                self.assertIn("needs.discover.outputs.shards == 'true'", condition)
                 self.assertIn("needs.discover.outputs.ansible == 'true'", condition)
                 self.assertNotIn("result", condition)
                 self.assertNotIn("pull_request", condition)
@@ -398,30 +455,32 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
         needle = '[ "$EVENT" = "merge_group" ] && '
         self.assertIn(needle, gate_script)
         widened = gate_script.replace(needle, "")
-        self.assertEqual(1, run_gate(gate_script, {"SHARD": "skipped"}))
-        self.assertEqual(0, run_gate(widened, {"SHARD": "skipped"}))
+        self.assertEqual(1, run_gate(gate_script, {"BLOCKING_RESULT": "skipped"}))
+        self.assertEqual(0, run_gate(widened, {"BLOCKING_RESULT": "skipped"}))
 
     def test_a_shard_job_that_did_not_succeed_fails_the_gate_when_shards_were_chosen(self) -> None:
         text = script(self.job("roles"))
         self.assertLess(
-            text.index('[ "$SHARDS" = "false" ]'), text.index('[ "$SHARD" != "success" ]')
+            text.index('[ "$BLOCKING" = "false" ]'),
+            text.index('[ "$BLOCKING_RESULT" != "success" ]'),
         )
-        self.assertIn('[ "$SHARDS" != "true" ]', text)
+        self.assertIn('[ "$BLOCKING" != "true" ]', text)
 
     def test_the_merge_queue_triggers_the_workflow(self) -> None:
         self.assertLessEqual(
             {"merge_group", "pull_request", "push"}, keys(get(self.workflow, "on"))
         )
 
-    def test_the_full_sweep_is_scheduled_weekly(self) -> None:
+    def test_the_full_sweep_is_scheduled_daily_off_the_hour(self) -> None:
         # Drift in an external image or collection shows in no diff; only a sweep finds it.
+        # One schedule only: every scheduled run is the daily sweep, which the pass counter reads.
         schedule = items(get(self.workflow, "on", "schedule"))
         self.assertEqual(1, len(schedule))
         fields = str(get(schedule[0], "cron")).split()
         self.assertEqual(5, len(fields))
-        self.assertNotIn("*", fields[4], "the sweep must name its weekday: it is weekly")
-        self.assertEqual("*", fields[2])
-        self.assertEqual("*", fields[3])
+        self.assertEqual(["*", "*", "*"], fields[2:], "the sweep runs every day")
+        self.assertTrue(fields[0].isdigit() and fields[1].isdigit())
+        self.assertNotIn(fields[0], ("0", "30"), "the minute is off the hour and the half hour")
 
     def test_every_tool_job_restores_the_tool_environment_from_a_pinned_cache(
         self,
@@ -461,6 +520,98 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
         text = str(get(self.job("discover"), "steps", 1, "run"))
         push = text[text.index("push)") :]
         self.assertIn('echo "ansible=false"', push[: push.index(";;")])
+
+
+ISSUE_PERMISSIONS = {"contents": "read", "actions": "read", "issues": "write"}
+ISSUE_CONDITION = "always() && github.event_name == 'schedule' && needs.roles.result == 'failure'"
+# What a step of this workflow must never contain: nothing here starts, wakes or prompts an
+# agent, or dispatches another workflow. The issue the daily run opens is read by a person.
+FORBIDDEN_IN_STEPS = (
+    "claude",
+    "anthropic",
+    "gh workflow run",
+    "repository_dispatch",
+    "createDispatchEvent",
+    "--assignee",
+    "--add-assignee",
+)
+TRIGGERS = {"pull_request", "push", "merge_group", "schedule", "workflow_dispatch"}
+
+
+def issue_job_problems(job: object) -> list[str]:
+    """Return what is wrong with the job that may open an issue; empty when it is as intended."""
+    found = []
+    condition = " ".join(str(get(job, "if")).split())
+    if condition != ISSUE_CONDITION:
+        found.append("it is not limited to the scheduled run with a red required check")
+    if needs(job) != {"roles"}:
+        found.append("it does not need exactly the gate job")
+    if get(job, "permissions") != ISSUE_PERMISSIONS:
+        found.append("its permissions are not read-only plus issues: write")
+    return found
+
+
+class AnsibleIssueAndReportJobsTest(unittest.TestCase):
+    workflow = ANSIBLE_WORKFLOW
+
+    def job(self, name: str) -> object:
+        return get(self.workflow, "jobs", name)
+
+    def test_only_the_issue_job_can_write_and_it_runs_for_the_scheduled_red_run_alone(self) -> None:
+        self.assertEqual({"contents": "read"}, get(self.workflow, "permissions"))
+        self.assertEqual([], issue_job_problems(self.job("daily-issue")))
+        jobs = get(self.workflow, "jobs")
+        for name in jobs if isinstance(jobs, dict) else []:
+            if name != "daily-issue":
+                with self.subTest(job=name):
+                    permissions = get(self.job(str(name)), "permissions")
+                    granted = permissions.values() if isinstance(permissions, dict) else []
+                    self.assertNotIn("write", set(granted))
+
+    def test_the_issue_job_check_sees_it_run_on_a_pull_request(self) -> None:
+        # The control of the test above: the same job with its condition widened to a pull
+        # request, or with a wider permission, is found.
+        job = self.job("daily-issue")
+        widened = dict(job) if isinstance(job, dict) else {}
+        widened["if"] = "always() && github.event_name == 'pull_request'"
+        self.assertIn(
+            "it is not limited to the scheduled run with a red required check",
+            issue_job_problems(widened),
+        )
+        wider = dict(job) if isinstance(job, dict) else {}
+        wider["permissions"] = {**ISSUE_PERMISSIONS, "pull-requests": "write"}
+        self.assertIn(
+            "its permissions are not read-only plus issues: write", issue_job_problems(wider)
+        )
+
+    def test_the_report_job_only_reads_and_never_fails_the_run_for_a_red_shard(self) -> None:
+        report = self.job("report")
+        self.assertEqual({"contents": "read", "actions": "read"}, get(report, "permissions"))
+        self.assertEqual({"discover", "shard", "shard-advisory"}, needs(report))
+        self.assertIn("github.event_name != 'merge_group'", str(get(report, "if")))
+        self.assertIn("always()", str(get(report, "if")))
+        self.assertIn(
+            "shard_results.py report --run-id", script(report), "it writes the step summary"
+        )
+        self.assertIn("$GITHUB_STEP_SUMMARY", script(report))
+
+    def test_nothing_in_the_workflow_starts_wakes_or_prompts_an_agent(self) -> None:
+        self.assertLessEqual(keys(get(self.workflow, "on")), TRIGGERS)
+        jobs = get(self.workflow, "jobs")
+        for name, job in jobs.items() if isinstance(jobs, dict) else []:
+            for step in items(get(job, "steps")):
+                text = f"{get(step, 'run') or ''} {get(step, 'uses') or ''}".lower()
+                for word in FORBIDDEN_IN_STEPS:
+                    with self.subTest(job=name, step=get(step, "name"), word=word):
+                        self.assertNotIn(word.lower(), text)
+
+    def test_the_issue_is_written_by_the_one_program_and_it_names_no_one(self) -> None:
+        text = script(self.job("daily-issue"))
+        self.assertEqual(1, text.count("daily_red_issue.py"))
+        self.assertNotIn("@", text)
+        self.assertEqual(
+            "${{ github.token }}", get(self.job("daily-issue"), "steps", 1, "env", "GITHUB_TOKEN")
+        )
 
 
 class CrowdsecPinCheckTest(unittest.TestCase):

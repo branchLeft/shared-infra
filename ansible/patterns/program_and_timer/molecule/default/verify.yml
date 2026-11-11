@@ -17,7 +17,7 @@
     # with the same algorithm as the installed file.
     - name: Read the source program's checksum on the controller
       ansible.builtin.stat:
-        path: '{{ playbook_dir }}/files/example_program_v2.sh'
+        path: '{{ playbook_dir }}/files/example_program_v2.py'
         checksum_algorithm: sha256
         get_checksum: true
       delegate_to: localhost
@@ -225,7 +225,7 @@
       ansible.builtin.include_role:
         name: branchleft.program_and_timer
       vars:
-        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.py'
 
     - name: Ask systemd for the timer's state after the role ran
       ansible.builtin.systemd_service:
@@ -248,7 +248,7 @@
       ansible.builtin.include_role:
         name: branchleft.program_and_timer
       vars:
-        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.py'
         program_and_timer_program_dir: /usr/local/lib/program_and_timer_root
         program_and_timer_service_user: ''
         program_and_timer_service_group: ''
@@ -283,4 +283,4 @@
       ansible.builtin.include_role:
         name: branchleft.program_and_timer
       vars:
-        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.sh'
+        program_and_timer_program_src: '{{ playbook_dir }}/files/example_program_v2.py'

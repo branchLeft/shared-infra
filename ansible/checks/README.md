@@ -289,7 +289,7 @@ left alone.
 `ci_select.py` narrows the shard list from `ansible/harness/list_shards.py` to the shards a
 run needs, from the event and the files it changed. The rules, in the order they apply:
 
-- the weekly scheduled run and a manual run execute every shard, whatever changed: they are
+- the daily scheduled run and a manual run execute every shard, whatever changed: they are
   what finds drift in an external image or collection, which no diff shows;
 - a push to `main` executes none, and runs no lint: the pushed tree is the tree the merge
   queue tested, and the delivery workflow runs its own checks before it applies anything;
@@ -340,24 +340,73 @@ run needs, from the event and the files it changed. The rules, in the order they
 A shard that is wrongly left out is a gate that passes without running, so every rule
 above errs towards running more.
 
+## blocking_shards.json: which container tests fail the required check
+
+Every container test (harness shard) runs on every pull request and stays visible. Only the
+shards named in `blocking_shards.json` fail the required check, `Lint and test the Ansible
+roles`; every other shard is advisory. An advisory shard that fails shows red on its own
+check line, the required check does not wait for it, and the `report` job lists it in the
+step summary. A scheduled or manual run treats every shard as blocking, so the daily run
+catches what an advisory shard hides. The merge queue runs no shard, as before.
+
+The file is one JSON object with the single key `blocking`: a list of shard ids, sorted,
+each once, each one a shard that exists in the tree. A shard id is the name `list_shards.py`
+gives it: `ansible/roles/ci_jump`, or `ansible/roles/ci_jump (refusals)` for a second
+scenario. `blocking_shards.py validate` and `test_blocking_shards.py` hold those rules; the
+discover job runs the same checks before it splits the shards, and fails when the list is
+bad, which fails the required check.
+
+The rules for the list:
+
+- It starts with the shards of the lock-out roles, the ones whose break can cut the operator
+  or the pipeline off a host: `pull_trigger`, `ci_jump`, `breakglass_mint_host`,
+  `host_baseline`, `tunnel_account`, `edge_firewall`, `egress_nat` and `deploy_tooling`.
+  They stay. A test fails when one of their shards is not listed, and takes any new scenario
+  of one of those roles in too. Taking one off needs an owner-approved edit to
+  `LOCKOUT_PATHS` in `test_blocking_shards.py` as well as to the list. `edge_firewall` is
+  named in the test before its role is merged; its shards must be listed in the pull request
+  that adds the role.
+- A shard goes on the list by a reviewed pull request that cites the failing run that
+  tripped it.
+- A shard comes off the list by a pull request that cites five passes in a row of the daily
+  run: `advisory_passes.py <shard id> --n 5` prints `PASS-STREAK=<k>` and the run URLs, and
+  exits 0 only when k is at least n. It reads the newest completed scheduled runs of the
+  workflow on `main`; a run in which the shard did not pass, or had no job, ends the streak.
+  It reads only, with the token in `GH_TOKEN` or `GITHUB_TOKEN`; `--fixture FILE` runs it
+  offline on recorded answers (`advisory_passes_fixture.json`).
+- The approver records every red advisory shard of the pull request, from the `report` job's
+  table, on the pull request.
+- A red daily run opens one issue (`daily_red_issue.py`), titled with the date, with the run
+  link and the failed shard ids and the one label `ci-red-daily`, or comments on the one still
+  open. Nothing there mentions, assigns or prompts anyone or anything.
+
+Two things to know. A new role or scenario starts advisory: it is on no list until a pull
+request puts it there. And the delivery workflow (`ansible-delivery.yml`) runs the harness
+over every role before it applies anything; this list does not change that run.
+
 ## test_ci_gate_order.py: the workflow order and gate
 
 These tests hold the CI workflows to what `ci_select.py` assumes:
 
 - the shard job waits for the quick lint gate (yamllint and `test_ci_select.py`) and not for
   the full lint, so a malformed file starts no container and the shards start sooner;
-- the shard job runs only when discover chose shards, and refuses the entry that stands
-  for none;
+- the blocking shard job and the advisory shard job each run only when discover chose shards
+  of their kind, and refuse the entry that stands for none; the advisory job runs the same
+  steps as the blocking job (compared step for step), and both are named
+  `Harness: <id>` and `Advisory harness: <id>`, which `shard_results.py` reads;
 - the gate job (the check the ruleset requires) fails unless the quick gate and the full lint
-  both passed, and fails when shards were chosen and did not all pass. The one exception is
+  both passed, and fails when blocking shards were chosen and did not all pass. It needs the
+  blocking shard job and not the advisory one. The one exception is
   the merge queue, where the shard job is skipped by a condition on `github.event_name`
   and the gate accepts the skip for that event alone; a skipped, failed or cancelled shard job
   fails it on every other event. The gate's own script is run under bash against a table of
   outcomes, with a control that cuts the full-lint refusal out and one that widens the queue
   skip to every event, and shows the table sees each go;
+- only the issue job has a write permission, it runs for a red scheduled run alone, and no step
+  in the workflow starts, wakes or prompts an agent or dispatches another workflow;
 - the quick gate builds its tool environment with the same steps as the full lint, and the
   full lint keeps every step it had;
-- the merge queue still triggers the workflow, and the weekly sweep is scheduled;
+- the merge queue still triggers the workflow, and the daily sweep is scheduled;
 - the lint and every shard restore the tool environment from a SHA-pinned `actions/cache`
   keyed on the lock files, and install only on a miss;
 - the CrowdSec pin check opens a pull request on a stale pin and still fails when it cannot
@@ -484,9 +533,22 @@ variable reference, withholds the plan of the host: nothing can be approved.
 
 The control is a task keyword, `diff: false`, set on the copy or template task whose file is not
 secret but reads as secret-like text. The scan is a backstop, never loosened to fit a file (ANS-16).
-There is no list of exceptions (owner ruling of 2 Nov 2026). A line that is prose is reworded so it no
-longer matches. `diff: false` is set only on the task of a file whose matching line is a variable
-reference or a name that cannot change, and each such task carries a comment citing ANS-16.
+There is no list of exceptions in the roles (owner ruling of 2 Nov 2026). A line that is prose is
+reworded so it no longer matches. `diff: false` is set only on the task of a file whose matching line
+is a variable reference or a name that cannot change, and each such task carries a comment citing
+ANS-16.
+
+The one exception is a named allowance in the scan itself (owner ruling of 10 Nov 2026): a file path
+and one whole line, in the `allowances` array of the `ssh-check-hosts` action in `github-workflows`,
+which the code owners approve, so a new entry is a reviewed change there. The scan passes that line
+only in that file and only as the whole line; the diff of the file is still shown to the approver in
+full. `SCAN_ALLOWANCES` in the test is a copy of the array, so the test passes the same line. Today it
+holds one entry, the `GH_TOKEN` placeholder line of `hetzner/provision/branchleft-verify-image`, so
+that file needs no `diff: false`. An entry is added in both places in one change. The test fails an
+entry whose line is not on one line of its file, so a name held apart from its value cannot stand in
+for it, and fails a shown file that assigns through an expanded name (`export "$NAME=$VALUE"`), the
+shape that was used to hold a name apart. That second test reads one shape and is not a proof that no
+other split exists: the scan reads a line at a time, and the review of a copied file is the rest.
 
 What the test enforces, over every `copy` and `template` task of the roles the playbooks list:
 

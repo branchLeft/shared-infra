@@ -137,7 +137,7 @@ README = ANSIBLE / "README.md"
 # that the runner image happens to bundle.
 LOCK_PATH = "ansible/requirements.txt"
 PIN_PATH = "ansible/checks/pip-requirements.txt"
-TOOL_JOBS = ("quick-lint", "lint", "shard")
+TOOL_JOBS = ("quick-lint", "lint", "shard", "shard-advisory")
 JOB_HEADER = re.compile(r"^  (?P<name>[A-Za-z0-9_-]+):[ \t]*$", re.MULTILINE)
 
 
@@ -315,10 +315,10 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         self.assertIsNone(pattern.search(text))
 
     def test_the_install_scan_finds_the_commands_it_is_meant_to_find(self) -> None:
-        # A control: a scan that matched nothing would make the next two tests pass. Six: the
-        # pinned pip and the lock, each installed in the three tool environments. In the recipe,
+        # A control: a scan that matched nothing would make the next two tests pass. Eight: the
+        # pinned pip and the lock, each installed in the four tool environments. In the recipe,
         # eight: the same two lines in each of its four places (install, download, offline install).
-        self.assertEqual(6, len(lock_installs(WORKFLOW)))
+        self.assertEqual(8, len(lock_installs(WORKFLOW)))
         self.assertLessEqual(8, len(lock_installs(README.read_text("utf-8"))))
 
     def test_every_workflow_install_of_the_lock_is_wheels_only(self) -> None:
@@ -331,7 +331,9 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         # A control: an empty split would make the next test pass, and a third job that
         # installs the lock would be a tool environment this guard never looked at.
         jobs = workflow_jobs(WORKFLOW)
-        self.assertLessEqual({"discover", "quick-lint", "lint", "shard", "roles"}, jobs.keys())
+        self.assertLessEqual(
+            {"discover", "quick-lint", "lint", "shard", "shard-advisory", "roles"}, jobs.keys()
+        )
         self.assertEqual(set(TOOL_JOBS), {name for name, job in jobs.items() if lock_installs(job)})
 
     def test_each_tool_job_installs_the_pinned_pip_and_then_the_lock(self) -> None:
