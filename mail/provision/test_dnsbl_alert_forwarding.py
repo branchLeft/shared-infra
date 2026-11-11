@@ -226,8 +226,8 @@ class ControlCaseTests(MainRunTestCase):
         self.assertEqual(request.method, "POST")
         self.assertEqual(request.content_type, "text/plain; charset=utf-8")
         self.assertIn("NEW LISTING: Spamhaus ZEN (zen.spamhaus.org)", request.body)
-        # 5 IP lists listed, plus the 3 default sending domains checked clean: 8 in all.
-        self.assertIn(f"dnsbl check for {TARGET}: 5 of 8 list(s) need attention", request.body)
+        # 5 IP lists listed, plus the 4 default sending domains checked clean: 9 in all.
+        self.assertIn(f"dnsbl check for {TARGET}: 5 of 9 list(s) need attention", request.body)
         self.assert_url_not_leaked(outcome, server)
 
     def test_a_clean_run_pings_the_bare_url_and_never_fail(self) -> None:

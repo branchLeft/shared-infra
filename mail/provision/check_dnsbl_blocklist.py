@@ -126,10 +126,11 @@ DOMAIN_SENTINEL = "dbltest.com"
 DOMAIN_SENTINEL_ANSWER = "127.0.1.2"
 DOMAIN_DBL_DELISTING_URL = "https://check.spamhaus.org/"
 SENDING_DOMAINS_VARIABLE = "DNSBL_SENDING_DOMAINS"
-# Config point: a tenant's sending domain is not checked until it is listed
-# here or in SENDING_DOMAINS_VARIABLE. Confirm this list before relying on it.
+# Each entry is shown to send mail in the repo; the proof for each is in
+# check_dnsbl_blocklist.md. Tenant sending domains are not listed yet.
 DEFAULT_SENDING_DOMAINS: tuple[str, ...] = (
     "branchleft.co.uk",
+    "blog.branchleft.co.uk",
     "publicpress.co.uk",
     "trypublicpress.co.uk",
 )

@@ -369,6 +369,32 @@ class DomainBlocklistTests(unittest.TestCase):
         self.assertEqual(len(results), len(DEFAULT_SENDING_DOMAINS))
 
 
+# Each default sending domain, with the repo file and the exact text that shows
+# mail is sent from or signed with it. A domain is in the default list only if
+# it is here, and each entry must still be found in its file.
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+SENDING_DOMAIN_PROOFS = {
+    "branchleft.co.uk": ("hetzner/dns/zone.json", "v=spf1 ip4:167.233.252.240"),
+    "blog.branchleft.co.uk": ("mail/RUNBOOK-mx1-provision.md", "register blog.branchleft.co.uk"),
+    "publicpress.co.uk": ("hetzner/dns/publicpress.co.uk.json", "bl._domainkey"),
+    "trypublicpress.co.uk": (
+        "mail/provision/provision_collector_submission_credential.py",
+        'COLLECTOR_SENDING_DOMAINS: tuple[str, ...] = ("trypublicpress.co.uk",)',
+    ),
+}
+
+
+class DefaultSendingDomainProofTests(unittest.TestCase):
+    def test_every_default_domain_has_a_repo_proof_and_no_other_domain_is_listed(self):
+        self.assertEqual(set(DEFAULT_SENDING_DOMAINS), set(SENDING_DOMAIN_PROOFS))
+        self.assertEqual(len(DEFAULT_SENDING_DOMAINS), len(set(DEFAULT_SENDING_DOMAINS)))
+
+    def test_each_proof_text_is_found_in_its_repo_file(self):
+        for domain, (path, needle) in SENDING_DOMAIN_PROOFS.items():
+            with self.subTest(domain=domain), open(os.path.join(REPO_ROOT, path), encoding="utf-8") as handle:
+                self.assertIn(needle, handle.read())
+
+
 class DnsblConfigTests(unittest.TestCase):
     def test_at_least_the_five_minimum_lists_are_configured(self):
         required_zones = {
