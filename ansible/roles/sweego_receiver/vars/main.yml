@@ -1,0 +1,74 @@
+---
+# Constants of the receiver's host, not inputs: role variables outrank every value an
+# inventory or a play passes, so a caller cannot move them. Each is a value the compose
+# file, the drain-rule program or another repository file hard-codes, and the unit tests
+# hold the ones that repeat a file elsewhere to that file.
+
+# The host's own short name. Under the pull the inventory name is localhost on every host,
+# so the role reads the name from the host itself.
+sweego_receiver_expected_host: edge1
+
+sweego_receiver_config_dir: /etc/branchleft
+sweego_receiver_opt_dir: /opt/branchleft
+sweego_receiver_sbin_dir: /usr/local/sbin
+sweego_receiver_unit_dir: /etc/systemd/system
+
+# edge1's private address, where every published port of the receiver is bound, and ops1's,
+# the one source the drain port admits. Both are hetzner-host/addressPlan.ts HOST_IPS.
+sweego_receiver_private_address: 10.20.1.10
+sweego_receiver_drain_peer_address: 10.20.1.50
+
+# The stack. One compose project named for its directory, run by the shared compose unit,
+# which this role asserts and never writes.
+sweego_receiver_project_name: sweego-receiver
+sweego_receiver_project_dir: /opt/branchleft/sweego-receiver
+sweego_receiver_compose_dest: /opt/branchleft/sweego-receiver/compose.yml
+sweego_receiver_image_env_path: /etc/branchleft/sweego-receiver.image.env
+sweego_receiver_compose_unit: branchleft-compose@sweego-receiver.service
+sweego_receiver_compose_template_path: /etc/systemd/system/branchleft-compose@.service
+sweego_receiver_dropin_dir: /etc/systemd/system/branchleft-compose@sweego-receiver.service.d
+sweego_receiver_dropin_dest: /etc/systemd/system/branchleft-compose@sweego-receiver.service.d/10-drain-rule-first.conf
+sweego_receiver_dropin_content: |
+  [Unit]
+  # The receiver starts only with the drain-port rule loaded, and is restarted with it.
+  Requires={{ sweego_receiver_rule_unit_name }}
+  After={{ sweego_receiver_rule_unit_name }}
+sweego_receiver_container: sweego-receiver-receiver-1
+sweego_receiver_docker: /usr/bin/docker
+
+# The account the container runs as. A number, not a name: the host has no such account and
+# the role creates none. The secret files are owned by root and given this group, so the
+# container reads them and no other account does.
+sweego_receiver_uid: 31100
+sweego_receiver_gid: 31100
+sweego_receiver_secret_mode: '0440'
+sweego_receiver_state_dir: /var/lib/branchleft/sweego-receiver
+
+# The container's own network, fixed so that the receiver can bind a specific address (it
+# refuses a wildcard). The subnet sits outside the estate's 10.20.0.0/16 and outside the
+# 172.17.0.0/16 default bridge.
+sweego_receiver_network_subnet: 172.29.250.0/29
+sweego_receiver_network_gateway: 172.29.250.1
+sweego_receiver_container_address: 172.29.250.2
+
+# The receiver's own listeners and mounts (its README and Dockerfile).
+sweego_receiver_container_public_port: 8080
+sweego_receiver_container_drain_port: 8081
+sweego_receiver_container_state_dir: /state
+sweego_receiver_container_secret_path: /run/secrets/webhook-signing-secret
+sweego_receiver_container_previous_secret_path: /run/secrets/webhook-signing-secret-previous
+sweego_receiver_container_token_path: /run/secrets/webhook-drain-token
+
+# The drain-port rule: a program and the boot unit that runs it.
+sweego_receiver_program_src: branchleft_sweego_drain_rule.py
+sweego_receiver_program_dest: /usr/local/sbin/branchleft-sweego-drain-rule
+sweego_receiver_rule_unit_name: branchleft-sweego-drain-rule.service
+# The unit of the egress_nat role that puts the estate's NAT rules in the same chain. The rule
+# unit is ordered after it. That role is not imported (ANS-12), so the name is written out here
+# and a test holds it to that role's unit file.
+sweego_receiver_nat_unit_name: branchleft-nat.service
+sweego_receiver_rule_unit_dest: /etc/systemd/system/branchleft-sweego-drain-rule.service
+
+# Shapes. \Z, not $, so a trailing newline does not pass.
+sweego_receiver_secret_path_pattern: '^/etc/branchleft/[A-Za-z0-9][A-Za-z0-9._-]*\Z'
+sweego_receiver_image_env_pattern: '^IMAGE=[a-z0-9][a-z0-9._/:-]*@sha256:[0-9a-f]{64}\Z'
