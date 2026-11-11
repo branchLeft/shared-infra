@@ -27,3 +27,12 @@ deploy_verifier_home: /var/lib/branchleft/verifier-home
 # the single home of the program. The role holds no copy of it. role_path is this role's own
 # directory, three levels below the repository root.
 deploy_verifier_programs_dir: '{{ role_path }}/../../../hetzner/provision'
+
+# ----- The registry read key (checked, never written) -----
+
+# The owner places this directory. branchleft_deploy.py names it in REGISTRY_DOCKER_CONFIG and
+# branchleft-compose@.service in DOCKER_CONFIG; test_branchleft_deploy.py holds the three to one
+# path. The role only reads it, and no value in it is ever printed.
+deploy_verifier_registry_docker_dir: /etc/branchleft/registry/docker
+deploy_verifier_registry_config: /etc/branchleft/registry/docker/config.json
+deploy_verifier_registry_host: ghcr.io
