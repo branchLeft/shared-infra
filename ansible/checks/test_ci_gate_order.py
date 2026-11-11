@@ -59,6 +59,25 @@ LINT_STEPS_THAT_STILL_RUN = (
     "Run every role's unit tests",
 )
 
+# The legs of the full lint and the steps each runs, in order. The static leg is the cheap
+# static checks, the checks leg is the unit tests of the harness, the checks and the tools, and
+# the units leg is every role's unit tests. They ran one after the other in one job that took
+# fifteen to twenty minutes; the legs run at once, so the job takes as long as the longest.
+LINT_LEGS = ["static", "checks", "units"]
+LINT_LEG_STEPS = {
+    "static": (
+        "Check the pins and the update route",
+        "ansible-lint at the production profile",
+        "Type-check the harness, the checks and the tools",
+        "Lint the harness, the checks and the tools",
+        "Check the harness, checks and tools formatting",
+        "Check each role's own program in files/",
+        "Check each role's own library modules",
+    ),
+    "checks": ("Test the harness", "Test the checks", "Test the tools"),
+    "units": ("Run every role's unit tests",),
+}
+
 # One row per outcome the gate must settle, as (what it shows, the values that differ from a run
 # in which every job succeeded, the exit status the gate script must end with). OK is that run.
 OK = {
@@ -324,6 +343,37 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
         self.assertIsNone(get(lint, "continue-on-error"))
         for step in items(get(lint, "steps")):
             self.assertIsNone(get(step, "continue-on-error"), get(step, "name"))
+
+    def test_the_full_lint_runs_as_parallel_legs_and_no_step_is_left_with_no_leg(self) -> None:
+        # The lint job is a matrix so its three kinds of work run at once, and a step carries
+        # `if: matrix.part == '<leg>'`. A condition naming a leg the matrix lacks would skip the
+        # step in every leg and the job would still be green, so each condition must name a leg
+        # of the matrix, every leg must hold a step of its own, and a step with no condition
+        # (the environment steps and yamllint) runs in every leg.
+        lint = self.job("lint")
+        legs = get(lint, "strategy", "matrix", "part")
+        self.assertEqual(LINT_LEGS, [str(leg) for leg in items(legs)])
+        self.assertEqual(False, get(lint, "strategy", "fail-fast"))
+        named: dict[str, list[str]] = {leg: [] for leg in LINT_LEGS}
+        for step in items(get(lint, "steps")):
+            condition = get(step, "if")
+            if condition is None or "matrix.part" not in str(condition):
+                continue
+            found = re.fullmatch(r"matrix\.part == '([a-z]+)'", str(condition).strip())
+            self.assertIsNotNone(found, f"{get(step, 'name')}: {condition}")
+            if found is not None:
+                self.assertIn(found.group(1), named, f"{get(step, 'name')} names no leg")
+                named.setdefault(found.group(1), []).append(str(get(step, "name")))
+        for leg, steps in named.items():
+            with self.subTest(leg=leg):
+                self.assertNotEqual([], steps, f"the {leg} leg holds no step of its own")
+        for name in ENVIRONMENT_STEPS:
+            steps = [s for s in items(get(lint, "steps")) if get(s, "name") == name]
+            self.assertEqual(1, len(steps))
+            self.assertNotIn("matrix.part", str(get(steps[0], "if")), name)
+        for leg, expected in LINT_LEG_STEPS.items():
+            with self.subTest(leg=leg, kind="steps"):
+                self.assertEqual(list(expected), named[leg])
 
     def test_each_shard_job_runs_only_when_discover_chose_some_of_its_kind(self) -> None:
         for name, output in (("shard", "blocking"), ("shard-advisory", "advisory")):

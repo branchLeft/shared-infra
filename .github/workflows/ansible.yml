@@ -296,13 +296,24 @@ jobs:
       - name: Test the shard selection
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_ci_select.py"'
 
+  # The full lint runs as three legs at once, each on its own runner, so it takes as long as
+  # the longest leg and not the sum. In one job its steps ran one after the other for 15 to 20
+  # minutes (ansible-lint about 4, the checks' tests 6 to 9, the role unit tests about 4) and a
+  # slow runner reached the 20 minute limit. Each leg restores the same tool environment; a
+  # step carries `if: matrix.part == '<leg>'` and a step with no condition runs in every leg.
+  # test_ci_gate_order.py holds every condition to a leg of the matrix, so a typo cannot
+  # skip a step in all of them. `needs.lint.result` is success only when every leg is.
   lint:
-    name: Lint the Ansible inputs
+    name: 'Lint the Ansible inputs (${{ matrix.part }})'
     needs: [discover]
     if: needs.discover.outputs.ansible == 'true'
     # Pinned until the harness is verified on the next Ubuntu LTS image.
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [static, checks, units]
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -359,33 +370,40 @@ jobs:
       # copied in outside the lock, Dependabot watches the lock, and the
       # pre-commit hook for ansible-lint runs the pinned version (ANS-4).
       - name: Check the pins and the update route
+        if: matrix.part == 'static'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/check_pins.py'
 
       - name: yamllint every YAML file under ansible/
         run: '"$RUNNER_TEMP/ansible-venv/bin/yamllint" --strict -c .yamllint ansible'
 
       - name: ansible-lint at the production profile
+        if: matrix.part == 'static'
         run: '"$RUNNER_TEMP/ansible-venv/bin/ansible-lint" --strict ansible'
 
       - name: Type-check the harness, the checks and the tools
+        if: matrix.part == 'static'
         working-directory: ansible
         run: '"$RUNNER_TEMP/ansible-venv/bin/mypy" harness checks tools'
 
       - name: Lint the harness, the checks and the tools
+        if: matrix.part == 'static'
         working-directory: ansible
         run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" check harness checks tools'
 
       - name: Check the harness, checks and tools formatting
+        if: matrix.part == 'static'
         working-directory: ansible
         run: '"$RUNNER_TEMP/ansible-venv/bin/ruff" format --check harness checks tools'
 
       - name: Test the harness
+        if: matrix.part == 'checks'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/harness -p "test_*.py"'
 
       # --durations 10 prints the ten slowest checks after the run, so the time the step takes
       # can be attributed. unittest's flag needs Python 3.12 or later, the runner image's
       # interpreter. It changes no result: a failing check still fails the step.
       - name: Test the checks
+        if: matrix.part == 'checks'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/checks -p "test_*.py" --durations 10'
 
       # The tools build the record a new host's first-boot document is made from. Their
@@ -394,6 +412,7 @@ jobs:
       # the tool, hetzner-host/pullBootstrapFixed.json; the filter above names both.
       # The interpreter is the venv's, so ansible-playbook is found beside it.
       - name: Test the tools
+        if: matrix.part == 'checks'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" -m unittest discover -b -s ansible/tools -p "test_*.py"'
 
       # A role that ships a program in files/ names that directory as the mypy_path of its
@@ -407,6 +426,7 @@ jobs:
       # together with any program in its files/; a role whose pyproject.toml names no files/
       # path is covered by neither.
       - name: Check each role's own program in files/
+        if: matrix.part == 'static'
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -447,6 +467,7 @@ jobs:
       # not covered: the typed_module pattern keeps its tests where they are, and
       # moving them into CI is a separate change.
       - name: Check each role's own library modules
+        if: matrix.part == 'static'
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -487,6 +508,7 @@ jobs:
       # keeps this the only copy, run in the "Test the checks" step above and in
       # scripts/test_merge_group_triggers.py.
       - name: Run every role's unit tests
+        if: matrix.part == 'units'
         run: 'PYTHON="$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/run_role_unit_tests.sh ansible'
 
   # The blocking shards: the ones named in ansible/checks/blocking_shards.json, and every

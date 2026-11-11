@@ -188,7 +188,11 @@ class MergeGroupTriggerTests(unittest.TestCase):
         self.assertEqual("needs.discover.outputs.ansible == 'true'", job_if(lint))
         steps = [part for part in lint.split("\n      - name: ") if part.startswith("Run every role's unit tests")]
         self.assertEqual(1, len(steps), "the lint job must hold exactly one role unit step")
-        self.assertNotIn("if:", steps[0])
+        # The one condition it may carry is the lint matrix's own leg, which names no event, so
+        # a queued check runs it as a pull request does (test_ci_gate_order.py holds the leg
+        # to a leg of the matrix).
+        conditions = [line.strip() for line in steps[0].splitlines() if line.strip().startswith("if:")]
+        self.assertEqual(["if: matrix.part == 'units'"], conditions)
         # The run line is exact: a trailing `|| true` or a continue-on-error on the step or
         # the job would let a failing role test pass the gate, so neither may appear.
         run_lines = [line for line in steps[0].splitlines() if line.strip().startswith("run:")]
