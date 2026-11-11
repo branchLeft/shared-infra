@@ -574,6 +574,83 @@ check matches either bitmask ordering: `iptables -S` renders the state set
 order the script gives it in — the same normalisation §3's gateway check
 above already accounts for.
 
+**Prove the mail spool's bridge is refused, with containers.** The rule counts
+above show the rules are present; this shows they bite.
+`hetzner/scripts/probe-app1-mailspool.py` is one Python file, run as root on the
+app host and fed on stdin, so it leaves no copy. It starts two containers from
+an image already on the host and removes them on every exit, saying so:
+
+- a control on Docker's default bridge, which must connect to the internet
+  (Quad9's resolver on TCP 53; `--target IPV4:PORT` changes it). If it cannot,
+  the run is `INCONCLUSIVE` and proves nothing.
+- a container on `br-mailspool`, which must get **no answer at all** from that
+  address and from `db1:3306`. The forward rule is a `DROP`, so a timeout is the
+  only reading that fits; a connection, or a refusal, is `RED`. Each blocked case
+  also needs the spool forward drop's packet counter to rise across the attempt,
+  which shows the rule, and nothing else, did the dropping.
+
+It refuses (exit 2, nothing started) unless the host is `app1`, `app2` or `app3`
+holding its own private address and none of the estate's other hosts', and both
+`iptables` and `ip6tables` carry the three spool rules once each (plus, for
+`iptables`, the `db1:3306` accept the forward drop must outrank). It also refuses
+if `br-mailspool` already exists: the probe makes its own Docker network on that
+bridge name, because the spool is not delivered to an app host yet, and it never
+touches a network that is the spool's. Run it before the spool is delivered, or
+not at all on that host. It never pulls an image, mounts nothing, publishes no
+port, drops every capability, and writes no firewall rule. The probe's network
+keeps Docker's masquerade, unlike the spool's, so a missing rule would let the
+connection through instead of hiding behind a missing return path. The rule
+matches on the interface name alone, so the result carries over.
+
+List what the host runs and holds, read-only. Pick an image that has `node` on
+its path; the website's image, from the `docker ps` half of the output, is the simplest:
+
+```bash
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 "docker ps --format '{{.Names}} {{.Image}}'; docker image ls --format '{{.Repository}}:{{.Tag}} {{.ID}}'"
+```
+
+Paste the image as listed (`name@sha256:...`, `name:tag` or the ID), then run the
+proof from your checkout. It takes about 15 seconds, and the last line is the
+exit code:
+
+```bash
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
+read -r IMG
+git -C "$HOME/branchLeft/shared-infra" fetch --quiet origin main
+git -C "$HOME/branchLeft/shared-infra" show origin/main:hetzner/scripts/probe-app1-mailspool.py | ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 python3 - --image "$IMG"; echo "exit=$?"
+```
+
+Expect, with the run's own names and counts:
+
+```text
+probe-app1-mailspool: <UTC time> on app1, image <IMG>, internet target 9.9.9.9:53, subnet target 10.20.1.20:3306, containers zz-probe-mailspool-<hex> and zz-probe-mailspool-<hex>-control
+GREEN spool-rules-present [live]: iptables and ip6tables each carry ...
+GREEN control-default-bridge-internet-reachable [live]: a container on the default bridge connected to 9.9.9.9:53
+INFO control-default-bridge-subnet-reachable [live]: 10.20.1.20:3306: ...
+GREEN drain-bridge-internet-blocked [live]: 9.9.9.9:53: timeout after 5s, as a DROP produces; the spool forward drop counted N more packet(s) (A to B)
+GREEN drain-bridge-subnet-blocked [live]: 10.20.1.20:3306: timeout after 5s, as a DROP produces; the spool forward drop counted N more packet(s) (A to B)
+CLEANUP ok: removed container ..., container ..., network ...; no probe container, network or br-mailspool bridge is left
+RESULT PASS
+exit=0
+```
+
+The `INFO` line is a note: it says whether a default-bridge container reaches
+`db1:3306`, and never changes the verdict. Exit codes: `0` pass; `1` a blocked
+case is `RED` (paste the output: it is a finding, not something to patch); `2`
+`REFUSED` or `INCONCLUSIVE`, nothing proven (paste the line); `3` `CLEANUP
+FAILED`, which names the leftovers and prints the `docker rm -f -v` and
+`docker network rm` commands that remove them (a leftover network on
+`br-mailspool` would block the spool's own bridge later, so remove it before
+anything else); `255` is `ssh` itself. Read back that nothing is left:
+
+```bash
+JUMP="ssh -i ~/.ssh/id_ed25519_hetzner -W %h:%p root@$EDGE1_IPV4"
+ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@10.20.1.100 "docker ps -a --filter name=zz-probe-mailspool- --format '{{.Names}}'; docker network ls --filter name=zz-probe-mailspool- --format '{{.Name}}'; ip link show dev br-mailspool 2>&1 | head -1"
+```
+
+Expect no container name, no network name, then `Device "br-mailspool" does not exist.`
+
 **What this does not give you: a signal if it ever silently stops applying.**
 Unlike `branchleft-nat.service`, whose reconciler refuses to run and fails the
 unit when `DOCKER-USER` is absent, an app host that loses `DOCKER-USER` — a
