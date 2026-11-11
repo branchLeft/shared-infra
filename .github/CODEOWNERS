@@ -39,6 +39,12 @@
 /hetzner/provision/test_provision_deploy_slot.py  @branchLeft/branchleft-admin
 /hetzner/provision/30-install-deploy-tooling.sh   @branchLeft/branchleft-admin
 
+# The host applier: a root-run program that decides which signed image the wrapper is handed on a tenant host, its notes and the tests that hold its refusals.
+/hetzner/provision/branchleft_promote.py                       @branchLeft/branchleft-admin
+/hetzner/provision/branchleft_promote.md                       @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_promote.py                  @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_promote_wrapper_contract.py @branchLeft/branchleft-admin
+
 # Named gates: the DNS cutover stop check and its test, the suite-size pin.
 /hetzner/dns/zonecheck.py                @branchLeft/branchleft-admin
 /hetzner/dns/test_zonecheck.py           @branchLeft/branchleft-admin
