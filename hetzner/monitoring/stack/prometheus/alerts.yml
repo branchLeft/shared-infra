@@ -656,6 +656,27 @@ groups:
             in the Alertmanager template, so this alert reaches a receiver
             that does not depend on the path it is reporting as broken.
 
+      - alert: NtfyPagerDisabled
+        expr: branchleft_pager_route_configured == 0
+        for: 30m
+        labels:
+          severity: warning
+          owner_action: "true"
+        annotations:
+          summary: "The pager is disabled on {{ $labels.instance }}: email still sends, nothing pages."
+          description: >-
+            A textfile gauge written by the monitoring_stack role on every
+            apply: 0 means /etc/branchleft/ntfy-pager.env is missing or lacks a
+            value for one of its four NTFY_ keys, so the renderer switches the
+            pager off with only a journal warning and email carries on. That
+            is the one failure of the alert path that nothing else here would
+            show. The gauge is as fresh as the last apply, not live, and it
+            says the keys are present, not that the renderer accepts their
+            shape. A host with no pager by design has no business running this
+            stack. The fix is the owner placing the values through the
+            ntfy_pager inputs and the next gated apply. `for: 30m` rides out a
+            run in which ntfy_pager and this role were applied apart.
+
   - name: snds-reputation
     rules:
       - alert: SNDSComplaintRateHigh
