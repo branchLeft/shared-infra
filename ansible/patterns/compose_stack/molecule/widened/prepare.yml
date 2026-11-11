@@ -20,7 +20,7 @@
 
     - name: Install the default scenario's stand-in as the docker command
       ansible.builtin.copy:
-        src: '{{ playbook_dir }}/../default/files/docker_standin.sh'
+        src: '{{ playbook_dir }}/../default/files/docker_standin.py'
         dest: /usr/local/bin/docker
         owner: root
         group: root
