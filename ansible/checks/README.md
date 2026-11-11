@@ -533,9 +533,22 @@ variable reference, withholds the plan of the host: nothing can be approved.
 
 The control is a task keyword, `diff: false`, set on the copy or template task whose file is not
 secret but reads as secret-like text. The scan is a backstop, never loosened to fit a file (ANS-16).
-There is no list of exceptions (owner ruling of 2 Nov 2026). A line that is prose is reworded so it no
-longer matches. `diff: false` is set only on the task of a file whose matching line is a variable
-reference or a name that cannot change, and each such task carries a comment citing ANS-16.
+There is no list of exceptions in the roles (owner ruling of 2 Nov 2026). A line that is prose is
+reworded so it no longer matches. `diff: false` is set only on the task of a file whose matching line
+is a variable reference or a name that cannot change, and each such task carries a comment citing
+ANS-16.
+
+The one exception is a named allowance in the scan itself (owner ruling of 10 Nov 2026): a file path
+and one whole line, in the `allowances` array of the `ssh-check-hosts` action in `github-workflows`,
+which the code owners approve, so a new entry is a reviewed change there. The scan passes that line
+only in that file and only as the whole line; the diff of the file is still shown to the approver in
+full. `SCAN_ALLOWANCES` in the test is a copy of the array, so the test passes the same line. Today it
+holds one entry, the `GH_TOKEN` placeholder line of `hetzner/provision/branchleft-verify-image`, so
+that file needs no `diff: false`. An entry is added in both places in one change. The test fails an
+entry whose line is not on one line of its file, so a name held apart from its value cannot stand in
+for it, and fails a shown file that assigns through an expanded name (`export "$NAME=$VALUE"`), the
+shape that was used to hold a name apart. That second test reads one shape and is not a proof that no
+other split exists: the scan reads a line at a time, and the review of a copied file is the rest.
 
 What the test enforces, over every `copy` and `template` task of the roles the playbooks list:
 
