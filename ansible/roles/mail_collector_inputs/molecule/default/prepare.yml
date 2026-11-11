@@ -1,0 +1,42 @@
+---
+# What the role expects to find on a host that has the collector's inputs. /etc/branchleft is
+# made by the host_inputs role on a real host (it goes first, R11), so the test stands in for
+# that role. The owner places the file and the descriptor on a real host; the test places made-up
+# ones here, the file with every value hidden from the log.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the directories, as the owner does on a real host
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - '{{ scenario_directory }}'
+        - '{{ scenario_descriptors }}'
+
+    - name: Place one descriptor, so a host is named
+      ansible.builtin.copy:
+        content: '{}'
+        dest: '{{ scenario_descriptor }}'
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Place the input file with made-up values
+      ansible.builtin.copy:
+        content: |
+          COLLECTOR_DRAIN_TOKEN={{ scenario_value_token }}
+          COLLECTOR_HEARTBEAT_URL={{ scenario_value_url }}
+          COLLECTOR_SMTP_USER=example-submission-user
+          COLLECTOR_SMTP_PASS={{ scenario_value_pass }}
+        dest: '{{ scenario_secrets }}'
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false

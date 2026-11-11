@@ -1,0 +1,104 @@
+---
+# Every task that handles a value has no_log and diff: false: the scan at the end reads the log
+# of this play too. The values are made up and live only in the throwaway container of this run.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    scenario_cases:
+      - name: group-readable file is refused
+        commands:
+          - [chmod, '0640', '{{ scenario_secrets }}']
+        expect: file-mode
+      - name: world-writable directory is refused
+        commands:
+          - [chmod, '0777', '{{ scenario_directory }}']
+        expect: directory-mode
+      - name: no descriptor with a real heartbeat is refused
+        commands:
+          - [rm, -f, '{{ scenario_descriptor }}']
+        expect: no-host-named
+      - name: a link in place of the file is refused
+        commands:
+          - [mv, '{{ scenario_secrets }}', '{{ scenario_secrets }}.real']
+          - [ln, -s, '{{ scenario_secrets }}.real', '{{ scenario_secrets }}']
+        expect: file-mode
+      - name: a short drain token is refused
+        commands:
+          - - sed
+            - -i
+            - 's/^COLLECTOR_DRAIN_TOKEN=.*/COLLECTOR_DRAIN_TOKEN=short/'
+            - '{{ scenario_secrets }}'
+        expect: drain-token-short
+      - name: a heartbeat URL on another host is refused
+        commands:
+          - - sed
+            - -i
+            - 's#^COLLECTOR_HEARTBEAT_URL=.*#COLLECTOR_HEARTBEAT_URL=https://example.com/x#'
+            - '{{ scenario_secrets }}'
+        expect: heartbeat-url-shape
+      - name: a missing submission user is refused
+        commands:
+          - [sed, -i, '/^COLLECTOR_SMTP_USER=/d', '{{ scenario_secrets }}']
+        expect: 'missing-key:COLLECTOR_SMTP_USER'
+      - name: a key outside the collector's names is refused
+        commands:
+          - [sh, -c, 'echo NODE_OPTIONS=x >> {{ scenario_secrets }}']
+        expect: unknown-key
+      - name: an absent file is not a fault (control)
+        commands:
+          - [rm, -f, '{{ scenario_secrets }}']
+        expect: accepted
+  tasks:
+    - name: Look at the input file
+      ansible.builtin.stat:
+        path: '{{ scenario_secrets }}'
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      register: mail_collector_inputs_verify_file
+
+    - name: Require the role to have left the file as the owner placed it
+      ansible.builtin.assert:
+        that:
+          - mail_collector_inputs_verify_file.stat.isreg
+          - mail_collector_inputs_verify_file.stat.mode == '0600'
+          - mail_collector_inputs_verify_file.stat.pw_name == 'root'
+        quiet: true
+
+    - name: Run each refusal case, and the control
+      ansible.builtin.include_tasks: tasks/case.yml
+      loop: '{{ scenario_cases }}'
+      loop_control:
+        loop_var: scenario_case
+        label: '{{ scenario_case.name }}'
+
+    # --- The log holds no value, and the scan can find something.
+    - name: Print the scan's control, a value-shaped text that is meant to be in the log
+      ansible.builtin.debug:
+        msg: 'SCENARIO_SCAN_CONTROL {{ scenario_scan_control }}'
+
+    - name: Read the log again, now that the control is in it
+      ansible.builtin.set_fact:
+        mail_collector_inputs_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+      diff: false
+
+    - name: Require the log to hold the output the scan is meant to read
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in mail_collector_inputs_verify_log"
+          - "'Check the collector' in mail_collector_inputs_verify_log"
+          - "('SCENARIO_SCAN_CONTROL ' ~ scenario_scan_control) in mail_collector_inputs_verify_log"
+        fail_msg: The log lacks the canary, a role task name or the scan control, so an empty scan would prove nothing.
+        quiet: true
+
+    - name: Require the log to hold none of the three values
+      ansible.builtin.assert:
+        that:
+          - scenario_value_token not in mail_collector_inputs_verify_log
+          - scenario_value_pass not in mail_collector_inputs_verify_log
+          - scenario_value_url_id not in mail_collector_inputs_verify_log
+        fail_msg: A value is in the Ansible log.
+        quiet: true
+      no_log: true

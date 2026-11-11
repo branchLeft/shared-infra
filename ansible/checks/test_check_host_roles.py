@@ -73,8 +73,9 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
-# (it asserts the directory control_plane makes), the node exporter, and ring_controller_host
-# last of all so its failure holds nothing else back, and demo1's two build roles.
+# (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it
+# only reads), and ring_controller_host last of all so its failure holds nothing else back, and
+# demo1's two build roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -105,6 +106,7 @@ APPLIED_ON_MAIN = {
         "backup_restore",
         "control_plane_db",
         "node_exporter",
+        "mail_collector_inputs",
         "ring_controller_host",
     ],
     "app1": [
@@ -404,6 +406,7 @@ class HostRoleLists(unittest.TestCase):
                 "backup_restore",
                 "control_plane_db",
                 "node_exporter",
+                "mail_collector_inputs",
                 "ring_controller_host",
             ],
         )
