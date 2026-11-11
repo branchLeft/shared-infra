@@ -390,7 +390,7 @@ history` still pass.** Only `docker create --pull=never` fails ("apply layer err
 A role reaches a host only through the gated workflow (ANS-17), never by running
 `ansible-playbook` by hand. Nothing applies this role to demo1 yet. `ansible/playbooks/demo1.yml`
 enrols the host and lists this role after `demo1_build`, and demo1 takes its commit by push, not by
-a pull. The bundle that carries it is sent by CI through edge1 and arrives with shared-infra#511,
+a pull. The bundle that carries it is sent by CI through edge1 and arrives with the signed bundle send,
 which is not yet merged, so until it lands no run reaches this role. A bootstrap run of demo1.yml
 applies all four of its roles as root, because the roles carry no tags, so the bootstrap waits for
 the broker_deploy precondition and for the spool image to be on the host (the egress decision,
