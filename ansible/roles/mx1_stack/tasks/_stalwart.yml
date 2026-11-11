@@ -1,0 +1,48 @@
+---
+# Stalwart's project (30-deploy-stalwart.sh). The environment file is made before the class is read:
+# once made it is never replaced, and its hash is a line of the stamp, so a run that stops after it
+# leaves the class due.
+- name: Make Stalwart's directory
+  ansible.builtin.file:
+    path: '{{ mx1_stack_stalwart_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Make Stalwart's environment file, once
+  mx1_stack_envfile:
+    action: mint
+    path: '{{ mx1_stack_stalwart_env_file }}'
+    key: '{{ mx1_stack_stalwart_env_key }}'
+  register: mx1_stack_stalwart_env_result
+
+# The value is never printed. Prometheus scrapes mx1 with it, so until the owner copies it to edge1
+# the exporter is closed, which is the safe failure (a monitoring gap, not a mail outage).
+- name: Say what a newly made environment file means for Prometheus
+  ansible.builtin.debug:
+    msg: >-
+      {{ mx1_stack_stalwart_env_file }} was made with a new Prometheus secret. Prometheus will not
+      scrape mx1 until the owner copies it to edge1 (mail/RUNBOOK-mx1-prometheus-metrics.md). The role
+      does not do that step.
+  when: mx1_stack_stalwart_env_result.created | ansible.builtin.bool
+
+- name: Run Stalwart's class
+  ansible.builtin.include_tasks: _classes.yml
+  vars:
+    mx1_stack_c:
+      name: stalwart
+      project: '{{ mx1_stack_stalwart_project }}'
+      dir: '{{ mx1_stack_stalwart_dir }}'
+      compose_name: '{{ mx1_stack_stalwart_compose_name }}'
+      stamp: '{{ mx1_stack_stalwart_stamp }}'
+      files:
+        stalwart_compose: '{{ mx1_stack_stalwart_compose_file }}'
+        stalwart_env: '{{ mx1_stack_stalwart_env_file }}'
+      expected:
+        stalwart_compose: "{{ mx1_stack_stalwart_compose_text | ansible.builtin.hash('sha256') }}"
+      fresh_inputs: '{{ mx1_stack_stalwart_fresh_inputs }}'
+      containers:
+        - name: stalwart
+          image: '{{ mx1_stack_stalwart_doc.services.stalwart.image }}'
+      health_tries: '{{ mx1_stack_stalwart_health_tries }}'

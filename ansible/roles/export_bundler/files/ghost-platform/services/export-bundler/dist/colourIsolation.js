@@ -1,0 +1,46 @@
+import { randomBytes } from 'node:crypto';
+/**
+ * Turns off what Ghost 6.55 would otherwise do from a second process
+ * booted on the tenant's live database and environment: mail, scheduling,
+ * recurring jobs, update checks, the Stripe webhook.
+ * See ../README.md#the-export-colour-sends-nothing-and-schedules-nothing-the-second-layer.
+ */
+/** Ghost's own stub transport: accepts a message and sends it nowhere. */
+export const MAIL_TRANSPORT = 'stub';
+/**
+ * Configured bulk email takes precedence over the Mailgun settings in the
+ * database, so a sink here is what stops those settings being used. Port 9
+ * on the container's own loopback has no listener: every call is refused.
+ */
+export const BULK_EMAIL_SINK = 'http://127.0.0.1:9/v3';
+/** The no-op adapter the platform image ships (ghost-adapter/). */
+export const SCHEDULING_ADAPTER = 'SchedulingDisabled';
+const DROPPED_PREFIXES = ['mail__', 'bulkEmail__', 'adapters__scheduling__', 'updateCheck__'];
+/**
+ * `webhookSecret` puts Ghost's Stripe webhook manager into local mode, so it
+ * never creates, deletes or re-points the tenant's Stripe webhook. Nothing
+ * can reach the export colour to use the secret: it is published on
+ * loopback only.
+ */
+export function exportColourOverrides(webhookSecret) {
+    return {
+        mail__transport: MAIL_TRANSPORT,
+        bulkEmail__mailgun__baseUrl: BULK_EMAIL_SINK,
+        bulkEmail__mailgun__apiKey: 'export-colour-sends-nothing',
+        bulkEmail__mailgun__domain: 'export-colour.invalid',
+        adapters__scheduling__active: SCHEDULING_ADAPTER,
+        backgroundJobs__emailAnalytics: 'false',
+        backgroundJobs__clickTrackingLastSeenAtUpdater: 'false',
+        privacy__useUpdateCheck: 'false',
+        WEBHOOK_SECRET: webhookSecret,
+    };
+}
+export function isolateExportColour(tenantEnv, webhookSecret = randomBytes(32).toString('hex')) {
+    const env = {};
+    for (const [key, value] of Object.entries(tenantEnv)) {
+        if (DROPPED_PREFIXES.some((prefix) => key.startsWith(prefix)))
+            continue;
+        env[key] = value;
+    }
+    return { ...env, ...exportColourOverrides(webhookSecret) };
+}

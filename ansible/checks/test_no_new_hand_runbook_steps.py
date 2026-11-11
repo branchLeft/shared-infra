@@ -135,6 +135,19 @@ def check(root: Path) -> list[str]:
     return findings
 
 
+def unknown_roles(root: Path) -> list[str]:
+    """Return one finding per pending-role entry whose role is no directory under ansible/roles."""
+    document = YAML(typ="safe").load((root / ALLOWLIST).read_text(encoding="utf-8")) or {}
+    findings: list[str] = []
+    for name, entry in sorted(document.items()):
+        if not isinstance(entry, dict) or entry.get("reason") != "pending-role":
+            continue
+        role = entry.get("role")
+        if isinstance(role, str) and not (root / "ansible" / "roles" / role).is_dir():
+            findings.append(f"{name}: role {role} is not a directory in ansible/roles/")
+    return findings
+
+
 def _entry_findings(name: str, entry: object) -> list[str]:
     if not isinstance(entry, dict):
         return [f"{name}: the entry must be a mapping with steps and a reason"]
@@ -160,11 +173,26 @@ class RealTree(unittest.TestCase):
     def test_every_hand_step_is_listed_and_no_more(self) -> None:
         self.assertEqual(check(ROOT), [])
 
+    def test_every_pending_role_is_a_role_in_the_tree(self) -> None:
+        self.assertEqual(unknown_roles(ROOT), [])
+
     def test_the_scan_reaches_nested_runbooks_and_finds_steps(self) -> None:
         names = runbooks(ROOT)
         self.assertIn("hetzner/dns/RUNBOOK-dns-cutover.md", names)
         self.assertIn("mail/RUNBOOK-mx1-provision.md", names)
         self.assertGreaterEqual(len(hand_steps(ROOT)), 5)
+
+
+class NextcloudStepsOneToSix(unittest.TestCase):
+    """Steps 1 to 6 of the nextcloud runbook are the nextcloud_stack role: none may edit a host."""
+
+    def test_no_hand_step_before_section_seven_and_the_pointer_names_the_role(self) -> None:
+        text = (ROOT / "hetzner/RUNBOOK-nextcloud.md").read_text(encoding="utf-8")
+        head, marker, _ = text.partition("\n## 7. ")
+        self.assertTrue(marker, "section 7 of the nextcloud runbook is missing")
+        self.assertIn("ansible/roles/nextcloud_stack", head)
+        steps = [body for info, body in fences(head) if is_hand_step(info, body)]
+        self.assertEqual(steps, [])
 
 
 class Classifier(unittest.TestCase):

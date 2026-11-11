@@ -1,0 +1,116 @@
+---
+# The mailgun-shim's project (63-deploy-mailgun-shim.sh). The directories, the data directory, the
+# throttle seed and the environment file are written before the class is read: none of them is read
+# from the repository, each is idempotent, and the environment file's hash is a line of the stamp.
+- name: Make the shim's directory
+  ansible.builtin.file:
+    path: '{{ mx1_stack_shim_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# The image runs as the unprivileged node user, and the sqlite database lives on this bind mount;
+# without this the container crash-loops with SQLITE_CANTOPEN on a fresh host. The files inside stay
+# root-owned (the throttle file is edited by the operator, the shim only reads it).
+- name: Make the shim's data directory, owned by the user the image runs as
+  ansible.builtin.file:
+    path: '{{ mx1_stack_shim_data_dir }}'
+    state: directory
+    owner: '{{ mx1_stack_shim_data_uid }}'
+    group: '{{ mx1_stack_shim_data_uid }}'
+    mode: '0755'
+
+# Seeded once. An operator's own tuning (the RUNBOOK's "Throttle tuning") must never be overwritten.
+- name: Seed the throttle file, only if it is absent
+  ansible.builtin.copy:
+    content: "{}\n"
+    dest: '{{ mx1_stack_shim_throttle_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+    force: false
+
+- name: Render the shim's environment file for its pinned image, from the secret on the host
+  mx1_stack_envfile:
+    action: shim
+    path: '{{ mx1_stack_shim_env_file }}'
+    credentials_path: '{{ mx1_stack_credentials_file }}'
+    image: "{{ mx1_stack_shim_doc.services['mailgun-shim'].image }}"
+    contracts: '{{ mx1_stack_shim_contracts }}'
+  register: mx1_stack_shim_env_result
+
+- name: Run the shim's class
+  ansible.builtin.include_tasks: _classes.yml
+  vars:
+    mx1_stack_c:
+      name: shim
+      project: '{{ mx1_stack_shim_project }}'
+      dir: '{{ mx1_stack_shim_dir }}'
+      compose_name: '{{ mx1_stack_shim_compose_name }}'
+      stamp: '{{ mx1_stack_shim_stamp }}'
+      files:
+        shim_compose: '{{ mx1_stack_shim_compose_file }}'
+        shim_caddyfile: '{{ mx1_stack_shim_caddyfile }}'
+        shim_env: '{{ mx1_stack_shim_env_file }}'
+      expected:
+        shim_compose: "{{ mx1_stack_shim_compose_text | ansible.builtin.hash('sha256') }}"
+        shim_caddyfile: "{{ mx1_stack_shim_caddyfile_text | ansible.builtin.hash('sha256') }}"
+      fresh_inputs: '{{ mx1_stack_shim_fresh_inputs }}'
+      containers:
+        - name: mailgun-shim
+          image: "{{ mx1_stack_shim_doc.services['mailgun-shim'].image }}"
+        - name: mailgun-shim-caddy
+          image: '{{ mx1_stack_shim_doc.services.caddy.image }}'
+      health_tries: '{{ mx1_stack_shim_health_tries }}'
+
+# Once per ACTION, not once per run: Stalwart's scan-ban counts a bare TLS connect with no protocol
+# command as a port-scan signal and blocks the source address, so a run that changed nothing makes
+# no connection at all. A forced recreate of Caddy is one action. Neither check is fatal: a fresh ACME
+# issuance can take a few seconds after the container reports healthy.
+- name: Say whether the shim acted in this run
+  ansible.builtin.set_fact:
+    mx1_stack_shim_acted: >-
+      {{ not ansible_check_mode and
+      ((mx1_stack_up.changed | ansible.builtin.default(false)) or
+      (mx1_stack_recreated.changed | ansible.builtin.default(false))) }}
+
+- name: Ask the shim's own health endpoint after it was acted on
+  ansible.builtin.uri:
+    url: '{{ mx1_stack_shim_healthz_url }}'
+    method: GET
+    status_code: 200
+    timeout: 5
+    return_content: false
+  changed_when: false
+  when: mx1_stack_shim_acted | ansible.builtin.bool
+
+- name: Check once that Caddy serves a verified certificate on the shim's port
+  mx1_stack_probe:
+    action: shim_cert
+    port: '{{ mx1_stack_shim_tls_port }}'
+    servername: '{{ mx1_stack_shim_hostname }}'
+  register: mx1_stack_shim_cert
+  when: mx1_stack_shim_acted | ansible.builtin.bool
+
+- name: Check once that Stalwart still serves its own certificate on 443
+  mx1_stack_probe:
+    action: shim_cert
+    port: '{{ mx1_stack_stalwart_tls_port }}'
+    servername: '{{ mx1_stack_shim_hostname }}'
+  register: mx1_stack_stalwart_cert
+  when: mx1_stack_shim_acted | ansible.builtin.bool
+
+- name: Warn when Caddy's certificate on the shim's port could not be confirmed
+  ansible.builtin.debug:
+    msg: 'WARNING: {{ mx1_stack_shim_cert.warning }}'
+  when:
+    - mx1_stack_shim_acted | ansible.builtin.bool
+    - not (mx1_stack_shim_cert.ok | ansible.builtin.default(true))
+
+- name: Warn when Stalwart's own certificate on 443 could not be confirmed
+  ansible.builtin.debug:
+    msg: 'WARNING: {{ mx1_stack_stalwart_cert.warning }}'
+  when:
+    - mx1_stack_shim_acted | ansible.builtin.bool
+    - not (mx1_stack_stalwart_cert.ok | ansible.builtin.default(true))

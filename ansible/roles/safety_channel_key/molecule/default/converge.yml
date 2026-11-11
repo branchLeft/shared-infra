@@ -1,0 +1,13 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    # A line that is in the log whatever the role does, so verify can show the log is read.
+    - name: Mark the log
+      ansible.builtin.debug:
+        msg: SCENARIO_LOG_CANARY
+
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.safety_channel_key

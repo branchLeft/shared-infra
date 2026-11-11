@@ -1,0 +1,31 @@
+[project]
+name = "demo1-build-role"
+version = "0.0.0"
+# The oldest interpreter any target host provides (PY-3): Debian 13 ships Python 3.13.
+requires-python = ">=3.13"
+
+[tool.mypy]
+strict = true
+disallow_any_explicit = true
+python_version = "3.13"
+# The role's own program is a single file in files/, imported by the tests by its own name.
+mypy_path = "$MYPY_CONFIG_FILE_DIR/files"
+# files/ghost-platform holds another repository's programs, copied byte for byte and held
+# to their pins. They are that repository's to type and lint, and are never edited here.
+exclude = ["^files/ghost-platform/"]
+
+# PyYAML ships no type information. This names the one module; it is not a blanket ignore.
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
+[tool.ruff]
+# The repository's ruff policy (ansible/pyproject.toml), with this role's Python floor.
+extend = "../../pyproject.toml"
+target-version = "py313"
+extend-exclude = ["files/ghost-platform"]
+
+[tool.ruff.lint.per-file-ignores]
+# Every subprocess call in this test runs a fixed argument list built from the test's own
+# paths and the role's own argument list, with no shell.
+"tests/unit/test_caddy_judge.py" = ["S603"]

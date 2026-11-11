@@ -11,6 +11,8 @@ import re
 import unittest
 from pathlib import Path
 
+import yaml
+
 ROLE = Path(__file__).resolve().parents[2]
 FILES = ROLE / "files"
 VARS = ROLE / "vars" / "main.yml"
@@ -103,6 +105,54 @@ class DeliveryTests(unittest.TestCase):
             self.assertRegex(digest, r"^[0-9a-f]{64}$", name)
 
 
+class DeliveryControlTests(unittest.TestCase):
+    """The task that fetches a program checks its digest and sets its owner and mode.
+
+    A fetch with no checksum, or with a mode other than 0644, still reads as a
+    delivery. These tests fail on that, as the refusals scenario does on a host.
+    """
+
+    TASKS = ROLE / "tasks" / "main.yml"
+
+    def _fetch_tasks(self) -> list[dict]:
+        tasks = yaml.safe_load(self.TASKS.read_text(encoding="utf-8"))
+        fetches = [task for task in tasks if "ansible.builtin.get_url" in task]
+        self.assertEqual(len(fetches), 2, "expected one fetch task for provision and one for recovery")
+        return fetches
+
+    def test_every_fetch_is_checked_against_the_pinned_digest_of_its_item(self) -> None:
+        for task in self._fetch_tasks():
+            self.assertEqual(
+                task["ansible.builtin.get_url"].get("checksum"),
+                "sha256:{{ db1_backup_timers_program_sha256[item] }}",
+                task["name"],
+            )
+
+    def test_every_fetch_is_root_owned_with_mode_0644(self) -> None:
+        for task in self._fetch_tasks():
+            args = task["ansible.builtin.get_url"]
+            self.assertEqual(args.get("owner"), "root", task["name"])
+            self.assertEqual(args.get("group"), "root", task["name"])
+            self.assertEqual(args.get("mode"), "0644", task["name"])
+
+    def test_every_fetch_is_skipped_only_in_check_mode(self) -> None:
+        for task in self._fetch_tasks():
+            self.assertEqual(task.get("when"), "not ansible_check_mode", task["name"])
+
+    def test_the_fetches_loop_over_the_two_file_lists(self) -> None:
+        loops = {task["loop"] for task in self._fetch_tasks()}
+        self.assertEqual(
+            loops,
+            {"{{ db1_backup_timers_provision_files }}", "{{ db1_backup_timers_recovery_files }}"},
+        )
+
+    def test_provision_tenant_db_is_in_the_provision_list_with_its_digest(self) -> None:
+        self.assertIn("provision_tenant_db.py", _list_under("db1_backup_timers_provision_files"))
+        self.assertRegex(
+            _mapping_under("db1_backup_timers_program_sha256")["provision_tenant_db.py"], r"^[0-9a-f]{64}$"
+        )
+
+
 class PinTests(unittest.TestCase):
     def test_the_commit_is_a_full_forty_character_sha(self) -> None:
         self.assertRegex(_scalar("db1_backup_timers_ghost_commit"), r"^[0-9a-f]{40}$")
@@ -110,6 +160,61 @@ class PinTests(unittest.TestCase):
     def test_the_fetch_base_names_the_pinned_commit(self) -> None:
         self.assertIn("{{ db1_backup_timers_ghost_commit }}", _scalar("db1_backup_timers_ghost_raw_base"))
         self.assertIn("raw.githubusercontent.com/branchLeft/ghost-platform/", _scalar("db1_backup_timers_ghost_raw_base"))
+
+
+class CrossRoleTests(unittest.TestCase):
+    """db1_grants runs a program that this role delivers; the two roles' pins must agree."""
+
+    GRANTS_VARS = ROLE.parent / "db1_grants" / "vars" / "main.yml"
+
+    def _grants_list(self, key: str) -> list[str]:
+        items: list[str] = []
+        inside = False
+        for line in self.GRANTS_VARS.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{key}:"):
+                inside = True
+                continue
+            if inside:
+                match = re.match(r"^  - (\S+)\s*$", line)
+                if match:
+                    items.append(match.group(1))
+                elif line.strip():
+                    break
+        return items
+
+    def _grants_mapping(self, key: str) -> dict[str, str]:
+        pairs: dict[str, str] = {}
+        inside = False
+        for line in self.GRANTS_VARS.read_text(encoding="utf-8").splitlines():
+            if line.startswith(f"{key}:"):
+                inside = True
+                continue
+            if inside:
+                match = re.match(r"^  (\S+): (\S+)\s*$", line)
+                if match:
+                    pairs[match.group(1)] = match.group(2)
+                elif line.strip():
+                    break
+        return pairs
+
+    def test_every_file_db1_grants_runs_is_delivered_here_at_the_same_digest(self) -> None:
+        staged = self._grants_list("db1_grants_staged_files")
+        self.assertTrue(staged, "db1_grants_staged_files is empty or not read")
+        delivered = set(_list_under("db1_backup_timers_provision_files"))
+        mine = _mapping_under("db1_backup_timers_program_sha256")
+        theirs = self._grants_mapping("db1_grants_program_sha256")
+        for name in staged:
+            self.assertIn(name, delivered, f"db1_grants runs {name}, which this role does not deliver")
+            self.assertIn(name, mine, f"{name} is delivered here with no pinned digest")
+            self.assertEqual(mine[name], theirs.get(name), f"{name} is pinned to a different digest in db1_grants")
+
+    def test_db1_grants_pins_the_commit_this_role_fetches_at(self) -> None:
+        grants_commit = next(
+            line.split(":", 1)[1].strip()
+            for line in self.GRANTS_VARS.read_text(encoding="utf-8").splitlines()
+            if line.startswith("db1_grants_source_commit:")
+        )
+        self.assertEqual(grants_commit, _scalar("db1_backup_timers_ghost_commit"))
 
 
 if __name__ == "__main__":

@@ -41,42 +41,8 @@
     loop_var: db1_stack_verify_case
     label: '{{ db1_stack_verify_case.name }}'
 
-# A second compose file, an override file, or a .env file, beside compose.yml is
-# refused before any change. Compose would read a second base file in place of
-# compose.yml, would merge an override file into it, and would take COMPOSE_FILE,
-# COMPOSE_PROJECT_NAME or COMPOSE_PROFILES from a .env file, and the deploy
-# program checks only compose.yml. The names are written out here, not read from
-# the role, so a name removed from the role's list fails its own case. The unit
-# runs `docker compose up` with no -f, so these are the names Compose looks for
-# by default, other than compose.yml itself.
-- name: Make the names of the files Compose reads beside the compose file
-  ansible.builtin.set_fact:
-    db1_stack_verify_compose_names:
-      - compose.yaml
-      - docker-compose.yml
-      - docker-compose.yaml
-      - compose.override.yml
-      - compose.override.yaml
-      - docker-compose.override.yml
-      - docker-compose.override.yaml
-      - .env
+# The second compose file cases are in verify_compose_names.yml, the part
+# refusals_compose, so that this part's shard runs only the image pin forms.
 
-- name: Refuse the role beside each of those files at its named task
-  ansible.builtin.include_tasks: verify_compose_name_case.yml
-  loop: '{{ db1_stack_verify_compose_names }}'
-  loop_control:
-    loop_var: db1_stack_verify_compose_name
-
-- name: Read the database image pin again after the refusals
-  ansible.builtin.slurp:
-    src: '{{ db1_stack_image_env_path }}'
-  register: db1_stack_verify_pin_after
-  no_log: true
-
-- name: Assert the database image pin is the good one again after the refusals
-  ansible.builtin.assert:
-    that:
-      - (db1_stack_verify_pin_after.content | b64decode) == ('IMAGE=mysql:8.0.43@sha256:' ~ scenario_image_digest) ~ ('%c' | format(10))
-    fail_msg: The restored database image pin is not the good one.
-    quiet: true
-  no_log: true
+- name: Assert the database image pin is the good one after the refusals
+  ansible.builtin.include_tasks: assert_pin_after_refusals.yml

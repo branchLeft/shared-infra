@@ -19,11 +19,15 @@ follows the order the standard sets for a role README (ANS-14).
 2. **Updates and fail2ban.** It installs `unattended-upgrades`, `apt-listchanges`
    and `fail2ban` when one is missing, turns on the daily index refresh and
    unattended upgrade, adds Docker's origin to the unattended-upgrades origins,
-   writes the one jail (`sshd`), reloads fail2ban when the jail file changed, and
+   writes the one jail (`sshd`) from `templates/jail.local.j2`, with its ignore
+   list from the one input, reloads fail2ban when the jail file changed, and
    enables and starts both services.
 3. **Docker.** It delivers Docker's apt signing key and source, installs
    `docker-ce`, `docker-ce-cli`, `containerd.io` and `docker-compose-plugin`
-   when one is missing, and enables and starts Docker.
+   when one is missing, and enables and starts Docker. In check mode the install
+   is skipped when `docker-ce` is not installed yet, and the enable with it (ANS-10):
+   check mode writes no source line and refreshes no index, so apt cannot see
+   `docker-ce` and a first plan on a new host failed there. The apply installs it.
 
 It does not set up host egress, install the deploy tooling, configure the
 firewall or the NAT gateway, create users, or write any secret. Those belong to
@@ -44,9 +48,16 @@ composition in playbooks. How it differs from the scripts, and why, is under
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the interface and
-[`defaults/main.yml`](defaults/main.yml) holds its defaults. There are no inputs:
-every value the role writes is the same on every container host. None of the
-role's values is a secret and the role handles no secret.
+[`defaults/main.yml`](defaults/main.yml) holds its defaults. The role has one
+input, `host_baseline_fail2ban_ignoreip`: the addresses and ranges the sshd jail
+never bans, one line of space-separated IP addresses and CIDR ranges. Its default
+is the list the baseline has always written, loopback and edge1's private address
+(`127.0.0.1/8 ::1 10.20.1.10`), so a host that already has the jail reports no
+change. Setting it changes only the `ignoreip` line of the jail. A value with a
+newline, or any character other than hex digits, `:`, `.`, `/` and space, is refused
+before the jail is written, so a host name is refused too. Every other value the role writes is the same on every
+container host. None of the role's values is a secret and the role handles no
+secret.
 
 `vars/main.yml` holds the constants of the baseline: the settings sshd must
 resolve to, the package names, the pinned digest and fingerprint of Docker's key,
@@ -188,6 +199,24 @@ What each part of the scenario does:
   4. the table of apt architecture names is empty: the role stops at the
      architecture check.
 
+### The fresh-host scenario
+
+`molecule/check-fresh/` is a second shard, the plan a first run on a new host
+meets: a host with no Docker. Its `prepare.yml` imports the default one, which
+leaves out the Docker packages and unit when the scenario is `check-fresh`
+(`MOLECULE_SCENARIO_NAME`). Its `converge.yml` plans the role only in check mode:
+this instance has no network and no apt index that holds `docker-ce`, so a real
+apply could not install Docker here. The harness's `check-fresh` step runs that
+play under `--check` and must complete; the scenario leaves out `idempotence`,
+`verify`, `check-configured` and `molecule-check`, which belong to the default
+scenario, the only one that applies the role for real.
+
+Run it with `--scenario check-fresh`:
+
+```text
+.venv/bin/python ansible/harness/run_harness.py ansible/roles/host_baseline --scenario check-fresh
+```
+
 ### What breaks which step
 
 Each row is one edit to the role, one harness run, and a restore with a clean
@@ -255,9 +284,11 @@ from a laptop. This role is not applied to any host yet.
 
 ## How to change it safely
 
-1. To change a setting, change the file under `files/` and the same lines in
+1. To change a setting, change the file under `files/` (or, for the jail, the
+   template under `templates/`) and the same lines in
    `molecule/default/verify.yml`, which holds the expected content separately.
-   A change to one without the other fails `verify`.
+   A change to one without the other fails `verify`. The ignore list is changed
+   by its input, `host_baseline_fail2ban_ignoreip`, not by the template.
 2. To change Docker's key, change `files/docker.asc` (and the fixture it links
    to), `host_baseline_docker_key_sha256` and
    `host_baseline_docker_key_fingerprint` in `vars/main.yml` together. Read the

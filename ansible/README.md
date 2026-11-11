@@ -11,18 +11,24 @@ enrolled in the gated pull, except that `demo1` takes its commit by push and nev
 `edge1` and `ops1` apply `roles/ansible_runtime` and
 `roles/pull_trigger`, then `roles/host_inputs` (the loader of the host's private inputs, which goes
 first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
-`roles/ci_login`, then `roles/deploy_tooling`, then `roles/edge_stack`, then
-`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last, and
-`roles/egress_nat` is on edge1's list and not applied), and
+`roles/egress_nat` (the estate's NAT gateway; edge1 alone, with `egress_nat_gateway_enabled` pinned
+in `checks/check_enrolment.py`), then
+`roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
+until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
+`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
 `roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
-reads). `playbooks/app1.yml` applies the two pull roles, then
+reads), then `roles/control_plane_db` last (it asserts the directory `roles/control_plane` makes; a
+plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
+allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
-`roles/host_baseline`, `roles/breakglass_grant_host` and `roles/website_app1`.
+`roles/host_baseline`, `roles/breakglass_grant_host`, `roles/website_app1`, then
+`roles/deploy_tooling` (as class app, standard variant) and `roles/deploy_slot_keys`, then
+`roles/export_bundler`, last.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
 the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, then
-`roles/db1_backup_timers`; `roles/db1_grants` is left out of it.
+`roles/db1_backup_timers`, then `roles/db1_grants` last; `roles/tunnel_account` is left out of it.
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
 `roles/broker_deploy`.
@@ -136,10 +142,15 @@ with the reason beneath each failed interface or scenario check:
 11. `check-configured`: the converge playbook under `--check --diff` against
     the configured container. It fails if any task would change, because an
     already configured host must show no drift.
-12. `molecule-check`: Molecule's own `check` action, which ANS-15 requires. It
-    recreates the container, converges for real and then runs the check-mode
-    play, so it covers the configured state again and not the fresh one. The
-    fresh state is covered by step 7 alone.
+12. `molecule-check`: Molecule's own `check` action, which ANS-15 requires. The
+    harness runs it alone, on the container already configured by step 8: it
+    passes Molecule a base configuration (`-c`) that narrows `check_sequence` to
+    `check`, because Molecule's default sequence destroys, recreates and
+    converges the container for real before its one check-mode pass. The pass is
+    counted like step 11 (it fails if any task would change), and it fails if its
+    output has no `PLAY RECAP`, so a narrowing that ran nothing cannot pass. It
+    covers the configured state again and not the fresh one. The fresh state is
+    covered by step 7 alone.
 13. `destroy`: always runs, after a failure and after an interrupt too.
 
 The static steps do not depend on each other or on the container steps. A
@@ -181,7 +192,7 @@ CI runs the same commands, the pin check, and the harness over every role. The w
 (`.github/workflows/ansible.yml`) runs on every pull request and every push to
 `main`, with no path filter, so its jobs always report. The first job decides
 whether a file under `ansible/`, the two lint files or the workflow itself
-changed (`ansible/` and `hetzner/` are watched whole); when none did, the other
+changed (`ansible/`, `hetzner/` and `mail/provision/` are watched whole); when none did, the other
 jobs are skipped and the gate passes.
 
 What runs, by event:
@@ -189,7 +200,7 @@ What runs, by event:
 | Event          | Lint | Shards                                                                                                                                                                                                                                                    |
 | -------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, the lock, the lint config, the workflow, or `ci_select.py`, `check_pins.py` or `pip-requirements.txt` changed |
-| merge queue    | yes  | the shards its diff selects, as on a pull request                                                                                                                                                                                                         |
+| merge queue    | yes  | none: the pull request ran them on its own head, so the queue runs the lint and the unit tests only                                                                                                                                                       |
 | push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything                                                                                                                                                                                   |
 
 The workflow has three kinds of job:
@@ -205,11 +216,15 @@ The workflow has three kinds of job:
   the scenario in brackets for any scenario but `default`, so names are unique.
   `ansible/checks/ci_select.py` then narrows that list by the table above (its
   rules are in `ansible/checks/README.md`); any doubt keeps the shard.
-- `lint` runs the static checks once: yamllint, ansible-lint, mypy, ruff and the
-  harness's unit tests.
+- `quick-lint` runs the two cheap checks first: yamllint and the tests of the
+  shard selection (`test_ci_select.py`).
+- `lint` runs the static checks once, all of them, alongside the shards:
+  yamllint, ansible-lint, mypy, ruff and the harness's unit tests. The gate job
+  still fails unless it passed.
 - `shard` runs the harness once for each entry `discover` kept, in parallel,
-  with `--scenario` set to the entry's scenario, and only after `lint` has
-  passed, so a lint error is red in minutes and starts no container. Each shard
+  with `--scenario` set to the entry's scenario, and only after `quick-lint` has
+  passed, so a malformed file is red in minutes and starts no container. It does
+  not wait for the full `lint`. Each shard
   has its own time limit (25 minutes), so the run time does not grow with the
   number of roles in one job. A role whose one scenario would not fit in the
   limit puts its refusal cases in a second scenario, which is a second shard,
@@ -221,7 +236,10 @@ other names, so the gate stays one job. It fails unless `discover` succeeded
 and, when the Ansible inputs changed, `lint` succeeded and, when `discover`
 chose shards, every chosen shard did. When nothing changed, `lint` and the
 shards are skipped and the gate passes; when the lint passed and no shard was
-needed, the shard job is skipped on purpose and the gate passes.
+needed, the shard job is skipped on purpose and the gate passes. In the merge
+queue the shard job is always skipped, by a condition on the event name, and the
+gate accepts that skip for that event alone: on a pull request, the weekly run or
+a manual run, a skipped shard job fails the gate.
 
 How to add a pattern: nothing to edit here. A directory directly under
 `ansible/patterns/` or `ansible/roles/` is picked up by `discover` on the next
@@ -271,6 +289,30 @@ scenario, so one run cannot remove another run's container, whether it is a
 second role or a second session. An interrupt (Ctrl-C) runs `destroy` before
 the harness exits. A run that is killed outright cannot, and its container can
 be found and removed by that label.
+
+## The CI runner image pin
+
+Every Ansible workflow job runs on the `ubuntu-24.04` runner image, not
+`ubuntu-latest`: `ansible.yml`, `ansible-offline.yml`, `ansible-delivery.yml` and
+`ansible-environment-probe.yml`. The comment above the harness jobs' `runs-on`
+lines says "Pinned until the harness is verified on the next Ubuntu LTS image".
+
+- **Why.** GitHub is moving `ubuntu-latest` to Ubuntu 26.04, rolling out from
+  19 October 2026 to 19 November 2026
+  (<https://github.com/actions/runner-images/issues/14748>). The container harness was measured on `ubuntu-24.04` only (cgroup v2
+  runner, `cgroupns_mode: host`, recorded in
+  `patterns/files_and_units/README.md`), so a silent move of the label could turn the
+  required check red with nothing changed in the repository.
+- **Who holds it.** The repository owner. The pin is a line in `.github/workflows/`, so
+  only a pull request the owner merges changes it.
+- **When it comes off.** Run the harness once on `ubuntu-26.04`: a branch whose
+  workflow sets that `runs-on`, with every shard selected. If every shard is green,
+  one pull request moves all four files to the verified label and cites the run URL in
+  its description. If a shard is red, the pull request records what fails and the fix
+  it needs, here and in the workflow comment, and the pin stays.
+- **When to look.** At each GitHub runner-images notice that retires `ubuntu-24.04`,
+  and whenever a pull request touches a harness `runs-on` line.
+- **Status.** No run on `ubuntu-26.04` is recorded yet. The pin stays until one is.
 
 ## Pins, the lock and the update route
 
@@ -544,6 +586,11 @@ is.
   passes, and ansible-lint at the production profile does not refuse it when the
   command uses shell features. ANS-3 forbids `shell`, `raw` and `script` in a
   role, but its check is not scripted here, so review is what closes it.
+- **A pristine, never-checked converge is no longer run a second time.** Molecule's
+  own `check` used to rebuild the container and converge it for real before its
+  check-mode pass; it no longer does. The first converge on a fresh container is
+  still preceded by `check-fresh`, and a real apply is always preceded by a
+  check-mode plan (ANS-17, CI-13), so the dropped pass is not a production state.
 - **A silent skip under check mode passes.** A task wrapped in
   `when: not ansible_check_mode` runs in neither check step, and nothing fails.
   ANS-10 asks for a stated reason on every such skip; review is what checks it.
@@ -585,11 +632,14 @@ oversight. Each is a decision the standard assigns to later work.
   run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
   its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. app1's
   playbook applies `roles/host_inputs` and then `roles/website_app1` (after `roles/host_baseline` and
-  `roles/breakglass_grant_host`), and refuses the run the same way
-  until the owner has placed app1's own `/etc/branchleft/host-inputs.json`. edge1 and ops1 apply
-  `roles/host_inputs` first as well, and refuse the run until the owner has placed their own
-  `/etc/branchleft/host-inputs.json` (edge1 holds the monitoring and pager inputs, ops1 the
-  backup worker and restore inputs). ANS-17 describes the only approved path. The trigger is
+  `roles/breakglass_grant_host`), then `roles/deploy_tooling` and `roles/deploy_slot_keys`, then
+  `roles/export_bundler`, and
+  refuses the run the same way until the owner has placed app1's own
+  `/etc/branchleft/host-inputs.json`, holding the four SMTP values and at least one deploy slot.
+  edge1 and ops1 apply `roles/host_inputs` first as well, and refuse the run until the owner has
+  placed their own `/etc/branchleft/host-inputs.json` (edge1 holds the monitoring and pager
+  inputs, ops1 the backup worker and restore inputs). ANS-17 describes the only approved path. The
+  trigger is
   `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
   `.github/workflows/ansible-delivery.yml` calls that workflow.
 - **Reuse by other repositories.** The harness is code another repository may

@@ -1,0 +1,360 @@
+{
+  "admin": { "disabled": true },
+  "apps": {
+    "http": {
+      "servers": {
+        "srv0": {
+          "listen": [":443"],
+          "routes": [
+            {
+              "match": [{ "host": ["*.site-fixture.invalid"] }],
+              "handle": [
+                {
+                  "handler": "subroute",
+                  "routes": [
+                    {
+                      "group": "group11",
+                      "handle": [
+                        {
+                          "handler": "subroute",
+                          "routes": [
+                            {
+                              "handle": [
+                                {
+                                  "handler": "headers",
+                                  "response": {
+                                    "deferred": true,
+                                    "set": {
+                                      "Content-Security-Policy": ["default-src 'self'"],
+                                      "X-Robots-Tag": ["noindex, nofollow"]
+                                    }
+                                  }
+                                },
+                                { "handler": "request_body", "max_size": 10485760 }
+                              ]
+                            },
+                            {
+                              "group": "group3",
+                              "handle": [
+                                {
+                                  "handler": "subroute",
+                                  "routes": [
+                                    {
+                                      "handle": [
+                                        {
+                                          "handler": "reverse_proxy",
+                                          "upstreams": [{ "dial": "127.0.0.1:8080" }]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ],
+                              "match": [{ "path": ["/__gate/login"] }]
+                            },
+                            {
+                              "group": "group3",
+                              "handle": [
+                                {
+                                  "handler": "subroute",
+                                  "routes": [
+                                    {
+                                      "handle": [
+                                        {
+                                          "handler": "subroute",
+                                          "routes": [
+                                            {
+                                              "handle": [
+                                                {
+                                                  "handle_response": [
+                                                    {
+                                                      "match": { "status_code": [2] },
+                                                      "routes": [
+                                                        { "handle": [{ "handler": "vars" }] }
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "handler": "reverse_proxy",
+                                                  "headers": {
+                                                    "request": {
+                                                      "set": {
+                                                        "X-Forwarded-Method": [
+                                                          "{http.request.method}"
+                                                        ],
+                                                        "X-Forwarded-Uri": ["{http.request.uri}"]
+                                                      }
+                                                    }
+                                                  },
+                                                  "rewrite": {
+                                                    "method": "GET",
+                                                    "uri": "/__gate/verify"
+                                                  },
+                                                  "upstreams": [{ "dial": "127.0.0.1:8080" }]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                { "handler": "static_response", "status_code": 403 }
+                                              ],
+                                              "match": [
+                                                {
+                                                  "method": ["POST"],
+                                                  "path": [
+                                                    "/ghost/api/admin/members/upload",
+                                                    "/ghost/api/admin/members/upload/",
+                                                    "/ghost/api/*/admin/members/upload",
+                                                    "/ghost/api/*/admin/members/upload/"
+                                                  ]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                { "handler": "static_response", "status_code": 403 }
+                                              ],
+                                              "match": [
+                                                {
+                                                  "method": ["POST"],
+                                                  "path_regexp": {
+                                                    "name": "membersImportByPattern",
+                                                    "pattern": "(?i)^/ghost/api/(?:(?:v[0-9]+|canary)/)?admin/members/upload/?$"
+                                                  }
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                {
+                                                  "handler": "reverse_proxy",
+                                                  "health_checks": {
+                                                    "active": {
+                                                      "headers": {
+                                                        "X-Colour-Upstream": [
+                                                          "{http.reverse_proxy.active.target_upstream}"
+                                                        ]
+                                                      },
+                                                      "interval": 2000000000,
+                                                      "port": 10100,
+                                                      "uri": "/healthz"
+                                                    }
+                                                  },
+                                                  "load_balancing": {
+                                                    "selection_policy": { "policy": "first" }
+                                                  },
+                                                  "upstreams": [
+                                                    { "dial": "127.0.0.1:9300" },
+                                                    { "dial": "127.0.0.1:9301" }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [{ "host": ["demo-0.site-fixture.invalid"] }]
+                    },
+                    {
+                      "group": "group11",
+                      "handle": [
+                        {
+                          "handler": "subroute",
+                          "routes": [
+                            {
+                              "handle": [
+                                {
+                                  "handler": "headers",
+                                  "response": {
+                                    "deferred": true,
+                                    "set": {
+                                      "Content-Security-Policy": ["default-src 'self'"],
+                                      "X-Robots-Tag": ["noindex, nofollow"]
+                                    }
+                                  }
+                                },
+                                { "handler": "request_body", "max_size": 10485760 }
+                              ]
+                            },
+                            {
+                              "group": "group8",
+                              "handle": [
+                                {
+                                  "handler": "subroute",
+                                  "routes": [
+                                    {
+                                      "handle": [
+                                        {
+                                          "handler": "reverse_proxy",
+                                          "upstreams": [{ "dial": "127.0.0.1:8080" }]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ],
+                              "match": [{ "path": ["/__gate/login"] }]
+                            },
+                            {
+                              "group": "group8",
+                              "handle": [
+                                {
+                                  "handler": "subroute",
+                                  "routes": [
+                                    {
+                                      "handle": [
+                                        {
+                                          "handler": "subroute",
+                                          "routes": [
+                                            {
+                                              "handle": [
+                                                {
+                                                  "handle_response": [
+                                                    {
+                                                      "match": { "status_code": [2] },
+                                                      "routes": [
+                                                        { "handle": [{ "handler": "vars" }] }
+                                                      ]
+                                                    }
+                                                  ],
+                                                  "handler": "reverse_proxy",
+                                                  "headers": {
+                                                    "request": {
+                                                      "set": {
+                                                        "X-Forwarded-Method": [
+                                                          "{http.request.method}"
+                                                        ],
+                                                        "X-Forwarded-Uri": ["{http.request.uri}"]
+                                                      }
+                                                    }
+                                                  },
+                                                  "rewrite": {
+                                                    "method": "GET",
+                                                    "uri": "/__gate/verify"
+                                                  },
+                                                  "upstreams": [{ "dial": "127.0.0.1:8080" }]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                { "handler": "static_response", "status_code": 403 }
+                                              ],
+                                              "match": [
+                                                {
+                                                  "method": ["POST"],
+                                                  "path": [
+                                                    "/ghost/api/admin/members/upload",
+                                                    "/ghost/api/admin/members/upload/",
+                                                    "/ghost/api/*/admin/members/upload",
+                                                    "/ghost/api/*/admin/members/upload/"
+                                                  ]
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                { "handler": "static_response", "status_code": 403 }
+                                              ],
+                                              "match": [
+                                                {
+                                                  "method": ["POST"],
+                                                  "path_regexp": {
+                                                    "name": "membersImportByPattern",
+                                                    "pattern": "(?i)^/ghost/api/(?:(?:v[0-9]+|canary)/)?admin/members/upload/?$"
+                                                  }
+                                                }
+                                              ]
+                                            },
+                                            {
+                                              "handle": [
+                                                {
+                                                  "handler": "reverse_proxy",
+                                                  "health_checks": {
+                                                    "active": {
+                                                      "headers": {
+                                                        "X-Colour-Upstream": [
+                                                          "{http.reverse_proxy.active.target_upstream}"
+                                                        ]
+                                                      },
+                                                      "interval": 2000000000,
+                                                      "port": 10101,
+                                                      "uri": "/healthz"
+                                                    }
+                                                  },
+                                                  "load_balancing": {
+                                                    "selection_policy": { "policy": "first" }
+                                                  },
+                                                  "upstreams": [
+                                                    { "dial": "127.0.0.1:9302" },
+                                                    { "dial": "127.0.0.1:9303" }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ],
+                      "match": [{ "host": ["demo-1.site-fixture.invalid"] }]
+                    },
+                    {
+                      "group": "group11",
+                      "handle": [
+                        {
+                          "handler": "subroute",
+                          "routes": [
+                            { "handle": [{ "abort": true, "handler": "static_response" }] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ],
+              "terminal": true
+            }
+          ],
+          "tls_connection_policies": [{}],
+          "automatic_https": { "disable": true }
+        }
+      }
+    },
+    "tls": {
+      "automation": {
+        "policies": [
+          {
+            "subjects": ["*.site-fixture.invalid"],
+            "issuers": [
+              {
+                "challenges": {
+                  "dns": {
+                    "provider": {
+                      "api_token": "{file./etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard}",
+                      "name": "hetzner"
+                    }
+                  }
+                },
+                "module": "acme"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

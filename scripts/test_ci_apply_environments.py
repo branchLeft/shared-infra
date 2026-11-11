@@ -31,10 +31,25 @@ APPLY_JOBS = {
     "mail-apply": "production-mail",
     "hetzner-network-apply": routed("hetzner-network-plan"),
     "hetzner-estate-apply": routed("hetzner-estate-plan"),
+    "hetzner-dns-apply": "production-dns",
 }
 ROUTED_APPLY_JOBS = ("hetzner-network-apply", "hetzner-estate-apply")
-PLAN_JOBS = ["mail-plan", "hetzner-network-plan", "hetzner-estate-plan"]
+PLAN_JOBS = ["mail-plan", "hetzner-network-plan", "hetzner-estate-plan", "hetzner-dns-plan"]
 ROUTED_PLAN_JOBS = ("hetzner-network-plan", "hetzner-estate-plan")
+# The two stacks whose applies each have an environment of their own, never
+# routed by the spend gate.
+OWN_ENVIRONMENT_APPLIES = {
+    "mail-apply": "production-mail",
+    "hetzner-dns-apply": "production-dns",
+}
+DNS_APPLY = "hetzner-dns-apply"
+DNS_PLAN = "hetzner-dns-plan"
+# The plan jobs that read their credentials from an environment of their own:
+# main-only, no reviewer (issue #2195 for mail; the DNS plan mirrors it).
+PLAN_ENVIRONMENTS = {"mail-plan": "mail-plan", DNS_PLAN: "dns-plan"}
+# The three secrets that can write the DNS zone. They live in `dns-plan` and
+# `production-dns`, so only these two jobs may name them.
+DNS_SECRETS = ("HCLOUD_TOKEN_DNS", "PULUMI_PASSPHRASE_HETZNER_DNS", "PULUMI_SALT_HETZNER_DNS")
 
 # The reviewer App's integration id, as `app.id` on the live rule object.
 REVIEWER_APP_ID = 5090756
@@ -205,10 +220,42 @@ class StructureTests(unittest.TestCase):
             with self.subTest(job=job):
                 self.assertEqual(environment_of(job_block(self.text, job)), expected)
 
-    def test_only_the_three_applies_and_mail_plan_declare_an_environment(self):
-        # mail-plan has its own environment since #2195 (no reviewer, main only).
+    def test_only_the_four_applies_and_the_mail_and_dns_plans_declare_an_environment(self):
+        # mail-plan has its own environment since #2195 (no reviewer, main only);
+        # the DNS plan mirrors it with `dns-plan`.
         declared = re.findall(r"^    environment: (.+?)[ \t]*$", self.text, re.M)
-        self.assertEqual(sorted(declared), sorted([*APPLY_JOBS.values(), "mail-plan"]))
+        self.assertEqual(
+            sorted(declared), sorted([*APPLY_JOBS.values(), *PLAN_ENVIRONMENTS.values()])
+        )
+
+    def test_the_plan_jobs_name_their_environments(self):
+        for job, expected in PLAN_ENVIRONMENTS.items():
+            with self.subTest(job=job):
+                self.assertEqual(environment_of(job_block(self.text, job)), expected)
+        for job in ROUTED_PLAN_JOBS:
+            with self.subTest(job=job):
+                self.assertIsNone(environment_of(job_block(self.text, job)))
+
+    def test_dns_plan_is_the_only_job_in_dns_plan(self):
+        self.assertEqual(
+            self.text.count("environment: dns-plan"),
+            1,
+            "dns-plan must belong to the DNS plan alone",
+        )
+        for job in all_jobs(self.text):
+            if job != DNS_PLAN:
+                with self.subTest(job=job):
+                    self.assertNotEqual(environment_of(job_block(self.text, job)), "dns-plan")
+
+    def test_the_dns_secrets_are_read_by_the_dns_plan_and_apply_only(self):
+        for job in all_jobs(self.text):
+            block = job_block(self.text, job)
+            for secret in DNS_SECRETS:
+                with self.subTest(job=job, secret=secret):
+                    if job in (DNS_PLAN, DNS_APPLY):
+                        self.assertIn(f"secrets.{secret}", block)
+                    else:
+                        self.assertNotIn(secret, block)
 
     def test_mail_apply_is_the_only_job_in_production_mail(self):
         self.assertEqual(
@@ -217,10 +264,93 @@ class StructureTests(unittest.TestCase):
             "production-mail must belong to the mail apply alone",
         )
         self.assertIn("environment: production-mail", job_block(self.text, "mail-apply"))
-        for job in ("hetzner-network-apply", "hetzner-estate-apply"):
+        for job in ("hetzner-network-apply", "hetzner-estate-apply", DNS_APPLY):
             self.assertNotEqual(
                 environment_of(job_block(self.text, job)), "production-mail"
             )
+
+    def test_dns_apply_is_the_only_job_in_production_dns(self):
+        # The mirror of the production-mail test above: GitHub approves per
+        # environment per run, so a DNS apply sharing an environment with any
+        # other apply would be released by that apply's approval.
+        self.assertEqual(
+            self.text.count("environment: production-dns"),
+            1,
+            "production-dns must belong to the DNS apply alone",
+        )
+        self.assertEqual(environment_of(job_block(self.text, DNS_APPLY)), "production-dns")
+        for job in all_jobs(self.text):
+            if job != DNS_APPLY:
+                with self.subTest(job=job):
+                    self.assertNotEqual(
+                        environment_of(job_block(self.text, job)), "production-dns"
+                    )
+
+    def test_dns_apply_environment_is_a_literal_never_an_expression(self):
+        environment = environment_of(job_block(self.text, DNS_APPLY))
+        self.assertNotIn("${{", environment)
+        self.assertNotIn("production-free", environment)
+
+    def test_dns_plan_job_shape(self):
+        plan = job_block(self.text, DNS_PLAN)
+        self.assertEqual(
+            needs_of(plan),
+            ["changes", "hetzner-typecheck", "scripts-tests", "pulumi-inventory-audit"],
+        )
+        self.assertEqual(
+            and_operands(job_if(plan)),
+            [
+                "github.event_name == 'push'",
+                "github.ref == 'refs/heads/main'",
+                "needs.changes.outputs.hetzner_dns == 'true'",
+            ],
+        )
+        # The DNS secrets are environment-level, as the mail plan's are: the
+        # plan has the main-only, no-reviewer `dns-plan` environment, so it
+        # reads them without an approval and a branch cannot read them at all.
+        self.assertEqual(environment_of(plan), "dns-plan")
+        self.assertIn("      has_changes: ${{ steps.noop.outputs.has_changes }}\n", plan)
+        self.assertEqual(
+            job_env_value(plan, "HCLOUD_TOKEN"), "${{ secrets.HCLOUD_TOKEN_DNS }}"
+        )
+
+    def test_dns_apply_has_its_own_concurrency_group_that_never_cancels(self):
+        block = job_block(self.text, DNS_APPLY)
+        self.assertIn("      group: pulumi-hetzner-dns-deploy\n", block)
+        self.assertIn("      cancel-in-progress: false\n", block)
+
+    def test_dns_apply_guards_run_in_order_before_pulumi_up(self):
+        block = job_block(self.text, DNS_APPLY)
+        names = [n for n, _ in step_blocks(block)]
+        order = [
+            GATE_NAME,
+            "Verify the deploy secrets are present",
+            "Preview the plan",
+            "Refuse to apply a plan that destroys the DNS zone",
+            "Apply",
+        ]
+        positions = [names.index(n) for n in order]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(positions[3] + 1, positions[4], "nothing may sit between the guard and Apply")
+        guard = run_script(step(block, "Refuse to apply a plan that destroys the DNS zone"))
+        self.assertIn("assert-no-hetzner-deletes.py --self-test", guard)
+        self.assertIn("assert-no-hetzner-deletes.py --verify-coverage ..", guard)
+        self.assertNotRegex(
+            step(block, "Refuse to apply a plan that destroys the DNS zone"),
+            r"^        if:",
+            "the delete guard must not be skippable",
+        )
+
+    def test_dns_plan_runs_the_delete_guard_before_the_verdict_and_summary(self):
+        names = [n for n, _ in step_blocks(job_block(self.text, DNS_PLAN))]
+        order = [
+            "Preview the plan",
+            "Refuse a plan that destroys the DNS zone",
+            "Decide whether the plan changes anything",
+            "Write the plan to the job summary",
+        ]
+        positions = [names.index(n) for n in order]
+        self.assertEqual(positions, sorted(positions))
 
     def test_every_apply_job_opens_with_the_environment_gate(self):
         for job in APPLY_JOBS:
@@ -276,6 +406,7 @@ class GateBehaviourTests(unittest.TestCase):
         self.estate = run_script(
             step(job_block(text, "hetzner-estate-apply"), GATE_NAME)
         )
+        self.dns = run_script(step(job_block(text, DNS_APPLY), GATE_NAME))
         self.stub = StubGh(self)
 
     @staticmethod
@@ -363,6 +494,50 @@ class GateBehaviourTests(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn("neither a required-reviewer rule", result.stderr)
 
+    def test_dns_accepts_a_required_reviewer_rule(self):
+        self.stub.put("environment.json", environment_object(reviewers=True))
+        result = self.stub.run(self.dns)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_dns_reads_production_dns_and_never_production(self):
+        self.stub.put("environment.json", environment_object(reviewers=True))
+        self.assertEqual(self.stub.run(self.dns).returncode, 0)
+        self.assertEqual(
+            self.stub.calls(), ["GET repos/ORG/REPO/environments/production-dns"]
+        )
+
+    def test_dns_refuses_an_enabled_reviewer_app_rule_alone(self):
+        # The network and estate gates accept this rule, and an approval of it
+        # is not the owner's. The DNS gate must not: this is the pinned
+        # difference between the two (see also GateShapeTests).
+        self.stub.put("environment.json", environment_object(reviewers=False))
+        self.stub.put("rules.json", self.rules(True))
+        self.assertEqual(self.stub.run(self.prod).returncode, 0, "control: the network gate accepts it")
+        self.stub.log.write_text("", encoding="utf-8")
+        result = self.stub.run(self.dns)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("production-dns environment has no required-reviewer", result.stderr)
+        self.assertFalse(
+            any("deployment_protection_rules" in c for c in self.stub.calls())
+        )
+
+    def test_dns_refuses_with_no_rule_at_all(self):
+        self.stub.put("environment.json", environment_object(reviewers=False))
+        result = self.stub.run(self.dns)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("no required-reviewer rule", result.stderr)
+
+    def test_dns_refuses_when_the_environment_cannot_be_read(self):
+        result = self.stub.run(self.dns)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn("no required-reviewer rule", result.stderr)
+
+    def test_dns_non_numeric_answer_with_a_zero_exit_counts_as_no_rule(self):
+        (self.stub.dir / "environment.raw").write_text("x\n", encoding="utf-8")
+        result = self.stub.run(self.dns)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("no required-reviewer rule", result.stderr)
+
     def test_the_gate_pins_the_reviewer_app_by_integration_id(self):
         for script in (self.prod, self.estate):
             self.assertIn(f".app.id == {REVIEWER_APP_ID}", script)
@@ -384,13 +559,16 @@ class CancelStepStructureTests(unittest.TestCase):
                 names = [n for n, _ in step_blocks(block)]
                 self.assertEqual(names[names.index("Checkout") + 1], CANCEL_NAME)
                 bodies.append(step(block, CANCEL_NAME))
-        self.assertEqual(len(set(bodies)), 1, "the three copies must not drift")
+        self.assertEqual(len(bodies), 4)
+        self.assertEqual(len(set(bodies)), 1, "the four copies must not drift")
+        self.assertIn("PLANS_DNS: ${{ needs.changes.outputs.hetzner_dns }}", bodies[0])
+        self.assertIn('--dns "${PLANS_DNS}"', bodies[0])
 
     def test_cancel_step_cannot_fail_the_plan(self):
         body = step(job_block(self.text, "mail-plan"), CANCEL_NAME)
         self.assertIn("continue-on-error: true", body)
 
-    def test_actions_write_is_on_the_three_plan_jobs_only(self):
+    def test_actions_write_is_on_the_four_plan_jobs_only(self):
         header = self.text.split("\njobs:\n", 1)[0]
         self.assertNotIn("actions:", header)
         current, granted = None, []
@@ -462,7 +640,7 @@ class CancelBehaviourTests(unittest.TestCase):
         self.script = run_script(step(job_block(text, "mail-plan"), CANCEL_NAME))
         self.stub = StubGh(self)
 
-    def run_with(self, runs, jobs_by_run, plans=("true", "true", "true")):
+    def run_with(self, runs, jobs_by_run, plans=("true", "true", "true", "true")):
         self.stub.put("runs.json", {"workflow_runs": runs})
         for run_id, jobs in jobs_by_run.items():
             self.stub.put(f"jobs-{run_id}.json", {"jobs": jobs})
@@ -474,6 +652,7 @@ class CancelBehaviourTests(unittest.TestCase):
             PLANS_MAIL=plans[0],
             PLANS_NETWORK=plans[1],
             PLANS_ESTATE=plans[2],
+            PLANS_DNS=plans[3],
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return [c for c in self.stub.calls() if c.startswith("POST ")]
@@ -495,6 +674,7 @@ class CancelBehaviourTests(unittest.TestCase):
     MAIL = "Apply (mail, pulumi up)"
     NETWORK = "Apply (hetzner network, pulumi up)"
     ESTATE = "Apply (hetzner estate, pulumi up)"
+    DNS = "Apply (hetzner dns, pulumi up)"
 
     def test_cancels_an_older_run_waiting_on_stacks_this_run_plans(self):
         posts = self.run_with(
@@ -514,7 +694,7 @@ class CancelBehaviourTests(unittest.TestCase):
         posts = self.run_with(
             [self.run_row(101)],
             {101: [self.job(self.MAIL, "waiting"), self.job(self.NETWORK, "waiting")]},
-            plans=("true", "false", "false"),
+            plans=("true", "false", "false", "false"),
         )
         self.assertEqual(posts, [])
 
@@ -604,12 +784,24 @@ class CancelBehaviourTests(unittest.TestCase):
             self.job(self.MAIL, "completed", "skipped"),
         ]
         kept = self.run_with(
-            [self.run_row(101)], {101: jobs}, plans=("false", "true", "false")
+            [self.run_row(101)], {101: jobs}, plans=("false", "true", "false", "false")
         )
         self.assertEqual(kept, [])
         self.stub.log.write_text("", encoding="utf-8")
         cancelled = self.run_with(
-            [self.run_row(101)], {101: jobs}, plans=("false", "true", "true")
+            [self.run_row(101)], {101: jobs}, plans=("false", "true", "true", "false")
+        )
+        self.assertEqual(cancelled, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
+
+    def test_a_waiting_dns_apply_is_cancelled_only_when_this_push_planned_dns(self):
+        jobs = [self.job(self.DNS, "waiting")]
+        kept = self.run_with(
+            [self.run_row(101)], {101: jobs}, plans=("true", "true", "true", "false")
+        )
+        self.assertEqual(kept, [])
+        self.stub.log.write_text("", encoding="utf-8")
+        cancelled = self.run_with(
+            [self.run_row(101)], {101: jobs}, plans=("false", "false", "false", "true")
         )
         self.assertEqual(cancelled, ["POST repos/ORG/REPO/actions/runs/101/cancel"])
 
@@ -627,6 +819,7 @@ class CancelBehaviourTests(unittest.TestCase):
             PLANS_MAIL="true",
             PLANS_NETWORK="true",
             PLANS_ESTATE="true",
+            PLANS_DNS="true",
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         return [c for c in self.stub.calls() if c.startswith("POST ")]
@@ -655,6 +848,7 @@ class CancelBehaviourTests(unittest.TestCase):
             PLANS_MAIL="true",
             PLANS_NETWORK="true",
             PLANS_ESTATE="true",
+            PLANS_DNS="true",
         )
         # The step itself goes red (it is continue-on-error, so the plan
         # still runs); the point is that nothing is cancelled on a bad read.
@@ -666,6 +860,7 @@ PLAN_OF_APPLY = {
     "mail-apply": "mail-plan",
     "hetzner-network-apply": "hetzner-network-plan",
     "hetzner-estate-apply": "hetzner-estate-plan",
+    DNS_APPLY: DNS_PLAN,
 }
 
 
@@ -731,8 +926,8 @@ class NoOpGateStructureTests(unittest.TestCase):
     def setUp(self):
         self.text = workflow_text()
 
-    def test_the_gated_apply_jobs_are_the_three_known_ones(self):
-        # A fourth gated apply must be added to APPLY_JOBS and PLAN_OF_APPLY
+    def test_the_gated_apply_jobs_are_the_four_known_ones(self):
+        # A fifth gated apply must be added to APPLY_JOBS and PLAN_OF_APPLY
         # here, so it cannot arrive without the no-op condition below.
         self.assertEqual(sorted(gated_apply_jobs(self.text)), sorted(APPLY_JOBS))
 
@@ -820,12 +1015,18 @@ class RouteStructureTests(unittest.TestCase):
                 block = job_block(self.text, job)
                 self.assertEqual(job_env_value(block, "APPLY_ENVIRONMENT"), environment_of(block))
 
-    def test_the_mail_jobs_are_never_routed(self):
-        for job in ("mail-plan", "mail-apply"):
-            block = job_block(self.text, job)
-            self.assertNotIn("production-free", block)
-            self.assertNotIn("apply_environment", block)
-            self.assertNotIn("spend-gate", block)
+    def test_the_mail_and_dns_jobs_are_never_routed(self):
+        for job in ("mail-plan", "mail-apply", DNS_PLAN, DNS_APPLY):
+            with self.subTest(job=job):
+                block = job_block(self.text, job)
+                self.assertNotIn("production-free", block)
+                self.assertNotIn("apply_environment", block)
+                self.assertNotIn("spend-gate", block)
+
+    def test_the_dns_plan_has_no_route_or_spend_steps(self):
+        names = [n for n, _ in step_blocks(job_block(self.text, DNS_PLAN))]
+        for absent in (ROUTE_NAME, READY_NAME, SPEND_NAME):
+            self.assertNotIn(absent, names)
 
     def test_each_routed_plan_job_publishes_the_route_step_output(self):
         for job in ROUTED_PLAN_JOBS:
@@ -1098,6 +1299,462 @@ class RouteReplayTests(unittest.TestCase):
                 )
         # A plan job that published nothing at all (skipped or failed).
         self.assertEqual(resolve_environment(expression, {}), "production")
+
+
+# ---------------------------------------------------------------------------
+# The DNS apply's own environment, and the lint that keeps it that way.
+#
+# GitHub approves per environment per run: an approval given for the network
+# apply releases every job waiting in the same environment of that run. A DNS
+# apply in `production` would therefore be released by an approval the owner
+# gave for a network change. `production-dns` is the DNS apply's alone, and
+# its gate accepts a required-reviewer rule only, never the reviewer App's
+# custom rule that `production` and `production-free` also accept.
+# ---------------------------------------------------------------------------
+
+ROUTED_ENVIRONMENT_NAMES = {"production", "production-free"}
+ENVIRONMENT_NAME = re.compile(r"production(?:-[a-z]+)?")
+
+# What each apply's gate step may contain, per job:
+#   environment  the literal environment the gate reads, or None when the job
+#                is routed and the gate reads ${APPLY_ENVIRONMENT}
+#   custom_rule  whether the gate may read the reviewer App's custom rule
+#   bare_eq_ok   whether a numeric `-eq` on an unsanitised count is tolerated
+# The mail gate's bare `-eq` is grandfathered here and filed as tech debt; it
+# is not tolerated anywhere else.
+GATE_ALLOWANCES = {
+    "mail-apply": {"environment": "production-mail", "custom_rule": False, "bare_eq_ok": True},
+    DNS_APPLY: {"environment": "production-dns", "custom_rule": False, "bare_eq_ok": False},
+    "hetzner-network-apply": {"environment": None, "custom_rule": True, "bare_eq_ok": False},
+    "hetzner-estate-apply": {"environment": None, "custom_rule": True, "bare_eq_ok": False},
+}
+
+
+def apply_gate_violations(text: str, job: str, allowances: dict = GATE_ALLOWANCES) -> list[str]:
+    """Lint one apply job's gate step against that job's own allowance and
+    return human-readable violations (empty when the gate is as allowed)."""
+    allowance = allowances.get(job)
+    if allowance is None:
+        return [f"{job}: no gate allowance is recorded for this job"]
+    try:
+        body = run_script(step(job_block(text, job), GATE_NAME))
+    except AssertionError as error:
+        return [f"{job}: {error}"]
+    environment = allowance["environment"]
+    if environment is None:
+        reads, names = 'environments/${APPLY_ENVIRONMENT}"', ROUTED_ENVIRONMENT_NAMES
+    else:
+        reads, names = f'environments/{environment}"', {environment}
+    found = []
+    if reads not in body:
+        found.append(f"{job}: the gate does not read {reads}")
+    if "required_reviewers" not in body:
+        found.append(f"{job}: the gate does not look for a required_reviewers rule")
+    reads_rules = "deployment_protection_rules" in body
+    pins_app = str(REVIEWER_APP_ID) in body
+    if allowance["custom_rule"]:
+        if not (reads_rules and pins_app):
+            found.append(f"{job}: the gate should read the reviewer App's rule by integration id")
+    elif reads_rules or pins_app:
+        found.append(
+            f"{job}: the gate reads the reviewer App's custom rule, which this job's "
+            "allowance does not permit"
+        )
+    if "-eq" in body and "*[!0-9]*" not in body and not allowance["bare_eq_ok"]:
+        found.append(f"{job}: the gate compares a count with -eq and never sanitises it")
+    stray = sorted(set(ENVIRONMENT_NAME.findall(body)) - names)
+    if stray:
+        found.append(f"{job}: the gate names another environment: {', '.join(stray)}")
+    return found
+
+
+class _AnyOutput(dict):
+    """A plan job's outputs that answer one fixed value for every key."""
+
+    def __init__(self, value: str):
+        super().__init__()
+        self.value = value
+
+    def get(self, key, default=""):
+        return self.value
+
+
+def environment_isolation_violations(text: str) -> list[str]:
+    """`production-dns` is the literal environment of the DNS apply alone, and
+    no other job's environment can resolve to it."""
+    found = []
+    holders = [j for j in all_jobs(text) if environment_of(job_block(text, j)) == "production-dns"]
+    if holders != [DNS_APPLY]:
+        found.append(f"production-dns must be the environment of {DNS_APPLY} alone; held by {holders}")
+    if text.count("environment: production-dns") != 1:
+        found.append("`environment: production-dns` must appear exactly once in ci.yml")
+    own = environment_of(job_block(text, DNS_APPLY))
+    if own is None or "${{" in own or own in ROUTED_ENVIRONMENT_NAMES:
+        found.append(f"{DNS_APPLY}: the environment must be the literal production-dns, not {own!r}")
+    for job in all_jobs(text):
+        if job == DNS_APPLY:
+            continue
+        block = job_block(text, job)
+        for line in re.findall(r"^\s*(?:environment|APPLY_ENVIRONMENT): .*$", block, re.M):
+            if "production-dns" in line:
+                found.append(f"{job}: names production-dns: {line.strip()}")
+        expression = environment_of(block)
+        if expression and expression.startswith("${{"):
+            try:
+                for published in ("production-free", "production-dns", "production", ""):
+                    resolved = resolve_environment(expression, _AnyOutput(published))
+                    if resolved == "production-dns":
+                        found.append(f"{job}: its environment can resolve to production-dns")
+            except AssertionError as error:
+                found.append(f"{job}: {error}")
+    return found
+
+
+def plan_environment_violations(text: str) -> list[str]:
+    """The DNS plan reads the zone-writing secrets from `dns-plan` (main only,
+    no reviewer, as `mail-plan`), so: `dns-plan` is the literal environment of
+    the DNS plan alone; the plan starts on a push to main only, which is what
+    keeps the main-only policy from ever meeting a branch; the plan is never in
+    the apply's environment; and no other job names the DNS secrets."""
+    found = []
+    own = environment_of(job_block(text, DNS_PLAN))
+    if own != "dns-plan":
+        found.append(f"{DNS_PLAN}: the environment must be the literal dns-plan, not {own!r}")
+    holders = [j for j in all_jobs(text) if environment_of(job_block(text, j)) == "dns-plan"]
+    if holders != [DNS_PLAN]:
+        found.append(f"dns-plan must be the environment of {DNS_PLAN} alone; held by {holders}")
+    if text.count("environment: dns-plan") != 1:
+        found.append("`environment: dns-plan` must appear exactly once in ci.yml")
+    operands = and_operands(job_if(job_block(text, DNS_PLAN)))
+    for required in ("github.event_name == 'push'", "github.ref == 'refs/heads/main'"):
+        if required not in operands:
+            found.append(f"{DNS_PLAN}: the job must start only when {required}")
+    for job in all_jobs(text):
+        if job in (DNS_PLAN, DNS_APPLY):
+            continue
+        block = job_block(text, job)
+        for secret in DNS_SECRETS:
+            if secret in block:
+                found.append(f"{job}: names the DNS secret {secret}")
+    return found
+
+
+class GateShapeTests(unittest.TestCase):
+    """The per-job gate lint, run on the real ci.yml."""
+
+    def setUp(self):
+        self.text = workflow_text()
+
+    def test_the_allowances_cover_every_apply_job_and_no_other(self):
+        self.assertEqual(sorted(GATE_ALLOWANCES), sorted(APPLY_JOBS))
+
+    def test_every_apply_gate_is_as_its_own_allowance_permits(self):
+        for job in GATE_ALLOWANCES:
+            with self.subTest(job=job):
+                self.assertEqual(apply_gate_violations(self.text, job), [])
+
+    def test_dns_gate_allows_a_required_reviewers_rule_only(self):
+        # One of the two pins on the DNS-only strictness (the other is
+        # GateBehaviourTests.test_dns_refuses_an_enabled_reviewer_app_rule_alone).
+        self.assertEqual(apply_gate_violations(self.text, DNS_APPLY), [])
+        gate = run_script(step(job_block(self.text, DNS_APPLY), GATE_NAME))
+        self.assertNotIn("deployment_protection_rules", gate)
+        self.assertNotIn(str(REVIEWER_APP_ID), gate)
+        self.assertIn("required_reviewers", gate)
+
+    def test_the_dns_allowance_is_the_strictest_row(self):
+        row = GATE_ALLOWANCES[DNS_APPLY]
+        self.assertEqual(
+            row, {"environment": "production-dns", "custom_rule": False, "bare_eq_ok": False}
+        )
+
+    def test_the_allowance_is_per_job_not_global(self):
+        # The mail gate's bare -eq passes under the mail row and is flagged
+        # under any stricter row, so the exemption cannot spread to a new gate.
+        self.assertEqual(apply_gate_violations(self.text, "mail-apply"), [])
+        strict = {"mail-apply": dict(GATE_ALLOWANCES["mail-apply"], bare_eq_ok=False)}
+        self.assertTrue(
+            any("never sanitises" in v for v in apply_gate_violations(self.text, "mail-apply", strict))
+        )
+        # A routed gate judged by the DNS row (no App rule, a literal
+        # environment) is flagged, so the rows really differ per job.
+        routed_as_dns = {"hetzner-network-apply": GATE_ALLOWANCES[DNS_APPLY]}
+        self.assertTrue(apply_gate_violations(self.text, "hetzner-network-apply", routed_as_dns))
+
+    def test_the_isolation_lint_is_clean_on_the_real_workflow(self):
+        self.assertEqual(environment_isolation_violations(self.text), [])
+
+    def test_the_plan_environment_lint_is_clean_on_the_real_workflow(self):
+        self.assertEqual(plan_environment_violations(self.text), [])
+
+
+class DnsApplyIsolationTests(unittest.TestCase):
+    """THE SABOTAGE TEST. Each case breaks one part of the mechanism that keeps
+    an approval meant for another stack from releasing a DNS apply, on the real
+    ci.yml text in memory, and must be flagged (red); the unmutated text must
+    be clean (green)."""
+
+    def setUp(self):
+        self.text = workflow_text()
+
+    @staticmethod
+    def problems(text: str) -> list[str]:
+        found = environment_isolation_violations(text) + plan_environment_violations(text)
+        for job in GATE_ALLOWANCES:
+            found += apply_gate_violations(text, job)
+        return found
+
+    @staticmethod
+    def mutate(text: str, job: str, old: str, new: str) -> str:
+        block = job_block(text, job)
+        if old not in block:
+            raise AssertionError(f"mutation target not found in {job}: {old!r}")
+        if text.count(block) != 1:
+            raise AssertionError(f"job block of {job} is not unique in ci.yml")
+        return text.replace(block, block.replace(old, new, 1))
+
+    def mutations(self) -> dict[str, str]:
+        text = self.text
+        dns = job_block(text, DNS_APPLY)
+        network = job_block(text, "hetzner-network-apply")
+        dns_gate = step(dns, GATE_NAME)
+        network_gate = step(network, GATE_NAME)
+        guard_line = """          case "${reviewers}" in '' | *[!0-9]*) reviewers=0 ;; esac\n"""
+        return {
+            "(1) the dns apply moves into the shared production environment": self.mutate(
+                text, DNS_APPLY, "    environment: production-dns", "    environment: production"
+            ),
+            "(2) the dns gate is swapped for the network gate that accepts the App rule": self.mutate(
+                text, DNS_APPLY, dns_gate, network_gate
+            ),
+            "(3) the dns gate loses its numeric sanitising guard": self.mutate(
+                text, DNS_APPLY, guard_line, ""
+            ),
+            "(4) production-dns is also given to the network apply": self.mutate(
+                text,
+                "hetzner-network-apply",
+                f"    environment: {environment_of(network)}",
+                "    environment: production-dns",
+            ),
+            "(5) the dns apply is routed like the network apply": self.mutate(
+                text,
+                DNS_APPLY,
+                "    environment: production-dns",
+                f"    environment: {routed('hetzner-network-plan')}",
+            ),
+            "(6) the dns gate reads production, not production-dns": self.mutate(
+                text, DNS_APPLY, "environments/production-dns", "environments/production"
+            ),
+            # The plan job's environment (the DNS secrets live there).
+            "(7) the dns plan loses its environment": self.mutate(
+                text, DNS_PLAN, "    environment: dns-plan\n", ""
+            ),
+            "(8) the dns plan moves into the apply's production-dns": self.mutate(
+                text, DNS_PLAN, "    environment: dns-plan", "    environment: production-dns"
+            ),
+            "(9) the dns plan may start on a branch": self.mutate(
+                text,
+                DNS_PLAN,
+                "github.event_name == 'push' && github.ref == 'refs/heads/main' &&\n",
+                "github.event_name == 'push' &&\n",
+            ),
+            "(10) dns-plan is also given to the network plan": self.mutate(
+                text,
+                "hetzner-network-plan",
+                "    runs-on: ubuntu-latest\n",
+                "    runs-on: ubuntu-latest\n    environment: dns-plan\n",
+            ),
+            "(11) the network plan reads the DNS token": self.mutate(
+                text,
+                "hetzner-network-plan",
+                "secrets.HCLOUD_TOKEN_ESTATE",
+                "secrets.HCLOUD_TOKEN_DNS",
+            ),
+            "(12) the dns apply moves into dns-plan": self.mutate(
+                text, DNS_APPLY, "    environment: production-dns", "    environment: dns-plan"
+            ),
+        }
+
+    def test_sabotaged_workflows_are_flagged_and_the_real_one_is_clean(self):
+        # GREEN: the real workflow is clean for every job.
+        self.assertEqual(self.problems(self.text), [])
+        # RED: every mutation is flagged.
+        for name, mutated in self.mutations().items():
+            with self.subTest(mutation=name):
+                self.assertNotEqual(mutated, self.text, "the mutation changed nothing")
+                self.assertTrue(self.problems(mutated), f"not flagged: {name}")
+
+    def test_each_mutation_is_caught_by_the_lint_that_is_meant_to_catch_it(self):
+        flagged_by = {
+            "(1)": environment_isolation_violations,
+            "(4)": environment_isolation_violations,
+            "(5)": environment_isolation_violations,
+            "(2)": lambda t: apply_gate_violations(t, DNS_APPLY),
+            "(3)": lambda t: apply_gate_violations(t, DNS_APPLY),
+            "(6)": lambda t: apply_gate_violations(t, DNS_APPLY),
+            "(7)": plan_environment_violations,
+            "(8)": plan_environment_violations,
+            "(9)": plan_environment_violations,
+            "(10)": plan_environment_violations,
+            "(11)": plan_environment_violations,
+            "(12)": plan_environment_violations,
+        }
+        for name, mutated in self.mutations().items():
+            with self.subTest(mutation=name):
+                self.assertTrue(flagged_by[name.split()[0]](mutated))
+
+
+PUBLICPRESS_RUNBOOK = ROOT / "hetzner" / "dns" / "RUNBOOK-dns-publicpress-cutover.md"
+
+
+def runbook_step(text: str, number: int) -> str:
+    """One numbered owner step of the publicpress runbook: from its `### N.`
+    heading to the next heading."""
+    match = re.search(rf"^### {number}\. .*?(?=^##+ )", text, re.M | re.S)
+    if not match:
+        raise AssertionError(f"step {number} not found in {PUBLICPRESS_RUNBOOK.name}")
+    return match.group(0)
+
+
+def fenced_blocks(markdown: str) -> list[str]:
+    return re.findall(r"^```[^\n]*\n(.*?)^```", markdown, re.M | re.S)
+
+
+class DnsRunbookTests(unittest.TestCase):
+    """The publicpress cutover is applied through CI, not by hand: the runbook
+    steps that create the zone must say so, in terms of the environments ci.yml
+    really has. A pin on the wording of a production-DNS procedure."""
+
+    def setUp(self):
+        ci = workflow_text()
+        self.apply_env = environment_of(job_block(ci, DNS_APPLY))
+        self.plan_env = environment_of(job_block(ci, DNS_PLAN))
+        runbook = PUBLICPRESS_RUNBOOK.read_text(encoding="utf-8")
+        self.step2 = runbook_step(runbook, 2)
+        self.step3 = runbook_step(runbook, 3)
+
+    def test_the_environment_names_are_the_real_ones(self):
+        # Guards the pins below against a rename in ci.yml.
+        self.assertEqual(self.apply_env, "production-dns")
+        self.assertEqual(self.plan_env, "dns-plan")
+
+    def test_steps_2_and_3_hold_no_hand_pulumi_command(self):
+        for number, body in ((2, self.step2), (3, self.step3)):
+            for block in fenced_blocks(body):
+                with self.subTest(step=number):
+                    self.assertNotRegex(block, r"pulumi\s+(up|preview)")
+
+    def test_steps_2_and_3_name_both_environments(self):
+        self.assertIn(f"`{self.plan_env}`", self.step2)
+        self.assertIn(f"`{self.apply_env}`", self.step3)
+
+    def test_step_3_approves_the_apply_environment_alone(self):
+        self.assertIn(f"`{self.apply_env}` alone", self.step3)
+
+    def test_step_2_says_a_non_create_is_a_stop_and_to_reject(self):
+        self.assertIn("STOP", self.step2)
+        self.assertIn("Reject", self.step2)
+        self.assertIn("branchleft.co.uk", self.step2)
+
+
+def filter_patterns(text: str, name: str) -> list[str]:
+    match = re.search(rf"^            {name}:\n((?:              - '.*'\n)+)", text, re.M)
+    if not match:
+        raise AssertionError(f"filter {name!r} not found in the changes job")
+    return re.findall(r"'(.*)'", match.group(1))
+
+
+def filter_matches(patterns: list[str], path: str) -> bool:
+    """dorny/paths-filter globbing, for the only two shapes the filters use:
+    an exact path, and `dir/**`."""
+    for pattern in patterns:
+        if pattern.endswith("/**"):
+            if path.startswith(pattern[:-2]):
+                return True
+        elif pattern == path:
+            return True
+    return False
+
+
+RELATIVE_IMPORT = re.compile(r"""(?:from|import)\s+['"](\.{1,2}/[^'"]+)['"]""")
+
+
+def import_graph(entry_files: list[str]) -> dict[str, str]:
+    """Every repo-relative file reachable from the entries by relative import,
+    mapped to its source text."""
+    seen: dict[str, str] = {}
+    queue = list(entry_files)
+    while queue:
+        rel = queue.pop()
+        if rel in seen:
+            continue
+        source = (ROOT / rel).read_text(encoding="utf-8")
+        seen[rel] = source
+        for target in RELATIVE_IMPORT.findall(source):
+            base = (ROOT / rel).parent / target
+            for candidate in (base.with_suffix(".ts"), base / "index.ts"):
+                if candidate.is_file():
+                    queue.append(str(candidate.relative_to(ROOT)))
+                    break
+            else:
+                raise AssertionError(f"{rel} imports {target!r}, which resolves to no .ts file")
+    return seen
+
+
+class DnsFilterTests(unittest.TestCase):
+    """A wrong path filter skips a plan with no red anywhere, so it is pinned
+    against the real import graph rather than trusted."""
+
+    def setUp(self):
+        self.text = workflow_text()
+        self.patterns = filter_patterns(self.text, "hetzner_dns")
+
+    def test_the_changes_job_publishes_the_dns_output(self):
+        self.assertIn(
+            "      hetzner_dns: ${{ steps.filter.outputs.hetzner_dns }}\n",
+            job_block(self.text, "changes"),
+        )
+
+    def test_filter_covers_the_dns_program_import_graph(self):
+        main = re.search(r"^main:\s*(\S+)", (ROOT / "hetzner/dns/Pulumi.yaml").read_text(), re.M)
+        entry = str((ROOT / "hetzner/dns" / main.group(1)).resolve().relative_to(ROOT))
+        graph = import_graph([entry, "hetzner/dns.ts", "hetzner/dnsZone.ts"])
+        self.assertIn("hetzner/projectGuard.ts", graph, "the traced graph lost projectGuard.ts")
+        zone_files = re.findall(r"file: '([^']+\.json)'", graph["hetzner/dnsZone.ts"])
+        self.assertIn("zone.json", zone_files)
+        files = sorted(graph) + [f"hetzner/dns/{name}" for name in zone_files]
+        files += [
+            "hetzner/dns/Pulumi.yaml",
+            "hetzner/dns/Pulumi.production.yaml",
+            "hetzner/dns/zonecheck.py",
+            "hetzner/package.json",
+            "hetzner/pnpm-lock.yaml",
+            "hetzner/.nvmrc",
+            "hetzner/tsconfig.json",
+            "scripts/assert-no-hetzner-deletes.py",
+            ".github/workflows/ci.yml",
+        ]
+        for rel in files:
+            with self.subTest(file=rel):
+                self.assertTrue((ROOT / rel).exists(), f"{rel} does not exist")
+                self.assertTrue(filter_matches(self.patterns, rel), f"{rel} is not in the filter")
+
+    def test_hetzner_host_is_in_the_filter_only_if_the_program_imports_it(self):
+        graph = import_graph(["hetzner/dns.ts", "hetzner/dnsZone.ts"])
+        imports_host = any("@branchleft/hetzner-host" in source for source in graph.values())
+        self.assertEqual(filter_matches(self.patterns, "hetzner-host/host.ts"), imports_host)
+
+    def test_the_filter_does_not_fire_on_the_other_stacks_alone(self):
+        for rel in ("hetzner/estate.ts", "hetzner/network.ts", "hetzner/egress.ts", "mail/server.ts"):
+            with self.subTest(file=rel):
+                self.assertFalse(filter_matches(self.patterns, rel))
+
+    def test_the_filter_helper_tells_a_listed_path_from_an_unlisted_one(self):
+        # The matcher itself, so a filter test cannot pass on a matcher that
+        # matches everything.
+        self.assertTrue(filter_matches(["a/**"], "a/b/c.json"))
+        self.assertFalse(filter_matches(["a/**"], "ab/c.json"))
+        self.assertFalse(filter_matches(["a/b.ts"], "a/c.ts"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,41 @@
+name: Ansible tool environment
+description: >-
+  Restore or build the hash-locked Ansible tool environment at $RUNNER_TEMP/ansible-venv, from
+  ansible/requirements.txt and ansible/checks/pip-requirements.txt. The cache key is the one
+  ansible.yml uses, so both read one entry; the install steps run only on a miss.
+
+runs:
+  using: composite
+  steps:
+    # A venv links to the image's interpreter, so the exact Python is part of the key.
+    - name: Name the Python the tool environment is built with
+      id: python
+      shell: bash
+      run: echo "version=$(python3 --version | tr ' ' '-')" >> "$GITHUB_OUTPUT"
+
+    - name: Restore the tool environment
+      id: venv
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/ansible-venv
+        key: ansible-venv-${{ runner.os }}-${{ runner.arch }}-${{ steps.python.outputs.version }}-${{ hashFiles('ansible/requirements.txt', 'ansible/checks/pip-requirements.txt') }}
+
+    - name: Create the tool environment
+      if: steps.venv.outputs.cache-hit != 'true'
+      shell: bash
+      run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
+
+    # The pip is pinned by hash before the lock, so nothing depends on the image's ensurepip.
+    - name: Install the pinned pip
+      if: steps.venv.outputs.cache-hit != 'true'
+      shell: bash
+      run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
+
+    - name: Install the pinned tools
+      if: steps.venv.outputs.cache-hit != 'true'
+      shell: bash
+      run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/requirements.txt'
+
+    - name: Check the installed set
+      shell: bash
+      run: '"$RUNNER_TEMP/ansible-venv/bin/pip" check'

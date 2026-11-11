@@ -1,6 +1,6 @@
 # Installed at /etc/systemd/system/snds-collector.service by hand, per
 # RUNBOOK-monitoring.md's SNDS section -- not one of the *.override.conf
-# drop-ins install-systemd-drop-ins.sh installs automatically, and not itself
+# drop-ins the monitoring_stack role installs, and not itself
 # a Compose stack unit like branchleft-compose@monitoring. Triggered by the
 # sibling snds-collector.timer, never enabled to start on its own.
 [Unit]

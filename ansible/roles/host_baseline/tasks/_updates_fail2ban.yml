@@ -60,12 +60,24 @@
 # and on the edge the HTTP-facing protection is CrowdSec's rather than
 # fail2ban's. So this jail is deliberately the only one.
 #
-# The ignoreip line exempts edge1's private address. Edge1 carries the CI route
-# and the owner's route to these hosts, and five failed logins from it in ten
-# minutes would otherwise ban that route for an hour. Loopback stays exempt too.
+# The ignoreip line is the role input host_baseline_fail2ban_ignoreip. Its
+# default exempts edge1's private address. Edge1 carries the CI route and the
+# owner's route to these hosts, and five failed logins from it in ten minutes
+# would otherwise ban that route for an hour. Loopback stays exempt too. The
+# value is one line of space-separated addresses: a newline would write a second
+# line into the jail, so it is refused first.
+- name: Refuse an ignore list that is not one line of addresses
+  ansible.builtin.assert:
+    that:
+      - host_baseline_fail2ban_ignoreip is ansible.builtin.match('^[0-9A-Fa-f:./ ]+\Z')
+    quiet: true
+    fail_msg: >-
+      host_baseline_fail2ban_ignoreip must be one line of IP addresses and CIDR ranges
+      separated by spaces; refusing to write the jail.
+
 - name: Configure the sshd jail
-  ansible.builtin.copy:
-    src: jail.local
+  ansible.builtin.template:
+    src: jail.local.j2
     dest: /etc/fail2ban/jail.local
     owner: root
     group: root

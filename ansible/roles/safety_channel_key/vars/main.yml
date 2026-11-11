@@ -1,0 +1,16 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. A path or a mode the service
+# depends on must not be moved by a play variable (ansible/README.md, variable precedence).
+#
+# The directory is the one the safety service is configured to read its key from. Its parent,
+# /etc/branchleft, is made by host_inputs (R11), so this role does not make it and asserts it.
+safety_channel_key_directory: /etc/branchleft/content-safety
+
+# The file names and modes live in the module, which writes them. These are the same values,
+# held equal to the module's by tests/unit/test_safety_channel_key.py, so the Molecule scenario
+# and a reader of the role see one set of facts. The key is 0400: the service only reads it.
+safety_channel_key_key_name: channel-signing.key
+safety_channel_key_pub_name: channel-signing.pub
+safety_channel_key_directory_mode: '0700'
+safety_channel_key_key_mode: '0400'
+safety_channel_key_pub_mode: '0444'

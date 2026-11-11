@@ -1,0 +1,9 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with its pins, as a playbook would
+      ansible.builtin.include_role:
+        # Molecule links the role under its namespace and name, from meta/main.yml.
+        name: branchleft.deploy_verifier

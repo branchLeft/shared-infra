@@ -1,0 +1,293 @@
+---
+# What the first application and the second (the idempotence step) left on the host. The
+# expected values are written out here, or read from the repository's own files, and never from
+# the role's variables, so a role that put a file in the wrong place or with the wrong mode is a
+# failure and not a test that agrees with it.
+- name: Verify the host
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_repo: '{{ playbook_dir }}/../../files'
+    verify_stalwart_compose: "{{ lookup('ansible.builtin.file', verify_repo ~ '/docker-compose.yml', rstrip=false) }}"
+    verify_shim_compose: "{{ lookup('ansible.builtin.file', verify_repo ~ '/shim-compose.yml', rstrip=false) }}"
+    verify_caddyfile: "{{ lookup('ansible.builtin.file', verify_repo ~ '/shim.Caddyfile', rstrip=false) }}"
+    verify_dropin: "{{ lookup('ansible.builtin.file', verify_repo ~ '/10-branchleft-local-recursive.conf', rstrip=false) }}"
+    verify_dnsbl: "{{ lookup('ansible.builtin.file', verify_repo ~ '/check_dnsbl_blocklist.py.txt', rstrip=false) }}"
+    # A real line break: a backslash and an n inside a Jinja string are two characters.
+    verify_nl: "\n"
+    # The environment file for the pinned image's smtp-delivery contract (mail/provision/shim-env-contracts.json).
+    verify_shim_env: |
+      PORT=8080
+      SHIM_DB_PATH=/data/shim.db
+      SHIM_THROTTLE_PATH=/data/throttle.json
+      SMTP_HOST=mx1.branchleft.co.uk
+      SMTP_PORT=587
+      SMTP_SECURE=false
+      SMTP_USER=blog@branchleft.co.uk
+      SMTP_PASS={{ scenario_shim_secret }}
+  tasks:
+    # ----- Files: owner, group, mode and what they hold -----
+
+    - name: Look at each file and directory the role delivers
+      ansible.builtin.stat:
+        path: '{{ item.path }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - { path: /opt/stalwart, mode: '0755' }
+        - path: /opt/stalwart/docker-compose.yml
+          mode: '0644'
+          sha: '{{ verify_stalwart_compose | hash("sha256") }}'
+        - { path: /opt/stalwart/.env, mode: '0600' }
+        - { path: /etc/mailgun-shim, mode: '0755' }
+        - path: /etc/mailgun-shim/shim-compose.yml
+          mode: '0644'
+          sha: '{{ verify_shim_compose | hash("sha256") }}'
+        - path: /etc/mailgun-shim/Caddyfile
+          mode: '0644'
+          sha: '{{ verify_caddyfile | hash("sha256") }}'
+        - path: /etc/mailgun-shim/env
+          mode: '0600'
+          sha: '{{ verify_shim_env | hash("sha256") }}'
+        - { path: /var/lib/mailgun-shim, mode: '0755', uid: 1000 }
+        - path: /var/lib/mailgun-shim/throttle.json
+          mode: '0644'
+          sha: ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356
+        - { path: /var/lib/branchleft, mode: '0755' }
+        - { path: /var/lib/branchleft/mx1.stalwart.applied, mode: '0600' }
+        - { path: /var/lib/branchleft/mx1.shim.applied, mode: '0600' }
+        - { path: /var/lib/branchleft/mx1.resolver.applied, mode: '0600' }
+        - path: /etc/unbound/unbound.conf.d/10-branchleft-local-recursive.conf
+          mode: '0644'
+          sha: '{{ verify_dropin | hash("sha256") }}'
+        - { path: /root/mail-provision, mode: '0755' }
+        - path: /root/mail-provision/check_dnsbl_blocklist.py
+          mode: '0755'
+          sha: '{{ verify_dnsbl | hash("sha256") }}'
+        - { path: /etc/cron.d/dnsbl-check, mode: '0644' }
+      loop_control:
+        label: '{{ item.path }}'
+      register: mx1_stack_verify_files
+
+    - name: Assert each is where it should be, owned as it should be, with its mode and its content
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - not item.stat.islnk
+          - item.stat.uid == (item.item.uid | default(0))
+          - item.stat.gid == (item.item.uid | default(0))
+          - item.stat.mode == item.item.mode
+          - item.item.sha is not defined or item.stat.checksum == item.item.sha
+        quiet: true
+        fail_msg: '{{ item.item.path }} is missing, a link, owned wrongly, has mode {{ item.stat.mode | default("none") }} or is not what the repository holds.'
+      loop: '{{ mx1_stack_verify_files.results }}'
+      loop_control:
+        label: '{{ item.item.path }}'
+
+    - name: Read the files whose content is a secret, or is the stamp
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /opt/stalwart/.env
+        - /var/lib/branchleft/mx1.stalwart.applied
+        - /var/lib/branchleft/mx1.shim.applied
+        - /var/lib/branchleft/mx1.resolver.applied
+        - /etc/cron.d/dnsbl-check
+      register: mx1_stack_verify_held
+      no_log: true
+
+    # The log scan at the end looks for the secret Stalwart's .env holds, so it is kept as a fact, and
+    # as the task does not print it, a fact set with no_log is not in the log either.
+    - name: Keep the Prometheus secret for the log scan
+      ansible.builtin.set_fact:
+        mx1_stack_verify_prometheus_secret: >-
+          {{ (mx1_stack_verify_held.results[0].content | b64decode
+          | regex_search('STALWART_PROMETHEUS_SECRET=(\S+)', '\1'))[0] }}
+      no_log: true
+
+    - name: Assert Stalwart's .env has one Prometheus line, and the cron entry runs the delivered script
+      ansible.builtin.assert:
+        that:
+          - (mx1_stack_verify_held.results[0].content | b64decode | regex_findall('(?m)^STALWART_PROMETHEUS_SECRET=[^\s]{16,}$') | length) == 1
+          - (mx1_stack_verify_held.results[0].content | b64decode).splitlines() | select | list | length == 1
+          - "'python3 /root/mail-provision/check_dnsbl_blocklist.py' in (mx1_stack_verify_held.results[4].content | b64decode)"
+        quiet: true
+        fail_msg: Stalwart's .env is not one STALWART_PROMETHEUS_SECRET line, or the cron entry runs another script.
+      no_log: true
+
+    # ----- The stamps: one line per input, each the checksum of the file as it is -----
+
+    - name: Look at the checksums of the files the stamps name
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - /opt/stalwart/docker-compose.yml
+        - /opt/stalwart/.env
+        - /etc/mailgun-shim/shim-compose.yml
+        - /etc/mailgun-shim/Caddyfile
+        - /etc/mailgun-shim/env
+        - /etc/unbound/unbound.conf.d/10-branchleft-local-recursive.conf
+      register: mx1_stack_verify_summed
+
+    - name: Assert each stamp holds its inputs, sorted, with the checksum of the file on the host
+      ansible.builtin.assert:
+        that:
+          - >-
+            (mx1_stack_verify_held.results[1].content | b64decode)
+            == "stalwart_compose " ~ mx1_stack_verify_summed.results[0].stat.checksum
+            ~ verify_nl ~ "stalwart_env " ~ mx1_stack_verify_summed.results[1].stat.checksum ~ verify_nl
+          - >-
+            (mx1_stack_verify_held.results[2].content | b64decode)
+            == "shim_caddyfile " ~ mx1_stack_verify_summed.results[3].stat.checksum
+            ~ verify_nl ~ "shim_compose " ~ mx1_stack_verify_summed.results[2].stat.checksum
+            ~ verify_nl ~ "shim_env " ~ mx1_stack_verify_summed.results[4].stat.checksum ~ verify_nl
+          - >-
+            (mx1_stack_verify_held.results[3].content | b64decode
+            | regex_findall('(?m)^resolver_dropin ' ~ mx1_stack_verify_summed.results[5].stat.checksum ~ '$') | length) == 1
+          - (mx1_stack_verify_held.results[3].content | b64decode | regex_findall('(?m)^resolver_(anchor|packages) [0-9a-f]{64}$') | length) == 2
+        quiet: true
+        fail_msg: A stamp is pending, or does not hold the checksums of the files as they are.
+      no_log: true
+
+    # ----- The containers, as the stand-in docker holds them -----
+
+    - name: Read the stand-in docker's containers
+      ansible.builtin.command:
+        argv: [docker, standin, dump]
+      register: mx1_stack_verify_dump
+      changed_when: false
+
+    - name: Read the stand-in docker's call log
+      ansible.builtin.slurp:
+        src: /var/lib/standin-docker/argv.log
+      register: mx1_stack_verify_argv
+
+    - name: Work out what the containers hold
+      ansible.builtin.set_fact:
+        mx1_stack_verify_containers: "{{ mx1_stack_verify_dump.stdout | from_json | map(attribute='name') | sort }}"
+        mx1_stack_verify_by_name: "{{ dict(mx1_stack_verify_dump.stdout | from_json | map(attribute='name') | zip(mx1_stack_verify_dump.stdout | from_json)) }}"
+        mx1_stack_verify_up_calls: "{{ (mx1_stack_verify_argv.content | b64decode).splitlines() | select('search', ' up ') | list }}"
+
+    - name: Assert there are the three containers, each created once, on the image the compose file names, holding what is on the host
+      ansible.builtin.assert:
+        that:
+          - mx1_stack_verify_containers == ['mailgun-shim', 'mailgun-shim-caddy', 'stalwart']
+          - mx1_stack_verify_by_name['stalwart'].image == (verify_stalwart_compose | from_yaml).services.stalwart.image
+          - mx1_stack_verify_by_name['mailgun-shim'].image == (verify_shim_compose | from_yaml).services['mailgun-shim'].image
+          - mx1_stack_verify_by_name['mailgun-shim-caddy'].image == (verify_shim_compose | from_yaml).services.caddy.image
+          - mx1_stack_verify_by_name['stalwart'].generation == 1
+          - mx1_stack_verify_by_name['mailgun-shim'].generation == 1
+          - mx1_stack_verify_by_name['mailgun-shim-caddy'].generation == 1
+          - >-
+            mx1_stack_verify_by_name['mailgun-shim-caddy'].mounts
+            | selectattr('container_path', 'equalto', '/etc/caddy/Caddyfile') | map(attribute='sha256') | first
+            == (verify_caddyfile | hash('sha256'))
+          - mx1_stack_verify_by_name['mailgun-shim'].env_files['/etc/mailgun-shim/env'] == (verify_shim_env | hash('sha256'))
+          - mx1_stack_verify_by_name['stalwart'].dotenv_sha256 == mx1_stack_verify_summed.results[1].stat.checksum
+          - mx1_stack_verify_by_name['stalwart'].status == 'running'
+          - mx1_stack_verify_by_name['mailgun-shim'].status == 'running'
+          - mx1_stack_verify_by_name['mailgun-shim-caddy'].status == 'running'
+        quiet: true
+        fail_msg: The stand-in docker does not hold the three containers as the repository's files describe them.
+      no_log: true
+
+    - name: Assert the role made no forced recreate, and removed nothing, on a host it built from nothing
+      ansible.builtin.assert:
+        that:
+          - mx1_stack_verify_up_calls | select('search', '--force-recreate') | list | length == 0
+          - mx1_stack_verify_up_calls | select('search', '--remove-orphans') | list | length == 0
+          - mx1_stack_verify_up_calls | select('search', '--renew-anon-volumes') | list | length == 0
+          - mx1_stack_verify_up_calls | length == 2
+        quiet: true
+        fail_msg: 'The role made these calls: {{ mx1_stack_verify_up_calls }}.'
+
+    # ----- The checks that run once per action -----
+
+    - name: Read the call logs of the openssl and dig stand-ins
+      ansible.builtin.slurp:
+        src: '/var/lib/standin-docker/{{ item }}'
+      loop:
+        - openssl.log
+        - dig.log
+        - checkconf.log
+      register: mx1_stack_verify_tool_logs
+
+    - name: Assert the certificate was looked at once per port, in the run that acted and never in the run that did not
+      ansible.builtin.assert:
+        that:
+          - (mx1_stack_verify_tool_logs.results[0].content | b64decode).splitlines() | length == 2
+          - "'-connect 127.0.0.1:8443 -servername mx1.branchleft.co.uk' in (mx1_stack_verify_tool_logs.results[0].content | b64decode)"
+          - "'-connect 127.0.0.1:443 -servername mx1.branchleft.co.uk' in (mx1_stack_verify_tool_logs.results[0].content | b64decode)"
+          - (mx1_stack_verify_tool_logs.results[1].content | b64decode).splitlines() | length == 1
+          # The package's own helper calls unbound-checkconf with arguments; the role's probe calls it with none.
+          - (mx1_stack_verify_tool_logs.results[2].content | b64decode).splitlines() | select('equalto', '') | list | length == 1
+        quiet: true
+        fail_msg: The certificate, recursion or configuration check ran more or less often than once for the one run that acted.
+
+    # ----- The resolver -----
+
+    - name: Read the units
+      ansible.builtin.service_facts:
+
+    - name: Read the system resolver file
+      ansible.builtin.stat:
+        path: /etc/resolv.conf
+        checksum_algorithm: sha256
+      register: mx1_stack_verify_resolv
+
+    - name: Read what the system resolver file held before the role ran
+      ansible.builtin.slurp:
+        src: /var/lib/standin-docker/resolv.sha256
+      register: mx1_stack_verify_resolv_kept
+
+    - name: Assert unbound runs and is enabled, the unit that would repoint the host is masked and the system resolver file is as it was
+      ansible.builtin.assert:
+        that:
+          - ansible_facts.services['unbound.service'].state == 'running'
+          - ansible_facts.services['unbound-resolvconf.service'].status == 'masked'
+          - mx1_stack_verify_resolv.stat.checksum == (mx1_stack_verify_resolv_kept.content | b64decode)
+        quiet: true
+        fail_msg: unbound is not running, the unit that repoints the host's resolver is not masked, or /etc/resolv.conf changed.
+
+- name: Verify the run's log on the machine that runs the test
+  hosts: localhost
+  gather_facts: false
+  vars:
+    verify_log_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}"
+    verify_secrets:
+      - '{{ hostvars[groups["all"][0]].scenario_shim_secret }}'
+      - "{{ hostvars[groups['all'][0]].mx1_stack_verify_prometheus_secret | default('') }}"
+  tasks:
+    # The control first: a value the converge printed on purpose. A scan that cannot find it
+    # would find nothing for a secret either. Without read_whole_file, find matches the
+    # pattern at the start of each line only, so it would find neither.
+    - name: Look for the control value in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ verify_log_dir }}'
+        patterns: ansible.log
+        contains: LOG-SCAN-CONTROL-VALUE
+        read_whole_file: true
+      register: mx1_stack_verify_control
+
+    - name: Look for each secret in the log of the whole run
+      ansible.builtin.find:
+        paths: '{{ verify_log_dir }}'
+        patterns: ansible.log
+        contains: '{{ item }}'
+        read_whole_file: true
+      loop: '{{ verify_secrets | select | list }}'
+      register: mx1_stack_verify_leaks
+      no_log: true
+
+    - name: Assert the scan works and no secret is in the log
+      ansible.builtin.assert:
+        that:
+          - mx1_stack_verify_control.matched == 1
+          - verify_secrets | select | list | length == 2
+          - mx1_stack_verify_leaks.results | map(attribute='matched') | select | list | length == 0
+        quiet: true
+        fail_msg: >-
+          Either the log scan cannot see a printed value (control found in
+          {{ mx1_stack_verify_control.matched }} file(s), expected 1), the Prometheus secret was not read,
+          or a secret reached the log.

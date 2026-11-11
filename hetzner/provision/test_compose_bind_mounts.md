@@ -48,3 +48,20 @@ Sources are matched by regex rather than by parsing YAML: these files are
 hand-written in one consistent style, and the suites beside this one hand-roll
 their Compose parsing for the same reason -- to stay stdlib-only, so the CI job
 needs no install step.
+
+## Single-file bind mounts
+
+A deploy replaces a file by writing a new one and renaming it into place, which
+gives the host path a new inode. A container bind-mounted to the file keeps the
+old inode, so a `caddy validate` or `caddy reload` run inside it reads the old
+bytes while the host holds the new ones; the validation passes on a file that is
+no longer deployed. The edge stack did this with its Caddyfile. A directory mount
+follows the name, so the Caddyfile now lives in `caddy/` and the container mounts
+that directory.
+
+`SingleFileMountTests` refuses any relative mount whose source resolves to one
+committed file. The mounts that already existed are pinned in
+`SINGLE_FILE_MOUNTS` by exact path, so the check bites on any new one; each pinned
+entry is separate work to retire or to prove safe, and the test fails an entry
+that no longer matches a mount. A source that is not committed (the deploy-time
+files above) is not a file here and is covered by its own exemption.

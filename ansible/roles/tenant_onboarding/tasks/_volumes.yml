@@ -1,0 +1,78 @@
+---
+# Guarded step PROVISION_TENANT_VOLUMES: create one tenant's three volumes and claim its
+# UID, by running the program the plain apply installed. The program is the oracle for
+# the slug rules, the reserved names and the UID range, and it is idempotent: a re-run
+# finishes what a run that died halfway left, and changes nothing else.
+#
+# No marker is written. The program's claim register and the volumes are the record, and
+# a host-local marker would block the re-run that repairs a half-finished request.
+
+# The first task of this file is the guard's check: named by its tag without its
+# confirmation, the step stops here with a REFUSED message.
+- name: Refuse PROVISION_TENANT_VOLUMES when its tag is named without its confirmation
+  ansible.builtin.assert:
+    that:
+      - tenant_onboarding_confirm == 'PROVISION_TENANT_VOLUMES'
+    quiet: true
+    fail_msg: 'REFUSED: PROVISION_TENANT_VOLUMES was requested by its tag without tenant_onboarding_confirm set to PROVISION_TENANT_VOLUMES, so it did not run.'
+
+# The role types the inputs; the program decides whether they are allowed. A slug is one
+# text value with no line break, and a UID is digits only.
+- name: Refuse PROVISION_TENANT_VOLUMES without one tenant slug and one UID
+  ansible.builtin.assert:
+    that:
+      - tenant_onboarding_slug is string
+      - tenant_onboarding_slug is match('^[^\n\r]+\Z')
+      - (tenant_onboarding_uid | string) is match('^[0-9]+\Z')
+    quiet: true
+    fail_msg: >-
+      REFUSED: PROVISION_TENANT_VOLUMES needs tenant_onboarding_slug (one text value,
+      no line break) and tenant_onboarding_uid (digits only). The tenant program checks
+      the values themselves.
+
+- name: Stat the tenant volume program before asking it anything
+  ansible.builtin.stat:
+    path: '{{ tenant_onboarding_program }}'
+  register: tenant_onboarding_program_stat
+
+- name: Refuse PROVISION_TENANT_VOLUMES when the tenant volume program is not installed
+  ansible.builtin.assert:
+    that:
+      - tenant_onboarding_program_stat.stat.exists
+      - tenant_onboarding_program_stat.stat.isreg
+    quiet: true
+    fail_msg: 'REFUSED: the tenant volume program is not installed. A plain apply installs it, so run that first; PROVISION_TENANT_VOLUMES did not run.'
+
+- name: Read the UID claims before the program changes anything
+  ansible.builtin.import_tasks: _claims.yml
+
+- name: Note whether this tenant already holds this UID on this host
+  ansible.builtin.set_fact:
+    tenant_onboarding_already_held: '{{ (tenant_onboarding_slug ~ "=" ~ (tenant_onboarding_uid | string)) in tenant_onboarding_held_claims }}'
+  no_log: true
+
+# The program is run by its argument list, with no shell. The slug follows a -- so that a
+# slug that begins with a dash is read as a value and refused by the program, not taken as
+# an option. The output names the tenant and is not shown; a change is reported when the
+# UID was not held before, or when the program created a volume.
+- name: Create the tenant volumes and claim its UID with the tenant program
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - '{{ tenant_onboarding_program }}'
+      - --uid
+      - '{{ tenant_onboarding_uid | string }}'
+      - --
+      - '{{ tenant_onboarding_slug }}'
+  register: tenant_onboarding_provision
+  failed_when: false
+  changed_when: "('created volume' in tenant_onboarding_provision.stdout) or (not tenant_onboarding_already_held)"
+  no_log: true
+
+# A refusal shows the program's own message, so the operator sees why (a reserved name,
+# a UID out of range, a UID another tenant holds). Not hidden by no_log: the message is
+# the program's and the operator asked for this run.
+- name: Refuse PROVISION_TENANT_VOLUMES with the tenant program's own message
+  ansible.builtin.fail:
+    msg: 'REFUSED: the tenant program refused PROVISION_TENANT_VOLUMES: {{ tenant_onboarding_provision.stderr | trim }}'
+  when: tenant_onboarding_provision is not skipped and tenant_onboarding_provision.rc != 0

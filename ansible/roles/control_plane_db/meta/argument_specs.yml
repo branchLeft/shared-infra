@@ -7,10 +7,12 @@ argument_specs:
       (root, group 1000, mode 0750) and runs no step. A step runs only when its tag
       (control_plane_db_ followed by its id) is named on the command line and
       control_plane_db_step is that id. The three steps are migrate (apply a pending
-      migration), identity (run the identity reconciler) and provision (create the
-      portal database, roles and logins, and write the two connection URL files). A
-      step writes a marker only after its effect succeeded, removes the administrator
-      URL file on every exit, and is skipped when its marker exists.
+      migration, connecting as the migration login and never as the administrator),
+      identity (run the identity reconciler) and provision (create the portal
+      database, roles and logins, and write the two connection URL files). A step
+      writes a marker only after its effect succeeded, removes the owner-placed
+      credential URL file it was given (the migrator's for migrate, the administrator's
+      for provision) on every exit, and is skipped when its marker exists.
     author: branchLeft
     options:
       control_plane_db_step:

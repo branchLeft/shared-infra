@@ -182,6 +182,90 @@
         - [systemctl, start, 'branchleft-compose@mail-spool.service']
       expect: 'is not active, or is not enabled for boot'
 
+# The image the spool starts. The host has no route to a registry and never pulls, so the
+# image the pin file names must already be on it, and the step refuses the start when it is
+# not. The control is the host as delivered (the image is there); the cases take the image
+# away, and move the pin file to an image that is not there.
+- name: Accept the spool's image as on the host
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the image the pin file names is on the host
+      tasks_from: _image.yml
+      accepted: true
+
+- name: Refuse a spool whose image is not on the host
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the host holds no image
+      tasks_from: _image.yml
+      standin:
+        images: []
+      expect: 'The spool was not started'
+
+- name: Refuse a pin file that names an image that is not on the host
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the pin file names an image the host does not hold
+      tasks_from: _image.yml
+      files:
+        - path: /etc/branchleft/mail-spool.image.env
+          content: "IMAGE=ghcr.io/branchleft/mailgun-shim@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210\n"
+      expect: 'is not on this host'
+
+# The image being on the host under the right name is not enough: a different image loaded
+# under the pinned name must be refused, and the role reads what docker lists for it (the
+# stand-in lists one image whose RepoDigests is the asked reference by default, which is
+# the control above). Each case below lists something else, beside a control that lists the
+# pinned digest explicitly, so the override path itself is shown to accept the good value.
+- name: Accept an image whose RepoDigests hold the pinned digest beside another name
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    golden_compose: '{{ playbook_dir }}/../../files/ghost-platform/render-core/test/golden/mail-spool-compose.demo1.yml'
+    golden_image: >-
+      {{ lookup('ansible.builtin.file', golden_compose) | regex_findall("image: '([^']+)'") | first }}
+    converge_case:
+      name: the image lists the pinned digest, and the digest under a second name
+      tasks_from: _image.yml
+      standin:
+        image_digests:
+          - '{{ golden_image }}'
+          - 'registry.example.invalid/other@sha256:{{ golden_image | regex_replace("^.*sha256:", "") }}'
+      accepted: true
+
+- name: Refuse an image that lists another digest
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: an image is found but lists another digest
+      tasks_from: _image.yml
+      standin:
+        image_digests:
+          - ghcr.io/branchleft/mailgun-shim@sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+      expect: 'that is not the pinned image'
+
+- name: Refuse an image that lists no digest
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: an image is found but lists no digest
+      tasks_from: _image.yml
+      standin:
+        image_digests: []
+      expect: 'that is not the pinned image'
+
+- name: Refuse a listing of two images
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: docker lists two images for the one reference
+      tasks_from: _image.yml
+      standin:
+        image_count: 2
+      expect: 'that is not the pinned image'
+
 # The loaded egress policy, read from the kernel. The control, then one rule taken away or
 # put out of order at a time. A restart of the egress unit rebuilds both policy chains and
 # puts back a jump that is absent (it does not move one that is present, which is why the
@@ -499,6 +583,21 @@
         - path: /opt/branchleft/mail-spool/compose.override.yml
           regexp: '(    image: .*)$'
           replace: "\\1\n    ports:\n      - '0.0.0.0:2525:2525'"
+      expect: 'is not the file the role writes'
+
+# The host has no route to a registry, and the shared unit pulls on every start, so an
+# override that does not say pull_policy never would fail the start. The control is the
+# accepted case above, with the override as the role writes it.
+- name: Refuse an override that lets Compose pull
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the override no longer says pull_policy never
+      tasks_from: _compose_assert.yml
+      edits:
+        - path: /opt/branchleft/mail-spool/compose.override.yml
+          regexp: '\n    pull_policy: never'
+          replace: ''
       expect: 'is not the file the role writes'
 
 - name: Refuse a Compose file that publishes on every address

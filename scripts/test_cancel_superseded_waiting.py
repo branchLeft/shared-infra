@@ -27,6 +27,7 @@ superseded = _load_module()
 MAIL = "Apply (mail, pulumi up)"
 NETWORK = "Apply (hetzner network, pulumi up)"
 ESTATE = "Apply (hetzner estate, pulumi up)"
+DNS = "Apply (hetzner dns, pulumi up)"
 PLAN_MAIL = "Plan (mail, pulumi preview)"
 
 
@@ -34,8 +35,13 @@ def job(name, status, conclusion=None):
     return {"name": name, "status": status, "conclusion": conclusion}
 
 
-def planned(mail=False, network=False, estate=False):
-    return {"mail": mail, "hetzner_network": network, "hetzner_estate": estate}
+def planned(mail=False, network=False, estate=False, dns=False):
+    return {
+        "mail": mail,
+        "hetzner_network": network,
+        "hetzner_estate": estate,
+        "hetzner_dns": dns,
+    }
 
 
 class RunThirtyEightMillionShape(unittest.TestCase):
@@ -94,6 +100,18 @@ class KeepRules(unittest.TestCase):
         self.assertEqual(verdict, "keep")
         self.assertIn("no apply job", reason)
 
+    def test_keeps_a_waiting_dns_apply_when_this_push_did_not_plan_dns(self):
+        jobs = [job(DNS, "waiting"), job(NETWORK, "waiting")]
+        verdict, reason = superseded.decide(jobs, planned(network=True, dns=False))
+        self.assertEqual(verdict, "keep")
+        self.assertIn(DNS, reason)
+        self.assertIn("did not plan", reason)
+
+    def test_clears_a_waiting_dns_apply_when_this_push_planned_dns(self):
+        verdict, reason = superseded.decide([job(DNS, "waiting")], planned(dns=True))
+        self.assertEqual(verdict, "cancel", reason)
+        self.assertIn(DNS, reason)
+
     def test_keeps_an_unrecognised_apply_name(self):
         jobs = [job("Apply (somewhere else, pulumi up)", "waiting")]
         verdict, _ = superseded.decide(jobs, planned(mail=True, network=True, estate=True))
@@ -102,7 +120,7 @@ class KeepRules(unittest.TestCase):
 
 class ListingReading(unittest.TestCase):
     def run_main(self, text):
-        argv = ["--mail", "true", "--network", "false", "--estate", "true"]
+        argv = ["--mail", "true", "--network", "false", "--estate", "true", "--dns", "false"]
         out = io.StringIO()
         original = sys.stdin
         sys.stdin = io.StringIO(text)
@@ -118,6 +136,12 @@ class ListingReading(unittest.TestCase):
         code, out = self.run_main(listing)
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("cancel: "), out)
+
+    def test_the_dns_flag_is_required(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit) as raised:
+                superseded.main(["--mail", "true", "--network", "false", "--estate", "true"])
+        self.assertEqual(raised.exception.code, 2)
 
     def test_an_unreadable_listing_exits_nonzero_and_prints_nothing(self):
         code, out = self.run_main("not json")

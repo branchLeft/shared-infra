@@ -15,28 +15,13 @@
   vars:
     broker_deploy_templates: '{{ playbook_dir }}/../../../broker_deploy/templates'
   tasks:
-    - name: Install sudo, which holds visudo, and the certificates the program download needs
+    - name: Install sudo, which holds visudo
       ansible.builtin.apt:
         name:
           - sudo
-          - ca-certificates
         state: present
         update_cache: true
         cache_valid_time: 3600
-
-    # The role's source URL is a file URL in this scenario (molecule.yml). The ten
-    # programs are the test's own copy of the commit the role pins, at the same
-    # paths, so get_url reads them and holds each to its sha256 as it does from
-    # GitHub. A copy that does not match its pin fails the role's download. Imported
-    # by plan and refusals as well, so this is the one place the copy is staged.
-    - name: Stage the test copy of the pinned programs the role downloads
-      ansible.builtin.copy:
-        src: '{{ playbook_dir }}/../default/files/ghost-platform/'
-        dest: /opt/branchleft-test-fixtures/ghost-platform/
-        owner: root
-        group: root
-        mode: '0644'
-        directory_mode: '0755'
 
     - name: Create the configuration and state directories, as broker_deploy does
       ansible.builtin.file:
@@ -81,3 +66,139 @@
         owner: root
         group: root
         mode: '0600'
+
+    # A stand-in for the shared compose template, so the refusals scenario's colour case
+    # has a template to take away and put back. The role replaces it with the real file
+    # from hetzner/provision/ (_units.yml, A-7), and verify reads the installed bytes
+    # against that file. It is only ever read, never started: no step in the role starts
+    # a unit, and verify asserts that no colour unit is active.
+    - name: Install a stand-in for the shared compose template, which the role then replaces
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Test stand-in for the shared compose template, never started
+
+          [Service]
+          Type=oneshot
+          ExecStart=/bin/true
+          RemainAfterExit=yes
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    # The owner's edge inputs for slots 0 and 1, as the owner places them at go-live: root's,
+    # mode 0600, read only by the pinned site renderer. Each hostname is a made-up name under
+    # the reserved .invalid top-level domain, exactly one label below the wildcard base the
+    # converge sets (site-fixture.invalid). They are hidden from the log (no_log), as the real
+    # inputs would be. Two slots are occupied, so the one-call render is proved to hold both;
+    # the other five slots must read NOT rendered.
+    - name: Place the owner's edge input for each of two slots, root's and mode 0600
+      ansible.builtin.copy:
+        content: |
+          {
+            "displayHostname": "demo-{{ item }}.site-fixture.invalid",
+            "admittedHostname": null,
+            "gate": {"kind": "passphrase"},
+            "requestBodyMaxSize": "10MiB",
+            "contentSecurityPolicy": "default-src 'self'",
+            "contentSecurityPolicyMode": "enforcing"
+          }
+        dest: '/etc/branchleft/demo-{{ item }}.edge.json'
+        owner: root
+        group: root
+        mode: '0600'
+      loop: ['0', '1']
+      loop_control:
+        label: '{{ item }}'
+      no_log: true
+      diff: false
+
+    # The owner's DNS token, as the owner places it once: a file in the root-only secrets
+    # directory, root's and mode 0600. The value is a stand-in that is not a credential,
+    # and it is the canary the scenarios scan for: the role only looks at the file, so the
+    # value must be in no log and no candidate. It is hidden here for the same reason.
+    - name: Make the secrets directory, root's and closed to everyone else
+      ansible.builtin.file:
+        path: /etc/branchleft/secrets
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Place the owner's DNS token file, root's and mode 0600, holding a stand-in value
+      ansible.builtin.copy:
+        content: "STAND-IN-DNS-TOKEN-NOT-A-CREDENTIAL\n"
+        dest: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    # A stand-in for Docker and for the Caddy image, because the test container has no
+    # Docker engine and no Caddy. The role asks docker two things: whether the Caddy image
+    # is on the host (`docker image inspect IMAGE`, which lists it with its RepoDigests), and
+    # for the config Caddy would run (`docker run ... caddy adapt`, the candidate on standard
+    # input). The script is files/standin-docker.sh, which says what it answers. It answers
+    # the first for the one image reference in its state directory, and the second with the file
+    # /etc/stand-in-caddy-adapt.json whatever it is given. It adapts nothing, so what ties
+    # these answers to real Caddy is tests/unit/test_caddy_judge.py: it adapts every case with
+    # real Caddy and requires the result to equal the recorded file this scenario replays, and
+    # it runs this script beside a real Docker, on both image stores, and requires the same
+    # answers to the calls the role makes. A case that wants another answer replaces that file
+    # or writes the state files; with no adapt file, the stand-in fails as Caddy does on a
+    # Caddyfile it cannot adapt.
+    - name: Install a stand-in for docker that answers from recorded real output
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../default/files/standin-docker.sh'
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Make the stand-in docker's state directory
+      ansible.builtin.file:
+        path: /var/lib/standin-docker
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the demo edge's image on the stand-in host, under its digest
+      ansible.builtin.copy:
+        content: "demo-edge-test@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n"
+        dest: /var/lib/standin-docker/images
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Record what real Caddy printed for the unchanged renderer output, as the stand-in's answer
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../../tests/unit/fixtures/adapted-good.json'
+        dest: /etc/stand-in-caddy-adapt.json
+        owner: root
+        group: root
+        mode: '0600'
+
+    # What an earlier version of this role staged: one candidate per slot, each carrying the
+    # interim certificate. The role must remove them (verify.yml lists the directory), because
+    # the go-live step installs whatever file it is pointed at.
+    - name: Make the candidate directory, root's and closed to everyone else
+      ansible.builtin.file:
+        path: /var/lib/branchleft/demo-candidates
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Leave the per-slot candidates an earlier version of the role staged, carrying tls internal
+      ansible.builtin.copy:
+        content: "https://demo-{{ item }}.site-fixture.invalid {\n    tls internal\n}\n"
+        dest: '/var/lib/branchleft/demo-candidates/site-{{ item }}.caddy'
+        owner: root
+        group: root
+        mode: '0600'
+      loop: ['0', '3']
+      no_log: true
+      diff: false

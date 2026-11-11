@@ -1,0 +1,227 @@
+---
+# Everything here reads and refuses; nothing writes. Each guard is its own task with its own name,
+# because the Molecule refusal cases require the run to stop at the task that names the guard.
+
+# ----- The compose files the repository holds -----
+
+- name: Parse the compose files the repository holds
+  ansible.builtin.set_fact:
+    mx1_stack_stalwart_doc: '{{ mx1_stack_stalwart_compose_text | ansible.builtin.from_yaml }}'
+    mx1_stack_shim_doc: '{{ mx1_stack_shim_compose_text | ansible.builtin.from_yaml }}'
+
+# Compose reads an image by its name, so a tag can move between two runs; the digest cannot. A
+# placeholder digest never matches 64 hex digits, so it is refused by the same rule. A service that
+# builds an image or extends another has no digest to read, and an include brings in services this
+# check did not see.
+- name: Refuse a compose file whose images are not all pinned by digest
+  ansible.builtin.assert:
+    that:
+      - item.doc.services is ansible.builtin.mapping
+      - item.doc.services | ansible.builtin.length > 0
+      - item.doc.include is ansible.builtin.undefined
+      - item.doc.services.values() | ansible.builtin.selectattr('build', 'ansible.builtin.defined') | ansible.builtin.list | ansible.builtin.length == 0
+      - item.doc.services.values() | ansible.builtin.selectattr('extends', 'ansible.builtin.defined') | ansible.builtin.list | ansible.builtin.length == 0
+      - item.doc.services.values() | ansible.builtin.rejectattr('image', 'ansible.builtin.defined') | ansible.builtin.list | ansible.builtin.length == 0
+      - >-
+        item.doc.services.values() | ansible.builtin.map(attribute='image')
+        | ansible.builtin.reject('ansible.builtin.match', mx1_stack_image_pattern)
+        | ansible.builtin.list | ansible.builtin.length == 0
+    quiet: true
+    fail_msg: >-
+      The {{ item.name }} compose file has an image that is not pinned by digest (NAME@sha256: and
+      64 lower-case hex digits), a PLACEHOLDER where a digest belongs, a service that builds or
+      extends, or an include. Nothing was written.
+  vars:
+    mx1_stack_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
+  loop:
+    - { name: Stalwart, doc: '{{ mx1_stack_stalwart_doc }}' }
+    - { name: mailgun-shim, doc: '{{ mx1_stack_shim_doc }}' }
+  loop_control:
+    label: '{{ item.name }}'
+
+# ----- What Compose would read beside the compose files -----
+
+- name: Look at the two project directories
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    get_checksum: false
+  loop:
+    - '{{ mx1_stack_stalwart_dir }}'
+    - '{{ mx1_stack_shim_dir }}'
+  register: mx1_stack_project_dirs
+
+- name: Name the project directories that exist
+  ansible.builtin.set_fact:
+    mx1_stack_present_dirs: >-
+      {{ mx1_stack_project_dirs.results | ansible.builtin.selectattr('stat.isdir', 'ansible.builtin.defined')
+      | ansible.builtin.selectattr('stat.isdir') | ansible.builtin.map(attribute='item') | ansible.builtin.list }}
+
+# A second base file would be read in place of the one the role delivers, since Compose picks the
+# first it finds when no file is named. The managed file itself is not on the list.
+- name: Look for a second compose file beside either compose file
+  ansible.builtin.find:
+    paths: '{{ item.dir }}'
+    patterns: '{{ item.names }}'
+    hidden: true
+    file_type: any
+  loop:
+    - dir: '{{ mx1_stack_stalwart_dir }}'
+      names: [compose.yaml, compose.yml, docker-compose.yaml]
+    - dir: '{{ mx1_stack_shim_dir }}'
+      names: [compose.yaml, compose.yml, docker-compose.yml, docker-compose.yaml]
+  loop_control:
+    label: '{{ item.dir }}'
+  register: mx1_stack_second_compose
+  when: item.dir in mx1_stack_present_dirs
+
+- name: Refuse a second compose file beside either compose file
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_found | ansible.builtin.length == 0
+    quiet: true
+    fail_msg: >-
+      A second compose file sits beside a compose file this role delivers: {{ mx1_stack_found }}.
+      Compose could read it in place of the delivered file. Remove it by hand. Nothing was written.
+  vars:
+    mx1_stack_found: >-
+      {{ mx1_stack_second_compose.results | ansible.builtin.selectattr('files', 'ansible.builtin.defined')
+      | ansible.builtin.map(attribute='files') | ansible.builtin.flatten
+      | ansible.builtin.map(attribute='path') | ansible.builtin.list }}
+
+- name: Look for an override file beside either compose file
+  ansible.builtin.find:
+    paths: '{{ item }}'
+    patterns:
+      - compose.override.y*ml
+      - docker-compose.override.y*ml
+    hidden: true
+    file_type: any
+  loop: '{{ mx1_stack_present_dirs }}'
+  register: mx1_stack_overrides
+
+- name: Refuse an override file beside either compose file
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_found | ansible.builtin.length == 0
+    quiet: true
+    fail_msg: >-
+      An override file sits beside a compose file this role delivers: {{ mx1_stack_found }}. Compose
+      would merge it into the project without the digest check. Remove it by hand. Nothing was written.
+  vars:
+    mx1_stack_found: >-
+      {{ mx1_stack_overrides.results | ansible.builtin.selectattr('files', 'ansible.builtin.defined')
+      | ansible.builtin.map(attribute='files') | ansible.builtin.flatten
+      | ansible.builtin.map(attribute='path') | ansible.builtin.list }}
+
+# The shim's compose file interpolates nothing, so a .env beside it can only change what Compose does
+# (COMPOSE_FILE, COMPOSE_PROJECT_NAME, COMPOSE_PROFILES).
+- name: Look for a .env beside the shim's compose file
+  ansible.builtin.stat:
+    path: '{{ mx1_stack_shim_dir }}/.env'
+    get_checksum: false
+  register: mx1_stack_shim_dotenv
+
+- name: Refuse a .env beside the shim's compose file
+  ansible.builtin.assert:
+    that:
+      - not mx1_stack_shim_dotenv.stat.exists
+    quiet: true
+    fail_msg: >-
+      {{ mx1_stack_shim_dir }}/.env exists. The shim's compose file reads no .env, and Compose would
+      take COMPOSE_ settings from it. Remove it by hand. Nothing was written.
+
+# ----- Stalwart's .env -----
+
+- name: Look at Stalwart's .env
+  ansible.builtin.stat:
+    path: '{{ mx1_stack_stalwart_env_file }}'
+    get_checksum: false
+  register: mx1_stack_stalwart_dotenv
+
+# It holds the Prometheus secret, so only root may read it, and a link or a directory is not a file.
+- name: Refuse a Stalwart .env that is not a regular file owned by root with mode 0600
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_stalwart_dotenv.stat.isreg
+      - not mx1_stack_stalwart_dotenv.stat.islnk
+      - mx1_stack_stalwart_dotenv.stat.uid == 0
+      - mx1_stack_stalwart_dotenv.stat.gid == 0
+      - mx1_stack_stalwart_dotenv.stat.mode == '0600'
+    quiet: true
+    fail_msg: >-
+      {{ mx1_stack_stalwart_env_file }} is not a regular file owned by root:root with mode 0600. It
+      holds a secret. Put it right by hand. Nothing was written.
+  when: mx1_stack_stalwart_dotenv.stat.exists
+
+- name: Read which COMPOSE_ keys Stalwart's .env holds
+  mx1_stack_envfile:
+    action: reserved_keys
+    path: '{{ mx1_stack_stalwart_env_file }}'
+    prefix: COMPOSE_
+  register: mx1_stack_stalwart_reserved
+
+- name: Refuse a COMPOSE_ key in Stalwart's .env
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_stalwart_reserved.found_keys | ansible.builtin.length == 0
+    quiet: true
+    fail_msg: >-
+      {{ mx1_stack_stalwart_env_file }} sets {{ mx1_stack_stalwart_reserved.found_keys }}. Compose reads
+      COMPOSE_ settings from a .env file and would change which files or project it uses. Remove
+      the line by hand. Nothing was written.
+
+# ----- The shim's secret -----
+
+# Which secret the shim reads depends on its image: the contract table selects it by the digest the
+# compose file pins, and refuses a digest it does not list (this task fails, before anything is written).
+- name: Read whether the credentials file holds the secret the shim's pinned image reads
+  mx1_stack_envfile:
+    action: check_token
+    credentials_path: '{{ mx1_stack_credentials_file }}'
+    image: "{{ mx1_stack_shim_doc.services['mailgun-shim'].image }}"
+    contracts: '{{ mx1_stack_shim_contracts }}'
+  register: mx1_stack_secret_check
+
+- name: Refuse a host with no secret for the shim
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_secret_check.found
+    quiet: true
+    fail_msg: >-
+      {{ mx1_stack_credentials_file }} holds no entry labelled {{ mx1_stack_secret_check.label }}. The
+      secret is made once by the owner's hand scripts, on the host, and recorded there; this role never
+      makes it, for any image. Nothing was written.
+
+# ----- Port 53 -----
+
+# 127.0.0.53 is systemd-resolved's stub, which does not collide with a 127.0.0.1 listener; anything
+# else on port 53 would make the resolver install a silent no-op or a service flap.
+- name: Read what holds port 53
+  mx1_stack_probe:
+    action: port53
+  register: mx1_stack_port53
+
+- name: Refuse a host where port 53 is held by something other than unbound
+  ansible.builtin.assert:
+    that:
+      - mx1_stack_port53.ok
+    quiet: true
+    fail_msg: >-
+      Port 53 is held by {{ mx1_stack_port53.conflicts | ansible.builtin.map(attribute='holder') | ansible.builtin.unique | ansible.builtin.list }}
+      on {{ mx1_stack_port53.conflicts | ansible.builtin.map(attribute='address') | ansible.builtin.unique | ansible.builtin.list }}.
+      Installing unbound beside it would be a silent no-op or a service flap. Nothing was written.
+
+# ----- The stamps -----
+
+# decide reads and validates the stamp; with no inputs it judges nothing else. A stamp the module
+# cannot read (a link, wide permissions, a malformed line) stops the run here, before anything is
+# placed, because a class judged on a stamp that cannot be trusted is judged on nothing.
+- name: Refuse a stamp that cannot be read
+  mx1_stack_stamp:
+    action: decide
+    stamp_path: '{{ item }}'
+  loop:
+    - '{{ mx1_stack_stalwart_stamp }}'
+    - '{{ mx1_stack_shim_stamp }}'
+    - '{{ mx1_stack_resolver_stamp }}'
+  changed_when: false

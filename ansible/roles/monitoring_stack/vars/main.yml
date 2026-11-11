@@ -39,6 +39,17 @@ monitoring_stack_files:
   - prometheus/alerts.yml
   - prometheus/prometheus.yml
 
+# The files above whose diff the plan does not show: they hold placeholder names, a
+# password-file path and environment variables named like passwords, which the plan's secret
+# scan would withhold the whole plan of the host over. The rest are delivered by a task that
+# shows its diff. ansible/checks/test_plan_diff_scan.py fails if a file listed here has no
+# such line, or if a file left out of it has one.
+monitoring_stack_files_hidden:
+  - compose.yml
+  - alertmanager/alertmanager.yml.tmpl
+  - ntfy/server.yml.tmpl
+  - prometheus/prometheus.yml
+
 # The shared Compose unit template names a stack's drop-in directory after the
 # instance, and the instance of this stack is "monitoring".
 monitoring_stack_dropin_dir: /etc/systemd/system/branchleft-compose@monitoring.service.d

@@ -1,0 +1,46 @@
+---
+# The bytes are right and the mode is wrong. The role resets the mode and does not
+# refuse. The wrong mode is read first, so the case cannot pass on a file already right.
+- name: Empty what an earlier case left
+  ansible.builtin.set_fact:
+    db1_backup_timers_refusals_before: {}
+    db1_backup_timers_refusals_after: {}
+
+- name: Loosen the mode of the pinned file
+  ansible.builtin.file:
+    path: '{{ verify_program_path }}'
+    mode: '0666'
+
+- name: Read the loosened file
+  ansible.builtin.stat:
+    path: '{{ verify_program_path }}'
+    checksum_algorithm: sha256
+  register: db1_backup_timers_refusals_before
+
+- name: Assert the bytes are right and the mode is wrong
+  ansible.builtin.assert:
+    that:
+      - db1_backup_timers_refusals_before.stat.checksum == db1_backup_timers_program_sha256[verify_program]
+      - db1_backup_timers_refusals_before.stat.mode == '0666'
+    quiet: true
+    fail_msg: The case did not loosen the mode, so it would prove nothing.
+
+- name: Apply the role
+  ansible.builtin.include_role:
+    name: branchleft.db1_backup_timers
+
+- name: Read the file after the role
+  ansible.builtin.stat:
+    path: '{{ verify_program_path }}'
+    checksum_algorithm: sha256
+  register: db1_backup_timers_refusals_after
+
+- name: Assert the mode is 0644 again and the bytes are unchanged
+  ansible.builtin.assert:
+    that:
+      - db1_backup_timers_refusals_after.stat.checksum == db1_backup_timers_program_sha256[verify_program]
+      - db1_backup_timers_refusals_after.stat.pw_name == 'root'
+      - db1_backup_timers_refusals_after.stat.gr_name == 'root'
+      - db1_backup_timers_refusals_after.stat.mode == '0644'
+    quiet: true
+    fail_msg: A wrong mode on the pinned program was not reset to 0644.

@@ -19,7 +19,7 @@
     # that records its arguments goes where the unit's PATH finds it first.
     - name: Install a stand-in for the sysctl command
       ansible.builtin.copy:
-        src: sysctl_standin.sh
+        src: sysctl_standin.py
         dest: /usr/local/sbin/sysctl
         owner: root
         group: root

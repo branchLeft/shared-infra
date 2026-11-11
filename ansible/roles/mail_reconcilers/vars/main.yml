@@ -1,0 +1,116 @@
+---
+# Constants, not inputs: role vars outrank inventory vars, so a caller cannot override them.
+
+# The four step ids. A later step is a new id here, a new _<id>.yml and a tagged import.
+mail_reconcilers_step_ids:
+  - configure
+  - mailboxes
+  - mint
+  - collector
+
+# A step or credential id as the request sends it. \Z, not $, so a line break is refused.
+mail_reconcilers_id_pattern: '^[a-z][a-z0-9_]{0,31}\Z'
+
+# The one wrapper each of the two single-program steps runs.
+mail_reconcilers_wrappers:
+  configure: 40-configure-stalwart.sh
+  mailboxes: 50-provision-mailboxes.sh
+  collector: 67-provision-collector-submission-credential.sh
+
+# The closed table of credentials the mint step creates, each with the one wrapper that
+# creates it. There is no row for a rotation, an administrator or the collector.
+mail_reconcilers_credential_rows:
+  website: 60-provision-website-submission-credential.sh
+  blog: 61-provision-blog-submission-credential.sh
+  shim: 62-provision-shim-submission-credential.sh
+  alerting: 64-provision-alerting-submission-credential.sh
+  nextcloud: 66-provision-nextcloud-submission-credential.sh
+  zitadel: 68-provision-zitadel-submission-credential.sh
+
+# The programs are read in place from mail/provision/ (their single home); role_path is three
+# levels below the repository root. The role holds no copy and no link.
+mail_reconcilers_programs_dir: '{{ role_path }}/../../../mail/provision'
+mail_reconcilers_install_dir: /root/mail-provision
+mail_reconcilers_install_dir_mode: '0755'
+
+# The programs placed, root-owned with an explicit mode. Every file under mail/provision is
+# here or in mail_reconcilers_not_installed.
+mail_reconcilers_installed:
+  - { program: configure_stalwart.py, mode: '0755' }
+  - { program: provision_mailboxes.py, mode: '0755' }
+  - { program: provision_website_submission_credential.py, mode: '0755' }
+  - { program: provision_collector_submission_credential.py, mode: '0755' }
+  - { program: provision_zitadel_submission_credential.py, mode: '0755' }
+  - { program: provision_sending_domain.py, mode: '0755' }
+  - { program: check_collector_sender_scope.py, mode: '0755' }
+  - { program: check_zitadel_sender_scope.py, mode: '0755' }
+  - { program: trigger_acme_renewal.py, mode: '0755' }
+  - { program: list_and_clear_blocked_ips.py, mode: '0755' }
+  - { program: 40-configure-stalwart.sh, mode: '0755' }
+  - { program: 50-provision-mailboxes.sh, mode: '0755' }
+  - { program: 60-provision-website-submission-credential.sh, mode: '0755' }
+  - { program: 61-provision-blog-submission-credential.sh, mode: '0755' }
+  - { program: 62-provision-shim-submission-credential.sh, mode: '0755' }
+  - { program: 64-provision-alerting-submission-credential.sh, mode: '0755' }
+  - { program: 66-provision-nextcloud-submission-credential.sh, mode: '0755' }
+  - { program: 67-provision-collector-submission-credential.sh, mode: '0755' }
+  - { program: 68-provision-zitadel-submission-credential.sh, mode: '0755' }
+
+# What is not placed, and whose it is. mx1_stack is the mail host's stack role, which
+# owns these files; check_role_paths.py cannot tell two roles apart when a destination
+# is a loop item, so a unit test holds this role off every one of them. The two
+# patterns are tests and notes, which are never placed.
+mail_reconcilers_not_installed:
+  later_part:
+    - rotate_admin_credential.py
+  mx1_stack:
+    - 30-deploy-stalwart.sh
+    - 63-deploy-mailgun-shim.sh
+    - 65-install-local-resolver.sh
+    - 70-schedule-dnsbl-check.sh
+    - run-all.sh
+    - shim-compose.yml
+    - render_shim_env.py
+    - shim-env-contracts.json
+    - check_dnsbl_blocklist.py
+    - docker-compose.yml
+    - Caddyfile
+  # Runs only in CI, against the runner's own docker; never placed on a host.
+  ci_only:
+    - check_shim_image_starts.py
+  other_roles:
+    - 00-harden-ssh.sh
+    - 10-harden-updates-fail2ban.sh
+    - 20-install-docker.sh
+  patterns:
+    - test_*.py
+    - '*.md'
+
+# The credential files the programs read and write, and so the ones every step checks
+# before it runs a program. The administrator file is the owner's one-time bootstrap
+# and is required; the other two exist once a program has written them.
+mail_reconcilers_admin_credentials: /root/.stalwart-admin-credentials
+mail_reconcilers_service_credentials: /root/.stalwart-service-credentials
+mail_reconcilers_mailbox_credentials: /root/.stalwart-mailbox-credentials
+mail_reconcilers_credential_files:
+  - { path: '{{ mail_reconcilers_admin_credentials }}', required: true }
+  - { path: '{{ mail_reconcilers_service_credentials }}', required: false }
+  - { path: '{{ mail_reconcilers_mailbox_credentials }}', required: false }
+
+# What a program runs with: the paths checked above are the paths used. No bytecode is
+# written next to the programs.
+mail_reconcilers_program_environment:
+  PYTHONDONTWRITEBYTECODE: '1'
+  STALWART_BASE_URL: http://127.0.0.1:8080
+  STALWART_CREDENTIALS_PATH: '{{ mail_reconcilers_admin_credentials }}'
+  SERVICE_CREDENTIALS_PATH: '{{ mail_reconcilers_service_credentials }}'
+  MAILBOX_CREDENTIALS_PATH: '{{ mail_reconcilers_mailbox_credentials }}'
+
+# The lines of a program's output a failed step may show: its prefix, then one of its own
+# refusal words. An API failure line (which echoes the error body) matches none of these.
+mail_reconcilers_refusal_line_pattern: '^[a-z_]+: (REFUSED, nothing written|WARNING --|DRY RUN, nothing written)'
+
+# Those lines of the last program run's output, each cut to 200 characters.
+mail_reconcilers_shown_lines: >-
+  {{ (mail_reconcilers_run.stdout_lines + mail_reconcilers_run.stderr_lines)
+     | select('match', mail_reconcilers_refusal_line_pattern) | map('truncate', 200) | list }}

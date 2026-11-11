@@ -2,42 +2,35 @@
 # Nothing here is private. The role has no secret input and no required input:
 # every value below has a default, and the pinned programs are public.
 
-# The one home of the demo host's programs is branchLeft/ghost-platform, at
-# demo-host/provision/. They are downloaded from this commit, and each file is
-# held to the sha256 below. The only copies in this repository are the Molecule
-# fixtures under molecule/default/files/, which the role test serves instead of
-# GitHub; the same checksums hold them, so a fixture that drifts from the pin
-# fails the test. A bump updates the fixtures in the same change. Bump the commit
-# and every checksum in one change: a checksum that does not match the file at
-# the commit fails the download. The commit must be at or after the ghost-platform
-# commit that moved the drain flags to /var/lib/branchleft-broker/drain-flags
-# (0a23634b652a37260d77e656ded3c37ff24d62ec); the role also refuses an installed
-# sidecar that does not name that directory.
-demo1_build_source_sha: 5e52f78427cab104438057164e4baa16b329875c
-demo1_build_source_base_url: 'https://raw.githubusercontent.com/branchLeft/ghost-platform/{{ demo1_build_source_sha }}'
+# The copies under files/ghost-platform are of the ghost-platform commit below, at
+# the same paths. Each is held to its sha256 in demo1_build_release_files, and a copy
+# that does not match stops the role before it writes. The commit must be at or after
+# 0a23634b652a37260d77e656ded3c37ff24d62ec, the commit that moved the drain flags to
+# /var/lib/branchleft-broker/drain-flags.
+demo1_build_source_sha: 595bcce0ee2bb1c7f8de565cf008060ea43122cf
 
-# Every program the role fetches, one URL and one sha256 each, relative to the
+# Every program the role carries, one path and one sha256 each, relative to the
 # repository root. This is the import closure of the programs the role runs
 # (render_*, the wrapper's constants) plus the two programs systemd runs and the
 # owner's go-live step. provision_socket_dirs.py and drain_flag_dir.py are not
 # here: the role declares what they create with modules instead (README).
 demo1_build_release_files:
   - path: demo-host/provision/branchleft_slot.py
-    sha256: 2e2279f0067d91296e1b309f6cbe71a3d276d7ccdbbd58aa4f99f81ce85ba80b
+    sha256: 338ed8ad8a4e74ea2be7cebbbb05a4766a66367fab5b8ec8e9df4fc30fc2c39f
   - path: demo-host/provision/demo_go_live.py
-    sha256: 21da8cc0b1e8fb69cd3f116187fee42cf1fbea8fd3c1466c5fb25ebc3a38bed5
+    sha256: deab5c8c780de0c23ad8ce4459ef33ae5ee5f6e577fe5b7311a77d045b332677
   - path: demo-host/provision/demo_sidecar.py
     sha256: f3d0373bd80d4ef7f58b60d3c555825b39283f272eb71d26dcb91610cfa7ae66
   - path: demo-host/provision/demo_uid_claims.py
     sha256: 2d2536eb516ed5fab1e743cd1fa974ac6339c9334b529db7d94c47cc19152230
   - path: demo-host/provision/health_router.py
-    sha256: 5eac21b7ab44ad0b1a308f0ac8b7da0d1d2db9dfb2cd1e4dcd034d5223036a15
+    sha256: 4fd5c91017ad67ae4ae99317583b4346e9c0a738e7aa207245c6f5ee8fbe04d0
   - path: demo-host/provision/render_colour_units.py
     sha256: 64e33649290e3501f291e31921c7ff94e4b4de511b06bea7bf9b7c11335d2a81
   - path: demo-host/provision/render_demo_edge.py
-    sha256: 7391e93adda924e863f33610490581da050e73153882cc471945d5b38a848ad8
+    sha256: 8b42f5de63114d201844539c449b1466d0b504422724821351a2e6c712d619b0
   - path: demo-host/provision/render_demo_site.py
-    sha256: a34c5dec7d174fed868fc5fc73b2ef61773cf5dc4aa708fd57295486e9460cba
+    sha256: 2f2841c8b612af87bc9f92c38acd7f932a2284d831f9bddbc1fff87f8c9d010f
   - path: demo-host/provision/render_router_unit.py
     sha256: 3a0f71cc61e45e416f983ef86c02f1b419565a6c34511d1a60f35092454dab3a
   - path: demo-host/provision/render_slot_sudoers.py
@@ -52,3 +45,24 @@ demo1_build_slot_names: "{{ broker_deploy_slot_names | default(['0', '1', '2', '
 # The slot wrapper's install path, which the sudoers grant names. Follows
 # broker_deploy_wrapper_path when the host's variables set it.
 demo1_build_wrapper_path: "{{ broker_deploy_wrapper_path | default('/usr/local/sbin/branchleft-slot') }}"
+
+# The base domain of the demo's one wildcard site (*.<base>): every demo hostname is one
+# label below it. Empty turns the production candidate off, and the plan and apply say
+# so. Lower-case, at least two labels, no wildcard character.
+demo1_build_wildcard_base: ''
+
+# The root-only file the owner places once, holding the DNS-01 token of the demo's own
+# DNS project. The role never reads it: it only looks at the file's owner and mode, and
+# gives Caddy the path. A file directly in /etc/branchleft/secrets.
+demo1_build_dns_token_file: /etc/branchleft/secrets/demo-dns-caddy-demo1-wildcard
+
+# The Caddy image that judges the production candidate: the demo edge's image, with the
+# Hetzner DNS module, loaded on the host by the owner (the role never pulls). The role has
+# Caddy adapt the rendered Caddyfile in it and judges the config Caddy would run. Pinned by
+# its digest, <name>@sha256:<64 hex digits> and nothing else, so a re-pointed tag cannot
+# change what judges; the role finds it by that digest and wants the digest in its RepoDigests.
+# The name is only the host's own label for the image: the owner tags the image with it before
+# the carry, and the role holds no registry address, because this host reaches none. The digest
+# is the identity; it is the digest of the published image the owner carries.
+# Empty, the production candidate is not staged, and the plan and apply say so.
+demo1_build_caddy_image: 'demo-edge@sha256:9dd44edaf5ac542bd4ac1c55d0f761a40b5d5531e31c9b78f5f5477ac325324d'

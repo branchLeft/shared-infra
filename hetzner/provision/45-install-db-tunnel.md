@@ -13,7 +13,7 @@ The replica host's half, the restricted account this unit logs in as, is
 `db/tunnel/tunnel_account.py` in `branchLeft/ghost-platform`, with the
 control-case probes and a container proof beside it.
 
-Deliberately outside `run-all.sh`, like `40-install-node-exporter.sh`: this
+Deliberately outside `run-all.sh`, like the node exporter (now the `node_exporter` role): this
 runs on `db1` only, by hand, for the length of the migration. The install
 runbook is in `branchLeft/ghost-platform-docs`.
 

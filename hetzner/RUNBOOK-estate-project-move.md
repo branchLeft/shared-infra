@@ -159,11 +159,27 @@ declaring them merged without an apply path). Read the ids from
 `describe` each id to confirm it names the resource you think it does, and
 never type an id belonging to mx1.
 
+**Select the hcloud project first.** The lookups below ask hcloud, so its active context
+must be the one for the project that holds the server. Which of your contexts that is
+is not recorded here. List them, read the name, then select it, each as its own paste:
+
 ```bash
-EDGE1_SERVER_ID=$(hcloud server list -o json | python3 -c "import json, sys; print([s['id'] for s in json.load(sys.stdin) if s['name'] == 'edge1'][0])")
-EDGE1_IPV4_ID=$(hcloud primary-ip list -o json | python3 -c "import json, sys; print([p['id'] for p in json.load(sys.stdin) if p['name'] == 'edge1-ipv4'][0])")
-EDGE1_IPV6_ID=$(hcloud primary-ip list -o json | python3 -c "import json, sys; print([p['id'] for p in json.load(sys.stdin) if p['name'] == 'edge1-ipv6'][0])")
-EDGE1_FIREWALL_ID=$(hcloud firewall list -o json | python3 -c "import json, sys; print([f['id'] for f in json.load(sys.stdin) if f['name'] == 'edge1'][0])")
+hcloud context list
+```
+
+```bash
+read -r HCLOUD_CONTEXT
+```
+
+```bash
+hcloud context use "${HCLOUD_CONTEXT}"
+```
+
+```bash
+EDGE1_SERVER_ID=$(hcloud server describe edge1 -o format='{{.ID}}')
+EDGE1_IPV4_ID=$(hcloud primary-ip describe edge1-ipv4 -o format='{{.ID}}')
+EDGE1_IPV6_ID=$(hcloud primary-ip describe edge1-ipv6 -o format='{{.ID}}')
+EDGE1_FIREWALL_ID=$(hcloud firewall describe edge1 -o format='{{.ID}}')
 hcloud server disable-protection "$EDGE1_SERVER_ID" delete rebuild
 hcloud server delete "$EDGE1_SERVER_ID"
 hcloud primary-ip disable-protection "$EDGE1_IPV4_ID" delete
@@ -255,6 +271,29 @@ pulumi up
 
 Record the new `edge1PublicIpv4` and the new IPv6 range. Both differ from the
 old ones and every note that quotes `46.225.95.167` is now stale.
+
+### 7.1 Re-apply the tenants stack
+
+The tenants stack reads `edge1PublicIpv4` from this stack through a
+`StackReference`, and it reads that value only when it is applied. Edge-t's one SSH
+source is set from that value. The old address goes back to the provider's pool and
+can be reassigned, so an allowlist that still holds it lets whichever host is given
+that address reach edge-t's SSH port. Re-apply the tenants stack after this step,
+from the same checkout as steps 6 to 10.
+
+In `hetzner/tenants/`: set the tenants token the same way step 6 sets the estate
+token, then:
+
+```bash
+pulumi preview     # expect: edge-t's tcp/22 source changes to the new edge1 /32
+pulumi up
+```
+
+Then check the rule with the tenants project's token, the one the apply used.
+`hcloud firewall list` names edge-t's firewall. `hcloud firewall describe` on that
+firewall must show the tcp/22 source as the new `edge1PublicIpv4` recorded above,
+with `/32`. `46.225.95.167/32` must not appear in it. If the old address is still
+there, the apply did not run: stop, and do not go on to step 8.
 
 ## 8. Re-provision the host
 

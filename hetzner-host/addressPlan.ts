@@ -63,6 +63,56 @@ export const APP_HOST_IPS = {
 } as const;
 
 /**
+ * The tenants project's hosts. The tenants project has its own network, and a
+ * network does not span projects, so it reuses the estate's range
+ * (`NETWORK_CIDR`, the owner's ruling 5a of 2 Nov 2026). The two projects therefore
+ * share one address space without sharing a network, and nothing but the
+ * register below stops one address being given to a host in each. Both sit
+ * clear of the estate's own hosts, and `edgeT` is the tenants network's one
+ * NAT gateway and public host.
+ */
+export const TENANTS_HOST_IPS = {
+  dbT1: '10.20.1.200',
+  edgeT: '10.20.1.210',
+} as const;
+
+export type AddressProject = 'org' | 'tenants';
+
+export interface RegisteredAddress {
+  project: AddressProject;
+  name: string;
+  ip: string;
+}
+
+const registered = (
+  project: AddressProject,
+  hosts: Readonly<Record<string, string>>
+): RegisteredAddress[] => Object.entries(hosts).map(([name, ip]) => ({ project, name, ip }));
+
+/**
+ * Every private address the programme assigns, across both projects, built
+ * from the constants above and never retyped. `addressRegister.test.ts`
+ * refuses an address that appears twice anywhere in it, because two projects
+ * on one range is exactly how two hosts end up claiming one address.
+ */
+export const ADDRESS_REGISTER: readonly RegisteredAddress[] = [
+  ...registered('org', HOST_IPS),
+  ...registered('org', APP_HOST_IPS),
+  ...registered('tenants', TENANTS_HOST_IPS),
+];
+
+/** The addresses held by more than one entry of a register, each with its holders. */
+export function duplicateAddresses(register: readonly RegisteredAddress[]): string[] {
+  const holders = new Map<string, string[]>();
+  for (const { project, name, ip } of register) {
+    holders.set(ip, [...(holders.get(ip) ?? []), `${project}/${name}`]);
+  }
+  return [...holders.entries()]
+    .filter(([, names]) => names.length > 1)
+    .map(([ip, names]) => `${ip} is used by ${names.join(' and ')}`);
+}
+
+/**
  * The locations in Hetzner's `eu-central` network zone, which is the zone
  * `SUBNET_CIDR` is scoped to. A server outside the zone cannot attach to the
  * subnet, and the provider reports that at apply time rather than in the
@@ -81,30 +131,12 @@ export type EuCentralLocation = 'fsn1' | 'nbg1' | 'hel1';
 export type EstateLocation = 'nbg1' | 'hel1';
 
 /**
- * The one location every host in the estate is created in.
- *
- * Here rather than in any stack's configuration because the estate is built by
- * more than one stack, in more than one repository, and `location` is
- * create-time-only on `hcloud.Server`. A per-stack config value lets the second
- * apply land somewhere the first did not, permanently, with a clean preview —
- * and the app and database hosts are the latency-sensitive pairing, so a split
- * between them is the specific outcome that must not happen. A constant in the
- * module every host stack already imports is the only form of this decision
- * that reaches across a repository boundary.
- *
- * It is still only a shared constant, and it is weaker than one apply in two
- * distinct ways. Nothing prevents a stack passing something else to `Host`.
- * And a stack that has **already applied** does not follow a later edit to
- * this line — its hosts stay where they were created, so changing this value
- * after any host exists silently describes an estate that is already split.
- * Read `estateLocation` from the applied stack's outputs to learn where a host
- * actually is; this constant is the intention, not the fact.
- *
- * Nuremberg, with the mail host, so the bulk-mail hop stays inside the private
- * network. `hel1` is the substitute if `cx23` is out of stock at the moment of
- * an apply. Reach and cost are unaffected — a subnet spans the whole zone, so
- * the mail hop stays intra-network either way. What is given up is that the
- * hop's latency becomes unmeasured, which is the thing the placement rule
- * exists to avoid rather than a loss of the hop itself.
+ * The one location every host in the estate is created in: Nuremberg, with the
+ * mail host, so the bulk-mail hop stays inside the private network. `location`
+ * is create-time-only, and a stack that has already applied keeps its hosts
+ * where they were created, so `estateLocation` in the applied stack's outputs
+ * is the fact and this constant is the intention. Why it is a constant, and
+ * the substitute location, are in `hetzner-host/README.md`, "Where the estate
+ * is placed".
  */
 export const ESTATE_LOCATION: EstateLocation = 'nbg1';

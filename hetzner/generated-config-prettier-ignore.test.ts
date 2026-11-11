@@ -20,7 +20,7 @@ const GENERATED_FILES = [
   'hetzner/monitoring/stack/prometheus/prometheus.yml',
   'hetzner/monitoring/stack/prometheus/alerts.yml',
   'hetzner/monitoring/stack/alertmanager/alertmanager.yml.tmpl',
-  'hetzner/edge/stack/Caddyfile',
+  'hetzner/edge/stack/caddy/Caddyfile',
   'hetzner/edge/stack/crowdsec/acquis.d/appsec.yaml',
   'hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml',
   'hetzner/edge/validation/Caddyfile.enforcing',

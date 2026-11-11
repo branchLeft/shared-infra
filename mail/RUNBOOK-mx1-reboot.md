@@ -3,6 +3,11 @@
 Runs the fix for branchLeft/workspace#433. The issue closes by hand on the
 Step 3 output, not on this merge — the reboot is executed here, not by CI.
 
+The `mx1_stack` role (`ansible/roles/mx1_stack`, not wired into a playbook yet) reads the Caddyfile
+back through `docker exec` before it records a stamp, and stops without one where that fails, so this
+reboot is a precondition of the role's first apply on `mx1` and stays an owner step. The role never
+reboots.
+
 ## What is wrong
 
 Every container healthcheck on `mx1` fails, identically:

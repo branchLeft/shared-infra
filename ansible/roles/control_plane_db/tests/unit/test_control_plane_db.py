@@ -186,22 +186,25 @@ class GuardTests(unittest.TestCase):
 
 
 class CleanupTests(unittest.TestCase):
-    def test_the_administrator_url_file_is_removed_in_an_always_section(self) -> None:
-        for step in ("migrate", "provision"):
+    def test_the_credential_url_file_a_step_is_given_is_removed_in_an_always_section(self) -> None:
+        # migrate is given the migrator's URL and provision the administrator's, and each
+        # removes the one it was given on every way out.
+        given = {"migrate": "migrator", "provision": "admin"}
+        for step, name in given.items():
             blocks = [t for t in _tasks(ROLE / "tasks" / f"_{step}.yml") if "always" in t]
             self.assertEqual(len(blocks), 1, step)
             removals = cast(list[Task], blocks[0]["always"])
             first = removals[0]
             self.assertEqual(
                 first["ansible.builtin.file"],
-                {"path": "{{ control_plane_db_admin_url_file }}", "state": "absent"},
+                {"path": f"{{{{ control_plane_db_{name}_url_file }}}}", "state": "absent"},
             )
 
     def test_the_passwords_are_removed_only_once_provision_is_recorded(self) -> None:
         always = next(t for t in _tasks(ROLE / "tasks" / "_provision.yml") if "always" in t)
         removal = cast(list[Task], always["always"])[-1]
         self.assertEqual(removal["when"], "control_plane_db_marker_after.stat.exists")
-        self.assertEqual(len(cast(list[str], removal["loop"])), 3)
+        self.assertEqual(len(cast(list[str], removal["loop"])), 4)
 
     def test_the_working_directory_is_removed_only_when_this_run_made_it(self) -> None:
         always = next(t for t in _tasks(ROLE / "tasks" / "_identity.yml") if "always" in t)
@@ -343,6 +346,231 @@ class PrivilegeTests(unittest.TestCase):
         self.assertIn('content: "{{ control_plane_db_console_url }}\\n"', text)
         self.assertNotIn("provisioner_login", text)
         self.assertNotIn("passwords[2] }}@", text)
+        # The migrator's credential is in no standing file: provision writes no URL for it.
+        self.assertNotIn("migrator_login", text)
+        self.assertNotIn("passwords[3]", text)
+
+
+REPOSITORY = ROLE.parents[2]
+STACK = REPOSITORY / "hetzner" / "control-plane" / "stack"
+HBA_CHECK = "Check the database runs on rules that admit the four portal logins"
+
+
+def _hba_rule_pattern(login: str) -> re.Pattern[str]:
+    """Return the pattern the role looks for a login's accepting rule with."""
+    constants = _vars()
+    return re.compile(
+        str(constants["control_plane_db_hba_rule_prefix"])
+        + re.escape(login)
+        + str(constants["control_plane_db_hba_rule_suffix"])
+    )
+
+
+class DatabaseRulesTests(unittest.TestCase):
+    def test_provision_checks_the_database_rules_before_it_looks_at_or_reads_any_input(self) -> None:
+        names = _names(ROLE / "tasks" / "_provision.yml")
+        check = names.index(HBA_CHECK)
+        self.assertLess(check, names.index("Check the administrator URL file and the four password files"))
+        self.assertLess(check, names.index("Read the four passwords"))
+        self.assertLess(check, names.index("Look at the two connection URL files"))
+        self.assertLess(check, names.index("Create the portal database, its roles and logins"))
+        imported = next(t for t in _tasks(ROLE / "tasks" / "_provision.yml") if t["name"] == HBA_CHECK)
+        self.assertEqual(imported["ansible.builtin.import_tasks"], "_hba.yml")
+
+    def test_only_provision_imports_the_check(self) -> None:
+        for step in ("migrate", "identity"):
+            self.assertNotIn("_hba.yml", _text(f"_{step}.yml"), step)
+
+    def test_the_check_reads_no_input_file_and_no_secret(self) -> None:
+        tasks = _tasks(ROLE / "tasks" / "_hba.yml")
+        for task in tasks:
+            for needle in ("admin_url", "password", "input_dir", "input_files", "url_file"):
+                self.assertNotIn(needle, str(task).lower(), f"{task['name']}: {needle}")
+        reads = [t for t in tasks if _module(t) == "slurp"]
+        self.assertEqual([t["ansible.builtin.slurp"] for t in reads], [{"src": "{{ control_plane_db_hba_file }}"}])
+
+    def test_the_running_rules_are_read_from_the_container_and_compared_byte_for_byte(self) -> None:
+        tasks = _tasks(ROLE / "tasks" / "_hba.yml")
+        reads = [t for t in tasks if _module(t) == "command"]
+        self.assertEqual(len(reads), 1)
+        command = cast(dict[str, object], reads[0]["ansible.builtin.command"])
+        self.assertEqual(
+            command["argv"],
+            [
+                "docker",
+                "exec",
+                "{{ control_plane_db_hba_container }}",
+                "cat",
+                "{{ control_plane_db_hba_container_file }}",
+            ],
+        )
+        self.assertIs(command["strip_empty_ends"], False)
+        self.assertIs(reads[0]["changed_when"], False)
+        text = _text("_hba.yml")
+        self.assertIn(
+            "control_plane_db_hba_running.stdout == (control_plane_db_hba_delivered.content | ansible.builtin.b64decode)",
+            text,
+        )
+        self.assertIn("control_plane_db_hba_running.rc == 0", text)
+        self.assertIn("REFUSED:", text)
+
+    def test_each_of_the_four_logins_is_looked_for_in_the_delivered_file(self) -> None:
+        checks = [t for t in _tasks(ROLE / "tasks" / "_hba.yml") if "accepting rule" in str(t["name"])]
+        self.assertEqual(len(checks), 1)
+        self.assertEqual(checks[0]["loop"], "{{ control_plane_db_hba_logins }}")
+        self.assertEqual(
+            _vars()["control_plane_db_hba_logins"],
+            [
+                "{{ control_plane_db_tenant_login }}",
+                "{{ control_plane_db_owner_login }}",
+                "{{ control_plane_db_provisioner_login }}",
+                "{{ control_plane_db_migrator_login }}",
+            ],
+        )
+        constants = _vars()
+        self.assertEqual(constants["control_plane_db_provisioner_login"], "portal_provisioner_login")
+
+    def test_the_delivered_path_is_the_one_the_control_plane_role_delivers_to(self) -> None:
+        control_plane = cast(dict[str, object], _load(ROLE.parent / "control_plane" / "vars" / "main.yml"))
+        self.assertEqual(
+            _vars()["control_plane_db_hba_file"],
+            f"{control_plane['control_plane_project_dir']}/postgres/pg_hba.conf",
+        )
+
+    def test_the_container_and_its_path_are_the_ones_the_compose_file_makes(self) -> None:
+        compose = (STACK / "compose.yml").read_text(encoding="utf-8")
+        project = re.search(r"^name: (\S+)\s*$", compose, re.MULTILINE)
+        mount = re.search(r"^\s+- \./postgres:(/\S+):ro\s*$", compose, re.MULTILINE)
+        if project is None or mount is None:
+            self.fail("the compose file no longer names its project or mounts the postgres directory")
+        self.assertEqual(_vars()["control_plane_db_hba_container"], f"{project.group(1)}-db-1")
+        self.assertEqual(_vars()["control_plane_db_hba_container_file"], f"{mount.group(1)}/pg_hba.conf")
+        self.assertEqual(_vars()["control_plane_db_network"], f"{project.group(1)}_default")
+
+    def test_the_logins_are_the_ones_the_stacks_file_admits_to_the_portal_database(self) -> None:
+        text = (STACK / "postgres" / "pg_hba.conf").read_text(encoding="utf-8")
+        constants = _vars()
+        for name in ("tenant", "owner", "provisioner", "migrator"):
+            login = str(constants[f"control_plane_db_{name}_login"])
+            self.assertRegex(text, _hba_rule_pattern(login), login)
+
+    def test_the_rule_pattern_matches_an_accepting_rule_and_nothing_else(self) -> None:
+        login = "portal_provisioner_login"
+        pattern = _hba_rule_pattern(login)
+        for good in (
+            "host     portal              portal_provisioner_login  samenet   scram-sha-256\n",
+            "host portal portal_provisioner_login 10.0.0.0/8 scram-sha-256",
+            "host\tportal,zitadel\tportal_provisioner_login\tsamenet\tscram-sha-256  \n",
+            "# a comment\nhost zitadel,portal portal_provisioner_login samenet scram-sha-256\n",
+        ):
+            self.assertRegex(good, pattern)
+        for bad in (
+            "",
+            "# host portal portal_provisioner_login samenet scram-sha-256\n",
+            "host portal portal_provisioner_login samenet reject\n",
+            "host portal portal_provisioner_login samenet trust\n",
+            "host zitadel portal_provisioner_login samenet scram-sha-256\n",
+            "host portalx portal_provisioner_login samenet scram-sha-256\n",
+            "host portal portal_provisioner_login_x samenet scram-sha-256\n",
+            "host portal xportal_provisioner_login samenet scram-sha-256\n",
+            "local portal portal_provisioner_login scram-sha-256\n",
+            "hostssl portal portal_provisioner_login samenet scram-sha-256\n",
+            "host portal portal_owner_login samenet scram-sha-256\n",
+        ):
+            self.assertNotRegex(bad, pattern)
+
+    def test_the_check_names_a_refusal_for_each_way_it_can_stop(self) -> None:
+        asserts = [t for t in _tasks(ROLE / "tasks" / "_hba.yml") if _module(t) == "assert"]
+        self.assertEqual(len(asserts), 3)
+        for task in asserts:
+            body = cast(dict[str, object], task["ansible.builtin.assert"])
+            self.assertTrue(str(body["fail_msg"]).startswith("REFUSED:"), task["name"])
+
+
+def _step_task(step: str, name: str) -> Task:
+    """Return the task of a step with this name, which must be unique in its file."""
+    found = [t for t in _tasks(ROLE / "tasks" / f"_{step}.yml") if t.get("name") == name]
+    if len(found) != 1:
+        raise AssertionError(f"{step}: expected one task named {name!r}, found {len(found)}")
+    return found[0]
+
+
+def _input_files(step: str, name: str) -> list[str]:
+    """Return the input files a step's input check is given."""
+    task = _step_task(step, name)
+    return cast(dict[str, list[str]], task["vars"])["control_plane_db_input_files"]
+
+
+def _image_needle(step: str, name: str) -> str:
+    """Return the text a step requires the image's program to carry."""
+    task = _step_task(step, name)
+    return cast(dict[str, str], task["vars"])["control_plane_db_image_needle"]
+
+
+class MigratorTests(unittest.TestCase):
+    """The migration login is not the administrator, and the role never hands migrate the administrator."""
+
+    def test_the_constants_name_the_login_its_two_inputs_and_the_provision_marker(self) -> None:
+        constants = _vars()
+        self.assertEqual(constants["control_plane_db_migrator_login"], "portal_migrator_login")
+        self.assertEqual(constants["control_plane_db_migrator_password_name"], "migrator-password")
+        self.assertEqual(constants["control_plane_db_migrator_url_name"], "migrator-url")
+        for kind in ("password", "url"):
+            self.assertEqual(
+                constants[f"control_plane_db_migrator_{kind}_file"],
+                f"{{{{ control_plane_db_input_dir }}}}/{{{{ control_plane_db_migrator_{kind}_name }}}}",
+            )
+        logins = [constants[f"control_plane_db_{n}_login"] for n in ("tenant", "owner", "provisioner", "migrator")]
+        self.assertEqual(len(set(logins)), 4)
+        sets = [t for t in _tasks(ROLE / "tasks" / "_provision.yml") if _module(t) == "set_fact"]
+        facts = cast(dict[str, str], sets[0]["ansible.builtin.set_fact"])
+        self.assertEqual(facts["control_plane_db_marker"], "provision-migrator")
+
+    def test_migrate_is_given_the_migrator_url_file_alone_and_checks_nothing_else(self) -> None:
+        self.assertEqual(
+            _input_files("migrate", "Check the migrator URL file"),
+            ["{{ control_plane_db_migrator_url_file }}"],
+        )
+
+    def test_migrate_names_no_administrator_input_anywhere_in_its_tasks(self) -> None:
+        for task in _tasks(ROLE / "tasks" / "_migrate.yml"):
+            self.assertNotIn("admin", str(task).lower(), str(task.get("name")))
+
+    def test_migrate_mounts_one_read_only_file_and_names_one_input_variable(self) -> None:
+        text = _text("_migrate.yml")
+        mounts = re.findall(r"'-v', (.*)", text)
+        self.assertEqual(len(mounts), 1)
+        self.assertIn("control_plane_db_migrator_url_file", mounts[0])
+        self.assertIn(":ro'", mounts[0])
+        self.assertEqual(
+            re.findall(r"'-e', '(\w+)=", text),
+            ["PORTAL_MIGRATOR_URL_FILE", "NODE_OPTIONS"],
+        )
+
+    def test_the_image_must_carry_the_variable_each_step_reads_for_the_migrator(self) -> None:
+        self.assertEqual(
+            _image_needle("migrate", "Check the image carries the migrator login"), "PORTAL_MIGRATOR_URL_FILE"
+        )
+        self.assertEqual(
+            _image_needle("provision", "Check the image carries the migrator login"),
+            "PORTAL_MIGRATOR_PASSWORD_FILE",
+        )
+
+    def test_provision_checks_reads_mounts_and_names_the_migrator_password_with_the_others(self) -> None:
+        files = _input_files("provision", "Check the administrator URL file and the four password files")
+        self.assertEqual(files[-1], "{{ control_plane_db_migrator_password_file }}")
+        self.assertEqual(len(files), 5)
+        read = _step_task("provision", "Read the four passwords")
+        self.assertEqual(read["loop"][-1], "{{ control_plane_db_migrator_password_file }}")  # type: ignore[index]
+        self.assertEqual(len(cast(list[str], read["loop"])), 4)
+        text = _text("_provision.yml")
+        self.assertIn("'-v', control_plane_db_migrator_password_file", text)
+        self.assertIn("'-e', 'PORTAL_MIGRATOR_PASSWORD_FILE=/provision/' ~ control_plane_db_migrator_password_name", text)
+        self.assertEqual(text.count("'-v', "), 5)
+
+    def test_provision_still_gives_the_program_the_administrator_url_it_needs_for_the_first_steps(self) -> None:
+        # Out of scope for this change: the administrator creates the roles and the database.
+        self.assertIn("'-e', 'PORTAL_ADMIN_URL_FILE=/provision/' ~ control_plane_db_admin_url_name", _text("_provision.yml"))
 
 
 class PatternTests(unittest.TestCase):
