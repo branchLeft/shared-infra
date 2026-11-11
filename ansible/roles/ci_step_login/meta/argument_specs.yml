@@ -1,0 +1,27 @@
+---
+argument_specs:
+  main:
+    short_description: Keep the step account, its one-command sudoers file and its one forced-command key line
+    description: >-
+      Makes sure the account the owner's gated step workflow logs in as exists with a locked
+      password and a real shell, installs its sudoers file (one command, nothing else) and makes its
+      authorised keys exactly one line: the declared public key, restricted, limited to the
+      declared source addresses, and bound to the trigger program in step mode.
+    author: branchLeft
+    options:
+      ci_step_login_key:
+        type: str
+        required: true
+        description: >-
+          The step key's public half, one ed25519 public key on one line as ssh-keygen writes it,
+          with no options in front. An empty value, another key type and a body of the wrong length
+          are refused. Public, but treated as sensitive: no task prints it.
+      ci_step_login_from:
+        type: list
+        elements: str
+        required: true
+        description: >-
+          The source addresses the key may connect from, written into the from option: dotted
+          IPv4 addresses or ranges from /24 to /32. A key with a forced command must say where it
+          may come from, so an empty list is refused. A wildcard, a name, a negation and a range
+          wider than /24 are refused.

@@ -85,6 +85,8 @@
 /ansible/tools/fixtures/                 @branchLeft/branchleft-admin
 # ci_login grants the pipeline account root-run sudo for the trigger and writes its authorized_keys, so a change to it is the owner's to review.
 /ansible/roles/ci_login/                 @branchLeft/branchleft-admin
+# ci_step_login grants the step account root-run sudo for the trigger in step mode and writes its authorized_keys, so a change to it is the owner's to review.
+/ansible/roles/ci_step_login/            @branchLeft/branchleft-admin
 # ci_jump writes the authorized_keys options of the CI jump account, which decide which private hosts the gated run may reach through edge1: SSH access control on the estate's one gateway, so a change to it is the owner's to review.
 /ansible/roles/ci_jump/                  @branchLeft/branchleft-admin
 # owner_vars holds the owner's values for a host's roles, such as the pipeline's public keys. check_enrolment.py (R10) pins which keys each file may set.

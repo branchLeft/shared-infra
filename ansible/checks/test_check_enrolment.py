@@ -1230,10 +1230,60 @@ class Sabotage(unittest.TestCase):
         self.assertIn("control_plane_db_apps_image:", text)
         self.assertEqual(
             sorted(
-                ["control_plane_db_apps_image", "pull_trigger_steps", *RING_CONTROLLER_TEXT_KEYS]
+                [
+                    "ci_step_login_from",
+                    "ci_step_login_key",
+                    "control_plane_db_apps_image",
+                    "pull_trigger_steps",
+                    *RING_CONTROLLER_TEXT_KEYS,
+                ]
             ),
             sorted(self._ops1_keys()),
         )
+
+    # The step account's two values are public text and a list of text, read by type only (the
+    # role holds the shapes). Each wrong type is refused by name, each missing key is refused as a
+    # key set that is not exact, and neither is allowed on another host's file.
+    def test_r10_ops1_step_login_key_must_be_text(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml", "ci_step_login_key: 'ssh-ed25519", "ci_step_login_key: 7\n#"
+        )
+        self._assert_one("R10 owner_vars/ops1.yml: ci_step_login_key must be text")
+
+    def test_r10_ops1_step_login_from_must_be_a_list_of_text(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml",
+            "ci_step_login_from:\n  - '10.20.1.10'\n",
+            "ci_step_login_from: 10.20.1.10\n",
+        )
+        self._assert_one(
+            "R10 owner_vars/ops1.yml: ci_step_login_from must be a list of text entries"
+        )
+        self._reset()
+        self._edit(
+            "owner_vars/ops1.yml",
+            "ci_step_login_from:\n  - '10.20.1.10'\n",
+            "ci_step_login_from:\n  - 10\n",
+        )
+        self._assert_one(
+            "R10 owner_vars/ops1.yml: ci_step_login_from must be a list of text entries"
+        )
+
+    def test_r10_ops1_step_login_missing_is_refused(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml",
+            "ci_step_login_from:\n  - '10.20.1.10'\n",
+            "",
+        )
+        self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
+
+    def test_r10_the_step_login_values_are_ops1s_alone(self) -> None:
+        self._edit(
+            "owner_vars/edge1.yml",
+            "ci_login_keys: []\n",
+            "ci_login_keys: []\nci_step_login_key: x\n",
+        )
+        self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
 
     # The ring controller role's five inputs are public text, empty until the owner sets them. The
     # check reads only the type; the role holds the shapes. Each key, set to a non-text value, is

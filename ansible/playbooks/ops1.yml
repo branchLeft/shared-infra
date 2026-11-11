@@ -22,6 +22,11 @@
 # includes and the one trust file, all loaded through vars_files, and the step
 # allow-list from the owner's file.
 #
+# The step account (ci_step_login) goes right after the host baseline, so that no later role's
+# failure holds back the route a step is sent over. It makes the account the gated step workflow
+# logs in as, its one-command sudoers file and its one forced-command key line, from the key and
+# source addresses in owner_vars/ops1.yml. It runs no step and no tag of its own.
+#
 # The safety service role goes before the channel key's, so that a later change can name the
 # account it makes as the key's owner and the account exists when the key role runs. It stays off
 # until the owner sets its inputs.
@@ -51,6 +56,7 @@
     - role: ../roles/pull_trigger # noqa: role-name[path]
     - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/ci_step_login # noqa: role-name[path]
     - role: ../roles/breakglass_mint_host # noqa: role-name[path]
     - role: ../roles/safety_service # noqa: role-name[path]
     - role: ../roles/safety_channel_key # noqa: role-name[path]
