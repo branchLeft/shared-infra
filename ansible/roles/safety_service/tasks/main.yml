@@ -161,6 +161,17 @@
     mode: '0700'
   when: safety_service_account_present
 
+# The hash-source credential's directory. The owner places the two files in it; the role never
+# writes a file there, so an apply cannot change the credential.
+- name: Make the hash-source credential directory, owned by the service account and closed to everyone else
+  ansible.builtin.file:
+    path: '{{ safety_service_credential_dir }}'
+    state: directory
+    owner: '{{ safety_service_account }}'
+    group: '{{ safety_service_account }}'
+    mode: '0700'
+  when: safety_service_account_present
+
 # --- The configuration and the environment. Public values only, written whole.
 - name: Write the configuration when the service is meant to run
   ansible.builtin.template:
