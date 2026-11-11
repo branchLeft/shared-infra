@@ -130,6 +130,34 @@ class SecretNoLogTest(unittest.TestCase):
         self.assertIn("control_plane_masterkey", secrets["control_plane"])
         self.assertGreaterEqual(sum(len(names) for names in secrets.values()), 20)
 
+    # The baseline of the findings the tree has today: it only shrinks, in both directions.
+
+    def test_a_new_leak_not_in_the_baseline_is_red(self) -> None:
+        root = self._append_task(NTFY, "    msg: '{{ ntfy_pager_pager_token }}'")
+        findings = self._findings(root)
+        self._assert_red(findings, "task 'Appended task' refers to ntfy_pager_pager_token")
+
+    def test_a_baselined_finding_removed_from_the_baseline_is_red(self) -> None:
+        root = self._mutate(
+            "ansible/checks/secret_no_log_baseline.yml",
+            "  - task: Refuse every stack that breaks a rule, before anything is written\n"
+            "    rule: no_log\n",
+            "",
+        )
+        self._assert_red(
+            self._findings(root),
+            "task 'Refuse every stack that breaks a rule, before anything is written'",
+        )
+
+    def test_a_baseline_entry_that_no_longer_fires_is_red(self) -> None:
+        root = self._mutate(
+            "ansible/checks/secret_no_log_baseline.yml",
+            "  - task: Work out whether the stack must be brought up\n    rule: no_log\n",
+            "  - task: Work out whether the stack must be brought up\n    rule: no_log\n"
+            "  - task: No such task\n    rule: no_log\n",
+        )
+        self._assert_red(self._findings(root), "R5", "'No such task' (no_log) no longer fires")
+
     def test_taint_reaches_the_derived_variables(self) -> None:
         self.assertIn("ntfy_pager_env_lines", checker.tainted(ROOT, "ntfy_pager"))
         self.assertIn("monitoring_stack_env_keys", checker.tainted(ROOT, "monitoring_stack"))
@@ -1601,6 +1629,152 @@ class TaskParserTest(unittest.TestCase):
                         load()
                 finally:
                     setattr(constants, name, saved)
+
+
+class SetFactAndRegisterTest(unittest.TestCase):
+    """A secret copied by `set_fact`, or printed through a `register`ed result of a task that used
+    it, is followed like a `vars:` name: a task that names the copy or the result must set no_log.
+    Each red case has a green control of the same shape, so the red is the mechanism and not the
+    fixture. The one-role tree has one secret, `probe_secret`, as TaskParserTest does."""
+
+    def setUp(self) -> None:
+        self._scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(self._scratch.cleanup)
+        self.count = 0
+
+    def _findings(self, tasks: str) -> list[str]:
+        self.count += 1
+        root = Path(self._scratch.name) / f"tree{self.count}"
+        role = root / "ansible" / "roles" / "probe"
+        (role / "meta").mkdir(parents=True)
+        (role / "meta" / "argument_specs.yml").write_text(MINI_SPEC, encoding="utf-8")
+        (role / "tasks").mkdir()
+        (role / "tasks" / "main.yml").write_text(tasks, encoding="utf-8")
+        findings: list[str] = []
+        checker._r1(root, findings)
+        return list(dict.fromkeys(findings))
+
+    def _assert_red(self, findings: list[str], *fragments: str) -> None:
+        self.assertTrue(findings, "expected a finding, the tree passed")
+        for fragment in fragments:
+            self.assertTrue(
+                any(fragment in finding for finding in findings),
+                f"no finding contains {fragment!r}; findings: {findings}",
+            )
+
+    # set_fact: a copy of the secret, named later.
+
+    SET_FACT_COPY = (
+        "---\n- name: Copy the probe\n  ansible.builtin.set_fact:\n"
+        "    probe_copy: '{{ probe_secret }}'\n  no_log: true\n"
+    )
+
+    def test_a_set_fact_copy_printed_without_no_log_is_red(self) -> None:
+        findings = self._findings(
+            self.SET_FACT_COPY
+            + "- name: Print the copy\n  ansible.builtin.debug:\n    msg: '{{ probe_copy }}'\n"
+        )
+        self._assert_red(
+            findings,
+            "task 'Print the copy' refers to probe_copy (secret through probe_secret)",
+            "must set no_log: true",
+        )
+
+    def test_a_set_fact_copy_printed_with_no_log_is_green(self) -> None:
+        self.assertEqual(
+            self._findings(
+                self.SET_FACT_COPY
+                + "- name: Print the copy\n  ansible.builtin.debug:\n    msg: '{{ probe_copy }}'\n"
+                "  no_log: true\n"
+            ),
+            [],
+        )
+
+    def test_a_set_fact_whose_expression_mentions_the_secret_is_followed(self) -> None:
+        findings = self._findings(
+            "---\n- name: Build the copy\n  ansible.builtin.set_fact:\n"
+            "    probe_copy: \"{{ 'token=' ~ probe_secret | default('') }}\"\n  no_log: true\n"
+            "- name: Print the copy\n  ansible.builtin.debug:\n    msg: '{{ probe_copy }}'\n"
+        )
+        self._assert_red(findings, "task 'Print the copy' refers to probe_copy")
+
+    def test_a_set_fact_copy_of_a_copy_is_followed(self) -> None:
+        findings = self._findings(
+            self.SET_FACT_COPY
+            + "- name: Copy the copy\n  ansible.builtin.set_fact:\n"
+            "    probe_second: '{{ probe_copy }}'\n  no_log: true\n"
+            "- name: Print the second copy\n  ansible.builtin.debug:\n"
+            "    msg: '{{ probe_second }}'\n"
+        )
+        self._assert_red(findings, "task 'Print the second copy' refers to probe_second")
+
+    def test_a_set_fact_that_does_not_mention_the_secret_stays_clean(self) -> None:
+        self.assertEqual(
+            self._findings(
+                "---\n- name: Plain fact\n  ansible.builtin.set_fact:\n"
+                "    probe_plain: 'literal'\n"
+                "- name: Print the fact\n  ansible.builtin.debug:\n    msg: '{{ probe_plain }}'\n"
+            ),
+            [],
+        )
+
+    # register: the result of a task that used the secret, named later.
+
+    REGISTER_OF_SECRET = (
+        "---\n- name: Run with the probe\n  ansible.builtin.command: echo '{{ probe_secret }}'\n"
+        "  register: probe_out\n  no_log: true\n"
+    )
+
+    def test_a_register_of_a_secret_printed_without_no_log_is_red(self) -> None:
+        findings = self._findings(
+            self.REGISTER_OF_SECRET
+            + "- name: Print the result\n  ansible.builtin.debug:\n    var: probe_out\n"
+        )
+        self._assert_red(
+            findings,
+            "task 'Print the result' refers to probe_out (secret through probe_secret)",
+            "must set no_log: true",
+        )
+
+    def test_a_register_of_a_secret_printed_with_no_log_is_green(self) -> None:
+        self.assertEqual(
+            self._findings(
+                self.REGISTER_OF_SECRET
+                + "- name: Print the result\n  ansible.builtin.debug:\n    var: probe_out\n"
+                "  no_log: true\n"
+            ),
+            [],
+        )
+
+    def test_a_register_of_a_task_that_does_not_use_the_secret_stays_clean(self) -> None:
+        self.assertEqual(
+            self._findings(
+                "---\n- name: Run plainly\n  ansible.builtin.command: echo hello\n"
+                "  register: probe_plain\n"
+                "- name: Print the result\n  ansible.builtin.debug:\n    var: probe_plain\n"
+            ),
+            [],
+        )
+
+    def test_a_register_read_only_in_a_when_expression_stays_clean(self) -> None:
+        # The expression keywords print only their expression: a `when` on the result is no read.
+        self.assertEqual(
+            self._findings(
+                self.REGISTER_OF_SECRET
+                + "- name: Act on the result\n  ansible.builtin.debug:\n    msg: fine\n"
+                "  when: probe_out.changed\n"
+            ),
+            [],
+        )
+
+    def test_a_set_fact_of_a_register_is_followed_to_the_fact(self) -> None:
+        findings = self._findings(
+            self.REGISTER_OF_SECRET
+            + "- name: Keep the stdout\n  ansible.builtin.set_fact:\n"
+            "    probe_kept: '{{ probe_out.stdout }}'\n  no_log: true\n"
+            "- name: Print the kept stdout\n  ansible.builtin.debug:\n    var: probe_kept\n"
+        )
+        self._assert_red(findings, "task 'Print the kept stdout' refers to probe_kept")
 
 
 if __name__ == "__main__":
