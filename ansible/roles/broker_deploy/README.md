@@ -84,10 +84,11 @@ two that stay empty until the owner carries them make the role refuse before it 
   in `broker_deploy_release_pins`, and the files are in `broker_deploy_release_dir`.
 - The request-signing public key is the 32-byte file `files/broker-verify-key.bin` of this role
   (`broker_deploy_verify_key_src`), held to the sha256 in `broker_deploy_verify_key_sha256`
-  (empty until the key is carried). The role refuses an empty or malformed digest, a file that
-  is missing, a link, not 32 bytes, or not that digest. Carrying the key is one change that adds
-  the file and sets the digest, so a key is chosen by a reviewed change; the role does not say
-  whose key it is, and the owner decides that.
+  (the owner's key, carried). The role refuses an empty or malformed digest, a file that
+  is missing, a link, not 32 bytes, or not that digest. Changing the key is one change that
+  replaces the file and the digest, and a test holds the file to the key's hex and to the digest,
+  so a key is chosen by a reviewed change. The private half stays with the owner and never reaches
+  the role.
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) documents all of them. None
 of them is a secret. The private half of the key never reaches the role.
@@ -150,8 +151,6 @@ download are only reported, not made.
   reads this role's text; the host's own firewall is not read by it. A variable passed at
   run time could still move the base url (the pull route passes none, and the checksum
   must still match). A host that already has the pinned version skips the download.
-- No verify key is carried yet: the file and its digest are empty until the owner commits
-  both (see "Inputs"), and the role refuses until then.
 - The attestation is not verified by the role, only the pinned digests (see "How the
   release arrives").
 - The sandboxed start of the unit is proven by the broker's own boot test, not by this

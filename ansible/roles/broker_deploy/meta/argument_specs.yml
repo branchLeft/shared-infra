@@ -52,7 +52,7 @@ argument_specs:
           before it writes anything, a key file that is not exactly 32 bytes or
           does not have this digest, and refuses an empty value. A digest is not
           a secret.
-        default: ''
+        default: 'a001696bc4047c5a43ae774025e35352214a03a9b264e9d4382832777b6fad17'
       broker_deploy_node_version:
         type: str
         description: The Node version the broker runs, as it appears in the download path.
