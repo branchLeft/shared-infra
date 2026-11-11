@@ -19,6 +19,9 @@
 /hetzner/.npmrc                          @branchLeft/branchleft-admin
 /hetzner-host/.npmrc                     @branchLeft/branchleft-admin
 
+# ovh/ creates Object Storage buckets with object lock at OVHcloud, and a Compliance lock cannot be undone once an object is written, so the whole project, its guards and their tests are the owner's to review.
+/ovh/                                    @branchLeft/branchleft-admin
+
 # The review rule itself. GitHub reads this file from .github/ first; /.github/ at the foot of this file owns the workflows and actions as well.
 /.github/CODEOWNERS      @branchLeft/branchleft-admin
 # The floors file is a gate the standards job reads. It is listed here, with the other gate files, and not in the shared tail below, because the tail must be the template's own lines.

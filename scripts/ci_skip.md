@@ -21,9 +21,10 @@ up a Python of its own. The base commit is fetched with one anonymous depth-1
 
 ## Which jobs may skip
 
-Seven check jobs are in `UNITS`: `mail-typecheck`, `mail-provision-checks`,
-`shim-image-starts`, `edge-config-validate`, `monitoring-config-validate`,
-`nextcloud1-config-validate` and `control-plane-config-validate`. Each job's
+Eight check jobs are in `UNITS`: `mail-typecheck`, `mail-provision-checks`,
+`shim-image-starts`, `ovh-copy2-checks`, `edge-config-validate`,
+`monitoring-config-validate`, `nextcloud1-config-validate` and
+`control-plane-config-validate`. Each job's
 entry lists every repository path it reads. `shim-image-starts` reads only
 `mail/provision/` (its script renders and starts the image from there), so it sits
 in `UNITS` with `mail/provision/`, not in `ALWAYS_RUN`. Every job reachable on
@@ -39,7 +40,7 @@ in `UNITS` with `mail/provision/`, not in `ALWAYS_RUN`. Every job reachable on
    raises: run.
 4. The diff is empty: run.
 5. A changed path is outside every zone (`ansible/`, `hetzner/`, `hetzner-host/`,
-   `mail/`, `scripts/`, `.github/`, `.claude/`): run. Root-level files and unknown
+   `mail/`, `ovh/`, `scripts/`, `.github/`, `.claude/`): run. Root-level files and unknown
    directories are in this case.
 6. A changed path is one the job reads (`UNITS`), or one that changes the skip
    machinery itself (`UNIVERSAL`: `ci.yml`, the ci-skip action, `ci_skip.py`,

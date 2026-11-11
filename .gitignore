@@ -8,6 +8,9 @@
 /hetzner/coverage/
 /hetzner-host/node_modules/
 /hetzner-host/dist/
+/ovh/copy2/node_modules/
+# Written by `vitest run --coverage`, which nothing in CI commits.
+/ovh/copy2/coverage/
 
 # Pulumi state artifacts. Nothing under here is ever committed: this stack's
 # state lives in the bucket, and a local copy of it is both a source-of-truth

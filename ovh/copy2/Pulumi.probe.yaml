@@ -1,0 +1,65 @@
+# The probe stack: three throwaway buckets and two users, made, exercised and
+# destroyed inside one job. Nothing here may outlive the run.
+#
+# `allowedProjectId` is UNSET on purpose. The program refuses UNSET (see
+# projectGuard.ts), so this stack creates nothing until the project's owner
+# supplies the OVHcloud project id and it is committed here in place of UNSET.
+# The id is not a secret. The workflow must also export the same id as
+# OVH_CLOUD_PROJECT_SERVICE; the guard refuses a run where the two differ.
+#
+# `nameSuffix` is not committed: the job sets it per run, so each bucket name
+# is `<name>-<suffix>` and no two runs collide. configGuard.ts holds the
+# limits: a `zz-probe-` bucket locks for one day at most, and Compliance mode
+# exists only on a `zz-probe-` bucket.
+#
+# `encryptionsalt` is absent, as in every stack file in this repo; the job
+# generates a throwaway passphrase and a fresh salt for its own backend.
+config:
+  ovh:endpoint: ovh-eu
+  branchleft-ovh-copy2:allowedProjectId: UNSET
+  branchleft-ovh-copy2:users:
+    # Owns the buckets and never receives an S3 credential.
+    - name: zz-probe-owner
+      s3Credential: false
+    # The probe's own credential, reaching bucket A only.
+    - name: zz-probe-rw
+      s3Credential: true
+      statements:
+        - sid: ProbeBucketA
+          effect: Allow
+          buckets: [zz-probe-a]
+          actions:
+            - s3:ListBucket
+            - s3:ListBucketVersions
+            - s3:GetBucketLocation
+            - s3:GetBucketObjectLockConfiguration
+            - s3:PutBucketObjectLockConfiguration
+            - s3:GetObject
+            - s3:GetObjectVersion
+            - s3:PutObject
+            - s3:DeleteObject
+            - s3:DeleteObjectVersion
+            - s3:GetObjectRetention
+            - s3:BypassGovernanceRetention
+  branchleft-ovh-copy2:buckets:
+    # A: lock at creation, Governance, one day. The probe writes here.
+    - name: zz-probe-a
+      region: UK
+      versioning: ENABLED
+      ownerUser: zz-probe-owner
+      objectLock:
+        mode: GOVERNANCE
+        retentionDays: 1
+    # B: versioning only, the control with no lock.
+    - name: zz-probe-b
+      region: UK
+      versioning: ENABLED
+      ownerUser: zz-probe-owner
+    # C: the real configuration at probe size, Compliance one day, never written.
+    - name: zz-probe-c
+      region: UK
+      versioning: ENABLED
+      ownerUser: zz-probe-owner
+      objectLock:
+        mode: COMPLIANCE
+        retentionDays: 1
