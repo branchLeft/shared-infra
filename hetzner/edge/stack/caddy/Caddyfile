@@ -511,10 +511,10 @@ publicpress.co.uk {
 		respond @page_ghost_hosting <<PAGE_HTML
 		<!doctype html><html lang='en'><head><meta charset='utf-8'>
 		<meta name='viewport' content='width=device-width, initial-scale=1'>
-		<title>PublicPress Ghost Hosting</title>
+		<title>Managed Ghost hosting, done well | PublicPress</title>
 		<meta name="description" content="Managed Ghost hosting in the UK for writers, charities, clubs and small businesses. Upgrades, backups, newsletters and support included, from £15 a month.">
 		<link rel="canonical" href="https://publicpress.co.uk/ghost-hosting">
-		<meta property="og:title" content="PublicPress Ghost Hosting">
+		<meta property="og:title" content="Managed Ghost hosting, done well | PublicPress">
 		<meta property="og:description" content="Managed Ghost hosting in the UK for writers, charities, clubs and small businesses. Upgrades, backups, newsletters and support included, from £15 a month.">
 		<meta property="og:url" content="https://publicpress.co.uk/ghost-hosting">
 		<meta property="og:type" content="website">
@@ -1136,10 +1136,10 @@ publicpress.co.uk {
 		respond @page_default <<PAGE_HTML
 		<!doctype html><html lang='en'><head><meta charset='utf-8'>
 		<meta name='viewport' content='width=device-width, initial-scale=1'>
-		<title>PublicPress Journey</title>
+		<title>Independent journalism, on independent infrastructure | PublicPress</title>
 		<meta name="description" content="Managed technical solutions for independent newsrooms in the UK, from a company that exists to support them.">
 		<link rel="canonical" href="https://publicpress.co.uk/">
-		<meta property="og:title" content="PublicPress Journey">
+		<meta property="og:title" content="Independent journalism, on independent infrastructure | PublicPress">
 		<meta property="og:description" content="Managed technical solutions for independent newsrooms in the UK, from a company that exists to support them.">
 		<meta property="og:url" content="https://publicpress.co.uk/">
 		<meta property="og:type" content="website">
