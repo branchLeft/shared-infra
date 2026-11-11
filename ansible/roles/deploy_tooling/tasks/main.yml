@@ -36,12 +36,15 @@
     quiet: true
 
 # Classes gateway and internal get the common targets only: the wrapper, the template
-# unit, the directories and the sudoers read. Only class app gets the policy program.
+# unit, the directories and the sudoers read. Only class app gets the policy program and
+# the watch (a timer that reads the firewall chains between runs); its files are checked
+# here with the rest.
 - name: Work out which files this host class gets
   ansible.builtin.set_fact:
     deploy_tooling_file_targets: >-
       {{ deploy_tooling_common_file_targets
-         + (deploy_tooling_app_file_targets if deploy_tooling_host_class == 'app' else []) }}
+         + (deploy_tooling_app_file_targets + deploy_tooling_watch_file_targets
+            if deploy_tooling_host_class == 'app' else []) }}
 
 # ----- The directories above the targets -----
 
@@ -176,6 +179,44 @@
   notify:
     - Reload systemd manager
     - Restart the policy unit
+  when: deploy_tooling_host_class == 'app'
+
+# The watch: a program that reads the firewall chains, the checks it runs (the role's own
+# module file, so the watch and the read-back below apply the same test), its timer and its
+# service. Written here so the checks below cover them; the timer is enabled after the
+# isolation (_watch.yml). The handlers reload systemd, and restart the timer so a changed
+# schedule is read.
+
+- name: Install the watch program, its checks and its timer
+  ansible.builtin.copy:
+    src: '{{ role_path }}/{{ item.source }}'
+    dest: '{{ item.path }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ deploy_tooling_watch_copied_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: deploy_tooling_watch_copied
+  notify:
+    - Reload systemd manager
+    - Restart the watch timer
+  when: deploy_tooling_host_class == 'app'
+
+- name: Render the watch service and its timer
+  ansible.builtin.template:
+    src: '{{ item.template }}'
+    dest: '{{ item.path }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: '{{ deploy_tooling_watch_rendered_targets }}'
+  loop_control:
+    label: '{{ item.path }}'
+  register: deploy_tooling_watch_service
+  notify:
+    - Reload systemd manager
+    - Restart the watch timer
   when: deploy_tooling_host_class == 'app'
 
 # ----- What the targets are now -----
@@ -333,4 +374,9 @@
 
 - name: Apply the isolation policy and read the firewall chains back
   ansible.builtin.include_tasks: _isolation.yml
+  when: deploy_tooling_host_class == 'app'
+
+# After the isolation, so the chains the watch reads are the ones the policy has just built.
+- name: Install the watch that reads the firewall chains between runs
+  ansible.builtin.include_tasks: _watch.yml
   when: deploy_tooling_host_class == 'app'

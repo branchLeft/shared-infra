@@ -1,0 +1,17 @@
+---
+# Included from main.yml for a host of class app only, after the isolation. The watch's
+# files are already in place and checked, and the isolation's flush of the handlers has
+# reloaded systemd. This enables the timer that runs the watch. The watch only reads the
+# firewall: it changes nothing and repairs nothing, and its result is the unit's state.
+
+# Skipped in check mode with a stated reason (ANS-10) while a file of the watch would be
+# written: check mode did not write the timer, so systemd has no such unit to enable.
+- name: Enable and start the watch timer
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_watch_timer_name }}'
+    enabled: true
+    state: started
+  when: >-
+    not (ansible_check_mode
+         and (deploy_tooling_watch_copied.changed
+              or deploy_tooling_watch_service.changed))

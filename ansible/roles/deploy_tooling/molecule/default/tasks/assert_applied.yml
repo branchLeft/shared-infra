@@ -6,7 +6,9 @@
   ansible.builtin.stat:
     path: '{{ item.path }}'
     follow: false
-  loop: '{{ deploy_tooling_directory_targets + deploy_tooling_common_file_targets + deploy_tooling_app_file_targets }}'
+  loop: >-
+    {{ deploy_tooling_directory_targets + deploy_tooling_common_file_targets + deploy_tooling_app_file_targets
+       + deploy_tooling_watch_file_targets }}
   loop_control:
     label: '{{ item.path }}'
   register: deploy_tooling_scenario_targets
@@ -49,6 +51,32 @@
   deploy_tooling_chain:
     reconciler_path: '{{ deploy_tooling_reconciler_path }}'
     variant: '{{ chain_variant }}'
+
+- name: Read the watch timer's state
+  ansible.builtin.command:
+    argv:
+      [
+        systemctl,
+        show,
+        '{{ deploy_tooling_watch_timer_name }}',
+        '--property=ActiveState,UnitFileState',
+      ]
+  register: deploy_tooling_scenario_watch_timer
+  changed_when: false
+
+- name: Assert the watch timer is enabled and running
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_watch_timer.stdout_lines | sort == ['ActiveState=active', 'UnitFileState=enabled']
+    fail_msg: 'The watch timer is not active and enabled: {{ deploy_tooling_scenario_watch_timer.stdout_lines }}'
+    quiet: true
+
+# A oneshot: started, it runs once and the module waits for its exit, so a reopened chain
+# fails this task. The chains are the policy here, so the watch passes.
+- name: Run the watch once on the chains the policy built
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_watch_unit_name }}'
+    state: started
 
 - name: Read DOCKER-USER as it stands
   ansible.builtin.command:

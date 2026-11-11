@@ -5,7 +5,7 @@
   ansible.builtin.stat:
     path: '{{ item.path }}'
     follow: false
-  loop: '{{ deploy_tooling_app_file_targets }}'
+  loop: '{{ deploy_tooling_app_file_targets + deploy_tooling_watch_file_targets }}'
   loop_control:
     label: '{{ item.path }}'
   register: deploy_tooling_scenario_app_files

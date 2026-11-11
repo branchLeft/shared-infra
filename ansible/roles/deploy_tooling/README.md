@@ -87,6 +87,12 @@ another tool may put a jump to above the policy (empty, see "Named limits").
   `0755`) and `/etc/systemd/system/branchleft-docker-user-policy.service` (`root:root`,
   `0644`); the unit is enabled; and when either file changed the unit is **restarted**,
   which runs the program and adds the firewall rules.
+- Class `app` only, the watch (see "The watch between runs"):
+  `/usr/local/lib/branchleft_docker_user_watch.py` (`root:root`, `0755`) and
+  `/usr/local/lib/deploy_tooling_chain.py` (`root:root`, `0644`), both copied from this
+  role's `library/`; `/etc/systemd/system/branchleft-docker-user-watch.service` and
+  `branchleft-docker-user-watch.timer` (`root:root`, `0644`), both rendered from
+  `templates/`; the timer is enabled and started. The role's own run does not run the watch.
 
 A file target that is a symbolic link is replaced, never written through. A directory at
 a file target is removed only when it is empty; one with anything in it stops the run.
@@ -175,6 +181,40 @@ re-applies the Docker firewall policy on a live app host: installing the policy 
 the "Restart the policy unit" handler. The owner reads the plan job before approving. The real `iptables -S INPUT` and
 `iptables -S DOCKER-USER` (and the IPv6 pair) have still not been captured from a real app
 host (see "Named limits").
+
+## The watch between runs
+
+The read-back in this role runs when the role runs: at an apply and at the nightly
+drift check, which plays every host in check mode. A policy that is reopened between two
+runs (the chain flushed by another tool, rules deleted by hand, Docker's firewall backend
+changed under an unattended upgrade, so that the chain is absent) is not seen until the
+next one. The watch closes that window on the host itself.
+
+A systemd timer starts `branchleft-docker-user-watch.service` three minutes after boot and
+five minutes after the end of each run. The service runs `branchleft_docker_user_watch.py`,
+which lists the same chains and applies the same checks as the read-back. It does not
+restate them: it loads `deploy_tooling_chain.py`, installed beside it from this role's
+`library/` and loaded by its own path, so one definition of "the policy is in place" serves both. It reads the policy
+program for the rules' literals, takes the variant from the role's input, writes nothing
+and repairs nothing. The program is in `library/` beside the module it imports, so the
+type check and the unit tests that cover the module cover it (CI checks a role's `files/`
+only when the role has no `library/`, and the checks that bind the role to the hand-run
+scripts allow nothing under `files/`). Its result is the unit's result:
+
+| Exit | Unit   | Meaning                                                                                                                                                |
+| ---- | ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 0    | ok     | The chains carry the policy.                                                                                                                           |
+| 1    | failed | Reopened: a chain is absent, a rule is missing, out of order or one the variant must not carry, or a rule above the last drop could let a packet past. |
+| 2    | failed | The check could not be made (the policy program, a listing or an argument is unusable). It is never read as intact.                                    |
+
+To read it on a host: `systemctl status branchleft-docker-user-watch.service` for the
+last result, and `journalctl -u branchleft-docker-user-watch.service` for the history. A
+failed line names the chain and the rule's place and target, never the text of a rule the
+policy did not put there. A chain that stays reopened keeps the unit failed, because the
+timer fires after a failed run too; a chain put right by the policy unit's restart (which
+follows a restart of Docker) makes the next run pass.
+
+What reads this result is a limit, not a feature: see "Named limits".
 
 ## How to change it safely
 
@@ -331,6 +371,10 @@ leaves every step green is not claimed.
 | A rule of the wrong variant is refused                                                | the forbidden-rule loop taken out of the module                 | the module's unit tests: the standard host with the protected drops, the protected host with the database accept                                                            |
 | A foreign rule above the last drop is bounded                                         | the bypass test made to accept every rule                       | the module's unit tests: the foreign accept, the return, the unmatched drop, the goto and the unlisted chain                                                                |
 | The rule named as displaced is the one that moved                                     | the module made to name the rule after it                       | the module's unit tests: `the_rule_named_is_the_one_that_moved_not_the_one_after_it`                                                                                        |
+| The watch fails the unit on a reopened chain                                          | the reopened outcome made to return intact                      | the watch's unit tests: every `TestReopened` case                                                                                                                           |
+| The watch never reads an unchecked host as intact                                     | the cannot-check outcome made to return intact                  | the watch's unit tests: every `TestUnchecked` case                                                                                                                          |
+| The watch is a oneshot the timer re-fires after a failure                             | `RemainAfterExit` added, or the re-fire removed                 | the watch's unit tests: `TestUnits`                                                                                                                                         |
+| The watch fails on the real chain the read-back refuses                               | the check taken out of the watch                                | verify, chain: `EXPECTED THE WATCH TO FAIL, IT PASSED`                                                                                                                      |
 | The sudoers line agrees with the cloud-init constant                                  | the wrapper path changed in the cloud-init source               | the repository checks: `test_the_real_files_agree`                                                                                                                          |
 | The role and the hand scripts install the same modes                                  | the wrapper's mode changed in the role                          | the repository checks: `test_the_role_and_the_hand_scripts_install_the_same_paths_and_modes`                                                                                |
 | A program has one home and the role holds none                                        | a byte copy of a program put under the role                     | the repository checks: `test_every_program_is_read_from_the_one_home_and_none_is_held`                                                                                      |
@@ -432,6 +476,22 @@ stayed clean; the harness run that follows them is the green.
   workflow being available for this repository, and the first app host's playbook now
   applies it but no gated run has applied it yet. The ticket is unfinished on both halves until each has run
   live and a second run of the same commit has reported no change.
+- **Nothing reads the watch's result yet.** The watch fails its unit and writes the journal.
+  No scrape, page or ticket follows from either: the host has no metrics exporter, and the
+  nightly drift check reads the chains itself rather than the watch's unit. Until a
+  monitoring input reads the unit state (or a metric the watch is later taught to write),
+  the watch shortens the time a reopened chain is on record from a day to minutes for
+  whoever looks at the host, and no more. It is the first half of the detection path; the
+  alert is the second.
+- **A chain reopened and put right between two ticks is not seen.** A restart of Docker
+  rebuilds the chain empty, and the policy unit follows it within moments; if that falls
+  between ticks the watch never sees the gap, and a tick that falls inside it fails once.
+  The watch is a sampler, not a log of the firewall.
+- **The watch is tested against captured listings and a container, not a host.** Its unit
+  tests use the same captured chains as the module's. The container test starts the real
+  service on the real firewall, but the sandboxing options a host would allow
+  (a private `/tmp`, a read-only system) are left off because the container cannot make a
+  mount namespace; the first start on a real host is the first run under the real unit.
 - **The unit tests of the module read the real program.** They parse
   `files/branchleft_docker_user_policy.py` itself, so a change to a constant in the program
   changes what the module expects; they do not pin a copy of it. The module reads a

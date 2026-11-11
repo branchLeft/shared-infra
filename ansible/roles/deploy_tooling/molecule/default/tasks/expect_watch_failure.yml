@@ -1,0 +1,39 @@
+---
+# Runs the watch service once, outside the role, and requires it to fail with the exit
+# status in expect_status: 1 when the policy is reopened, 2 when the check could not be
+# made. The same marker as expect_chain_failure.yml keeps a pass from being read as a
+# failure.
+- name: Run the watch, expecting it to fail
+  block:
+    - name: Start the watch service
+      ansible.builtin.systemd_service:
+        name: '{{ deploy_tooling_watch_unit_name }}'
+        state: started
+
+    - name: Fail because the watch passed
+      ansible.builtin.fail:
+        msg: 'EXPECTED THE WATCH TO FAIL, IT PASSED: {{ expect_label }}'
+  rescue:
+    - name: Check that the failure is the watch's own
+      ansible.builtin.assert:
+        that:
+          - ansible_failed_task.name != 'Fail because the watch passed'
+        fail_msg: 'THE WATCH PASSED: {{ expect_label }}'
+        quiet: true
+
+    - name: Read how the watch ended
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - '{{ deploy_tooling_watch_unit_name }}'
+          - --property=Result,ExecMainStatus
+      register: deploy_tooling_scenario_watch_result
+      changed_when: false
+
+    - name: Check that it ended with the expected status
+      ansible.builtin.assert:
+        that:
+          - deploy_tooling_scenario_watch_result.stdout_lines | sort == ['ExecMainStatus=' ~ expect_status, 'Result=exit-code']
+        fail_msg: 'WRONG WATCH RESULT for {{ expect_label }}: {{ deploy_tooling_scenario_watch_result.stdout_lines }}'
+        quiet: true
