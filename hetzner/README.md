@@ -582,6 +582,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@ntfy-pager`, which is not an instance  | nowhere: the pager's secrets file, `/etc/branchleft/ntfy-pager.env`, written by the `ntfy_pager` role    | no                |
 | `branchleft-compose@mail-spool`                            | nowhere: `branchLeft/ghost-platform`'s `render-core` golden, fetched by the `demo1_egress_spool` role    | no                |
 | `branchleft-compose@status`, which is not an instance      | nowhere: the project directory of the `status_page` role's plain `docker compose` Gatus page             | no                |
+| `branchleft-compose@dbt1`                                  | nowhere: rendered from a template by the `db_t1` role of `branchLeft/shared-infra`                       | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that

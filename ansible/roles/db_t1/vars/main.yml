@@ -1,0 +1,107 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. Every value has
+# its reason beside it, so a change is one reviewed edit to this file, the
+# templates and the tests that pin them. The one input is the image
+# (defaults/main.yml).
+
+# ----- The stack -----
+
+# The stack name branchleft-deploy takes (hetzner/provision/branchleft_deploy.py,
+# STACK_NAME). It is not `db`: that name is db1's, and no two roles may write the
+# same path (checks/check_role_paths.py). The compose project name in the template
+# is this name, because the deploy program finds a stack's containers by the
+# compose project label.
+db_t1_stack: dbt1
+
+# The paths the deploy program and the stack's unit read. The deploy program builds
+# the compose path as STACK_DIR/<stack>/compose.yml and the pin path as
+# CONFIG_DIR/<stack>.image.env; the unit reads CONFIG_DIR/<stack>.env as an
+# optional environment file after the pin.
+db_t1_config_directory: /etc/branchleft
+db_t1_stack_directory: /opt/branchleft
+db_t1_project_directory: /opt/branchleft/dbt1
+db_t1_compose_path: /opt/branchleft/dbt1/compose.yml
+db_t1_cnf_directory: /opt/branchleft/dbt1/conf.d
+db_t1_cnf_path: /opt/branchleft/dbt1/conf.d/branchleft.cnf
+db_t1_run_directory: /opt/branchleft/dbt1/run
+db_t1_socket_directory: /opt/branchleft/dbt1/run/mysqld
+db_t1_image_env_path: /etc/branchleft/dbt1.image.env
+db_t1_secrets_path: /etc/branchleft/dbt1.env
+db_t1_unit: branchleft-compose@dbt1.service
+db_t1_deploy_program: /usr/local/sbin/branchleft-deploy
+db_t1_systemd_running_path: /run/systemd/system
+
+# Where Docker keeps the stack's named data volume (compose project name, then the
+# volume name in the template). The role never writes there. It only looks for an
+# initialised data directory, to refuse a first deploy over data (tasks/_pin.yml).
+db_t1_data_directory: /var/lib/docker/volumes/dbt1_mysql-data/_data
+
+# The file names Docker Compose also reads from the project directory. The unit
+# runs `docker compose up` there with no -f and the deploy program checks only
+# compose.yml, so a base file of another name would replace it and an override
+# file would be merged into it (a swapped image, a published port, a second
+# service), and a .env file can set COMPOSE_FILE, COMPOSE_PROJECT_NAME or
+# COMPOSE_PROFILES. The role refuses to run while one exists and writes none.
+db_t1_other_compose_names:
+  - compose.yaml
+  - docker-compose.yml
+  - docker-compose.yaml
+  - compose.override.yml
+  - compose.override.yaml
+  - docker-compose.override.yml
+  - docker-compose.override.yaml
+  - .env
+
+# ----- The database image -----
+
+# The one registry the image may come from: the organisation's own, where an
+# attested image is published. The digest is mandatory; a tag is not accepted,
+# because a tag can move. Empty is allowed and means no deploy. The deploy program
+# is the other control: it refuses a digest that is not attested.
+db_t1_image_pattern: '^ghcr\.io/branchleft/[a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*@sha256:[0-9a-f]{64}\Z'
+
+# The line branchleft-deploy writes to the pin file (write_image_env): IMAGE=, the
+# reference, a line break. The role compares it with the input and never writes it.
+db_t1_image_env_prefix: 'IMAGE='
+# A real line break. It is a variable because a backslash-n written inside an expression
+# is two characters to Ansible, not a line break, and the comparison would never match.
+db_t1_line_end: "\n"
+
+# The server the image must run, checked by the container's own health check on
+# every start: Percona Server 8.0.46-37, the build the isolation proof measured.
+# A different version fails the check, so the deploy does not report success.
+db_t1_server_version: 8.0.46-37
+db_t1_version_comment_prefix: Percona Server
+
+# The server id of this host in a replication topology. The upstream host is 1 and
+# the proofs ran this host as 2; changing it later breaks GTID bookkeeping.
+db_t1_server_id: 2
+
+# The numeric user the Percona image runs mysqld as (its Dockerfile: useradd -u
+# 1001). The socket directory, which is bind-mounted over the image's own, must
+# belong to that user or mysqld cannot create its socket and its pid file. The
+# image the organisation derives must keep this uid; the health check would fail
+# loudly otherwise.
+db_t1_container_uid: 1001
+
+# ----- The root credential file (owner-placed, never written by the role) -----
+
+# The shape of the one line the file may hold. The alphabet is what the image's
+# first-start script can put inside a SQL string without quoting, and what the
+# unit's environment-file parser keeps whole: a quote, a backslash, a dollar sign
+# or a space would break the first start in a way that leaves a half-initialised
+# data directory behind. The two patterns are applied to single lines by
+# lineinfile, which matches a line with its line break still on, so they end in $
+# and not in \Z.
+db_t1_secret_line_pattern: '^MYSQL_ROOT_PASSWORD=[A-Za-z0-9]{32,128}$'
+# Any non-blank line that is not the expected line, leading space included (systemd
+# strips it). systemd lets a later environment file override an earlier one, so an
+# IMAGE= line here would override the pin; the file must hold the one key and
+# nothing else. A test holds this pattern to the one above.
+db_t1_secret_stray_pattern: '^(?!MYSQL_ROOT_PASSWORD=[A-Za-z0-9]{32,128}$)\s*\S'
+db_t1_secret_file_mode: '0600'
+# The numeric owner and group the root file must have. Root is 0 and 0 on every host;
+# only the role's behaviour tests move them, with an extra variable, so that the same
+# tasks can run as an ordinary user in a scratch tree.
+db_t1_root_user_id: 0
+db_t1_root_group_id: 0

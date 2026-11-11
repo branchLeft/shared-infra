@@ -3,7 +3,7 @@
 # the owner steps leave it: the shared Compose unit template (a placeholder here, the
 # real one is part of the host baseline), the pin file the deploy wrapper writes, the
 # secrets file the owner places, and stand-ins for the programs the role's locked
-# script calls. The stand-ins prove wiring only (README, "Named limits").
+# module calls. The stand-ins prove wiring only (README, "Named limits").
 - name: Prepare
   hosts: all
   gather_facts: false

@@ -9,7 +9,7 @@
   vars:
     verify_repo: '{{ playbook_dir }}/../../../../../'
     verify_stack_source: '{{ verify_repo }}hetzner/control-plane/stack'
-    verify_provision_source: '{{ verify_repo }}hetzner/provision'
+    verify_policy_source: '{{ verify_repo }}ansible/roles/deploy_tooling/files'
     verify_project_dir: /opt/branchleft/control-plane
     verify_env_file: /etc/branchleft/control-plane.env
     verify_masterkey_file: /etc/branchleft/control-plane/zitadel-masterkey
@@ -36,10 +36,10 @@
           value: '{{ verify_stack_source }}/compose.init.yml'
         - key: postgres/pg_hba.conf
           value: '{{ verify_stack_source }}/postgres/pg_hba.conf'
-        - key: branchleft_docker_user_policy.sh
-          value: '{{ verify_provision_source }}/branchleft_docker_user_policy.sh'
+        - key: branchleft_docker_user_policy.py
+          value: '{{ verify_policy_source }}/branchleft_docker_user_policy.py'
         - key: branchleft-docker-user-policy.service
-          value: '{{ verify_provision_source }}/branchleft-docker-user-policy.service'
+          value: '{{ verify_policy_source }}/branchleft-docker-user-policy.service'
       loop_control:
         label: '{{ item.key }}'
       no_log: true
@@ -707,7 +707,7 @@
     - name: Assert the isolation reconciler and its unit are byte-equal to their sources
       ansible.builtin.assert:
         that:
-          - verify_reconciler_content == control_plane_verify_sources['branchleft_docker_user_policy.sh']
+          - verify_reconciler_content == control_plane_verify_sources['branchleft_docker_user_policy.py']
           - verify_unit_content == control_plane_verify_sources['branchleft-docker-user-policy.service']
         quiet: true
         fail_msg: The isolation reconciler or its unit differs from its source.

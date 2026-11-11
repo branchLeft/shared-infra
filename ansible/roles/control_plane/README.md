@@ -54,9 +54,9 @@ It does these, in order:
    container) so the delivered `pg_hba.conf` is the one in force, and removes the old
    `/opt/branchleft/control-plane/pg_hba.conf`. See "How a changed pg_hba.conf reaches the
    running database".
-8. Installs the DOCKER-USER isolation reconciler and its unit byte for byte from
-   `hetzner/provision/`, enables the unit, and restarts it only when the
-   reconciler or the unit changed.
+8. Installs the DOCKER-USER isolation reconciler (a Python program) and its unit byte for
+   byte, through links in `files/` to the `deploy_tooling` role's own copies (the one home
+   of each), enables the unit, and restarts it only when the reconciler or the unit changed.
 
 The role never removes a volume, an environment file, a master key or a container, and
 removes one file only: the access rules at their old place, once the stack runs on the
@@ -111,6 +111,49 @@ when approving the gate. Every apply after that only reloads.
   access rules at their old path (`/opt/branchleft/control-plane/pg_hba.conf`). The
   runbook's rsync used `--delete`; this role copies, and any other removed file stays
   on the host until someone removes it by hand.
+
+### The preflight on a host Nextcloud shares
+
+`ops1` runs Nextcloud beside the control plane, has no swap, and holds the only copy of
+Nextcloud's data. The role's first tasks and its last task use the module
+`library/control_plane_preflight.py`, which only reads, so check mode runs it too and a plan
+shows a refusal:
+
+1. **Collisions, first of all, on every run.** The run is refused, before any task that reads or
+   writes the host, if a Compose project name or a volume name the deploy is configured with is
+   Nextcloud's: the role's `control_plane_project_name`, the project directory's name, the unit's
+   instance, the `name:` of either Compose file, and every volume the Compose files would create
+   (a volume's `name:` if it has one, else the project name, an underscore and its key; an
+   external volume by its key). Project names are compared without regard to case. A name that
+   holds `$` is filled in when Compose runs, so it cannot be shown to differ and is refused. The
+   refusal codes are `project-collision`, `volume-collision` and `unverifiable-name`.
+2. **Room, then the first record.** Where the role would start or change containers
+   (`control_plane_bring_up` or `control_plane_start_units`), the run is refused if the memory
+   available is under the floor, or the free space on `/` or on Docker's data root is under the
+   floor (`memory-low`, `disk-low`), and the record is taken: memory, swap, free disk, how many
+   containers the stack has, and Nextcloud's containers (id, name, creation and start time,
+   state, restart count, image, Compose project, configuration hash, project directory, health),
+   volumes (name, creation time, mount point, project) and Compose project. A figure the module
+   cannot read is a refusal (`memory-unreadable`, `disk-unreadable`, `docker-unreadable`), never
+   a pass.
+3. **The comparison, last of all.** The record is taken again and the run fails
+   (`nextcloud-changed`) if any container or volume of Nextcloud's is gone, new or differs in any
+   field above except health, or if its containers' Compose project differs. Health is recorded
+   and not compared: it moves with load and a restart shows in the start time and the count. Both
+   records are printed.
+
+The floors are constants in `vars/main.yml`, so an inventory or play variable cannot lower them:
+memory 2664 MiB available while the stack has no container (the four hard limits, 1664 MiB, plus
+a margin of 1000 MiB), 1000 MiB once it has one (its memory is then already in use, and 2664
+would refuse an ordinary re-apply on a host that has run it), and 5120 MiB free disk on each of
+the two file systems. They are the figures of the delivery runbook, in the units `free -m` and
+`df -BM` print.
+
+Nextcloud's project name and its two volume names are constants of the module. A unit test
+holds them equal to `hetzner/nextcloud1/stack/compose.yml`, so renaming them there fails a test.
+The module reads Docker with five fixed commands (`info`, `ps --all`, `inspect`, `volume ls`,
+`volume inspect`) and a format that names fields, never a container's environment, because
+Nextcloud's containers hold credentials there.
 
 ## Interface
 
@@ -187,6 +230,7 @@ by the owner is what moves it.
 
 ## What it changes on a host
 
+- Nothing, by the preflight: it reads memory, disk and Docker and writes nothing.
 - `/etc/branchleft` (`0755`), `/etc/branchleft/control-plane` (`0750`),
   `/var/lib/branchleft/control-plane/zitadel-state` (`0700`, owned `1000:1000`).
 - `/etc/branchleft/control-plane.env` (`0600`, root) and
@@ -286,6 +330,13 @@ converge is the idempotence step. `verify.yml` checks:
   with a running image that is a tag it stops with `control_plane[image-not-pinned]`;
 - that no throwaway value, from any apply, appears in the run's log.
 
+The module's tests run from the role's directory with the module on the path:
+`PYTHONPATH=library python -m unittest discover -s tests/unit -p 'test_control_plane_preflight.py'`.
+They use a fake Docker that answers from tables, files for memory and a function for disk, and
+they run the real role under `ansible-playbook` in check mode to show that Nextcloud's project
+name, or a volume of Nextcloud's in the Compose files, stops the run before its second task.
+Each refusal is proven by sabotage (the test names the line to break).
+
 `tests/unit/` reads `tasks/main.yml` and holds the structure the safety depends on:
 every input refusal is before the first write, every task that runs Compose directly
 is gated on a stack that is not yet deployed, the two reads of the running stack run in
@@ -334,3 +385,13 @@ command of the role can remove a container or a volume.
   on them being present, as the runbook did.
 - **Compose's state is not read back by Ansible.** `--wait` is the check; no task
   reads the container list after it.
+- **The host reads of the preflight are not exercised against a real Docker.** The tests use a
+  fake that answers the five commands; the real output of `docker inspect` with the module's
+  format is first seen on the host. The container scenario runs with the bring-up off, so it
+  runs the collision check and skips the host reads.
+- **The comparison does not run if an earlier task failed.** A failed run has ended already, and
+  its failure is the signal; Nextcloud's state after a failed run is read by hand.
+- **The record is in the run's log, not on the host.** Nothing is written for it.
+- **A memory refusal can stop every later role of the host.** Roles after this one in the play do
+  not run when it fails. The running-stack floor is the margin for that, and the floors are
+  constants in `vars/main.yml`, changed by a reviewed commit and not by a variable.
