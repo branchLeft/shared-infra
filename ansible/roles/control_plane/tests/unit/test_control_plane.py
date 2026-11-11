@@ -62,6 +62,25 @@ def _tasks() -> list[dict[str, object]]:
     return [task for task in loaded if isinstance(task, dict)]
 
 
+def _flat_tasks(tasks: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Return the tasks and every task nested in a block, rescue or always, in file order."""
+    flat: list[dict[str, object]] = []
+    for task in tasks:
+        flat.append(task)
+        for key in ("block", "rescue", "always"):
+            nested = task.get(key)
+            if isinstance(nested, list):
+                flat.extend(_flat_tasks([item for item in nested if isinstance(item, dict)]))
+    return flat
+
+
+def _names(tasks: object) -> list[str]:
+    """Return the names of a list of tasks, or none when the value is not a list."""
+    if not isinstance(tasks, list):
+        return []
+    return [str(item.get("name")) for item in tasks if isinstance(item, Mapping)]
+
+
 def _section(task: Mapping[str, object], key: str) -> Mapping[str, object]:
     """Return the arguments of a task's module, which the test has just found there.
 
@@ -155,7 +174,7 @@ class InputTests(unittest.TestCase):
 
     def test_the_direct_compose_tasks_are_gated_on_a_stack_not_yet_deployed(self) -> None:
         gated = 0
-        for task in _tasks():
+        for task in _flat_tasks(_tasks()):
             words = _argv(task)
             direct = words[:2] == ["docker", "compose"]
             stamp = "Record that the init phase has completed" == task.get("name")
@@ -183,7 +202,7 @@ class InputTests(unittest.TestCase):
             self.assertIn(_argv(task)[1], ("ps", "inspect"), f"{name!r} is not a read")
 
     def test_only_the_settled_image_is_used_by_the_tasks_that_run_it(self) -> None:
-        for task in _tasks():
+        for task in _flat_tasks(_tasks()):
             command = task.get("ansible.builtin.command")
             if not isinstance(command, dict):
                 continue
@@ -200,6 +219,12 @@ DELIVER_COMPOSE = "Deliver the stack's compose files"
 MAKE_SUBDIRECTORIES = "Create the subdirectories of the stack"
 RELOAD = "Reload the database so the delivered access rules are the ones in force"
 REMOVE_LEGACY = "Remove the access rules file from its old place"
+DELIVERY_BLOCK = "Deliver the access rules, and undo the delivery if a step after it fails"
+KEEP = "Keep the access rules now on disk, so a failed delivery can be undone"
+STAT_KEPT = "Look at the kept access rules"
+RESTORE = "Put the kept access rules back on disk, where the database reads them"
+RELOAD_KEPT = "Reload the database on the kept access rules"
+REFUSE_UNDONE = "Refuse the delivery after the kept access rules were put back"
 STACK = ROLE.parents[2] / "hetzner" / "control-plane" / "stack"
 # Words that, in a command of this role, would take a container or a volume away.
 DESTRUCTIVE_WORDS = frozenset(
@@ -227,12 +252,42 @@ class HbaDeliveryTests(unittest.TestCase):
     """
 
     def setUp(self) -> None:
-        self.names = [name for name, _ in task_lines(TASKS)]
-        self.by_name = {str(task.get("name")): task for task in _tasks()}
+        flat = _flat_tasks(_tasks())
+        self.names = [str(task.get("name")) for task in flat]
+        self.by_name = {str(task.get("name")): task for task in flat}
 
     def _position(self, name: str) -> int:
         self.assertEqual(self.names.count(name), 1, f"{name!r} must appear exactly once")
         return self.names.index(name)
+
+    def test_a_failed_step_after_the_delivery_puts_the_kept_rules_back_and_reloads(self) -> None:
+        found = [task for task in _tasks() if task.get("name") == DELIVERY_BLOCK]
+        self.assertEqual(len(found), 1, "the access rules are not delivered inside one block")
+        block = found[0]
+        for name in (DELIVER_OTHER, WRAPPER, UNIT_ACTIVE, RELOAD):
+            self.assertIn(name, _names(block["block"]), f"{name!r} is outside the block")
+        rescue = _names(block.get("rescue"))
+        self.assertEqual(rescue, [STAT_KEPT, RESTORE, RELOAD_KEPT, REFUSE_UNDONE])
+        restore = self.by_name[RESTORE]
+        copy = _section(restore, "ansible.builtin.copy")
+        self.assertEqual(copy["src"], "{{ control_plane_hba_previous }}")
+        self.assertEqual(copy["dest"], "{{ control_plane_hba_live }}")
+        self.assertIs(copy.get("remote_src"), True)
+        self.assertIn("control_plane_hba_previous_stat.stat.exists", _conditions(restore))
+        reload_kept = self.by_name[RELOAD_KEPT]
+        self.assertEqual(_argv(reload_kept), _argv(self.by_name[RELOAD]))
+        self.assertIs(reload_kept.get("changed_when"), False)
+        self.assertIn("control_plane_start_units | ansible.builtin.bool", _conditions(reload_kept))
+        self.assertIn("ansible.builtin.fail", self.by_name[REFUSE_UNDONE])
+
+    def test_the_rules_on_disk_are_kept_before_the_block_and_never_in_check_mode(self) -> None:
+        self.assertLess(self._position(KEEP), self._position(DELIVERY_BLOCK))
+        self.assertLess(self._position(KEEP), self._position(DELIVER_OTHER))
+        keep = self.by_name[KEEP]
+        copy = _section(keep, "ansible.builtin.copy")
+        self.assertEqual(copy["dest"], "{{ control_plane_hba_previous }}")
+        self.assertIs(copy.get("remote_src"), True)
+        self.assertIn("not ansible_check_mode", _conditions(keep))
 
     def test_the_reload_comes_after_the_wrapper_and_after_the_stack_files_are_delivered(
         self,
@@ -310,7 +365,7 @@ class HbaDeliveryTests(unittest.TestCase):
 
     def test_no_task_removes_a_container_or_a_volume(self) -> None:
         # The data lives in the db-data volume. Nothing the role runs may take it away.
-        for task in _tasks():
+        for task in _flat_tasks(_tasks()):
             words = set(_argv(task))
             self.assertEqual(
                 words & DESTRUCTIVE_WORDS,
