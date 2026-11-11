@@ -816,6 +816,23 @@ describe('the notify="on-host" label', () => {
   });
 });
 
+describe('HostCPUSaturated', () => {
+  // Scope: no job or host filter, so it covers every instance node_exporter
+  // scrapes, the same as HostMemoryPressure. Warning, never page: a sustained
+  // CPU ceiling is a sizing signal, not an outage.
+  it('watches busy and stolen CPU on every host, warning severity, for 30 minutes', () => {
+    const rule = renderAlertRules()
+      .split('- alert: ')
+      .find((r) => r.startsWith('HostCPUSaturated'));
+    expect(rule).toBeDefined();
+    expect(rule).toContain('node_cpu_seconds_total{mode="idle"}');
+    expect(rule).toContain('node_cpu_seconds_total{mode="steal"}');
+    expect(rule).toContain('for: 30m');
+    expect(rule).toContain('severity: warning');
+    expect(rule).not.toMatch(/\bjob=|\bhost=/);
+  });
+});
+
 describe('the owner_action="true" label', () => {
   // Exact set, both directions: a missing label leaves an owner-only chore in
   // a mailbox the owner does not read; a stray one sends routine mail off-host.
@@ -827,6 +844,7 @@ describe('the owner_action="true" label', () => {
       .map((rule) => rule.split('\n')[0]);
     expect(labelled).toEqual([
       'HostMemoryPressure',
+      'HostCPUSaturated',
       'HostDiskSpaceLow',
       'MySQLConnectionsHigh',
       'TLSCertificateExpiringSoon',
