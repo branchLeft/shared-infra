@@ -10,9 +10,14 @@ copy and green on the copy left alone.
 
 from __future__ import annotations
 
+import hashlib
+import re
 import unittest
 from pathlib import Path
 
+import check_enrolment
+import jinja2  # type: ignore[import-untyped]
+import yaml  # type: ignore[import-untyped]
 from check_enrolment import ROOT
 
 PROVISION = ROOT / "hetzner" / "provision"
@@ -37,6 +42,7 @@ PAIRS = (
 JAIL_SCRIPT = "10-harden-updates-fail2ban.sh"
 JAIL_POSITION = 2
 JAIL_INPUT = "host_baseline_fail2ban_ignoreip"
+JAIL_NONE_INPUT = "host_baseline_fail2ban_ignoreip_none"
 
 
 def _heredocs(script: Path) -> list[str]:
@@ -126,18 +132,23 @@ def _role_default(name: str) -> str:
     raise AssertionError(message)
 
 
-def _rendered_jail() -> str:
+def _rendered_jail(ignoreip_none: bool = False) -> str:
     """Return the jail the template renders at the role's default ignoreip input.
 
-    Raises:
-        AssertionError: the template holds a placeholder the test does not fill.
+    The template holds a Jinja block (the opt-out), so it is rendered with Jinja, with the
+    trim settings Ansible's template module uses, and no variable is left undefined.
     """
+    env = jinja2.Environment(  # noqa: S701 - a plain-text template, not HTML
+        trim_blocks=True,
+        keep_trailing_newline=True,
+        undefined=jinja2.StrictUndefined,
+    )
     text = (ROLE / "templates" / "jail.local.j2").read_text(encoding="utf-8")
-    rendered = text.replace("{{ " + JAIL_INPUT + " }}", _role_default(JAIL_INPUT))
-    if "{{" in rendered:
-        message = "jail.local.j2 holds a placeholder this test does not fill"
-        raise AssertionError(message)
-    return rendered
+    variables = {
+        JAIL_INPUT: _role_default(JAIL_INPUT),
+        JAIL_NONE_INPUT: ignoreip_none,
+    }
+    return env.from_string(text).render(variables)
 
 
 class HostBaselineMatchesScripts(unittest.TestCase):
@@ -175,6 +186,74 @@ class HostBaselineMatchesScripts(unittest.TestCase):
 
     def test_the_docker_apt_line_renders_to_the_scripts_line_for_amd64_trixie(self) -> None:
         self.assertEqual(_rendered_docker_line(), _docker_line_of_script() + "\n")
+
+
+MAIL_PROVISION = ROOT / "mail" / "provision"
+MX1_JAIL_SHA256 = "51f4f2f5249a0daeb4f056185a2c8ebe47c58e28dbf922b7577b0c10eb40b257"
+MX1_DROPIN_SHA256 = "6a481602fc503d4709e3c7ea43630e3c3c66cb6b91cc4709202163f213122bf8"
+MX1_PLAYBOOK = ROOT / "ansible" / "playbooks" / "mx1.yml"
+ASSERT_TASKS = ROLE / "tasks" / "_updates_fail2ban.yml"
+ARGUMENT_SPECS = ROLE / "meta" / "argument_specs.yml"
+OPT_OUT_KEY = "host_baseline_fail2ban_ignoreip_none"
+IGNOREIP_PATTERN = "^[0-9A-Fa-f:./ ]+\\Z"
+
+
+class Mx1OptOut(unittest.TestCase):
+    """The mx1 jail is the mail script's jail: no ignoreip line, and the opt-out writes that.
+
+    The mail host's scripts wrote the jail with no ignore list and the sshd drop-in as 99-.
+    The role writes the same bytes as 01-, so mx1 holds an identical duplicate it keeps (the
+    accepted duplicate is left in place). Each pin is red on a sabotaged template or task and
+    green on the copy left alone.
+    """
+
+    def test_the_opt_out_renders_the_mail_scripts_jail_byte_for_byte(self) -> None:
+        # The mail script writes two heredocs: the auto-upgrades file, then the jail (position 1).
+        bodies = _heredocs(MAIL_PROVISION / "10-harden-updates-fail2ban.sh")
+        self.assertEqual(len(bodies), 2)
+        rendered = _rendered_jail(ignoreip_none=True)
+        self.assertEqual(rendered, bodies[1])
+        self.assertEqual(hashlib.sha256(rendered.encode("utf-8")).hexdigest(), MX1_JAIL_SHA256)
+
+    def test_the_default_keeps_the_ignore_list_line(self) -> None:
+        rendered = _rendered_jail(ignoreip_none=False)
+        self.assertIn("ignoreip = " + _role_default(JAIL_INPUT) + "\n", rendered)
+
+    def test_the_mail_sshd_drop_in_is_the_role_file_under_its_own_name(self) -> None:
+        bodies = _heredocs(MAIL_PROVISION / "00-harden-ssh.sh")
+        self.assertEqual(len(bodies), 1)
+        role_file = (ROLE / "files" / "01-branchleft-hardening.conf").read_bytes()
+        self.assertEqual(role_file, bodies[0].encode("utf-8"))
+        self.assertEqual(hashlib.sha256(role_file).hexdigest(), MX1_DROPIN_SHA256)
+
+    def test_the_ignore_list_is_asserted_on_every_host(self) -> None:
+        # The assert has no `when`, so an empty input refuses whether or not the opt-out is set.
+        tasks = yaml.safe_load(ASSERT_TASKS.read_text(encoding="utf-8"))
+        asserts = [
+            task
+            for task in tasks
+            if "ansible.builtin.assert" in task
+            and "ignoreip" in str(task["ansible.builtin.assert"])
+        ]
+        self.assertEqual(len(asserts), 1)
+        self.assertNotIn("when", asserts[0])
+        expressions = asserts[0]["ansible.builtin.assert"]["that"]
+        self.assertTrue(any(IGNOREIP_PATTERN in str(item) for item in expressions), expressions)
+
+    def test_the_pattern_refuses_an_empty_ignore_list(self) -> None:
+        self.assertIsNone(re.match(IGNOREIP_PATTERN, ""))
+
+    def test_the_opt_out_is_declared_as_a_boolean_defaulting_to_false(self) -> None:
+        specs = yaml.safe_load(ARGUMENT_SPECS.read_text(encoding="utf-8"))
+        option = specs["argument_specs"]["main"]["options"][OPT_OUT_KEY]
+        self.assertEqual(option["type"], "bool")
+        self.assertIs(option["default"], False)
+
+    def test_mx1_is_enrolled_and_the_opt_out_is_pinned_in_the_enrolment_check(self) -> None:
+        # R2 holds the play's vars to exactly HOST_PLAY_VARS, so the playbook and the pin agree.
+        play = yaml.safe_load(MX1_PLAYBOOK.read_text(encoding="utf-8"))[0]
+        self.assertEqual(play["vars"], {"enrolled_host": "mx1", OPT_OUT_KEY: True})
+        self.assertIs(check_enrolment.HOST_PLAY_VARS["mx1"][OPT_OUT_KEY], True)
 
 
 if __name__ == "__main__":
