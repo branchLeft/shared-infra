@@ -221,6 +221,9 @@ hetzner/provision/test_00_harden_ssh.py:
   - hetzner/provision/run-all.sh
   - mail/provision/00-harden-ssh.sh
   - mail/provision/run-all.sh
+hetzner/provision/test_05_configure_host_egress.py:
+  - hetzner/provision/05-configure-host-egress.sh
+  - hetzner/provision/branchleft_host_egress.sh
 hetzner/provision/test_20_install_docker.py:
   - hetzner/provision/20-install-docker.sh
   - mail/provision/20-install-docker.sh
