@@ -1,0 +1,8 @@
+---
+# Where the owner places the two secret files. A path, never a value. Each is one name
+# directly under /etc/branchleft: the role refuses anything else, because the path is
+# written into a bind-mount line.
+sweego_receiver_signing_secret_file: /etc/branchleft/sweego-receiver-signing-secret
+# Optional second signing secret, for a rotation. Empty means no rotation is in progress.
+sweego_receiver_previous_signing_secret_file: ''
+sweego_receiver_drain_token_file: /etc/branchleft/sweego-receiver-drain-token

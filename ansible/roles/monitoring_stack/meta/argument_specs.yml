@@ -16,7 +16,9 @@ argument_specs:
       when the unit is enabled, whatever state it is in; a unit that is not enabled
       is left alone for runbook step 7a. The role sets one fact for its caller,
       monitoring_stack_restart_due. The seven values arrive from the caller; the role
-      never reads, generates or stores one. It removes nothing. The renderer is
+      never reads, generates or stores one. It removes no file; it removes the stale NTFY_
+      lines from the secrets file once the pager's file holds all four keys, and writes the
+      pager gauge (branchleft_pager_route_configured) for the node-exporter. The renderer is
       delivered by ntfy_pager, which must run before this role.
     author: branchLeft
     options:

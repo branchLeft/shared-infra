@@ -917,9 +917,11 @@ describe('detect-only', () => {
    */
   it('is what the committed posture says, so enforcement cannot arrive by redeploy', () => {
     expect(POSTURE).toEqual({
-      // In-band AppSec only: a known-bad request shape gets a 403, and no
-      // address is banned. The IP-decision handler is the next stage.
-      crowdsec: 'inband-only',
+      // In-band AppSec and the IP-decision handler: a known-bad request shape
+      // gets a 403, and an address the checker has banned is refused ahead of
+      // the proxy. When the checker is slow or down, requests pass: see the
+      // fail-open describe below.
+      crowdsec: 'enforcing',
       // On, by the owner's ruling (2026-11-03,
       // "Turn it on") at the parity value, RATE_LIMIT_EVENTS per
       // RATE_LIMIT_WINDOW_SECONDS per direct peer address, answered 429. It
@@ -1060,6 +1062,126 @@ describe("the committed posture's general throttle", () => {
         expect(general, block.addresses[0]).toBeLessThan(proxy);
       }
     }
+  });
+});
+
+/**
+ * The committed posture's IP-decision handler and the checker's failure
+ * behaviour. Each throttled block kind is counted from the registries, never
+ * from a hard-coded total, so a block that stops calling `protectionChain`
+ * fails on its own kind. The decision on a slow or unreachable checker is
+ * "let the request through": the assertions below pin each token that makes
+ * that so, because the bouncer's default for the AppSec half is the opposite.
+ */
+describe("the committed posture's IP-decision handler", () => {
+  const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
+
+  /** Top-level blocks keyed by their address list. */
+  const blocksOf = (text: string): Array<{ addresses: string[]; text: string }> => {
+    const found: Array<{ addresses: string[]; text: string }> = [];
+    for (const chunk of text.split(/\n(?=\S.* \{\n)/)) {
+      const header = chunk.split('\n')[0] ?? '';
+      if (!header.endsWith(' {')) continue;
+      found.push({ addresses: header.slice(0, -2).split(', '), text: chunk });
+    }
+    return found;
+  };
+  const blocks = blocksOf(rendered);
+  const blockAt = (address: string) => blocks.find((block) => block.addresses.includes(address));
+
+  /** The handler only: two tabs deep, bare. The global options block is one tab deep with a brace. */
+  const HANDLER = /^\t\tcrowdsec$/gm;
+  const handlerCount = (text: string): number => (text.match(HANDLER) ?? []).length;
+
+  const servable = servableSites(sites);
+  const servableHostnames = new Set(servable.flatMap((entry) => entry.hostnames));
+  const redirects = hostRedirects.filter(
+    (redirect) => servableHostnames.has(redirect.from) && servableHostnames.has(redirect.to)
+  );
+  const redirectSources = new Set(redirects.map((redirect) => redirect.from));
+  const siteAddresses = servable
+    .map((entry) => entry.hostnames.find((hostname) => !redirectSources.has(hostname)))
+    .filter((address): address is string => address !== undefined);
+  const redirectBlockAddresses = redirects.map((redirect) => redirect.from);
+  const staticAddresses = staticSites.map((entry) => entry.hostname);
+  const PROBE_ADDRESSES = ['http://edge-probe.invalid:8080', ':8080'];
+
+  const kinds: Array<[string, string[]]> = [
+    ['servable site blocks', siteAddresses],
+    ['redirect blocks', redirectBlockAddresses],
+    ['static site blocks', staticAddresses],
+    ['probe blocks', PROBE_ADDRESSES],
+  ];
+
+  it.each(kinds)('puts exactly one IP-decision handler in each of the %s', (_kind, addresses) => {
+    expect(addresses.length).toBeGreaterThan(0);
+    for (const address of addresses) {
+      const block = blockAt(address);
+      expect(block, `block ${address} must be rendered`).toBeDefined();
+      expect(handlerCount(block!.text), `crowdsec handler in ${address}`).toBe(1);
+    }
+  });
+
+  it('renders as many handlers as there are protected blocks, and no more', () => {
+    const expected =
+      siteAddresses.length +
+      redirectBlockAddresses.length +
+      staticAddresses.length +
+      PROBE_ADDRESSES.length;
+    expect(handlerCount(rendered)).toBe(expected);
+  });
+
+  it('leaves the :9091 metrics listener without the handler', () => {
+    const metrics = blockAt(':9091');
+    expect(metrics, 'the metrics listener must be rendered').toBeDefined();
+    expect(metrics!.text).not.toMatch(/^\t+crowdsec$/m);
+  });
+
+  it('never lets a block reach AppSec or the proxy without the IP-decision handler first', () => {
+    const guarded = blocks.filter((entry) => handlerCount(entry.text) === 1);
+    expect(guarded.length).toBeGreaterThan(0);
+    for (const block of guarded) {
+      const handler = block.text.search(/^\t\tcrowdsec$/m);
+      const appsec = block.text.search(/^\t\tappsec\b/m);
+      const proxy = block.text.indexOf('reverse_proxy');
+      if (appsec !== -1) expect(handler, block.addresses[0]).toBeLessThan(appsec);
+      if (proxy !== -1) expect(handler, block.addresses[0]).toBeLessThan(proxy);
+    }
+    const unguarded = blocks.filter(
+      (entry) => /^\t\tappsec\b/m.test(entry.text) && handlerCount(entry.text) === 0
+    );
+    expect(unguarded.map((entry) => entry.addresses[0])).toEqual([]);
+  });
+
+  it('loads the in-band AppSec configuration, so the known-exploit refusal is armed', () => {
+    const configs = renderAppsecAcquisition(POSTURE)
+      .split('\n')
+      .filter((line) => line.startsWith('  - '))
+      .map((line) => line.slice(4));
+    expect(configs).toEqual(['crowdsecurity/appsec-default', 'crowdsecurity/crs']);
+  });
+
+  describe('when the checker is slow or down, the request is let through', () => {
+    const globalBlock = rendered.split('\n}\n')[0] ?? '';
+
+    it('lets a request pass when the AppSec verdict does not arrive', () => {
+      expect(globalBlock).toMatch(/^\t\tappsec_fail_open$/m);
+    });
+
+    it('bounds the wait for a verdict at one second', () => {
+      expect(globalBlock).toContain('\t\tappsec_timeout 1s\n');
+    });
+
+    it('does not turn a failure to reach the decision service into a refusal', () => {
+      // `enable_hard_fails` is the bouncer's switch for refusing when the local
+      // decision service cannot be reached. Absent, a stopped CrowdSec leaves
+      // the last decisions in force and everything else through.
+      expect(globalBlock).not.toMatch(/hard_fail/);
+    });
+
+    it('polls decisions on an interval, so the handler answers from its cache', () => {
+      expect(globalBlock).toMatch(/^\t\tticker_interval \d+s$/m);
+    });
   });
 });
 
@@ -1354,6 +1476,7 @@ const BLOG_BLOCK = `
 				events 5
 			}
 		}
+		crowdsec
 		appsec @inspected
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.100:8101

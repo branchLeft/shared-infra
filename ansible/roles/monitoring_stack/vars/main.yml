@@ -68,6 +68,29 @@ monitoring_stack_env_file: /etc/branchleft/monitoring.env
 # Molecule scenario asserts the two and the drop-in agree.
 monitoring_stack_ntfy_env_file: /etc/branchleft/ntfy-pager.env
 
+# The four names ntfy_pager writes into its file. The pager is configured when the
+# file holds a value for every one. A copy of ntfy_pager's constant (no role imports
+# another, ANS-12); the Molecule scenario asserts the two lists are equal.
+monitoring_stack_ntfy_env_keys:
+  - NTFY_PAGER_TOKEN
+  - NTFY_WATCHER_TOKEN
+  - NTFY_OWNER_PASSWORD_HASH
+  - NTFY_MACHINE_PASSWORD_HASH
+
+# The lines the role removes from monitoring.env: any line that starts with NTFY_
+# and a plain name and an equals sign, as the hand-written ones did. Held here so a
+# unit test can run the same expression over sample lines.
+monitoring_stack_stale_key_regexp: '^NTFY_[A-Z0-9_]*='
+
+# The pager gauge. The directory is the one the stack's node-exporter reads as its
+# textfile collector (the stack's compose file mounts it read-only), made by
+# exporters_and_collectors for the SNDS collector; this role writes one file in it,
+# which no other role writes. The metric name is the one the NtfyPagerDisabled alert
+# queries; a unit test asserts the two agree.
+monitoring_stack_textfile_dir: /var/lib/branchleft/snds-exporter
+monitoring_stack_pager_gauge: branchleft_pager_route_configured
+monitoring_stack_pager_gauge_file: /var/lib/branchleft/snds-exporter/pager.prom
+
 # The seven keys this role writes, each mapped to the input that carries its
 # value. The key names are fixed here so no caller can rename a key the stack
 # reads. Keys written by ntfy_pager (the NTFY_ lines, in its own file) and the

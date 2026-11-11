@@ -322,7 +322,7 @@ is in the state that file says:
 
 | Switch                      | Committed state | What that means here                                           |
 | --------------------------- | --------------- | -------------------------------------------------------------- |
-| `crowdsec`                  | `detect-only`   | sees everything, records what it would act on, blocks nothing  |
+| `crowdsec`                  | `enforcing`     | in-band 403 on known-bad shapes, and banned addresses refused  |
 | `rateLimit`                 | `enforcing`     | the general 200/60s per-address throttle is on for every block |
 | `membersMagicLinkRateLimit` | `enforcing`     | POSTs to Ghost's magic-link path are throttled at 5/60s        |
 
@@ -509,7 +509,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 ```
 
 Expect `204`. The request reached the WAF, tripped an OWASP Core Rule Set rule,
-and was answered normally — which is the whole of what detect-only means.
+and was answered normally, because the Core Rule Set is loaded out-of-band: it
+alerts and never refuses a request, in every posture.
 
 **d. The detection is recorded.**
 
@@ -521,8 +522,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 ```
 
 Expect at least one alert naming an AppSec scenario. Decisions may be empty or
-may list bans that nothing is enforcing — either is correct in this posture, and
-the second is the evidence the review in step 9 is about.
+may list bans; with the IP-decision handler committed, a listed ban is refused
+at the edge, and the review in step 9 is about whether each one is deserved.
 
 ## 9. The detect-only period, and the review that ends it
 
@@ -561,7 +562,7 @@ literally the configuration the host will run.
 | --------------------------- | --------------------------------- | -------------------------------------------------------------------- |
 | `membersMagicLinkRateLimit` | **`enforcing`** — already flipped | §8b                                                                  |
 | `rateLimit`                 | **`enforcing`** — committed       | §10a: the pre-apply check gates the apply; §8a proves it trips after |
-| `crowdsec`                  | `inband-only`                     | §10b below completes it with the IP-decision handler                 |
+| `crowdsec`                  | **`enforcing`** — committed       | §10b: the in-band 403 and the IP-decision handler are both in force  |
 
 `rateLimit` is committed as `enforcing`, but committing does not deliver it:
 `hetzner/edge/stack/**` reaches `edge1` only through the gated apply, and §10a's
@@ -777,10 +778,16 @@ above, performed by whoever holds `~/.ssh/id_ed25519_hetzner`.
 
 ### 10b. The WAF and IP remediation
 
-Same four steps. The committed `crowdsec: 'inband-only'` already loads the
-in-band AppSec configuration in `crowdsec/acquis.d/appsec.yaml`: a known-bad
-request shape gets a 403 and no address is banned. Setting
-`crowdsec: 'enforcing'` adds the IP-decision handler to the Caddy route chain.
+Same four steps. The committed `crowdsec: 'enforcing'` loads the in-band AppSec
+configuration in `crowdsec/acquis.d/appsec.yaml`, so a known-bad request shape
+gets a 403, and puts the IP-decision handler in every protected Caddy route
+chain, so a banned address is refused ahead of the proxy. Setting
+`crowdsec: 'inband-only'` takes the handler out again and leaves the 403.
+
+When the checker is slow or down the edge lets requests through: the AppSec
+verdict is bounded at one second and then waived (`appsec_fail_open`), and the
+bouncer is not set to refuse when it cannot reach CrowdSec, so a stopped
+CrowdSec leaves the last decisions in force and everything else served.
 
 Confirm it took. `$EDGE1_IPV4` is set under "What has to be true first"
 above; re-set it first if you are entering this section independently:
