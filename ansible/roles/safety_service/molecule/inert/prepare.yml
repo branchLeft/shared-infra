@@ -39,7 +39,15 @@
         group: root
         mode: '0755'
 
-    - name: Put made-up text where the key and the credential would be
+    - name: Make the directory the owner fills with the hash-source credential
+      ansible.builtin.file:
+        path: '{{ scenario_credential_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put made-up text where the key and the two credential files would be
       ansible.builtin.copy:
         content: 'NOT-A-REAL-SECRET stand-in for {{ item }}'
         dest: '{{ item }}'
@@ -48,7 +56,8 @@
         mode: '0644'
       loop:
         - '{{ scenario_key_file }}'
-        - '{{ scenario_credential_file }}'
+        - '{{ scenario_username_file }}'
+        - '{{ scenario_password_file }}'
       no_log: true
 
     - name: Install a stand-in docker client that records its arguments and stays up

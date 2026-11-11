@@ -16,8 +16,9 @@ The role:
 1. Checks that `docker`, `/etc/branchleft` and `/var/lib/branchleft` exist and are root's and that
    no one else can change them. It makes none of them (`host_inputs` and the roles before it do).
 2. Makes the system account `content-safety` (no login, no home) and its group.
-3. Makes `/etc/branchleft/safety-service` (root's, `0755`) and `/var/lib/branchleft/safety-service`
-   (the account's, `0700`, which holds the audit trail).
+3. Makes `/etc/branchleft/safety-service` (root's, `0755`), `/etc/branchleft/arachnid` (the
+   account's, `0700`, which holds the hash-source credential's two files, placed by the owner) and
+   `/var/lib/branchleft/safety-service` (the account's, `0700`, which holds the audit trail).
 4. Writes the environment file (the image and the account's numeric ids) and, when the service is
    meant to run, the configuration (`config.json`). Both hold public values only.
 5. Installs the unit `content-safety.service` as a static file, then holds it enabled and started
@@ -28,17 +29,18 @@ The service is **meant to run** only when both `safety_service_arachnid_base_url
 about what the host does until the owner sets them.
 
 The role does not write the channel signing key (`safety_channel_key` makes it), does not place the
-hash-source credential (the owner does, into `/etc/branchleft/content-safety/arachnid-credential`,
-and no role handles its value), does not
-pull the image ahead of the first start (Docker pulls it by digest when the unit first runs), and
-does not decide which hosts are dialled (that is the owner's input below).
+hash-source credential's two files (the owner does, into `/etc/branchleft/arachnid`, and no role
+handles their values), does not pull the image ahead of the first start (Docker pulls it by digest
+when the unit first runs), and does not decide which hosts are dialled (that is the owner's input
+below).
 
 ## Fail closed
 
 A service that cannot answer is not a pass, and the host end holds an upload that has no verdict.
 This role keeps its half of that: the unit does not start unless the configuration, the signing key
-and the hash-source credential are all on the host (three `ConditionPathExists` lines, so a missing
-one leaves the unit inactive and not failed), the service refuses to start without its credential,
+and the hash-source credential's two files are all on the host (four `ConditionPathExists` lines, so
+a missing one leaves the unit inactive and not failed), the service refuses to start without its
+credential,
 and a role run that holds the service off never writes the configuration. Nothing in the role
 makes a host see "allow" for want of an answer.
 
@@ -78,18 +80,20 @@ inputs: an inventory value cannot move them.
 | `/etc/branchleft/safety-service`             | root    | `0755` | The directory of the two public files below         |
 | `/etc/branchleft/safety-service/config.json` | root    | `0644` | The service's configuration; absent while it is off |
 | `/etc/branchleft/safety-service/service.env` | root    | `0644` | The image and the account's ids, public values      |
+| `/etc/branchleft/arachnid`                   | service | `0700` | The directory of the two credential files below     |
 | `/var/lib/branchleft/safety-service`         | service | `0700` | The audit trail, written by the service             |
 | `/etc/systemd/system/content-safety.service` | root    | `0644` | The unit                                            |
 
-It also makes the `content-safety` account and group. It names, and never writes, the key and the
-credential in `/etc/branchleft/content-safety`.
+It also makes the `content-safety` account and group. It names, and never writes, the signing key in
+`/etc/branchleft/content-safety` (the key role's directory, which refuses any other file, so the
+credential is never placed there).
 
 ## What the unit runs
 
 `docker run --rm` of the pinned image, as the account's numeric id, with a read-only root
 filesystem, every capability dropped, no new privileges, no published port and no network option
-(the service only dials). Three bind mounts: the configuration directory and the key and
-credential directory, both read-only, and the state directory, read-write. The only variable passed
+(the service only dials). Four bind mounts: the configuration directory, the key directory and the
+credential directory, all read-only, and the state directory, read-write. The only variable passed
 into the container names the configuration file. The Docker socket, the host's other directories
 and the environment file are not mounted.
 
@@ -101,11 +105,16 @@ the owner sets `safety_channel_key_owner` and `safety_channel_key_group` to `con
 later change, and the key role adopts the existing key to that owner without touching its bytes.
 That change waits for the first apply of this role, because the key role refuses an account the
 host does not yet have, and that includes the plan. This role goes before the key role in the
-playbook so the account exists when the later change reaches it. The hash-source credential is placed by the owner in
-`/etc/branchleft/content-safety/arachnid-credential`, owned by the account and not readable by
-group or others, which the service enforces. Until both exist the unit does not start. After the
-owner places the credential, the next gated apply starts the unit, because the role converges it to
-started on every run.
+playbook so the account exists when the later change reaches it. The hash-source credential is a
+username and a password (HTTP Basic), held in two files the owner places in `/etc/branchleft/arachnid`:
+`username` and `password`, each owned by the account, mode `0400`, one line with no other content.
+The service reads them by the paths in its configuration (`arachnid.usernameFile` and
+`arachnid.passwordFile`) and refuses a file readable by group or others. Until all of them exist the
+unit does not start. After the owner places the credential, the next gated apply starts the unit,
+because the role converges it to started on every run.
+
+The paths are fixed by the role's `vars/main.yml`, not by inventory. The values are placed by the owner
+and never pass through a repository, an issue, a transcript or a command line.
 
 ## How to test it
 

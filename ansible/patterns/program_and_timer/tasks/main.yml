@@ -159,7 +159,7 @@
     owner: '{{ program_and_timer_service_user | default("root", true) }}'
     group: '{{ program_and_timer_service_group | default("root", true) }}'
     mode: '0755'
-    validate: /bin/sh %s --check
+    validate: /usr/bin/python3 -I %s --check
   notify: Restart the program timer
 
 - name: Render the timer's oneshot service unit

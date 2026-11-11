@@ -1,0 +1,51 @@
+---
+# Internal to the role: included first from main.yml. The inputs are refused before anything
+# is checked against the host or written. The argument specification has already run; it
+# coerces a wrong type rather than rejecting it, so these reject the shapes.
+- name: Refuse a port that is not an unprivileged TCP port, or a public port equal to the drain port
+  ansible.builtin.assert:
+    that:
+      - sweego_receiver_port is integer
+      - sweego_receiver_drain_port is integer
+      - sweego_receiver_port >= 1024
+      - sweego_receiver_port <= 65535
+      - sweego_receiver_drain_port >= 1024
+      - sweego_receiver_drain_port <= 65535
+      - sweego_receiver_port != sweego_receiver_drain_port
+    quiet: true
+    fail_msg: >-
+      The public port and the drain port must each be a whole number from 1024 to 65535, and
+      they must differ.
+
+# The files the owner places: the signing secret, the drain token and, while a rotation is in
+# progress, the previous signing secret. Set once and read by the steps that follow.
+- name: Work out the secret files in use
+  ansible.builtin.set_fact:
+    sweego_receiver_has_previous: '{{ sweego_receiver_previous_signing_secret_file | length > 0 }}'
+    sweego_receiver_secret_files: >-
+      {{ [sweego_receiver_signing_secret_file, sweego_receiver_drain_token_file]
+      + ([sweego_receiver_previous_signing_secret_file] if sweego_receiver_previous_signing_secret_file | length > 0 else []) }}
+
+# The paths are written into bind-mount lines of the compose file, where a colon, a space or a
+# quote would change what is mounted. One name directly under /etc/branchleft, no more.
+- name: Refuse a secret path that is not one plain name under /etc/branchleft
+  ansible.builtin.assert:
+    that:
+      - item is string
+      - item is match(sweego_receiver_secret_path_pattern)
+    quiet: true
+    fail_msg: >-
+      A secret file path must be one name directly under /etc/branchleft, made of letters,
+      digits, dots, dashes and underscores, with no other character.
+  loop: '{{ sweego_receiver_secret_files }}'
+  loop_control:
+    label: '{{ item }}'
+
+# The roles of the files are different files: one file standing for two would put the signing
+# secret where the drain token is checked, or the other way round.
+- name: Refuse two secret roles that name the same file
+  ansible.builtin.assert:
+    that:
+      - sweego_receiver_secret_files | unique | length == sweego_receiver_secret_files | length
+    quiet: true
+    fail_msg: The signing secret, the previous signing secret and the drain token must be different files.

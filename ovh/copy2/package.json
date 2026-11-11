@@ -1,0 +1,27 @@
+{
+  "name": "branchleft-ovh-copy2",
+  "private": true,
+  "license": "SEE LICENSE IN LICENSE",
+  "packageManager": "pnpm@11.17.0",
+  "main": "index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "comment": "@ovhcloud/pulumi-ovh is pinned exactly, not caret-ranged, as @pulumi/hcloud is in hetzner/package.json: the default provider's version is part of every resource's URN, so a floating range makes a provider bump indistinguishable from a resource change in a plan that is read as a gate.",
+  "dependencies": {
+    "@ovhcloud/pulumi-ovh": "2.22.0",
+    "@pulumi/pulumi": "^3.255.0"
+  },
+  "devDependencies": {
+    "@branchleft/tsconfig": "^0.3.1",
+    "@branchleft/vitest-config": "^0.4.0",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^26",
+    "@vitest/coverage-v8": "^4.1.10",
+    "js-yaml": "^4.3.1",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.0",
+    "vitest": "^4.1.10"
+  }
+}

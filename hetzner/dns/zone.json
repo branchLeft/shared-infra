@@ -91,6 +91,22 @@
       ]
     },
     {
+      "name": "blog",
+      "type": "MX",
+      "ttl": 3600,
+      "values": [
+        "10 mx1.branchleft.co.uk."
+      ]
+    },
+    {
+      "name": "blog",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=spf1 ip4:167.233.252.240 ip6:2a01:4f8:1c18:866::1 -all\""
+      ]
+    },
+    {
       "name": "book",
       "type": "A",
       "ttl": 3600,
@@ -224,6 +240,7 @@
     "auth",
     "autoconfig",
     "autodiscover",
+    "bl._domainkey.blog",
     "blog",
     "blog2",
     "book",

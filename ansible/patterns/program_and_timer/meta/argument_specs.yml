@@ -14,7 +14,7 @@ argument_specs:
       program_and_timer_program_src:
         type: str
         description: Source of the program, not empty. A name under the role's files directory, or an absolute path on the controller.
-        default: example_program.sh
+        default: example_program.py
       program_and_timer_program_dir:
         type: str
         description: >-

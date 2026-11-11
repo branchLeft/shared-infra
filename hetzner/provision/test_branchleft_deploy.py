@@ -593,21 +593,32 @@ TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 # sha256 of hetzner/provision/branchleft-verify-image, the host copy of
 # ghost-platform's scripts/verify-image-attestation.sh. Change the copy and this
 # constant in the same change, and carry the change to ghost-platform's script.
-VERIFIER_SHA256 = "2342896f33a659a85697a586223b5d970d92082b02f6f3bd7ea2c7637a71cd0d"
+VERIFIER_SHA256 = "4739d9e574c5448ce5720e28668c9b03b978f19c2a3a2ef0caec25438ce30fa5"
 
-# The verifier's whole environment, exactly. Nothing is inherited from the host,
-# and no GitHub credential is in it: the host holds none. A change to any value
-# here is a change to what gh is allowed to read, and is reviewed as one.
+# The verifier's whole environment, exactly. Nothing is inherited from the host.
+# No GitHub API credential is in it; the one credential path is DOCKER_CONFIG,
+# the registry read key's directory. A change to any value here is a change to
+# what gh is allowed to read, and is reviewed as one.
 EXPECTED_VERIFIER_ENV = {
     "PATH": "/usr/local/libexec/branchleft-verifier:/usr/bin:/bin",
     "HOME": "/var/lib/branchleft/verifier-home",
     "GH_CONFIG_DIR": "/var/lib/branchleft/verifier-home",
     "XDG_CONFIG_HOME": "/var/lib/branchleft/verifier-home",
+    "DOCKER_CONFIG": "/etc/branchleft/registry/docker",
     "GH_PROMPT_DISABLED": "1",
     "GH_NO_UPDATE_NOTIFIER": "1",
     "LC_ALL": "C",
     "VERIFY_PLAIN_ERRORS": "1",
 }
+
+# What a registry says to a client it will not serve, as gh prints it. The
+# wording is the registry's, so each spelling a registry uses is listed.
+REGISTRY_REFUSALS = [
+    "Error: failed to fetch OCI image descriptor: GET https://ghcr.io/v2/x: UNAUTHORIZED: authentication required",
+    "GET https://ghcr.io/v2/x: DENIED: requested access to the resource is denied",
+    "unexpected status code 401 Unauthorized",
+    "request unauthorised",
+]
 
 
 class AttestationTests(unittest.TestCase):
@@ -795,6 +806,85 @@ class AttestationTests(unittest.TestCase):
             self.deploy(TENANT, run)
         self.assertIn("is not attested by", str(raised.exception))
         self.assertNotIn("needs GitHub credentials", str(raised.exception))
+
+    def test_the_verifier_is_pointed_at_the_registry_read_key_directory(self):
+        self.assertEqual(bd.REGISTRY_DOCKER_CONFIG, "/etc/branchleft/registry/docker")
+        self.assertEqual(bd.verifier_env()["DOCKER_CONFIG"], bd.REGISTRY_DOCKER_CONFIG)
+
+    def test_the_registry_key_directory_is_one_path_in_wrapper_unit_and_role(self):
+        provision = os.path.dirname(os.path.abspath(__file__))
+        with open(
+            os.path.join(provision, "branchleft-compose@.service"), encoding="utf-8"
+        ) as handle:
+            unit = handle.read()
+        self.assertIn(f"\nEnvironment=DOCKER_CONFIG={bd.REGISTRY_DOCKER_CONFIG}\n", unit)
+        role_vars = os.path.join(
+            provision, "..", "..", "ansible", "roles", "deploy_verifier", "vars", "main.yml"
+        )
+        with open(role_vars, encoding="utf-8") as handle:
+            self.assertIn(f"deploy_verifier_registry_docker_dir: {bd.REGISTRY_DOCKER_CONFIG}\n", handle.read())
+
+    def test_an_unauthorised_registry_names_the_read_key_and_pins_nothing(self):
+        for stderr in REGISTRY_REFUSALS:
+            with self.subTest(stderr=stderr):
+                run = FakeRun([(1, "", stderr)])
+                with self.assertRaises(bd.DeployError) as raised:
+                    self.deploy(TENANT, run)
+                message = str(raised.exception)
+                self.assertIn("registry read key", message)
+                self.assertIn(bd.REGISTRY_DOCKER_CONFIG, message)
+                self.assertNotIn("is not attested by", message)
+                self.assert_refused_before_any_host_change(run)
+
+    def test_a_private_image_is_refused_without_the_key_and_verifies_with_it(self):
+        class Registry:
+            """A registry that serves the attestation only to a client holding the key."""
+
+            def __init__(self, key_placed):
+                self.key_placed = key_placed
+                self.calls = []
+
+            def __call__(self, argv, check=False, capture_output=False, text=False, **kwargs):
+                self.calls.append(list(argv))
+                if argv[0] != bd.VERIFIER:
+                    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+                reads_key = kwargs["env"].get("DOCKER_CONFIG") == bd.REGISTRY_DOCKER_CONFIG
+                if self.key_placed and reads_key:
+                    return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+                stderr = "GET https://ghcr.io/v2/x: UNAUTHORIZED: authentication required"
+                return subprocess.CompletedProcess(argv, 1, stdout="", stderr=stderr)
+
+        without_key = Registry(key_placed=False)
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(TENANT, without_key)
+        self.assertIn("registry read key", str(raised.exception))
+        self.assertFalse(os.path.exists(self.env_path()))
+
+        with_key = Registry(key_placed=True)
+        self.deploy(TENANT, with_key)
+        self.assertEqual(bd.read_current_image(self.env_path()), TENANT)
+
+    def test_no_key_on_the_host_leaves_an_image_that_needs_none_deploying(self):
+        # The verifier is handed the key directory whether or not the host has
+        # one; an absent directory is anonymous access, which a public image's
+        # attestation accepts. Nothing in the wrapper checks for the directory.
+        run = FakeRun([0, 0])
+        self.deploy(TENANT, run)
+        self.assertEqual(run.kwargs[0]["env"]["DOCKER_CONFIG"], bd.REGISTRY_DOCKER_CONFIG)
+        self.assertEqual(bd.read_current_image(self.env_path()), TENANT)
+
+    def test_the_login_refusal_still_wins_over_the_registry_refusal(self):
+        run = FakeRun([(1, "", "gh auth login ... UNAUTHORIZED")])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(TENANT, run)
+        self.assertIn("needs GitHub credentials", str(raised.exception))
+
+    def test_the_registry_refusal_is_not_matched_inside_a_digest(self):
+        run = FakeRun([(1, "", "::error::no valid attestation for " + TENANT + " 401 403")])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(TENANT, run)
+        self.assertIn("is not attested by", str(raised.exception))
+        self.assertNotIn("registry read key", str(raised.exception))
 
     def test_the_vendored_verifier_is_pinned_to_its_digest(self):
         path = os.path.join(

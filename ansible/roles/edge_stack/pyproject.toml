@@ -17,6 +17,11 @@ disallow_any_explicit = true
 module = ["ansible.*"]
 ignore_missing_imports = true
 
+# PyYAML ships no type information. This names the one module; it is not a blanket ignore.
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
 [tool.ruff]
 # The repository's ruff policy (ansible/pyproject.toml), with this role's Python floor.
 extend = "../../pyproject.toml"

@@ -359,6 +359,17 @@
           {{ monitoring_stack_verify_role.monitoring_stack_ntfy_env_file | default('nothing: not in its vars/main.yml') }}
           (both must be {{ verify_ntfy_env_file }}). The monitoring drop-in must name both files in an EnvironmentFile=- line.
 
+    # The pager's four key names are held in two places: ntfy_pager writes them and
+    # this role asks whether the file holds a value for each. A name that differs
+    # would make the gauge read 0 on a pager that works, or 1 on one that does not.
+    - name: Assert the two roles name the same four pager keys
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_role.monitoring_stack_ntfy_env_keys | sort == monitoring_stack_verify_ntfy.ntfy_pager_env_names.values() | list | sort
+          - monitoring_stack_verify_role.monitoring_stack_ntfy_env_keys | length == 4
+        quiet: true
+        fail_msg: The pager key names this role checks are not the four names ntfy_pager writes.
+
     # The project directory is held in three places as well: this role's constant,
     # ntfy_pager's constant and the WorkingDirectory the shared unit template
     # derives from the instance name. The unit runs from the template's directory
@@ -1449,6 +1460,261 @@
         quiet: true
         fail_msg: The host was not put back to the converged state with the scenario's own inputs.
 
+# The pager secrets split: stale NTFY_ lines in monitoring.env and the pager gauge.
+# The host here has ntfy-pager.env from the plays above (written by the real
+# ntfy_pager role) and monitoring.env without NTFY_ lines. Throwaway values only.
+- name: Verify the stale NTFY_ lines are cleared and the pager gauge follows the pager file
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_env_file: /etc/branchleft/monitoring.env
+    verify_ntfy_env_file: /etc/branchleft/ntfy-pager.env
+    verify_gauge_file: /var/lib/branchleft/snds-exporter/pager.prom
+    verify_gauge_name: branchleft_pager_route_configured
+    verify_stale_one: test-sentinel-stale-ntfy-0024
+    verify_stale_two: test-sentinel-stale-ntfy-0025
+    verify_ntfy_role: '{{ playbook_dir }}/../../../ntfy_pager'
+    verify_ntfy_pager: test-sentinel-ntfy-pager-0018
+    verify_ntfy_watcher: test-sentinel-ntfy-watcher-0019
+    verify_ntfy_owner: test-sentinel-ntfy-owner-0020
+    verify_ntfy_machine: test-sentinel-ntfy-machine-0021
+    verify_env_keys:
+      - SMTP_USERNAME
+      - SMTP_PASSWORD
+      - HEALTHCHECKS_PING_URL
+      - ALERT_RECIPIENT_EMAIL
+      - MAILHOST_PING_URL
+      - GRAFANA_ADMIN_PASSWORD
+      - SNDS_DATA_URL
+  tasks:
+    # ----- Stale lines are removed while the pager's file holds all four keys -----
+    - name: Put the hand-written NTFY_ lines back into the monitoring secrets file, as an old host has them
+      ansible.builtin.lineinfile:
+        path: '{{ verify_env_file }}'
+        line: '{{ item }}'
+        create: false
+      loop:
+        - NTFY_PAGER_TOKEN={{ verify_stale_one }}
+        - NTFY_OWNER_PASSWORD_HASH={{ verify_stale_two }}
+      loop_control:
+        label: seed
+      no_log: true
+      diff: false
+
+    - name: Snapshot before the stale lines are cleared
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: stale_before
+
+    - name: Apply the role while the pager's file holds all four keys
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
+    - name: Snapshot after the stale lines were cleared
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: stale_after
+
+    - name: Apply the role again
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
+    - name: Snapshot after the rerun
+      ansible.builtin.include_tasks: tasks/snapshot.yml
+      vars:
+        monitoring_stack_verify_snap_name: stale_rerun
+
+    - name: Read the monitoring secrets file and the pager's secrets file
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_ntfy_env_file }}'
+      register: monitoring_stack_verify_split_files
+      no_log: true
+
+    - name: Look at the monitoring secrets file
+      ansible.builtin.stat:
+        path: '{{ verify_env_file }}'
+      register: monitoring_stack_verify_split_stat
+
+    # Counted, never shown. Clearing the lines puts monitoring.env back to the bytes
+    # the stamp was written for, so no restart is due here; the rerun changes nothing.
+    # On a host whose stamp was written with the lines present, the same removal moves
+    # the fingerprint and restarts once, which is the ordinary fingerprint rule.
+    - name: Assert the stale lines are gone, the file is still root-only, and the pager's file is as it was
+      ansible.builtin.assert:
+        that:
+          - monitoring_stack_verify_split_env | select('match', 'NTFY_') | list | length == 0
+          - monitoring_stack_verify_split_env | select('search', verify_stale_one) | list | length == 0
+          - monitoring_stack_verify_split_env | select('search', verify_stale_two) | list | length == 0
+          - monitoring_stack_verify_split_pager | select('match', 'NTFY_') | list | length == 4
+          - ('NTFY_PAGER_TOKEN=' ~ verify_ntfy_pager) in monitoring_stack_verify_split_pager
+          - monitoring_stack_verify_split_stat.stat.mode == '0600'
+          - monitoring_stack_verify_split_stat.stat.pw_name == 'root'
+          - monitoring_stack_verify_snaps.stale_after.calls == monitoring_stack_verify_snaps.stale_before.calls
+          - monitoring_stack_verify_snaps.stale_rerun.calls == monitoring_stack_verify_snaps.stale_after.calls
+        quiet: true
+        fail_msg: >-
+          The stale NTFY_ lines are still in {{ verify_env_file }}, or the file is no longer root-only, or the pager's
+          file changed, or a run restarted the unit that had no reason to.
+      vars:
+        monitoring_stack_verify_split_env: '{{ (monitoring_stack_verify_split_files.results[0].content | b64decode).splitlines() }}'
+        monitoring_stack_verify_split_pager: '{{ (monitoring_stack_verify_split_files.results[1].content | b64decode).splitlines() }}'
+      no_log: true
+
+    - name: Assert each key the role writes is still in the monitoring secrets file exactly once
+      ansible.builtin.assert:
+        that:
+          - (monitoring_stack_verify_split_env | select('match', item ~ '=') | list | length) == 1
+        quiet: true
+        fail_msg: '{{ item }} is missing from {{ verify_env_file }}, or is there more than once.'
+      loop: '{{ verify_env_keys }}'
+      loop_control:
+        label: '{{ item }}'
+      vars:
+        monitoring_stack_verify_split_env: '{{ (monitoring_stack_verify_split_files.results[0].content | b64decode).splitlines() }}'
+      no_log: true
+
+    - name: Read the pager gauge
+      ansible.builtin.slurp:
+        src: '{{ verify_gauge_file }}'
+      register: monitoring_stack_verify_gauge_on
+
+    - name: Look at the pager gauge file
+      ansible.builtin.stat:
+        path: '{{ verify_gauge_file }}'
+      register: monitoring_stack_verify_gauge_stat
+
+    - name: Assert the gauge reads 1, is a readable root file, and holds no pager value
+      ansible.builtin.assert:
+        that:
+          - (verify_gauge_name ~ ' 1') in (monitoring_stack_verify_gauge_on.content | b64decode).splitlines()
+          - ('# TYPE ' ~ verify_gauge_name ~ ' gauge') in (monitoring_stack_verify_gauge_on.content | b64decode).splitlines()
+          - monitoring_stack_verify_gauge_stat.stat.mode == '0644'
+          - monitoring_stack_verify_gauge_stat.stat.pw_name == 'root'
+          - "'test-sentinel' not in (monitoring_stack_verify_gauge_on.content | b64decode)"
+        quiet: true
+        fail_msg: The pager gauge does not read 1 with a configured pager, or is not a root-owned 0644 file, or holds a sentinel.
+
+    # ----- A pager file that is gone: the lines are kept and the gauge reads 0 -----
+    - name: Take the pager's secrets file away, as a host whose pager was never placed
+      ansible.builtin.file:
+        path: '{{ verify_ntfy_env_file }}'
+        state: absent
+
+    - name: Put a hand-written NTFY_ line into the monitoring secrets file
+      ansible.builtin.lineinfile:
+        path: '{{ verify_env_file }}'
+        line: NTFY_PAGER_TOKEN={{ verify_stale_one }}
+        create: false
+      no_log: true
+      diff: false
+
+    - name: Apply the role with no pager file
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
+    - name: Read the monitoring secrets file and the pager gauge
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_gauge_file }}'
+      register: monitoring_stack_verify_off_files
+      no_log: true
+
+    - name: Assert the hand-written line is kept and the gauge reads 0
+      ansible.builtin.assert:
+        that:
+          - ('NTFY_PAGER_TOKEN=' ~ verify_stale_one) in (monitoring_stack_verify_off_files.results[0].content | b64decode).splitlines()
+          - (verify_gauge_name ~ ' 0') in (monitoring_stack_verify_off_files.results[1].content | b64decode).splitlines()
+          - (verify_gauge_name ~ ' 1') not in (monitoring_stack_verify_off_files.results[1].content | b64decode).splitlines()
+        quiet: true
+        fail_msg: >-
+          With no pager file the role removed the hand-written line the host pages with, or the gauge did not read 0.
+      no_log: true
+
+    # ----- A pager file that lacks a key reads as disabled too -----
+    - name: Apply ntfy_pager, which places its four lines again
+      ansible.builtin.include_role:
+        name: '{{ verify_ntfy_role }}'
+      vars:
+        ntfy_pager_pager_token: '{{ verify_ntfy_pager }}'
+        ntfy_pager_watcher_token: '{{ verify_ntfy_watcher }}'
+        ntfy_pager_owner_password_hash: '{{ verify_ntfy_owner }}'
+        ntfy_pager_machine_password_hash: '{{ verify_ntfy_machine }}'
+
+    - name: Take one key out of the pager's secrets file
+      ansible.builtin.lineinfile:
+        path: '{{ verify_ntfy_env_file }}'
+        regexp: '^NTFY_WATCHER_TOKEN='
+        state: absent
+      no_log: true
+      diff: false
+
+    - name: Apply the role with a pager file that lacks a key
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
+    - name: Read the monitoring secrets file and the pager gauge again
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_gauge_file }}'
+      register: monitoring_stack_verify_short_files
+      no_log: true
+
+    - name: Assert a pager file that lacks a key keeps the hand-written line and reads 0
+      ansible.builtin.assert:
+        that:
+          - ('NTFY_PAGER_TOKEN=' ~ verify_stale_one) in (monitoring_stack_verify_short_files.results[0].content | b64decode).splitlines()
+          - (verify_gauge_name ~ ' 0') in (monitoring_stack_verify_short_files.results[1].content | b64decode).splitlines()
+        quiet: true
+        fail_msg: A pager file with a key missing was treated as configured.
+      no_log: true
+
+    # ----- Put the pager back: the line goes and the gauge reads 1 -----
+    - name: Apply ntfy_pager, which restores the missing line
+      ansible.builtin.include_role:
+        name: '{{ verify_ntfy_role }}'
+      vars:
+        ntfy_pager_pager_token: '{{ verify_ntfy_pager }}'
+        ntfy_pager_watcher_token: '{{ verify_ntfy_watcher }}'
+        ntfy_pager_owner_password_hash: '{{ verify_ntfy_owner }}'
+        ntfy_pager_machine_password_hash: '{{ verify_ntfy_machine }}'
+
+    - name: Apply the role with the pager's file whole again
+      ansible.builtin.include_role:
+        name: branchleft.monitoring_stack
+
+    - name: Read the monitoring secrets file and the pager gauge once more
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - '{{ verify_env_file }}'
+        - '{{ verify_gauge_file }}'
+      register: monitoring_stack_verify_back_files
+      no_log: true
+
+    - name: Assert the hand-written line is gone and the gauge reads 1 again
+      ansible.builtin.assert:
+        that:
+          - (monitoring_stack_verify_back_files.results[0].content | b64decode).splitlines() | select('match', 'NTFY_') | list | length == 0
+          - (verify_gauge_name ~ ' 1') in (monitoring_stack_verify_back_files.results[1].content | b64decode).splitlines()
+        quiet: true
+        fail_msg: With the pager's file whole again the hand-written line stayed, or the gauge did not read 1.
+      no_log: true
+
+    - name: Forget the content of the files
+      ansible.builtin.set_fact:
+        monitoring_stack_verify_split_files: {}
+        monitoring_stack_verify_off_files: {}
+        monitoring_stack_verify_short_files: {}
+        monitoring_stack_verify_back_files: {}
+      no_log: true
+
 # The log of this scenario's Ansible runs. The inputs are sentinels, and so is
 # every value the cases above rotated to. A task that handles one and lacks
 # no_log (or shows a diff) prints it at verbosity 3, so the log must hold none of
@@ -1482,6 +1748,8 @@
       - test-sentinel-rotated-smtp-0016
       - test-sentinel-rotated-smtp-0022
       - test-sentinel-rotated-smtp-0023
+      - test-sentinel-stale-ntfy-0024
+      - test-sentinel-stale-ntfy-0025
   tasks:
     - name: Read the log of this scenario's Ansible runs
       ansible.builtin.set_fact:
@@ -1494,6 +1762,8 @@
           - "'MONITORING_STACK_LOG_CANARY' in monitoring_stack_verify_log"
           - "'Write the keys into the monitoring secrets file' in monitoring_stack_verify_log"
           - "'Write the four NTFY_ lines into the pager secrets file' in monitoring_stack_verify_log"
+          - "'Remove the stale NTFY_ lines from the monitoring secrets file' in monitoring_stack_verify_log"
+          - "'Check which pager keys the pager secrets file holds a value for' in monitoring_stack_verify_log"
         quiet: true
         fail_msg: The log lacks the canary or the task name of either role, so an empty scan would prove nothing.
       no_log: true
