@@ -272,6 +272,8 @@
   register: spool_paths_owner_files
   check_mode: false
 
+# Both facts are JSON text, because a template with statements in it renders as text, and are read
+# back with from_json where they are used.
 - name: Note which paths have everything the owner places
   ansible.builtin.set_fact:
     spool_paths_ready: >-
@@ -301,12 +303,12 @@
   ansible.builtin.systemd_service:
     name: '{{ spool_paths_instance_prefix }}{{ item }}{{ spool_paths_instance_suffix }}'
     state: restarted
-  loop: '{{ spool_paths_ready | intersect(spool_paths_changed) | list }}'
+  loop: '{{ spool_paths_ready | from_json | intersect(spool_paths_changed | from_json) | list }}'
   when: spool_paths_unit_stat.stat.exists and not ansible_check_mode
 
 - name: Start each ready path whose files did not change
   ansible.builtin.systemd_service:
     name: '{{ spool_paths_instance_prefix }}{{ item }}{{ spool_paths_instance_suffix }}'
     state: started
-  loop: '{{ spool_paths_ready | difference(spool_paths_changed) | list }}'
+  loop: '{{ spool_paths_ready | from_json | difference(spool_paths_changed | from_json) | list }}'
   when: spool_paths_unit_stat.stat.exists

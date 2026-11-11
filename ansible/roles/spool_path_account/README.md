@@ -118,8 +118,7 @@ The Molecule `default` scenario converges twice on a systemd container with stan
 `ssh` service and the spool's loopback listener, with both owner inputs placed as made-up values. It checks
 the files, owners and modes, the key line, that the account has no login shell, the sshd settings, that sshd
 was asked to check the whole configuration, and that no input value is in the run's log. It needs Docker.
-The scenario was written without Docker to hand and has not been run; the unit tests above run the real
-`sshd`.
+The scenario passes under the harness; the unit tests above run the real `sshd`.
 
 ## How it is delivered
 

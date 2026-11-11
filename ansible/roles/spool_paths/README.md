@@ -215,10 +215,7 @@ The Molecule `default` scenario converges twice on a systemd container with stan
 `networkctl`, with two listed hosts and one descriptor and no key placed. It checks the files, owners and
 modes, that the listed host with no descriptor has nothing, that the named host's path is enabled and
 left stopped because no key is there, that other roles' files are untouched, and that no private key text
-is in the run's log. It needs Docker. The scenario was written without Docker to hand and has not been
-run; the unit tests above run the real `ssh` and `sshd`.
-
-## How it is delivered
+is in the run's log. It needs Docker. The scenario passes under the harness; the unit tests above run the real `ssh` and `sshd`.## How it is delivered
 
 Delivery is the gated workflow only (ANS-17): a plan in check mode, the `ansible-hosts` approval, a
 pull of that exact commit on the host, and a second run that must report zero changes. Nothing here
