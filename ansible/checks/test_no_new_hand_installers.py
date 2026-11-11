@@ -99,7 +99,6 @@ class RealTree(unittest.TestCase):
 
     def test_the_scan_reaches_nested_and_mail_scripts(self) -> None:
         found = installers(ROOT)
-        self.assertIn("hetzner/scripts/lib/docker-pull.sh", found)
         self.assertIn("mail/provision/run-all.sh", found)
         self.assertGreaterEqual(len(found), 30)
 

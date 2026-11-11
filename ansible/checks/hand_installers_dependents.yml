@@ -248,9 +248,9 @@ hetzner/provision/test_compose_unit_contract.md:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/run-all.sh
   - mail/provision/run-all.sh
-hetzner/scripts/test-control-plane-port-policy.sh:
+hetzner/scripts/prove_control_plane_port_policy.py:
   - hetzner/provision/branchleft_docker_user_policy.sh
-hetzner/scripts/test-spool-bridge-egress.sh:
+hetzner/scripts/prove_spool_bridge_egress.py:
   - hetzner/provision/branchleft_docker_user_policy.sh
 hetzner/scripts/test_probe_edget_gateway.py:
   - hetzner/provision/branchleft_nat.sh
