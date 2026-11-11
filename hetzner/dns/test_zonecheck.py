@@ -665,6 +665,12 @@ class CheckedInPublicPressTest(unittest.TestCase):
         code, out, err = self.check()
         self.assertEqual((code, err), (0, ""), out)
 
+    def test_sites_record_is_declared(self):
+        # The registrar serves an A record for the sites host. It is declared
+        # here so that the move to Hetzner DNS does not drop it.
+        rrsets = zonecheck.load_zone(self.ZONE_FILE).rrsets
+        self.assertEqual(rrsets[("sites", "A")], (3600, frozenset({"46.225.95.167"})))
+
     def test_mail_records_are_declared(self):
         rrsets = zonecheck.load_zone(self.ZONE_FILE).rrsets
         self.assertIn(("@", "MX"), rrsets)
