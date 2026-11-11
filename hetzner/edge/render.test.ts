@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto';
+import { readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 
-import { PublicPressLogo, PublicPressWordmark } from '@branchleft/components';
+import { PublicPressLogo } from '@branchleft/components';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -15,7 +17,15 @@ import {
   RATE_LIMIT_WINDOW_SECONDS,
 } from './posture';
 import type { EdgePosture } from './posture';
-import { PUBLICPRESS_ABUSE_CONTACT } from './publicpressHolding';
+import type { StaticPage } from './publicpress/build';
+import { buildPublicpressPages, distName, registerMailto } from './publicpress/build';
+import {
+  ENTRY_TIER,
+  LAUNCH_DATE,
+  REGISTER_ADDRESS,
+  REGISTER_BODY,
+  REGISTER_SUBJECT,
+} from './publicpress/config';
 import {
   renderAppsecAcquisition,
   renderCaddyfile,
@@ -69,6 +79,39 @@ const render = (
   entries: EdgeSite[] = [site()],
   redirects: HostRedirect[] = []
 ) => renderCaddyfile(entries, redirects, posture);
+
+interface ServedPage {
+  /** The named matcher guarding the response, `@page_default` for the fallback. */
+  matcher: string;
+  /** The Content-Security-Policy header set for the same matcher. */
+  csp: string;
+  /** The page as Caddy serves it: the heredoc with the marker's indentation removed. */
+  html: string;
+}
+
+/** Reads each page back out of a rendered static-site block, undoing the heredoc indentation. */
+function servedPages(blockText: string): ServedPage[] {
+  const lines = blockText.split('\n');
+  const policies = new Map<string, string>();
+  for (const line of lines) {
+    const header = /^\t+header (?:(@\S+) )?Content-Security-Policy "(.*)"$/.exec(line);
+    if (header !== null) policies.set(header[1] ?? '@page_default', header[2]);
+  }
+  const pages: ServedPage[] = [];
+  lines.forEach((line, index) => {
+    const open = /^(\t+)respond (?:(@\S+) )?<<PAGE_HTML$/.exec(line);
+    if (open === null) return;
+    const indent = open[1];
+    const end = lines.findIndex((l, i) => i > index && l === `${indent}PAGE_HTML 200`);
+    const html = lines
+      .slice(index + 1, end)
+      .map((l) => (l.startsWith(indent) ? l.slice(indent.length) : l))
+      .join('\n');
+    const matcher = open[2] ?? '@page_default';
+    pages.push({ matcher, csp: policies.get(matcher) ?? '', html });
+  });
+  return pages;
+}
 
 describe('resolvePrivateAddress', () => {
   it('resolves an address-plan host name to its fixed private address', () => {
@@ -1206,9 +1249,12 @@ describe('the CrowdSec acquisition files', () => {
 // exercised directly above, against the rendered output; the TLS floor is
 // covered by the 'protocols tls1.2 tls1.3' assertion above too.
 
-describe('the publicpress.co.uk holding page', () => {
+describe('the publicpress.co.uk site', () => {
   const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
   const block = () => rendered.split('\npublicpress.co.uk {')[1]?.split('\n}')[0] ?? '';
+  const served = servedPages(block());
+  const journey = served.find((page) => page.matcher === '@page_default')!;
+  const ghostHosting = served.find((page) => page.matcher === '@page_ghost_hosting')!;
 
   it('serves exactly the apex hostname -- no www, no sites.* subdomain, no wildcard', () => {
     expect(rendered).toContain('\npublicpress.co.uk {');
@@ -1217,145 +1263,252 @@ describe('the publicpress.co.uk holding page', () => {
     expect(rendered).not.toContain('*.publicpress.co.uk');
   });
 
+  it('commits the build of its sources, so a source edit with no rebuild fails here', async () => {
+    const pages = buildPublicpressPages();
+    expect(pages.map((page) => page.path)).toEqual(['/', '/ghost-hosting']);
+    for (const page of pages) {
+      await expect(page.html).toMatchFileSnapshot(`./publicpress/dist/${distName(page)}`);
+    }
+  });
+
+  it('serves each page byte for byte as the committed build', () => {
+    expect(journey.html).toBe(buildPublicpressPages()[0].html);
+    expect(ghostHosting.html).toBe(buildPublicpressPages()[1].html);
+  });
+
   it('carries the site-wide TLS floor and HSTS header, the same as every proxied site', () => {
     expect(block()).toContain('tls {');
     expect(block()).toContain('protocols tls1.2 tls1.3');
     expect(block()).toContain('Strict-Transport-Security "max-age=31536000; includeSubDomains"');
   });
 
-  it('carries a strict Content-Security-Policy refusing every external resource', () => {
-    expect(block()).toContain("Content-Security-Policy \"default-src 'none'");
-    expect(block()).toContain("connect-src 'none'");
-    expect(block()).toContain('img-src data:;');
-    expect(block()).toContain('font-src data:;');
+  it('serves two pages, the journey for "/" and every path it does not name, the other at its own', () => {
+    expect(served.map((page) => page.matcher)).toEqual(['@page_ghost_hosting', '@page_default']);
+    expect(block()).toContain('@page_ghost_hosting path /ghost-hosting /ghost-hosting/\n');
+    expect(block()).toContain('@page_default not path /ghost-hosting /ghost-hosting/\n');
+    expect(ghostHosting.html).toContain('<h1>Managed Ghost hosting, done well.</h1>');
+    expect(journey.html).toContain(
+      '<h1>Independent journalism, on independent infrastructure.</h1>'
+    );
+  });
+
+  it('answers every page with the same text/html type, no proxy, and the same 1KiB body cap', () => {
+    expect(block()).toContain('header Content-Type "text/html; charset=utf-8"');
+    expect(block()).not.toContain('reverse_proxy');
+    expect(block()).toContain('max_size 1KiB');
+    expect(block().match(/^\t\trespond /gm)).toHaveLength(2);
+  });
+
+  it.each([
+    ['the journey', () => journey],
+    ['the Ghost hosting page', () => ghostHosting],
+  ])(
+    'carries a strict Content-Security-Policy for %s refusing every external resource',
+    (_, page) => {
+      const csp = page().csp;
+      expect(csp).toContain("default-src 'none'");
+      for (const directive of [
+        "connect-src 'none'",
+        "frame-src 'none'",
+        "frame-ancestors 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+        'img-src data:;',
+        'font-src data:;',
+      ]) {
+        expect(csp).toContain(directive);
+      }
+      expect(csp).not.toMatch(/unsafe-|\*|https?:/);
+    }
+  );
+
+  it.each([
+    ['the journey', () => journey],
+    ['the Ghost hosting page', () => ghostHosting],
+  ])('admits exactly the blocks %s serves, each by the hash of the bytes served', (_, page) => {
+    const { html, csp } = page();
+    const hashOf = (text: string) =>
+      `'sha256-${createHash('sha256').update(text, 'utf8').digest('base64')}'`;
+    const styles = [...html.matchAll(/<style>([^<]*)<\/style>/g)].map(([, css]) => hashOf(css));
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(([, js]) => hashOf(js));
+    expect(styles.length).toBeGreaterThanOrEqual(2);
+    expect(scripts.length).toBeGreaterThanOrEqual(2);
+    expect(/style-src ([^;]*);/.exec(csp)?.[1]).toBe(styles.join(' '));
+    expect(/script-src ([^;]*);/.exec(csp)?.[1]).toBe(scripts.join(' '));
+    expect(html.match(/<style\b/g)).toHaveLength(styles.length);
+    expect(html.match(/<script\b/g)).toHaveLength(scripts.length);
+  });
+
+  it.each([
+    ['the journey', () => journey],
+    ['the Ghost hosting page', () => ghostHosting],
+  ])('has nothing %s would need the policy to allow beyond its own hashes and data:', (_, page) => {
+    const { html } = page();
+    expect(html).not.toMatch(/\sstyle=/);
+    expect(html).not.toMatch(/\son[a-z]+=/);
+    expect(html).not.toMatch(/<(iframe|object|embed|form|input|select)\b/);
+    expect(html).not.toMatch(/<script\s[^>]*src=/);
+    expect(html).not.toMatch(/@import|url\((?!data:)/);
+    const sources = [...html.matchAll(/\ssrc=["']([^"']*)["']/g)].map(([, value]) => value);
+    expect(sources.length).toBeGreaterThan(0);
+    for (const value of sources) expect(value).toMatch(/^data:/);
+    const links = [...html.matchAll(/<link\b[^>]*>/g)].map(([link]) => link);
+    expect(links).toHaveLength(2);
+    expect(links[0]).toMatch(
+      /^<link rel="canonical" href="https:\/\/publicpress\.co\.uk\/(ghost-hosting)?">$/
+    );
+    expect(links[1]).toMatch(
+      /^<link rel='icon' type='image\/svg\+xml' href='data:image\/svg\+xml,/
+    );
+    expect(html).not.toMatch(/\b(fetch|XMLHttpRequest|sendBeacon|WebSocket|EventSource)\b/);
+  });
+
+  it('would leave an extra script or stylesheet out of the policy, so the browser refuses it', () => {
+    const base = journey.html;
+    const before = journey.csp;
+    const injected = `${base}<script>alert(1)</script>`;
+    const hash = `'sha256-${createHash('sha256').update('alert(1)', 'utf8').digest('base64')}'`;
+    // The hash is only there when the block is in the page the policy was built from.
+    expect(before).not.toContain(hash);
+    expect(staticSiteCsp(injected)).toContain(hash);
+    expect(served.map((page) => page.csp).join(' ')).not.toContain(hash);
+  });
+
+  it('refuses to build a policy for a block it cannot hash, rather than serve one the browser would drop', () => {
+    expect(() => staticSiteCsp("<script type='module'>1</script>")).toThrow(
+      /can be admitted by hash/
+    );
+    expect(() => staticSiteCsp("<style media='print'>a{}</style>")).toThrow(
+      /can be admitted by hash/
+    );
+    expect(() => staticSiteCsp('<style>a::after{content:"<"}</style>')).toThrow(/can be admitted/);
+    expect(() => staticSiteCsp('<script src="x.js"></script>')).toThrow(/can be admitted/);
   });
 
   it('refuses every font on a page whose stylesheet carries no inline data: font', () => {
     expect(staticSiteCsp('<style>body{color:red}</style>')).toContain("font-src 'none';");
   });
 
-  it("admits exactly the page's own stylesheet by the hash of the body actually served", () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const styles = [...body.matchAll(/<style>([^<]*)<\/style>/g)].map(([, css]) => css);
-    expect(styles).toHaveLength(1);
-    const expected = createHash('sha256').update(styles[0], 'utf8').digest('base64');
-    const styleSrc = /style-src ([^;]*);/.exec(block())?.[1];
-    expect(styleSrc).toBe(`'sha256-${expected}'`);
-  });
-
-  it('carries no style attribute, script, stylesheet link, image or remote URL the CSP would silently drop', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    expect(body).not.toMatch(/\sstyle=/);
-    expect(body).not.toMatch(/<(img|iframe|object)\b/);
-    const links = [...body.matchAll(/<link\b[^>]*>/g)].map(([link]) => link);
-    expect(links).toHaveLength(1);
-    expect(links[0]).toMatch(
-      /^<link rel='icon' type='image\/svg\+xml' href='data:image\/svg\+xml,/
-    );
-    expect(body).not.toMatch(/<script\s[^>]*src=/);
-    expect(body).not.toMatch(/\son[a-z]+=/);
-    // url(data:...) is the one exception: the self-hosted font, which fetches
-    // nothing, same reasoning as the data: favicon above.
-    expect(body).not.toMatch(
-      /url\((?!data:)|@import|https?:\/\/(?!www\.w3\.org\/2000\/svg'|branchleft\.co\.uk')/
-    );
-  });
-
-  it('heads the page with the outlined wordmark, named for assistive technology', () => {
-    expect(block()).toMatch(/<h1><svg [^>]*role='img' aria-label='PublicPress'>/);
-  });
-
-  it('sets body copy in the self-hosted Jost face at a readable size, Futura as its own fallback', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
-    expect(styles).toMatch(
-      /body\{[^}]*font:400 1rem\/1\.6 'Jost','Futura','Century Gothic','Avenir Next',system-ui,sans-serif\}/
-    );
-    expect(styles).toMatch(/@font-face\{font-family:'Jost';src:url\(data:font\/woff2;base64,/);
-  });
-
-  it('credits branchLeft with an inline logo mark and the word "branchLeft" in one link', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    expect(body).toMatch(
-      /<a href='https:\/\/branchleft\.co\.uk' class='bl-credit'><svg [^>]*aria-hidden='true'[^>]*>[\s\S]*?<\/svg><span>branchLeft<\/span><\/a>/
-    );
-  });
-
-  it('sets the branchLeft credit word in the self-hosted Syne wordmark face at weight 500', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
-    expect(styles).toMatch(/a\.bl-credit span\{font-family:'Syne',sans-serif;font-weight:500/);
-    expect(styles).toMatch(/@font-face\{font-family:'Syne';src:url\(data:font\/woff2;base64,/);
-  });
-
-  it('embeds the Syne face subsetted to a handful of glyphs, not the whole variable font', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
-    const [, base64] =
-      /@font-face\{font-family:'Syne';src:url\(data:font\/woff2;base64,([^)]*)\)/.exec(styles) ??
-      [];
-    expect(base64).toBeTruthy();
-    // The unsubsetted variable font this page's Syne embed is cut from is
-    // ~38KB; a ten-glyph subset should land under 10KB decoded.
-    expect(Buffer.from(base64 ?? '', 'base64').byteLength).toBeLessThan(10_000);
-  });
-
-  it("admits exactly the page's own script by the hash of the body actually served", () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const scripts = [...body.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(([, js]) => js);
-    expect(scripts).toHaveLength(1);
-    const expected = createHash('sha256').update(scripts[0], 'utf8').digest('base64');
-    const scriptSrc = /script-src ([^;]*);/.exec(block())?.[1];
-    expect(scriptSrc).toBe(`'sha256-${expected}'`);
-  });
-
-  it('serves a script Caddy passes through untouched: no escape, no placeholder', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const script = /<script>([\s\S]*?)<\/script>/.exec(body)?.[1] ?? '';
-    expect(script).not.toMatch(/[\\"]/);
-    expect(script).not.toMatch(/\{[^\s]/);
-  });
-
-  it('refuses every script and image on a page that carries none', () => {
+  it('refuses every script, stylesheet and image on a page that carries none', () => {
     expect(staticSiteCsp('<p>plain</p>')).toContain("script-src 'none';");
+    expect(staticSiteCsp('<p>plain</p>')).toContain("style-src 'none';");
     expect(staticSiteCsp('<p>plain</p>')).toContain("img-src 'none';");
   });
 
-  it('serves the wordmark and favicon exactly as @branchleft/components renders them', () => {
-    const rendered = (mark: typeof PublicPressLogo) =>
-      renderToStaticMarkup(createElement(mark))
-        .replace(/ style="[^"]*"/, '')
-        .replaceAll('"', "'");
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    expect(body).toContain(`<h1>${rendered(PublicPressWordmark)}</h1>`);
-    const href = /<link rel='icon' [^>]*href='([^']*)'/.exec(body)?.[1] ?? '';
-    expect(decodeURIComponent(href.replace('data:image/svg+xml,', ''))).toBe(
-      rendered(PublicPressLogo)
+  it('admits a data: image when the page carries one inline, and only then', () => {
+    expect(staticSiteCsp('<img src="data:image/webp;base64,AAAA" alt="">')).toContain(
+      'img-src data:;'
+    );
+    expect(staticSiteCsp('<img src="https://example.invalid/a.png" alt="">')).toContain(
+      "img-src 'none';"
     );
   });
 
-  it('refuses every stylesheet on a page that carries none', () => {
-    expect(staticSiteCsp('<p>plain</p>')).toContain("style-src 'none';");
+  it('serves bytes Caddy passes through untouched: no placeholder, no environment reference', () => {
+    for (const page of [journey, ghostHosting]) {
+      // A known placeholder such as {path} or {env.X} in a respond body is substituted
+      // at request time; the shapes below are the only ones that can be.
+      expect(page.html).not.toMatch(/\{[A-Za-z_][\w.-]*\}/);
+      expect(page.html).not.toMatch(/\{\$|\{env\.|\{http\.|\{file\./);
+      expect(page.html).not.toContain('\r');
+    }
   });
 
-  it('answers with an inline text/html response and no reverse_proxy at all', () => {
-    expect(block()).toContain('header Content-Type "text/html; charset=utf-8"');
-    expect(block()).toContain('respond "');
-    expect(block()).not.toContain('reverse_proxy');
+  it('gives every pop-up its own address, the path its bar shows, on both pages', () => {
+    const paths = [
+      '/what-is-ghost',
+      '/included',
+      '/your-site',
+      '/moving',
+      '/how-its-built',
+      '/why',
+      '/everyone',
+      '/about',
+    ];
+    for (const page of [journey, ghostHosting]) {
+      const bars = [
+        ...page.html.matchAll(/<div class="bar"><span>publicpress\.co\.uk(\/[^<]*)<\/span>/g),
+      ];
+      expect(bars.map(([, path]) => path)).toEqual(paths);
+      expect(page.html).toContain('history.pushState');
+      expect(page.html).toContain('popstate');
+    }
+  });
+
+  it('registers interest by a pre-filled email, not a form that could post anywhere', () => {
+    for (const page of [journey, ghostHosting]) {
+      const link = /<a class="btn" href="(mailto:[^"]*)">Register interest<\/a>/.exec(
+        page.html
+      )?.[1];
+      expect(link).toBe(registerMailto(REGISTER_ADDRESS, REGISTER_SUBJECT, REGISTER_BODY));
+      const [target, query] = (link ?? '').replaceAll('&amp;', '&').split('?');
+      expect(target).toBe(`mailto:${REGISTER_ADDRESS}`);
+      const params = new URLSearchParams(query);
+      expect(params.get('subject')).toBe('Register interest in PublicPress');
+      const body = params.get('body') ?? '';
+      expect(body).toContain('Your name:');
+      expect(body).toContain('Your outlet or organisation:');
+      expect(body).toContain('What you publish on today:');
+      expect(page.html).toContain(`<span class="reg-addr">${REGISTER_ADDRESS}</span>`);
+      expect(page.html).toContain('<h2 id="register-heading">Be there from the start.</h2>');
+      expect(page.html).toContain("Tell us who you are and we'll be in touch before we launch.");
+      expect(page.html).toContain('We use these details only to contact you about PublicPress.');
+      expect(page.html).not.toContain('Preview only');
+      expect(page.html).not.toContain('id="send"');
+    }
+  });
+
+  it('reads the date, the entry tier and the register address from config only', () => {
+    const sourceText = readdirSync(join(__dirname, 'publicpress', 'src'))
+      .map((file) => readFileSync(join(__dirname, 'publicpress', 'src', file), 'utf8'))
+      .join('\n');
+    expect(sourceText).not.toContain(REGISTER_ADDRESS);
+    expect(sourceText).not.toContain(ENTRY_TIER);
+    expect(sourceText).not.toContain('March 2027');
+    for (const page of [journey, ghostHosting]) {
+      expect(page.html).toContain(`Launching by ${LAUNCH_DATE}`);
+      expect(page.html).toContain(`<h3>${ENTRY_TIER}</h3>`);
+    }
+  });
+
+  it('describes each page for search and sharing, and names its own canonical address', () => {
+    for (const [page, url] of [
+      [journey, 'https://publicpress.co.uk/'],
+      [ghostHosting, 'https://publicpress.co.uk/ghost-hosting'],
+    ] as const) {
+      const html = page.html;
+      expect(html.startsWith("<!doctype html><html lang='en'><head><meta charset='utf-8'>")).toBe(
+        true
+      );
+      expect(html).toContain(
+        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+      );
+      const title = /<title>([^<]+)<\/title>/.exec(html)?.[1];
+      const description = /<meta name="description" content="([^"]+)">/.exec(html)?.[1];
+      expect(title).toBeTruthy();
+      expect(description).toBeTruthy();
+      expect(html).toContain(`<link rel="canonical" href="${url}">`);
+      expect(html).toContain(`<meta property="og:title" content="${title}">`);
+      expect(html).toContain(`<meta property="og:description" content="${description}">`);
+      expect(html).toContain(`<meta property="og:url" content="${url}">`);
+      expect(html).toContain('<meta property="og:type" content="website">');
+      expect(html).toContain('<meta name="twitter:card" content="summary">');
+      expect(html.endsWith('</body></html>')).toBe(true);
+    }
   });
 
   it('serves the abuse contact the Public Suffix List submission needs to find on the page', () => {
-    expect(block()).toContain(`mailto:${PUBLICPRESS_ABUSE_CONTACT}`);
-    expect(block()).toContain(PUBLICPRESS_ABUSE_CONTACT);
+    for (const page of [journey, ghostHosting]) {
+      expect(page.html).toContain('<span class="addr">abuse@branchleft.co.uk</span>');
+    }
   });
 
-  it('sets every email address on a line of its own', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const addresses = [...body.matchAll(/mailto:([^']+)'/g)].map(([, address]) => address);
-    expect(addresses).toHaveLength(3);
-    for (const address of addresses) {
-      expect(body).toContain(`<br><a href='mailto:${address}'>${address}</a></p>`);
-    }
+  it('serves the favicon exactly as @branchleft/components renders it', () => {
+    const mark = renderToStaticMarkup(createElement(PublicPressLogo))
+      .replace(/ style="[^"]*"/, '')
+      .replaceAll('"', "'");
+    const href = /<link rel='icon' [^>]*href='([^']*)'/.exec(journey.html)?.[1] ?? '';
+    expect(decodeURIComponent(href.replace('data:image/svg+xml,', ''))).toBe(mark);
   });
 
   it('carries the general throttle and AppSec once the posture enforces them', () => {
@@ -1364,6 +1517,17 @@ describe('the publicpress.co.uk holding page', () => {
       ?.split('\n}')[0];
     expect(enforcingBlock).toContain('rate_limit {');
     expect(enforcingBlock).toContain('appsec');
+  });
+
+  it('puts HSTS and every policy ahead of the body cap and the protection chain', () => {
+    const lines = block().split('\n');
+    const at = (needle: string) => lines.findIndex((line) => line.includes(needle));
+    const last = (needle: string) => lines.map((line) => line.includes(needle)).lastIndexOf(true);
+    expect(at('Strict-Transport-Security')).toBeLessThan(at('Content-Security-Policy'));
+    expect(last('Content-Security-Policy')).toBeLessThan(at('request_body'));
+    expect(last('Content-Security-Policy')).toBeLessThan(at('crowdsec'));
+    expect(at('request_body')).toBeLessThan(at('Content-Type'));
+    expect(at('Content-Type')).toBeLessThan(at('respond'));
   });
 
   it('refuses a static hostname an EdgeSite in the registry already proxies to', () => {
@@ -1379,6 +1543,56 @@ describe('the publicpress.co.uk holding page', () => {
       { name: 'second', hostname: 'duplicate.invalid' },
     ];
     expect(() => renderCaddyfile([], [], POSTURE, duplicate)).toThrow(/both declare/);
+  });
+});
+
+describe('static sites with more than one page', () => {
+  const entry: StaticSite = { name: 'pages', hostname: 'pages.invalid' };
+  const page = (path: string, html = `<p>${path}</p>`): StaticPage => ({ path, html });
+  const withPages = (pages: StaticPage[]) =>
+    renderCaddyfile([], [], POSTURE, [entry], { pages: () => pages });
+  const blockOf = (text: string) => text.split('\npages.invalid {')[1]?.split('\n}')[0] ?? '';
+
+  it('renders a single page with no matchers, the way the one-page site always was', () => {
+    const out = blockOf(withPages([page('/')]));
+    expect(out).not.toContain('@page_');
+    expect(out).toMatch(/^\t\theader Content-Security-Policy "/m);
+    expect(out).toMatch(/^\t\trespond <<PAGE_HTML$/m);
+  });
+
+  it('gives each extra page its own policy and its own response, behind its own matcher', () => {
+    const out = blockOf(
+      withPages([
+        page('/', '<style>a{color:red}</style><p>home</p>'),
+        page('/other', '<script>1+1</script>'),
+      ])
+    );
+    const [other, home] = servedPages(out);
+    expect(other.matcher).toBe('@page_other');
+    expect(home.matcher).toBe('@page_default');
+    expect(other.html).toBe('<script>1+1</script>');
+    expect(other.csp).toBe(staticSiteCsp('<script>1+1</script>'));
+    expect(home.csp).toBe(staticSiteCsp('<style>a{color:red}</style><p>home</p>'));
+    expect(other.csp).not.toBe(home.csp);
+  });
+
+  it('refuses a site with no page at "/", two at one path, or a path Caddy would match loosely', () => {
+    expect(() => withPages([page('/other')])).toThrow(/exactly one page at "\/"/);
+    expect(() => withPages([page('/'), page('/a'), page('/a')])).toThrow(/two pages at one path/);
+    for (const bad of ['/Upper', '/two/segments', '/with space', '/a*', '/']) {
+      expect(() => withPages([page('/'), page(bad)])).toThrow(
+        bad === '/' ? /exactly one page/ : /one lowercase segment/
+      );
+    }
+  });
+
+  it('refuses a page that could end its own heredoc, or that carries a carriage return', () => {
+    expect(() => withPages([page('/', '<p>a</p>\nPAGE_HTML\n<p>b</p>')])).toThrow(/heredoc/);
+    expect(() => withPages([page('/', '<p>a</p>\r\n<p>b</p>')])).toThrow(/carriage return/);
+  });
+
+  it('refuses a site with no registered content', () => {
+    expect(() => renderCaddyfile([], [], POSTURE, [entry], {})).toThrow(/no page content/);
   });
 });
 

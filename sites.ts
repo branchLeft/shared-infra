@@ -141,17 +141,16 @@ export const hostRedirects: HostRedirect[] = [
 
 /**
  * Hostnames the edge answers directly with a fixed page instead of proxying.
- * `hetzner/edge/render.ts` looks up each entry's actual page content by
- * `name` from its own `hetzner/edge/publicpressHolding.ts` (or the
- * equivalent file for a future entry) -- this registry stays hostname and
- * addressing only, same rule as the rest of this file.
+ * `hetzner/edge/render.ts` looks up each entry's pages by `name` (for
+ * `publicpress`, built from `hetzner/edge/publicpress/`) -- this registry stays
+ * hostname and addressing only, same rule as the rest of this file.
  */
 export const staticSites: StaticSite[] = [
   {
     // No `www`, no `sites.*`, no wildcard: publicpress.co.uk's own eventual
     // platform, and its subdomains, are a separate onboarding when they
-    // exist. This entry is a temporary holding page for the apex alone.
-    name: 'publicpress-holding',
+    // exist. This entry is the launch site for the apex alone.
+    name: 'publicpress',
     hostname: 'publicpress.co.uk',
   },
 ];

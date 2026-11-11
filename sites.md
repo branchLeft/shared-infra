@@ -88,6 +88,9 @@ because that combination already means something else here: `privateUpstream`
 absent is how a site is _skipped_ by the renderer. A static site is the
 opposite: always rendered, never proxied.
 
-Hostname and addressing only, same rule as the rest of this registry: the page
-content itself lives in a file under `hetzner/edge/`, keyed by `name`, so that
-changing the words on the page never touches this file.
+Hostname and addressing only, same rule as the rest of this registry: the pages
+themselves live under `hetzner/edge/`, keyed by `name` in `render.ts`'s content
+registry, so that changing the words on a page never touches this file. A
+static site may have several pages, one per path (the one at `/` answers every
+path no other page claims); `hetzner/edge/publicpress/site.md` is the worked
+example, with its sources, its build and how to change them.

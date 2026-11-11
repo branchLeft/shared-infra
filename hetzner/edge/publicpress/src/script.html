@@ -1,0 +1,94 @@
+<script>
+var header = document.querySelector('.top');
+function compact() { header.classList.toggle('compact', window.scrollY > 80); }
+window.addEventListener('scroll', compact, { passive: true });
+compact();
+
+document.querySelectorAll('main h2[id], dialog h3[id]').forEach(function (h) {
+ var a = document.createElement('a');
+ a.className = 'anchor'; a.href = '#' + h.id; a.textContent = '#';
+ a.setAttribute('aria-label', 'Link to this section');
+ h.appendChild(a);
+});
+
+var when = document.getElementById('when');
+var info = when.querySelector('.info');
+function tip(open) { when.classList.toggle('open', open); info.setAttribute('aria-expanded', open ? 'true' : 'false'); }
+info.addEventListener('click', function (e) { e.stopPropagation(); tip(!when.classList.contains('open')); });
+document.addEventListener('click', function () { tip(false); });
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape') tip(false); });
+
+// Each pop-up has an address, the path its bar shows. Opening one puts that path
+// in the address bar, closing returns to this page's own path, and Back closes it.
+// The server answers every one of these paths with the page that holds the pop-up.
+var HOME = new URL(document.querySelector('link[rel=canonical]').href).pathname;
+var dialogs = Object.create(null);
+document.querySelectorAll('dialog').forEach(function (d) {
+ var path = d.querySelector('.bar span').textContent.replace(/^[^\/]*/, '');
+ d.setAttribute('data-path', path);
+ dialogs[path] = d;
+});
+function here() { return location.pathname.replace(/(.)\/+$/, '$1').toLowerCase(); }
+function show(d, how) {
+ if (!d.open) d.showModal();
+ if (how === 'push') history.pushState({ dlg: d.id, back: true }, '', d.getAttribute('data-path'));
+ if (how === 'replace') history.replaceState({ dlg: d.id }, '', d.getAttribute('data-path') + location.hash);
+}
+function sync() {
+ var want = dialogs[here()];
+ document.querySelectorAll('dialog[open]').forEach(function (d) { if (d !== want) d.close(); });
+ if (want && !want.open) want.showModal();
+}
+function leave(d, hash) {
+ if (here() !== d.getAttribute('data-path')) return;
+ if (!hash && history.state && history.state.back) history.back();
+ else history.replaceState(null, '', HOME + (hash || ''));
+}
+document.querySelectorAll('[data-open]').forEach(function (b) {
+ b.addEventListener('click', function () { show(document.getElementById(b.getAttribute('data-open')), 'push'); });
+});
+document.querySelectorAll('dialog').forEach(function (d) {
+ d.querySelector('.close').addEventListener('click', function () { d.close(); });
+ d.addEventListener('click', function (e) { if (e.target === d) d.close(); });
+ d.addEventListener('close', function () { leave(d); });
+ d.querySelectorAll('[data-close]').forEach(function (a) {
+  a.addEventListener('click', function (e) {
+   e.preventDefault();
+   leave(d, a.getAttribute('href'));
+   d.close();
+   document.getElementById(a.getAttribute('href').slice(1)).scrollIntoView();
+  });
+ });
+});
+window.addEventListener('popstate', sync);
+
+function follow() {
+ var t = location.hash ? document.getElementById(location.hash.slice(1)) : null;
+ if (!t) return;
+ var d = t.tagName === 'DIALOG' ? t : t.closest('dialog');
+ if (d && !d.open) show(d, 'replace');
+ if (d && t !== d) t.scrollIntoView();
+}
+sync();
+follow();
+window.addEventListener('hashchange', follow);
+
+var tabs = Array.prototype.slice.call(document.querySelectorAll('[role=tab]'));
+function pick(t) {
+ tabs.forEach(function (x) {
+  var on = x === t;
+  x.setAttribute('aria-selected', on ? 'true' : 'false');
+  x.tabIndex = on ? 0 : -1;
+  document.getElementById(x.getAttribute('aria-controls')).hidden = !on;
+ });
+}
+tabs.forEach(function (t, i) {
+ t.addEventListener('click', function () { pick(t); });
+ t.addEventListener('keydown', function (e) {
+  var n = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+  if (!n) return;
+  var next = tabs[(i + n + tabs.length) % tabs.length];
+  pick(next); next.focus();
+ });
+});
+</script>

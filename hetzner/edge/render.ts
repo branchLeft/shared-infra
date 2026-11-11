@@ -11,7 +11,8 @@ import {
   TLS_PROTOCOLS,
   type EdgePosture,
 } from './posture';
-import { PUBLICPRESS_HOLDING_HTML } from './publicpressHolding';
+import { buildPublicpressPages } from './publicpress/build';
+import type { StaticPage } from './publicpress/build';
 
 // Why: renders config from sites.ts & posture.ts; pure strings, committed to
 // stack/, hand-copied. Registry is the only hostname list. See render.md
@@ -289,15 +290,24 @@ function hstsDirective(): string[] {
 // Why: restricts directives to inline-only hashes; img-src/font-src support data: URIs
 // when present; CSP does not govern mailto: links. See render.md §"staticSiteCsp".
 export function staticSiteCsp(html: string): string {
-  const source = (pattern: RegExp): string => {
+  const source = (pattern: RegExp, tag: 'script' | 'style'): string => {
     const hashes = [...html.matchAll(pattern)].map(
       ([, body]) => `'sha256-${createHash('sha256').update(body, 'utf8').digest('base64')}'`
     );
+    // Why: a block the pattern skips would be blocked by the browser with no error here.
+    const opened = (html.match(new RegExp(`<${tag}\\b`, 'gi')) ?? []).length;
+    if (opened !== hashes.length) {
+      throw new Error(
+        `page opens ${opened} <${tag}> elements but ${hashes.length} can be admitted by hash`
+      );
+    }
     return hashes.length > 0 ? hashes.join(' ') : "'none'";
   };
-  const scriptSrc = source(/<script>([\s\S]*?)<\/script>/g);
-  const styleSrc = source(/<style>([^<]*)<\/style>/g);
-  const imgSrc = /<link rel='icon' [^>]*href='data:/.test(html) ? 'data:' : "'none'";
+  const scriptSrc = source(/<script>([\s\S]*?)<\/script>/g, 'script');
+  const styleSrc = source(/<style>([^<]*)<\/style>/g, 'style');
+  const imgSrc = /<link rel='icon' [^>]*href='data:|<img\s[^>]*src="data:/.test(html)
+    ? 'data:'
+    : "'none'";
   const fontSrc = /@font-face\{[^}]*src:url\(data:/.test(html) ? 'data:' : "'none'";
   return (
     `default-src 'none'; script-src ${scriptSrc}; style-src ${styleSrc}; img-src ${imgSrc}; ` +
@@ -306,8 +316,8 @@ export function staticSiteCsp(html: string): string {
   );
 }
 
-function cspDirective(value: string): string[] {
-  return [`header Content-Security-Policy "${value}"`];
+function cspDirective(value: string, matcher?: string): string[] {
+  return [`header ${matcher === undefined ? '' : `${matcher} `}Content-Security-Policy "${value}"`];
 }
 
 /** No form on this page and no legitimate reason for a request body at all. */
@@ -321,19 +331,61 @@ const STATIC_SITE_CONTENT_TYPE = 'text/html; charset=utf-8';
  * and addressing) and content stay in separate files, the same split the
  * rest of `sites.ts` draws.
  */
-const STATIC_SITE_CONTENT: Record<string, string> = {
-  'publicpress-holding': PUBLICPRESS_HOLDING_HTML,
+type StaticContent = Readonly<Record<string, () => StaticPage[]>>;
+
+const STATIC_SITE_CONTENT: StaticContent = {
+  publicpress: buildPublicpressPages,
 };
 
-function staticSiteContent(site: StaticSite): string {
-  const html = STATIC_SITE_CONTENT[site.name];
-  if (html === undefined) {
+// Why: one page serves '/' and every path no other page claims; the rest are one
+// lowercase segment, because Caddy's path matcher ignores case. See render.md §"staticBlock".
+function staticSitePages(site: StaticSite, content: StaticContent): StaticPage[] {
+  const build = content[site.name];
+  if (build === undefined) {
     throw new Error(
       `static site ${site.name} has no page content registered in render.ts's STATIC_SITE_CONTENT`
     );
   }
-  return html;
+  const pages = build();
+  const paths = pages.map((page) => page.path);
+  if (paths.filter((path) => path === '/').length !== 1) {
+    throw new Error(`static site ${site.name} must have exactly one page at "/"`);
+  }
+  for (const path of paths) {
+    if (path !== '/' && !/^\/[a-z0-9][a-z0-9-]*$/.test(path)) {
+      throw new Error(`static site ${site.name} has page path ${path}; use one lowercase segment`);
+    }
+  }
+  if (new Set(paths).size !== paths.length) {
+    throw new Error(`static site ${site.name} has two pages at one path`);
+  }
+  return pages;
 }
+
+const STATIC_PAGE_HEREDOC_MARKER = 'PAGE_HTML';
+
+/**
+ * `respond` with the page as a Caddy heredoc, so the bytes served are the bytes
+ * hashed. Every line is indented by the caller; Caddy strips the marker's
+ * indentation from each, which restores the page exactly.
+ */
+function pageResponse(page: StaticPage, matcher: string | undefined): string[] {
+  const lines = page.html.split('\n');
+  if (lines.some((line) => line.trim() === STATIC_PAGE_HEREDOC_MARKER)) {
+    throw new Error(`page ${page.path} has a line that would end its own heredoc`);
+  }
+  if (page.html.includes('\r')) {
+    throw new Error(`page ${page.path} carries a carriage return`);
+  }
+  return [
+    `respond ${matcher === undefined ? '' : `${matcher} `}<<${STATIC_PAGE_HEREDOC_MARKER}`,
+    ...lines,
+    `${STATIC_PAGE_HEREDOC_MARKER} 200`,
+  ];
+}
+
+const pageMatcherName = (page: StaticPage): string =>
+  `@page_${page.path === '/' ? 'default' : page.path.slice(1).replaceAll('-', '_')}`;
 
 function rateLimitDirective(zone: string): string[] {
   return [
@@ -569,19 +621,30 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
 
 // Why: fixed-page hostname with same TLS/throttle posture as siteBlock; no upstream,
 // no members route; strict CSP (inline only). See render.md §"staticBlock".
-function staticBlock(site: StaticSite, posture: EdgePosture): Block {
-  const html = staticSiteContent(site);
+function staticBlock(site: StaticSite, posture: EdgePosture, content: StaticContent): Block {
+  const pages = staticSitePages(site, content);
+  const fallback = pages.filter((page) => page.path === '/');
+  const named = pages.filter((page) => page.path !== '/');
+  // Matchers sit at site-block scope, ahead of `route`, like every other named matcher here.
+  const matchers = named.length === 0 ? [] : staticPageMatchers(fallback[0], named);
+  const matcherOf = (page: StaticPage): string | undefined =>
+    named.length === 0 ? undefined : pageMatcherName(page);
+  const ordered = [...named, ...fallback];
   return {
     addresses: [assertHostname(site.hostname)],
     body: [
       ...logDirective(ACCESS_LOG),
       ...tlsDirective(),
+      ...matchers,
       'route {',
       // Ahead of everything else, same reasoning as hstsDirective's own
       // comment: both headers must survive a 429 or a 403 from the chain
       // below, not only the 200 this block otherwise always answers.
       ...hstsDirective().map((line) => `\t${line}`),
-      ...cspDirective(staticSiteCsp(html)).map((line) => `\t${line}`),
+      // One CSP per page, each from that page's own blocks, still ahead of the chain.
+      ...ordered.flatMap((page) =>
+        cspDirective(staticSiteCsp(page.html), matcherOf(page)).map((line) => `\t${line}`)
+      ),
       ...['request_body {', `\tmax_size ${STATIC_SITE_REQUEST_BODY_MAX_SIZE}`, '}'].map(
         (line) => `\t${line}`
       ),
@@ -593,10 +656,19 @@ function staticBlock(site: StaticSite, posture: EdgePosture): Block {
       // and a request the chain above already answered (429, 403) never
       // reaches this line.
       `\theader Content-Type "${STATIC_SITE_CONTENT_TYPE}"`,
-      `\trespond "${html}" 200`,
+      ...ordered.flatMap((page) => pageResponse(page, matcherOf(page)).map((line) => `\t${line}`)),
       '}',
     ],
   };
+}
+
+/** One matcher per extra page, and one for everything else, which the fallback page answers. */
+function staticPageMatchers(fallback: StaticPage, named: readonly StaticPage[]): string[] {
+  const pathsOf = (page: StaticPage): string => `${page.path} ${page.path}/`;
+  return [
+    ...named.flatMap((page) => [`${pageMatcherName(page)} path ${pathsOf(page)}`]),
+    `${pageMatcherName(fallback)} not path ${named.map(pathsOf).join(' ')}`,
+  ];
 }
 
 // Why: loopback listener makes posture observable before hostnames resolve;
@@ -767,7 +839,8 @@ export function renderCaddyfile(
   sites: readonly EdgeSite[],
   hostRedirects: readonly HostRedirect[],
   posture: EdgePosture,
-  staticSites: readonly StaticSite[] = []
+  staticSites: readonly StaticSite[] = [],
+  staticContent: StaticContent = STATIC_SITE_CONTENT
 ): string {
   const servable = servableSites(sites);
   assertUpstreamsAreDistinct(servable);
@@ -797,7 +870,7 @@ export function renderCaddyfile(
     }
   }
   for (const site of staticSites) {
-    blocks.push(staticBlock(site, posture));
+    blocks.push(staticBlock(site, posture, staticContent));
   }
   // Host-qualified first, bare port second. Caddy picks the most specific
   // matching site regardless of order, so this is for the reader, not for it.

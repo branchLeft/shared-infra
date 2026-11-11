@@ -132,10 +132,14 @@ and `<style>` elements by SHA-256 and nothing else, so nothing can be injected a
 The hash is taken from the page served, so the two cannot drift. `img-src` admits `data:`
 only when the page carries an inline `data:` favicon, and `font-src` admits `data:` only
 when the stylesheet carries an inline `data:` font -- either way a `data:` URI makes no
-request. `connect-src` stays `'none'`, so the script can never send anything anywhere.
+request. The favicon link and an `<img src="data:...">` both count for `img-src`. `connect-src` stays `'none'`, so the script can never send anything anywhere.
 `form-action` and `frame-ancestors` are refused too: the page takes no input and is not
 meant to be framed. CSP does not govern anchor navigation, so this does not affect the
 page's own `mailto:` links.
+
+The function throws when a page opens more `<script>` or `<style>` elements than it can
+hash (a `type` or `src` attribute, a `<` inside a stylesheet). Left alone, the browser
+would refuse that block silently and the page would break with no error at render time.
 
 ## `BINARY_SIZE` regex
 
@@ -344,17 +348,40 @@ anyway.
 
 ## `staticBlock`
 
-A hostname the edge answers directly with a fixed page, never proxying anywhere -- see
+A hostname the edge answers directly with fixed pages, never proxying anywhere -- see
 `StaticSite`'s own doc comment in `siteTypes.ts` for what belongs in an entry, and
-`publicpressHolding.ts` for where this one's actual page text lives.
+`publicpress/site.md` for where this one's pages come from.
 
 Carries the same TLS and throttle posture as a proxied site block (`siteBlock` above): a
 browser or a scanner cannot tell this has a simpler backend and must not be given a
 weaker one. It differs in three ways -- there is no upstream to proxy to, so `respond`
-answers directly; every path gets the same response, so there is no per-path routing to
-speak of; and it carries its own strict Content-Security-Policy, appropriate here because
-the page ships no external resource of any kind, only its own inline stylesheet and script,
-which is not true of every site this edge serves.
+answers directly; the routing is by exact page path only; and each page carries its own
+strict Content-Security-Policy (`staticSiteCsp`), appropriate here because the pages ship
+no external resource of any kind, only their own inline stylesheet and scripts.
+
+**Pages.** The content registry in `render.ts` maps a site's `name` to a function returning
+its pages, each a path and a whole document. Exactly one page is at `/` and answers every
+path no other page claims, so `/included`, `/about` and any unknown path serve it. Each
+other page has one lowercase segment, matched by a named matcher on the path and on the
+path with a trailing slash (Caddy's path matcher ignores case, so `/Ghost-Hosting` is the
+same page). A site with a single page renders no matcher at all.
+
+**Policy ahead of the chain.** HSTS and every page's policy are set before the body cap and
+the protection chain, so a 429 or a 403 from the chain carries them too. A policy is set
+under its page's matcher; the Content-Type is set once, immediately before the responses.
+
+**Heredoc.** A page is written as a Caddy heredoc (`respond @matcher <<PAGE_HTML` ... a
+closing `PAGE_HTML 200`), not a quoted token. The pages contain double quotes and
+backslashes, and a quoted token would need escaping that one edit to the prose could get
+wrong; a heredoc is raw. Every line is indented with the block and Caddy removes the
+closing marker's indentation from each line, so the bytes served are the bytes hashed
+(`render.test.ts` reads each page back out of the rendered block and compares it with the
+build, and the committed Caddyfile was fetched through the pinned image to the same end).
+The renderer refuses a page with a line that would end its own heredoc or with a carriage
+return. Caddy substitutes known placeholders (`{path}`, `{env.X}`, `{http.*}`) inside a
+`respond` body at request time and reads `{$VAR}` at parse time, so a test refuses any
+page that contains a `{name}` shape; `{` followed by anything else, as in CSS and
+JavaScript, passes through untouched.
 
 No members-magic-link matcher: that route is Ghost's, and nothing here is Ghost.
 
@@ -434,7 +461,7 @@ confined to a client that is both flooding and attacking: it is answered 429 rat
 `protectionChain` is called by four block builders, so the one `rateLimit` posture
 field throttles all four: `siteBlock` (zone `<site>_per_ip`), `redirectBlock` (zone
 `<site>_redirect_per_ip`), `staticBlock` (zone `<site>_per_ip`, the `publicpress.co.uk`
-holding page) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
+site) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
 loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` never calls
 `protectionChain`. Under the committed posture that is one general `rate_limit` directive
 per throttled block, each in its own zone, and `render.test.ts` counts them per kind

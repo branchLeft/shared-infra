@@ -1,0 +1,119 @@
+<figure class="ghost-anim" aria-label="A story is written once in Ghost and published as a page on your website, an email newsletter and members-only content; a reader joins and the newsroom's member count goes up by one.">
+<style>
+.ghost-anim{margin:0 auto;max-width:520px}
+.ghost-anim svg{display:block;width:100%;height:auto;overflow:hidden}
+.ghost-anim text{font:500 15px var(--sans);fill:var(--ink)}
+.ghost-anim .ga-name{font-weight:600;font-size:17px}
+.ghost-anim .ga-mid{text-anchor:middle}
+.ghost-anim .ga-onblue{fill:var(--paper)}
+.ghost-anim .ga-box{fill:var(--paper);stroke:var(--ink);stroke-width:2}
+.ghost-anim .ga-line{fill:none;stroke:var(--ink);stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.ghost-anim .ga-ink{fill:var(--ink)}
+.ghost-anim .ga-grey{fill:var(--ink);fill-opacity:.3}
+.ghost-anim .ga-blue{fill:var(--blue)}
+.ghost-anim .ga-pink{fill:var(--pink)}
+.ghost-anim .ga-pic{fill:var(--yellow);stroke:var(--ink);stroke-width:2}
+.ghost-anim .ga-slot{fill:var(--ink);fill-opacity:.2}
+.ghost-anim .ga-out{opacity:0}
+.ghost-anim .ga-grow,.ghost-anim .ga-press,.ghost-anim .ga-pop{transform-box:fill-box;transform-origin:0 50%}
+.ghost-anim .ga-press,.ghost-anim .ga-pop{transform-origin:50% 50%}
+.ghost-anim.js .ga-grow{animation:ga-grow var(--t,.5s) linear var(--d,0s) both paused}
+.ghost-anim.js .ga-press{animation:ga-press .4s ease-in-out var(--d,0s) both paused}
+.ghost-anim.js .ga-drop{animation:ga-drop .8s cubic-bezier(.2,.7,.2,1) var(--d,0s) both paused}
+.ghost-anim.js .ga-in{animation:ga-in .4s ease-out var(--d,0s) both paused}
+.ghost-anim.js .ga-out{animation:ga-out var(--t,.4s) ease-out var(--d,0s) both paused}
+.ghost-anim.js .ga-pop{animation:ga-pop .4s ease-out var(--d,0s) both paused}
+.ghost-anim.js .ga-cur{animation:ga-cur 2.1s linear .3s both paused,ga-out .2s linear 2.45s both paused}
+.ghost-anim.js .ga-join{animation:ga-press .4s ease-in-out 5s both paused,ga-out .3s ease-out 5.4s both paused}
+.ghost-anim.js.is-playing [class*="ga-"]{animation-play-state:running}
+.ghost-anim .dly-03{--d:.3s}
+.ghost-anim .dly-11{--d:1.1s}
+.ghost-anim .dly-16{--d:1.6s}
+.ghost-anim .dly-21{--d:2.1s}
+.ghost-anim .dly-27{--d:2.7s}
+.ghost-anim .dly-31{--d:3.1s}
+.ghost-anim .dly-33{--d:3.3s}
+.ghost-anim .dly-35{--d:3.5s}
+.ghost-anim .dly-38{--d:3.8s}
+.ghost-anim .dly-40{--d:4s}
+.ghost-anim .dly-42{--d:4.2s}
+.ghost-anim .dly-44{--d:4.4s}
+.ghost-anim .dly-54{--d:5.4s}
+.ghost-anim .dly-55{--d:5.5s}
+.ghost-anim .dly-60{--d:6s}
+.ghost-anim .dly-62{--d:6.2s}
+.ghost-anim .dur-02{--t:.2s}
+.ghost-anim .dur-03{--t:.3s}
+.ghost-anim .dur-08{--t:.8s}
+@keyframes ga-grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes ga-cur{0%{transform:translate(0,0)}38.09%{transform:translate(200px,0)}38.1%{transform:translate(0,20px)}61.9%{transform:translate(300px,20px)}61.91%{transform:translate(0,32px)}85.71%{transform:translate(300px,32px)}85.72%{transform:translate(0,44px)}100%{transform:translate(180px,44px)}}
+@keyframes ga-press{0%,100%{transform:scale(1)}45%{transform:scale(.9)}}
+@keyframes ga-drop{from{transform:translateY(-164px)}to{transform:translateY(0)}}
+@keyframes ga-in{from{opacity:0}to{opacity:1}}
+@keyframes ga-out{from{opacity:1}to{opacity:0}}
+@keyframes ga-pop{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.ghost-anim.js [class*="ga-"]{animation:none}}
+</style>
+<svg viewBox="0 0 340 350" aria-hidden="true" focusable="false">
+<!-- three outputs: drawn first so they slide out from behind the editor -->
+<g transform="translate(4 176)"><g class="ga-drop dly-31">
+<rect class="ga-box" width="100" height="140" rx="6"/>
+<path class="ga-line" d="M0 20H100"/>
+<circle class="ga-ink" cx="10" cy="10" r="2.5"/><circle class="ga-ink" cx="19" cy="10" r="2.5"/><circle class="ga-ink" cx="28" cy="10" r="2.5"/>
+<rect class="ga-pic" x="10" y="30" width="80" height="40"/>
+<rect class="ga-ink" x="10" y="80" width="64" height="8" rx="1"/>
+<rect class="ga-grey" x="10" y="98" width="80" height="4" rx="1"/><rect class="ga-grey" x="10" y="108" width="80" height="4" rx="1"/><rect class="ga-grey" x="10" y="118" width="48" height="4" rx="1"/>
+</g></g>
+<g transform="translate(120 176)"><g class="ga-drop dly-33">
+<rect class="ga-box" width="100" height="140" rx="6"/>
+<path class="ga-line" d="M0 40H100"/>
+<rect class="ga-box" x="10" y="10" width="28" height="20" rx="2"/>
+<path class="ga-line" d="M10 11l14 10 14-10"/>
+<circle class="ga-pink ga-pop dly-44" cx="38" cy="10" r="6"/>
+<rect class="ga-ink" x="48" y="14" width="42" height="4" rx="1"/><rect class="ga-grey" x="48" y="22" width="28" height="4" rx="1"/>
+<rect class="ga-pic" x="10" y="50" width="80" height="28"/>
+<rect class="ga-ink" x="10" y="88" width="64" height="8" rx="1"/>
+<rect class="ga-grey" x="10" y="106" width="80" height="4" rx="1"/><rect class="ga-grey" x="10" y="116" width="48" height="4" rx="1"/>
+</g></g>
+<g transform="translate(236 176)"><g class="ga-drop dly-35">
+<rect class="ga-box" width="100" height="140" rx="6"/>
+<rect class="ga-ink" x="10" y="14" width="64" height="8" rx="1"/>
+<rect class="ga-grey" x="10" y="30" width="80" height="4" rx="1"/><rect class="ga-grey" x="10" y="40" width="80" height="4" rx="1"/>
+<g class="ga-in dly-55"><rect class="ga-grey" x="10" y="50" width="80" height="4" rx="1"/><rect class="ga-grey" x="10" y="60" width="80" height="4" rx="1"/><rect class="ga-grey" x="10" y="70" width="80" height="4" rx="1"/><rect class="ga-grey" x="10" y="80" width="80" height="4" rx="1"/><rect class="ga-grey" x="10" y="90" width="48" height="4" rx="1"/></g>
+<g class="ga-out dly-54 dur-03"><path class="ga-line" d="M44 70v-5a6 6 0 0 1 12 0v5"/><rect class="ga-ink" x="40" y="70" width="20" height="16" rx="2"/></g>
+<g class="ga-in dly-55"><rect class="ga-pink" x="14" y="104" width="72" height="26" rx="13"/><path class="ga-line" d="M43 117l5 5 10-11"/></g>
+<g class="ga-out ga-join"><rect class="ga-blue" x="14" y="104" width="72" height="26" rx="13"/><text class="ga-mid ga-onblue" x="50" y="122">Join</text></g>
+</g></g>
+<!-- the editor -->
+<rect class="ga-box" x="4" y="4" width="332" height="156" rx="8"/>
+<path class="ga-line" d="M4 48H336M4 126H336"/>
+<text class="ga-name" x="20" y="32">Ghost</text>
+<g class="ga-press dly-27"><rect class="ga-blue" x="244" y="12" width="80" height="28" rx="14"/><text class="ga-mid ga-onblue" x="284" y="31">Publish</text></g>
+<rect class="ga-ink ga-grow dly-03 dur-08" x="20" y="62" width="200" height="12" rx="1"/>
+<rect class="ga-grey ga-grow dly-11" x="20" y="86" width="300" height="4" rx="1"/>
+<rect class="ga-grey ga-grow dly-16" x="20" y="98" width="300" height="4" rx="1"/>
+<rect class="ga-grey ga-grow dly-21 dur-03" x="20" y="110" width="180" height="4" rx="1"/>
+<rect class="ga-blue ga-out ga-cur" x="20" y="60" width="2" height="16"/>
+<circle class="ga-ink" cx="27" cy="138" r="4"/><path class="ga-ink" d="M19 152a8 8 0 0 1 16 0z"/>
+<text class="ga-out dly-60 dur-02" x="44" y="148">248 members</text>
+<text class="ga-in dly-62" x="44" y="148">249 members</text>
+<g class="ga-pop dly-62"><rect class="ga-pink" x="284" y="132" width="40" height="22" rx="11"/><text class="ga-mid" x="304" y="148">+1</text></g>
+<!-- labels -->
+<text class="ga-mid ga-in dly-38" x="54" y="340">Website</text>
+<text class="ga-mid ga-in dly-40" x="170" y="340">Newsletter</text>
+<text class="ga-mid ga-in dly-42" x="286" y="340">Members</text>
+</svg>
+<script>
+(function(){
+  var f=document.currentScript.parentNode;
+  if(!('IntersectionObserver' in window))return;
+  f.classList.add('js');
+  new IntersectionObserver(function(es){es.forEach(function(e){
+    if(e.intersectionRatio>=.4){f.classList.add('is-playing');}
+    else if(!e.isIntersecting){
+      f.classList.remove('js','is-playing');void f.offsetWidth;f.classList.add('js');
+    }
+  });},{threshold:[0,.4]}).observe(f);
+})();
+</script>
+</figure>

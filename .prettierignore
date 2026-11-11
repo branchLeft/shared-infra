@@ -26,6 +26,12 @@ hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml
 hetzner/edge/validation/Caddyfile.enforcing
 hetzner/edge/validation/Caddyfile.authoring
 
+# The publicpress.co.uk site: `src/` is the owner's prose and whitespace-sensitive
+# inline markup, and `dist/` is built from it by hetzner/edge/publicpress/build.ts.
+# A formatter would rewrite both. See hetzner/edge/publicpress/site.md.
+hetzner/edge/publicpress/src/
+hetzner/edge/publicpress/dist/
+
 # Files a role carries byte for byte from branchLeft/ghost-platform and holds to a pinned
 # sha256 (ansible/roles/demo1_build, ansible/roles/demo1_egress_spool). A formatter that
 # rewrote one would break its pin.

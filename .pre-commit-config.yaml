@@ -18,7 +18,7 @@ repos:
       # directly without consulting `.prettierignore` -- they are the ones
       # that need it, and only them.
       - id: trailing-whitespace
-        exclude: &generated-config-exclude ^hetzner/monitoring/stack/prometheus/(prometheus|alerts)\.yml$|^hetzner/monitoring/stack/alertmanager/alertmanager\.yml\.tmpl$|^hetzner/edge/stack/caddy/Caddyfile$|^hetzner/edge/stack/crowdsec/acquis\.d/(appsec|caddy)\.yaml$|^hetzner/edge/validation/Caddyfile\.(enforcing|authoring)$
+        exclude: &generated-config-exclude ^hetzner/monitoring/stack/prometheus/(prometheus|alerts)\.yml$|^hetzner/monitoring/stack/alertmanager/alertmanager\.yml\.tmpl$|^hetzner/edge/stack/caddy/Caddyfile$|^hetzner/edge/stack/crowdsec/acquis\.d/(appsec|caddy)\.yaml$|^hetzner/edge/validation/Caddyfile\.(enforcing|authoring)$|^hetzner/edge/publicpress/dist/
       - id: end-of-file-fixer
         exclude: *generated-config-exclude
       - id: check-yaml
