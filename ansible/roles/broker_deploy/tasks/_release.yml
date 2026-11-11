@@ -1,0 +1,32 @@
+---
+# Internal to the role: the pinned release goes into a directory of its own under releases/
+# and the current link is swapped to it, never a write into the directory the link points
+# at. The files were held to their pins by _release_pin.yml before the role wrote anything.
+# Root-owned, directories 0755 and files 0644.
+- name: Create the directory of this release
+  ansible.builtin.file:
+    path: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}'
+    state: directory
+    owner: '{{ broker_deploy_release_owner }}'
+    group: '{{ broker_deploy_release_group }}'
+    mode: '0755'
+
+# A directory copy keeps the directory as the pins describe it, and puts back a byte that
+# changed on the host. A file on the host that is not in the release is left alone.
+- name: Deliver the pinned release files
+  ansible.builtin.copy:
+    src: '{{ broker_deploy_release_dir }}/{{ broker_deploy_release_version }}/'
+    dest: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}/'
+    owner: '{{ broker_deploy_release_owner }}'
+    group: '{{ broker_deploy_release_group }}'
+    mode: 'u=rwX,go=rX'
+    directory_mode: 'u=rwX,go=rX'
+  register: broker_deploy_release_copy
+
+- name: Point the current link at the release
+  ansible.builtin.file:
+    src: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release_version }}'
+    dest: '{{ broker_deploy_current_link }}'
+    state: link
+    force: true
+  register: broker_deploy_link_result
