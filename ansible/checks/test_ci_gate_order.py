@@ -67,7 +67,10 @@ OK = {
     "QUICK": "success",
     "LINT": "success",
     "SHARD": "success",
+    "EVENT": "pull_request",
 }
+# What the shard job's condition must say about the merge queue, and the one event it is keyed on.
+QUEUE_SKIP = "github.event_name != 'merge_group'"
 GATE_TABLE: tuple[tuple[str, dict[str, str], int], ...] = (
     ("every job succeeded", {}, 0),
     ("the quick gate failed", {"QUICK": "failure"}, 1),
@@ -98,6 +101,57 @@ GATE_TABLE: tuple[tuple[str, dict[str, str], int], ...] = (
         {"SHARDS": "false", "SHARD": "skipped", "QUICK": "failure"},
         1,
     ),
+    ("a chosen shard was cancelled", {"SHARD": "cancelled"}, 1),
+    # The merge queue skips the container shards on purpose, because the pull request already
+    # passed them; the lint and the quick gate still decide the queue's result.
+    (
+        "queue: lint passed and the shards were skipped",
+        {"EVENT": "merge_group", "SHARD": "skipped"},
+        0,
+    ),
+    (
+        "queue: the full lint failed and the shards were skipped",
+        {"EVENT": "merge_group", "SHARD": "skipped", "LINT": "failure"},
+        1,
+    ),
+    (
+        "queue: the quick gate failed and the shards were skipped",
+        {"EVENT": "merge_group", "SHARD": "skipped", "QUICK": "failure"},
+        1,
+    ),
+    (
+        "queue: the quick gate was skipped and the shards were skipped",
+        {"EVENT": "merge_group", "SHARD": "skipped", "QUICK": "skipped"},
+        1,
+    ),
+    (
+        "queue: discover failed",
+        {"EVENT": "merge_group", "SHARD": "skipped", "DISCOVER": "failure"},
+        1,
+    ),
+    ("queue: a shard that ran and failed", {"EVENT": "merge_group", "SHARD": "failure"}, 1),
+    ("queue: a shard that was cancelled", {"EVENT": "merge_group", "SHARD": "cancelled"}, 1),
+    ("queue: a shard that ran and passed", {"EVENT": "merge_group"}, 0),
+    (
+        "queue: no Ansible input changed",
+        {
+            "EVENT": "merge_group",
+            "ANSIBLE": "false",
+            "QUICK": "skipped",
+            "LINT": "skipped",
+            "SHARD": "skipped",
+        },
+        0,
+    ),
+    # Only the queue may skip a chosen shard, and the event name decides it, never a result.
+    ("pull request: the shards were skipped", {"SHARD": "skipped"}, 1),
+    ("schedule: the shards were skipped", {"EVENT": "schedule", "SHARD": "skipped"}, 1),
+    (
+        "manual run: the shards were skipped",
+        {"EVENT": "workflow_dispatch", "SHARD": "skipped"},
+        1,
+    ),
+    ("no event name: the shards were skipped", {"EVENT": "", "SHARD": "skipped"}, 1),
 )
 
 
@@ -304,6 +358,48 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
         self.assertNotIn('[ "$LINT" != "success" ]', cut)
         self.assertEqual(1, run_gate(gate_script, {"LINT": "failure"}))
         self.assertEqual(0, run_gate(cut, {"LINT": "failure"}))
+
+    def test_every_container_shard_job_skips_in_the_merge_queue_by_the_event_name(self) -> None:
+        # A container shard is any job that runs the harness. Its condition names the event, not
+        # a result, and the pull request keeps the condition it had.
+        jobs = get(self.workflow, "jobs")
+        shard_jobs = [
+            str(name)
+            for name, job in (jobs.items() if isinstance(jobs, dict) else [])
+            if "run_harness.py" in script(job)
+        ]
+        self.assertEqual(["shard"], shard_jobs, "a control: the harness runs in the shard job")
+        for name in shard_jobs:
+            condition = str(get(self.job(name), "if"))
+            with self.subTest(job=name):
+                self.assertIn(QUEUE_SKIP, condition)
+                self.assertIn("needs.discover.outputs.shards == 'true'", condition)
+                self.assertIn("needs.discover.outputs.ansible == 'true'", condition)
+                self.assertNotIn("result", condition)
+                self.assertNotIn("pull_request", condition)
+
+    def test_the_lint_jobs_and_discover_run_in_the_merge_queue(self) -> None:
+        for name in ("discover", "quick-lint", "lint", "roles"):
+            condition = str(get(self.job(name), "if") or "")
+            with self.subTest(job=name):
+                self.assertNotIn("merge_group", condition)
+                self.assertNotIn("github.event_name", condition)
+                for step in items(get(self.job(name), "steps")):
+                    self.assertNotIn("merge_group", str(get(step, "if") or ""))
+
+    def test_the_gate_is_told_the_event_name_and_never_a_job_result_in_its_place(self) -> None:
+        env = get(self.job("roles"), "steps", 0, "env")
+        self.assertEqual("${{ github.event_name }}", get(env, "EVENT"))
+
+    def test_the_gate_table_sees_the_queue_skip_being_widened_to_every_event(self) -> None:
+        # The control of the rows above: with the event test cut out, the gate takes a skipped
+        # shard from a pull request, and the table's rows for that case turn red.
+        gate_script = str(get(self.job("roles"), "steps", 0, "run"))
+        needle = '[ "$EVENT" = "merge_group" ] && '
+        self.assertIn(needle, gate_script)
+        widened = gate_script.replace(needle, "")
+        self.assertEqual(1, run_gate(gate_script, {"SHARD": "skipped"}))
+        self.assertEqual(0, run_gate(widened, {"SHARD": "skipped"}))
 
     def test_a_shard_job_that_did_not_succeed_fails_the_gate_when_shards_were_chosen(self) -> None:
         text = script(self.job("roles"))

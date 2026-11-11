@@ -9,21 +9,27 @@
   gather_facts: false
   vars:
     egress_nat_verify_provision: '{{ playbook_dir }}/../../../../../hetzner/provision'
+    egress_nat_verify_role_files: '{{ playbook_dir }}/../../files'
     egress_nat_verify_files:
       - dest: /usr/local/sbin/branchleft-host-egress
         source: branchleft_host_egress.sh
+        source_dir: '{{ egress_nat_verify_provision }}'
         mode: '0755'
       - dest: /etc/systemd/system/branchleft-host-egress.service
         source: branchleft-host-egress.service
+        source_dir: '{{ egress_nat_verify_provision }}'
         mode: '0644'
       - dest: /etc/systemd/system/branchleft-host-egress.timer
         source: branchleft-host-egress.timer
+        source_dir: '{{ egress_nat_verify_provision }}'
         mode: '0644'
       - dest: /usr/local/sbin/branchleft-nat
-        source: branchleft_nat.sh
+        source: branchleft_nat.py
+        source_dir: '{{ egress_nat_verify_role_files }}'
         mode: '0755'
       - dest: /etc/systemd/system/branchleft-nat.service
         source: branchleft-nat.service
+        source_dir: '{{ egress_nat_verify_role_files }}'
         mode: '0644'
     egress_nat_verify_subnet: 10.20.1.0/24
   tasks:
@@ -38,7 +44,7 @@
 
     - name: Read each file's source in the repository, on the machine that runs the test
       ansible.builtin.stat:
-        path: '{{ egress_nat_verify_provision }}/{{ item.source }}'
+        path: '{{ item.source_dir }}/{{ item.source }}'
         checksum_algorithm: sha256
       loop: '{{ egress_nat_verify_files }}'
       register: egress_nat_verify_sources
@@ -59,7 +65,7 @@
         quiet: true
         fail_msg: >-
           {{ item.0.item.dest }} is missing, is not a regular file owned by root with mode {{ item.0.item.mode }},
-          or differs from {{ egress_nat_verify_provision }}/{{ item.0.item.source }}.
+          or differs from {{ item.0.item.source_dir }}/{{ item.0.item.source }}.
       loop: '{{ egress_nat_verify_installed.results | ansible.builtin.zip(egress_nat_verify_sources.results) | ansible.builtin.list }}'
       loop_control:
         label: '{{ item.0.item.dest }}'

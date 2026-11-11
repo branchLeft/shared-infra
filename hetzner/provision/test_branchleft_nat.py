@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Unit tests for branchleft_nat.sh.
+"""Unit tests for the NAT gateway reconciler, branchleft_nat.py in the egress_nat role.
+
+The suite was written for the bash program it replaced and is kept as its specification: every
+case runs the program as a subprocess, with the same fakes and the same expectations.
 
 The script writes forwarding rules on the host that terminates public traffic,
 so the return-path rule and the refusal on a private default route are
@@ -12,13 +15,16 @@ import os
 import re
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 
 from runbook_sections import runbook_section
 
-SCRIPT = os.path.join(os.path.dirname(__file__), "branchleft_nat.sh")
-UNIT = os.path.join(os.path.dirname(__file__), "branchleft-nat.service")
+HERE = os.path.dirname(__file__)
+ROLE_FILES = os.path.normpath(os.path.join(HERE, "..", "..", "ansible", "roles", "egress_nat", "files"))
+SCRIPT = os.path.join(ROLE_FILES, "branchleft_nat.py")
+UNIT = os.path.join(ROLE_FILES, "branchleft-nat.service")
 RUNBOOK = os.path.join(
     os.path.dirname(__file__), "..", "RUNBOOK-provision-host.md"
 )
@@ -39,7 +45,10 @@ args="$*"
 printf '%s\\n' "$args" >> "$FAKE_IPTABLES_LOG"
 case "$args" in
     *"-S DOCKER-USER"*) exit "${FAKE_IPTABLES_DOCKER_USER_EXIT:-1}" ;;
-    *" -C "*) exit "${FAKE_IPTABLES_CHECK_EXIT:-1}" ;;
+    *" -C "*)
+        # exec, so that a timed-out call kills the sleep itself and not a child holding the pipe.
+        if [[ -n "${FAKE_IPTABLES_CHECK_HANG:-}" ]]; then exec sleep 40; fi
+        exit "${FAKE_IPTABLES_CHECK_EXIT:-1}" ;;
     *" -I "*) exit "${FAKE_IPTABLES_INSERT_EXIT:-0}" ;;
 esac
 exit 0
@@ -51,7 +60,9 @@ exit 0
 
 FAKE_SYSTEMCTL = """#!/usr/bin/env bash
 case "$*" in
-    "is-active --quiet docker.service") exit "${FAKE_SYSTEMCTL_DOCKER_ACTIVE_EXIT:-1}" ;;
+    "is-active --quiet docker.service")
+        if [[ -n "${FAKE_SYSTEMCTL_HANG:-}" ]]; then exec sleep 40; fi
+        exit "${FAKE_SYSTEMCTL_DOCKER_ACTIVE_EXIT:-1}" ;;
 esac
 exit 0
 """
@@ -100,6 +111,8 @@ class NatGatewayTests(unittest.TestCase):
         subnet=None,
         drop_iptables=False,
         insert_exit="0",
+        systemctl_hangs=False,
+        check_hangs=False,
     ):
         if drop_iptables:
             os.remove(os.path.join(self.bin_dir, "iptables"))
@@ -115,12 +128,14 @@ class NatGatewayTests(unittest.TestCase):
                 "FAKE_IPTABLES_INSERT_EXIT": insert_exit,
                 "FAKE_SYSTEMCTL_DOCKER_ACTIVE_EXIT": "0" if docker_active else "1",
                 "BRANCHLEFT_NAT_SYSCTL_CONF": self.sysctl_conf,
+                "FAKE_SYSTEMCTL_HANG": "1" if systemctl_hangs else "",
+                "FAKE_IPTABLES_CHECK_HANG": "1" if check_hangs else "",
             }
         )
         if subnet is not None:
             env["BRANCHLEFT_NAT_SUBNET"] = subnet
         return subprocess.run(
-            ["bash", SCRIPT],
+            [sys.executable, SCRIPT],
             env=env,
             capture_output=True,
             text=True,
@@ -193,6 +208,26 @@ class NatGatewayTests(unittest.TestCase):
         self.assertIn("no DOCKER-USER chain", result.stderr)
         self.assertIn("not a safe substitute", result.stderr)
         self.assertEqual(self.inserted(), [])
+
+    def test_refuses_when_docker_state_cannot_be_learned_and_installs_no_rule(self):
+        # A timed-out `systemctl is-active` says nothing about Docker. Reading that as "not running"
+        # would choose FORWARD, where Docker's DROP never looks, and exit 0 with no egress.
+        result = self.run_script(docker_user=False, systemctl_hangs=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not learn whether docker.service is active", result.stderr)
+        self.assertEqual(self.inserted(), [])
+
+    def test_refuses_when_a_rule_check_cannot_be_learned_and_does_not_insert(self):
+        # A timed-out `iptables -C` is not "the rule is absent": inserting on it can duplicate a rule.
+        result = self.run_script(check_hangs=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("could not learn whether nat/POSTROUTING already carries the rule", result.stderr)
+        self.assertEqual(self.inserted(), [])
+
+    def test_is_the_program_with_the_shebang_and_mode_the_role_pins(self):
+        with open(SCRIPT, encoding="utf-8") as handle:
+            self.assertEqual(handle.readline(), "#!/usr/bin/python3 -I\n")
+        self.assertEqual(stat.S_IMODE(os.stat(SCRIPT).st_mode), 0o755)
 
     def test_adds_nothing_when_the_rules_are_already_present(self):
         result = self.run_script(rule_present=True)
@@ -277,7 +312,12 @@ class NatGatewayTests(unittest.TestCase):
     def test_reports_a_missing_iptables_rather_than_failing_as_a_broken_unit(self):
         result = self.run_script(drop_iptables=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("iptables is not installed", result.stderr)
+        # Deliberate deviation from the bash original: the message names the role, not the
+        # script being removed. The bash original keeps its old wording until it is removed.
+        self.assertEqual(
+            "branchleft-nat: iptables is not installed: apply the host_baseline role first\n",
+            result.stderr,
+        )
 
     def test_follows_the_uplink_rather_than_assuming_an_interface_name(self):
         result = self.run_script(

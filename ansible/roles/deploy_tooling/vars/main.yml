@@ -45,10 +45,10 @@ deploy_tooling_directory_targets:
     mode: '0755'
     kind: directory
 
-# Where the programs are read from: hetzner/provision/ of the checkout the playbook
-# runs from, the single home of each program. The role holds no copy and no link of
-# them (a copy would be a second home that could drift). role_path is this role's own
-# directory, three levels below the repository root.
+# Where the common programs are read from: hetzner/provision/ of the checkout the playbook
+# runs from, the single home of each. The role holds no copy and no link of them (a copy
+# would be a second home that could drift). role_path is this role's own directory, three
+# levels below the repository root.
 deploy_tooling_programs_dir: '{{ role_path }}/../../../hetzner/provision'
 
 # The files every host gets, of every class (gateway, internal and app). program is the
@@ -65,15 +65,24 @@ deploy_tooling_common_file_targets:
     mode: '0644'
     kind: file
 
+# The policy program and its unit are held by this role, in its own files/: the program is
+# a typed Python program with unit tests in tests/unit. home: role says so for the checks
+# (they read the file from there and not from hetzner/provision). hand_source is the name
+# the hand-run installer installs the same path from, until that installer is removed.
+deploy_tooling_role_files_dir: '{{ role_path }}/files'
+
 # The files only a host of class app gets.
 deploy_tooling_app_file_targets:
   - label: policy program
-    program: branchleft_docker_user_policy.sh
+    program: branchleft_docker_user_policy.py
+    home: role
+    hand_source: branchleft_docker_user_policy.sh
     path: '{{ deploy_tooling_reconciler_path }}'
     mode: '0755'
     kind: file
   - label: policy unit
     program: branchleft-docker-user-policy.service
+    home: role
     path: '{{ deploy_tooling_policy_unit_path }}'
     mode: '0644'
     kind: file

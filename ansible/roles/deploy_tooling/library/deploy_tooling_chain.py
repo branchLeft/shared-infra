@@ -8,6 +8,7 @@ rules' literals are read from the program as installed, so the module restates n
 The README shows what the listing looks like.
 """
 
+import ast
 import dataclasses
 import ipaddress
 import re
@@ -195,8 +196,10 @@ LITERAL_NAMES = (
     "METADATA_ADDRESS",
     "DB_HOST",
 )
-ASSIGNMENT = re.compile(r'^\s*(?P<name>[A-Z_]+)="(?P<value>[^"]*)"\s*$')
-DEFAULTED = re.compile(r"^\$\{[A-Z_]+:-(?P<default>[^}]*)\}$")
+# The module-level constant of the policy program (a Python program) each value is read from.
+PROGRAM_CONSTANTS = {
+    name: name if name == "METADATA_ADDRESS" else f"DEFAULT_{name}" for name in LITERAL_NAMES
+}
 
 
 class PolicyError(Exception):
@@ -222,6 +225,16 @@ class LiteralMissingError(PolicyError):
         super().__init__(
             f"the policy program has {found} usable assignment(s) of {name}, expected exactly one; "
             "the module reads it from there and cannot check the chains without it"
+        )
+
+
+class LiteralUnreadableError(PolicyError):
+    """The policy program is not Python the module can parse."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "the policy program is not valid Python, so the module cannot read the values "
+            "it checks the chains against"
         )
 
 
@@ -560,23 +573,32 @@ def normalise_address(value: str) -> str:
 def read_literals(text: str) -> Literals:
     """Read the values the policy program carries from its text.
 
+    A value is a module-level constant the program assigns a non-empty string literal, as
+    ``PROGRAM_CONSTANTS`` names it. Anything assigned inside a function or a class is not read.
+
     Raises:
+        LiteralUnreadableError: when the program is not valid Python.
         LiteralMissingError: when a value is not assigned exactly once.
         LiteralInvalidError: when a value is not an address, a port or a bridge name.
     """
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError) as error:
+        raise LiteralUnreadableError from error
+    constants = {constant: name for name, constant in PROGRAM_CONSTANTS.items()}
     found: dict[str, list[str]] = {name: [] for name in LITERAL_NAMES}
-    for line in text.splitlines():
-        match = ASSIGNMENT.match(line)
-        if match is None or match["name"] not in found:
+    for node in tree.body:
+        if not (
+            isinstance(node, ast.Assign)
+            and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in constants
+            and isinstance(node.value, ast.Constant)
+            and isinstance(node.value.value, str)
+            and node.value.value
+        ):
             continue
-        value = match["value"]
-        defaulted = DEFAULTED.match(value)
-        if defaulted is not None:
-            value = defaulted["default"]
-        elif "$" in value:
-            continue
-        if value:
-            found[match["name"]].append(value)
+        found[constants[node.targets[0].id]].append(node.value.value)
     for name, values in found.items():
         if len(values) != 1:
             raise LiteralMissingError(name, len(values))

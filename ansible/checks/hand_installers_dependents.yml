@@ -10,8 +10,6 @@ ansible/checks/test_codeowners.py:
 ansible/checks/test_deploy_tooling_links.py:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/app-host-isolation.sh
-ansible/checks/test_deploy_tooling_single_owner.py:
-  - hetzner/provision/branchleft_docker_user_policy.sh
 ansible/checks/test_egress_nat_single_gateway.py:
   - hetzner/provision/branchleft_nat.sh
 ansible/checks/test_host_baseline_matches_scripts.py:
@@ -27,22 +25,9 @@ ansible/checks/test_mx1_stack_agree.py:
 ansible/checks/test_no_new_hand_installers.py:
   - hetzner/provision/run-all.sh
   - mail/provision/run-all.sh
-ansible/roles/control_plane/files/branchleft_docker_user_policy.sh:
-  - hetzner/provision/20-install-docker.sh
-  - hetzner/provision/app-host-isolation.sh
-  - hetzner/provision/branchleft_host_egress.sh
-  - hetzner/provision/branchleft_nat.sh
-  - mail/provision/20-install-docker.sh
-ansible/roles/control_plane/molecule/default/verify.yml:
-  - hetzner/provision/branchleft_docker_user_policy.sh
-ansible/roles/control_plane/tasks/main.yml:
-  - hetzner/provision/branchleft_docker_user_policy.sh
 ansible/roles/deploy_tooling/README.md:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/app-host-isolation.sh
-  - hetzner/provision/branchleft_docker_user_policy.sh
-ansible/roles/deploy_tooling/tests/unit/test_deploy_tooling_chain.py:
-  - hetzner/provision/branchleft_docker_user_policy.sh
 ansible/roles/deploy_tooling/vars/main.yml:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/app-host-isolation.sh
@@ -56,19 +41,15 @@ ansible/roles/egress_nat/README.md:
   - hetzner/provision/nat-gateway.sh
 ansible/roles/egress_nat/molecule/default/verify.yml:
   - hetzner/provision/branchleft_host_egress.sh
-  - hetzner/provision/branchleft_nat.sh
 ansible/roles/egress_nat/tasks/_reconciler.yml:
   - hetzner/provision/05-configure-host-egress.sh
   - hetzner/provision/nat-gateway.sh
 ansible/roles/egress_nat/tasks/main.yml:
   - hetzner/provision/05-configure-host-egress.sh
-  - hetzner/provision/nat-gateway.sh
 ansible/roles/egress_nat/tests/unit/test_egress_nat_role.py:
   - hetzner/provision/branchleft_host_egress.sh
-  - hetzner/provision/branchleft_nat.sh
 ansible/roles/egress_nat/vars/main.yml:
   - hetzner/provision/branchleft_host_egress.sh
-  - hetzner/provision/branchleft_nat.sh
 ansible/roles/mail_reconcilers/tests/unit/test_mail_reconcilers.py:
   - hetzner/provision/run-all.sh
   - mail/provision/30-deploy-stalwart.sh
@@ -150,7 +131,6 @@ hetzner-host/testdata/cloud-init-public.golden:
   - hetzner/provision/00-harden-ssh.sh
   - mail/provision/00-harden-ssh.sh
 hetzner/README.md:
-  - hetzner/provision/branchleft_nat.sh
   - hetzner/provision/run-all.sh
   - mail/provision/run-all.sh
 hetzner/RUNBOOK-monitoring.md:
@@ -179,17 +159,9 @@ hetzner/RUNBOOK-provision-host.md:
   - mail/provision/10-harden-updates-fail2ban.sh
   - mail/provision/20-install-docker.sh
   - mail/provision/run-all.sh
-hetzner/egress.ts:
-  - hetzner/provision/branchleft_nat.sh
 hetzner/estate.md:
   - hetzner/provision/app-host-isolation.sh
   - hetzner/provision/branchleft_docker_user_policy.sh
-hetzner/natSubnet.test.ts:
-  - hetzner/provision/branchleft_nat.sh
-hetzner/network.ts:
-  - hetzner/provision/10-harden-updates-fail2ban.sh
-  - hetzner/provision/branchleft_nat.sh
-  - mail/provision/10-harden-updates-fail2ban.sh
 hetzner/provision/05-configure-host-egress.sh:
   - hetzner/provision/10-harden-updates-fail2ban.sh
   - hetzner/provision/branchleft_host_egress.sh
@@ -273,19 +245,11 @@ hetzner/provision/test_compose_unit_contract.md:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/run-all.sh
   - mail/provision/run-all.sh
-hetzner/scripts/check-address-plan-drift.py:
-  - hetzner/provision/branchleft_docker_user_policy.sh
-  - hetzner/provision/branchleft_nat.sh
 hetzner/scripts/test-control-plane-port-policy.sh:
   - hetzner/provision/branchleft_docker_user_policy.sh
 hetzner/scripts/test-spool-bridge-egress.sh:
   - hetzner/provision/branchleft_docker_user_policy.sh
-hetzner/scripts/test_check_address_plan_drift.py:
-  - hetzner/provision/branchleft_docker_user_policy.sh
-  - hetzner/provision/branchleft_nat.sh
 hetzner/scripts/test_probe_edget_gateway.py:
-  - hetzner/provision/branchleft_nat.sh
-hetzner/tenants.ts:
   - hetzner/provision/branchleft_nat.sh
 hetzner/tenants/RUNBOOK-edget-gateway-proof.md:
   - hetzner/provision/branchleft_nat.sh

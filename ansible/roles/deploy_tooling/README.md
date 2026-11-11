@@ -116,12 +116,31 @@ fresh `debian:13`, `debian:12` or `ubuntu:24.04` has `/usr/local/sbin` at `root:
 and no such marker file. These reads come first, before the role writes a
 file, so a run that is refused has written nothing into the directory it refused.
 
-The four files are read from `hetzner/provision/` of the checkout the playbook runs from,
-which stays their single home: the role holds no copy of them and no link to them (a link
-under the role would be a second path to the same bytes, and a check that reads it would
-treat the role as the author of a program it does not write). This differs from the note
-that asked for a download at a pinned commit: no other repository holds these programs, so
-a download would have meant a second copy in the repository that is downloaded from.
+The wrapper and the template unit are read from `hetzner/provision/` of the checkout the
+playbook runs from, which stays their single home: the role holds no copy of them and no
+link to them (a link under the role would be a second path to the same bytes, and a check
+that reads it would treat the role as the author of a program it does not write). This
+differs from the note that asked for a download at a pinned commit: no other repository
+holds these programs, so a download would have meant a second copy in the repository that
+is downloaded from.
+
+The policy program and its unit are held in this role's own `files/`, which is their one
+home. The program is a typed Python program (`files/branchleft_docker_user_policy.py`,
+installed under the name `branchleft-docker-user-policy`) with its unit tests in
+`tests/unit/test_branchleft_docker_user_policy.py`, checked by `mypy --strict` and `ruff`
+with the module in `library/`. It has no configuration file: it reads the host's own
+addresses, and the estate values it restates (the subnet, the gateway, the database host
+and port, the protected address and its ports, the spool bridge) are constants at the top
+of the file. The module reads the same constants to know what chain to expect, so a change
+to one changes what the read-back expects. The hand installer still installs an older
+shell copy of the program from `hetzner/provision/` until that installer is removed; the
+two differ, and the role's copy is the one a gated apply installs.
+
+The program refuses what it does not understand. It takes no arguments. An environment
+value with the name prefix `BRANCHLEFT_DOCKER_USER_POLICY_` (the tests set them; nothing on
+a host does) is refused unless it is an address, a subnet with its prefix length, a port
+number or a bridge name, as its name needs. A command it runs that does not finish in 30
+seconds is no answer, and the program stops with nothing more inserted rather than guess.
 
 ## How to run its test
 
@@ -474,8 +493,10 @@ stayed clean; the harness run that follows them is the green.
   (a private `/tmp`, a read-only system) are left off because the container cannot make a
   mount namespace; the first start on a real host is the first run under the real unit.
 - **The unit tests of the module read the real program.** They parse
-  `hetzner/provision/branchleft_docker_user_policy.sh` itself, so a change to a literal in
-  the program changes what the module expects; they do not pin a copy of it.
+  `files/branchleft_docker_user_policy.py` itself, so a change to a constant in the program
+  changes what the module expects; they do not pin a copy of it. The module reads a
+  constant only when it is assigned at the top level of the file, exactly once, to a
+  non-empty string.
 
 ## Clauses this role exercises
 
