@@ -225,12 +225,15 @@ one of them only:
   no argument, environment variable or stack setting that skips it.
 - `UNATTESTED_ALLOWED` names deploy **without verification**, and each deploy
   logs `unattested by allowance: <name> (<reason>)` so it shows in the deploy
-  log. Today it holds exactly four images: `ghcr.io/branchleft/edge-caddy`,
-  `ghcr.io/branchleft/website`, `mysql` and `ghcr.io/branchleft/mailgun-shim`.
+  log. Today it holds eight names. Four are deploy images: `ghcr.io/branchleft/edge-caddy`,
+  `ghcr.io/branchleft/website`, `mysql` and `ghcr.io/branchleft/mailgun-shim`. Four are
+  sidecars named in a stack's Compose file (see `verify_compose_images`):
+  `prom/mysqld-exporter` (db), `docker.io/crowdsecurity/crowdsec` (edge),
+  `docker.io/library/postgres` and `ghcr.io/zitadel/zitadel` (control-plane).
 - Any other name is refused with a `DeployError` naming the image and both
   tables. The verifier is not run for it and nothing is deployed.
 
-The four allowed images are **not signed or attested today**. The allowance
+The eight allowed images are **not signed or attested today**. The allowance
 table is the owner-visible list of that gap: each entry is a debt, retired by
 adding an attestation step to the image's publish workflow and moving the name
 to `ATTESTED_IMAGES`. Adding a name to either table is a reviewed owner
@@ -251,6 +254,119 @@ and blocking it could leave the host with nothing running.
 The vendored copy is pinned by sha256 in `test_branchleft_deploy.py`. Change
 the copy and that constant in one change, and take the bytes only from
 ghost-platform's script.
+
+## verify_compose_images
+
+The image on the command line is one of the images a stack runs. A Compose file
+also names sidecars (an exporter, a database next to an app), and before this
+check they deployed unverified: the default deny above covered one reference per
+deploy. `deploy()` now asks Compose for the stack's model after the pin is
+verified and holds every other image to the same rule, before the lock, the pin
+write and any restart.
+
+**Compose reads the files, not this program.** `render_compose` runs, in the
+stack directory and as the unit does (no `-f`, so Compose finds `compose.yml`,
+`compose.override.yml` and a project `.env` itself):
+
+```
+/usr/bin/docker compose --profile '*' config --format json --no-interpolate
+```
+
+and parses the JSON it prints. An earlier version of this check read the YAML
+with a hand-written line reader. Four review cycles found seven bypasses of it
+(a hidden `include`, a pin counted across files, an indented override, an image
+mount through an anchor, an alias hidden by quote mispairing), each a new shape
+of YAML that Compose reads one way and a line grammar another. YAML is not a
+language to re-implement, so the reader was deleted rather than patched a
+seventh time. Options weighed, in order:
+
+- **Compose's own render (used).** It resolves `include`, `extends`, anchors, merge
+  keys, overrides and the project `.env` with the parser that will start the
+  stack, so the check and the stack cannot read different files. It needs
+  neither the daemon nor the network, and runs in under a second.
+- **A pinned PyYAML.** Rejected: it would still be a second YAML reader that is
+  not Compose (it does not follow `include`, and differs from Compose's YAML
+  library on edge cases), it would have to be installed for the system
+  `python3` on every host, and a deploy gate that failed to import would stop
+  every deploy. CI uses PyYAML only to stand in for the render in unit tests.
+- **Keeping the hand reader.** Rejected: no stated reason outweighed the above.
+
+`--no-interpolate` leaves `${...}` as written. Nothing is substituted, so no
+secret from the stack environment is read, printed or needed, and a variable
+that is unset does not stop the render. `--profile '*'` includes services behind
+a profile (some Compose versions leave them out of `config`). The process gets a
+fixed environment (`PATH`, `HOME`, `LC_ALL`) and no stdin, so a `COMPOSE_FILE` or
+`COMPOSE_PROFILES` in the caller's environment cannot change what is read; a
+project `.env` in the stack directory still is, as it is for the unit. A 60
+second timeout bounds it.
+
+Its output is parsed in memory and never written, logged or put in a message:
+the model can hold inline values. A refusal says only that Compose failed, its
+exit code and to run it by hand.
+
+What counts as an image: the `image:` of every service in the rendered model.
+What each must be, one of:
+
+- the pin, `${IMAGE}` or `${IMAGE:?message}` as `--no-interpolate` leaves it, or
+  the pin's own reference. It is the image already verified, and at least one
+  service must be the pin;
+- a literal, digest-pinned reference (`name@sha256:...`, a tag may ride along). It
+  goes through `verify_attestation`: verified if registered, logged
+  `unattested by allowance` if allowed, refused if on neither table. A reference
+  named by several services is verified once;
+- nothing else. A tag-only or bare name is refused (an attestation is of a
+  digest). Any other `$` is refused: reproducing Compose's substitution here would
+  be a second, drifting reader. The committed stacks write sidecar digests as
+  literals for this reason.
+
+Fail closed. The walker (`model_images`) refuses what it cannot account for:
+
+- a failed or timed-out Compose, a missing `docker`, output that is not one
+  JSON object;
+- a top-level key other than `name`, `services`, `networks`, `volumes`,
+  `secrets`, `configs` or `x-*`. `models` and any key a newer Compose adds pull
+  artifacts this program does not know to look for, so they refuse until a
+  reviewer teaches the walker. (`x-*` is data Compose never runs; an alias from
+  one into a service is already resolved into `services`.)
+- a service with `build`, `extends`, `provider` or `models` (an image built on the
+  host has no digest to attest), or with no `image:`;
+- a mapping with `type: image` anywhere inside a service: a volume entry of that
+  type mounts an image's files, which runs an image no `image:` key names. Current
+  hosts take `docker-ce` and `docker-compose-plugin` unpinned from Docker's
+  repository with unattended upgrades, so image mounts are assumed supported.
+
+Every reference is checked for shape before the first verifier runs.
+
+The `${IMAGE}` wiring text check on `compose.yml` itself (`resolves_image_from_env`)
+is unchanged and still runs first, so a pin that only an override supplies is
+refused as before.
+
+**Tests.** `RealComposeTests` runs every hostile shape the old reader was
+bypassed by through the real `docker compose` (skipped where it is absent): each
+must be rejected by Compose, refused by the walker, or harmless, and none may be
+accepted with an unverified image or an image mount in `services`. Every other
+`deploy()` test uses a PyYAML stand-in for the render. `CommittedStackTests`
+runs the committed stacks both ways. The pinned argv, environment and
+fail-closed paths of `render_compose` are tested with a fake `run`.
+
+**Registry port.** A port is a spelling only on a registry host, a dotted name or
+`localhost`. On a Docker Hub namespace, `prom:5000/mysqld-exporter` is another
+registry named `prom`, so the port stays in the name and matches no table entry.
+The allowance remains keyed by name, not digest, so that it keeps the register's
+table shape and a routine digest bump needs no edit here.
+
+A rollback restore is still not re-verified (above). The allowance table is shared
+by deploy images and sidecars on purpose: one owner-visible list of the gap, and the
+go-live check that it is empty covers both. Registering a sidecar later is the same
+move as for a deploy image: attest it where it is built, add it to `ATTESTED_IMAGES`.
+
+Not covered: a `COMPOSE_FILE` or `COMPOSE_PROFILES` set in
+`/etc/branchleft/<stack>.env` (a root-owned file nothing here writes); what a
+Compose file's image does once running; and the gap between this read and the
+unit's own. The files are read here, and `docker compose up` reads them again at
+start. They are root-owned, so closing the gap needs a second writer. It could
+be closed by having the unit start from the bytes checked (a private copy passed
+with `-f`), which changes the unit and the sudoers surface and so is not done here.
 
 ### The verifier runs with no credential
 

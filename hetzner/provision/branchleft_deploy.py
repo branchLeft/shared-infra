@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import errno
 import fcntl
+import json
 import os
 import re
 import subprocess
@@ -88,6 +89,11 @@ UNATTESTED_ALLOWED: dict[str, str] = {
     "ghcr.io/branchleft/website": "built in another repo, not attested for this host yet",
     "mysql": "third-party image",
     "ghcr.io/branchleft/mailgun-shim": "built in another repo, not attested for this host yet",
+    # Sidecars, named in a stack's Compose file and pinned there by digest.
+    "prom/mysqld-exporter": "third-party sidecar of the db stack",
+    "docker.io/crowdsecurity/crowdsec": "third-party sidecar of the edge stack",
+    "docker.io/library/postgres": "third-party sidecar of the control-plane stack",
+    "ghcr.io/zitadel/zitadel": "third-party sidecar of the control-plane stack",
 }
 
 
@@ -132,6 +138,11 @@ def attested_name(image: str) -> str:
     same register entry as `name@sha256:...` and cannot skip verification.
     """
     first, slash, rest = image.partition("@")[0].partition("/")
+    # A port is a spelling only on a registry host (a dotted name or localhost). On
+    # a Docker Hub namespace such as `prom`, `prom:5000/x` is another registry
+    # named `prom`, so the port stays in the name and matches no table entry.
+    if slash and ":" in first and "." not in first and first.partition(":")[0] != "localhost":
+        return first + slash + rest.partition(":")[0]
     return first.partition(":")[0] + slash + rest.partition(":")[0]
 
 
@@ -474,6 +485,168 @@ def health_signal_gaps(stack: str, compose_text: str) -> tuple[list[str], list[s
     return refused, warned
 
 
+# Every image a stack runs is checked, not only the one passed on the command
+# line. The images are read from Docker Compose's own rendering of the stack, not
+# from a reader of this program's own. See branchleft_deploy.md,
+# "verify_compose_images".
+
+DOCKER = "/usr/bin/docker"
+
+# The same invocation the unit makes (`docker compose` in the stack directory, so
+# Compose finds its files itself), asking for the model as JSON. `--profile '*'`
+# keeps services behind a profile in it, which some Compose versions leave out of
+# `config` and `up --profile` would start. `--no-interpolate` leaves `${IMAGE}` as
+# written and never needs the stack's secrets environment: nothing is substituted,
+# so no secret is read or printed, and no variable has to be set for it to render.
+COMPOSE_RENDER_ARGV = (
+    "compose", "--profile", "*", "config", "--format", "json", "--no-interpolate",
+)
+
+# Nothing is inherited. No COMPOSE_* variable of the caller can change which file
+# is read, and Compose needs neither the daemon nor the network to render.
+COMPOSE_RENDER_ENV = {"PATH": "/usr/bin:/bin", "HOME": "/root", "LC_ALL": "C"}
+COMPOSE_RENDER_TIMEOUT = 60.0
+
+# What the rendered model may carry at its top level. `models` and anything new
+# pull artifacts this program does not know to look at, so they refuse.
+MODEL_TOP_LEVEL_KEYS = frozenset({"name", "services", "networks", "volumes", "secrets", "configs"})
+
+# A service key that gets its runnable content from somewhere other than `image:`.
+MODEL_REFUSED_SERVICE_KEYS = frozenset({"build", "extends", "provider", "models"})
+
+
+def render_compose(
+    directory: str, *, run=subprocess.run, docker: str = DOCKER, env=None
+) -> dict:
+    """The stack's Compose model, as Compose itself reads it, parsed in memory.
+
+    Refuses the deploy on any failure. Nothing the process prints is put in a
+    message, written to disk or logged: the model can hold inline values.
+    """
+    try:
+        result = run(
+            [docker, *COMPOSE_RENDER_ARGV],
+            cwd=directory,
+            env=COMPOSE_RENDER_ENV if env is None else env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=COMPOSE_RENDER_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise DeployError(
+            f"could not run `docker compose config` in {directory} ({type(error).__name__}); "
+            "refusing to deploy images it could not list"
+        ) from None
+    if result.returncode != 0:
+        raise DeployError(
+            f"`docker compose config` failed in {directory} (exit {result.returncode}); "
+            "refusing to deploy images it could not list. Run it there by hand to read why"
+        )
+    try:
+        model = json.loads(result.stdout)
+    except ValueError:
+        model = None
+    if not isinstance(model, dict):
+        raise DeployError(
+            f"`docker compose config` in {directory} did not print a JSON object; "
+            "refusing to deploy"
+        )
+    return model
+
+
+def _holds_image_mount(node) -> bool:
+    if isinstance(node, dict):
+        kind = node.get("type")
+        if isinstance(kind, str) and kind.strip().lower() == "image":
+            return True
+        return any(_holds_image_mount(value) for value in node.values())
+    if isinstance(node, list):
+        return any(_holds_image_mount(value) for value in node)
+    return False
+
+
+def model_images(model: dict, image: str) -> tuple[bool, list[tuple[str, str]]]:
+    """`(pin_seen, [(service, literal reference)])` for a rendered Compose model.
+
+    Raises `DeployError` for anything that runs content no `image:` names, or
+    that this cannot account for. `image` is the pin already verified.
+    """
+    for key in model:
+        if key not in MODEL_TOP_LEVEL_KEYS and not str(key).startswith("x-"):
+            raise DeployError(
+                f"the Compose model has a top-level `{key}`, which this program does not "
+                "know to look for images in; refusing to deploy"
+            )
+    services = model.get("services")
+    if not isinstance(services, dict):
+        raise DeployError("the Compose model has no services; refusing to deploy")
+    pin_seen = False
+    literals: list[tuple[str, str]] = []
+    for name, service in services.items():
+        if not isinstance(service, dict):
+            raise DeployError(f"service {name!r} is not a mapping in the Compose model")
+        refused = MODEL_REFUSED_SERVICE_KEYS & set(service)
+        if refused:
+            raise DeployError(
+                f"service {name!r} uses `{sorted(refused)[0]}`, so what it runs is not an "
+                "image this program can verify; refusing to deploy"
+            )
+        if _holds_image_mount(service):
+            raise DeployError(
+                f"service {name!r} mounts an image (`type: image`), which runs an image no "
+                "`image:` line names; refusing to deploy"
+            )
+        reference = service.get("image")
+        if not isinstance(reference, str) or not reference.strip():
+            raise DeployError(f"service {name!r} names no `image:` in the Compose model")
+        if IMAGE_PIN_REFERENCE.fullmatch(reference) or reference == image:
+            pin_seen = True
+        elif "$" in reference:
+            raise DeployError(
+                f"service {name!r} image {reference!r} is interpolated, and only ${{IMAGE}} "
+                "is resolved here; write the digest-pinned reference"
+            )
+        else:
+            try:
+                validate_image_ref(reference)
+            except DeployError as error:
+                raise DeployError(f"service {name!r}: {error}") from None
+            literals.append((name, reference))
+    return pin_seen, literals
+
+
+def verify_compose_images(
+    directory: str, image: str, *, run=subprocess.run, render=None
+) -> None:
+    """Hold every image the stack runs to the attestation rule.
+
+    `image` is the pin, already verified by the caller. A service that takes its
+    image from the pin is that image. Any other service must name a literal,
+    digest-pinned reference, and each is passed through `verify_attestation`, so a
+    sidecar is registered, allowed by the allowance, or refused exactly as the
+    pin is. Anything this cannot account for refuses. Nothing is verified until
+    the whole model has been read and every reference checked for shape.
+    """
+    model = (render or render_compose)(directory)
+    pin_seen, literals = model_images(model, image)
+    if not pin_seen:
+        raise DeployError(
+            f"no service in {directory} takes its image from the pin, so a pin written "
+            "here would not take effect"
+        )
+    verified = {image}
+    for service, reference in literals:
+        if reference in verified:
+            continue
+        verified.add(reference)
+        try:
+            verify_attestation(reference, run=run)
+        except DeployError as error:
+            raise DeployError(f"service {service!r}: {error}") from None
+
+
 def write_image_env(path: str, image: str) -> None:
     """Replace the file atomically.
 
@@ -542,6 +715,7 @@ def deploy(
     run=subprocess.run,
     lock_timeout: float = DEPLOY_LOCK_TIMEOUT,
     lock_poll_interval: float = DEPLOY_LOCK_POLL_INTERVAL,
+    render=None,
 ) -> None:
     validate_stack_name(stack)
     validate_image_ref(image)
@@ -570,6 +744,10 @@ def deploy(
             f"{compose_file} does not resolve its image from ${{IMAGE}}, "
             "so a pin written here would not take effect"
         )
+
+    # The pin was verified above; every other image the stack runs is verified
+    # here, still before the lock, the pin write and any restart.
+    verify_compose_images(os.path.dirname(compose_file), image, run=run, render=render)
 
     # `docker compose up --wait` is a rollback signal only for a service that
     # declares a healthcheck; without one it waits for *running*, which a
