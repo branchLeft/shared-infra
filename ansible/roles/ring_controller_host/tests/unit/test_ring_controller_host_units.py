@@ -484,6 +484,73 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(state["owner"], "{{ ring_controller_host_account }}")
 
 
+def promotion_record_problems(
+    record_dir: str, state_dir: str, task_text: str, env_text: str, rw_paths: list[str]
+) -> list[str]:
+    """Return what is wrong with the reserved promotion record path.
+
+    The path is a name only: under the state directory, covered by the unit's one writable path,
+    and named by no task and by no line of the environment file.
+    """
+    problems: list[str] = []
+    if not record_dir.startswith(state_dir + "/") or ".." in record_dir:
+        problems.append(f"not under the state directory: {record_dir}")
+    if not any(record_dir == p or record_dir.startswith(p + "/") for p in rw_paths):
+        problems.append("not inside a path the unit may write")
+    if "ring_controller_host_promotion_record_dir" in task_text or record_dir in task_text:
+        problems.append("a task names it, so the role would make or touch it")
+    if record_dir in env_text or "PROMOTION" in env_text.upper():
+        problems.append("the environment file names it")
+    return problems
+
+
+class PromotionRecordPathTests(unittest.TestCase):
+    """The promotion record's path is reserved under the state directory and is built by nothing."""
+
+    def setUp(self) -> None:
+        self.record_dir = render("{{ ring_controller_host_promotion_record_dir }}")
+        self.state_dir = render("{{ ring_controller_host_state_dir }}")
+        self.task_text = (ROLE / "tasks" / "main.yml").read_text(encoding="utf-8")
+        self.env_text = ENV_TEMPLATE.read_text(encoding="utf-8")
+        self.rw_paths = [
+            v.strip()
+            for key, value in unit_keys(SERVICE.read_text(encoding="utf-8"))
+            if key == "ReadWritePaths"
+            for v in value.split()
+        ]
+
+    def problems(
+        self,
+        record_dir: str | None = None,
+        task_text: str | None = None,
+        env_text: str | None = None,
+    ) -> list[str]:
+        return promotion_record_problems(
+            self.record_dir if record_dir is None else record_dir,
+            self.state_dir,
+            self.task_text if task_text is None else task_text,
+            self.env_text if env_text is None else env_text,
+            self.rw_paths,
+        )
+
+    def test_the_path_is_under_the_state_directory_and_nothing_names_it(self) -> None:
+        self.assertEqual(self.problems(), [])
+        self.assertEqual(self.record_dir, "/var/lib/branchleft/ring-controller/promotion-record")
+
+    def test_the_check_sees_a_path_moved_out_of_the_state_directory(self) -> None:
+        problems = self.problems(record_dir="/var/lib/branchleft/promotion-record")
+        self.assertIn("not under the state directory", " ".join(problems))
+        self.assertIn("not inside a path the unit may write", " ".join(problems))
+
+    def test_the_check_sees_a_task_that_would_make_the_directory(self) -> None:
+        extra = self.task_text + "\n    path: '{{ ring_controller_host_promotion_record_dir }}'\n"
+        self.assertIn("a task names it", " ".join(self.problems(task_text=extra)))
+
+    def test_the_check_sees_the_environment_file_naming_it(self) -> None:
+        extra = self.env_text + "RING_CONTROLLER_PROMOTION_RECORD_DIR=x\n"
+        self.assertIn("the environment file names it", " ".join(self.problems(env_text=extra)))
+
+
 class InterfaceTests(unittest.TestCase):
     """The argument spec, the defaults and the patterns agree, and the patterns judge as meant."""
 

@@ -106,6 +106,21 @@ value cannot move them.
 
 Nothing else. A canary test holds that nothing outside these paths changes.
 
+## The reserved path of the promotion record
+
+The controller keeps its own signed, hash-chained record of each promotion. That record is a
+separate piece of work and this role does not build, make, write or read it. The role only fixes
+where it will live, so that the controller and the host agree on one path before either exists. The
+constant is `ring_controller_host_promotion_record_dir` in `vars/main.yml`, and its value is
+`/var/lib/branchleft/ring-controller/promotion-record`.
+
+The path is a subdirectory of the state directory, so it is the service account's and closed to
+everyone else (`0700`), and it is inside the one path the unit may write (`ReadWritePaths`). The
+controller derives it from `RING_CONTROLLER_STATE_DIR`, so it is not in the environment file and
+no task names it. The directory does not exist after an apply; the controller makes it the first
+time it writes a record. A test holds all four facts: under the state directory, inside the unit's
+writable path, named by no task, absent from the environment file.
+
 ## How the keys are made
 
 The module runs `ssh-keygen` by argument list with an empty environment, no terminal, no standard

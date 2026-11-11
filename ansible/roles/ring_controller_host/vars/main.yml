@@ -20,6 +20,11 @@ ring_controller_host_keys_directory: /etc/branchleft/ring-controller/keys
 ring_controller_host_env_file: /etc/branchleft/ring-controller/ring-controller.env
 ring_controller_host_known_hosts_file: /etc/branchleft/ring-controller/known_hosts
 ring_controller_host_state_dir: /var/lib/branchleft/ring-controller
+# Reserved for the controller's own signed, hash-chained promotion record. It is a name and
+# nothing more: no task of this role makes, writes or reads it, and the controller derives it from
+# the state directory, so it is not in the environment file. It sits under the state directory,
+# which is the service account's, mode 0700, and the only path the unit may write.
+ring_controller_host_promotion_record_dir: '{{ ring_controller_host_state_dir }}/promotion-record'
 ring_controller_host_base_dir: /opt/branchleft/ring-controller
 ring_controller_host_releases_dir: /opt/branchleft/ring-controller/releases
 ring_controller_host_current_link: /opt/branchleft/ring-controller/current
