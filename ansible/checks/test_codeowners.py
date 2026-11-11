@@ -206,6 +206,10 @@ KEY_ROLE_PATHS = [
     "ansible/roles/safety_service/README.md",
 ]
 
+# The image-scan exemption file (SEC-5): each entry is an exception to the image scan, so each is
+# the owner's to review. It arrives with the edge-caddy image change, so it need not exist yet.
+IMAGE_SCAN_PATHS = [".image-scan-exemptions.json"]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -307,6 +311,9 @@ class CodeownersTests(unittest.TestCase):
 
     def test_the_bootstrap_guards_are_owned_by_the_owner(self) -> None:
         self.assert_owned(BOOTSTRAP_GUARD_PATHS)
+
+    def test_the_image_scan_exemption_file_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(IMAGE_SCAN_PATHS)
 
     def test_the_standards_template_paths_are_owned_by_the_owner(self) -> None:
         self.assert_owned(
