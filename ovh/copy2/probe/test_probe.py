@@ -30,7 +30,7 @@ RUNNER_ENV = {
     "OVH_ENDPOINT": "ovh-eu",
     "OVH_CLIENT_ID": "client-id-value",
     "OVH_CLIENT_SECRET": "client-secret-value",
-    "OVH_CLOUD_PROJECT_SERVICE": "5dd5eda4165c48fa80428816500bc992",
+    "OVH_CLOUD_PROJECT_SERVICE": "0123456789abcdef0123456789abcdef",
     "GH_TOKEN": "gh-token-value",
     "NODE_AUTH_TOKEN": "npm-token-value",
 }

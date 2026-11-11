@@ -6,6 +6,8 @@ The lock probe for the second backup copy at OVHcloud London. The workflow `.git
 
 The workflow is dispatch-only and runs from `main`. The job waits on the protected environment `ovh-copy2-probe`: its required reviewer approves the run in the Actions tab before any step starts. That environment alone holds the two secrets `OVH_CLIENT_ID` and `OVH_CLIENT_SECRET`. The first step, `gate`, reads the environment and fails the job if it no longer has a required-reviewer rule and a branch policy.
 
+The probe cannot run yet. Its first step, `project`, fails the job while `OVH_CLOUD_PROJECT_SERVICE` in the workflow is not a 32-character lower-case hex id, before the checkout and before any secret is read, and the program's project guard refuses `UNSET` in `Pulumi.probe.yaml`. Both places carry `UNSET` on purpose: no id has been reported for the probe project, and the id of an existing project must never be guessed, because one of the owner's projects holds the key escrow. A follow-up pull request writes the owner's step 01 answer, the 32-character hex id of the project `branchleft-backup-copy2`, into both places. A test pins the two places equal.
+
 Cost: three empty buckets and one 5-byte object for a few minutes, in the London region, with no egress. It rounds to nothing.
 
 ## The checks

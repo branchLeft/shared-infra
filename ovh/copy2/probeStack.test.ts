@@ -10,14 +10,17 @@ import { buildStack } from './stack';
 
 /**
  * The committed probe stack file, read as the engine would read it. It carries
- * the owner's OVHcloud project id, and the first tests pin that the program
- * accepts exactly that id when the environment agrees, and refuses UNSET, a
- * different id and a missing variable.
+ * the project marker. It stays UNSET until the owner reports the id of the
+ * probe project, and the first tests pin that the program refuses the committed
+ * file, accepts a well-formed id only when the config and the environment
+ * agree, and refuses a mismatch, a missing variable and a malformed id.
  */
 
 const NS = 'branchleft-ovh-copy2';
 const FILE = join(__dirname, 'Pulumi.probe.yaml');
-const PROJECT = '5dd5eda4165c48fa80428816500bc992';
+// Fixtures shaped like project ids, not any real project.
+const PROJECT = '0123456789abcdef0123456789abcdef';
+const OTHER_PROJECT = 'fedcba9876543210fedcba9876543210';
 
 type StackFile = { config: Record<string, unknown> };
 
@@ -43,23 +46,35 @@ beforeAll(async () => {
 });
 
 describe('Pulumi.probe.yaml', () => {
-  it('commits exactly the owner project id', () => {
-    expect(own('allowedProjectId')).toBe(PROJECT);
-    expect(PROJECT).toMatch(/^[0-9a-f]{32}$/);
+  it('commits no project id until the owner reports one: it is UNSET', () => {
+    expect(own('allowedProjectId')).toBe('UNSET');
   });
 
-  it('is accepted when the environment names the same project', () => {
+  it('is refused as committed, even when the environment names a well-formed project', () => {
+    const committed = settings(own('allowedProjectId') as string);
+    expect(() => buildStack(committed, { OVH_CLOUD_PROJECT_SERVICE: PROJECT })).toThrow(
+      /allowedProjectId is not set/
+    );
+    expect(() => buildStack(committed, { OVH_CLOUD_PROJECT_SERVICE: 'UNSET' })).toThrow(
+      /allowedProjectId is not set/
+    );
+    expect(() => buildStack(committed, {})).toThrow(/allowedProjectId is not set/);
+  });
+
+  it('is accepted only when the config and the environment name the same well-formed project', () => {
+    expect(PROJECT).toMatch(/^[0-9a-f]{32}$/);
     const stack = buildStack(settings(PROJECT), { OVH_CLOUD_PROJECT_SERVICE: PROJECT });
     expect(Object.keys(stack.buckets)).toEqual(['zz-probe-a', 'zz-probe-b', 'zz-probe-c']);
   });
 
-  it('still refuses UNSET, a different id and a missing variable', () => {
-    const env = { OVH_CLOUD_PROJECT_SERVICE: PROJECT };
-    expect(() => buildStack(settings('UNSET'), env)).toThrow(/allowedProjectId is not set/);
+  it('refuses a mismatch, a missing variable and a malformed id', () => {
     expect(() =>
-      buildStack(settings(PROJECT), { OVH_CLOUD_PROJECT_SERVICE: '0'.repeat(32) })
+      buildStack(settings(PROJECT), { OVH_CLOUD_PROJECT_SERVICE: OTHER_PROJECT })
     ).toThrow(/not the allowed project/);
     expect(() => buildStack(settings(PROJECT), {})).toThrow(/is not set/);
+    expect(() =>
+      buildStack(settings(PROJECT.slice(1)), { OVH_CLOUD_PROJECT_SERVICE: PROJECT.slice(1) })
+    ).toThrow(/32-character lower-case hex/);
   });
 
   it('names only probe buckets, each locked for one day at most', () => {

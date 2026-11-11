@@ -12,7 +12,7 @@ Only the probe stack exists. The probe makes three throwaway buckets, exercises 
 | `stack.ts`          | `buildStack`: runs both guards, then registers users, credentials, policies, buckets.  |
 | `projectGuard.ts`   | Refuses any OVHcloud project other than the one the stack config allows.               |
 | `configGuard.ts`    | Refuses bucket configuration that could lock too long or leave a real bucket exposed.  |
-| `Pulumi.probe.yaml` | The probe stack's config. `allowedProjectId` is the owner's OVHcloud project id.       |
+| `Pulumi.probe.yaml` | The probe stack's config. `allowedProjectId` is the probe project id, UNSET now.       |
 | `probe/`            | The probe's Python: the lock checks, the Pulumi driver, the summary table, and tests.  |
 | `*.test.ts`         | Mock-runtime tests for each guard, for the wiring, and for the committed probe config. |
 

@@ -8,8 +8,10 @@ rule narrative is in ovh/copy2/probe/README.md.
 
 from __future__ import annotations
 
+import os
 import pathlib
 import re
+import subprocess
 import unittest
 
 import yaml
@@ -24,6 +26,9 @@ PROBE_STACK_FILE = ROOT / "ovh" / "copy2" / "Pulumi.probe.yaml"
 ENVIRONMENT = "ovh-copy2-probe"
 SECRET_NAMES = ("OVH_CLIENT_ID", "OVH_CLIENT_SECRET")
 SECRET_STEPS = ("up", "check", "destroy")
+UNSET = "UNSET"
+# A fixture shaped like a project id, not any real one.
+WELL_FORMED = "0123456789abcdef0123456789abcdef"
 
 
 def text() -> str:
@@ -58,6 +63,27 @@ def position(data: dict, step_id: str) -> int:
 def triggers(data: dict) -> dict:
     # The loader reads `on` as a string key, as YAML 1.2 and GitHub do.
     return data["on"]
+
+
+def markers(stack_source: str, workflow_source: str) -> tuple[str, str]:
+    """The project marker in the stack file and in the workflow's job env."""
+    stack = yaml.safe_load(stack_source)
+    allowed = stack["config"]["branchleft-ovh-copy2:allowedProjectId"]
+    return allowed, job(workflow(workflow_source))["env"]["OVH_CLOUD_PROJECT_SERVICE"]
+
+
+def markers_agree(stack_source: str, workflow_source: str) -> bool:
+    """True for two equal UNSET markers or two equal well-formed ids, else False."""
+    allowed, in_workflow = markers(stack_source, workflow_source)
+    return allowed == in_workflow and bool(
+        re.fullmatch(rf"{UNSET}|[0-9a-f]{{32}}", allowed)
+    )
+
+
+def with_stack_id(stack_source: str, value: str) -> str:
+    return re.sub(
+        r"(?m)^(\s+\S*allowedProjectId: )\S+$", rf"\g<1>{value}", stack_source
+    )
 
 
 def pins(source: str) -> dict[str, str]:
@@ -114,10 +140,107 @@ class EnvironmentTests(unittest.TestCase):
             self.assertLess(position(data, "gate"), position(data, later))
 
     def test_the_project_in_the_workflow_is_the_project_in_the_stack_file(self) -> None:
-        stack = yaml.safe_load(PROBE_STACK_FILE.read_text(encoding="utf-8"))
-        allowed = stack["config"]["branchleft-ovh-copy2:allowedProjectId"]
-        self.assertRegex(allowed, r"^[0-9a-f]{32}$")
-        self.assertEqual(allowed, job(workflow())["env"]["OVH_CLOUD_PROJECT_SERVICE"])
+        stack_source = PROBE_STACK_FILE.read_text(encoding="utf-8")
+        self.assertTrue(markers_agree(stack_source, text()))
+        allowed, in_workflow = markers(stack_source, text())
+        self.assertEqual(allowed, in_workflow)
+        self.assertRegex(allowed, rf"^({UNSET}|[0-9a-f]{{32}})$")
+
+    def test_a_pair_that_differs_is_refused(self) -> None:
+        stack_source = PROBE_STACK_FILE.read_text(encoding="utf-8")
+        one_sided = text().replace(
+            f"OVH_CLOUD_PROJECT_SERVICE: {UNSET}",
+            f"OVH_CLOUD_PROJECT_SERVICE: {WELL_FORMED}",
+        )
+        self.assertNotEqual(text(), one_sided)
+        self.assertFalse(markers_agree(stack_source, one_sided))
+        differing = one_sided.replace(WELL_FORMED, WELL_FORMED[::-1])
+        self.assertFalse(
+            markers_agree(with_stack_id(stack_source, WELL_FORMED), differing)
+        )
+
+    def test_a_well_formed_pair_is_accepted_only_when_both_places_match(self) -> None:
+        stack_source = PROBE_STACK_FILE.read_text(encoding="utf-8")
+        both = text().replace(
+            f"OVH_CLOUD_PROJECT_SERVICE: {UNSET}",
+            f"OVH_CLOUD_PROJECT_SERVICE: {WELL_FORMED}",
+        )
+        self.assertTrue(markers_agree(with_stack_id(stack_source, WELL_FORMED), both))
+        self.assertFalse(markers_agree(stack_source, both))
+
+    def test_the_committed_marker_is_unset_until_the_owner_reports_the_id(
+        self,
+    ) -> None:
+        allowed, in_workflow = markers(
+            PROBE_STACK_FILE.read_text(encoding="utf-8"), text()
+        )
+        self.assertEqual(UNSET, allowed)
+        self.assertEqual(UNSET, in_workflow)
+
+
+class ProjectStepTests(unittest.TestCase):
+    """The first step stops a run that does not know its project, before anything else."""
+
+    def test_the_project_step_is_the_first_step_of_the_job(self) -> None:
+        data = workflow()
+        self.assertEqual(0, position(data, "project"))
+
+    def test_nothing_the_project_step_does_needs_a_credential_or_an_action(
+        self,
+    ) -> None:
+        first = steps(workflow())[0]
+        self.assertEqual({"id", "name", "timeout-minutes", "run"}, set(first))
+        body = str(first)
+        for word in ("secrets.", "GH_TOKEN", "OVH_CLIENT", "pulumi", "pnpm", "uses"):
+            with self.subTest(word=word):
+                self.assertNotIn(word, body)
+
+    def test_no_later_step_can_run_after_the_project_step_failed(self) -> None:
+        data = workflow()
+        for s in steps(data)[1:]:
+            condition = str(s.get("if", ""))
+            with self.subTest(step=s.get("name")):
+                self.assertNotIn("failure()", condition)
+                if "always()" in condition:
+                    self.assertIn("steps.gate.outcome == 'success'", condition)
+        self.assertLess(position(data, "project"), position(data, "gate"))
+
+    def run_project_step(self, value: str | None) -> subprocess.CompletedProcess[str]:
+        env = {"PATH": os.environ["PATH"]}
+        if value is not None:
+            env["OVH_CLOUD_PROJECT_SERVICE"] = value
+        return subprocess.run(
+            ["bash", "-e", "-c", steps(workflow())[0]["run"]],
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+    def test_unset_fails_the_run_with_a_message_that_says_what_to_do(self) -> None:
+        for value in (UNSET, "", None):
+            with self.subTest(value=value):
+                result = self.run_project_step(value)
+                self.assertEqual(1, result.returncode)
+                self.assertIn("::error", result.stdout)
+                self.assertIn("project id", result.stdout)
+                self.assertIn("ovh/copy2/Pulumi.probe.yaml", result.stdout)
+
+    def test_a_malformed_id_fails_the_run(self) -> None:
+        for value in (
+            WELL_FORMED[:-1],
+            WELL_FORMED + "0",
+            WELL_FORMED.upper(),
+            "g" + WELL_FORMED[1:],
+            WELL_FORMED + "\n" + WELL_FORMED,
+        ):
+            with self.subTest(value=value):
+                self.assertEqual(1, self.run_project_step(value).returncode)
+
+    def test_a_well_formed_id_passes_the_step(self) -> None:
+        result = self.run_project_step(WELL_FORMED)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual("", result.stdout)
 
     def test_only_one_probe_runs_at_a_time_and_a_running_one_is_never_cancelled(
         self,
