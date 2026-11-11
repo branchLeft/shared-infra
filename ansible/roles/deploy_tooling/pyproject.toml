@@ -7,8 +7,9 @@ requires-python = ">=3.13"
 [tool.mypy]
 strict = true
 python_version = "3.13"
-# The module is a single file in library/, imported by the tests by its own name.
-mypy_path = "$MYPY_CONFIG_FILE_DIR/library"
+# The module is a single file in library/, and the program the role installs is one in
+# files/; the tests import each by its own name.
+mypy_path = "$MYPY_CONFIG_FILE_DIR/library:$MYPY_CONFIG_FILE_DIR/files"
 
 # ANS-2: Ansible's own imports are untyped, so the override names the ansible.*
 # modules and nothing else. A blanket ignore_missing_imports is not the override.

@@ -1,11 +1,12 @@
 """Checks that bind the deploy_tooling role to the programs and scripts it must agree with.
 
-The role installs four programs read from `hetzner/provision/`, the single home of each (it
-holds no copy and no link of them). Two hand-run scripts install the same files until they
-are retired, so the role's paths and modes must match what those scripts install, and the
-role's README carries no hostname or address (ANS-14). Each check is a function that returns
-the problems it found, so the tests run it on the real tree (no problems) and on a broken
-fixture (the problem).
+The role installs four programs: two read from `hetzner/provision/`, the single home of each
+(the role holds no copy and no link of them), and the policy program and its unit, which the
+role holds in its own `files/` (the targets that say `home: role`). Two hand-run scripts
+install the same paths until they are retired, so the role's paths and modes must match what
+those scripts install, and the role's README carries no hostname or address (ANS-14). Each
+check is a function that returns the problems it found, so the tests run it on the real tree
+(no problems) and on a broken fixture (the problem).
 """
 
 from __future__ import annotations
@@ -46,15 +47,20 @@ def program_problems(role: Path, provision: Path) -> list[str]:
         problems.append(
             "deploy_tooling_programs_dir does not reach hetzner/provision from the role"
         )
-    for name in sorted({t.program for t in role_vars.targets(variables) if t.kind == "file"}):
-        program = provision / name
+    own = {t.program for t in role_vars.targets(variables) if t.kind == "file" and t.home == "role"}
+    for target in sorted(
+        (t for t in role_vars.targets(variables) if t.kind == "file"), key=lambda t: t.program
+    ):
+        program = role_vars.program_file(target, role, provision)
         if program.is_symlink() or not program.is_file():
-            problems.append(f"hetzner/provision/{name} is missing, or is not a regular file")
+            where = "files" if target.home == "role" else "hetzner/provision"
+            problems.append(f"{where}/{target.program} is missing, or is not a regular file")
     files = role / "files"
     held = sorted(entry.name for entry in files.iterdir()) if files.is_dir() else []
     problems.extend(
         f"files/{name} is held under the role, where hetzner/provision is the only home"
         for name in held
+        if name not in own
     )
     return problems
 
@@ -93,10 +99,11 @@ def agreement_problems(role: Path, provision: Path) -> list[str]:
             seen.add(path)
             if target.mode.lstrip("0") != mode.lstrip("0"):
                 problems.append(f"{name} installs {path} with mode {mode}, the role {target.mode}")
-            if target.program != src:
-                problems.append(
-                    f"{name} installs {path} from {src}, the role from {target.program}"
-                )
+            # A program the role holds itself may be installed by the hand script from an
+            # older file of another name: hand_source says which, so a change to it is seen.
+            expected = target.hand_source or target.program
+            if expected != src:
+                problems.append(f"{name} installs {path} from {src}, the role from {expected}")
         for path, mode in sorted(directories.items()):
             target = by_path.get(path)
             if target is None:
@@ -147,16 +154,19 @@ class TestControls(unittest.TestCase):
         shutil.copy(role_vars.ROLE / "vars" / "main.yml", self.role / "vars" / "main.yml")
         for script in SCRIPTS:
             shutil.copy(role_vars.PROVISION / script, self.provision / script)
+        (self.role / "files").mkdir()
         for target in role_vars.targets(role_vars.load_vars()):
             if target.kind == "file":
-                shutil.copy(role_vars.PROVISION / target.program, self.provision / target.program)
+                source = role_vars.program_file(target, role_vars.ROLE, role_vars.PROVISION)
+                shutil.copy(source, role_vars.program_file(target, self.role, self.provision))
+            if target.hand_source:
+                shutil.copy(role_vars.PROVISION / target.hand_source, self.provision)
 
     def test_the_fixture_tree_is_clean(self) -> None:
         self.assertEqual(program_problems(self.role, self.provision), [])
         self.assertEqual(agreement_problems(self.role, self.provision), [])
 
     def test_a_byte_copy_held_under_the_role_is_found(self) -> None:
-        (self.role / "files").mkdir()
         shutil.copy(self.provision / "branchleft_deploy.py", self.role / "files")
         found = program_problems(self.role, self.provision)
         self.assertEqual(
@@ -167,8 +177,45 @@ class TestControls(unittest.TestCase):
             ],
         )
 
+    def test_a_program_the_role_holds_is_not_a_copy(self) -> None:
+        self.assertTrue((self.role / "files" / "branchleft_docker_user_policy.py").is_file())
+        self.assertEqual(program_problems(self.role, self.provision), [])
+
+    def test_a_program_the_role_holds_that_is_missing_is_found(self) -> None:
+        (self.role / "files" / "branchleft_docker_user_policy.py").unlink()
+        found = program_problems(self.role, self.provision)
+        self.assertEqual(
+            found, ["files/branchleft_docker_user_policy.py is missing, or is not a regular file"]
+        )
+
+    def test_a_program_the_role_holds_that_is_a_link_is_found(self) -> None:
+        program = self.role / "files" / "branchleft_docker_user_policy.py"
+        program.unlink()
+        program.symlink_to(self.provision / "branchleft_deploy.py")
+        found = program_problems(self.role, self.provision)
+        self.assertEqual(
+            found, ["files/branchleft_docker_user_policy.py is missing, or is not a regular file"]
+        )
+
+    def test_a_hand_script_that_installs_the_policy_from_another_file_is_found(self) -> None:
+        hand_source = next(
+            t.hand_source
+            for t in role_vars.targets(role_vars.load_vars(self.role))
+            if t.hand_source
+        )
+        script = self.provision / "app-host-isolation.sh"
+        text = script.read_text(encoding="utf-8")
+        script.write_text(text.replace(hand_source, "branchleft_policy.sh"), "utf-8")
+        found = agreement_problems(self.role, self.provision)
+        self.assertEqual(
+            found,
+            [
+                "app-host-isolation.sh installs /usr/local/sbin/branchleft-docker-user-policy"
+                f" from branchleft_policy.sh, the role from {hand_source}"
+            ],
+        )
+
     def test_a_link_held_under_the_role_is_found(self) -> None:
-        (self.role / "files").mkdir()
         (self.role / "files" / "branchleft_deploy.py").symlink_to(
             self.provision / "branchleft_deploy.py"
         )

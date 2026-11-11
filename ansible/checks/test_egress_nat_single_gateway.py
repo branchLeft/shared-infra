@@ -180,7 +180,7 @@ class EgressNatSingleGateway(unittest.TestCase):
         role_list = roles if isinstance(roles, list) else []
         self.assertIn({"role": f"../roles/{ROLE}"}, role_list)
         self.assertNotIn(SWITCH, _play_vars("dbt1"))
-        self.assertNotIn("dbt1", HOST_PLAY_VARS)
+        self.assertNotIn(SWITCH, HOST_PLAY_VARS.get("dbt1", {}))
 
     def test_the_role_entry_is_bare_so_the_switch_cannot_hide_in_it(self) -> None:
         for host in GATEWAYS:

@@ -1,0 +1,94 @@
+---
+# Test scaffolding, never part of the role: the throwaway root value on the controller,
+# the shared Compose unit template the role enables an instance of, the owner-placed
+# root file, and a stand-in for the host's deploy program. The real template and the
+# real program are installed by another role, which this scenario does not run. Every
+# task that handles the sentinel has no_log and diff: false: verify reads the log of this
+# play too.
+- name: Make the throwaway root value on the controller
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Make the directory for this run's sentinel
+      ansible.builtin.file:
+        path: '{{ scenario_sentinel_dir }}'
+        state: directory
+        mode: '0700'
+
+    # The /dev/null path keeps nothing, and the seed makes the value repeat, so the
+    # same label gives the same value in every play. 40 letters and digits is a
+    # valid root value for the role's shape check.
+    - name: Make the sentinel
+      ansible.builtin.copy:
+        content: "{{ lookup('ansible.builtin.password', '/dev/null seed=root_value chars=ascii_letters,digits length=40') }}"
+        dest: '{{ scenario_sentinel_dir }}/root_value'
+        mode: '0600'
+      no_log: true
+      diff: false
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install a placeholder for the shared Compose unit template
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=PLACEHOLDER Compose stack %i
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the placeholder
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Create the configuration directory
+      ansible.builtin.file:
+        path: /etc/branchleft
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The owner's file: one line, the key and the sentinel, root 0600.
+    - name: Place the root file the way the owner would
+      ansible.builtin.copy:
+        content: "MYSQL_ROOT_PASSWORD={{ lookup('ansible.builtin.file', scenario_sentinel_dir ~ '/root_value') }}\n"
+        dest: /etc/branchleft/dbt1.env
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+      diff: false
+
+    # The stand-in records its arguments and writes the pin the way the real
+    # program does (one line, IMAGE=, the reference, a line break, mode 0600).
+    - name: Install a stand-in for the host's deploy program
+      ansible.builtin.copy:
+        content: |
+          #!/usr/bin/python3 -I
+          import os
+          import sys
+
+          LOG = "{{ scenario_deploy_log }}"
+
+          if len(sys.argv) != 3:
+              sys.exit(2)
+          with open(LOG, "a", encoding="utf-8") as handle:
+              handle.write(" ".join(sys.argv[1:]) + "\n")
+          pin = "/etc/branchleft/" + sys.argv[1] + ".image.env"
+          with open(pin, "w", encoding="utf-8") as handle:
+              handle.write("IMAGE=" + sys.argv[2] + "\n")
+          os.chmod(pin, 0o600)
+        dest: /usr/local/sbin/branchleft-deploy
+        owner: root
+        group: root
+        mode: '0755'
