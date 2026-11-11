@@ -1,10 +1,11 @@
 #!/usr/bin/python3 -I
 """Carry one verified broker release into the broker_deploy role: its files and its pins.
 
-Run by the owner on a workstation, after the release's attestation was verified, never on a
-host. Without ``--write`` it checks everything and prints the pins; with it, it writes the
-release files and the role's version and pins. Prints a verdict and a reason code, never any
-text read from the tarball. The reasoning: ansible/tools/README.md."""
+Run by the owner on a workstation with the system python3 (standard library only), after the
+release's attestation was verified, never on a host. Without ``--write`` it checks everything and
+prints the pins; with it, it writes the release files and the role's version and pins. Prints a
+verdict and a reason code, never any text read from the tarball. The reasoning:
+ansible/tools/README.md."""
 
 from __future__ import annotations
 
@@ -21,8 +22,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final, NoReturn
 
-import yaml  # type: ignore[import-untyped]
-
 ROLE_DEFAULT: Final = Path(__file__).resolve().parents[1] / "roles" / "broker_deploy"
 VERSION_PATTERN: Final = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+\Z")
 DIGEST_PATTERN: Final = re.compile(r"[0-9a-f]{64}\Z")
@@ -32,6 +31,11 @@ DOT_DOT: Final = re.compile(r"(^|/)\.\.(/|\Z)")
 ENTRY_POINT: Final = "broker.mjs"
 VERSION_LINE: Final = "broker_deploy_release_version: ''"
 PINS_LINE: Final = "broker_deploy_release_pins: {}"
+# The only shape pins_block writes. Read back by read_block, which refuses any other line.
+BLOCK_VERSION: Final = re.compile(r"broker_deploy_release_version: '([0-9]+\.[0-9]+\.[0-9]+)'\Z")
+BLOCK_PINS_HEAD: Final = "broker_deploy_release_pins:"
+BLOCK_RELEASE: Final = re.compile(r"  '([0-9]+\.[0-9]+\.[0-9]+)':\Z")
+BLOCK_PIN: Final = re.compile(r"    '([A-Za-z0-9][A-Za-z0-9._/-]*)': '([0-9a-f]{64})'\Z")
 MAX_TARBALL: Final = 32 << 20
 MAX_FILE: Final = 16 << 20
 MAX_TOTAL: Final = 48 << 20
@@ -145,11 +149,34 @@ def pins_block(version: str, pins: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
-def new_defaults(text: str, version: str, pins: dict[str, str]) -> str:
-    """Return the role defaults with the release set, after reading the result back.
+def read_block(lines: list[str]) -> tuple[str, dict[str, str]]:
+    """Return the version and pins that lines written by pins_block hold.
+
+    Only the exact shape pins_block writes is accepted: every other line is refused.
 
     Raises:
-        RefusedError: the defaults are not the placeholders, or the result does not read back as
+        RefusedError: a line is not of that shape, or the release keys disagree.
+    """
+    if len(lines) < 3 or lines[1] != BLOCK_PINS_HEAD:
+        raise RefusedError("defaults_do_not_read_back")
+    head = BLOCK_VERSION.match(lines[0])
+    release = BLOCK_RELEASE.match(lines[2])
+    if head is None or release is None or release.group(1) != head.group(1):
+        raise RefusedError("defaults_do_not_read_back")
+    pins: dict[str, str] = {}
+    for line in lines[3:]:
+        pin = BLOCK_PIN.match(line)
+        if pin is None or pin.group(1) in pins:
+            raise RefusedError("defaults_do_not_read_back")
+        pins[pin.group(1)] = pin.group(2)
+    return head.group(1), pins
+
+
+def new_defaults(text: str, version: str, pins: dict[str, str]) -> str:
+    """Return the role defaults with the release set, after reading the block back.
+
+    Raises:
+        RefusedError: the defaults are not the placeholders, or the block does not read back as
             the version and pins.
     """
     lines = text.split("\n")
@@ -157,23 +184,19 @@ def new_defaults(text: str, version: str, pins: dict[str, str]) -> str:
         raise RefusedError("defaults_not_placeholders")
     block = pins_block(version, pins).split("\n")
     out: list[str] = []
+    start = -1
     for line in lines:
         if line == VERSION_LINE:
+            start = len(out)
             out.append(block[0])
         elif line == PINS_LINE:
             out.extend(block[1:])
         else:
             out.append(line)
-    result = "\n".join(out)
-    try:
-        loaded = yaml.safe_load(result)
-    except yaml.YAMLError as error:
-        raise RefusedError("defaults_do_not_read_back") from error
-    if loaded.get("broker_deploy_release_version") != version or loaded.get(
-        "broker_deploy_release_pins"
-    ) != {version: pins}:
+    read_version, read_pins = read_block(out[start : start + len(block)])
+    if read_version != version or read_pins != pins:
         raise RefusedError("defaults_do_not_read_back")
-    return result
+    return "\n".join(out)
 
 
 def check_read_back(target: Path, content: bytes) -> None:
@@ -277,12 +300,20 @@ def carry(role: Path, version: str, tarball: Path, digest: str, *, write: bool) 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Run the tool; return its exit status: 0 done, 1 refused, 2 usage."""
-    parser = Parser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--version", required=True)
-    parser.add_argument("--tarball", required=True, type=Path)
-    parser.add_argument("--tarball-sha256", required=True)
-    parser.add_argument("--role-dir", type=Path, default=ROLE_DEFAULT)
-    parser.add_argument("--write", action="store_true")
+    parser = Parser(allow_abbrev=False, description=__doc__.split("\n", 1)[0])
+    parser.add_argument("--version", required=True, help="the release version, X.Y.Z")
+    parser.add_argument("--tarball", required=True, type=Path, help="the release tarball file")
+    parser.add_argument(
+        "--tarball-sha256",
+        required=True,
+        help="the tarball's sha256, 64 lower-case hex digits: the first field of "
+        "`shasum -a 256 FILE`, the same file as --tarball; must match the verify output's "
+        "subject digest (see ansible/tools/README.md, step 1)",
+    )
+    parser.add_argument("--role-dir", type=Path, default=ROLE_DEFAULT, help="the role to carry into")
+    parser.add_argument(
+        "--write", action="store_true", help="write the files and defaults; without it, check only"
+    )
     try:
         args = parser.parse_args(argv)
     except UsageError:

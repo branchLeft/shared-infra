@@ -202,21 +202,36 @@ image queried by its digest-form reference, and for an absent one.
 `broker_deploy` fetches nothing: it takes a release's files from its own `files/releases/VERSION/`
 and holds each to a sha256 in `broker_deploy_release_pins`, so a reviewed commit chooses the
 release. This tool makes that one commit's content from a release tarball the owner has verified.
-It runs on a workstation in the pinned environment, never on a host, and reads no network.
+It runs on a workstation with the system `/usr/bin/python3` and the standard library only (no
+PyYAML, no virtualenv, no pip), never on a host, and reads no network.
 
 Order of the owner's steps (the broker runbook's section "Release artifact and how to verify it"
 holds the download and the attestation commands):
 
 1. Download the tarball and its bundle, and run `gh attestation verify` as the runbook prints it,
-   with the tag's signer workflow and source ref. The digest the verify output names for the
-   tarball is the one given below; it is not read from the `.sha256` file of the release page.
-2. Run the tool without `--write`. It prints the pins and `carry=CHECKED`, and changes nothing.
+   with the tag's signer workflow and source ref. Then take the digest from the tarball file
+   itself, not from the release page's `.sha256` file:
+
+       DIGEST=$(shasum -a 256 broker-bundle-0.1.0.tar.gz | cut -d' ' -f1)
+       echo "$DIGEST"
+
+   The tool reads that same file and refuses unless its bytes hash to `$DIGEST`. Check that
+   `$DIGEST` equals the subject digest the verify output names for the tarball; if they differ,
+   stop, because the file is not the attested one.
+
+2. Run the tool without `--write`. It prints the pins and `carry=CHECKED`, and changes nothing:
+
+       /usr/bin/python3 -I ansible/tools/carry_broker_release.py --version 0.1.0 --tarball broker-bundle-0.1.0.tar.gz --tarball-sha256 "$DIGEST"
+
 3. Run it with `--write`, from a worktree of `main`, then commit the files and the defaults change
    in one pull request.
 
 Usage:
 
     carry_broker_release.py --version X.Y.Z --tarball FILE --tarball-sha256 HEX [--write]
+
+`--tarball-sha256` is the sha256 of `--tarball` itself (64 lower-case hex digits, from
+`shasum -a 256 FILE`), so both flags name the same file. `--help` prints the same.
 
 What it refuses, each with `carry=REFUSED reason=CODE` and exit 1, before anything is written:
 `version_not_major_minor_patch`, `digest_not_64_lower_hex`, `tarball_not_a_plain_file`,
@@ -234,8 +249,9 @@ The tool never extracts with `tarfile`: it reads each regular file's bytes, writ
 exclusive create that does not follow a link, mode 0644, and reads it back. The role's defaults
 are edited only where they are the two placeholder lines (`broker_deploy_release_version: ''` and
 `broker_deploy_release_pins: {}`, each exactly once), so a tree that already pins a release is
-changed by hand. The result is parsed back as YAML and must equal the version and pins, with every
-path and digest quoted so a path such as `true` or a digest of digits stays text. If the defaults
+changed by hand. The block the tool writes is read back by a strict line reader that accepts only
+the shape it writes (no YAML library is used), and it must equal the version and pins. Every path
+and digest is quoted, so a path such as `true` or a digest of digits stays text. If the defaults
 cannot be replaced, the release directory is removed again.
 
 The tool does not verify an attestation, and a pin proves the bytes did not change since they were

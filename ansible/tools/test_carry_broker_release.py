@@ -374,6 +374,69 @@ class Shape(unittest.TestCase):
                     self.assertEqual("", done.stderr)
 
 
+NO_YAML_PROGRAM = (
+    "import sys\n"
+    "sys.modules['yaml'] = None\n"  # any `import yaml` now raises ImportError
+    "sys.path.insert(0, sys.argv[1])\n"
+    "import carry_broker_release as tool\n"
+    "sys.exit(tool.main(sys.argv[2:]))\n"
+)
+
+
+class SystemPython(Lab):
+    """The owner runs the tool with the system python3, which has no PyYAML."""
+
+    def test_the_tool_imports_and_carries_without_yaml(self) -> None:
+        """With yaml blocked, the tool imports and writes the release and its pins."""
+        path = self.tarball()
+        done = subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-I",
+                "-c",
+                NO_YAML_PROGRAM,
+                str(TOOL.parent),
+                "--version",
+                VERSION,
+                "--tarball",
+                str(path),
+                "--tarball-sha256",
+                digest(path.read_bytes()),
+                "--role-dir",
+                str(self.role),
+                "--write",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=self.root,
+        )
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("carry=WRITTEN files=3", done.stdout)
+        loaded = yaml.safe_load(self.defaults.read_text(encoding="utf-8"))
+        self.assertEqual(VERSION, loaded["broker_deploy_release_version"])
+        self.assertEqual(
+            [VERSION], list(loaded["broker_deploy_release_pins"]), "one release is pinned"
+        )
+
+    def test_the_help_names_the_digest_source_the_readme_names(self) -> None:
+        """The tool's --help and the tools README give the same command for the digest."""
+        done = subprocess.run(  # noqa: S603
+            [sys.executable, "-I", str(TOOL), "--help"],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=self.root,
+        )
+        self.assertEqual(0, done.returncode)
+        helped = " ".join(done.stdout.split())  # argparse rewraps help text
+        readme = (TOOL.parent / "README.md").read_text(encoding="utf-8")
+        for text in ("shasum -a 256 FILE", "same file as --tarball"):
+            with self.subTest(text=text):
+                self.assertIn(text, helped)
+        self.assertIn("shasum -a 256 broker-bundle-0.1.0.tar.gz", readme)
+
+
 class RoleAgrees(Lab):
     """What the tool writes is accepted, byte for byte, by the role's own pin check."""
 
