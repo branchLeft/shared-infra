@@ -65,7 +65,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
-# (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
+# (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (last of
+# all: it refuses to run until its secret files exist), app1's host_inputs,
 # host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
 # installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that order: the slot
 # keys need the wrapper the tooling installs) and app1's export_bundler (last of all), db1's
@@ -90,6 +91,7 @@ APPLIED_ON_MAIN = {
         "exporters_and_collectors",
         "ntfy_pager",
         "monitoring_stack",
+        "sweego_receiver",
     ],
     "ops1": [
         "host_inputs",
@@ -338,9 +340,11 @@ class HostRoleLists(unittest.TestCase):
     # whose Docker and iptables its reconciler needs, then the edge stack after the CI login
     # and the deploy tooling, which installs the compose unit and deploy wrapper the stack uses,
     # then the three monitoring roles: the collectors, the pager, and the monitoring stack last
-    # (it hashes the pager's files and decides the one restart of its unit). The edge stack is
+    # (it hashes the pager's files and decides the one restart of its unit), then the Sweego
+    # receiver after all of them, because it refuses to run until the owner has placed its secret
+    # files and that refusal must not hold the roles before it back. The edge stack is
     # ahead of the monitoring roles so that a monitoring failure cannot hold the edge delivery.
-    # Red when any role moves or is dropped, green with the twelve named in this order.
+    # Red when any role moves or is dropped, green with the roles named in this order.
     def test_edge1_applies_the_edge_stack_then_the_pager_before_the_monitoring_stack(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
@@ -361,11 +365,12 @@ class HostRoleLists(unittest.TestCase):
                 "exporters_and_collectors",
                 "ntfy_pager",
                 "monitoring_stack",
+                "sweego_receiver",
             ],
         )
         self.assertEqual(names.index("ci_jump"), names.index("ci_login") + 1)
         self.assertLess(names.index("ntfy_pager"), names.index("monitoring_stack"))
-        self.assertEqual(names[-1], "monitoring_stack")
+        self.assertEqual(names[-2:], ["monitoring_stack", "sweego_receiver"])
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
             self.assertLess(names.index("edge_stack"), names.index(monitoring))
         self.assertEqual(names.count("egress_nat"), 1)

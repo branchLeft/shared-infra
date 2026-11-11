@@ -157,14 +157,18 @@ const PRIVATE_ADDRESSES: Record<string, string> = { ...HOST_IPS, ...APP_HOST_IPS
 const NOT_AN_UPSTREAM = new Set(['mx1']);
 
 /**
- * `edge1` is this host, so it is refused as an upstream except on the one
- * port a service on this host is deliberately published for: the monitoring
- * stack's pager. Any other port on its own address is the edge's own listener
- * (a proxy loop) or an internal service (Grafana, Prometheus) that must not be
- * exposed by a registry typo. Widening this is a decision, not a convenience.
+ * `edge1` is this host, so it is refused as an upstream except on the ports a
+ * service on this host is deliberately published for: the monitoring stack's
+ * pager (2586) and the Sweego receiver's webhook port (18080, the
+ * `sweego_receiver_port` of `ansible/owner_vars/edge1.yml`). The receiver's
+ * drain port (18081) is never listed: it is reachable from ops1 alone, and an
+ * edge upstream on it would put it on a public route. Any other port on its own
+ * address is the edge's own listener (a proxy loop) or an internal service
+ * (Grafana, Prometheus) that must not be exposed by a registry typo. Widening
+ * this is a decision, not a convenience.
  */
 const EDGE_HOST = 'edge1';
-export const EDGE_HOST_ALLOWED_PORTS: ReadonlySet<number> = new Set([2586]);
+export const EDGE_HOST_ALLOWED_PORTS: ReadonlySet<number> = new Set([2586, 18080]);
 
 export function resolvePrivateAddress(host: string, port: number): string {
   if (NOT_AN_UPSTREAM.has(host)) {

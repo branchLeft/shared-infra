@@ -19,6 +19,7 @@ edge1:
   - exporters_and_collectors
   - ntfy_pager
   - monitoring_stack
+  - sweego_receiver
 # edge-t, the tenants project's base host. The name has no hyphen because HOST_NAME allows
 # [a-z][a-z0-9]*. egress_nat makes it the gateway of the tenants network (one gateway per
 # network, test_egress_nat_single_gateway.py). ci_jump is the jump account's key options, the

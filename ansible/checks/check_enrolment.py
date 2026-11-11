@@ -76,8 +76,12 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
         "ring_controller_host_push_known_hosts",
     )
 )
+# The two host ports of the sweego_receiver role, whole numbers the owner names. The role holds the
+# range and the difference between them (its _inputs.yml), so only the type is read here. edge1
+# only: the role refuses any other host, and the playbook lists it there alone.
+SWEEGO_RECEIVER_PORT_KEYS = frozenset(("sweego_receiver_port", "sweego_receiver_drain_port"))
 _BASE_OWNER_KEYS = {
-    "edge1": CI_LOGIN_VARS,
+    "edge1": CI_LOGIN_VARS | SWEEGO_RECEIVER_PORT_KEYS,
     "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)) | RING_CONTROLLER_TEXT_KEYS,
 }
 OWNER_VARS_KEYS = {
@@ -769,6 +773,12 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
         f"{key} must be text"
         for key in sorted(RING_CONTROLLER_TEXT_KEYS)
         if key in doc and not isinstance(doc[key], str)
+    )
+    # A bool is an int in Python, so it is refused by name: true would read as port 1.
+    problems.extend(
+        f"{key} must be a whole number"
+        for key in sorted(SWEEGO_RECEIVER_PORT_KEYS)
+        if key in doc and (isinstance(doc[key], bool) or not isinstance(doc[key], int))
     )
     problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):

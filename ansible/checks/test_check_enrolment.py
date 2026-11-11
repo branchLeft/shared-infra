@@ -1018,8 +1018,33 @@ class Sabotage(unittest.TestCase):
             "ci_jump_own_address: 10.0.0.2\n"
             "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
             f"ci_jump_keys:\n  - key: {key} c\n"
+            "sweego_receiver_port: 18080\nsweego_receiver_drain_port: 18081\n"
         )
         self.assertEqual(check(self.root), [])
+
+    # R10 for the sweego_receiver ports: edge1 must hold both, each a whole number.
+    def test_r10_owner_vars_lacks_a_receiver_port(self) -> None:
+        for name in ("sweego_receiver_port: 18080\n", "sweego_receiver_drain_port: 18081\n"):
+            with self.subTest(name=name):
+                self._edit("owner_vars/edge1.yml", name, "")
+                self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_owner_vars_receiver_port_is_text_or_a_bool(self) -> None:
+        for key, old in (
+            ("sweego_receiver_port", "18080"),
+            ("sweego_receiver_drain_port", "18081"),
+        ):
+            for bad in ("'18080'", "true", "18080.5"):
+                with self.subTest(key=key, bad=bad):
+                    self._edit("owner_vars/edge1.yml", f"{key}: {old}", f"{key}: {bad}")
+                    self._assert_one(f"R10 owner_vars/edge1.yml: {key} must be a whole number")
+                    self._reset()
+
+    def test_r10_owner_vars_receiver_port_on_another_host(self) -> None:
+        # The role is edge1's alone, so another host's file may not carry its ports.
+        self._write("owner_vars/ops1.yml", "---\nsweego_receiver_port: 18080\n")
+        self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
 
     # R10: a key beyond the two the host is allowed.
     def test_r10_owner_vars_holds_an_extra_key(self) -> None:

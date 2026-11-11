@@ -36,11 +36,15 @@ services:
       WEBHOOK_DRAIN_HOST: {{ sweego_receiver_container_address }}
       WEBHOOK_DRAIN_PORT: '{{ sweego_receiver_container_drain_port }}'
       WEBHOOK_STATE_DIR: {{ sweego_receiver_container_state_dir }}
-      WEBHOOK_SECRET_FILE: {{ sweego_receiver_container_secret_path }}
+{# The three paths below are the receiver's own mount points, written out so the plan's secret
+   scan reads in the checkout the lines it will match on the host (the task hides its diff for
+   them, and a test fails a hide with no matching line). A unit test holds each to the constant of
+   the same name in vars/main.yml, and _compose_check.yml holds the first and the last. #}
+      WEBHOOK_SECRET_FILE: /run/secrets/webhook-signing-secret
 {% if sweego_receiver_previous_signing_secret_file | length > 0 %}
-      WEBHOOK_SECRET_FILE_PREVIOUS: {{ sweego_receiver_container_previous_secret_path }}
+      WEBHOOK_SECRET_FILE_PREVIOUS: /run/secrets/webhook-signing-secret-previous
 {% endif %}
-      WEBHOOK_DRAIN_TOKEN_FILE: {{ sweego_receiver_container_token_path }}
+      WEBHOOK_DRAIN_TOKEN_FILE: /run/secrets/webhook-drain-token
     ports:
       - '{{ sweego_receiver_private_address }}:{{ sweego_receiver_port }}:{{ sweego_receiver_container_public_port }}'
       - '{{ sweego_receiver_private_address }}:{{ sweego_receiver_drain_port }}:{{ sweego_receiver_container_drain_port }}'
