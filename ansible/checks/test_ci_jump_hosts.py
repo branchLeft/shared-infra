@@ -16,6 +16,10 @@ hop. It is never in JUMP_HOSTS and its playbook does not apply ci_jump, so the r
 edge1 to reach it and nothing goes through it. The list is read from the pull_trigger role's
 vars, its one home, and never copied here.
 
+One more pin keeps the role's README honest about the route's secrets: each repository or
+environment secret it names for the host lists and the per-host key maps is a secret the delivery
+workflow passes, so a rename there cannot leave the owner's page describing a name that is gone.
+
 The tenants addresses are read from hetzner-host/addressPlan.ts (TENANTS_HOST_IPS), their one home,
 and never copied here. Each pin is shown red on a sabotaged copy of the files it reads, and green
 again on the copy left alone, which is also the real tree.
@@ -57,6 +61,16 @@ OWN_ADDRESS = "ci_jump_own_address"
 # The hosts that take their commit pushed to them. The pull_trigger role's vars are the one home.
 PULL_TRIGGER_VARS = "ansible/roles/pull_trigger/vars/main.yml"
 BUNDLE_HOSTS = "pull_trigger_bundle_hosts"
+# The secrets of the route that the role's README documents the shape of, and the workflow that
+# passes them.
+README = f"{ROLE_DIR}/README.md"
+DELIVERY = ".github/workflows/ansible-delivery.yml"
+ROUTE_SECRETS = (
+    "ANSIBLE_HOSTS",
+    "ANSIBLE_PUSH_HOSTS",
+    "ANSIBLE_HOST_CHECK_KEYS",
+    "SSH_HOST_APPLY_KEYS",
+)
 
 
 def tenants_host_ips(root: Path) -> dict[str, str]:
@@ -189,6 +203,23 @@ def _push_host_findings(root: Path, jump_hosts: frozenset[str]) -> list[str]:
     return found
 
 
+def _secret_findings(root: Path) -> list[str]:
+    """Each secret the README documents is passed by the delivery workflow, and is documented
+    in the form `NAME`. A missing file is a finding, or the rule would pass on nothing."""
+    readme, delivery = root / README, root / DELIVERY
+    if not readme.is_file() or not delivery.is_file():
+        return [f"{README} or {DELIVERY} cannot be read, so the secrets are not held"]
+    documented = readme.read_text(encoding="utf-8")
+    passed = delivery.read_text(encoding="utf-8")
+    found: list[str] = []
+    for name in ROUTE_SECRETS:
+        if f"`{name}`" not in documented:
+            found.append(f"{README} does not document the secret {name}")
+        if f"secrets.{name} " not in passed + " ":
+            found.append(f"{DELIVERY} does not pass the secret {name}")
+    return found
+
+
 def problems(root: Path, jump_hosts: frozenset[str] = JUMP_HOSTS) -> list[str]:
     """Return one finding per broken pin in the tree under ``root``."""
     found: list[str] = []
@@ -200,6 +231,7 @@ def problems(root: Path, jump_hosts: frozenset[str] = JUMP_HOSTS) -> list[str]:
     found.extend(_role_findings(root))
     found.extend(_data_findings(root))
     found.extend(_push_host_findings(root, jump_hosts))
+    found.extend(_secret_findings(root))
     return found
 
 
@@ -223,6 +255,11 @@ class RealTree(unittest.TestCase):
         self.assertEqual([], _push_host_findings(ROOT, JUMP_HOSTS))
         self.assertFalse(set(bundle_hosts(ROOT)) & JUMP_HOSTS)
 
+    def test_the_route_secrets_are_documented_and_passed(self) -> None:
+        # The control of the secrets pin: the list it walks is not empty.
+        self.assertEqual(4, len(ROUTE_SECRETS))
+        self.assertEqual([], _secret_findings(ROOT))
+
 
 class Sabotage(unittest.TestCase):
     """Each pin goes red on a copy of the tree with one thing broken. The copy is the files the
@@ -240,6 +277,8 @@ class Sabotage(unittest.TestCase):
         shutil.copy(ROOT / ADDRESS_PLAN, self.root / ADDRESS_PLAN)
         (self.root / PULL_TRIGGER_VARS).parent.mkdir(parents=True)
         shutil.copy(ROOT / PULL_TRIGGER_VARS, self.root / PULL_TRIGGER_VARS)
+        (self.root / DELIVERY).parent.mkdir(parents=True)
+        shutil.copy(ROOT / DELIVERY, self.root / DELIVERY)
 
     def _edit(self, relative: str, old: str, new: str) -> None:
         path = self.root / relative
@@ -349,6 +388,18 @@ class Sabotage(unittest.TestCase):
     def _expect_push(self, jump_hosts: frozenset[str], fragment: str) -> None:
         found = problems(self.root, jump_hosts)
         self.assertTrue(any(fragment in line for line in found), f"{fragment!r} not in {found}")
+
+    def test_a_secret_the_readme_does_not_document_is_red(self) -> None:
+        self._edit(README, "`SSH_HOST_APPLY_KEYS` (the", "`SSH_HOST_APPLY_KEY` (the")
+        self._expect(f"{README} does not document the secret SSH_HOST_APPLY_KEYS")
+
+    def test_a_secret_the_delivery_no_longer_passes_is_red(self) -> None:
+        self._edit(DELIVERY, "secrets.ANSIBLE_HOST_CHECK_KEYS", "secrets.ANSIBLE_HOST_KEYS")
+        self._expect(f"{DELIVERY} does not pass the secret ANSIBLE_HOST_CHECK_KEYS")
+
+    def test_a_delivery_that_cannot_be_read_is_red(self) -> None:
+        (self.root / DELIVERY).unlink()
+        self._expect("cannot be read, so the secrets are not held")
 
     def test_an_address_plan_that_cannot_be_read_is_red(self) -> None:
         # Without this an unreadable plan would let any list through the edge1 rule.
