@@ -310,7 +310,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "`shasum -a 256 FILE`, the same file as --tarball; must match the verify output's "
         "subject digest (see ansible/tools/README.md, step 1)",
     )
-    parser.add_argument("--role-dir", type=Path, default=ROLE_DEFAULT, help="the role to carry into")
+    parser.add_argument(
+        "--role-dir", type=Path, default=ROLE_DEFAULT, help="the role to carry into"
+    )
     parser.add_argument(
         "--write", action="store_true", help="write the files and defaults; without it, check only"
     )
