@@ -184,15 +184,26 @@ class VerifierCoverageTests(unittest.TestCase):
         for pin in PINS:
             self.assertNotIn(pin, defaults, f"{pin} is a default, so an inventory can override it")
 
-    def test_the_role_holds_no_copy_of_the_verifier(self) -> None:
-        copies = list((ROLES / VERIFIER_ROLE).rglob("branchleft-verify-image"))
-        self.assertEqual(copies, [])
+    def test_the_role_holds_one_copy_of_the_verifier_and_it_is_the_python_program(self) -> None:
+        # Any copy of the program under the installed name, with or without .py, is listed here.
+        copies = sorted(
+            path.relative_to(ROLES / VERIFIER_ROLE).as_posix()
+            for path in (ROLES / VERIFIER_ROLE).rglob("branchleft-verify-image*")
+        )
+        self.assertEqual(copies, ["files/branchleft-verify-image.py"])
+        first_line = (
+            (ROLES / VERIFIER_ROLE / "files" / "branchleft-verify-image.py")
+            .read_text(encoding="utf-8")
+            .splitlines()[0]
+        )
+        self.assertEqual(first_line, "#!/usr/bin/python3 -I")
 
-    def test_the_role_copies_the_verifier_from_hetzner_provision(self) -> None:
+    def test_the_role_copies_the_verifier_from_its_own_files(self) -> None:
         # The verifier's own bytes are pinned by digest in test_branchleft_deploy.py. This holds
-        # only that the role reads that one file from its home, and does not hold its own copy.
+        # only that the role reads that one file from its files/, and does not name the old home.
         source = (ROLES / VERIFIER_ROLE / "tasks" / "main.yml").read_text(encoding="utf-8")
-        self.assertIn("{{ deploy_verifier_programs_dir }}/branchleft-verify-image", source)
+        self.assertIn("src: branchleft-verify-image.py", source)
+        self.assertNotIn("hetzner/provision", source)
 
 
 if __name__ == "__main__":

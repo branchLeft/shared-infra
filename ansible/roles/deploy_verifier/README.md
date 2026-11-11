@@ -6,7 +6,7 @@ check is in `hetzner/provision/branchleft_deploy.py`, `verify_attestation`.
 
 ## What it installs
 
-- `/usr/local/sbin/branchleft-verify-image`, root, 0755: copied from `hetzner/provision/`, the single home. The role holds no copy.
+- `/usr/local/sbin/branchleft-verify-image`, root, 0755: a Python program, copied from `files/branchleft-verify-image.py`, the single home. It runs with no shell; gh is started from an argument list. Its tests are in `tests/unit/`.
 - `/usr/local/libexec/branchleft-verifier/gh`, root, 0755: gh 2.103.3, the release named in `vars/main.yml`, installed from its tarball.
 - `/var/lib/branchleft/verifier-home`, root, 0700: empty. The wrapper points `HOME`, `GH_CONFIG_DIR` and `XDG_CONFIG_HOME` here.
 
@@ -48,6 +48,7 @@ them, because check mode fetches and extracts nothing (ANS-10).
 
 ## Tests
 
+- `tests/unit/test_branchleft_verify_image.py`: runs the installed program as a subprocess against a stub gh, for the token gate, the refusals and the usage exit. Run by `run_role_unit_tests.sh`.
 - `molecule/default`: converges the role on a container. It downloads the pinned gh tarball, so
   the digest check runs for real in CI, and `verify.yml` checks the installed files against the
   repository's copy and the version against `vars/main.yml`.

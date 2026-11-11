@@ -1,6 +1,6 @@
 ---
-# What must be on the instance is read from the repository's own files, not from the role, so a
-# verifier that differs from its source in hetzner/provision fails here. The gh pin is checked by
+# What must be on the instance is read from the role's own files/, so a verifier that differs from
+# its source fails here. The gh pin is checked by
 # the version the installed binary reports and by the digest the role verified at download (the
 # role refuses a download with another digest, so a converge that completed proves it).
 - name: Verify the deploy verifier and the pinned gh
@@ -10,8 +10,7 @@
     # The pin is read from the role's own vars, so this check cannot hold a second copy of it.
     - ../../vars/main.yml
   vars:
-    verify_repo: '{{ playbook_dir }}/../../../../..'
-    verify_program_src: '{{ verify_repo }}/hetzner/provision/branchleft-verify-image'
+    verify_program_src: '{{ playbook_dir }}/../../files/branchleft-verify-image.py'
   tasks:
     - name: Read the installed verifier, its home and the gh directory
       ansible.builtin.stat:

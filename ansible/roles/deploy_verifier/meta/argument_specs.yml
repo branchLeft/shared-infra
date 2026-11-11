@@ -3,7 +3,7 @@ argument_specs:
   main:
     short_description: Install the image attestation verifier and the pinned gh the deploy wrapper runs
     description: >-
-      Copies branchleft-verify-image from hetzner/provision/ to /usr/local/sbin, root-owned and 0755,
+      Copies branchleft-verify-image (a Python program, files/) to /usr/local/sbin, root-owned and 0755,
       and installs the gh release it runs, pinned by version and sha256 digest in vars/main.yml, at a
       directory of its own. It creates the empty, root-only home the verifier's gh reads its config
       from, and refuses a host where a gh credential file sits there. The role takes no inputs: the

@@ -1,6 +1,6 @@
 ---
 # Order matters. The pins are read first, and nothing is written until they pass. The verifier
-# is copied from hetzner/provision, and gh is installed at its own path, outside the general
+# is copied from this role's files/, and gh is installed at its own path, outside the general
 # PATH. The verifier's empty home is created last, after the credential refusal, so a host that
 # somehow holds a gh credential file there is refused before the directory is touched.
 #
@@ -52,12 +52,12 @@
       directory. Inspect it, remove it by hand, and run the role again.
     quiet: true
 
-# The program is read from hetzner/provision/, so the bytes installed are the bytes of the one
-# copy there. It is root's, 0755, and not writable by any other account, because the wrapper runs
-# it as root.
-- name: Install the verifier from hetzner/provision, the one home of the program
+# The program is files/branchleft-verify-image.py, the one copy of it, so the bytes installed are
+# the bytes of that file. It is root's, 0755, and not writable by any other account, because the
+# wrapper runs it as root. It is installed under the name the wrapper calls, without the .py.
+- name: Install the verifier from the role's files, the one home of the program
   ansible.builtin.copy:
-    src: '{{ deploy_verifier_programs_dir }}/branchleft-verify-image'
+    src: branchleft-verify-image.py
     dest: '{{ deploy_verifier_verifier_path }}'
     owner: root
     group: root
