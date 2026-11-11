@@ -1,8 +1,8 @@
 ---
 # What the role must leave on the host, read back from the instance. The unit
-# and the bundle sources are read from the role's own files, on the machine
-# that runs the test, so a copy in the role that differs from its source is a
-# failure. Nothing here starts the broker: the unit must be loaded and disabled.
+# and the verify key are read from the role's own files, on the machine that
+# runs the test, so a copy in the role that differs from its source is a
+# failure. The broker must be enabled, active and answering its status request.
 - name: Verify the instance
   hosts: all
   gather_facts: false
@@ -10,7 +10,7 @@
     verify_unit_source: '{{ playbook_dir }}/../../files/branchleft-broker.service'
     verify_key_source: '{{ playbook_dir }}/files/verify-key-stand-in.bin'
     verify_node: /opt/branchleft/broker/node/bin/node
-    verify_release: /opt/branchleft/broker/releases/test-release-1
+    verify_release: /opt/branchleft/broker/releases/0.0.1
     # The seven legal invocations of a slot in 0 to 6, and the one load.
     verify_grant_line_pattern: >-
       ^broker ALL=\(root\) NOPASSWD: /usr/local/sbin/branchleft-slot
@@ -100,6 +100,30 @@
         quiet: true
         fail_msg: The current link does not point at the release, or the bundle is not in it.
 
+    - name: Read the unpacked release's directory, entry point and plugin
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - '{{ verify_release }}'
+        - '{{ verify_release }}/broker.mjs'
+        - '{{ verify_release }}/plugins'
+        - '{{ verify_release }}/plugins/stand-in-plugin.mjs'
+      register: broker_deploy_verify_unpacked
+
+    - name: Assert the release is root-owned, directories 0755 and files 0644
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.pw_name == 'root'
+          - item.stat.gr_name == 'root'
+          - item.stat.mode == ('0755' if item.stat.isdir else '0644')
+        quiet: true
+        fail_msg: '{{ item.item }} is missing, is not root-owned, or has a mode other than 0755 (directory) or 0644 (file).'
+      loop: '{{ broker_deploy_verify_unpacked.results }}'
+      loop_control:
+        label: '{{ item.item }}'
+
     - name: Read the verify key on the instance
       ansible.builtin.stat:
         path: /etc/branchleft/broker-verify-key.bin
@@ -173,24 +197,82 @@
         quiet: true
         fail_msg: The unit is not root:root 0644 or differs from its source.
 
-    # Installed and loaded, not started, not enabled: the owner's ruling starts it.
+    # Enabled and started by the role. The container test lifts the unit's sandbox with a
+    # test-only drop-in (prepare.yml); every other line of the unit is the role's.
     - name: Ask systemd for the broker unit
       ansible.builtin.systemd_service:
         name: branchleft-broker.service
       register: broker_deploy_verify_service
 
-    - name: Assert systemd loads the broker unit and holds it stopped and disabled
+    - name: Assert systemd loads the broker unit, enabled and active
       ansible.builtin.assert:
         that:
           - broker_deploy_verify_service.status.LoadState == 'loaded'
-          - broker_deploy_verify_service.status.UnitFileState == 'disabled'
-          - broker_deploy_verify_service.status.ActiveState == 'inactive'
+          - broker_deploy_verify_service.status.UnitFileState == 'enabled'
+          - broker_deploy_verify_service.status.ActiveState == 'active'
         quiet: true
         fail_msg: >-
-          systemd does not hold the unit as loaded, disabled and inactive:
+          systemd does not hold the unit as loaded, enabled and active:
           LoadState {{ broker_deploy_verify_service.status.LoadState }},
           UnitFileState {{ broker_deploy_verify_service.status.UnitFileState }},
           ActiveState {{ broker_deploy_verify_service.status.ActiveState }}.
+
+    - name: Ask the running broker for the status of slot 0
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8090/status/0
+        return_content: true
+      register: broker_deploy_verify_status
+
+    - name: Assert the broker that answers is the one in the unpacked release
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_status.status == 200
+          - broker_deploy_verify_status.json.slot == '0'
+          - broker_deploy_verify_status.json.phase == 'free'
+        quiet: true
+        fail_msg: The broker did not answer the status of slot 0 as the stand-in bundle does.
+
+    # The restart decision. The role's run step is run alone with the answer to "did what
+    # the broker runs change" set by hand: unchanged must leave the same process running,
+    # changed must replace it, and in both the broker must be active afterwards.
+    - name: Run the start step with nothing changed
+      ansible.builtin.include_role:
+        name: branchleft.broker_deploy
+        tasks_from: _run.yml
+      vars:
+        broker_deploy_inputs_changed: false
+
+    - name: Ask systemd which process the broker is, after the step with nothing changed
+      ansible.builtin.systemd_service:
+        name: branchleft-broker.service
+      register: broker_deploy_verify_unchanged
+
+    - name: Run the start step with the release changed
+      ansible.builtin.include_role:
+        name: branchleft.broker_deploy
+        tasks_from: _run.yml
+      vars:
+        broker_deploy_inputs_changed: true
+
+    - name: Ask systemd which process the broker is, after the step with the release changed
+      ansible.builtin.systemd_service:
+        name: branchleft-broker.service
+      register: broker_deploy_verify_restarted
+
+    - name: Assert nothing changed left the process alone and a change replaced it
+      ansible.builtin.assert:
+        that:
+          - broker_deploy_verify_service.status.MainPID != '0'
+          - broker_deploy_verify_unchanged.status.MainPID == broker_deploy_verify_service.status.MainPID
+          - broker_deploy_verify_restarted.status.MainPID != '0'
+          - broker_deploy_verify_restarted.status.MainPID != broker_deploy_verify_unchanged.status.MainPID
+          - broker_deploy_verify_restarted.status.ActiveState == 'active'
+        quiet: true
+        fail_msg: >-
+          Expected no restart when nothing changed and a restart when the release changed.
+          Main process before {{ broker_deploy_verify_service.status.MainPID }}, after the step with
+          nothing changed {{ broker_deploy_verify_unchanged.status.MainPID }}, after the step with a
+          change {{ broker_deploy_verify_restarted.status.MainPID }}.
 
     # The sudoers boundary. The grant is exactly the 50 literal lines the slot
     # table gives (7 slots x 7 invocations, and one load), root-owned 0440, and

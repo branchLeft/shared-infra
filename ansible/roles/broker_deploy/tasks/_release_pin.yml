@@ -1,0 +1,38 @@
+---
+# Internal to the role: included from main.yml before the host is read or anything is
+# written. The release is a tarball the role carries, built and attested by the broker's
+# release workflow. It is hashed where the role runs and held to the sha256 pinned for its
+# version, so a tarball that is missing, is a link, or is not the pinned one stops the run
+# here with nothing written. Reading is not a change, so this runs in check mode too.
+- name: Refuse a release version that is not MAJOR.MINOR.PATCH or has no pin
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_release_version is match('^[0-9]+\.[0-9]+\.[0-9]+\Z')
+      - broker_deploy_release_version in broker_deploy_release_pins
+      - broker_deploy_release_pins[broker_deploy_release_version] is match('^[0-9a-f]{64}\Z')
+    quiet: true
+    fail_msg: >-
+      The release version must be MAJOR.MINOR.PATCH and must have a pin of 64 lower-case hex
+      digits in broker_deploy_release_pins. Nothing has been written to the host.
+
+- name: Hash the release tarball where the role runs
+  ansible.builtin.stat:
+    path: '{{ broker_deploy_release_dir }}/broker-bundle-{{ broker_deploy_release_version }}.tar.gz'
+    follow: false
+    checksum_algorithm: sha256
+  delegate_to: localhost
+  become: false
+  register: broker_deploy_release_stat
+
+- name: Refuse a release tarball that is missing, is not a plain file or is not the pinned one
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_release_stat.stat.exists
+      - broker_deploy_release_stat.stat.isreg
+      - not broker_deploy_release_stat.stat.islnk
+      - broker_deploy_release_stat.stat.checksum == broker_deploy_release_pins[broker_deploy_release_version]
+    quiet: true
+    fail_msg: >-
+      broker-bundle-{{ broker_deploy_release_version }}.tar.gz is missing from the role's release
+      directory, is not a plain file, or does not have its pinned sha256
+      ({{ broker_deploy_release_pins[broker_deploy_release_version] }}). Nothing has been written to the host.

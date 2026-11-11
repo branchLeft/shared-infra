@@ -1,17 +1,13 @@
 ---
 # Order follows the broker runbook's install steps: the Node runtime, the
 # account, the directories, the release, the verify key, the environment file,
-# and last the unit, which is installed and never started.
+# the unit, and last the start and the wait for the broker's answer.
 
-# The inputs are checked before anything is downloaded or written. The Node
-# digest must be pinned to a published sha256, and the release name must be a
-# plain directory name, so a path cannot escape the releases directory.
-- name: Refuse a release name that is not a plain directory name
-  ansible.builtin.assert:
-    that:
-      - broker_deploy_release is match('^[A-Za-z0-9][A-Za-z0-9._-]*\Z')
-    quiet: true
-    fail_msg: The release name must be a plain directory name of letters, digits, dot, underscore and hyphen.
+# The inputs are checked before anything is downloaded or written. The release
+# tarball must be the one pinned for its version, and the Node digest must be
+# pinned to a published sha256.
+- name: Hold the release tarball to its pinned sha256
+  ansible.builtin.include_tasks: _release_pin.yml
 
 - name: Refuse a Node digest that is not a pinned sha256
   ansible.builtin.assert:
@@ -166,23 +162,9 @@
     mode: '0755'
 
 # A new directory under releases/ and then a link swap, never an overwrite in
-# place. Directories are 0755 and files 0644, all root-owned, as the runbook's
-# chmod -R u=rwX,go=rX gives them.
-- name: Deliver the bundle as one release directory
-  ansible.builtin.copy:
-    src: '{{ broker_deploy_bundle_src }}/'
-    dest: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release }}/'
-    owner: root
-    group: root
-    mode: 'u=rwX,go=rX'
-    directory_mode: 'u=rwX,go=rX'
-
-- name: Point the current link at the release
-  ansible.builtin.file:
-    src: '{{ broker_deploy_releases_dir }}/{{ broker_deploy_release }}'
-    dest: '{{ broker_deploy_current_link }}'
-    state: link
-    force: true
+# place. Directories are 0755 and files 0644, all root-owned.
+- name: Deliver the pinned release and point the current link at it
+  ansible.builtin.include_tasks: _release.yml
 
 # The public half of the request-signing key. The broker reads it, through the
 # group, and cannot replace it, so it is owned by root and not by the broker.
@@ -193,6 +175,7 @@
     owner: root
     group: '{{ broker_deploy_user }}'
     mode: '0640'
+  register: broker_deploy_key_result
 
 # The template is the shipped example with one line set from the variable
 # (the runbook's B-5 step). The file holds no secret: the verify key is a file.
@@ -203,9 +186,9 @@
     owner: root
     group: root
     mode: '0600'
+  register: broker_deploy_env_result
 
-# Installed, then loaded by the reload before the role returns. The unit is not
-# enabled and not started: the runbook's B-7 step waits on an owner ruling.
+# Installed, then loaded by the reload before the role starts it.
 - name: Install the broker unit
   ansible.builtin.copy:
     src: branchleft-broker.service
@@ -213,7 +196,20 @@
     owner: root
     group: root
     mode: '0644'
+  register: broker_deploy_unit_result
   notify: Reload systemd manager
 
-- name: Load queued unit changes before the role returns
+- name: Load queued unit changes before the broker is started
   ansible.builtin.meta: flush_handlers
+
+# One decision for the restart: did the release, the key, the environment file or the unit
+# change in this run. A task skipped in check mode registers changed as false.
+- name: Work out whether what the broker runs changed in this run
+  ansible.builtin.set_fact:
+    broker_deploy_inputs_changed: >-
+      {{ [broker_deploy_unpacked, broker_deploy_unpack_report, broker_deploy_link_result,
+      broker_deploy_key_result, broker_deploy_env_result, broker_deploy_unit_result]
+      | map(attribute='changed') | select | list | length > 0 }}
+
+- name: Start the broker, restart it when what it runs changed, and wait for its answer
+  ansible.builtin.include_tasks: _run.yml

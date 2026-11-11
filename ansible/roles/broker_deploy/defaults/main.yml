@@ -8,6 +8,15 @@ broker_deploy_node_checksums:
   x64: 'sha256:9f619528f1db5ddc41dccf54211066fb42228d69a156733c69cb9d6cc92e358c'
   arm64: 'sha256:036df0b49662ebb350eb56f1cac603699b1e9ed1e2603ee129fefda473479030'
 broker_deploy_node_base_url: https://nodejs.org/dist
+# The broker release the host runs: the CI release tarball for this version, carried in
+# the role under broker_deploy_release_dir and held to the sha256 pinned for it below.
+# The digest is the one GitHub reports for the release asset broker-bundle-0.1.0.tar.gz of
+# the broker-v0.1.0 release. A release is never replaced; a new version is a new pin.
+broker_deploy_release_version: '0.1.0'
+broker_deploy_release_pins:
+  '0.1.0': '6410ecb830f6dd01ff46a459aa3e352e613b241378a4dc24f17f4bd50c4fc864'
+# Where the tarballs are, on the machine that runs the role. Nothing is fetched.
+broker_deploy_release_dir: '{{ role_path }}/files/releases'
 broker_deploy_base_dir: /opt/branchleft/broker
 broker_deploy_releases_dir: /opt/branchleft/broker/releases
 broker_deploy_current_link: /opt/branchleft/broker/current
