@@ -22,6 +22,10 @@
 # includes and the one trust file, all loaded through vars_files, and the step
 # allow-list from the owner's file.
 #
+# The safety service role goes before the channel key's, so that a later change can name the
+# account it makes as the key's owner and the account exists when the key role runs. It stays off
+# until the owner sets its inputs.
+#
 # The refusal is not a host control: under the trigger inventory_hostname is
 # localhost. The root-owned pull config is the host control.
 - name: Bring ops1 under the pull
@@ -48,6 +52,7 @@
     - role: ../roles/host_inputs # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
     - role: ../roles/breakglass_mint_host # noqa: role-name[path]
+    - role: ../roles/safety_service # noqa: role-name[path]
     - role: ../roles/safety_channel_key # noqa: role-name[path]
     - role: ../roles/status_page # noqa: role-name[path]
     - role: ../roles/deploy_verifier # noqa: role-name[path]

@@ -1,0 +1,14 @@
+---
+# The plan scenario for a host with no Docker (see prepare.yml). Only a check-mode run
+# plans the role: the harness runs this playbook under --check for check-fresh, the state
+# a first plan on a new host meets, and must see it complete. A real run is skipped here,
+# and not left to fail: this instance has no network and no apt index that holds docker-ce,
+# so a real apply cannot install Docker, and the default scenario is what applies for real.
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Plan the role on a host with no Docker
+      ansible.builtin.include_role:
+        name: branchleft.host_baseline
+      when: ansible_check_mode

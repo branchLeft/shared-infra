@@ -1,0 +1,16 @@
+{{ {
+  'arachnid': {
+    'baseUrl': safety_service_arachnid_base_url,
+    'credentialFile': safety_service_credential_file
+  },
+  'channel': {
+    'signingKeyFile': safety_service_signing_key_file
+  },
+  'cache': {
+    'negativeTtlMs': safety_service_negative_ttl_ms
+  },
+  'audit': {
+    'file': safety_service_audit_file
+  },
+  'hosts': safety_service_hosts | map('combine', {'safety': {'near': true, 'exact': true}}) | list
+} | to_nice_json }}

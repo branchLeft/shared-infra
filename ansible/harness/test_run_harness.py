@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import run_harness
+from ruamel.yaml import YAML
 
 TOOLS = Path("/tools")
 ENV = {"PATH": "/usr/bin"}
@@ -57,8 +58,12 @@ def fake_runner(
     specs: str | None = None,
     changing: Sequence[str] = (),
     interrupt_at: str | None = None,
+    silent: Sequence[str] = (),
 ) -> tuple[run_harness.Runner, list[tuple[str, ...]]]:
-    """Return a runner that fails, reports changes or is interrupted at the named steps."""
+    """Return a runner that fails, reports changes or is interrupted at the named steps.
+
+    A step named in ``silent`` succeeds but prints no PLAY RECAP.
+    """
     calls: list[tuple[str, ...]] = []
     converged = [False]
 
@@ -66,11 +71,13 @@ def fake_runner(
         tool = Path(argv[0]).name
         if tool != "molecule":
             return tool
-        if argv[1] == "converge":
+        # A global option (-c FILE) comes before the subcommand.
+        command = argv[3] if argv[1] == "-c" else argv[1]
+        if command == "converge":
             if "--check" in argv:
                 return "check-configured" if converged[0] else "check-fresh"
             return "converge"
-        return "molecule-check" if argv[1] == "check" else argv[1]
+        return "molecule-check" if command == "check" else command
 
     def run(
         argv: Sequence[str], cwd: Path, env: Mapping[str, str]
@@ -84,6 +91,7 @@ def fake_runner(
         if name == "converge":
             converged[0] = True
         recap = f"host : ok=3 changed={1 if name in changing else 0} unreachable=0 failed=0\n"
+        recap = "" if name in silent else recap
         return completed(1 if name in failing else 0, f"output of {name}\n{recap}")
 
     return run, calls
@@ -291,6 +299,90 @@ class RunHarnessTests(RoleCase):
             run_harness.main([str(self.make_role())], ENV, run, TOOLS)
         summary = out.getvalue().split("== demo_role (default) ==")[1]
         self.assertIn("FAIL argument-specs\n    meta/argument_specs.yml is missing", summary)
+
+
+class NarrowedMoleculeCheckTests(RoleCase):
+    """molecule-check runs only Molecule's check action, and still counts what it finds."""
+
+    BASE = Path("/work/molecule-check-only.yml")
+
+    def outcomes(
+        self,
+        base_config: Path | None = BASE,
+        changing: Sequence[str] = (),
+        silent: Sequence[str] = (),
+    ) -> dict[str, str]:
+        """Run one role with the fake runner and return step -> status."""
+        run, _ = fake_runner(changing=changing, silent=silent)
+        return dict(
+            run_harness.run_role(self.make_role(), TOOLS, run, ENV, base_config=base_config)
+        )
+
+    def test_a_change_reported_by_the_narrowed_check_fails_it(self) -> None:
+        self.assertEqual(
+            self.outcomes(changing=["molecule-check"])["molecule-check"], run_harness.FAIL
+        )
+
+    def test_a_narrowed_check_with_no_recap_fails_it(self) -> None:
+        self.assertEqual(
+            self.outcomes(silent=["molecule-check"])["molecule-check"], run_harness.FAIL
+        )
+
+    def test_a_clean_narrowed_check_passes(self) -> None:
+        outcomes = self.outcomes()
+        self.assertEqual(outcomes["molecule-check"], run_harness.OK)
+        self.assertEqual(outcomes["destroy"], run_harness.OK)
+
+    def test_the_check_with_no_recap_says_why(self) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.outcomes(silent=["molecule-check"])
+        self.assertIn(
+            "molecule-check: no PLAY RECAP in the output, so nothing was checked", out.getvalue()
+        )
+
+    def test_the_narrowed_check_names_the_base_config_before_the_subcommand(self) -> None:
+        run, calls = fake_runner()
+        run_harness.run_role(self.make_role(), TOOLS, run, ENV, base_config=self.BASE)
+        wanted = ("/tools/molecule", "-c", str(self.BASE), "check", "-s", "default")
+        self.assertEqual([call for call in calls if "check" in call and "-c" in call], [wanted])
+
+    def test_the_base_config_narrows_the_sequence_to_the_check_action_alone(self) -> None:
+        document = YAML(typ="safe").load(run_harness.CHECK_ONLY_CONFIG)
+        self.assertEqual(document, {"scenario": {"check_sequence": ["check"]}})
+
+    def test_without_a_base_config_the_check_is_the_old_command_and_counts_nothing(self) -> None:
+        run, calls = fake_runner(changing=["molecule-check"], silent=["molecule-check"])
+        outcomes = dict(run_harness.run_role(self.make_role(), TOOLS, run, ENV))
+        self.assertEqual(outcomes["molecule-check"], run_harness.OK)
+        self.assertIn(("/tools/molecule", "check", "-s", "default"), calls)
+        self.assertEqual(
+            [call for call in calls if call[0] == "/tools/molecule" and "-c" in call], []
+        )
+
+    def test_main_writes_the_narrowing_file_and_hands_it_to_the_check(self) -> None:
+        run, _ = fake_runner()
+        seen: list[str] = []
+
+        def watching(
+            argv: Sequence[str], cwd: Path, env: Mapping[str, str]
+        ) -> subprocess.CompletedProcess[str]:
+            if argv[0] == "/tools/molecule" and "-c" in argv:
+                seen.append(Path(argv[argv.index("-c") + 1]).read_text(encoding="utf-8"))
+            return run(argv, cwd, env)
+
+        self.assertEqual(run_harness.main([str(self.make_role())], ENV, watching, TOOLS), 0)
+        self.assertEqual(seen, [run_harness.CHECK_ONLY_CONFIG])
+
+    def test_a_scenario_that_leaves_the_check_out_still_skips_it_when_narrowed(self) -> None:
+        role = self.make_role(also=["second"])
+        (role / "molecule" / "second" / "skip-steps.txt").write_text(
+            "molecule-check\n", encoding="utf-8"
+        )
+        steps = run_harness.molecule_steps(role, TOOLS, "second", self.BASE)
+        skipped = {step.name: step.skipped for step in steps}
+        self.assertTrue(skipped["molecule-check"])
+        self.assertFalse(skipped["check-configured"])
 
 
 class ScenarioLimitTests(RoleCase):

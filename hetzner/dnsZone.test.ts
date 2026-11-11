@@ -218,6 +218,60 @@ describe('the checked-in publicpress.co.uk zone', () => {
   });
 });
 
+/**
+ * Every record the IONOS zone holds, as the cutover must carry it: written out
+ * here from the IONOS dig transcript (`captures/publicpress.co.uk.ionos-dig.txt`),
+ * not read back from the zone file, so a record dropped from the file fails
+ * here. The zone must hold these and nothing else.
+ */
+const PUBLICPRESS_CARRIED: RrsetSpec[] = [
+  { name: '@', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
+  { name: '@', type: 'MX', ttl: 3600, values: ['10 mx00.ionos.co.uk.', '10 mx01.ionos.co.uk.'] },
+  {
+    name: '@',
+    type: 'TXT',
+    ttl: 3600,
+    values: ['"v=spf1 ip4:167.233.252.240 ip6:2a01:4f8:1c18:866::1 -all"'],
+  },
+  { name: '_dmarc', type: 'TXT', ttl: 3600, values: ['"v=DMARC1; p=none; adkim=s; aspf=s"'] },
+  {
+    name: '_domainconnect',
+    type: 'CNAME',
+    ttl: 3600,
+    values: ['_domainconnect.ionos.com.'],
+  },
+  { name: 'autodiscover', type: 'CNAME', ttl: 3600, values: ['adsredir.ionos.info.'] },
+  {
+    name: 'bl._domainkey',
+    type: 'TXT',
+    ttl: 3600,
+    values: [
+      '"v=DKIM1; k=rsa; h=sha256; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxhILakyM7YDapZ0m2C/X8rwQzyXiZqAK2P7wAecrq3DIb018rk4Ts6RlFrMh5NHgGGAY6nKC+H7uRidtzU7Q3Qso1FnfdQWoV0SWPw8TbKh0OsdzsS67Qa9uzGFzWH9qzr7FvuPzfykWZR062/CAWDGcsrzQ0LbgVp5hNnymlSp3hsJjAdo6lSg" "KKOwaDw7Zl76C9POHlJjyabVcdOVAJF6uSaDwxiJ/6GX/pGPBRUErkWKnI35lNk3k2BpfraI88WeP3wPphdxUqqmUPoidKNk5Kc1++f4EtKpWmWcAgmLhXvlJIKx7vCiKOH15+th0K5O4/QnNz/Qk64mU17OksQIDAQAB"',
+    ],
+  },
+  { name: 'id', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
+  { name: 'portal', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
+  { name: 's1-ionos._domainkey', type: 'CNAME', ttl: 3600, values: ['s1.dkim.ionos.com.'] },
+  { name: 's2-ionos._domainkey', type: 'CNAME', ttl: 3600, values: ['s2.dkim.ionos.com.'] },
+];
+
+describe('the publicpress.co.uk zone holds exactly the records IONOS holds', () => {
+  const spec = validateZone(
+    JSON.parse(fs.readFileSync(path.join(__dirname, 'dns', 'publicpress.co.uk.json'), 'utf8'))
+  );
+  const key = (r: Pick<RrsetSpec, 'name' | 'type'>) => `${r.name} ${r.type}`;
+
+  it('carries every IONOS record with the same name, type, TTL and values', () => {
+    for (const expected of PUBLICPRESS_CARRIED) {
+      expect(spec.rrsets, key(expected)).toContainEqual(expected);
+    }
+  });
+
+  it('holds no record the IONOS list lacks', () => {
+    expect(spec.rrsets.map(key).sort()).toEqual(PUBLICPRESS_CARRIED.map(key).sort());
+  });
+});
+
 describe('assertDnsOnlyProject', () => {
   it('passes the dns project on its own marker', () => {
     expect(() => assertDnsOnlyProject([], ['project-marker-dns'])).not.toThrow();

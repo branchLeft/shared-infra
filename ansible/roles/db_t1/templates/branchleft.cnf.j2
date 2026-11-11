@@ -1,0 +1,45 @@
+# Rendered by the db_t1 role of branchLeft/shared-infra. A change made on the host
+# is overwritten by the next run, and reaches the running database only at a
+# restart, which the role never triggers.
+#
+# The settings are the ones the isolation proof ran with, plus five for this host:
+# the loopback bind, the explicit socket, the X protocol off, the server id, and
+# GTID mode from the first start (it cannot be turned on later without a staged
+# procedure). Anything else would be a guess about a database nobody has measured.
+[mysqld]
+# Loopback only. Nothing on the tenants network can reach this server. Opening it
+# to the application host is a separate change that adds the host firewall in the
+# same step, because the cloud firewall does not filter the private network.
+bind-address = 127.0.0.1
+# The X protocol listens on every address whatever bind-address says, so it is off.
+mysqlx = OFF
+socket = /var/run/mysqld/mysqld.sock
+
+# TLS is required for every TCP connection. Socket connections are exempt by
+# MySQL's documented behaviour, and the administrative accounts use the socket.
+require_secure_transport = ON
+
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+
+# GTID mode from the first start: a replica is seeded by GTID set, because file and
+# position coordinates lose committed rows on this server.
+gtid_mode = ON
+enforce_gtid_consistency = ON
+server-id = {{ db_t1_server_id }}
+
+# Seven days of binary log, the point-in-time window the backup design needs.
+log_bin = mysql-bin
+binlog_expire_logs_seconds = 604800
+sync_binlog = 1
+# Per-tenant replay filters row events by table database. STATEMENT format filters
+# by session USE and loses or leaks writes across tenants.
+binlog_format = ROW
+
+max_connections = 100
+innodb_buffer_pool_size = 1G
+innodb_redo_log_capacity = 268435456
+innodb_flush_log_at_trx_commit = 1
+
+# A monitoring collector reads from here.
+performance_schema = ON

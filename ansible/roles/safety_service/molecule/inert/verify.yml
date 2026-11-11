@@ -1,0 +1,39 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the files the role made, and the one it must not have
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        get_checksum: false
+        get_mime: false
+        get_attributes: false
+      loop:
+        - '{{ scenario_config_file }}'
+        - '{{ scenario_unit }}'
+        - '{{ scenario_state_dir }}'
+        - '{{ scenario_docker_args_file }}'
+      register: safety_service_v_stats
+
+    - name: Require the unit to be installed, no configuration to exist and docker never to have run
+      ansible.builtin.assert:
+        that:
+          - not safety_service_v_stats.results[0].stat.exists
+          - safety_service_v_stats.results[1].stat.exists
+          - safety_service_v_stats.results[2].stat.isdir
+          - not safety_service_v_stats.results[3].stat.exists
+        quiet: true
+
+    - name: Look at the unit's state
+      ansible.builtin.systemd_service:
+        name: content-safety.service
+      register: safety_service_v_unit
+
+    - name: Require the unit to be disabled and not running
+      ansible.builtin.assert:
+        that:
+          - safety_service_v_unit.status.UnitFileState != 'enabled'
+          - safety_service_v_unit.status.ActiveState != 'active'
+        quiet: true

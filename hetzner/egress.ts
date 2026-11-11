@@ -13,7 +13,7 @@ import { NETWORK_CIDR } from '@branchleft/hetzner-host';
  *
  * The route is only half the mechanism. It names a gateway address; the host
  * at that address has to forward and source-NAT the traffic, which is
- * `provision/branchleft_nat.sh`.
+ * `ansible/roles/egress_nat/files/branchleft_nat.py`.
  *
  * IPv4 only. Hetzner networks carry no IPv6 range, so there is no v6 default
  * to declare here and a private-only host is v4-only end to end.
