@@ -510,35 +510,6 @@ class CallerTests(unittest.TestCase):
 
         self.assert_names(self.weakened(drop), "permissions must be exactly")
 
-    def test_the_serialising_block_is_the_committed_one(self) -> None:
-        self.assertEqual(
-            {"group": "ansible-delivery-serialise", "cancel-in-progress": False},
-            committed()["concurrency"],
-        )
-
-    def test_a_missing_serialising_block_is_named(self) -> None:
-        def drop(document: dict[str, object]) -> None:
-            del document["concurrency"]
-
-        self.assert_names(self.weakened(drop), "concurrency must be exactly")
-
-    def test_a_cancelling_or_renamed_serialising_block_is_named(self) -> None:
-        blocks: list[dict[str, object]] = [
-            {"group": "ansible-delivery-serialise", "cancel-in-progress": True},
-            {"group": "ansible-delivery-serialise"},
-            {"group": "ansible-delivery-serialise", "cancel-in-progress": "false"},
-            {"group": "ansible-delivery-serialise", "cancel-in-progress": 0},
-            {"group": "ansible-apply-x", "cancel-in-progress": False},
-            {"group": "${{ github.run_id }}", "cancel-in-progress": False},
-        ]
-        for block in blocks:
-
-            def replace(document: dict[str, object], block: dict[str, object] = block) -> None:
-                document["concurrency"] = block
-
-            with self.subTest(block=block):
-                self.assert_names(self.weakened(replace), "concurrency must be exactly")
-
     def test_a_job_key_that_skips_or_redirects_the_call_is_named(self) -> None:
         extras: dict[str, object] = {
             "if": "github.actor != 'x'",

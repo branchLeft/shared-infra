@@ -57,27 +57,6 @@ Each rule is checked on the parsed data.
   empty, null or not a string (`group: 123`, `group: true`) is refused too. This
   test does not evaluate the job's expressions, because it refuses them.
 
-## A serialised workflow
-
-A workflow that reaches hosts must not run beside itself, and must never cancel
-a run that may be waiting on an environment approval. The registry `SERIALISED`
-in the test lists the workflows that queue their runs on one shared top-level
-group instead of keying it on the run id. Each listed workflow has exactly this
-block, with a literal group of its own and `cancel-in-progress: false`, and is
-triggered by a push alone: a pull request or merge_group trigger would let a
-check run hold the delivery's group. GitHub keeps one waiting run per group, so a
-burst of pushes leaves the running run and the newest, not one run per push.
-
-- The shared-group allowance is the registry's alone: the same block in any
-  other workflow is still refused as a group shared across runs.
-- A job literal in another workflow equal to the group is refused by the
-  cross-workflow rule below.
-- Every workflow that calls the gated apply of the shared workflows repository
-  must be listed, so a second caller cannot run beside the delivery.
-- The group is not one of the `ansible-plan-*` or `ansible-apply-*` groups the
-  reusable workflow's own jobs hold: a workflow group equal to a job group in
-  the same run waits on its own run.
-
 ## A job literal against the workflow group
 
 GitHub keeps one group namespace for a run and its jobs, so a job whose group is

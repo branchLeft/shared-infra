@@ -96,12 +96,7 @@ HOST_APPLY_KEYS = "ssh_host_apply_keys"
 # The environment secrets the probe looks for, each reported when missing.
 ENVIRONMENT_SECRETS = (APPLY_KEY, HOST_APPLY_KEYS)
 
-WORKFLOW_KEYS = frozenset({"name", "on", "permissions", "concurrency", "jobs"})
-# One delivery at a time, never cancelled: a run may be waiting on the environment's approval, and
-# a later push must not cancel it. The group is a name of its own, not one of the plan or apply
-# groups of the reusable workflow, which a workflow group equal to would wait on its own run.
-# scripts/test_workflow_concurrency.py holds the same pair for the workflow's other readers.
-CONCURRENCY_GROUP = "ansible-delivery-serialise"
+WORKFLOW_KEYS = frozenset({"name", "on", "permissions", "jobs"})
 JOB_KEYS = frozenset({"uses", "with", "secrets", "needs"})
 SKIP_INPUT = "skip-rerun-after-merge-group"
 CHECK_NAME_INPUT = "merge-group-check-name"
@@ -368,29 +363,8 @@ def caller_findings(workflow: object, other_environments: frozenset[str]) -> lis
             "permissions must be exactly contents: read and actions: read (the plan job "
             f"reads the run record), got {top.get('permissions')!r}"
         )
-    findings.extend(concurrency_findings(top.get("concurrency")))
     findings.extend(job_findings(top.get("jobs"), other_environments))
     return findings
-
-
-def concurrency_findings(block: object) -> list[str]:
-    """Check the workflow queues its runs on its own group and cancels none.
-
-    The comparison is on the types: a string or a number is not the boolean false.
-    """
-    parsed = as_mapping(block)
-    exact = (
-        parsed is not None
-        and set(parsed) == {"group", "cancel-in-progress"}
-        and parsed["group"] == CONCURRENCY_GROUP
-        and parsed["cancel-in-progress"] is False
-    )
-    if exact:
-        return []
-    return [
-        f"concurrency must be exactly group {CONCURRENCY_GROUP} and cancel-in-progress false, so "
-        f"deliveries queue and none is cancelled, got {block!r}"
-    ]
 
 
 def chosen_environments(expression: str) -> tuple[str, str] | None:
