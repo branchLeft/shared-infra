@@ -66,9 +66,10 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
-# host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
-# installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that order: the slot
-# keys need the wrapper the tooling installs) and app1's export_bundler (last of all), db1's
+# host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
+# host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
+# order: the slot keys need the wrapper the tooling installs) and app1's export_bundler (last of
+# all), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
@@ -113,6 +114,7 @@ APPLIED_ON_MAIN = {
         "breakglass_grant_host",
         "deploy_verifier",
         "website_app1",
+        "publicpress_website_app1",
         "deploy_tooling",
         "deploy_slot_keys",
         "export_bundler",
@@ -439,6 +441,7 @@ class HostRoleLists(unittest.TestCase):
                 "breakglass_grant_host",
                 "deploy_verifier",
                 "website_app1",
+                "publicpress_website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
                 "export_bundler",

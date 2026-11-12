@@ -1,0 +1,29 @@
+---
+# Test scaffolding, not role tasks: the shared Compose unit template the role
+# enables an instance of. The real template is part of the host baseline, which
+# is another role, so the test installs a placeholder with the same name and no
+# real content: a oneshot that runs /bin/true. systemd needs the template to
+# exist to enable an instance. Nothing here starts the stack.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install a placeholder for the shared Compose unit template
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=PLACEHOLDER Compose stack %i
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the placeholder
+      ansible.builtin.systemd_service:
+        daemon_reload: true

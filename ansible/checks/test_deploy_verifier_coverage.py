@@ -34,7 +34,16 @@ VERIFIER_ROLE = "deploy_verifier"
 
 # The roles that run the deploy wrapper, or name its path in what they install or run. A role that
 # names the path and is not here fails test_every_role_naming_the_wrapper_is_in_the_table.
-WRAPPER_ROLES = frozenset({"deploy_tooling", "control_plane", "db1_stack", "website_app1", "db_t1"})
+WRAPPER_ROLES = frozenset(
+    {
+        "deploy_tooling",
+        "control_plane",
+        "db1_stack",
+        "website_app1",
+        "publicpress_website_app1",
+        "db_t1",
+    }
+)
 
 # The hosts that run the wrapper, one playbook each. Another host that applies a wrapper role
 # fails test_only_the_listed_wrapper_hosts_apply_a_wrapper_role until it is listed here.

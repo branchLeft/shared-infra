@@ -51,6 +51,7 @@ app1:
   - export_bundler
   - deploy_verifier
   - website_app1
+  - publicpress_website_app1
   - breakglass_grant_host
   - host_baseline
 db1:

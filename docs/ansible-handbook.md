@@ -153,6 +153,7 @@ WHITEBOARD_INTRO_TEXT
 | `monitoring_stack`         | [README](../ansible/roles/monitoring_stack/README.md)         |
 | `nextcloud_stack`          | [README](../ansible/roles/nextcloud_stack/README.md)          |
 | `ntfy_pager`               | [README](../ansible/roles/ntfy_pager/README.md)               |
+| `publicpress_website_app1` | [README](../ansible/roles/publicpress_website_app1/README.md) |
 | `pull_trigger`             | [README](../ansible/roles/pull_trigger/README.md)             |
 | `tunnel_account`           | [README](../ansible/roles/tunnel_account/README.md)           |
 | `website_app1`             | [README](../ansible/roles/website_app1/README.md)             |

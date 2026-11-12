@@ -1,0 +1,38 @@
+---
+# Constants of the stack, not inputs, so an inventory cannot loosen them.
+# An absolute path of plain characters.
+publicpress_website_app1_path_pattern: '^/[A-Za-z0-9._/-]+\Z'
+
+# The one image this stack runs, pinned by digest. A tag alone can move.
+publicpress_website_app1_image_pattern: '^ghcr\.io/branchleft/publicpress-website@sha256:[0-9a-f]{64}\Z'
+
+# A value that goes on one line of the environment file: printable ASCII only.
+publicpress_website_app1_value_pattern: '^[ -~]+\Z'
+
+# The four SMTP values. The owner ruled that this app reuses the branchleft.co.uk site's SMTP
+# login, so each is the value the host_inputs loader already sets for the website role, from the
+# host's inputs file: no new input, no new key, no new secret. They are in vars/ and not in
+# defaults/ so that no default carries a secret (ANS-16).
+publicpress_website_app1_smtp_host: '{{ website_app1_smtp_host }}'
+publicpress_website_app1_smtp_port: '{{ website_app1_smtp_port }}'
+publicpress_website_app1_smtp_user: '{{ website_app1_smtp_user }}'
+publicpress_website_app1_smtp_password: '{{ website_app1_smtp_password }}'
+
+# The stack's name, which is the deploy program's first argument, the unit's instance and the
+# deploy slot's stack.
+publicpress_website_app1_stack: publicpress-website
+
+# The host's program that pins the digest and restarts the stack. It is
+# installed by the host provisioning in shared-infra, not by this role.
+publicpress_website_app1_deploy_program: /usr/local/sbin/branchleft-deploy
+
+# The shared Compose unit template and the instance this stack runs as.
+publicpress_website_app1_unit: branchleft-compose@publicpress-website.service
+
+# The port the app listens on and binds on the private address: files/compose.yml, the one
+# place the role says it, and the smoke test. No other app1 stack uses it
+# (tests/unit/test_publicpress_website_app1_contract.py).
+publicpress_website_app1_port: 8081
+
+# Where the record of the last deployed content is kept, in the project directory.
+publicpress_website_app1_stamp_name: .publicpress_website_app1_stamp

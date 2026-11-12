@@ -216,6 +216,13 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
         "is held by that role's unit tests, and the deploy wrapper refuses a Compose "
         "file with a service that declares none."
     ),
+    "publicpress-website": (
+        "An instance of the template on app1, started through branchleft-deploy. Its Compose "
+        "file is committed in the ansible/roles/publicpress_website_app1 role of "
+        "branchLeft/shared-infra, not under a `*/stack/compose.yml` path, so the scan cannot "
+        "read it. That role's unit tests load branchleft_deploy.py and require "
+        "health_signal_gaps to find no gap in it."
+    ),
     "sweego-receiver": (
         "An instance of the template on edge1, started through the shared unit. Its Compose "
         "text is rendered from a Jinja template by the ansible/roles/sweego_receiver role of "

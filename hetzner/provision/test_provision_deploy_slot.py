@@ -116,7 +116,7 @@ def fs_with(slots=None, authorized="", stacks=(), home_files=None):
 
 class StackNameTests(unittest.TestCase):
     def test_accepts_plain_names(self):
-        for name in ("blog", "blog2", "ghost-tenant-one", "website"):
+        for name in ("blog", "blog2", "ghost-tenant-one", "website", "publicpress-website"):
             self.assertEqual(ps.validate_stack_name(name), name)
 
     def test_rejects_path_traversal(self):
