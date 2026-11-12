@@ -29,7 +29,8 @@ The role calls one module, `safety_channel_key`, which:
 It does not install, start or configure the safety service (that is
 [ISSUE branchLeft/workspace#1266](https://github.com/branchLeft/workspace/issues/1266)), does not
 create the account the service runs as, does not place the public half in the host end of the
-channel, does not escrow or back up the key (losing it costs a regenerate and a re-pin, so there is no
+channel (that waits for [ISSUE branchLeft/workspace#1231](https://github.com/branchLeft/workspace/issues/1231)),
+does not escrow or back up the key (losing it costs a regenerate and a re-pin, so there is no
 copy to keep), and does not rotate it. To rotate, a person removes the key file on the host and
 the next apply generates a new one.
 
