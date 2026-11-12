@@ -26,12 +26,15 @@ what it is is not guessed.
   policy program, its unit enabled at boot, the program applied, and the firewall chains
   read back and compared with what the program builds. An app host also names its
   **variant**: `standard`, or `protected_no_db` for the host that serves the control
-  plane (it carries the protected-port drops and no database exception).
+  plane (it carries the protected-port drops and no database exception). It also enables
+  the compose template unit's instance for each tenant in the host's tenant list, and
+  starts none (see "The tenant instances" below).
 
 The role does not write the sudoers drop-in. First-boot configuration writes it, and a
 broken sudoers file locks every account out of `sudo`, so the role reads it and refuses
-anything but the one grant. It does not start, enable or restart a compose instance
-(`branchleft-compose@`): a restart redeploys a tenant's stack. It does not edit the
+anything but the one grant. It does not start or restart a compose instance
+(`branchleft-compose@`), and enables only the tenants' instances: a restart redeploys a
+tenant's stack. It does not edit the
 policy program, and it does not decide which host is which class: that belongs to the
 inventory or the play.
 
@@ -49,14 +52,38 @@ run on the hosts. Until then, do not run either script on a host this role manag
 [`defaults/main.yml`](defaults/main.yml) holds the one default. Ansible checks the
 inputs when the role starts.
 
-| Variable                        | Default          | Meaning                                                                                                                |
-| ------------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `deploy_tooling_host_class`     | none, required   | `app`, `gateway` or `internal`.                                                                                        |
-| `deploy_tooling_policy_variant` | `not_applicable` | `standard` or `protected_no_db`. Required for `app` (the role refuses `not_applicable` there); ignored for the others. |
+| Variable                        | Default          | Meaning                                                                                                                           |
+| ------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `deploy_tooling_host_class`     | none, required   | `app`, `gateway` or `internal`.                                                                                                   |
+| `deploy_tooling_policy_variant` | `not_applicable` | `standard` or `protected_no_db`. Required for `app` (the role refuses `not_applicable` there); ignored for the others.            |
+| `deploy_tooling_tenant_units`   | `[]`             | Only for `app`. The tenants whose instance is enabled. Empty means every tenant in the host's list; a name outside it is refused. |
 
 The variant is the role's **expectation**, never an input to the policy program. The
 program decides for itself from the host's own address, and the read-back fails when the
 chain it finds is not the one the variant names.
+
+### The tenant instances
+
+On a host of class `app` the role enables one instance of the compose template unit for each
+tenant in the host's tenant list, and starts none. The list is `tenant_compose_stacks`, which
+the `host_inputs` loader sets on app1; the role keeps only the tenants' names from it, in a
+task that hides its output, and reads nothing else of it. It runs after the isolation policy
+has been applied, so the template unit is installed and loaded. This role stays the single
+owner of the template unit; the instances are named from its prefix and the list, and none
+is written out in the role.
+
+The names go through the module `deploy_tooling_tenant_unit_names` first. It refuses, before
+anything is enabled: a name the tenant stack role would refuse (its pattern, its length, the
+mail spool's name), a repeated name, and a name in `deploy_tooling_tenant_units` that is not in
+the host's list. A refusal gives the position and the reason and never a name, because the plan
+log is public. The pull route passes no value for `deploy_tooling_tenant_units`, so a pulled host
+enables exactly the tenants its host input names.
+
+In check mode on a host that is still to be given the template unit, the enable is skipped
+(check mode did not write the unit, so systemd has none to enable), and the module still runs,
+so the plan refuses a bad list. The role never removes or disables an instance: taking a
+tenant out of the list leaves its unit as it is, and the teardown step in the tenant
+onboarding role disables it.
 
 Nothing is a secret (ANS-16). Everything else the role uses is fixed in
 [`vars/main.yml`](vars/main.yml), each with the reason for it, and an inventory value
@@ -313,7 +340,12 @@ leaves every step green is not claimed.
 | The policy unit is restarted only when something changed                              | a restart of the unit on every run                              | idempotence: `changed=1` on the second converge                                                                                                                             |
 | A changed program is applied by the handler                                           | the handler made a `started` instead of a `restarted`           | verify, program changed: `The chain was put right by the read-back's repair`                                                                                                |
 | The role never restarts a compose instance                                            | a restart handler notified when the template unit is written    | verify, compose probe: `The role restarted a compose instance`, the invocation id changed                                                                                   |
-| The role never enables a compose instance                                             | an `enabled: true` task for the probe instance                  | verify, compose probe: `A compose unit is enabled`                                                                                                                          |
+| The role never enables an instance that is not a tenant of the host                   | an `enabled: true` task for the probe instance                  | verify, compose probe: `A compose unit is enabled`                                                                                                                          |
+| A unit is enabled only for a tenant in the host's list                                | the known-name check taken out of the module                    | the module's unit tests: `test_a_unit_for_a_tenant_not_in_the_host_list_is_refused`                                                                                         |
+| A stranger's unit is refused before any enable                                        | the known-name check taken out of the module                    | verify, tenant units: `EXPECTED A FAILURE, GOT NONE: unit requested for a name outside the host's tenant list`                                                              |
+| A tenant's instance is enabled and never started                                      | `state: started` added to the enable task                       | verify, tenant units: `A tenant's instance is not enabled and inactive`                                                                                                     |
+| The enable takes its names from the module                                            | the loop pointed at the list of names                           | the role's unit tests: `test_only_the_modules_names_are_enabled_and_none_is_started`                                                                                        |
+| A tenant name is held to the tenant stack role's rules                                | the pattern check taken out of the module                       | the module's unit tests: `test_a_name_that_is_not_a_tenant_name_is_refused_in_the_host_list`                                                                                |
 | The compose probe is real                                                             | the start of the probe instance taken out                       | verify, compose probe: `The probe instance did not start`                                                                                                                   |
 | The firewall chains are read back                                                     | the read-back task replaced by a no-op                          | verify, chain: `The role did not notice that the chains had been flushed`                                                                                                   |
 | A flushed chain is repaired once                                                      | the restart in the rescue taken out                             | verify, chain: the second read-back fails with the module's `established accept is missing`                                                                                 |

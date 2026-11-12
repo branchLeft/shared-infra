@@ -1,0 +1,93 @@
+---
+# The role enables one instance of the compose template unit for each tenant in the host's
+# tenant list and starts none, and it refuses before enabling anything when it is asked for a
+# unit that is not one of the host's tenants or a name no tenant may have. The list is the one
+# the host inputs loader sets (only the names are read, so the placeholders carry only names).
+# No instance is written out here: the names are built from the role's own unit prefix.
+- name: Name two placeholder tenants as the host's tenant list # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    tenant_compose_stacks:
+      - slug: tenant-alpha
+      - slug: tenant-beta
+    deploy_tooling_scenario_tenant_units:
+      - '{{ deploy_tooling_compose_unit_prefix }}@tenant-alpha.service'
+      - '{{ deploy_tooling_compose_unit_prefix }}@tenant-beta.service'
+
+- name: Apply the role to a host with two tenants
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Read the state of each tenant's instance
+  ansible.builtin.command:
+    argv: [systemctl, show, '{{ item }}', '--property=UnitFileState,ActiveState']
+  loop: '{{ deploy_tooling_scenario_tenant_units }}'
+  register: deploy_tooling_scenario_tenant_state
+  changed_when: false
+
+- name: Assert each tenant's instance is enabled and not started
+  ansible.builtin.assert:
+    that:
+      - item.stdout_lines | sort == ['ActiveState=inactive', 'UnitFileState=enabled']
+    fail_msg: "A tenant's instance is not enabled and inactive: {{ item.stdout_lines }}"
+    quiet: true
+  loop: '{{ deploy_tooling_scenario_tenant_state.results }}'
+  loop_control:
+    label: '{{ item.item }}'
+
+- name: List what is enabled under the multi-user target
+  ansible.builtin.find:
+    paths: /etc/systemd/system/multi-user.target.wants
+    patterns: '{{ deploy_tooling_compose_unit_prefix }}@*'
+    file_type: any
+  register: deploy_tooling_scenario_tenant_wants
+
+- name: Assert exactly the two tenants' instances are enabled and nothing else
+  ansible.builtin.assert:
+    that:
+      - deploy_tooling_scenario_tenant_wants.files | map(attribute='path') | map('basename') | sort == deploy_tooling_scenario_tenant_units | sort
+    fail_msg: 'The enabled compose units are not the tenants of the host: {{ deploy_tooling_scenario_tenant_wants.files | map(attribute="path") | list }}'
+    quiet: true
+
+# The control: a unit requested for a name outside the list. The role must stop at the module,
+# before any enable, and the failure must be the module's.
+- name: Ask for a unit that is not a tenant of the host
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: unit requested for a name outside the host's tenant list
+    expect_msg: 'requested unit 1 is not one of the host'
+    expect_task: '^Name the tenant instances to enable'
+    run_class: app
+    run_variant: standard
+    run_tenant_units: [tenant-gamma]
+
+- name: Name a tenant list holding a name no tenant may have # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    tenant_compose_stacks:
+      - slug: Not_A-Tenant
+
+- name: Apply the role to a host whose list holds a name no tenant may have
+  ansible.builtin.include_tasks: expect_role_failure.yml
+  vars:
+    expect_label: tenant list with a name no tenant may have
+    expect_msg: 'tenant 1 of the host.s list is not a tenant name'
+    expect_task: '^Name the tenant instances to enable'
+    run_class: app
+    run_variant: standard
+
+# Put the host back: nothing enabled, and no tenant list, as every other case expects.
+- name: Empty the host's tenant list # noqa: var-naming[no-role-prefix]
+  ansible.builtin.set_fact:
+    tenant_compose_stacks: []
+
+- name: Disable the two instances
+  ansible.builtin.systemd_service:
+    name: '{{ item }}'
+    enabled: false
+  loop: '{{ deploy_tooling_scenario_tenant_units }}'
+
+- name: Assert the host is as the role leaves it, with no compose unit enabled
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard

@@ -11,3 +11,4 @@
   vars:
     deploy_tooling_host_class: '{{ run_class }}'
     deploy_tooling_policy_variant: '{{ run_variant | default("not_applicable") }}'
+    deploy_tooling_tenant_units: '{{ run_tenant_units | default([]) }}'

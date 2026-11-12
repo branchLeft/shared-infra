@@ -9,6 +9,9 @@
 
 deploy_tooling_wrapper_path: /usr/local/sbin/branchleft-deploy
 deploy_tooling_compose_unit_path: /etc/systemd/system/branchleft-compose@.service
+# The part of an instance's name before the at sign. The tenant instances the role enables
+# are named from it and the host's tenant list; none is written out here.
+deploy_tooling_compose_unit_prefix: branchleft-compose
 
 # Written by the host's first-boot configuration, never by this role: a broken
 # sudoers file locks every account out of sudo. The role checks it. The line is

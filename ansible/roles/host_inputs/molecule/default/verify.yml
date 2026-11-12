@@ -25,6 +25,8 @@
       second_tenant: '{{ host_inputs_test_tenants[1] }}'
       ops1_host: '{{ host_inputs_test_ops1_host }}'
       smtp_password: '{{ host_inputs_test_smtp_password }}'
+      stack_secret_a: '{{ host_inputs_test_stack_secret_a }}'
+      stack_secret_b: '{{ host_inputs_test_stack_secret_b }}'
       slot_key: '{{ host_inputs_test_slot_blob }}'
       jump_name: '{{ host_inputs_test_jump_name }}'
   tasks:
@@ -37,6 +39,7 @@
           - db1_stack_exporter_password is not defined
           - db1_grants_tenants is not defined
           - db1_grants_ops1_host is not defined
+          - tenant_compose_stacks is not defined
           - ci_jump_user is not defined
         quiet: true
 
@@ -150,6 +153,23 @@
         fail_msg: An app1 input did not reach the play as the file gave it.
         quiet: true
 
+    # The stacks are a list of mappings and arrive exactly as the file gave them: the
+    # same two tenants, the uids as integers, and every text unchanged, the compose text
+    # that holds template syntax included (it is not evaluated a second time).
+    - name: Assert the app1 tenant stacks reached the play as the file gave them
+      ansible.builtin.assert:
+        that:
+          - tenant_compose_stacks == host_inputs_test_stacks
+          - tenant_compose_stacks is sequence
+          - tenant_compose_stacks is not string
+          - tenant_compose_stacks | length == 2
+          - tenant_compose_stacks | map(attribute='slug') | list == ['tenant-a', 'tenant-b']
+          - tenant_compose_stacks[0].uid is integer
+          - tenant_compose_stacks[1].uid is integer
+          - "tenant_compose_stacks[1].compose_text is search('[{][{] 7 [*] 7 [}][}]')"
+        fail_msg: The tenant stacks did not reach the play as the file gave them.
+        quiet: true
+      no_log: true
     # ---- edge1's file, with and without its optional input -----------------------
     # The jump account's name is the one input the file may leave out (the plan that delivers the
     # tool that writes it must pass before it exists). First the file as it stands before the

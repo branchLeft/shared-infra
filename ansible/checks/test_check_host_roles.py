@@ -68,7 +68,9 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
 # host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
 # installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that order: the slot
-# keys need the wrapper the tooling installs) and app1's export_bundler (last of all), db1's
+# keys need the wrapper the tooling installs), app1's export_bundler, and app1's tenant_compose
+# (last of all: it restarts the tenants' live stacks, so a failure there must not hold the
+# website back), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
@@ -116,6 +118,7 @@ APPLIED_ON_MAIN = {
         "deploy_tooling",
         "deploy_slot_keys",
         "export_bundler",
+        "tenant_compose",
     ],
     "db1": [
         "host_inputs",
@@ -263,7 +266,12 @@ class HostRoleLists(unittest.TestCase):
     def test_the_playbooks_on_main_apply_the_expected_roles(self) -> None:
         for host in ENROLLED:
             text = (self.ansible / "playbooks" / f"{host}.yml").read_text(encoding="utf-8")
-            after = text[text.index(TRIGGER_ENTRY) + len(TRIGGER_ENTRY) :]
+            # A comment line among the roles says why one is where it is; it applies nothing.
+            after = "".join(
+                line
+                for line in text[text.index(TRIGGER_ENTRY) + len(TRIGGER_ENTRY) :].splitlines(True)
+                if not line.lstrip().startswith("#")
+            )
             expected = "".join(
                 f"    - role: ../roles/{name} # noqa: role-name[path]\n"
                 for name in APPLIED_ON_MAIN.get(host, [])
@@ -442,6 +450,7 @@ class HostRoleLists(unittest.TestCase):
                 "deploy_tooling",
                 "deploy_slot_keys",
                 "export_bundler",
+                "tenant_compose",
             ],
         )
         self.assertEqual(

@@ -41,3 +41,16 @@ argument_specs:
           to it; the read-back fails when the host's chain is not the one named
           here. Required for class app (the role refuses not_applicable there) and
           ignored for classes gateway and internal.
+      deploy_tooling_tenant_units:
+        type: list
+        elements: str
+        default: []
+        description: >-
+          For a host of class app, the tenants whose instance of the compose template
+          unit the role enables, without starting it. Empty means every tenant in the
+          host's tenant list (the tenant_compose_stacks the host inputs loader sets).
+          A name that is not in that list, or is not a tenant name, stops the run
+          before anything is enabled, and the refusal says which position was wrong,
+          never the name. The pull route passes no value, so on a pulled host the
+          list is every tenant the host input names. Ignored for classes gateway and
+          internal.

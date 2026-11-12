@@ -54,3 +54,6 @@
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/deploy_slot_keys # noqa: role-name[path]
     - role: ../roles/export_bundler # noqa: role-name[path]
+    # Last: it restarts the tenants' live stacks, so a failure here must not hold the website
+    # back, and it needs the deploy tooling's directories and unit to be in place first.
+    - role: ../roles/tenant_compose # noqa: role-name[path]

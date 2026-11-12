@@ -149,7 +149,8 @@
 # The wrapper and the template unit are read from hetzner/provision/, so the bytes installed
 # are the bytes of the one copy there and the role holds none. The template unit is copied and never
 # enabled or restarted: a restart of an instance redeploys a tenant's stack, and
-# only the deploy wrapper does that.
+# only the deploy wrapper does that. The instances of it for the host's tenants are enabled
+# further down, on a host of class app, and never started.
 - name: Install the deploy wrapper and the compose template unit
   ansible.builtin.copy:
     src: '{{ deploy_tooling_programs_dir }}/{{ item.program }}'
@@ -160,6 +161,7 @@
   loop: '{{ deploy_tooling_common_file_targets }}'
   loop_control:
     label: '{{ item.path }}'
+  register: deploy_tooling_common_files_written
   notify: Reload systemd manager
 
 - name: Install the policy program and its unit
@@ -333,4 +335,11 @@
 
 - name: Apply the isolation policy and read the firewall chains back
   ansible.builtin.include_tasks: _isolation.yml
+  when: deploy_tooling_host_class == 'app'
+
+# ----- The tenant instances of the template unit -----
+
+# After the isolation include, which runs the handlers, so the template unit is loaded.
+- name: Enable the compose unit of each tenant of the host, without starting it
+  ansible.builtin.include_tasks: _tenant_units.yml
   when: deploy_tooling_host_class == 'app'

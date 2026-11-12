@@ -27,6 +27,9 @@
 - name: Case, the role never touches a compose instance
   ansible.builtin.include_tasks: case_compose_probe.yml
 
+- name: Case, the role enables the instances of the host's tenants, starts none, and refuses a stranger
+  ansible.builtin.include_tasks: case_tenant_units.yml
+
 - name: Case, the compose unit retries a failed start and a deploy still sees the failure
   ansible.builtin.include_tasks: case_compose_retry.yml
 

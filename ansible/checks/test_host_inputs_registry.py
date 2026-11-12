@@ -316,6 +316,7 @@ class RealTree(unittest.TestCase):
                     "website_app1_smtp_port",
                     "website_app1_smtp_user",
                     "website_app1_smtp_password",
+                    "tenant_compose_stacks",
                     "deploy_slot_keys_slots",
                 ],
             },
@@ -351,6 +352,7 @@ class RealTree(unittest.TestCase):
                 "deploy_tooling",
                 "deploy_slot_keys",
                 "export_bundler",
+                "tenant_compose",
             ],
         )
 
@@ -370,6 +372,7 @@ class Mutations(unittest.TestCase):
             "tunnel_account",
             "ci_jump",
             "website_app1",
+            "tenant_compose",
             "deploy_tooling",
             "deploy_slot_keys",
             "monitoring_stack",
@@ -523,6 +526,28 @@ class Mutations(unittest.TestCase):
     def test_an_app1_input_the_loader_sets_with_no_row_is_found(self) -> None:
         self._edit("roles/host_inputs/vars/main.yml", "    - website_app1_smtp_user\n", "")
         self._expect("the input task sets")
+
+    # Safety class (secrets): the stacks hold every tenant's secrets file. The loader sets them only
+    # for app1's row, and the role may not give them a default that a missing file would fall to.
+    def test_the_tenant_stacks_the_loader_sets_with_no_row_is_found(self) -> None:
+        self._edit("roles/host_inputs/vars/main.yml", "    - tenant_compose_stacks\n", "")
+        self._expect("the input task sets")
+
+    def test_a_default_for_the_tenant_stacks_is_found(self) -> None:
+        path = self.ansible / "roles" / "tenant_compose" / "defaults" / "main.yml"
+        path.write_text(
+            path.read_text(encoding="utf-8") + "tenant_compose_stacks: []\n", encoding="utf-8"
+        )
+        self._expect("role tenant_compose gives tenant_compose_stacks a default")
+
+    def test_the_tenant_compose_role_applied_before_the_loader_on_app1_is_found(self) -> None:
+        self._edit(
+            "playbooks/app1.yml",
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+            "    - role: ../roles/tenant_compose # noqa: role-name[path]\n"
+            "    - role: ../roles/host_inputs # noqa: role-name[path]\n",
+        )
+        self._expect("playbooks/app1.yml applies a role before host_inputs")
 
     # Safety class: the deploy slots are private (tenant stack names and public keys), so the loader
     # is their only route onto a pulled host. Red with the name taken from app1's row while the
