@@ -4,10 +4,10 @@ Read-only. It reads committed files and never contacts a backend, a cloud API
 or the Pulumi CLI, so it is safe to run from CI, from a pre-commit hook and
 from a workstation with no credentials at all.
 
-It exists because the constraint it guards has no other enforcement. A stack
-whose secrets are wrapped by the one KMS key has ciphertext in its
-`Pulumi.<stack>.yaml` that is undecryptable, with no recovery path, once that
-key is destroyed. The ordering
+It exists because the constraint it guards has no other enforcement. Every
+stack's secrets are wrapped by one KMS key; the key is destroyed during the
+GCP wind-down; and once it is gone, the ciphertext committed in every
+`Pulumi.<stack>.yaml` is undecryptable with no recovery path. The ordering
 that prevents that is prose in a migration doc, which nothing checks. This
 turns it into an exit code:
 
