@@ -82,6 +82,12 @@ whose actor is the merger, and the `ansible-hosts` environment's
 every later apply. A merge through the queue runs as `github-merge-queue[bot]`,
 and its apply can be approved.
 
+Base every pull request on `main`, never on another pull request's branch.
+`ci.yml` runs on pull requests that target `main` only, so a pull request
+based on another pull request's branch gets every check except `ci.yml`'s jobs
+(type-check, test, validate). Those have not run until it is retargeted to
+`main`.
+
 ## Related documents
 
 - [`RUNBOOK-edge-state-move.md`](RUNBOOK-edge-state-move.md) — history: one

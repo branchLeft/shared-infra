@@ -603,6 +603,12 @@ a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
 
+Judge a mail port by its banner or a completed TLS handshake, never by a connect
+that succeeds: a scan-banned source or a dead backend still completes the TCP
+handshake and then closes. For the same reason a probe from a
+source that is itself banned proves nothing in either direction; read the result
+on the host, or from a second source address.
+
 `blackbox_object_storage` is one target: the Hetzner Object Storage endpoint
 `hel1.your-objectstorage.com`, probed over HTTPS through blackbox_exporter's
 `http_object_storage` module. It carries `expected_up: 'true'` and should read
@@ -760,7 +766,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 Expect the container's cgroup path to read something like
 `0::/system.slice/docker-<container-id>.scope` and the unit's `ControlGroup`
 to read `/system.slice/branchleft-compose@edge.service` -- two different,
-sibling paths under `system.slice`, not one nested inside the other. If a
+sibling paths under `system.slice`, not one nested inside the other. The unit
+is `Type=oneshot` with `RemainAfterExit=yes`, so once `docker compose up -d`
+has returned it owns no process and may own no cgroup either: an empty
+`ControlGroup=` is a pass of the same kind, and means the `MemoryMax` bounds a
+cgroup that does not exist. If a
 future Docker/systemd upgrade changes this and the container's path _does_
 start with the unit's path, the systemd-level bound has started doing real
 work and this section is due a rewrite -- but do not assume that from a
@@ -1101,8 +1111,11 @@ target that has never actually answered.
 **Not part of this PR, and not a hand edit.** `render.ts`'s
 `MONITORED_NODE_HOSTS` docstring names the reason: a hand edit here is
 exactly the gap that hid `db1`'s four-day `mysqld_exporter` crash loop
-(`RUNBOOK-monitoring.md` cites it above, and [[expected-up-flip-traps]]
-carries the full account). Once 15d's `1` is confirmed:
+(`RUNBOOK-monitoring.md` cites it above). The flip needs its own diff because
+the two suites each prove half of it: `render.test.ts` proves the scrape
+config attaches the label, and `alert_rules_test.yml` proves the rules fire on
+a hand-written series carrying it, so a revert of the flip fails only the
+first. Once 15d's `1` is confirmed:
 
 1. Change `ops1`'s `expectedUp: false` to `true` in `MONITORED_NODE_HOSTS`.
 2. `pnpm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.

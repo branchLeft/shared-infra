@@ -33,6 +33,22 @@ than a step inside it.
 re-running the set is a no-op on a host that is already correct, which is what
 makes this the right response to "I am not sure whether that host is current".
 
+`/root/platform-provision` on a host is a staging directory: a copy of
+`hetzner/provision/` there changes nothing live. A script takes effect only when
+it is run, so `branchleft-deploy` on a host is as current as the last run of
+`30-install-deploy-tooling.sh` (or of the `deploy_tooling` role that installs
+the same file), whatever the staging directory holds. A host can
+be current for one script and stale for another, so ask which script's installed
+file differs, not whether the host is stale.
+
+`05-configure-host-egress.sh` and `app-host-isolation.sh` end with a
+`systemctl restart` of their unit, so what the reconciler prints (a `no-op`
+line, the rules it inserted) goes to the journal and not to the installer's
+output, which shows only its own `wrote`, `no-op` and `done` lines. The
+installers run under `set -euo pipefail`, so a failed restart stops them before
+`done`: a `done` line is the success signal. Read the reconciler's lines with
+`journalctl -u <unit> --no-pager -n 20`.
+
 `nat-gateway.sh` is deliberately outside `run-all.sh`. Exactly one host in the
 estate is the gateway, and the script refuses to run anywhere the estate's
 egress could not work from. On edge1, the gateway, the `egress_nat` role
@@ -121,7 +137,9 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 ```
 
 Expect a `default` line via the private gateway, `enabled`, and the two
-Hetzner nameservers. A host created before this fix existed, and not yet
+Hetzner nameservers. `ip route show default` exits 0 and prints nothing when the
+host has no default route, so an empty first line is the failure, not a swallowed
+error. A host created before this fix existed, and not yet
 re-provisioned with it, loses the route on every reboot until `run-all.sh` is
 re-run; the immediate one-line repair, run on the host itself, derives the
 gateway the same way the reconciler does rather than restating an address
