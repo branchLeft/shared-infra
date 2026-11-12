@@ -116,9 +116,10 @@ for it, because a fail-closed rule would refuse real Markdown READMEs.
 What stops such a README from running is not this check. The controls are: the pull runs
 only the derived `HOST.yml` path (R3), so a README under `playbooks/` or `trust/` is never
 the file it runs; the gated workflows; and the owner's deploy approval of the gated apply.
-Ownership differs by file. `trust/README.md` is under the owner's merge (`/ansible/trust/` in
-CODEOWNERS). `playbooks/README.md` has no CODEOWNERS line, so the reviewer App may merge an
-edit to it alone.
+Ownership is the same for both. CODEOWNERS releases every Markdown file except `CLAUDE.md` and
+the files under `.github/`, which stay the owner's, so the reviewer App
+may merge an edit to `trust/README.md` or to `playbooks/README.md` alone. The trust files beside
+`trust/README.md` stay the owner's merge (`/ansible/trust/` in CODEOWNERS).
 
 Out of scope: a case-insensitive filesystem. On macOS Ansible can find
 `group_vars/all.YML` under the name `all.yml`, and R6 reads only the exact suffix. This is
