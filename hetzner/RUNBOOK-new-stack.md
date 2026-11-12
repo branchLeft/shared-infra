@@ -245,6 +245,11 @@ pattern) both do it: `printf '\nencryptionsalt: %s\n' "$SALT" >>
 Pulumi.production.yaml`. Only the passphrase itself needs the operator's own
 custody (password manager, per "Before you start" above) — the salt does not.
 
+`pulumi stack rm` deletes the stack's `Pulumi.<stack>.yaml` along with the
+stack, salt included, unless `--preserve-config` is passed. Take the export
+above before removing a stack: the checkpoint is then the only place the salt
+is still written down.
+
 **A `Pulumi.<stack>.yaml` that is already committed is safe to init against**
 — for genuine first-time creation, not reconstruction. `stack init` merges
 rather than replaces: it keeps the existing `config:` entries and appends the
