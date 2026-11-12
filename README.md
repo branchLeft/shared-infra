@@ -83,8 +83,10 @@ every later apply. A merge through the queue runs as `github-merge-queue[bot]`,
 and its apply can be approved.
 
 Base every pull request on `main`, never on another pull request's branch.
-`ci.yml` runs on pull requests that target `main` only, so a stacked pull
-request gets the docs-lint and standards checks and none of the real ones.
+`ci.yml` runs on pull requests that target `main` only, so a pull request
+based on another pull request's branch gets every check except `ci.yml`'s jobs
+(type-check, test, validate). Those have not run until it is retargeted to
+`main`.
 
 ## Related documents
 

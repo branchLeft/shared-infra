@@ -604,8 +604,8 @@ a dead exporter runs no probe, so there is no `probe_success` series for
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
 
 Judge a mail port by its banner or a completed TLS handshake, never by a connect
-that succeeds: a scan-banned source and a dead backend behind a live proxy both
-complete the TCP handshake and then close. For the same reason a probe from a
+that succeeds: a scan-banned source or a dead backend still completes the TCP
+handshake and then closes. For the same reason a probe from a
 source that is itself banned proves nothing in either direction; read the result
 on the host, or from a second source address.
 
