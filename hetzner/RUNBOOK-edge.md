@@ -3,7 +3,7 @@
 Deploying Caddy and CrowdSec onto `edge1`, verifying that the edge detects
 without acting, and later turning enforcement on.
 
-`edge1` is `46.225.95.167` (private `10.20.1.10`), a `cx23` in `nbg1`. Every
+`edge1` is a `cx23` in `nbg1` (private `10.20.1.10`). Every
 `ssh`/`scp` below uses the platform owner's key, `~/.ssh/id_ed25519_hetzner` —
 the one registered in the hcloud project and injected on `root` at server
 creation. The CI deploy account cannot run any of this and is not meant to.
@@ -56,13 +56,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 Expect `active` then `provisioned`. Anything else: run
 `RUNBOOK-provision-host.md` first and come back.
 
-**No hostname resolves to `edge1` yet**, and nothing in this runbook changes
-that. The rendered Caddy configuration contains a site block only for a site
-whose registry entry carries a `privateUpstream`, and no site does today, so
-Caddy binds no public port and requests no certificate. That is deliberate: a
-hostname whose DNS still points anywhere but edge1 would fail HTTP-01 validation
-in a loop and spend the Let's Encrypt failure budget for the whole account.
-Everything below is verified through the loopback probe listener instead.
+The rendered Caddy configuration contains a site block only for a site whose
+registry entry carries a `privateUpstream`. A hostname whose DNS points anywhere
+but edge1 would fail HTTP-01 validation in a loop and spend the Let's Encrypt
+failure budget for the whole account, so everything below is verified through
+the loopback probe listener.
 
 ## 1. Build and publish the Caddy image
 
@@ -81,8 +79,7 @@ builds anything.
 The tag is `caddy-<CADDY_VERSION>-<revision>`. `<CADDY_VERSION>` is read from
 the `ARG CADDY_VERSION=` line in the Dockerfile, so a change there changes the
 tag with it. `<revision>` is a positive integer you choose: the next one not
-yet used for that Caddy version. `caddy-2.11.4-1` is taken, so the first run
-uses `2`. Rebuilding a revision that exists is refused (the run fails at the
+yet used for that Caddy version. Rebuilding a revision that exists is refused (the run fails at the
 step that checks for the tag and pushes nothing), so a pushed tag is never
 overwritten; dispatch again with the next number. There is no `latest` tag.
 
@@ -583,18 +580,15 @@ through the protection chain — site, redirect, static and probe blocks — and
 the `:9091` metrics listener. Steps 1 to 3 below are done in the pull request
 that committed it.
 
-**That number has never been measured against traffic.** It was carried over
-from the retired edge, whose rule was live at `preview: true` and never enforced
-anything. `edge1` averages well under 1 req/s but has 1-minute bursts two orders
-of magnitude above that, and nothing currently attributes those to one client or
-to many. The key is the direct peer (`{http.request.remote.host}`), which can
+The number was carried over from the retired edge, whose rule was live at
+`preview: true` and never enforced anything. The key is the direct peer (`{http.request.remote.host}`), which can
 also collapse real clients onto a Docker bridge address such as `172.18.0.1`
 behind the docker-proxy, so that every collapsed client shares one budget per
 site. `RateLimitDecliningRealClients` excludes `172.16.0.0/12` keys, so that
 collapse would not alert on its own; the tripwire is the blackbox probes seeing
 `429`.
 
-**Pre-apply check: the owner's go/no-go, run before step 4.** Read the access
+**Pre-apply check: the go/no-go, run before step 4.** Read the access
 log, which `posture.ts` names as this throttle's observation instrument and
 which is enabled in every posture. The command below prints the distribution of
 requests per client address per minute, and the count and share of IP-minutes
@@ -838,7 +832,7 @@ One registry entry, then a re-render. Nothing else.
    to nothing).
 2. `cd hetzner && pnpm run render`, commit both files, open a pull request.
 3. After merge: `rsync` (step 4) and reload (step 10a.4).
-4. **Only then** cut the hostname's DNS at IONOS to `46.225.95.167`. The order
+4. **Only then** cut the hostname's DNS at IONOS to `$EDGE1_IPV4`. The order
    is forced: Caddy issues its certificate over HTTP-01, which cannot succeed
    until the hostname resolves here, and it will not attempt issuance at all
    until the site block exists.

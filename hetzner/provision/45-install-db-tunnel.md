@@ -14,7 +14,7 @@ The replica host's half, the restricted account this unit logs in as, is
 control-case probes and a container proof beside it.
 
 Deliberately outside `run-all.sh`, like the node exporter (now the `node_exporter` role): this
-runs on `db1` only, by hand, for the length of the migration. The install
+runs on `db1` only, by hand. The install
 runbook is in `branchLeft/ghost-platform-docs`.
 
 ## The two subcommands, in order

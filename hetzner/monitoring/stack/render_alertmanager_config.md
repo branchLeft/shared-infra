@@ -1,9 +1,10 @@
 # render_alertmanager_config.py
 
-Writes the monitoring stack's two secret-bearing files from
+Writes the monitoring stack's three secret-bearing files from
 `/etc/branchleft/monitoring.env`: `alertmanager.yml`, substituted from
-`alertmanager.yml.tmpl`, and `prometheus/mx1-metrics-password`, the basic-auth
-password Prometheus presents to Stalwart's exporter on mx1.
+`alertmanager.yml.tmpl`, `ntfy/server.yml`, substituted from `server.yml.tmpl`,
+and `prometheus/mx1-metrics-password`, the basic-auth password Prometheus
+presents to Stalwart's exporter on mx1.
 
 The filename is narrower than the remit. It stays as it is because
 `../systemd/monitoring.override.conf` names it in an `ExecStartPre` that is

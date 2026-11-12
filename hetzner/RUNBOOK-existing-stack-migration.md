@@ -119,16 +119,14 @@ moment to narrow it to the encrypt/decrypt role it actually uses.
 
 ## The stacks
 
-Six stacks exist today across two state backends, and no single command lists
-them. Plain `pulumi stack ls` lists only the _current project's_ stacks, so it
-shows one; `pulumi stack ls --all` shows every stack in the backend you are
-logged into, which is five; and the sixth lives in a different bucket and
-appears in neither.
+The stacks sit across several state backends, and no single command lists
+them. Plain `pulumi stack ls` lists only the _current project's_ stacks;
+`pulumi stack ls --all` shows every stack in the backend you are logged into;
+a stack in a different bucket appears in neither.
 
-`scripts/pulumi-stack-inventory.json` also carries two Hetzner stacks that do
-not exist yet, in a third backend that neither of the commands above will ever
-reach until something is created there — listed ahead of their own creation
-precisely so provisioning them later cannot mint one KMS-wrapped by accident.
+`scripts/pulumi-stack-inventory.json` also carries the Hetzner stacks, in a
+backend that neither of the commands above reaches unless you are logged into
+it.
 `scripts/audit-pulumi-secrets.py --root <workspace>` is what actually walks
 every stack in the inventory, across every backend and every sibling repo;
 run it before trusting `pulumi stack ls` for anything this runbook depends on.
@@ -203,7 +201,7 @@ mode than the key it replaces and it is accepted, for the reason
 `RUNBOOK-new-stack.md` gives: the alternative is a dependency on the cloud
 account this programme exists to leave.
 
-Three repos hold a `PULUMI_CONFIG_PASSPHRASE` secret, and all three are set:
+Three repos hold a `PULUMI_CONFIG_PASSPHRASE` secret:
 `branchLeft/shared-infra`, `branchLeft/website` and `branchLeft/ghost-platform`.
 
 | Repo                        | Stack it applies                                                                                                                     |
@@ -567,8 +565,8 @@ run fails closed on whichever one is missing.
 Step 5 rewrites the **remote checkpoint immediately**. The matching config
 change lands only when the PR merges. Until it does, `main` carries a
 `secretsprovider: gcpkms://` line and a stale `encryptedkey` against a
-checkpoint that is now passphrase-wrapped — and `shared-infra`'s CI runs
-`Deploy (pulumi up)` on **every push to `main`**. So the risk in this window
+checkpoint that is now passphrase-wrapped — and `shared-infra`'s CI plans and
+applies a stack on a push to `main` that changes that stack's inputs. So the risk in this window
 is merging too _late_, or letting anything else merge first, not merging too
 early.
 

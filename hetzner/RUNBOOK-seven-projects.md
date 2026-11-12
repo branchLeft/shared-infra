@@ -6,27 +6,26 @@ output, not on the merge of the PR that adds it.
 ## What is wrong, and why now
 
 A Hetzner Cloud project is the only credential boundary Hetzner offers: a
-token reaches everything in the project that minted it. Today the estate has
-two projects — mail (`mx1`) and the estate (`edge1`, `ops1`, `app1`, `db1`, the
-network). The try-it-now build is about to create customer hosts, demo hosts,
-an API-driven DNS zone for `branchleft.co.uk`, a separate zone for the demo
-domain, and a Hetzner Object Storage backup bucket. If those land in the
-estate project, one leaked estate token reaches customer data, strangers'
-demo code, both DNS zones and every backup at once.
+token reaches everything in the project that minted it. The try-it-now build
+creates customer hosts, demo hosts, an API-driven DNS zone for
+`branchleft.co.uk`, a separate zone for the demo domain, and a Hetzner Object
+Storage backup bucket. If those landed in the estate project, one leaked estate
+token would reach customer data, strangers' demo code, both DNS zones and every
+backup at once.
 
 The design (try-it-now §02, the DNS decision in the mail-delivery design, and
 the owner's rulings on branchLeft/workspace#1203 and #1260) fixes seven
 projects:
 
-| Project    | Console name          | Holds                                                      |
-| ---------- | --------------------- | ---------------------------------------------------------- |
-| `mail`     | the mail project      | `mx1`. Exists                                              |
-| `org`      | the estate project    | the network, `edge1`, `ops1`, `app1`, `db1`. Exists        |
-| `tenants`  | `branchLeft tenants`  | new, empty: `edge-t`, `app-t1`, `db-t1` later              |
-| `demos`    | `branchLeft demos`    | new, empty: `demo1` later                                  |
-| `dns`      | `branchLeft dns`      | new, empty: the branchleft.co.uk zone later, never a host  |
-| `backup`   | `branchLeft backup`   | new, empty: the Hetzner backup bucket later, never a host  |
-| `demo-dns` | `branchLeft demo dns` | new, empty: the demo domain's own zone later, never a host |
+| Project    | Console name          | Holds                                       |
+| ---------- | --------------------- | ------------------------------------------- |
+| `mail`     | the mail project      | `mx1`                                       |
+| `org`      | the estate project    | the network, `edge1`, `ops1`, `app1`, `db1` |
+| `tenants`  | `branchLeft tenants`  | `edge-t`, `app-t1`, `db-t1`                 |
+| `demos`    | `branchLeft demos`    | `demo1`                                     |
+| `dns`      | `branchLeft dns`      | the branchleft.co.uk zone, never a host     |
+| `backup`   | `branchLeft backup`   | the Hetzner backup bucket, never a host     |
+| `demo-dns` | `branchLeft demo dns` | the demo domain's own zone, never a host    |
 
 Splitting now costs a console session. Splitting later means moving live
 resources.
