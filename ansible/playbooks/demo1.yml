@@ -1,26 +1,30 @@
 ---
-# demo1: the demo host's build, under the signed route. Four roles, in order: the Ansible
-# toolchain the host runs this playbook with, the trigger that runs it, then the slots, and
-# the host's egress policy with the mail spool. The host never fetches: its commit arrives
-# by push, a git bundle that CI sends through edge1 and the trigger checks against this
-# host's trust file (pull_trigger_bundle_hosts in roles/pull_trigger/vars/main.yml is the one
-# place that says so). That sending arrives with shared-infra#511, not yet merged: until it
-# lands no bundle reaches the host, and a pull-mode check against demo1 fails the run. The
-# two demo1 roles carry the files they pin (their files/ghost-platform) and set the spool's
+# demo1: the demo host's build, under the signed route. Five roles, in order: the Ansible
+# toolchain the host runs this playbook with, the trigger that runs it, the broker's install,
+# then the slots, and the host's egress policy with the mail spool. The host never fetches:
+# its commit arrives by push, a git bundle that CI sends through edge1 and the trigger checks
+# against this host's trust file (pull_trigger_bundle_hosts in roles/pull_trigger/vars/main.yml
+# is the one place that says so). That sending arrives with shared-infra#511, not yet merged:
+# until it lands no bundle reaches the host, and a pull-mode check against demo1 fails the run.
+# The two demo1 roles carry the files they pin (their files/ghost-platform) and set the spool's
 # Compose service never to pull, so no role reaches GitHub or a container registry;
-# ansible/checks/test_demo1_no_github_fetch.py holds that. The broker's own install (the
-# broker_deploy role) comes first on the host and is not applied from here: its inputs are
-# the owner's built bundle and public key,
-# which have no home in a pushed commit yet, and applying it from this playbook would
-# repoint a broker the owner installed by hand. demo1_build checks, read-only, that
-# broker_deploy has run, and refuses the host when it has not.
+# ansible/checks/test_demo1_no_github_fetch.py holds that.
+#
+# broker_deploy comes first of the host's own roles, because demo1_build reads, and refuses the
+# host unless, what broker_deploy left behind. It carries its release and its request-signing
+# public key as pinned files and refuses before it writes anything until both are carried: with
+# no release pinned this playbook stops at that role and changes nothing on the host. Its inputs
+# are role defaults, because a playbook entry carries no variables (R2). Its Node runtime is
+# fetched from nodejs.org, pinned by its sha256: the one download the no-fetch test above lets
+# through. That test holds the roles' text to this one host; it does not read or set the host's
+# own egress rules, which nothing in this repository enforces.
 
 # host_baseline is not applied here. The egress role needs Docker's DOCKER-USER
 # chain and refuses the host, by name, when Docker is not running; the host's
 # baseline is its own step, under its own enrolment decision. egress_nat is not
 # applied here either: this host's containers must not reach the network, and a
 # NAT rule would give them a way. The per-host role list in checks/host_roles.yml
-# holds both of these, and broker_deploy, off this playbook.
+# holds both of these off this playbook.
 
 # The roles have no secret and no required input, so the only variables file is the
 # shared pull values and the host's trust file, which hold the signer list and nothing
@@ -45,5 +49,6 @@
       vars:
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
+    - role: ../roles/broker_deploy # noqa: role-name[path]
     - role: ../roles/demo1_build # noqa: role-name[path]
     - role: ../roles/demo1_egress_spool # noqa: role-name[path]

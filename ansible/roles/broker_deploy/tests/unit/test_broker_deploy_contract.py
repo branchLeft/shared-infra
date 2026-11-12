@@ -21,6 +21,10 @@ SHARDS = ROLE / "molecule" / "default"
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\Z")
 DIGEST = re.compile(r"^[0-9a-f]{64}\Z")
 PLAIN_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
+# The broker's request-signing public key, as the owner published it, and the sha256 of its 32
+# raw bytes. Both are public. A change to either, or to the carried file, is a change of key.
+OWNER_VERIFY_KEY_HEX = "74a5954901b7cc2bc854628f6cf176bf0829145141343f3b6652f3284afb74cc"
+OWNER_VERIFY_KEY_SHA256 = "a001696bc4047c5a43ae774025e35352214a03a9b264e9d4382832777b6fad17"
 # Modules that only read, decide or refuse: a task of any other module is a write to the host.
 READ_ONLY_MODULES = frozenset(
     {
@@ -108,6 +112,38 @@ class Pins(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.options[name]["default"], self.defaults[name])
 
+    def test_the_spec_defaults_of_the_verify_key_are_the_defaults(self) -> None:
+        for name in ("broker_deploy_verify_key_src", "broker_deploy_verify_key_sha256"):
+            with self.subTest(name=name):
+                self.assertNotIn("required", self.options[name])
+                self.assertEqual(self.options[name]["default"], self.defaults[name])
+
+    def test_the_verify_key_pin_is_empty_or_the_carried_files_digest(self) -> None:
+        digest = cast("str", self.defaults["broker_deploy_verify_key_sha256"])
+        carried = ROLE / "files" / "broker-verify-key.bin"
+        self.assertEqual(
+            self.defaults["broker_deploy_verify_key_src"],
+            "{{ role_path }}/files/broker-verify-key.bin",
+        )
+        if digest == "":
+            self.assertFalse(carried.exists(), "a key file is carried with no pin")
+            return
+        self.assertRegex(digest, DIGEST)
+        self.assertTrue(carried.is_file() and not carried.is_symlink())
+        self.assertEqual(carried.stat().st_size, 32)
+        self.assertEqual(sha256(carried), digest)
+
+    def test_the_carried_verify_key_is_the_owners_key(self) -> None:
+        carried = ROLE / "files" / "broker-verify-key.bin"
+        key = bytes.fromhex(OWNER_VERIFY_KEY_HEX)
+        self.assertEqual(len(key), 32)
+        self.assertEqual(hashlib.sha256(key).hexdigest(), OWNER_VERIFY_KEY_SHA256)
+        self.assertEqual(carried.read_bytes(), key)
+        self.assertEqual(self.defaults["broker_deploy_verify_key_sha256"], OWNER_VERIFY_KEY_SHA256)
+        self.assertEqual(
+            self.options["broker_deploy_verify_key_sha256"]["default"], OWNER_VERIFY_KEY_SHA256
+        )
+
     def test_a_release_the_role_carries_is_pinned_exactly(self) -> None:
         carried = ROLE / "files" / "releases"
         if not carried.is_dir():
@@ -140,6 +176,13 @@ class MoleculeRelease(unittest.TestCase):
         for path, digest in pins.items():
             with self.subTest(path=path):
                 self.assertEqual(sha256(release / path), digest)
+
+    def test_the_converge_pins_the_stand_in_key(self) -> None:
+        converge = cast("list[dict[str, object]]", load(SHARDS / "converge.yml"))
+        play_vars = cast("dict[str, object]", converge[0]["vars"])
+        key = SHARDS / "files" / "verify-key-stand-in.bin"
+        self.assertEqual(play_vars["broker_deploy_verify_key_sha256"], sha256(key))
+        self.assertEqual(key.stat().st_size, 32)
 
 
 class Agreements(unittest.TestCase):
