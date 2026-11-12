@@ -27,7 +27,10 @@ worse than no gate:
   A _half-finished_ re-wrap is precisely the case where the two disagree,
   and this script cannot detect it. `pulumi stack export --show-secrets`
   against the stack is the only proof of the checkpoint side; the runbook
-  requires it per stack and requires the result recorded.
+  requires it per stack and requires the result recorded. It shows which
+  provider the checkpoint names and is not a passphrase check: it exits 0
+  under a wrong passphrase, and `pulumi preview` is the check that fails
+  closed.
 - **Two stacks have no committed configuration at all**, so nothing about
   them is machine-checkable from this repo. They are satisfied by an
   `attestation` recorded in the inventory instead -- an operator statement
