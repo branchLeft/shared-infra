@@ -662,9 +662,10 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
   bumping the image means adding its digest and contract to the table in the
   same change. The `drain` contract (`SHIM_DRAIN_TOKEN` authenticating
   `GET /drain` as a bearer token; generated on the host on first use and
-  recorded under `shim-drain-token`) has no digest yet; it applies once a
-  drain image's digest is added to the table — see "Handing the drain token to
-  the collector" below.
+  recorded under `shim-drain-token`, and `SHIM_DRAIN_OUTCOMES=true`, which
+  registers `POST /drain/outcomes` for the collector's dropped-recipient report)
+  has no digest yet; it applies once a drain image's digest is added to the
+  table — see "Handing the drain token to the collector" below.
 
 ### ACME coexistence
 

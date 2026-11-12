@@ -63,6 +63,7 @@ DRAIN_ENV = (
     "PORT=8080\n"
     "SHIM_DB_PATH=/data/shim.db\n"
     "SHIM_THROTTLE_PATH=/data/throttle.json\n"
+    "SHIM_DRAIN_OUTCOMES=true\n"
     "SHIM_DRAIN_TOKEN=the-secret\n"
 )
 
@@ -194,6 +195,13 @@ class RenderEnvFileTests(unittest.TestCase):
         # image reads none of them, and a stray credential line is a leak for nothing.
         contents = render_env_file(real_table()["contracts"]["drain"], "the-secret")
         self.assertNotIn("SMTP_", contents)
+
+    def test_the_drain_environment_enables_the_drain_outcomes_route_exactly(self):
+        # The shim registers POST /drain/outcomes only when SHIM_DRAIN_OUTCOMES is exactly
+        # 'true' (ghost-platform services/mailgun-shim/src/config.ts). Without this line the
+        # collector's dropped-recipient report is inert.
+        lines = render_env_file(real_table()["contracts"]["drain"], "the-secret").splitlines()
+        self.assertIn("SHIM_DRAIN_OUTCOMES=true", lines)
 
     def test_the_smtp_environment_carries_no_drain_token(self):
         contents = render_env_file(real_table()["contracts"]["smtp-delivery"], "the-secret")
