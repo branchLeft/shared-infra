@@ -1455,12 +1455,7 @@ Run these after a provisioning round, against the actual host. Each is a read.
 /proc/net/tcp6`, filtered to `LISTEN`: expect 25, 443, 465, 587 and 993 on
   `[::]`, and 8080 on `127.0.0.1` only. No 995, no 4190.
 - **Port 25** answers with the host's own ESMTP banner, both on-box against
-  `127.0.0.1:25` and externally. Judge a mail port by its banner or a completed
-  TLS handshake, never by a connect that succeeds: a scan-banned source and a
-  dead backend behind a live proxy both complete the TCP handshake and then
-  close. For the same reason a probe from a source that is itself banned proves
-  nothing in either direction; read the result on the host, or from a second
-  source address.
+  `127.0.0.1:25` and externally.
 - **TLS.** `openssl s_client -connect <mail-host>:465 -servername <mail-host>`
   from a machine that is neither the host nor tunnelled into it: expect a
   Let's Encrypt certificate whose subject is the mail hostname and

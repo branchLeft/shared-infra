@@ -603,6 +603,12 @@ a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
 
+Judge a mail port by its banner or a completed TLS handshake, never by a connect
+that succeeds: a scan-banned source and a dead backend behind a live proxy both
+complete the TCP handshake and then close. For the same reason a probe from a
+source that is itself banned proves nothing in either direction; read the result
+on the host, or from a second source address.
+
 `blackbox_object_storage` is one target: the Hetzner Object Storage endpoint
 `hel1.your-objectstorage.com`, probed over HTTPS through blackbox_exporter's
 `http_object_storage` module. It carries `expected_up: 'true'` and should read
