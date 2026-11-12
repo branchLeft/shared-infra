@@ -55,10 +55,10 @@ ask IONOS and some ask Hetzner. **No record is edited at either provider from th
 final comparison until 48 hours after the switch**; if one must change, it
 changes at both.
 
-**This workstation intercepts port 53.** Every `dig +norec` to an authoritative
-server from it comes back `REFUSED` with no `aa` flag, so `zonecheck.py` exits 2.
-Run steps 4 and 5 from a network that does not (a phone hotspot), or from the
-GitHub runner.
+**A network that intercepts port 53** makes every `dig +norec` to an
+authoritative server come back `REFUSED` with no `aa` flag, so `zonecheck.py`
+exits 2. Run steps 4 and 5 from a network that does not (a phone hotspot), or
+from the GitHub runner.
 
 ## The owner's steps
 
@@ -134,7 +134,7 @@ dig +norec @hydrogen.ns.hetzner.com publicpress.co.uk SOA | grep -E 'status|flag
 ```
 
 Expected: `status: NOERROR` and `flags: qr aa`. `REFUSED` or no `aa` is a stop
-(on this workstation, first switch network: see above).
+(first switch network: see above).
 
 ### 5. Compare the two providers, record by record
 

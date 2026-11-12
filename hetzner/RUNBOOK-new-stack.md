@@ -439,9 +439,8 @@ project never issued one — see step 1.
 
 Every Hetzner stack in this repository applies from CI on merge to `main`
 (`.github/workflows/ci.yml`): a plan job previews and gates on
-`scripts/assert-no-hetzner-deletes.py`, then an apply job — paused by the
-`production` environment's required-reviewer rule until a human has read the
-plan — runs `pulumi up`. A new stack joins by adding its own plan/apply job
+`scripts/assert-no-hetzner-deletes.py`, then an apply job — paused for an
+environment approval — runs `pulumi up`. A new stack joins by adding its own plan/apply job
 pair on that template and the secrets below. There is no Workload Identity
 Federation equivalent here: the Hetzner API authenticates a bearer token and
 nothing else, so the short-lived-credential posture the GCP stacks have does
