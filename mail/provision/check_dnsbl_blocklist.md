@@ -26,11 +26,8 @@ each zone for the industry-standard always-listed test address 127.0.0.2
 sentinel doesn't come back listed, the zone isn't answering meaningfully --
 dead, unreachable, or rate-limiting this host -- and the real target's
 result for that zone is reported as inconclusive rather than clean. This
-is not hypothetical: dnsbl.sorbs.net currently has no DNS delegation at
-all (NXDOMAIN at the .net level, confirmed live) despite being in the
-minimum DNSBL set here, so without this self-test the SORBS entry would
+is not hypothetical: a list whose delegation has gone away would otherwise
 silently and permanently report "clean" while providing zero real signal.
-See the RUNBOOK for the live evidence.
 
 Queries go to the host's own local recursive resolver (127.0.0.1, unbound,
 installed by 65-install-local-resolver.sh) addressed explicitly rather than

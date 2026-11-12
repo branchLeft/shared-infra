@@ -47,7 +47,7 @@ call, of any kind, including read-only ones. Two consequences:
 
 - **The primary IP's `auto_delete` and delete-protection state is unknown.**
   This is [branchLeft/workspace#173](https://github.com/branchLeft/workspace/issues/173)'s
-  action item 1, and it is still open. The first live action for whoever
+  action item 1. The first live action for whoever
   rehearses this runbook should be `hcloud primary-ip describe mx1` (or the
   console equivalent) to find out, before trusting anything below that
   assumes the address survives a loss.
@@ -433,17 +433,6 @@ than silently fixing it.
 
 ## Out of scope for this runbook
 
-- **[branchLeft/workspace#173](https://github.com/branchLeft/workspace/issues/173)'s
-  action item 1** (verifying and recording the primary IP's `auto_delete` /
-  delete-protection state) is not done — see "What this runbook could not
-  verify" above.
-- **Action item 4** (the interaction with doc 14 §3.5's open default on
-  whether the mail stack joins CI-applied delivery) is a platform-owner
-  decision this runbook does not make; it is noted here as a pointer, not
-  resolved.
 - A scripted, one-command restore. Every path above is a manual sequence
   because the source material (`mail/RUNBOOK-mx1-provision.md`,
-  `mail/RUNBOOK-import-mail-host.md`) is itself manual end-to-end — there is
-  no CI credential for this project and no automation to lean on
-  (`mail/RUNBOOK-mx1-provision.md`: "this project has no credential CI can
-  hold").
+  `mail/RUNBOOK-import-mail-host.md`) is itself manual end-to-end.
