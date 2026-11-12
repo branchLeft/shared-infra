@@ -542,6 +542,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker exec "$CROWDSEC_CTR" cscli metrics'
 ```
 
+- The Acquisition Metrics table in `cscli metrics` names
+  `file:/var/log/caddy/access.log` with lines read. A `healthy` container and a
+  passing `cscli lapi status` do not show it: the healthcheck covers the Local
+  API only, so CrowdSec can answer correctly while reading no log at all.
 - Alerts against addresses that are plainly hostile: expected, and the argument
   for enforcing.
 - Alerts against the platform owner's own address, a member's, or a search
@@ -870,6 +874,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
 Then run §10a.4's mount check and probe read-back in full, and expect the same
 results.
 
+`branchleft-deploy` rolls back automatically by restoring the previous image
+pin only. A deploy that changes configuration and keeps the same image digest
+has nothing to roll back to, so the git restore above is the only undo for a
+bad configuration.
+
 **A rollback is applied by the reload, not by the unit.** A rollback is reached
 for during an outage, and `systemctl restart branchleft-compose@edge` would
 restore the previous file to disk and leave the broken configuration running in
@@ -911,6 +920,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker compose exec -T caddy wget -qO- http://127.0.0.1:2019/config/ | grep -o "\"roll_[a-z_]*\":[^,}]*" | sort | uniq -c
   grep -c "output file" caddy/Caddyfile'
 ```
+
+Caddy's admin API listens on port 2019 inside the container and the compose file
+does not publish it, so a `curl` to `127.0.0.1:2019` on the host returns nothing,
+which reads like a failed restart. Query it through the container, as above.
 
 Expect, on every log, `"roll_at":["00:00"]`, `"roll_keep":31` and `"roll_keep_days":30`,
 each with the same count, and that count equal to the last line (the number of `output
