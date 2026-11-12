@@ -833,7 +833,7 @@ because its `authorized_keys` entry is rendered rather than appended and the
 append-then-remove ordering below would not apply.
 
 The programme accepts a long-lived SSH deploy key in GitHub Actions secrets —
-a weaker posture than the federated identity the GCP stacks use — on the
+a weaker posture than a federated identity would give — on the
 condition that rotation is a documented procedure rather than an intention.
 This is that procedure.
 

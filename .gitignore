@@ -35,14 +35,6 @@ __pycache__/
 # lockfile must not get committed.
 package-lock.json
 
-# Unguarded intermediates from CLOUD-ARMOR-BASELINE.md's reproduction steps
-# -- a raw `gcloud` read, before the normalizer's redaction guard has run.
-# The documented steps write these to a scratch directory outside the repo;
-# this is the second layer, in case a future capture writes them here
-# instead.
-/cloud-armor-baseline/*.raw.json
-/cloud-armor-baseline/*.list.json
-
 # Rendered on the host (and in CI's throwaway checkout) by
 # hetzner/monitoring/stack/render_alertmanager_config.py from
 # /etc/branchleft/monitoring.env. Both carry a secret in plaintext; neither is
