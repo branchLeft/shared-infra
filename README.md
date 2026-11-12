@@ -98,8 +98,6 @@ based on another pull request's branch gets every check except `ci.yml`'s jobs
   and off `gs://` state.
 - `PULUMI-BACKEND-INVENTORY.md` — the state-backend enumeration across the
   repos that still have Pulumi programs.
-- `website/infra/KNOWN_ISSUES.md` — GCP/Pulumi bootstrap failure modes; that
-  repo's own infra program is a separate, later removal.
 
 ## License
 
