@@ -54,7 +54,7 @@ absent key stays anonymous.
 ## Where it runs
 
 The role is applied by the playbooks of every host that runs the deploy wrapper: `edge1` and `app1`
-(before `deploy_tooling`, and before `website_app1` on app1), `ops1` (before `control_plane`), and
+(before `deploy_tooling`, and before `website_app1` and `publicpress_website_app1` on app1), `ops1` (before `control_plane`), and
 `db1` (before `db1_stack`). `test_deploy_verifier_coverage.py` fails when a playbook applies a
 wrapper-calling role without applying this one first.
 

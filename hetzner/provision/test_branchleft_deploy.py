@@ -57,7 +57,7 @@ class FakeRun:
 
 class StackNameTests(unittest.TestCase):
     def test_accepts_plain_names(self):
-        for name in ("edge", "ghost-tenant-one", "mon1"):
+        for name in ("edge", "ghost-tenant-one", "mon1", "publicpress-website"):
             self.assertEqual(bd.validate_stack_name(name), name)
 
     def test_rejects_path_traversal(self):

@@ -23,7 +23,7 @@ reads), then `roles/control_plane_db` last (it asserts the directory `roles/cont
 plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
 allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
-`roles/host_baseline`, `roles/breakglass_grant_host`, `roles/website_app1`, then
+`roles/host_baseline`, `roles/breakglass_grant_host`, `roles/website_app1`, `roles/publicpress_website_app1`, then
 `roles/deploy_tooling` (as class app, standard variant) and `roles/deploy_slot_keys`, then
 `roles/export_bundler`, last.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
