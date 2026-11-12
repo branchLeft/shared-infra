@@ -32,7 +32,6 @@ provisioner:
         scenario_releases: /opt/branchleft/ring-controller/releases
         scenario_current: /opt/branchleft/ring-controller/current
         scenario_env_file: /etc/branchleft/ring-controller/ring-controller.env
-        scenario_known_hosts: /etc/branchleft/ring-controller/known_hosts
         scenario_fixture_dir: /srv/ring-fixture
         # The test-only URL shape: the role's own pattern admits https only, so the scenario
         # widens it to the fixture directory, through the role parameters of each include.
@@ -40,8 +39,6 @@ provisioner:
         scenario_good_url: file:///srv/ring-fixture/bundle-good.tar.gz
         scenario_noexec_url: file:///srv/ring-fixture/bundle-noexec.tar.gz
         scenario_ledger_url: https://ledger.example.test/ledger
-        scenario_push_remote: ssh://git@git.example.test/example-org/example-ledger.git
-        scenario_known_hosts_line: git.example.test ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIA==
         # A well-formed digest of nothing that exists: a download with this digest must fail.
         scenario_wrong_digest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 verifier:

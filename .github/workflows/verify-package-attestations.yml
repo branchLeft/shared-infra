@@ -1,0 +1,49 @@
+name: Verify package attestations
+
+# Fails unless every @branchleft package pinned by a pnpm-lock.yaml in this
+# repository is either listed as published before attestation began or carries a
+# signed build attestation from the identity the shared action's reviewed table
+# names for it. The rules are in that action's own doc.
+#
+# A separate small workflow, not a job of ci.yml or ansible.yml: it adds no
+# step to the required Ansible job and none to any plan or apply job, and it
+# runs in parallel with them. It has no path filter, so a lockfile change always
+# starts it; the listed pins need no download, so it takes seconds.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # The merge queue reports checks only from this event.
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+# One run per pull request. A push or merge_group run is its own group and is
+# never cancelled (pinned by scripts/test_workflow_concurrency.py).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  verify:
+    name: Verify attested @branchleft packages
+    runs-on: ubuntu-latest
+    # No runs yet to derive a p95 from: a generous bound chosen deliberately.
+    timeout-minutes: 10
+    # `packages: read` is what lets the action download a tarball from GitHub
+    # Packages with the run's own token, the same way ci.yml's installs do.
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Verify every locked @branchleft package
+        uses: branchLeft/github-workflows/.github/actions/verify-package-attestations@2c34b90b367fd160bb01d311d29224d250460086 # v1.2.1
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -360,10 +360,9 @@ in the pull request that carries this table.
 
 Nothing applies this role to a host from a laptop. ANS-17 describes the only
 approved path: a gated workflow run against `main`, which applies the role with a
-plan job before the approval and a second run that must report zero changes. The
-trigger and the reusable workflow are separate work, and this pattern does not
-wire them. A guarded step is requested by the approved workflow, not by a person at
-a terminal, once that workflow exists. Until then no step runs on any host.
+plan job before the approval and a second run that must report zero changes. This
+pattern does not wire them. A guarded step is requested by the approved workflow, not
+by a person at a terminal.
 
 ## How to change it safely
 
@@ -426,7 +425,7 @@ a terminal, once that workflow exists. Until then no step runs on any host.
 - That a real step is correct, or that its effect is safe to run.
 - That a step is run on the right host, or only once across hosts. The marker is
   host-local.
-- That the approved delivery path runs it. That path is separate work.
+- That the approved delivery path runs it.
 - That every spelling of a command line is refused. The scenario tests the tag alone,
   the wrong confirmations listed above, the confirmation with a line break, and the tag
   with its confirmation; it does not test `--tags all` or other tag lists.

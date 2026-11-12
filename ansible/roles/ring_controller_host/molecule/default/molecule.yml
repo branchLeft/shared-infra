@@ -53,24 +53,19 @@ provisioner:
         # scenario instead of being followed by it.
         scenario_account: ring-controller
         scenario_config_dir: /etc/branchleft/ring-controller
-        scenario_keys_dir: /etc/branchleft/ring-controller/keys
-        scenario_ledger_key: /etc/branchleft/ring-controller/keys/ledger-signing
-        scenario_ledger_pub: /etc/branchleft/ring-controller/keys/ledger-signing.pub
-        scenario_push_key: /etc/branchleft/ring-controller/keys/push
-        scenario_push_pub: /etc/branchleft/ring-controller/keys/push.pub
+        scenario_key_dir: /etc/branchleft/ring-controller/record-signing
+        scenario_key: /etc/branchleft/ring-controller/record-signing/record-signing.key
+        scenario_public: /etc/branchleft/ring-controller/record-signing.pub
         scenario_env_file: /etc/branchleft/ring-controller/ring-controller.env
-        scenario_known_hosts: /etc/branchleft/ring-controller/known_hosts
         scenario_state_dir: /var/lib/branchleft/ring-controller
         scenario_current: /opt/branchleft/ring-controller/current
         scenario_service: /etc/systemd/system/ring-controller.service
         scenario_timer: /etc/systemd/system/ring-controller.timer
         # The exact names the unit's environment file may hold.
         scenario_env_names:
-          - RING_CONTROLLER_KNOWN_HOSTS_FILE
-          - RING_CONTROLLER_LEDGER_PUSH_REMOTE
-          - RING_CONTROLLER_LEDGER_SIGNING_IDENTITY_FILE
           - RING_CONTROLLER_LEDGER_URL
-          - RING_CONTROLLER_PUSH_IDENTITY_FILE
+          - RING_CONTROLLER_RECORD_PUBLIC_KEY_FILE
+          - RING_CONTROLLER_RECORD_SIGNING_KEY_NAME
           - RING_CONTROLLER_STATE_DIR
         # Files of other roles and of the owner's data. The role must not touch them: each keeps
         # its inode, mtime, mode, owner and content across the role's runs.

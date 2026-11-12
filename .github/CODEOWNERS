@@ -99,7 +99,7 @@
 /ansible/roles/mail_reconcilers/         @branchLeft/branchleft-admin
 # safety_channel_key generates the content-safety channel's signing key on ops1 as root and publishes its public half, so the whole role is the owner's to review.
 /ansible/roles/safety_channel_key/       @branchLeft/branchleft-admin
-# ring_controller_host generates the ring controller's ledger-signing key and push key on ops1 as root, publishes their public halves, and installs the unit that will run the controller as a service account, so the whole role is the owner's to review.
+# ring_controller_host generates the ring controller's record-signing key on ops1 as root, publishes its public half, and installs the unit that hands the key to the controller's service account, so the whole role is the owner's to review.
 /ansible/roles/ring_controller_host/     @branchLeft/branchleft-admin
 # safety_service runs the content-safety service on ops1 as a container with the hash-source credential and the channel signing key mounted, so the unit's mounts and flags decide who can read both and the whole role is the owner's to review.
 /ansible/roles/safety_service/           @branchLeft/branchleft-admin

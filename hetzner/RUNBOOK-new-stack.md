@@ -245,6 +245,11 @@ pattern) both do it: `printf '\nencryptionsalt: %s\n' "$SALT" >>
 Pulumi.production.yaml`. Only the passphrase itself needs the operator's own
 custody (password manager, per "Before you start" above) — the salt does not.
 
+`pulumi stack rm` deletes the stack's `Pulumi.<stack>.yaml` along with the
+stack, salt included, unless `--preserve-config` is passed. Take the export
+above before removing a stack: the checkpoint is then the only place the salt
+is still written down.
+
 **A `Pulumi.<stack>.yaml` that is already committed is safe to init against**
 — for genuine first-time creation, not reconstruction. `stack init` merges
 rather than replaces: it keeps the existing `config:` entries and appends the
@@ -439,9 +444,8 @@ project never issued one — see step 1.
 
 Every Hetzner stack in this repository applies from CI on merge to `main`
 (`.github/workflows/ci.yml`): a plan job previews and gates on
-`scripts/assert-no-hetzner-deletes.py`, then an apply job — paused by the
-`production` environment's required-reviewer rule until a human has read the
-plan — runs `pulumi up`. A new stack joins by adding its own plan/apply job
+`scripts/assert-no-hetzner-deletes.py`, then an apply job — paused for an
+environment approval — runs `pulumi up`. A new stack joins by adding its own plan/apply job
 pair on that template and the secrets below. There is no Workload Identity
 Federation equivalent here: the Hetzner API authenticates a bearer token and
 nothing else, so the short-lived-credential posture the GCP stacks have does

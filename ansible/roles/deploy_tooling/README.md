@@ -4,8 +4,8 @@ This role installs the one program the CI deploy account may run as root and the
 template unit it restarts, checks (and never writes) the sudoers drop-in that grants
 the account that one program, and, on a host that runs tenants' containers, installs
 and applies the Docker firewall policy and reads the firewall chains back to prove it
-is in force. It replaces two hand-run scripts, one that installed the deploy tooling
-and one that installed the firewall policy.
+is in force. It installs the same files as two hand-run scripts, one that installs the
+deploy tooling and one that installs the firewall policy.
 
 This README is written for a maintainer who is new to the repository. It follows the
 order the standard sets for a role README (ANS-14).
@@ -36,12 +36,11 @@ policy program, and it does not decide which host is which class: that belongs t
 inventory or the play.
 
 **Do not apply this role while a second writer exists.** Two hand-run scripts install
-the same files today: `hetzner/provision/30-install-deploy-tooling.sh` (the wrapper and
+the same files: `hetzner/provision/30-install-deploy-tooling.sh` (the wrapper and
 the template unit) and `hetzner/provision/app-host-isolation.sh` (the policy program and
 its unit). They write the same bytes with the same modes and compare bytes first, so
 they cannot undo each other's work, but a host where all three ran is a host with three
-writers of one file. Retiring the scripts is a separate change, made after the role has
-run on the hosts. Until then, do not run either script on a host this role manages.
+writers of one file. Do not run either script on a host this role manages.
 
 ## Interface
 
@@ -172,9 +171,7 @@ class gateway, named in that host's play vars and pinned by the enrolment check.
 app host plays it as class app with the standard variant, named in its play vars and pinned
 the same way, after the website role and before `deploy_slot_keys`. The first apply there
 re-applies the Docker firewall policy on a live app host: installing the policy program and its unit notifies
-the "Restart the policy unit" handler. The owner reads the plan job before approving. The real `iptables -S INPUT` and
-`iptables -S DOCKER-USER` (and the IPv6 pair) have still not been captured from a real app
-host (see "Named limits").
+the "Restart the policy unit" handler.
 
 ## How to change it safely
 
@@ -234,8 +231,7 @@ host (see "Named limits").
   it. Docker puts that jump first in `FORWARD`. In each family where `DOCKER-USER` exists the
   module fails unless the first rule of `FORWARD` is the plain jump to it. The container
   test has no Docker, so it puts the jump in place the way Docker does. That Docker puts it
-  first on a real app host is read from Docker's behaviour, not from a capture, and a
-  capture is in the acceptance criteria of the ticket that wires the app hosts.
+  first on a real app host is read from Docker's behaviour, not from a capture.
 - **A flushed chain is repaired once.** Docker rebuilds the chain when it restarts and the
   unit follows that restart, but a chain flushed by anything else would stay open until
   the next boot. The read-back sits in a block; if it fails, the unit is restarted and the
@@ -366,24 +362,16 @@ stayed clean; the harness run that follows them is the green.
 
 ## Named limits
 
-- **The foreign-chain allow-list is empty and has never met a real host.** It is for a
+- **The foreign-chain allow-list is empty.** It is for a
   brute-force blocker that re-inserts a jump to its own chain at the top of `INPUT` or
-  `DOCKER-USER`; its chain name is not known until it is read from a real app host. The
-  gateway has no read-back, so nothing here exercised the list against a real host.
-  Capturing the real `iptables -S INPUT` and `iptables -S DOCKER-USER` (and the IPv6
-  pair) from an app host with the policy applied is a precondition of wiring the app
-  hosts; until then a jump to any other chain above the policy's drops is refused.
-  The firewall summary of a first plan (see "Check mode") is that capture, as names:
-  it shows the target of every other rule in each chain and its place. The allow-list
-  is not filled from it here, because the real names are known only after the owner has
-  read the first plan on a real app host; filling it is a follow-up.
+  `DOCKER-USER`; its chain name is known only from a real app host, and a jump to any
+  other chain above the policy's drops is refused. The firewall summary of a plan (see
+  "Check mode") shows the target of every other rule in each chain and its place.
   Two things about the list are known and are not fixed here, because they need a real
   chain to be right. A jump is accepted only when it has no match module beyond conntrack,
   tcp and udp, so a brute-force blocker's `-p tcp -m multiport --dports ... -j <chain>`
   is refused even when its chain is listed (the role fails closed on such a host). And the
   chain a listed jump goes to is not read, so a rule inside it that accepts would pass.
-  Both are in the acceptance criteria of the ticket that wires the app hosts, with a
-  captured real chain as the fixture the fix is tested against.
 - **The single-owner check has limits.** It finds, in another role or a playbook, a link to
   or a byte copy of a program; a string in its tasks, handlers, variables or defaults that
   is a program's file name or a path under `hetzner/provision/`; and a string, under any
@@ -404,8 +392,7 @@ stayed clean; the harness run that follows them is the green.
   writes it are not seen by the path rules either; the byte-copy rule still sees a copy.
   The check is a floor, not a proof that no second writer exists. Fixtures under a role's
   `molecule/` stand in for a host and are not read. The one allowed second role is exempt
-  for the policy program and its unit only, not for the wrapper or the compose unit, and is
-  retired by its own follow-up after this role has run live. Three shapes are also not
+  for the policy program and its unit only, not for the wrapper or the compose unit. Three shapes are also not
   seen: a Jinja `~` join inside one string (`'/usr/local' ~ '/sbin/branchleft-deploy'`), a
   directory `dest` with the program named only in `src` or a loop item, and a shell
   `cd /usr/local/sbin && cp x branchleft-deploy`.
@@ -428,10 +415,6 @@ stayed clean; the harness run that follows them is the green.
   author's machine, amd64 in CI); the `ip` output is a stand-in; Docker is a stub; and the
   address that makes a host the gateway, or the control-plane host, is a file the test
   writes.
-- **The role has not been applied to a host.** The gateway's apply is waiting on the gated
-  workflow being available for this repository, and the first app host's playbook now
-  applies it but no gated run has applied it yet. The ticket is unfinished on both halves until each has run
-  live and a second run of the same commit has reported no change.
 - **The unit tests of the module read the real program.** They parse
   `files/branchleft_docker_user_policy.py` itself, so a change to a constant in the program
   changes what the module expects; they do not pin a copy of it. The module reads a

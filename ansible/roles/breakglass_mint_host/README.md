@@ -154,8 +154,7 @@ for the tool and the image stay as the fallback.
   other role has its own test. What the test cannot prove is that
   a deliberate edit does not read the key: every role is root code, so a check on its
   text cannot stop one. The control for that is review plus the deployment approval
-  of the gated workflow that applies the role to the host; the trust in that approval
-  is examined in a separate ticket, and that ticket has no ruling yet. The check
+  of the gated workflow that applies the role to the host. The check
   catches an accident, not an edit made on purpose.
 - **Nothing in the role runs on the controller.** Under `ansible-pull` the
   controller is the host, so a `lookup`, `query`, `q` or `pipe` could read the key

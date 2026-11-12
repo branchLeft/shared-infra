@@ -1,18 +1,10 @@
 ---
 # What the role expects to find on ops1 before it runs, and nothing of the role itself. The parents
 # are made by roles that run earlier on a real host, so the test stands in for them here.
-# ssh-keygen is what the role asserts and never installs, so it is installed here.
 - name: Prepare the instance
   hosts: all
   gather_facts: false
   tasks:
-    - name: Install the OpenSSH client, which supplies ssh-keygen
-      ansible.builtin.apt:
-        name: openssh-client
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
-
     - name: Make the parent directories, as the roles that run before this one do
       ansible.builtin.file:
         path: '{{ item }}'

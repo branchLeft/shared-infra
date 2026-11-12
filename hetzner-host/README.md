@@ -220,8 +220,7 @@ regenerated). With it:
   `assertPullBootstrap` refuses anything that is not exactly that shape; it
   cannot tell which commits are on `main`, so the binding is the tool's.
   The package carries no copy of the record; the stack passes the one it was
-  given with the package. The committed record, its drift check and its
-  packaging are a separate change.
+  given with the package.
 - **The fixed values live once.** Where the files are served from, which three
   files, the one playbook, the remote and the keys the configuration needs are in
   `pullBootstrapFixed.json`. `cloudInit.ts` imports it (the build copies it into
@@ -264,8 +263,6 @@ regenerated). With it:
 - **A private-only host** is accepted by the type but its first-boot route to
   GitHub is the network's own gateway (`privateOnly`), so enrolment there
   depends on that route being up at first boot.
-- **Not proven on a live host.** The first real host is the proof: no
-  throwaway server was created and no live apply was run.
 
 ## Firewalls
 

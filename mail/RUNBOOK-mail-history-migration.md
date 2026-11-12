@@ -37,10 +37,7 @@ how it goes.
 brew install imapsync
 ```
 
-Check the flags below against `imapsync --help` before running for real. Unlike
-the scripts in this repository, this procedure has not been proven against a
-live run — close that gap the first time it actually runs rather than trusting
-it blind.
+Check the flags below against `imapsync --help` before running for real.
 
 ## Steps
 

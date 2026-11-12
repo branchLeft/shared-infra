@@ -186,8 +186,9 @@ BOOTSTRAP_GUARD_PATHS = [
 
 # safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
 # whole role is the owner's, its module, units, environment template and the tests that hold them
-# included. The ring controller role also installs the unit of a service that holds a push key,
-# and safety_service installs the unit that mounts the channel key and the hash-source credential.
+# included. The ring controller role also installs the unit that hands its root-only key to a
+# service account, and safety_service installs the unit that mounts the channel key and the
+# hash-source credential.
 KEY_ROLE_PATHS = [
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
@@ -195,11 +196,11 @@ KEY_ROLE_PATHS = [
     "ansible/roles/ring_controller_host/tasks/main.yml",
     "ansible/roles/ring_controller_host/vars/main.yml",
     "ansible/roles/ring_controller_host/meta/argument_specs.yml",
-    "ansible/roles/ring_controller_host/library/ring_controller_host_keys.py",
+    "ansible/roles/ring_controller_host/library/ring_controller_host_record_key.py",
     "ansible/roles/ring_controller_host/files/ring-controller.service",
     "ansible/roles/ring_controller_host/files/ring-controller.timer",
     "ansible/roles/ring_controller_host/templates/ring-controller.env.j2",
-    "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_keys.py",
+    "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_record_key.py",
     "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_units.py",
     "ansible/roles/ring_controller_host/molecule/default/verify.yml",
     "ansible/roles/ring_controller_host/README.md",

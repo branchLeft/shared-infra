@@ -1,20 +1,12 @@
 ---
-# Test setup only. The parents stand in for the roles that run earlier on ops1, ssh-keygen is
-# installed because the role asserts it and never installs it, and two bundles are built here
-# for a file:// URL (the role's own fetch has no network to reach in the test). Both hold only a
+# Test setup only. The parents stand in for the roles that run earlier on ops1, and two bundles
+# are built here for a file:// URL (the role's own fetch has no network to reach in the test). Both hold only a
 # stand-in program. The first is a root-owned executable, as a bundle must be. The second holds the
 # program without its execute bit, so the role must refuse it.
 - name: Prepare the instance
   hosts: all
   gather_facts: false
   tasks:
-    - name: Install the OpenSSH client, which supplies ssh-keygen
-      ansible.builtin.apt:
-        name: openssh-client
-        state: present
-        update_cache: true
-        cache_valid_time: 3600
-
     - name: Make the parent directories, as the roles that run before this one do
       ansible.builtin.file:
         path: '{{ item }}'

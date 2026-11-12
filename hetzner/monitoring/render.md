@@ -24,8 +24,7 @@ record a cutover has to hunt for. Every hostname below is derived.
 ## MonitoredHost / MONITORED_NODE_HOSTS
 
 The estate hosts this stack watches, and whether each node_exporter target
-is expected to answer today. `app1` is base-provisioned but carries no
-node_exporter yet -- provisioning it is a separate story -- so only the
+is expected to answer today. `app1`'s entry is `false`, so only the
 edge1, db1 and ops1 node targets contribute to the `HostOrServiceDown` alert
 `renderAlertRules` emits below.
 
@@ -33,11 +32,9 @@ edge1, db1 and ops1 node targets contribute to the `HostOrServiceDown` alert
 textfile directory.** The dump writes its lock wait, hold and abort gauges
 under `tenant="db1-all-databases"`, and only a node_exporter on db1 can
 publish them; the backup alerts then see db1 with no rule change. The flag
-flips in the same change as the install step, which is why
-`RUNBOOK-monitoring.md` §17 puts the install and its read-back first and
-the config redeploy last: the flag takes effect only when the rendered
-config reaches edge1, so installing first means the target is never
-expected-up while absent. A target that has never been available must not page anyone;
+flips in the same change as the install step: the flag takes effect only
+when the rendered config reaches edge1, so installing first means the
+target is never expected-up while absent. A target that has never been available must not page anyone;
 a target that stops answering after being available must.
 
 **`ops1` joins the list once the host it names has actually been renamed,
@@ -334,8 +331,8 @@ to a public repository.
 That file is not in the committed tree. `stack/render_alertmanager_config.py`
 writes it on the host from `STALWART_PROMETHEUS_SECRET` in
 `/etc/branchleft/monitoring.env` before every start, exactly as it writes
-`alertmanager.yml`, and every deploy's `rsync --delete` removes it for the
-same reason.
+`alertmanager.yml`, and the `monitoring_stack` role, which never deletes,
+leaves it in place.
 
 A missing file does not stop Prometheus starting. Neither `promtool check
 config` nor the config loader stats it -- it is read per request -- so the

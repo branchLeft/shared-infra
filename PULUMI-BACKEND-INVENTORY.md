@@ -24,10 +24,10 @@ disk — that runbook lives under `hetzner/`.
 
 ## 1. Every Pulumi stack in the estate
 
-**Eight stacks today, not nine.** The retired edge stack that used to be the
-first row of this table was deleted with its program (branchLeft/workspace#1000),
-so it carries no migration state to attest and
-`scripts/pulumi-stack-inventory.json` no longer has an entry for it.
+The retired edge stack that used to be the first row of this table was deleted
+with its program (branchLeft/workspace#1000), so it carries no migration state
+to attest and `scripts/pulumi-stack-inventory.json` no longer has an entry for
+it.
 `branchleft-ghost-platform-hosts`, previously missing from the inventory
 JSON, was added there since (branchLeft/shared-infra#173, closed) and is
 included below.
@@ -41,18 +41,13 @@ included below.
 | `blog-infra/blog`                                                    | `ghost-tenant-blog` | `Pulumi.yaml` / `Pulumi.blog.yaml`                        | `gs://branchleft-blog-pulumi-state`                    | still on `gs://`     |
 | `branchleft-hetzner-network/production`                              | `shared-infra`      | `hetzner/Pulumi.yaml` / `Pulumi.production.yaml`          | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 | `branchleft-hetzner-estate/production`                               | `shared-infra`      | `hetzner/estate/Pulumi.yaml` / `Pulumi.production.yaml`   | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
+| `branchleft-hetzner-dns/production`                                  | `shared-infra`      | `hetzner/dns/Pulumi.yaml` / `Pulumi.production.yaml`      | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
 | `branchleft-ghost-platform-hosts` (project name; stack `production`) | `ghost-platform`    | `infra/hosts/Pulumi.yaml` / `Pulumi.production.yaml`      | `s3://branchleft-pulumi-state?endpoint=hel1…` (pinned) | born there           |
-
-**Four stacks remain on `gs://`**: website-infra, ghost-platform/platform,
-ghost-provisioning/blog, and blog-infra/blog — each in `website` or
-`ghost-platform`/`ghost-tenant-blog`, outside this repo. Four stacks are
-already on Hetzner Object Storage — one moved (`mail`), three born there
-(the two Hetzner-native stacks plus the hosts stack).
 
 **Verified two ways:**
 
 1. Read each stack's committed `Pulumi.yaml` directly (`backend.url` present
-   or absent) — done for all eight, quoted inline above.
+   or absent) — done for every row above, quoted inline.
 2. Cross-checked against `scripts/pulumi-stack-inventory.json`'s
    `state_backends` map and per-stack `state_backend` field, and against
    `graphify query` traversals in `shared-infra` and `ghost-platform`
@@ -186,7 +181,7 @@ error dropped a fifth `RUNBOOK-*.md` from `shared-infra`'s named list
 fixed above by naming all five.
 
 Separately, note this name is now **overloaded**: `branchleft-pulumi-state`
-is both the legacy GCS bucket (europe-west2, doc 14 §15 step 4 deletes it)
+is both the legacy GCS bucket (europe-west2, destroyed 2026-09-13, §5)
 and the current-generation Hetzner Object Storage bucket (`hel1`) that
 `mail`, both Hetzner-native stacks and the new `hosts` stack are pinned to.
 They are different buckets in different clouds that happen to share a
@@ -230,9 +225,9 @@ finding.
 
 This is the headline finding of the CI-apply audit. `branchleft-ghost-provisioning/blog`
 creates tenant zero's GCP deploy identity (service account + Workload
-Identity Federation pool) for blog's still-GCP-based CI/CD pipeline. It is:
+Identity Federation pool). It is:
 
-- Still on `gs://branchleft-pulumi-state` (one of the five remaining stacks).
+- On `gs://branchleft-pulumi-state`.
 - **Config-path `null`** — no `Pulumi.blog.yaml` is ever committed for it;
   its config is reconstructed from the live deployment only when a human
   runs `restore-stack-secrets-config.py` by hand.
@@ -331,13 +326,8 @@ entry (`terminal_state: never-kms`, §1 above) and the tenant-template
 
 - Whether `branchleft-lab-pulumi-state` and `branchleft-lab-probe` (the two
   lab buckets doc 14 §16 item 1 names) and their S3 credential pair still
-  exist today, three-plus weeks after the 2026-08-22 rehearsal. No
-  committed file states a teardown, but absence of a teardown record is
-  not evidence of persistence either.
-- Whether `gs://branchleft-pulumi-state` and `gs://branchleft-blog-pulumi-state`
-  currently hold live, decryptable checkpoints for the five stacks §1
-  lists as still on `gs://` — this document reads committed config, not
-  bucket contents.
+  exist today. No committed file states a teardown, but absence of a
+  teardown record is not evidence of persistence either.
 - Whether the six escrowed post-wrap archive passphrases (doc 14 §15.1)
   have been re-verified against ProtonPass since 2026-08-18, and whether
   that verification has been extended to any stack moved after that date.

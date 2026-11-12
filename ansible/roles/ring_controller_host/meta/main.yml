@@ -5,6 +5,6 @@ galaxy_info:
   # Molecule derives a fully qualified role name from the namespace, or from
   # the author when there is none, and refuses an upper-case author.
   namespace: branchleft
-  description: Makes the ring controller's two keys on ops1 and installs its units, held off until a bundle digest is set.
+  description: Makes the ring controller's record-signing key on ops1 and installs its units, held off until a bundle digest is set.
   license: PolyForm-Shield-1.0.0
   min_ansible_version: '2.21.5'

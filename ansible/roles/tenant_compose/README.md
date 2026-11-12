@@ -228,9 +228,8 @@ Each row was done by an edit, one run, and a restore.
 
 A role reaches a host only through the gated workflow (ANS-17): a plan job in check mode, the
 approval of the protected environment, `ansible-pull` of that exact commit of `main`, and a second
-run that must report zero changes. **Nothing applies this role to a host yet.** It is not in any
-host playbook or in the enrolment register; the host playbooks are being rewired separately, and
-wiring this role into them follows that work.
+run that must report zero changes. The role is not in any host playbook or in the enrolment
+register.
 
 The wiring has three requirements:
 

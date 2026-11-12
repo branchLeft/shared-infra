@@ -45,8 +45,6 @@ default, which means no deploy and no smoke test.
   deploy program `/usr/local/sbin/branchleft-deploy`, installed by the host provisioning in
   `shared-infra`, not by this role.
 - The deploy account can run that program with `sudo -n`.
-- The image `ghcr.io/branchleft/website` is public (a platform-owner action, as the
-  runbook says).
 
 ## Where the secrets come from
 
@@ -62,8 +60,7 @@ must not be run with invented values.
 It is applied by app1's pulled playbook (ANS-17), after the two pull roles and `host_inputs`.
 The play gives it no image, so `website_app1_image` stays empty: the role writes the
 environment file and the compose file, enables the unit, and does not deploy, restart, smoke
-test or write a stamp. The image is still delivered by the website repository's CI deploy
-job until that route is retired in a follow-up.
+test or write a stamp. The image is delivered by the website repository's CI deploy job.
 
 ## What is different, and why
 

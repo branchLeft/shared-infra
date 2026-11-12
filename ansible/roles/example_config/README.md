@@ -59,7 +59,7 @@ touches a host.
 ## How it is delivered
 
 A role reaches a host only through the gated workflow (ANS-17), never by
-running `ansible-playbook` by hand. Nothing applies this role to a host yet.
+running `ansible-playbook` by hand.
 
 ## How to change it safely
 
