@@ -322,7 +322,7 @@ Also covered, each with its control on the good value:
 
 **The route: a one-off carry, then a check by digest.** The host has no route to a registry, and
 its egress allowlist holds the package mirrors only. So the owner pulls the pinned image
-anonymously on a workstation (the package is public, so there is no login), checks it there with
+on a workstation, checks it there with
 `ansible/tools/spool_image_gate.py`, tags it with a name, and streams `docker save` into
 `docker load` on demo1 over the same edge1 jump every other bootstrap step uses. The gate runs again
 on demo1, and a `docker create` probe (below) follows it. The host opens no connection and its
@@ -388,14 +388,13 @@ history` still pass.** Only `docker create --pull=never` fails ("apply layer err
 ## How it is delivered
 
 A role reaches a host only through the gated workflow (ANS-17), never by running
-`ansible-playbook` by hand. Nothing applies this role to demo1 yet. `ansible/playbooks/demo1.yml`
+`ansible-playbook` by hand. `ansible/playbooks/demo1.yml`
 enrols the host and lists this role after `demo1_build`, and demo1 takes its commit by push, not by
-a pull. The bundle that carries it is sent by CI through edge1 and arrives with the signed bundle send,
-which is not yet merged, so until it lands no run reaches this role. A bootstrap run of demo1.yml
+a pull. The bundle that carries it is sent by CI through edge1. A bootstrap run of demo1.yml
 applies all four of its roles as root, because the roles carry no tags, so the bootstrap waits for
-the broker_deploy precondition and for the spool image to be on the host (the egress decision,
-Desk decision demo1-github-files, is made: the files travel in the signed commit and the
-allowlist stays at the package mirrors; the image's route is the next section). What the owner provides before a run, once:
+the broker_deploy precondition and for the spool image to be on the host (the files travel in the
+signed commit and the allowlist stays at the package mirrors; the image's route is the section
+above). What the owner provides before a run, once:
 the token file `/etc/branchleft/mail-spool.env` (root, mode 0600, one `SHIM_DRAIN_TOKEN=` line),
 if the host holds none. The role asserts it and never writes it.
 

@@ -6,12 +6,12 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. Its real hosts are `edge1`, `ops1`, `app1`, `db1` and `demo1`. Each has a playbook
+the skeleton. Its real hosts are `edge1`, `edget`, `ops1`, `app1`, `db1`, `dbt1`, `demo1` and `mx1`. Each has a playbook
 enrolled in the gated pull, except that `demo1` takes its commit by push and never fetches.
 `edge1` and `ops1` apply `roles/ansible_runtime` and
 `roles/pull_trigger`, then `roles/host_inputs` (the loader of the host's private inputs, which goes
 first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
-`roles/egress_nat` (the estate's NAT gateway; edge1 alone, with `egress_nat_gateway_enabled` pinned
+`roles/egress_nat` (the estate's NAT gateway, with `egress_nat_gateway_enabled` pinned
 in `checks/check_enrolment.py`), then
 `roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
 until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
@@ -32,7 +32,9 @@ the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, t
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
 `roles/broker_deploy`.
-The other trees hold only what those hosts need.
+The other trees hold only what those hosts need. Delivery is `.github/workflows/ansible-delivery.yml`,
+which calls the reusable workflow in `branchLeft/github-workflows`; the trigger on the host is
+`roles/pull_trigger`, and ANS-17 describes the only approved path.
 
 ## Layout
 
@@ -47,7 +49,7 @@ The other trees hold only what those hosts need.
 | `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).    |
 | `checks/`             | The pin, enrolment, delivery, role and path checks, with tests.        |
 | `tools/`              | The record a new host's first boot is built from, and its tests.       |
-| `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1. |
+| `inventories/`        | The inventory and group-variable trees. `production` holds five hosts. |
 | `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |
 | `playbooks/includes/` | The shared pull values and refusals, each defined once.                |
 | `trust/`              | One signer file per host under the pull, loaded only by its playbook.  |
@@ -642,28 +644,6 @@ oversight. Each is a decision the standard assigns to later work.
 - **The standard's own checks.** Of the checks the standard's check plans
   describe, the scenario limits and the pins are scripted. No `shell` tasks and
   no loosened lint file are still review.
-- **Inventories.** The trees under `inventories/` hold one host, and their
-  layout is a proposal.
-- **A required check.** The Ansible job runs on every pull request, so it can be
-  required (CI-14), but making it required is a repository ruleset change and
-  belongs to the owner. Until it is done a red Ansible job does not block a
-  merge on its own.
-- **Delivery.** Each of edge1, db1, app1, ops1 and demo1 has a playbook under `playbooks/`.
-  edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
-  playbook applies the same two pull roles, then `roles/host_inputs`, then `roles/host_baseline`, then `roles/db1_stack`, then `roles/db1_backup_timers`; `roles/host_inputs` refuses the
-  run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
-  its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. app1's
-  playbook applies `roles/host_inputs` and then `roles/website_app1` (after `roles/host_baseline` and
-  `roles/breakglass_grant_host`), then `roles/deploy_tooling` and `roles/deploy_slot_keys`, then
-  `roles/export_bundler`, and
-  refuses the run the same way until the owner has placed app1's own
-  `/etc/branchleft/host-inputs.json`, holding the four SMTP values and at least one deploy slot.
-  edge1 and ops1 apply `roles/host_inputs` first as well, and refuse the run until the owner has
-  placed their own `/etc/branchleft/host-inputs.json` (edge1 holds the monitoring and pager
-  inputs, ops1 the backup worker and restore inputs). ANS-17 describes the only approved path. The
-  trigger is
-  `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
-  `.github/workflows/ansible-delivery.yml` calls that workflow.
 - **Reuse by other repositories.** The harness is code another repository may
   one day run. It is not to be copied between repositories (ANS-13). The
   reusable CI work in the github-workflows repository is where it will be

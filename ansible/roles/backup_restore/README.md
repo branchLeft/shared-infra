@@ -74,7 +74,7 @@ off-site copy are not in this role (see "Not in this role").
   settled; they are filed separately.
 - **The ops1 binding.** `ansible/playbooks/ops1.yml` applies the role after
   `backup_worker`, and the `host_inputs` loader's ops1 row carries its ten private
-  inputs. The live run waits on the owner's `host-inputs.json` on ops1 and on the gate.
+  inputs.
 - **Where the estate and tenant bucket values come from.** They are inventory
   inputs; sourcing them from the infrastructure code's output is filed separately.
 - **The restore-drill timer.** Refused, as above.
@@ -263,7 +263,7 @@ checksums in `verify`, the secrets directory mode, and the second-run check
 Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. The plan job shows the host's diff in
 check mode first. Nothing is applied from a laptop. `ansible/playbooks/ops1.yml`
-applies this role, after `backup_worker`; no run has been approved yet.
+applies this role, after `backup_worker`.
 
 ## How to change it safely
 

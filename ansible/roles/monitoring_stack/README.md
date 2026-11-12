@@ -204,8 +204,7 @@ last on the playbook. The seven secret inputs of this role come from the
 `/etc/branchleft/host-inputs.json` the owner places on edge1; no value is in the
 repository. Their values must equal what is live, or the first apply rewrites
 `monitoring.env` with different ones. The first apply has no stamp, so it
-restarts the monitoring unit once. The fresh-host run across both is not yet
-shown live. The seam between
+restarts the monitoring unit once. The seam between
 the two is tested with the real `ntfy_pager` role: the `verify.yml` of this role
 runs it by path (`include_role`), then this role, and rotates a pager token to
 see one restart. A second assertion makes the places that name the two secrets
@@ -583,7 +582,7 @@ is not shown to fail):
   systemd loads the drop-in, and that the restart decision is right against a
   stand-in `docker`; it does not prove the stack starts, that the render step
   works, or that the real unit template accepts the drop-in. The first live apply
-  is the proof (ANS-17), and it waits on the enrolment of the hosts and on the gate.
+  is the proof (ANS-17).
 - **The unit template is a placeholder in the test.** The drop-in is loaded
   against a oneshot whose `ExecStart` runs the stand-in. `MemoryMax` and
   `CPUWeight` are read from systemd's properties; the drop-in's `ExecStart`,
@@ -616,11 +615,9 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. A plan job shows the host's diff in
 check mode first; after the approval the host pulls that exact commit and applies
 it, and a second run must report zero changes. Nothing is applied from a laptop.
-`ansible/playbooks/edge1.yml` applies this role; the live run waits on the owner's
-`host-inputs.json` on edge1 and on the gate. The runbook keeps its hand
-paths for steps 3, 4, 5 and 13 until then; each is marked and listed in
-`hetzner/provision/test_runbook_monitoring_hand_blocks.py`, and they are retired
-together after the first gated converge.
+`ansible/playbooks/edge1.yml` applies this role. The runbook keeps its hand
+paths for steps 3, 4, 5 and 13; each is marked and listed in
+`hetzner/provision/test_runbook_monitoring_hand_blocks.py`.
 
 ## How to change it safely
 

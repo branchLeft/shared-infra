@@ -278,17 +278,13 @@ repository.
   the checks that select shards); a merge-queue entry runs no shard, because the pull
   request ran it; the weekly sweep runs every shard; a push to `main` runs none here,
   because the delivery workflow runs every shard before it applies anything.
-  [`ansible/checks/README.md`](../../checks/README.md) gives the rules. The
-  green run on `main` that ran this pattern's shard is
-  https://github.com/branchLeft/shared-infra/actions/runs/40191479010 (job
-  `Harness: ansible/patterns/files_and_units`, conclusion `success`, commit `7cd0d26`).
+  [`ansible/checks/README.md`](../../checks/README.md) gives the rules.
 - The settings in `molecule.yml` are measured on two hosts: Docker Desktop (the
   owner's machine) and a GitHub `ubuntu-24.04` runner (cgroup v2, Docker 28.0.4), where
   the full harness passed with `cgroupns_mode: host` in place. The runner evidence is a
   diagnostic run of 2026-10-17, https://github.com/branchLeft/shared-infra/actions/runs/39073641288,
   whose step with the host namespace reports all 14 steps `PASS` and exit status 0. That
-  job ends failed by design, on its temporary diagnostic step. The CI evidence for this
-  pattern is the push run named above.
+  job ends failed by design, on its temporary diagnostic step.
 - The Ansible workflow's harness jobs run on `ubuntu-24.04`, not `ubuntu-latest`. The
   comment above their `runs-on` lines in `.github/workflows/ansible.yml` reads "Pinned
   until the harness is verified on the next Ubuntu LTS image".
@@ -303,7 +299,7 @@ repository.
 A role reaches a host only through the gated workflow (ANS-17). In shared-infra that
 workflow is [`.github/workflows/ansible-delivery.yml`](../../../.github/workflows/ansible-delivery.yml).
 It runs on a push to `main` and on nothing else. It calls a reusable workflow,
-`ansible-gated-apply.yml` at tag `v1.0.19` of `branchLeft/github-workflows`, which lints
+`ansible-gated-apply.yml` at tag `v1.1.0` of `branchLeft/github-workflows`, which lints
 and runs Molecule over every role and pattern (`roles/*` and `patterns/*`). Two of its
 jobs matter here:
 

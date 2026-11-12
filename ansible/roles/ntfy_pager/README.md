@@ -103,10 +103,9 @@ one with a line break, naming the key and never the value.
 
 ### Where the four values come from
 
-The values are not in this repository, not in a playbook, and not in a test. How
-they reach a host that pulls its commit from `main` is settled with the wiring of
-the two roles into a playbook, and until then the role has no source for them and
-must not be given one by a default.
+The values are not in this repository, not in a playbook, and not in a test. The
+`host_inputs` loader sets them from the host's root-only file, and the role must not
+be given a default for them.
 
 ## Requirements
 

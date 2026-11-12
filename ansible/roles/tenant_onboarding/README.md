@@ -20,12 +20,12 @@ standard sets for a role README (ANS-14).
    authority for the slug rules, the reserved names and the UID range; the role only types
    the two inputs.
 
-It does not enable the tenant's compose unit. That step is an owner step for now (see the
-open decision under "Named limits"). It does not create a database account, a database, a
+It does not enable the tenant's compose unit: that is owner step 8, or the `tenant_compose`
+role's task where that role is applied. It does not create a database account, a database, a
 media bucket or a credential, and it writes no secret. It does not write the tenant's
 environment file, `compose.yml`, the deploy slot keys, the edge site block or the
 `pull_trigger` step list; those are owner steps or other roles, named in the owner steps.
-It does not wire itself into any host playbook: host wiring follows separately.
+It does not wire itself into any host playbook.
 
 ## Interface
 
@@ -103,10 +103,9 @@ UID appear in no log the scenario writes, and it names refusals only with placeh
 
 Nothing applies this role to a host from a laptop. ANS-17 describes the only approved path: a
 gated workflow run against `main`, which applies the role with a plan job before the approval
-and a second run that must report zero changes. This role is not wired into any host playbook
-by this change. Host wiring follows separately, after the rewiring of the host playbooks
-(shared-infra#538), and needs two things the role does not supply: an entry in the host's
-playbook, and a `host_inputs` row for the tenant list. Until then no step runs on any host.
+and a second run that must report zero changes. This role is not wired into any host playbook.
+Wiring it needs two things the role does not supply: an entry in the host's playbook, and a
+`host_inputs` row for the tenant list.
 
 ## How it runs its test
 
@@ -194,11 +193,6 @@ run them and writes no marker for them. Each is written with placeholders in cap
 
 ## Named limits
 
-- **The enable step is not in this role (open decision).** The plan put enabling the compose
-  unit here. The repository's single-owner check reads any reference to a unit that the
-  deployment tooling role installs as a second owner. The owner rules who enables the unit:
-  either an exemption for this role on the check's owner-held allow-list, or moving the step to
-  the role that installs the unit. Until then the enable is owner step 8.
 - **Ownership drift is repaired by a re-run and is not reported as a change.** The program sets
   each volume's owner and mode on every run. A re-run that repairs drift reports no change, so a
   drifted tenant shows as unchanged.

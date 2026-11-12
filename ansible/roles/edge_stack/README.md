@@ -47,7 +47,7 @@ The inputs, their types and defaults are in `meta/argument_specs.yml`; Ansible c
 | `edge_stack_crowdsec_wait_tries`    | `24`                          | Times CrowdSec's Local API is asked whether it answers after the restart.                           |
 | `edge_stack_crowdsec_wait_interval` | `5`                           | Seconds between those asks.                                                                         |
 
-The paths, the stamp names, the classes and the pin pattern are constants in `vars/main.yml`, not inputs: a caller cannot override them. The role has no `dependencies` and loads no other role (ANS-12): the stamp steps are its own task files ("The stamp steps" below). `playbooks/edge1.yml` applies this role last, after `host_baseline`, `ci_login` and `deploy_tooling` (see "How it is delivered").
+The paths, the stamp names, the classes and the pin pattern are constants in `vars/main.yml`, not inputs: a caller cannot override them. The role has no `dependencies` and loads no other role (ANS-12): the stamp steps are its own task files ("The stamp steps" below). `playbooks/edge1.yml` applies this role after `host_baseline`, `ci_login` and `deploy_tooling` (see "How it is delivered").
 
 ## Requirements
 
@@ -207,7 +207,7 @@ The shape is the same. It differs, on purpose: three stamps named `edge.<class>.
 
 ## How it is delivered
 
-A role reaches a host only through the gated workflow (ANS-17), never by running `ansible-playbook` by hand. `playbooks/edge1.yml` applies this role last, after `host_baseline` (which installs Docker), `ci_login` and `deploy_tooling` (which installs the `branchleft-deploy` wrapper that writes `edge.image.env` and the `branchleft-compose@.service` template unit). A merge changes no host; the gated run does, after the owner approves it. The owner order for the first live apply is:
+A role reaches a host only through the gated workflow (ANS-17), never by running `ansible-playbook` by hand. `playbooks/edge1.yml` applies this role after `host_baseline` (which installs Docker), `ci_login` and `deploy_tooling` (which installs the `branchleft-deploy` wrapper that writes `edge.image.env` and the `branchleft-compose@.service` template unit). A merge changes no host; the gated run does, after the owner approves it. The owner order for the first live apply is:
 
 1. edge1's bootstrap (the owner's step).
 2. The owner places `/etc/branchleft/edge.env` (root, 0600). The role asserts it and fails the run loudly until it is there.
