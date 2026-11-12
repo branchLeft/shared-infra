@@ -17,7 +17,7 @@ in `checks/check_enrolment.py`), then
 until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
 `roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
-`roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
+`roles/status_page`, then `roles/deploy_tooling` (as class internal), then `roles/control_plane`, then `roles/nextcloud_stack`, then
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
 reads), then `roles/control_plane_db` last (it asserts the directory `roles/control_plane` makes; a
 plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
@@ -27,7 +27,7 @@ allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/a
 `roles/deploy_tooling` (as class app, standard variant) and `roles/deploy_slot_keys`, then
 `roles/export_bundler`, last.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
-the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, then
+the host's private inputs, then `roles/host_baseline`, then `roles/deploy_tooling` (as class internal), then `roles/db1_stack`, then
 `roles/db1_backup_timers`, then `roles/db1_grants` last; `roles/tunnel_account` is left out of it.
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
