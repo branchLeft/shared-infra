@@ -69,9 +69,9 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # host_baseline, breakglass_grant_host and website_app1 (website_app1 after host_baseline has
 # installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that order: the slot
 # keys need the wrapper the tooling installs), app1's tenant_onboarding, and app1's export_bundler
-# (last of all), db1's
-# host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
-# db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
+# (last of all), db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the
+# loader, which goes first; db1_grants follows the timers, which deliver the dump programs it
+# checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, and ring_controller_host
