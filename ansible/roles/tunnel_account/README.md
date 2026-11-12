@@ -3,13 +3,13 @@
 The reverse tunnel that publishes db1's MySQL on the replica host's loopback.
 db1 dials out; the replica never dials in. One role, five entry points:
 
-| Entry point | Host         | What it does                                                                                                                                |
-| ----------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `main`      | db1          | db1 only; what db1's playbook will apply once wired. Not wired yet (see "Run order"). It runs `db1` and nothing of `replica` or `teardown`. |
-| `db1_key`   | db1          | Creates the tunnel account (no login shell) and db1's ed25519 key, once. Prints the public half. Reads no input.                            |
-| `db1`       | db1          | Runs `db1_key`, reads its three input files, pins the replica host key, writes the target file, installs the unit, starts it.               |
-| `replica`   | replica host | Reads its two input files, creates the account, writes the sshd drop-in and the authorized key, checks sshd, reads it back.                 |
-| `teardown`  | either       | Removes the tunnel from the host it runs on. Needs `tunnel_account_teardown_confirm: true`.                                                 |
+| Entry point | Host         | What it does                                                                                                                         |
+| ----------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `main`      | db1          | db1 only; what a plain `role:` entry in db1's playbook runs (see "Run order"). It runs `db1` and nothing of `replica` or `teardown`. |
+| `db1_key`   | db1          | Creates the tunnel account (no login shell) and db1's ed25519 key, once. Prints the public half. Reads no input.                     |
+| `db1`       | db1          | Runs `db1_key`, reads its three input files, pins the replica host key, writes the target file, installs the unit, starts it.        |
+| `replica`   | replica host | Reads its two input files, creates the account, writes the sshd drop-in and the authorized key, checks sshd, reads it back.          |
+| `teardown`  | either       | Removes the tunnel from the host it runs on. Needs `tunnel_account_teardown_confirm: true`.                                          |
 
 The ports (13306, 3306, 9105, 9104) and paths are constants in `vars/main.yml`,
 not inputs. A caller cannot change them. The play that calls the role may run with

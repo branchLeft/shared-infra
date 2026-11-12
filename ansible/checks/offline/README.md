@@ -8,7 +8,8 @@ tool runs the same templates and the same validators in seconds, before a merge,
 and no secret.
 
 It is advisory. `.github/workflows/ansible-offline.yml` runs it, and it is not a required
-check.
+check. It is promoted into the gate in `ansible.yml` after ten consecutive green runs on `main`
+with nothing not-covered.
 
 ## Run it
 

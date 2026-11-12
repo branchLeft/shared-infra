@@ -213,14 +213,20 @@ content hides its result, every check precedes the first input).
 ## How it is delivered
 
 It is applied by the host's pulled playbook (ANS-17), after the two pull roles, and by
-nothing else. The playbooks of edge1, edget, ops1, db1 and app1 apply it. On edget (edge-t)
-its one input is `ci_jump_user`, for the `ci_jump` role. A run stops
+nothing else. Today the playbooks of edge1, edget, ops1, db1 and app1 apply it. On edget (edge-t)
+its one input is `ci_jump_user`, for the `ci_jump` role. On edge1 the loader is
+followed by the roles up to `edge_stack` and then the monitoring roles, and on ops1 by the roles
+up to `control_plane` and then the backup roles; on both, the first run after this change stops
 here with `host_inputs[file-missing]`, before anything else is applied, until the owner has placed
-`/etc/branchleft/host-inputs.json` (root:root, `0600`, the keys above), which proves the file
-on the host before the roles after the loader depend on it. db1 also needs its signer in
-`ansible/trust/db1.yml` before any pull runs. On app1 the file holds the four SMTP keys above
-and `deploy_slot_keys_slots` with at least one slot; until a slot is there the run stops with
-`host_inputs[missing-key]`. The tool places it: `seed_host_inputs.py --host app1`
+`/etc/branchleft/host-inputs.json` (root:root, `0600`, the keys above). The first db1 apply that includes
+it stops here until the owner has placed the file, which proves the file on the host before
+the database roles depend on it. db1 also needs its signer in `ansible/trust/db1.yml`
+before any pull runs. On app1 the loader is followed by `website_app1`, and the same holds:
+the first app1 run after this change stops here with `host_inputs[file-missing]`, before
+the website role starts, until the owner has placed `/etc/branchleft/host-inputs.json` on
+app1 (root:root, `0600`, the four SMTP keys above and, since the deploy slot keys were wired
+to app1, `deploy_slot_keys_slots` with at least one slot: until it is there the same stop
+happens, as `host_inputs[missing-key]`). The tool places it: `seed_host_inputs.py --host app1`
 reads the four keys from the `website.env` that the website role's env file holds (the same four
 `CONTACT_SMTP_*` lines), so the values equal what is live, and it takes the slots at a hidden
 prompt, one line each (`stack public_key [adopt]`), so the public keys are never typed into a

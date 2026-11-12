@@ -85,7 +85,9 @@ Throwaway secrets are searched for in every request's output and in the whole ru
 
 ## How it is delivered
 
-No playbook applies this role. The mail host's steps are run by hand from the mail runbooks.
+Nowhere yet. No playbook applies this role: the mail host is not in the production inventory,
+and the gated pull's step allow-list holds only the control plane's three steps. Wiring it is
+separate, owner-reviewed work, and the hand procedure in the mail runbooks is unchanged.
 
 ## How to change it safely
 
@@ -108,4 +110,6 @@ No playbook applies this role. The mail host's steps are run by hand from the ma
   administrator credential file is absent, so the role never takes the program's bootstrap path.
 - **The stand-in proves the calls and the guards, not the reconcile.** The happy-path cases for
   `configure` and `mailboxes` are not in the container test; the first live run proves them.
+- **No step can be requested yet**, and a change under `mail/provision` alone does not reselect
+  this role's test: the change detection knows only the Hetzner program directories.
 - **`mail_reconcilers_step` set in an inventory defeats the second key.**

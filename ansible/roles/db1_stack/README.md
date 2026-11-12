@@ -450,9 +450,7 @@ The compose file and the configuration also exist in `ghost-platform`
 `db/systemd/db.override.conf`, the two contract tests and `db/RUNBOOK-db.md`). This
 role removes `/etc/systemd/system/branchleft-compose@db.service.d/override.conf` on
 every run that finds it, so a hand copy of that drop-in is removed again on the next
-run and is not left in place. In the rendered output, every non-comment line of the
-compose file and of the configuration is the same as the `ghost-platform` source;
-the only differences are comments.
+run and is not left in place.
 
 ## What the test proves
 
@@ -716,9 +714,8 @@ bot sees it.
   the log, which shows a skipped task's name. Nothing runs `docker compose`, so the healthcheck,
   the start order and the cnf change are asserted in the rendered text and are not
   exercised.
-- The compose file and the MySQL configuration are the same as `ghost-platform`'s
-  except for comments. A later change to either side is caught only when someone
-  runs the comparison again.
+- No check compares the compose file and the MySQL configuration with the copies in
+  `ghost-platform`.
 - The exporter account is in runbook section 4, outside this role, and the exporter's
   healthcheck needs it. On a rebuilt database host the role still converges, but the
   exporter cannot report `mysql_up 1` until section 4 is run by hand, so the stack's

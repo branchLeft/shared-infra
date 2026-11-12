@@ -90,7 +90,7 @@ describes (the harness runs in CI, never against a host):
   exactly; removes a key it was not given; refuses a usable password, a `nologin` shell, an
   empty or wrong-sized list, a repeated key and a malformed key (with every line-break
   character); leaves the keys alone with the flag false; and keeps every key out of the log.
-- `hand_made` starts from a hand-made state: a `*` account, the sudoers file and
+- `hand_made` starts from the state edge1 is in today: a `*` account, the sudoers file and
   two key lines written by hand. It proves the role changes none of them with the flag false,
   that the flag true with the same keys rewrites nothing, and that other keys do rewrite the
   file.

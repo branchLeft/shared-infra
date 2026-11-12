@@ -55,14 +55,14 @@ reached. The role holds no SQL; the grants are the applications image's closed m
 (`portal/data/provision/manifest.ts` in the Ghost platform repository), which the program
 checks before and after it acts and refuses to repair.
 
-| Login                      | What it can do                                                                                                                             | Defined by                                                | Reached how                                                                                                                      |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `postgres` (administrator) | Everything. `provision` runs as it for the steps that need a superuser (creating roles and the database); `migrate` does not.              | The `db` image's first start                              | `admin-url`, owner-placed, read by one container, removed on every exit; `pg_hba.conf`: three databases                          |
-| `zitadel`                  | Owns its own database and runs the sign-in service's own setup migrations there (so it holds DDL there).                                   | The sign-in service's `init` phase, run once by the owner | The stack network; `pg_hba.conf`: its own database only                                                                          |
-| `portal_tenant_login`      | Member of `portal_tenant` alone: the tenant portal's access; no BYPASSRLS; nothing beyond the manifest.                                    | The program's manifest, created by `provision`            | The tenant portal's URL file; `pg_hba.conf`: `portal` only                                                                       |
-| `portal_owner_login`       | Member of `portal_owner` alone: the operator console's access; the role (not the login) with BYPASSRLS.                                    | The program's manifest, created by `provision`            | The console's URL file; `pg_hba.conf`: `portal` only                                                                             |
-| `portal_provisioner_login` | Member of `portal_provisioner` alone: INSERT and SELECT on the demo-state and hostname-register tables only.                               | The program's manifest, created by `provision`            | No URL file; provisioning connects as it once; `pg_hba.conf`: `portal` only                                                      |
-| `portal_migrator_login`    | Not a superuser, no BYPASSRLS. Owns the `portal` database and its objects: applies migrations and the manifest's grants, and nothing else. | The program's manifest, created by `provision`            | `migrator-url`, owner-placed per `migrate`, removed on every exit; `provision` connects as it once; `pg_hba.conf`: `portal` only |
+| Login                      | What it can do                                                                                                                             | Defined by                                                | Reached how                                                                                                                           |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `postgres` (administrator) | Everything. `provision` runs as it for the steps that need a superuser (creating roles and the database); `migrate` does not.              | The `db` image's first start                              | `admin-url`, owner-placed, read by one container, removed on every exit; `pg_hba.conf`: three databases                               |
+| `zitadel`                  | Owns its own database and runs the sign-in service's own setup migrations there (so it holds DDL there).                                   | The sign-in service's `init` phase, run once by the owner | The stack network; `pg_hba.conf`: its own database only                                                                               |
+| `portal_tenant_login`      | Member of `portal_tenant` alone: the tenant portal's access; no BYPASSRLS; nothing beyond the manifest.                                    | The program's manifest, created by `provision`            | The tenant portal's URL file; `pg_hba.conf`: `portal` only                                                                            |
+| `portal_owner_login`       | Member of `portal_owner` alone: the operator console's access; the role (not the login) with BYPASSRLS.                                    | The program's manifest, created by `provision`            | The console's URL file; `pg_hba.conf`: `portal` only                                                                                  |
+| `portal_provisioner_login` | Member of `portal_provisioner` alone: INSERT and SELECT on the demo-state and hostname-register tables only.                               | The program's manifest, created by `provision`            | No URL file yet: the lifecycle worker (not built) is its runtime user; provisioning connects as it once; `pg_hba.conf`: `portal` only |
+| `portal_migrator_login`    | Not a superuser, no BYPASSRLS. Owns the `portal` database and its objects: applies migrations and the manifest's grants, and nothing else. | The program's manifest, created by `provision`            | `migrator-url`, owner-placed per `migrate`, removed on every exit; `provision` connects as it once; `pg_hba.conf`: `portal` only      |
 
 The migration role is the migration login, `portal_migrator_login`, and not the administrator.
 `migrate` is given its URL alone (`migrator-url`): the administrator's file is neither checked,
@@ -280,9 +280,9 @@ step key, and the pull runs the playbook with `--tags control_plane_db_<id> -e
 control_plane_db_step=<id>`. The host's step allow-list names the id, this role's tag and
 the word. For ops1 the role is in the host's playbook (last, after `control_plane`), on the
 host's role list, and the allow-list is in `owner_vars/ops1.yml`. The applications image
-digest and the identity hostnames are owner values in `owner_vars/ops1.yml`; a step
-refuses by name while its value is unset. The one-time host steps a step request needs
-are in the pull_trigger README, "Step requests".
+digest and the identity hostnames are not set, so every step refuses by name until a
+later owner change sets them. No step can be requested until the sender and the owner's
+one-time host steps exist (see the pull_trigger README, "Step requests").
 
 ## How to change it safely
 
