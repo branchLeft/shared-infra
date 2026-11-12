@@ -5,9 +5,12 @@
 
 # Where the tenant program and its register are installed. The program refuses every
 # slug unless the register sits beside it, so the two are installed together, here.
-tenant_onboarding_program_dir: /usr/local/lib/branchleft/provision
-tenant_onboarding_program: /usr/local/lib/branchleft/provision/provision_tenant_volume.py
-tenant_onboarding_register: /usr/local/lib/branchleft/provision/tenant-names.json
+# The directory is the path tenant_compose calls the program at (its
+# tenant_compose_volume_program), which is why it is not under /usr/local/lib. The
+# program's path is derived from the directory so the two cannot be set apart.
+tenant_onboarding_program_dir: /root/platform-provision
+tenant_onboarding_program: '{{ tenant_onboarding_program_dir }}/provision_tenant_volume.py'
+tenant_onboarding_register: '{{ tenant_onboarding_program_dir }}/tenant-names.json'
 
 # The program and register are fetched, never copied into this role. Each is fetched
 # from ghost-platform at one full 40-character commit, so no branch or tag can move

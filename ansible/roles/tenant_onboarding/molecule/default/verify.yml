@@ -18,23 +18,25 @@
       loop:
         - path: '{{ tenant_onboarding_program }}'
           sha256: '{{ tenant_onboarding_program_sha256 }}'
+          mode: '0755'
         - path: '{{ tenant_onboarding_register }}'
           sha256: '{{ tenant_onboarding_register_sha256 }}'
+          mode: '0644'
       register: tenant_onboarding_verify_installed
       loop_control:
         label: '{{ item.path }}'
 
-    - name: Assert each file is the pinned file, root-owned, mode 0644
+    - name: Assert each file is the pinned file, root-owned, with its pinned mode
       ansible.builtin.assert:
         that:
           - item.stat.exists
           - item.stat.isreg
           - item.stat.pw_name == 'root'
           - item.stat.gr_name == 'root'
-          - item.stat.mode == '0644'
+          - item.stat.mode == item.item.mode
           - item.stat.checksum == item.item.sha256
         quiet: true
-        fail_msg: '{{ item.item.path }} is not the pinned file, root-owned with mode 0644.'
+        fail_msg: '{{ item.item.path }} is not the pinned file, root-owned with mode {{ item.item.mode }}.'
       loop: '{{ tenant_onboarding_verify_installed.results }}'
       loop_control:
         label: '{{ item.item.path }}'

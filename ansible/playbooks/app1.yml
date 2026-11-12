@@ -3,7 +3,8 @@
 # playbook runs with, then the trigger that runs it. After them, in order: the loader
 # of the host's private inputs (host_inputs), the host baseline (which installs Docker),
 # the break-glass grant (breakglass_grant_host), then the website stack (website_app1),
-# then the deploy tooling and the deploy slot keys, and last the export bundler.
+# then the deploy tooling and the deploy slot keys, then the tenant onboarding role (which
+# installs the volume program the tenant compose role calls), and last the export bundler.
 # The loader reads the one root-only file the owner places on the host and sets the four
 # SMTP values the website role requires and the list of deploy slots; it stops the run if
 # that file is missing or unsafe, or holds no slot, and it runs first so every later role
@@ -53,4 +54,5 @@
     - role: ../roles/website_app1 # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/deploy_slot_keys # noqa: role-name[path]
+    - role: ../roles/tenant_onboarding # noqa: role-name[path]
     - role: ../roles/export_bundler # noqa: role-name[path]

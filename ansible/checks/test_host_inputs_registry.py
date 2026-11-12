@@ -350,6 +350,7 @@ class RealTree(unittest.TestCase):
                 "website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "tenant_onboarding",
                 "export_bundler",
             ],
         )
