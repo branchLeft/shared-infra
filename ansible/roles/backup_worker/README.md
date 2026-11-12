@@ -244,7 +244,7 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. The plan job shows the host's diff in
 check mode first. Nothing is applied from a laptop. `ansible/playbooks/ops1.yml`
 applies this role, after the `host_inputs` loader, whose ops1 row carries its ten
-inputs; no run has been approved yet.
+inputs.
 
 ## How to change it safely
 

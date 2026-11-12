@@ -2,8 +2,8 @@
 
 This role is the baseline every container host needs, in three parts that run in
 this order: a key-only sshd, unattended upgrades with fail2ban, and Docker CE.
-It replaces three provisioning scripts, one for each part, and keeps their
-files, modes, owners and order.
+It writes what three provisioning scripts write, one script for each part, and keeps
+their files, modes, owners and order.
 
 This README is written for a maintainer who is new to the repository. It
 follows the order the standard sets for a role README (ANS-14).
@@ -287,7 +287,7 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. A plan job shows the host's diff in
 check mode first; after the approval the host pulls that exact commit of `main`
 and applies it, and a second run must report zero changes. Nothing is applied
-from a laptop. This role is not applied to any host yet.
+from a laptop.
 
 ## How to change it safely
 

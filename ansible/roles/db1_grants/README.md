@@ -261,7 +261,7 @@ pattern. A statement it does not list is refused.
 
 ## Live blockers
 
-The role is applied to db1 by the gated pull: the db1 playbook ran it in gated apply run 41903489960 (4 Nov 2026), and a later gated apply, run 41916819852, also succeeded. Each of these must hold for a run to converge it.
+The role is applied to db1 by the gated pull. Each of these must hold for a run to converge it.
 
 1. The program directory `/opt/branchleft/db/provision` is delivered by
    `db1_backup_timers`, including `provision_tenant_db.py`, at the pinned digest.
@@ -280,10 +280,9 @@ The role is applied to db1 by the gated pull: the db1 playbook ran it in gated a
 6. The `db1_backup_timers` role is in the playbook before this one, so the dump
    code (`naming.py`, `dump_nightly.py`) is delivered before the dump account
    changes. `db1_backup_timers` delivers `provision_tenant_db.py`, pinned
-   by digest, in a real apply only: its fetch is skipped in check mode. Until
-   that apply has happened on db1, a plan of this role stops with
-   `program-missing`, in check mode too (ISSUE branchLeft/workspace#2861 is open
-   for the plan of a fresh db1).
+   by digest, in a real apply only: its fetch is skipped in check mode. On a host
+   where that apply has not happened, a plan of this role stops with
+   `program-missing`, in check mode too.
 
 ## Differences from the family base
 

@@ -366,8 +366,7 @@ Prettier on them afterwards; the test compares the JSON, not the text).
 
 **The route: a one-off carry by the owner, then a check by digest.** The host has no route
 to a registry and its egress allowlist holds the package mirrors only, so it never pulls
-the image. The owner pulls the pinned image on a workstation, anonymously (the package is
-public, so there is no login), checks the digest there, tags it with the name of the pin,
+the image. The owner pulls the pinned image on a workstation, checks the digest there, tags it with the name of the pin,
 and streams `docker save` into `docker load` on demo1 over the edge1 jump that every other
 bootstrap step uses. The host opens no connection and its allowlist is not touched. This is
 the route the spool role's image takes (`demo1_egress_spool`), and the commands are in the
@@ -977,10 +976,6 @@ assertion fires in its place or a later one is the only one left:
 | The colour instance check (`_units_loaded.yml`) assert removed                                            | refusals, `converge`                    | "The colour unit check accepted instances that load from no template."                                                        |
 | Both seeding tests removed (the pre-seed guard)                                                           | default, `converge`                     | "The role put a cleared drain flag back."                                                                                     |
 
-The row "The NOT rendered notice made silent" has not been run, so its red is not yet
-recorded. It is a mechanism the default scenario would show, and it is not in the PR
-body's sabotage record.
-
 The harness's own controls (a failing second scenario fails its shard, a role with
 no `molecule/` still gets a shard and fails at the scenario limits, a privileged
 second scenario without a comment is refused, a second privileged platform needs a
@@ -1044,9 +1039,8 @@ other unit tests of `ansible/harness`.
   (`ansible/checks/run_role_unit_tests.sh`), and need Docker (real Caddy, and the
   throwaway daemons of the image check). The Molecule scenarios carry the controls that
   need the role applied.
-- CI runs both scenarios: the Ansible workflow runs one job per scenario of every
-  directory under `ansible/roles/` (`ansible/harness/list_shards.py` lists them),
-  and this role's shards are `demo1_build` and `demo1_build (refusals)`.
+- CI runs all three scenarios: the Ansible workflow runs one job per scenario of every
+  directory under `ansible/roles/` (`ansible/harness/list_shards.py` lists them).
 
 ## Gaps the role names and does not close
 
@@ -1062,8 +1056,7 @@ other unit tests of `ansible/harness`.
   single-owner test (`ansible/checks/test_deploy_tooling_single_owner.py`) refused a
   second role that names it, so it now exempts demo1 by program
   (`ALLOWED_SECOND_OWNER_PROGRAMS`): demo1 may read and name that one file, and a byte
-  copy or a link of it stays refused. That exemption sits in an owner-merged file, so
-  the PR that adds it waits for the owner's merge. The role-path check
+  copy or a link of it stays refused. The role-path check
   (`ansible/checks/check_role_paths.py`) does not object and needs no exemption:
   `deploy_tooling` writes the template through a loop item (`dest: '{{ item.path }}'`),
   which that check leaves templated and does not compare. demo1 never applies
@@ -1086,27 +1079,19 @@ other unit tests of `ansible/harness`.
 - **The egress interaction is unverified.** The demo host's egress ruleset
   (`branchleft_demo_egress.sh`, ghost-platform) is not applied here, and the merged
   `egress_nat` role inserts NAT rules on the forward chain. Their interaction has
-  not been checked, so the first converge of demo1 waits for that check.
+  not been checked.
 - **The uid register has no lock** against a concurrent tenant allocation.
   The role consumes it as it is.
-- **The first apply's expected difference** from the host as the runbook left it at
-  its pinned commit (`fb2f064`): the sidecar and the health router are replaced by the
-  pinned versions (the drain-flag path fix); everything else the role declares
-  already matches. A running health router keeps the old code until the owner
-  restarts it.
-- **Ticket order.** The ticket for the demo-host work after this one lists this build
-  as a dependency while `broker_deploy` (its real prerequisite) is merged: the
-  recorded graph is inverted. The build order in this README is the correct one.
+- **A running health router keeps its old code** until the owner restarts it.
 
 ## How it is delivered
 
 Delivery to a host is ANS-17: only the gated workflow, run against `main` after the
 approval of its protected environment. The plan job shows the host's diff in check
-mode first. Nothing is applied from a laptop. This role is not applied to any host
-yet. `ansible/playbooks/demo1.yml` enrols demo1 on the signed push route and lists this role
-after `pull_trigger`. The host has no inventory entry: the playbook and its trust file enrol it.
-The commit reaches the host by push, which needs the signed bundle send (not yet merged), so the role
-is applied only after that lands. The first live run is check mode; the apply waits on the owner.
+mode first. Nothing is applied from a laptop. `ansible/playbooks/demo1.yml` enrols demo1
+on the signed push route and lists this role after `pull_trigger`. The host has no
+inventory entry: the playbook and its trust file enrol it. The commit reaches the host
+by push, and the apply waits on the environment's approval.
 
 The playbook `ansible/playbooks/demo1.yml` refuses any host but demo1. It does not
 apply `broker_deploy`, whose inputs are the owner's built bundle and public key.

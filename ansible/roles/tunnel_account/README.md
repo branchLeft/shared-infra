@@ -64,13 +64,10 @@ each input, as text, as base64 and as sha1. See "Tests".
 
 The live run is the owner's, through the gated apply. No agent applies it.
 
-The role is not wired into any playbook yet. `playbooks/db1.yml` does not apply it.
-Wiring is a later change, its own PR, and it waits until db-t1 exists (ISSUE
-branchLeft/workspace#1634) and db-t1's host key is placed on db1. Once wired, db1's
-playbook (`playbooks/db1.yml`) applies this role as its last entry, a plain `role:`
-line with no variable and no `tasks_from` (the pull's rule R2). That entry is
-`main`, which is db1's half. The replica half is not wired: the replica host is not
-enrolled in the pull, so the owner runs it by hand.
+`playbooks/db1.yml` does not apply this role. Wiring it makes it db1's last entry, a
+plain `role:` line with no variable and no `tasks_from` (the pull's rule R2). That
+entry is `main`, which is db1's half. The replica half is in no playbook: the replica
+host is not enrolled in the pull, so the owner runs it by hand.
 
 When the wiring is merged, a missing input fails the plan for every host, not only
 db1, because the pull runs the four hosts' plans together. So the inputs must be

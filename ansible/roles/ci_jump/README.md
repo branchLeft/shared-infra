@@ -5,7 +5,7 @@ host: the jump account's root-owned `authorized_keys` file and the sshd drop-in 
 block gives the account its settings. Each key line allows port 22 of the named hosts and nothing
 else, and sshd's own `PermitOpen` for the account carries the same list, so adding a tenant host is
 one reviewed line in the host's `owner_vars` file and a gated run, not a hand edit on the jump
-host. The role works on any jump host: `edge1` now, `edge-t` later, each with its own
+host. The role works on any jump host: `edge1` and `edge-t`, each with its own
 `owner_vars/HOST.yml`, its own jump account and its own address. Nothing in the role is specific to
 one host.
 
@@ -305,13 +305,10 @@ The same test reads `TENANTS_HOST_IPS` from `hetzner-host/addressPlan.ts`, its o
 refuses a tenants private address in `owner_vars/edge1.yml` and an own address on edget that is not
 edge-t's.
 
-edge-t's owner values are filled in (`owner_vars/edget.yml`: flag true, its own address, its
-destinations and the second-hop key). What is left is outside the repository, in this order: the
-edge-t server and its public address from the tenants stack; the jump account on it (the role
-never makes it); `ci_jump_user` in its private inputs file (`seed_host_inputs.py --host edget`); and
-its enrolment in `ANSIBLE_HOSTS` for the two-hop route. Until it is enrolled the wiring changes
-nothing live, and once it is, its first pull stops at `host_inputs[file-missing]` until the file is
-seeded.
+edge-t's owner values are in `owner_vars/edget.yml` (flag true, its own address, its
+destinations and the second-hop key). The jump account on the host is never made by the role.
+`ci_jump_user` is in the host's private inputs file (`seed_host_inputs.py --host edget`), and
+the host's first pull stops at `host_inputs[file-missing]` until the file is seeded.
 
 To give a further host this role, list `ci_jump` in its row of `ansible/checks/host_roles.yml`
 (with `host_inputs` first), apply both roles in its playbook, add the host to `JUMP_HOSTS` in
@@ -350,11 +347,10 @@ runner  --ssh -F config -o ProxyJump=jump_hop-->  edge1 (the jump account's key 
 
 What is proven where:
 
-| What                                                                                                                                                                                                                                                                                                                                      | Where                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| The jump key reaches a listed address and a command runs there, with the standard input carried, through the pipeline's own client shape (`ssh -F`, a `jump_hop` stanza, `ProxyJump`); an unlisted address, the listed address on another port and the jump host's own loopback are refused; a wrong or replaced key is denied at the hop | `molecule/default`, phase 1b, over the real sshd                                                                                             |
-| A pushed host is not a hop                                                                                                                                                                                                                                                                                                                | `test_ci_jump_hosts.py`                                                                                                                      |
-| demo1 is reached by a gated check-mode run                                                                                                                                                                                                                                                                                                | not yet: the owner's steps in the issue, then a plan whose log reads `Checking commit ... on 5 host(s)` and shows a demo1 row with a verdict |
+| What                                                                                                                                                                                                                                                                                                                                      | Where                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| The jump key reaches a listed address and a command runs there, with the standard input carried, through the pipeline's own client shape (`ssh -F`, a `jump_hop` stanza, `ProxyJump`); an unlisted address, the listed address on another port and the jump host's own loopback are refused; a wrong or replaced key is denied at the hop | `molecule/default`, phase 1b, over the real sshd |
+| A pushed host is not a hop                                                                                                                                                                                                                                                                                                                | `test_ci_jump_hosts.py`                          |
 
 Phase 1b's far end is a second account on the same test sshd, with its own key, as a pushed host's CI
 account is; it reads the standard input into `cat`, so the bytes the client sent are the proof that
@@ -371,8 +367,6 @@ repository secrets, the host lists) are in the private runbooks, not here.
   `tools/ssh_jump_proof.py` in github-workflows is the authority for the client side. Here only this
   role's sshd side is proven against those options. The stanza does not check host keys, which the
   action pins in its own `known_hosts`.
-- **The live state was not read.** The report is the first reading. The plan of the first run shows
-  it, and the second step is built from it.
 - **The `sshd -T -C` check uses the jump host's own address as the client address.** The jump key is
   used from runners that have no fixed address, so a `Match` block keyed on a real runner address is
   not seen. A `Match` on the user, the group or the host name is.
