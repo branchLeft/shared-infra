@@ -123,6 +123,23 @@ export const sites: EdgeSite[] = [
     // A page and a subscription request are a few hundred bytes.
     requestBodyMaxSize: '64KiB',
   },
+
+  {
+    // The PublicPress website: a React Router server-rendered app on app1. The
+    // apex alone -- no `www`, no wildcard; each further name is its own
+    // deliberate entry (and its own DNS record, which this registry never makes).
+    name: 'publicpress-website',
+    hostnames: ['publicpress.co.uk'],
+    // Port matches the `publicpress_website_app1` role's compose file in this
+    // repository, which publishes it on app1's private address; the two must
+    // move together, and each states so. 8080 is the branchLeft website's.
+    privateUpstream: { host: 'app1', port: 8081 },
+    // The register form posts a few short fields; 64KiB is orders of magnitude
+    // above that. Raise it deliberately if an upload surface is ever added.
+    // The app sets its own per-request CSP and response headers: the edge adds
+    // only HSTS to a proxied site and leaves every other response header alone.
+    requestBodyMaxSize: '64KiB',
+  },
 ];
 
 /**
@@ -141,17 +158,10 @@ export const hostRedirects: HostRedirect[] = [
 
 /**
  * Hostnames the edge answers directly with a fixed page instead of proxying.
- * `hetzner/edge/render.ts` looks up each entry's actual page content by
- * `name` from its own `hetzner/edge/publicpressHolding.ts` (or the
- * equivalent file for a future entry) -- this registry stays hostname and
- * addressing only, same rule as the rest of this file.
+ * Empty: its one entry, the `publicpress.co.uk` holding page, gave way to the
+ * `publicpress-website` site above. A new entry needs its page content
+ * registered by `name` in `STATIC_SITE_CONTENT` in `hetzner/edge/render.ts` --
+ * this registry stays hostname and addressing only, same rule as the rest of
+ * this file.
  */
-export const staticSites: StaticSite[] = [
-  {
-    // No `www`, no `sites.*`, no wildcard: publicpress.co.uk's own eventual
-    // platform, and its subdomains, are a separate onboarding when they
-    // exist. This entry is a temporary holding page for the apex alone.
-    name: 'publicpress-holding',
-    hostname: 'publicpress.co.uk',
-  },
-];
+export const staticSites: StaticSite[] = [];

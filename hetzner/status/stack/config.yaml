@@ -78,6 +78,14 @@ endpoints:
       timeout: 10s
     conditions:
       - '[STATUS] < 300'
+  - name: publicpress.co.uk
+    group: sites
+    url: https://publicpress.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
   - name: TEST
     group: TEST
     url: http://status-test-target:8080/health

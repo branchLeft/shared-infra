@@ -346,7 +346,11 @@ anyway.
 
 A hostname the edge answers directly with a fixed page, never proxying anywhere -- see
 `StaticSite`'s own doc comment in `siteTypes.ts` for what belongs in an entry, and
-`publicpressHolding.ts` for where this one's actual page text lives.
+`STATIC_SITE_CONTENT` in `render.ts` for where an entry's page text is registered.
+No static site is registered today: `publicpress.co.uk`, the only one, is now a
+proxied site (`publicpress-website` in `sites.ts`), and the renderer for this block
+is kept, unexercised, for the next fixed page. The paragraph below describes the
+block as it was rendered for that holding page.
 
 Carries the same TLS and throttle posture as a proxied site block (`siteBlock` above): a
 browser or a scanner cannot tell this has a simpler backend and must not be given a
@@ -433,8 +437,8 @@ confined to a client that is both flooding and attacking: it is answered 429 rat
 
 `protectionChain` is called by four block builders, so the one `rateLimit` posture
 field throttles all four: `siteBlock` (zone `<site>_per_ip`), `redirectBlock` (zone
-`<site>_redirect_per_ip`), `staticBlock` (zone `<site>_per_ip`, the `publicpress.co.uk`
-holding page) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
+`<site>_redirect_per_ip`), `staticBlock` (zone `<site>_per_ip`; none registered
+today) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
 loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` never calls
 `protectionChain`. Under the committed posture that is one general `rate_limit` directive
 per throttled block, each in its own zone, and `render.test.ts` counts them per kind

@@ -79,6 +79,7 @@ scrape_configs:
           - https://console.branchleft.co.uk
           - https://id.publicpress.co.uk
           - https://ntfy.branchleft.co.uk
+          - https://publicpress.co.uk
         labels: {host: edge1, expected_up: 'true'}
     relabel_configs:
       - source_labels: [__address__]
