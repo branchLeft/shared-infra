@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import importlib
 import os
+import re
 import unittest
 from pathlib import Path
 
@@ -129,6 +130,13 @@ PUBLIC_PATHS = [
     "LICENSE",
     "hetzner-host/LICENSE",
     "CLAUDE.md",
+    # The routing that goes public: the hostname registry (at the repository root), the renderer,
+    # the committed Caddyfiles and render.test.ts, the only thing that holds them equal to it.
+    "sites.ts",
+    "hetzner/edge/render.ts",
+    "hetzner/edge/render.test.ts",
+    "hetzner/edge/stack/caddy/Caddyfile",
+    "hetzner/edge/validation/Caddyfile.enforcing",
 ]
 
 # Gate files the CODEOWNERS header says judge a merge or a deploy: the review rule, the CI gate
@@ -140,7 +148,10 @@ GATE_PATHS = [
     "scripts/assert-no-hetzner-deletes.py",
     "scripts/choose-apply-environment.py",
     "hetzner/scripts/anything.sh",
+    # The hub-pin job holds contents: write and pull-requests: write, and this script's exit code
+    # decides whether its next, token-holding step runs.
     "hetzner/scripts/check-crowdsec-hub-pin.py",
+    "hetzner/scripts/test_check_crowdsec_hub_pin.py",
     "hetzner/projectGuard.ts",
     "hetzner/projectGuard.test.ts",
     "hetzner/dns.guard.test.ts",
@@ -174,6 +185,7 @@ GATE_PATHS = [
     "ansible/checks/codeowners_match.py",
     "ansible/checks/test_ci_watched_paths.py",
     "ansible/checks/test_no_new_script_dependents.py",
+    "ansible/checks/test_deploy_verifier_coverage.py",
     "ansible/trust/edge1.yml",
     "hetzner/provision/branchleft-verify-image",
     "hetzner/provision/test_branchleft_verify_image.py",
@@ -304,13 +316,57 @@ ACCESS_PATHS = [
     "ansible/patterns/sudoers_and_keys/templates/authorized_keys.j2",
     "ansible/playbooks/includes/require_signers.yml",
     "ansible/playbooks/includes/pull_trigger_common.yml",
+    # What the deploy verifier runs: the pinned gh binary, and the test that holds the pin.
+    "ansible/roles/deploy_verifier/vars/main.yml",
+    "ansible/checks/test_deploy_verifier_coverage.py",
 ]
 
-# Stopping or shortening a database backup: the dump and prune timers, and their units.
+# The role tasks that create an account or a group (criterion 2). Every user or group module task
+# in the roles is in one of these files or in a role that is owned whole; a new one is found by
+# test_every_account_creating_task_is_in_an_owned_file below.
+ACCOUNT_TASK_PATHS = [
+    "ansible/roles/broker_deploy/tasks/main.yml",
+    "ansible/roles/demo1_build/tasks/_accounts.yml",
+    "ansible/roles/node_exporter/tasks/_node_exporter.yml",
+    "ansible/roles/backup_worker/tasks/main.yml",
+    "ansible/roles/ci_login/tasks/_account.yml",
+    "ansible/roles/ring_controller_host/tasks/main.yml",
+    "ansible/roles/safety_service/tasks/main.yml",
+    "ansible/roles/tunnel_account/tasks/_account.yml",
+    "ansible/roles/tunnel_account/tasks/teardown.yml",
+]
+
+# The tests of the criterion 2 code that is owned (rule b: the tests of a kept gate stay with it).
+# Deleting one of these would otherwise reach no owner.
+ACCESS_TEST_PATHS = [
+    "hetzner-host/cloudInit.test.ts",
+    "ansible/roles/db1_grants/tests/unit/test_db1_grants.py",
+    "ansible/roles/db1_grants/molecule/default/verify.yml",
+    "ansible/roles/db1_grants/molecule/refusals_accounts/verify.yml",
+    "ansible/roles/breakglass_grant_host/molecule/default/verify.yml",
+    "ansible/roles/breakglass_mint_host/molecule/default/verify.yml",
+    "ansible/roles/tunnel_account/molecule/default/verify.yml",
+    "ansible/patterns/sudoers_and_keys/molecule/default/verify.yml",
+]
+
+# Stopping or shortening a backup: the dump and prune timers, their units and tests, the binary log
+# expiry that sets the seven-day point-in-time-recovery window, and the roles that hold the nightly
+# backup timer and the state-copy timer and their may_disable switches.
 BACKUP_PATHS = [
     "ansible/roles/db1_backup_timers/tasks/main.yml",
     "ansible/roles/db1_backup_timers/files/units/branchleft-db-prune.timer",
     "ansible/roles/db1_backup_timers/files/units/branchleft-db-dump.service",
+    "ansible/roles/db1_backup_timers/tests/unit/test_db1_backup_timers.py",
+    "ansible/roles/db1_backup_timers/molecule/default/verify.yml",
+    "ansible/roles/db1_stack/templates/branchleft.cnf.j2",
+    "ansible/roles/db_t1/templates/branchleft.cnf.j2",
+    "ansible/roles/backup_worker/defaults/main.yml",
+    "ansible/roles/backup_worker/tasks/main.yml",
+    "ansible/roles/backup_worker/vars/main.yml",
+    "ansible/roles/backup_worker/molecule/default/converge.yml",
+    "ansible/roles/backup_restore/defaults/main.yml",
+    "ansible/roles/backup_restore/tasks/main.yml",
+    "ansible/roles/backup_restore/molecule/default/verify.yml",
 ]
 
 # The image-scan exemption file (SEC-5): each entry is an exception to the image scan, so each is
@@ -325,8 +381,9 @@ UNOWNED_PATHS = [
     "ansible/playbooks/app1.yml",
     "ansible/playbooks/edge1.yml",
     "ansible/roles/host_baseline/tasks/main.yml",
-    "ansible/roles/broker_deploy/tasks/main.yml",
     "ansible/roles/broker_deploy/templates/broker.env.j2",
+    "ansible/roles/node_exporter/tasks/main.yml",
+    "ansible/roles/node_exporter/files/node-exporter.service",
     # Host configuration that reaches a host only through the gated apply: the edge stack, the
     # NAT gateway, the mx1 stack's role and the deploy tooling's wiring.
     "ansible/roles/edge_stack/tasks/main.yml",
@@ -394,8 +451,6 @@ RELEASED_CHECK_PATHS = [
     "ansible/checks/test_mx1_stack_agree.py",
     "ansible/checks/test_deploy_tooling_links.py",
     "ansible/checks/test_ci_jump_hosts.py",
-    "ansible/roles/db1_grants/molecule/default/verify.yml",
-    "ansible/patterns/sudoers_and_keys/molecule/default/verify.yml",
 ]
 
 # Paths named above that the repository does not hold yet: the launch page directory is listed
@@ -503,8 +558,31 @@ class CodeownersTests(unittest.TestCase):
     def test_the_access_roles_and_the_verifier_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(ACCESS_PATHS)
 
-    def test_the_database_backup_timers_are_owned_by_the_owner(self) -> None:
+    def test_the_backup_timers_and_the_retention_window_are_owned_by_the_owner(self) -> None:
         self.assert_owned(BACKUP_PATHS)
+
+    def test_the_account_creating_tasks_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(ACCOUNT_TASK_PATHS)
+
+    def test_the_tests_of_the_owned_access_code_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(ACCESS_TEST_PATHS)
+
+    def test_every_account_creating_task_is_in_an_owned_file(self) -> None:
+        # A task that runs the user or group module creates a login or a group (criterion 2). The
+        # scan reads every roles/ and patterns/ task file, so a new one in a file that is not
+        # owned fails here before the owner would miss it.
+        header = re.compile(r"^\s+ansible\.builtin\.(user|group):\s*$", re.MULTILINE)
+        found = [
+            f
+            for f in repository_files()
+            if f.startswith(("ansible/roles/", "ansible/patterns/"))
+            and "/tasks/" in f
+            and f.endswith((".yml", ".yaml"))
+            and "/molecule/" not in f
+            and header.search((ROOT / f).read_text(encoding="utf-8"))
+        ]
+        self.assertGreaterEqual(len(found), 8)
+        self.assert_owned(found)
 
     def test_the_ring_controller_role_line_is_its_own_not_a_loader_line(self) -> None:
         patterns = {pattern for pattern, _ in self.rules}
@@ -594,6 +672,8 @@ class CodeownersTests(unittest.TestCase):
             + BOOTSTRAP_GUARD_PATHS
             + KEY_ROLE_PATHS
             + ACCESS_PATHS
+            + ACCOUNT_TASK_PATHS
+            + ACCESS_TEST_PATHS
             + BACKUP_PATHS
             + UNOWNED_PATHS
             + RELEASED_DOCUMENT_PATHS
@@ -626,6 +706,14 @@ class CodeownersTests(unittest.TestCase):
                 "ansible/checks/check_a_new_gate.py",
                 "ansible/checks/test_check_a_new_gate.py",
                 "ansible/checks/a_new_gate_data.yml",
+                # A test of a new gate named like an agreement or single-home test is not
+                # released by its name: only the files named in CODEOWNERS are.
+                "ansible/checks/test_a_new_gate_agree.py",
+                "ansible/checks/test_a_new_gate_single_home.py",
+                "ansible/roles/backup_worker/tasks/new.yml",
+                "ansible/roles/backup_restore/templates/new.j2",
+                "ansible/roles/db1_grants/tests/unit/test_new.py",
+                "ansible/roles/db1_backup_timers/molecule/new/verify.yml",
                 "hetzner/aNewProgram.ts",
                 "hetzner-host/aNewProgram.ts",
                 "hetzner/new/Pulumi.production.yaml",
@@ -661,7 +749,6 @@ class CodeownersTests(unittest.TestCase):
             "test_deploy_tooling_links.py",
             "test_deploy_tooling_probe_name.py",
             "test_deploy_tooling_single_owner.py",
-            "test_deploy_verifier_coverage.py",
             "test_edge_single_home.py",
             "test_egress_nat_single_gateway.py",
             "test_host_baseline_matches_scripts.py",

@@ -43,9 +43,15 @@ pnpm-workspace.yaml                                          @branchLeft/branchl
 /hetzner-host/vitest.config.ts                               @branchLeft/branchleft-admin
 /hetzner/vitest.config.ts                                    @branchLeft/branchleft-admin
 
-# The launch page and the owner's words on it.
+# The launch page and the owner's words on it, and the routing that goes public: the hostname
+# registry, the renderer, the committed Caddyfiles it makes and the test that holds them equal.
 /hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
 /hetzner/edge/publicpressHolding.ts                          @branchLeft/branchleft-admin
+/sites.ts                                                    @branchLeft/branchleft-admin
+/hetzner/edge/render.ts                                      @branchLeft/branchleft-admin
+/hetzner/edge/render.test.ts                                 @branchLeft/branchleft-admin
+/hetzner/edge/stack/caddy/Caddyfile                          @branchLeft/branchleft-admin
+/hetzner/edge/validation/Caddyfile.enforcing                 @branchLeft/branchleft-admin
 
 # Rules, gates and exemption files: the hook set and format skips, the lint floors, the Ansible
 # harness, every CI gate and its tests under ansible/checks/, the CI scripts, the deploy account's
@@ -102,10 +108,14 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/breakglass_grant_host/                        @branchLeft/branchleft-admin
 /ansible/roles/breakglass_mint_host/                         @branchLeft/branchleft-admin
 /ansible/roles/tunnel_account/                               @branchLeft/branchleft-admin
+/ansible/roles/broker_deploy/tasks/main.yml                  @branchLeft/branchleft-admin
 /ansible/roles/broker_deploy/tasks/_sudoers.yml              @branchLeft/branchleft-admin
 /ansible/roles/broker_deploy/tasks/_admin_keys_dir.yml       @branchLeft/branchleft-admin
 /ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2 @branchLeft/branchleft-admin
 broker-verify-key*                                           @branchLeft/branchleft-admin
+/ansible/roles/deploy_verifier/vars/main.yml                 @branchLeft/branchleft-admin
+/ansible/roles/demo1_build/tasks/_accounts.yml               @branchLeft/branchleft-admin
+/ansible/roles/node_exporter/tasks/_node_exporter.yml        @branchLeft/branchleft-admin
 /ansible/roles/host_baseline/tasks/_ssh.yml                  @branchLeft/branchleft-admin
 /ansible/roles/host_baseline/files/01-branchleft-hardening.conf @branchLeft/branchleft-admin
 /ansible/roles/demo1_build/files/judge_caddy_config.py       @branchLeft/branchleft-admin
@@ -114,8 +124,14 @@ broker-verify-key*                                           @branchLeft/branchl
 /ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/render_slot_sudoers.py @branchLeft/branchleft-admin
 /ansible/patterns/sudoers_and_keys/                          @branchLeft/branchleft-admin
 
-# Stopping or shortening a database backup: the role that writes the dump and prune timers.
+# Stopping or shortening a backup: the role that writes the dump and prune timers, the binary log
+# expiry that sets the seven-day point-in-time-recovery window, and the two roles that hold the
+# nightly backup and state-copy timers (the account those roles create is in the same files).
 /ansible/roles/db1_backup_timers/                            @branchLeft/branchleft-admin
+/ansible/roles/db1_stack/templates/branchleft.cnf.j2         @branchLeft/branchleft-admin
+/ansible/roles/db_t1/templates/branchleft.cnf.j2             @branchLeft/branchleft-admin
+/ansible/roles/backup_worker/                                @branchLeft/branchleft-admin
+/ansible/roles/backup_restore/                               @branchLeft/branchleft-admin
 
 # Ansible runs code from the directories beside each playbook it loads, in an imported
 # playbook's directory and in each role. The pull sets no variable that names a plugin or
@@ -243,7 +259,6 @@ pnpm-lock.yaml
 /ansible/checks/test_deploy_tooling_links.py
 /ansible/checks/test_deploy_tooling_probe_name.py
 /ansible/checks/test_deploy_tooling_single_owner.py
-/ansible/checks/test_deploy_verifier_coverage.py
 /ansible/checks/test_edge_single_home.py
 /ansible/checks/test_egress_nat_single_gateway.py
 /ansible/checks/test_host_baseline_matches_scripts.py
@@ -251,19 +266,6 @@ pnpm-lock.yaml
 /ansible/checks/test_mx1_stack_agree.py
 /ansible/checks/test_patterns_typecheck.py
 /ansible/checks/test_ci_jump_hosts.py
-/ansible/checks/test_*_agree*.py
-/ansible/checks/test_*_single_home*.py
-/ansible/roles/db1_grants/tests/
-/ansible/roles/db1_grants/molecule/
-/ansible/roles/db1_backup_timers/tests/
-/ansible/roles/db1_backup_timers/molecule/
-/ansible/roles/tunnel_account/tests/
-/ansible/roles/tunnel_account/molecule/
-/ansible/roles/breakglass_grant_host/tests/
-/ansible/roles/breakglass_grant_host/molecule/
-/ansible/roles/breakglass_mint_host/tests/
-/ansible/roles/breakglass_mint_host/molecule/
-/ansible/patterns/sudoers_and_keys/molecule/
 /hetzner/dns/zonecheck.py
 /hetzner/dns/test_zonecheck.py
 
@@ -274,7 +276,8 @@ pnpm-lock.yaml
 /hetzner/*.guard.test.ts                                     @branchLeft/branchleft-admin
 /hetzner/tenants.structure.test.ts                           @branchLeft/branchleft-admin
 /hetzner-host/enrolment.test.ts                              @branchLeft/branchleft-admin
-CLAUDE.md                                                    @branchLeft/branchleft-admin
+/hetzner-host/cloudInit.test.ts                              @branchLeft/branchleft-admin
+CLAUDE.md                                                   @branchLeft/branchleft-admin
 LICENSE                                                      @branchLeft/branchleft-admin
 /.github/CODEOWNERS                                          @branchLeft/branchleft-admin
 

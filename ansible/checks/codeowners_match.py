@@ -88,6 +88,19 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("scripts/assert-no-hetzner-deletes.py", "gate: a script a secret job runs", True),
     Sample("hetzner/provision/branchleft_deploy.py", "gate: the deploy account command", True),
     Sample("hetzner/provision/test_suite_size.py", "gate: the suite-size floor", True),
+    Sample(
+        "hetzner/scripts/check-crowdsec-hub-pin.py",
+        "gate: a script whose exit code gates a write-token step",
+        True,
+    ),
+    Sample(
+        "hetzner/scripts/test_check_crowdsec_hub_pin.py",
+        "gate: that script's test",
+        True,
+    ),
+    Sample(
+        "ansible/checks/test_deploy_verifier_coverage.py", "gate: what the verifier trusts", True
+    ),
     Sample("hetzner/estate.guard.test.ts", "gate: a Pulumi guard test", True),
     Sample("hetzner/projectGuard.test.ts", "gate: the project guard test", True),
     # Trust, keys and access.
@@ -99,6 +112,21 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/roles/host_baseline/tasks/_ssh.yml", "access: sshd", True),
     Sample("ansible/roles/broker_deploy/tasks/_admin_keys_dir.yml", "access: verifier keys", True),
     Sample("ansible/roles/deploy_slot_keys/tasks/main.yml", "access: deploy account keys", True),
+    Sample("ansible/roles/deploy_verifier/vars/main.yml", "access: the verifier's pinned gh", True),
+    Sample("ansible/roles/broker_deploy/tasks/main.yml", "access: the broker account", True),
+    Sample("ansible/roles/demo1_build/tasks/_accounts.yml", "access: demo1 accounts", True),
+    Sample("ansible/roles/node_exporter/tasks/_node_exporter.yml", "access: its account", True),
+    Sample("ansible/roles/backup_worker/tasks/main.yml", "access: the backup account", True),
+    Sample("hetzner-host/cloudInit.test.ts", "access: a test of key injection", True),
+    Sample("ansible/roles/db1_grants/tests/unit/test_db1_grants.py", "access: a grants test", True),
+    Sample(
+        "ansible/roles/breakglass_mint_host/molecule/default/verify.yml",
+        "access: a break-glass test",
+        True,
+    ),
+    Sample(
+        "ansible/roles/tunnel_account/molecule/default/verify.yml", "access: a tunnel test", True
+    ),
     Sample("ansible/roles/r/library/x.py", "loader: a role's library", True),
     Sample("ansible/library/x.py", "loader: the top-level library", True),
     Sample("hetzner/control-plane/stack/postgres/pg_hba.conf", "access: database access", True),
@@ -118,8 +146,24 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("hetzner/edge/publicpressHolding.ts", "public: the holding page", True),
     Sample("hetzner/edge/publicpress/index.html", "public: the launch page", True),
     Sample("LICENSE", "public: the licence", True),
-    # Database backups.
+    Sample("sites.ts", "public: the hostname registry", True),
+    Sample("hetzner/edge/render.ts", "public: the edge renderer", True),
+    Sample("hetzner/edge/render.test.ts", "public: the test that holds the Caddyfile", True),
+    Sample("hetzner/edge/stack/caddy/Caddyfile", "public: the committed Caddyfile", True),
+    Sample("hetzner/edge/validation/Caddyfile.enforcing", "public: the enforcing Caddyfile", True),
+    # Backups: the timers, the retention window and the schedule.
     Sample("ansible/roles/db1_backup_timers/tasks/main.yml", "backup: dump and prune timers", True),
+    Sample(
+        "ansible/roles/db1_backup_timers/tests/unit/test_db1_backup_timers.py",
+        "backup: a timer test",
+        True,
+    ),
+    Sample("ansible/roles/db1_stack/templates/branchleft.cnf.j2", "backup: binlog expiry", True),
+    Sample("ansible/roles/db_t1/templates/branchleft.cnf.j2", "backup: binlog expiry", True),
+    Sample(
+        "ansible/roles/backup_worker/defaults/main.yml", "backup: the nightly timer switch", True
+    ),
+    Sample("ansible/roles/backup_restore/defaults/main.yml", "backup: the state-copy timer", True),
     # Released: documents, lockfiles and pins, host configuration, tests, checkers, probes.
     Sample("README.md", "released: a document", False),
     Sample("mail/RUNBOOK-mx1-provision.md", "released: a mail document", False),
@@ -132,6 +176,9 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ansible/roles/egress_nat/tasks/main.yml", "released: host configuration", False),
     Sample("ansible/roles/mx1_stack/tasks/main.yml", "released: host configuration", False),
     Sample("ansible/roles/deploy_tooling/tasks/main.yml", "released: deploy wiring", False),
+    Sample("ansible/roles/broker_deploy/templates/broker.env.j2", "released: broker wiring", False),
+    Sample("ansible/roles/node_exporter/tasks/main.yml", "released: host configuration", False),
+    Sample("ansible/roles/backup_worker/README.md", "released: a backup role's document", False),
     Sample("hetzner/estate.test.ts", "released: a Pulumi program test", False),
     Sample("ansible/checks/test_edge_single_home.py", "released: an agreement test", False),
     Sample("ansible/checks/test_ci_jump_hosts.py", "released: an agreement test", False),

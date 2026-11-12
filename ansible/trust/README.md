@@ -20,7 +20,8 @@ push, so a commit of `main` is not what it applies. The limit for demo1 is in
   loads as variables sets `pull_trigger_signers` (R6). The config writer must take its
   signers from the pinned variable (R8).
 - Owner-only in `.github/CODEOWNERS`: a change to a trust file here is the owner's merge. This
-  README is a document, and CODEOWNERS releases every document.
+  README is a document, and CODEOWNERS releases every Markdown file except `CLAUDE.md` and the
+  files under `.github/`.
 - The check does not stop a role edit. A role runs as root and can set the list
   in code. `.github/workflows/ansible-delivery.yml` calls the reusable gated apply in
   `branchLeft/github-workflows`, and the control on a role edit is the owner's deploy
