@@ -11,9 +11,9 @@ change at the registrar, described under "The MX cutover" below. Read "What
 this does not prove" at the end before relying on anything here for real mail
 traffic.
 
-The `mx1_stack` role (`ansible/roles/mx1_stack`) will replace scripts 30, 63, 65 and 70 once
-`branchLeft/shared-infra#352` wires its playbook; until then they stay the way to run those four
-steps by hand, and nothing here changes. The role's README says what it adds (a scoped recreate of
+The `mx1_stack` role (`ansible/roles/mx1_stack`) replaces scripts 30, 63, 65 and 70, but
+`ansible/playbooks/mx1.yml` does not apply it, so those four steps are run by hand and nothing
+here changes. The role's README says what it adds (a scoped recreate of
 only the container whose host input changed, and a freshness read-back before it records a
 stamp) and why it departs from script 63, which leaves Caddy running on an old Caddyfile after a
 content-only change. Do not run script 70 by hand once the role has been applied.
@@ -63,11 +63,10 @@ is silent: the previous `provision_mailboxes.py` runs, finds every mailbox it
 knows about already present, and prints `no-op`, which is indistinguishable
 from success.
 
-(No CI/CD path deploys this. `.github/workflows/ci.yml`'s `mail-typecheck`
-job type-checks the Pulumi program and its `mail-provision-checks` job
-shellchecks these scripts and runs their unit tests, but neither holds a
-credential or touches the host — this project has no credential CI can hold.
-Deploying is a manual `scp` + `ssh`, the same posture as the Pulumi side.)
+(No CI/CD path deploys these scripts. `.github/workflows/ci.yml`'s
+`mail-typecheck` job type-checks the Pulumi program and its
+`mail-provision-checks` job shellchecks these scripts and runs their unit
+tests, but neither touches the host. Deploying them is a manual `scp` + `ssh`.)
 
 ## Why a Python script, not a TOML file, is "config-as-code" here
 
@@ -136,7 +135,7 @@ fixed by the script:
 
 It also switches the log tracer from Stalwart's default (a file under
 `/var/log/stalwart/`, a path this deployment never mounts anywhere durable,
-so those log lines currently go nowhere) to stdout, so `docker logs
+so those log lines go nowhere) to stdout, so `docker logs
 stalwart` shows live activity — this is what let the ACME/TLS evidence
 below get captured at all.
 
@@ -584,7 +583,7 @@ throughout. `50-provision-mailboxes.sh` must have already created the
 lookup fails with a clear "expected provision_mailboxes.py to have already
 created it" error.
 
-This credential is what the blog (Ghost on Cloud Run) authenticates with to
+This credential is what the blog (Ghost) authenticates with to
 send transactional mail as `blog@branchleft.co.uk` over SMTP AUTH on 587 —
 Stalwart's default `mustMatchSender` requires the authenticated account to
 match `MAIL FROM`, hence a real account rather than a bare alias. Retrieved
@@ -617,8 +616,8 @@ credential (see "Retrieving the credential" above), substituting the label.
 
 ## Mailgun shim (bulk mail)
 
-Puts the mailgun-shim (a separate service, image built by a parallel PR)
-on mx1 behind its own TLS front, so Ghost (on GCP Cloud Run) can reach it
+Puts the mailgun-shim (a separate service)
+on mx1 behind its own TLS front, so Ghost can reach it
 at `https://mx1.branchleft.co.uk:8443` for bulk mail, without touching
 Stalwart's own listeners or ACME in any way. Three new artifacts under
 `mail/provision/`:
@@ -638,8 +637,7 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
   — independently revocable from `61`'s transactional `blog-ghost-smtp`
   credential, so retiring or rotating the shim's bulk-mail path never
   touches transactional mail or vice versa. **Read by `render_shim_env.py`**
-  for the image `shim-compose.yml` pins today: that image (ghost-platform
-  `ddaeb39`) still delivers mail itself, and its `smtp-delivery` contract in
+  for the image `shim-compose.yml` pins: that image delivers mail itself, and its `smtp-delivery` contract in
   `shim-env-contracts.json` renders this credential as `SMTP_PASS`. A later
   image whose outbound delivery is gone (`ghost-platform#238`,
   `branchLeft/workspace#1237`) reads no SMTP variable, and would use the
@@ -688,35 +686,14 @@ A new digest also needs its entry in `shim-env-contracts.json` (`digests`,
 mapped to the contract that image reads), in the same commit:
 `render_shim_env.py` refuses a digest the table does not list.
 
-The mailgun-shim image (`ghcr.io/branchleft/mailgun-shim`) is built by a
-shim's own repository, so `shim-compose.yml` ships with a placeholder until a
-real digest exists:
-
-```yaml
-image: ghcr.io/branchleft/mailgun-shim@sha256:IMAGE_DIGEST_PLACEHOLDER
-```
-
-Once that image has a real published digest, edit the line in place (exact
-`sed`, run from a checkout of this repo, or hand-edit — either way, commit
-the result through the normal PR flow, the same as any other change to
-`mail/`):
-
-```bash
-sed -i '' 's/sha256:IMAGE_DIGEST_PLACEHOLDER/sha256:<the real digest>/' mail/provision/shim-compose.yml
-```
-
-(`sed -i ''` is the macOS/BSD form; drop the empty `''` argument on Linux.)
+The mailgun-shim image (`ghcr.io/branchleft/mailgun-shim`) is built by the
+shim's own repository and pinned in `shim-compose.yml` by digest. To change
+the pin, edit the `image:` line in place and commit the result through the
+normal PR flow, the same as any other change to `mail/`.
 `63-deploy-mailgun-shim.sh` refuses to run — loudly, before touching
-anything — while the installed copy of `shim-compose.yml` still has an
-`image:` line whose digest reads as a placeholder. The guard is scoped to
-`image:` lines specifically, not a whole-file match: an earlier version of
-this check grepped the entire file for the literal string `PLACEHOLDER`,
-which also matched this section's own explanatory header comment inside
-`shim-compose.yml` — since the `sed` above only ever rewrites the `image:`
-line, that file-wide form kept refusing to deploy forever, even after a
-real digest had been filled in. Reworded to avoid the false positive at
-both ends: the header comment does not spell out the placeholder token, and
-the guard only ever looks at `image:` lines:
+anything — while the installed copy of `shim-compose.yml` has an
+`image:` line whose digest reads as a placeholder. The guard only ever looks
+at `image:` lines:
 
 ```bash
 if grep -qE '^\s*image:.*PLACEHOLDER' "$DEST_COMPOSE"; then
@@ -724,11 +701,6 @@ if grep -qE '^\s*image:.*PLACEHOLDER' "$DEST_COMPOSE"; then
     exit 1
 fi
 ```
-
-Verify by reproducing the operator sequence against a scratch copy: run the
-`sed` above against the pristine file, then run the guard's own `grep -qE`
-against both. Pristine matches (refuses to deploy, correctly); the rewritten
-copy does not.
 
 The `caddy` image is pinned to a real digest, resolved against the registry
 API — see `shim-compose.yml`'s own header comment for how. The same guard
@@ -781,7 +753,7 @@ this repo, a PR, or a chat transcript.
 ### Handing the drain token to the collector — owner action, once #1239 exists
 
 **This section applies once a drain image's digest is added to
-`shim-env-contracts.json`.** The digest pinned today reads no drain token, so
+`shim-env-contracts.json`.** A digest listed as `smtp-delivery` reads no drain token, so
 `render_shim_env.py` renders none for it, and generates and records nothing
 under `shim-drain-token`. Once a drain digest is pinned and listed,
 `render_shim_env.py` generates `SHIM_DRAIN_TOKEN` on mx1 itself (on the first
@@ -847,14 +819,10 @@ not built here.
 
 ### Owner-execution sequence
 
-In order, once the image digest is real:
+In order:
 
-1. `cd mail && pulumi preview` — expect exactly two rule additions (80/tcp,
-   8443/tcp), nothing else; then `pulumi up`.
-2. Fill in the real `IMAGE_DIGEST_PLACEHOLDER` in `shim-compose.yml` (see
-   "Filling in the image digest" above) and land that as its own commit.
-3. Run the deploy procedure above (`62` then `63`).
-4. Run the tenant registration command above and hand the printed API key to
+1. Run the deploy procedure above (`62` then `63`).
+2. Run the tenant registration command above and hand the printed API key to
    wherever the sending application reads it from.
 
 ## Alerting submission credential
@@ -953,37 +921,24 @@ rather than clean: correct behaviour from the check, but no signal from the
 single most important list in the set. "Local recursive resolver" below is
 the fix.
 
-**SORBS is currently dead — a real, live finding, not a hypothetical.**
-`dnsbl.sorbs.net` has no DNS delegation at all:
-
-```console
-$ dig SOA dnsbl.sorbs.net
-;; ->>HEADER<<- opcode: QUERY, status: NXDOMAIN
-;; AUTHORITY SECTION:
-net.  900  IN  SOA  a.gtld-servers.net. nstld.verisign-grs.com. ...
-```
-
-The `net.` SOA in the authority section means the _.net_ TLD servers have no
-delegation for `sorbs.net` at all — every query against it, including the
-industry-standard test address, returns NXDOMAIN. Without a guard, a naive
-"NXDOMAIN means not listed" check would report SORBS as permanently clean
-while providing zero actual signal. The self-test below is what catches
-this — for SORBS specifically today, and for any other list in this set if
-it ever goes the same way.
+**A list whose zone has lost its DNS delegation answers NXDOMAIN to every
+query, including the industry-standard test address.** Without a guard, a
+naive "NXDOMAIN means not listed" check would report such a list as
+permanently clean while providing zero actual signal. The self-test below is
+what catches this, for any list in this set.
 
 ### The self-test: why "not listed" is only trusted after the zone proves it's answering
 
 Before trusting a "not listed" result for the real target IP, every run
 first queries each zone for the industry-standard always-listed test
-address (`127.0.0.2`, confirmed live above for four of the five lists). If
+address (`127.0.0.2`). If
 that sentinel query doesn't come back listed, the zone isn't providing a
-real signal right now — dead (SORBS, today), unreachable, or rate-limiting
+real signal right now — dead, unreachable, or rate-limiting
 this host — and that list's result for this run is reported
 **inconclusive**, not folded into "clean". This is the concrete answer to
 "a check that always reports clean regardless of input is worse than no
 check": the self-test runs on a live target every hour, not just once at
-review time, so a zone that goes dark later is caught the same way SORBS's
-state was caught while this was written.
+review time, so a zone that goes dark later is caught.
 
 ### Local recursive resolver
 
@@ -1082,19 +1037,17 @@ directly over HTTPS and notifies from outside it.
 
 ### Forwarding findings to Healthchecks.io
 
-**Until steps 3 and 4 below are done this control is not live.** The
-script then logs one `ERROR` line per run (`alert forwarding is not
+Until steps 3 and 4 below are done, the
+script logs one `ERROR` line per run (`alert forwarding is not
 configured`), which `journalctl -t dnsbl-check -p err` shows, on purpose:
 an unwired alert path must look loud, not quiet.
 
-**Decide the SORBS entry before wiring.** SORBS was found dead (see above),
-and while that holds every run reports `CHECK INCONCLUSIVE: SORBS`, which is
-a finding, so every run exits 1 and sends `/fail`. As shipped, the new check therefore
-goes Down at its first ping and stays Down, and a real listing would be
-indistinguishable from that standing state. This change does not alter which
-lists are checked or what counts as a finding; whether to drop SORBS, or to
-treat a dead list differently from a listing, is the platform owner's
-decision and has to be made first.
+**A dead list makes every run a finding.** A list whose sentinel query fails
+reports `CHECK INCONCLUSIVE: <list>`, which is a finding, so every run exits 1
+and sends `/fail`; the check then goes Down and stays Down, and a real listing
+would be indistinguishable from that standing state. Whether to drop such a
+list, or to treat a dead list differently from a listing, is the platform
+owner's decision.
 
 How it works:
 
@@ -1196,7 +1149,7 @@ it succeeds.
 
    **What becomes true:** the next `:05` cron run reports to the check, and
    the first ping turns it from New to Up (or Down, if that run has
-   findings: see the SORBS note above). Doing step 4 before step 3 makes the
+   findings, including an inconclusive list). Doing step 4 before step 3 makes the
    hourly run log the `not configured` error in the meantime.
 
 5. **Fire drill.** Run the script once on mx1 against the always-listed test
@@ -1209,7 +1162,7 @@ it succeeds.
    ```
 
    Expect `exit=1` and `NEW LISTING` lines at `ERROR` (a list that does not
-   answer, such as SORBS, shows `CHECK INCONCLUSIVE` instead). In
+   answer shows `CHECK INCONCLUSIVE` instead). In
    Healthchecks.io the check goes Down, its log holds those lines, and a
    notification arrives on the channel or channels from step 1.
    If no notification arrives, the wiring is not working: look at the check's
@@ -1226,9 +1179,9 @@ it succeeds.
    ssh -i ~/.ssh/id_ed25519_hetzner root@mx1.branchleft.co.uk 'python3 /root/mail-provision/check_dnsbl_blocklist.py; echo "exit=$?"'
    ```
 
-   Expect `exit=0` and the check Up. While SORBS (or any list) still reports
-   a finding, the run exits 1 and the check stays Down: that is the standing
-   SORBS question above, not a fault in the wiring, and then step 5's Down
+   Expect `exit=0` and the check Up. While any list still reports
+   a finding, the run exits 1 and the check stays Down: that is the dead-list
+   question above, not a fault in the wiring, and then step 5's Down
    state with its log lines is the proof of the mechanism. **What becomes
    true:** a clean run clears the Down state, so a later Down means a new
    finding or a missed hour.
@@ -1262,13 +1215,13 @@ account-specific. Each alert
 line names the list and links directly to that list's own current process,
 also collected here for convenience:
 
-| List                            | Start here                                                                                                                              |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| Spamhaus ZEN                    | <https://check.spamhaus.org/>                                                                                                           |
-| Barracuda Reputation Block List | <https://www.barracudacentral.org/rbl/removal-request>                                                                                  |
-| SpamCop Blocking List           | <https://www.spamcop.net/bl.shtml>                                                                                                      |
-| SORBS                           | <http://www.sorbs.net/lookup.shtml> (see "SORBS is currently dead" above — this list is not currently providing real signal either way) |
-| UCEPROTECT Level 1              | <http://www.uceprotect.net/en/rblcheck.php>                                                                                             |
+| List                            | Start here                                             |
+| ------------------------------- | ------------------------------------------------------ |
+| Spamhaus ZEN                    | <https://check.spamhaus.org/>                          |
+| Barracuda Reputation Block List | <https://www.barracudacentral.org/rbl/removal-request> |
+| SpamCop Blocking List           | <https://www.spamcop.net/bl.shtml>                     |
+| SORBS                           | <http://www.sorbs.net/lookup.shtml>                    |
+| UCEPROTECT Level 1              | <http://www.uceprotect.net/en/rblcheck.php>            |
 
 ## Secrets: what is secret, and where it lives
 
@@ -1564,7 +1517,7 @@ Everything above provisions `branchleft.co.uk` itself — the domain Stalwart's
 setup wizard creates on first boot, with its default **Automatic** DKIM
 management. `provision_sending_domain.py` is separate: it creates any
 _other_ sending domain the platform needs, starting with the demo sending
-domain (`@demo.<platform>`, never a tenant domain, never the main domain),
+domain (`@trypublicpress.co.uk`, never a tenant domain, never the main domain),
 and later each tenant's own domain by the same call with a different name.
 
 ```bash
@@ -1602,9 +1555,7 @@ script creates can never have that failure mode, because it is never
 anything but Manual.
 
 Run it, then publish the printed records the same way as "DKIM records to
-publish" above — at Hetzner once
-[branchLeft/workspace#1164](https://github.com/branchLeft/workspace/issues/1164)
-lands, or at IONOS by hand before it. The DKIM TXT record is required for
+publish" above — at the provider that serves the domain's zone. The DKIM TXT record is required for
 every domain; MX, SPF and the DMARC record too unless `--dkim-only` was
 used. For the demo domain, the DMARC policy is: `TXT _dmarc.trypublicpress.co.uk v=DMARC1; p=none; adkim=s; aspf=s`
 
@@ -1702,19 +1653,16 @@ Procedure: `mail/RUNBOOK-mx1-prometheus-metrics.md` step 5.
 
 ## What remains owner-gated
 
-Three things this procedure cannot do for itself, in order:
+One thing this procedure cannot do for itself:
 
-- **The firewall apply**, opening 25/443/465/587/993. Confirm with
-  `hcloud firewall describe <firewall>` and an external `nc` to each port.
 - **Publishing the DKIM TXT records** at the registrar — regenerate from the
   live instance via the admin API (see "DKIM records to publish" above). A
   standing requirement rather than a one-time task, because the keys rotate
   with any volume wipe.
-- **The first ACME issuance**, which cannot succeed until 443 is open.
 
-**Triggering a renewal manually should not be needed going forward.** The
+**Triggering a renewal manually should not be needed.** The
 `AcmeProvider`'s `renewBefore` setting drives Stalwart's own internal
-scheduling — after the issuance above, the platform recorded its own next
+scheduling — after an issuance, the platform records its own next
 renewal task due shortly before the certificate expires, not left for a
 human to remember (visible live on the `AcmeRenewal` task's `due` field,
 `x:Task/get`). If a manual trigger is ever needed anyway (testing, a
