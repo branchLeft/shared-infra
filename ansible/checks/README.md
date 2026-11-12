@@ -72,21 +72,21 @@ It catches a protected key (`pull_trigger_signers`, `pull_trigger_remote_url`,
 file that owns it, and a loader it cannot read.
 
 It does not judge what a role does. The roles run as root, so a change to `roles/` can
-change what a host does with its signers, and this check does not see that. The reusable
-gated apply exists in `branchLeft/github-workflows`, but nothing in this repo calls it, so
-a role edit is not gated by anything here. The control on a role edit is the owner's
-deploy approval of the gated apply, which is not yet wired. Which files the reviewer App
-may merge alone is not yet decided by the owner.
+change what a host does with its signers, and this check does not see that.
+`.github/workflows/ansible-delivery.yml` calls the reusable gated apply in
+`branchLeft/github-workflows`, and the control on a role edit is the owner's deploy
+approval of that gated apply.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
-host in `HOST_PLAY_VARS` in `check_enrolment.py` (today three rows: edge1's `deploy_tooling_host_class`
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (five rows: edge1's `deploy_tooling_host_class`
 with `egress_nat_gateway_enabled: true`, the one switch that makes a host a NAT gateway; edget's
 `egress_nat_gateway_enabled: true` alone (edget is the server edge-t, the tenants network's gateway:
 a network does not span hcloud projects, so there is one gateway per network, edge1 for the estate's
 and edget for the tenants', and `test_egress_nat_single_gateway.py` refuses a second on either; the
-logical name has no hyphen because `HOST_NAME` allows `[a-z][a-z0-9]*`); and app1's
+logical name has no hyphen because `HOST_NAME` allows `[a-z][a-z0-9]*`); app1's
 `deploy_tooling_host_class` with `deploy_tooling_policy_variant`,
-which the role takes with no default for the class and which a host of class app must name; no other variable: a
+which the role takes with no default for the class and which a host of class app must name; dbt1's
+`deploy_tooling_host_class: internal`; and mx1's `host_baseline_fail2ban_ignoreip_none: true`; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
@@ -116,10 +116,9 @@ for it, because a fail-closed rule would refuse real Markdown READMEs.
 What stops such a README from running is not this check. The controls are: the pull runs
 only the derived `HOST.yml` path (R3), so a README under `playbooks/` or `trust/` is never
 the file it runs; the gated workflows; and the owner's deploy approval of the gated apply.
-The last two are not yet wired in this repo, as the roles paragraph above says. Ownership
-differs by file. `trust/README.md` is under the owner's merge (`/ansible/trust/` in
+Ownership differs by file. `trust/README.md` is under the owner's merge (`/ansible/trust/` in
 CODEOWNERS). `playbooks/README.md` has no CODEOWNERS line, so the reviewer App may merge an
-edit to it alone until the owner decides which files the reviewer App may merge alone.
+edit to it alone.
 
 Out of scope: a case-insensitive filesystem. On macOS Ansible can find
 `group_vars/all.YML` under the name `all.yml`, and R6 reads only the exact suffix. This is

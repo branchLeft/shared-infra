@@ -3,10 +3,9 @@
 This role keeps the mail host's two Compose projects (Stalwart, and the mailgun-shim with its Caddy
 front) and its local recursive resolver in step with the repository, and delivers the hourly
 DNSBL check. It is Part 1 of moving the hand scripts `mail/provision/30`, `63`, `65` and `70`
-into Ansible: the role, its tests and these docs. No playbook applies it yet; that wiring is
-[branchLeft/shared-infra#352](https://github.com/branchLeft/shared-infra/issues/352), and until it
-lands the scripts stay the way to run those four steps (`hand_installers.yml` lists them as
-`pending-role`, role `mx1_stack`).
+into Ansible: the role, its tests and these docs. No playbook applies it; the scripts stay the
+way to run those four steps (`ansible/checks/hand_installers.yml` lists them as `pending-role`,
+role `mx1_stack`).
 
 This README is written for a maintainer who is new to the repository. It follows the order the
 standard sets for a role README (ANS-14).
@@ -322,11 +321,8 @@ passed.
 Delivery to a host is ANS-17: only the gated workflow, run against `main` after the approval of its
 protected environment. A plan job shows the host's diff in check mode first; after the approval the
 host pulls that exact commit and applies it, and a second run must report zero changes. Nothing is
-applied from a laptop. This role is applied by no playbook yet
-([branchLeft/shared-infra#352](https://github.com/branchLeft/shared-infra/issues/352)). The first
-gated apply is after the reboot of `mail/RUNBOOK-mx1-reboot.md`, outside a send window; the owner
-chooses its date. The hand scripts stay the documented path until then, and `hand_installers.yml`
-keeps them as `pending-role` against this role.
+applied from a laptop. This role is applied by no playbook. The hand scripts stay the documented
+path, and `ansible/checks/hand_installers.yml` keeps them as `pending-role` against this role.
 
 ## How to change it safely
 

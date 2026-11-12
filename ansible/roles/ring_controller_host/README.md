@@ -236,9 +236,8 @@ Delivery is the gated workflow only (ANS-17): a plan in check mode, the `ansible
 pull of that exact commit on the host, and a second run that must report zero changes. Nothing
 here applies the role by hand, and nobody generates, reads or carries a private key.
 
-Wiring the role to `ops1` is the owner's merge, because the lists it edits are owner-merged paths
-(`ansible/checks/host_roles.yml`, `ansible/playbooks/ops1.yml`, `ansible/owner_vars/ops1.yml`,
-`.github/CODEOWNERS`). Until the owner's apply nothing runs the role.
+The lists that wire the role to `ops1` are owner-merged paths (`ansible/checks/host_roles.yml`,
+`ansible/playbooks/ops1.yml`, `ansible/owner_vars/ops1.yml`, `.github/CODEOWNERS`).
 
 On a fresh host the plan (check mode) shows the key as "would create" and cannot show the public
 half, which exists only after the apply. The first apply writes `record-signing.pub` and prints the
