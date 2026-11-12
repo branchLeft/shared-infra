@@ -92,8 +92,6 @@ and its apply can be approved.
   and off `gs://` state.
 - `PULUMI-BACKEND-INVENTORY.md` — the state-backend enumeration across the
   repos that still have Pulumi programs.
-- `website/infra/KNOWN_ISSUES.md` — GCP/Pulumi bootstrap failure modes; that
-  repo's own infra program is a separate, later removal.
 
 ## License
 
