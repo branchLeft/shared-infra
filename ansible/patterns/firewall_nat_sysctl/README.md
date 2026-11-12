@@ -53,7 +53,7 @@ The role leaves facts after it runs, which a caller or a test reads:
 
 - ansible-core as pinned in `ansible/requirements.txt`, and `min_ansible_version` in
   `meta/main.yml` equal to it.
-- The collection `ansible.posix`, pinned in `ansible/requirements.yml`, for the sysctl
+- The collection `ansible.posix`, from the `ansible` package pinned in `ansible/requirements.txt`, for the sysctl
   module. No module in the pinned collections loads an nftables ruleset (the
   `firewalld` modules in `ansible.posix` manage a different firewall), so the loader
   is called with `ansible.builtin.command` as an argument list, with `changed_when`
@@ -104,8 +104,7 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after 
 approval of its protected environment. A plan job shows each host's diff in check mode
 first; after the approval the host pulls that exact commit of `main` and applies it, and
 a second run must report zero changes. Nothing is applied from a laptop. This pattern is
-not applied to any host: it exists to be copied, and the trigger and the reusable
-workflow are separate work.
+not applied to any host: it exists to be copied.
 
 The Ansible workflow on `main` (`.github/workflows/ansible.yml`) runs the harness over
 every role and every pattern: `ansible/roles/*` and `ansible/patterns/*`, with no path
