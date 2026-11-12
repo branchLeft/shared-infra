@@ -1,0 +1,54 @@
+---
+# Every input is checked before the key file is touched. No assertion loops: a failed loop
+# prints its item, which here would be a key. An empty value is refused, never applied, because
+# an exclusive write of nothing would remove every key.
+- name: Find out whether the key is one plausible public key
+  ansible.builtin.set_fact:
+    ci_step_login_key_ok: '{{ (ci_step_login_key | regex_search(ci_step_login_key_pattern)) is not none }}'
+  no_log: true
+
+- name: Refuse a key that is not one ed25519 public key on one line
+  ansible.builtin.assert:
+    that:
+      - ci_step_login_key_ok | bool
+    quiet: true
+    fail_msg: >-
+      ci_step_login_key is not one public key on one line: an ed25519 key, a base64 body of the
+      length that type has, an optional comment of printable ASCII, and no options in front.
+
+- name: Refuse an empty list of source addresses
+  ansible.builtin.assert:
+    that:
+      - ci_step_login_from | length > 0
+    quiet: true
+    fail_msg: ci_step_login_from is empty. A key with a forced command must say which addresses it may connect from.
+
+# The addresses are public, so the refusal may name the position of each bad entry.
+- name: Find the source addresses that are not one address or a range of at least 256 addresses
+  ansible.builtin.set_fact:
+    ci_step_login_bad_address_numbers: >-
+      {{ range(1, (ci_step_login_from | length) + 1)
+      | zip(ci_step_login_from | map('regex_search', ci_step_login_address_pattern))
+      | rejectattr('1') | map(attribute='0') | list }}
+
+- name: Refuse a source address that is not a dotted IPv4 address or a /24 to /32 range
+  ansible.builtin.assert:
+    that:
+      - ci_step_login_bad_address_numbers | length == 0
+    quiet: true
+    fail_msg: >-
+      Source address number {{ ci_step_login_bad_address_numbers | join(', ') }} is not a dotted IPv4
+      address or a range from /24 to /32. A wildcard, a name, a negation and a wider range are refused.
+
+# exclusive: true makes the account's file exactly this line, so any other key is removed.
+# The key module needs the account, so a check-mode run on a host that has none yet stops here
+# after the checks above; the account is created by the real run.
+- name: Make the authorised keys of the step account exactly the one declared key
+  ansible.posix.authorized_key:
+    user: '{{ ci_step_login_user }}'
+    key: "{{ lookup('ansible.builtin.template', 'authorized_keys.j2') }}"
+    exclusive: true
+    manage_dir: true
+  no_log: true
+  diff: false
+  when: ci_step_login_account_present | bool

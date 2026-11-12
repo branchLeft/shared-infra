@@ -198,7 +198,9 @@ is not loaded there.
   `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url`,
   `ring_controller_host_ledger_url`, `ring_controller_host_ledger_push_remote` and
   `ring_controller_host_push_known_hosts`. Each may be the empty string, which is how the role
-  starts inert; what a value may look like is the role's rule alone.
+  starts inert; what a value may look like is the role's rule alone. The `ci_step_login` role
+  adds two, allowed on ops1 only: `ci_step_login_key`, text, and `ci_step_login_from`, a list of
+  text. `test_ci_step_login_pins.py` holds the real key and addresses to the owner's values.
   R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
   digest pattern, read by name from the role's constants. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
   word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
@@ -228,6 +230,23 @@ key template, the tasks, the variables or the argument spec. The owner accepted 
 source limit; this keeps that visible, so a limit is added by an owner ruling that changes
 the test too. Each pin runs red on a sabotaged copy of its files and green once the file is
 put back.
+
+## test_ci_step_login_pins.py: the step account's one command, one key and one list
+
+The `ci_step_login` role gives the step account root-run sudo for one argument list and writes its
+one key line. The role copies the ed25519 key shape of the `sudoers_and_keys` pattern and the
+trigger program's path (ANS-12), so the test holds both to their homes. It fails when the sudoers
+lines are anything but the `env_keep` line and the one `--mode step` grant (a wildcard, a second
+command, a third line, or a step id or word named in the role); when the key template drops
+`restrict`, the `from` option or the forced command, or names another mode; when the key task is
+not exclusive or loses `no_log`/`diff: false`; when the sudoers task hides its diff or its `visudo`
+validate; when the address pattern accepts a wildcard, a name, a negation or a range wider than
+`/24`, or the key pattern accepts another type, a cut-short body, leading options or a trailing
+line break; when the interface grows past the key and the addresses; when ops1's key or source is
+not the owner's pinned value; and when ops1's step list holds an id or a word the sender
+(`ansible-gated-step.yml`, whose shapes are copied in the test) would refuse, or not exactly the
+three steps. Each pin runs red on a sabotaged copy of its files and green once the file is put back.
+The sudo half is proved in the role's container scenario, not here.
 
 ## test_ci_jump_pins.py: the ci_jump copies, its output and its task order
 

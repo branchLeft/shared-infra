@@ -64,6 +64,12 @@ JUMP_VARS = frozenset(
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
 APPS_IMAGE_KEY = "control_plane_db_apps_image"
+# The two inputs of the ci_step_login role, which only ops1 applies: the step key's public half
+# and the source addresses it may connect from. The role holds the shapes (key type and length,
+# an address or a /24 to /32 range), so only the types are read here.
+STEP_LOGIN_KEY = "ci_step_login_key"
+STEP_LOGIN_FROM = "ci_step_login_from"
+STEP_LOGIN_VARS = frozenset((STEP_LOGIN_KEY, STEP_LOGIN_FROM))
 # The five inputs of the ring_controller_host role. Each is public text that is empty until the
 # owner sets it, and an empty digest keeps the controller's timer off. The role holds the shapes
 # (its vars/main.yml patterns), so only the type is read here, as for APPS_IMAGE_KEY.
@@ -78,7 +84,9 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
 )
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS,
-    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)) | RING_CONTROLLER_TEXT_KEYS,
+    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY))
+    | STEP_LOGIN_VARS
+    | RING_CONTROLLER_TEXT_KEYS,
 }
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
@@ -758,6 +766,19 @@ def _jump_key_problems(doc: dict[str, object]) -> list[str]:
     return problems
 
 
+def _step_login_problems(doc: dict[str, object]) -> list[str]:
+    """The types of the ci_step_login values. What a key or an address may look like is the
+    role's rule alone (vars/main.yml), so only the types are read here."""
+    problems: list[str] = []
+    if STEP_LOGIN_KEY in doc and not isinstance(doc[STEP_LOGIN_KEY], str):
+        problems.append(f"{STEP_LOGIN_KEY} must be text")
+    if STEP_LOGIN_FROM in doc:
+        addresses = doc[STEP_LOGIN_FROM]
+        if not isinstance(addresses, list) or not all(isinstance(item, str) for item in addresses):
+            problems.append(f"{STEP_LOGIN_FROM} must be a list of text entries")
+    return problems
+
+
 def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     """What is wrong with the values of an owner_vars file, by key. A missing key is reported
     by the caller, which compares the key set."""
@@ -773,6 +794,7 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
         for key in sorted(RING_CONTROLLER_TEXT_KEYS)
         if key in doc and not isinstance(doc[key], str)
     )
+    problems.extend(_step_login_problems(doc))
     problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")

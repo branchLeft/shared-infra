@@ -71,7 +71,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # keys need the wrapper the tooling installs) and app1's export_bundler (last of all), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
-# (first), control_plane after the status page, then nextcloud_stack, backup_worker and
+# (first), ci_step_login directly after host_baseline (the step account's route),
+# control_plane after the status page, then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, and ring_controller_host
 # last of all so its failure holds nothing else back, and demo1's two build roles.
@@ -94,6 +95,7 @@ APPLIED_ON_MAIN = {
     "ops1": [
         "host_inputs",
         "host_baseline",
+        "ci_step_login",
         "breakglass_mint_host",
         "safety_service",
         "safety_channel_key",
@@ -393,6 +395,7 @@ class HostRoleLists(unittest.TestCase):
                 "pull_trigger",
                 "host_inputs",
                 "host_baseline",
+                "ci_step_login",
                 "breakglass_mint_host",
                 "safety_service",
                 "safety_channel_key",
@@ -408,6 +411,9 @@ class HostRoleLists(unittest.TestCase):
             ],
         )
         self.assertEqual(names[-1], "ring_controller_host")
+        # The step account follows the baseline directly, so no later role's failure holds back
+        # the route a step is sent over.
+        self.assertEqual(names.index("ci_step_login"), names.index("host_baseline") + 1)
         self.assertLess(names.index("backup_worker"), names.index("backup_restore"))
         # The database role asserts the directory the control plane makes, so it follows it.
         self.assertLess(names.index("control_plane"), names.index("control_plane_db"))

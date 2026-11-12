@@ -16,12 +16,14 @@ in `checks/check_enrolment.py`), then
 `roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
 until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
 `roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
-`playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
+`playbooks/ops1.yml` adds `roles/ci_step_login` (the step account, its one-command sudoers file and
+its one forced-command key line; its key and source addresses are in `owner_vars/ops1.yml`), then
+`roles/breakglass_mint_host`, then
 `roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
 reads), then `roles/control_plane_db` last (it asserts the directory `roles/control_plane` makes; a
 plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
-allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/app1.yml` applies the two pull roles, then
+allow-list (`pull_trigger_steps`) and the values of its other roles that R10 allows. `playbooks/app1.yml` applies the two pull roles, then
 `roles/host_inputs` (the loader of the host's private inputs, which goes first),
 `roles/host_baseline`, `roles/breakglass_grant_host`, `roles/website_app1`, then
 `roles/deploy_tooling` (as class app, standard variant) and `roles/deploy_slot_keys`, then

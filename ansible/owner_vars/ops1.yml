@@ -1,6 +1,7 @@
 ---
-# The owner's values for the roles ops1 applies. check_enrolment.py (R10) allows these seven keys
-# and no others: the step allow-list, the applications image, and five ring controller inputs.
+# The owner's values for the roles ops1 applies. check_enrolment.py (R10) allows these nine keys
+# and no others: the step allow-list, the applications image, the step account's key and source
+# addresses, and five ring controller inputs.
 #
 # pull_trigger_steps is the gated pull's step allow-list: the routine control_plane_db steps
 # ops1 may be asked to run. The program holds the closed list of ids and fixes each tag to
@@ -34,6 +35,16 @@ pull_trigger_steps:
     tag: control_plane_db_provision
     word: PROVISION-OPS1
 control_plane_db_apps_image: 'ghcr.io/branchleft/portal-apps@sha256:06f282c3701cc4ac192cf367c8e290a2c31bb8b77fc70c74555072f7d5631d28'
+#
+# The step account's route (the ci_step_login role). ci_step_login_key is the public half of the
+# step key the owner's deployment environment holds the private half of; the host keeps it as the
+# one key of the step account, restricted to the trigger program in step mode. ci_step_login_from
+# is where that key may connect from: ops1 has no public address and the step is sent through
+# the edge1 jump host, so ops1's sshd sees edge1's private address. A wrong address refuses the
+# key, so no step runs; it never widens it. Both are public values.
+ci_step_login_key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIF7LL0AnUqZIbGs312C8/jx7NR92q+Zs3LbSinLUh6JO control-plane-step'
+ci_step_login_from:
+  - '10.20.1.10'
 #
 # The five ring_controller_host_ keys are the public inputs of the ring controller's host role.
 # All are empty text until the owner sets them, and an empty bundle digest keeps the controller's
