@@ -1,5 +1,12 @@
 import type { EdgeSite, HostRedirect, StaticSite } from './siteTypes';
 
+// Placeholders until the owner names them. While either is unset the webhook
+// entry below claims no hostname and has no upstream, so the renderer skips it
+// and the edge asks for no certificate. Setting both is a deliberate step: see
+// the "Inbound webhook sites" section of `sites.md`.
+const WEBHOOK_HOSTNAME: string | undefined = undefined;
+const WEBHOOK_PORT: number | undefined = undefined;
+
 /**
  * The site registry: everything the Hetzner edge serves. Hostnames and service
  * addressing only; nothing else about a site belongs in this file.
@@ -122,6 +129,23 @@ export const sites: EdgeSite[] = [
     privateUpstream: { host: 'edge1', port: 2586 },
     // A page and a subscription request are a few hundred bytes.
     requestBodyMaxSize: '64KiB',
+  },
+
+  {
+    // Receives the mail provider's signed complaint callbacks, nothing else.
+    // The receiver is a container on edge1; its public listener is the only
+    // port named here, and its private drain listener is never routed.
+    name: 'sweego-webhook',
+    hostnames: WEBHOOK_HOSTNAME === undefined ? [] : [WEBHOOK_HOSTNAME],
+    privateUpstream:
+      WEBHOOK_HOSTNAME === undefined || WEBHOOK_PORT === undefined
+        ? undefined
+        : { host: 'edge1', port: WEBHOOK_PORT },
+    // A complaint callback is a few hundred bytes of JSON; the receiver refuses
+    // anything over 16 KiB itself, and the edge refuses it first.
+    requestBodyMaxSize: '16KiB',
+    // The receiver's one public route (its README names it).
+    inboundWebhookPath: '/webhook',
   },
 ];
 

@@ -27,6 +27,22 @@ itself -- is a `StaticSite` in `staticSites` below instead, never an
 `EdgeSite` with `privateUpstream` left out: that combination already means
 "not rendered at all" here.
 
+## Inbound webhook sites
+
+An entry with `inboundWebhookPath` is a site that only receives signed callbacks; what
+the edge lets through for it is in `hetzner/edge/render.md`, "`siteBlock`: inbound
+webhook". Its hostname and port are owner decisions, so the entry names them through
+two constants at the top of this file that read `undefined` until the owner supplies
+them. While either is unset the entry claims no hostname and has no `privateUpstream`,
+so it is skipped like any site with nowhere to proxy to: no block, no certificate
+request, no probe target. This is the one case where an `EdgeSite` without a
+`privateUpstream` is expected, and the registry test allows it only because the entry
+also claims no hostname.
+
+Setting both is a deliberate step: the upstream host is `edge1`, which the renderer
+refuses except on the ports in `EDGE_HOST_ALLOWED_PORTS`, so the port must be added
+there in the same change.
+
 ## Copying a tenant's port and ceiling
 
 Both values on a tenant's entry belong to that tenant's own stack and neither
