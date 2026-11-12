@@ -254,6 +254,19 @@ to alert mail, which is why it gets the same real storage and copy-forward. `psl
 `sites.publicpress.co.uk`, where the list's maintainers send renewal and
 removal notices, so it too needs real storage and the copy-forward.
 
+**One mailbox on another domain.** `provision_mailboxes.py --domain DOMAIN
+--only LOCALPART` creates exactly `LOCALPART@DOMAIN` and nothing else (for
+example `--domain blog.branchleft.co.uk --only hello`); the domain must already
+exist in Stalwart (`provision_sending_domain.py`). Both flags are required
+together, `DOMAIN` must be in the script's `ALLOWED_DOMAINS` and `LOCALPART`
+must match `[a-z][a-z0-9]{0,31}`, or it exits 2 with `refused, nothing written`
+before it reads any credential. On a domain other than `branchleft.co.uk` the
+mailbox always gets the copy-forward to `rob@branchleft.co.uk`, and its
+generated password is recorded in `/root/.stalwart-mailbox-credentials` under
+the full address, never printed. A second run is a no-op. With neither flag the
+script is unchanged. A new domain is added to `ALLOWED_DOMAINS` in a reviewed
+change, never taken from the command line.
+
 **Every role script carries exactly one `redirect`, and that is a constraint
 rather than a style.** Stalwart caps an untrusted Sieve script at
 `maxRedirects` — [default `1`](https://stalw.art/docs/sieve/interpreter/untrusted/)

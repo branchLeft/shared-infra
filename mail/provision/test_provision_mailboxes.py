@@ -507,5 +507,337 @@ class CredentialLabelUniquenessTests(unittest.TestCase):
         self.assertIn("alerting-submission", self._labels())
 
 
+BLOG = "blog.branchleft.co.uk"
+
+
+class TargetedRunValidationTests(unittest.TestCase):
+    """`--domain D --only L`: the closed domain set and the strict local part
+    are the two controls that stop a mailbox being minted where nobody
+    listed. Each refusal below is a case the control must catch; the
+    sabotage proof for each is recorded in the PR.
+    """
+
+    def test_neither_flag_is_the_default_run(self):
+        self.assertIsNone(pm.validate_target(None, None))
+
+    def test_both_flags_with_an_allowed_pair_is_accepted(self):
+        self.assertIsNone(pm.validate_target(BLOG, "hello"))
+        self.assertIsNone(pm.validate_target("branchleft.co.uk", "rob"))
+        self.assertIsNone(pm.validate_target(BLOG, "a" * 32))
+
+    def test_one_flag_alone_is_refused(self):
+        self.assertIsNotNone(pm.validate_target(BLOG, None))
+        self.assertIsNotNone(pm.validate_target(None, "hello"))
+
+    def test_a_domain_outside_the_allowed_set_is_refused(self):
+        for domain in (
+            "example.com",
+            "publicpress.co.uk",
+            "demo.trypublicpress.co.uk",
+            "co.uk",
+            "x.blog.branchleft.co.uk",
+            "blog.branchleft.co.uk.evil.example",
+            "evilbranchleft.co.uk",
+            "BLOG.branchleft.co.uk",
+            "blog.branchleft.co.uk\n",
+            " blog.branchleft.co.uk",
+            "",
+        ):
+            with self.subTest(domain=domain):
+                self.assertIsNotNone(pm.validate_target(domain, "hello"))
+
+    def test_a_local_part_outside_the_pattern_is_refused(self):
+        for local in (
+            "",
+            "Hello",
+            "1hello",
+            "he llo",
+            "he-llo",
+            "he_llo",
+            "he.llo",
+            "he/llo",
+            "../hello",
+            "hello@branchleft.co.uk",
+            "hello\n",
+            "hello\nrob",
+            "a" * 33,
+            "h\u00e9llo",
+        ):
+            with self.subTest(local=local):
+                self.assertIsNotNone(pm.validate_target(BLOG, local))
+
+    def test_every_existing_mailbox_name_matches_the_pattern(self):
+        for local in MAILBOXES:
+            self.assertIsNone(pm.validate_target("branchleft.co.uk", local))
+
+    def test_the_allowed_set_is_exactly_the_two_domains(self):
+        self.assertEqual(pm.ALLOWED_DOMAINS, ("branchleft.co.uk", BLOG))
+
+
+class ParseArgsTests(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch("sys.stderr", new_callable=io.StringIO)
+        self.stderr = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_no_arguments_is_the_default_run(self):
+        self.assertIsNone(pm.parse_args([]))
+
+    def test_both_flags_return_the_pair(self):
+        self.assertEqual(pm.parse_args(["--domain", BLOG, "--only", "hello"]), (BLOG, "hello"))
+
+    def test_a_refused_pair_exits_2_and_says_nothing_was_written(self):
+        for argv in (
+            ["--domain", "example.com", "--only", "hello"],
+            ["--domain", BLOG, "--only", "Hello"],
+            ["--domain", BLOG],
+            ["--only", "hello"],
+        ):
+            with self.subTest(argv=argv):
+                with self.assertRaises(SystemExit) as caught:
+                    pm.parse_args(argv)
+                self.assertEqual(caught.exception.code, 2)
+        self.assertIn("refused, nothing written", self.stderr.getvalue())
+
+    def test_an_unknown_flag_exits_2(self):
+        with self.assertRaises(SystemExit) as caught:
+            pm.parse_args(["--everything"])
+        self.assertEqual(caught.exception.code, 2)
+
+
+class TargetedRunRefusalReachesNoCredentialTests(unittest.TestCase):
+    """The pair is checked again in the run itself, before the admin
+    credential is read or the API is called."""
+
+    def test_a_bad_pair_reads_no_credential_and_makes_no_call(self):
+        with mock.patch.object(pm, "_load_admin_credentials") as creds, \
+             mock.patch.object(pm, "_get_domain_id") as domain_id, \
+             mock.patch.object(pm, "_create_account") as create, \
+             mock.patch("sys.stderr", new_callable=io.StringIO):
+            for pair in (("example.com", "hello"), (BLOG, "Hello"), (BLOG, "x\ny")):
+                with self.subTest(pair=pair):
+                    self.assertEqual(pm.main(pair), 2)
+        creds.assert_not_called()
+        domain_id.assert_not_called()
+        create.assert_not_called()
+
+
+class TargetedRunTests(unittest.TestCase):
+    """hello@blog.branchleft.co.uk end to end against a fake JMAP layer."""
+
+    AUTH = ("admin", "admin-secret-not-real")
+
+    def _run(self, existing=None, recorded=None, domain=BLOG, local="hello"):
+        out = io.StringIO()
+        err = io.StringIO()
+        records, creates, domain_lookups, sieve = [], [], [], []
+
+        def fake_create(auth, name, create_args):
+            creates.append((name, create_args))
+            return f"id-{name}"
+
+        def fake_domain_id(auth, name):
+            domain_lookups.append(name)
+            return f"domain-id-for-{name}"
+
+        def fake_sieve(auth, name, account_id, *rest):
+            sieve.append((name, account_id, rest))
+            return True
+
+        with mock.patch("sys.stdout", out), mock.patch("sys.stderr", err), \
+             mock.patch.object(pm, "_load_admin_credentials", return_value=self.AUTH), \
+             mock.patch.object(pm, "_get_domain_id", side_effect=fake_domain_id), \
+             mock.patch.object(pm, "_get_existing_account_names", return_value=existing or {}), \
+             mock.patch.object(pm, "_load_recorded_secrets", return_value=recorded or {}), \
+             mock.patch.object(pm, "_record_mailbox_secret", side_effect=lambda k, s: records.append((k, s))), \
+             mock.patch.object(pm, "_create_account", side_effect=fake_create), \
+             mock.patch.object(pm, "_reconcile_role_sieve_script", side_effect=fake_sieve), \
+             mock.patch.object(pm.secrets, "token_urlsafe", return_value="fresh-secret-not-real"):
+            result = pm.main((domain, local))
+        return result, out.getvalue(), err.getvalue(), records, creates, domain_lookups, sieve
+
+    def test_creates_only_the_one_mailbox_on_the_given_domain(self):
+        result, out, _err, _records, creates, lookups, _sieve = self._run()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(lookups, [BLOG])
+        self.assertEqual([name for name, _ in creates], ["hello"])
+        self.assertEqual(creates[0][1]["domainId"], f"domain-id-for-{BLOG}")
+        self.assertEqual(creates[0][1]["name"], "hello")
+        self.assertIn(f"created mailbox hello@{BLOG} (id id-hello)", out)
+        for local in MAILBOXES:
+            self.assertNotIn(f"{local}@", out.replace(f"hello@{BLOG}", ""))
+
+    def test_the_secret_is_recorded_under_the_full_address_before_the_create(self):
+        _r, _out, _err, records, creates, *_ = self._run()
+
+        self.assertEqual(records, [(f"hello@{BLOG}", "fresh-secret-not-real")])
+        self.assertEqual(creates[0][1]["credentials"]["0"]["secret"], "fresh-secret-not-real")
+
+    def test_a_main_domain_secret_for_the_same_local_part_is_not_reused(self):
+        _r, _out, _err, records, creates, *_ = self._run(recorded={"hello": "belongs-to-the-main-domain"})
+
+        self.assertEqual(creates[0][1]["credentials"]["0"]["secret"], "fresh-secret-not-real")
+        self.assertEqual(records, [(f"hello@{BLOG}", "fresh-secret-not-real")])
+
+    def test_a_secret_recorded_for_the_full_address_is_reused_not_rewritten(self):
+        _r, _out, _err, records, creates, *_ = self._run(recorded={f"hello@{BLOG}": "from-a-lost-response"})
+
+        self.assertEqual(creates[0][1]["credentials"]["0"]["secret"], "from-a-lost-response")
+        self.assertEqual(records, [])
+
+    def test_a_second_run_creates_and_records_nothing_and_says_no_op(self):
+        result, out, _err, records, creates, *_ = self._run(existing={"hello": "existing-id"})
+
+        self.assertEqual(result, 0)
+        self.assertEqual(creates, [])
+        self.assertEqual(records, [])
+        self.assertIn("no-op", out)
+
+    def test_no_secret_is_printed(self):
+        _r, out, err, *_ = self._run(recorded={f"hello@{BLOG}": "from-a-lost-response"})
+        _r, out2, err2, *_ = self._run()
+
+        for text in (out, err, out2, err2):
+            self.assertNotIn("from-a-lost-response", text)
+            self.assertNotIn("fresh-secret-not-real", text)
+            self.assertNotIn("admin-secret-not-real", text)
+
+    def test_the_forwarding_script_is_reconciled_for_that_account_on_that_domain(self):
+        *_, sieve = self._run()
+
+        self.assertEqual(sieve, [("hello", "id-hello", (BLOG,))])
+
+    def test_the_forward_target_stays_rob_at_the_main_domain(self):
+        self.assertEqual(FORWARD_TARGET, "rob@branchleft.co.uk")
+        self.assertNotIn(BLOG, FORWARD_TARGET)
+
+    def test_rob_on_the_main_domain_gets_no_forwarding_script(self):
+        *_, sieve = self._run(domain="branchleft.co.uk", local="rob")
+
+        self.assertEqual(sieve, [])
+
+    def test_a_role_address_on_the_main_domain_gets_one(self):
+        *_, sieve = self._run(domain="branchleft.co.uk", local="blog")
+
+        self.assertEqual([name for name, *_ in sieve], ["blog"])
+
+
+class ForwardsToRobTests(unittest.TestCase):
+    def test_main_domain_follows_role_addresses(self):
+        for local in MAILBOXES:
+            self.assertEqual(pm.forwards_to_rob(local, "branchleft.co.uk"), local in ROLE_ADDRESSES)
+
+    def test_another_domain_always_forwards(self):
+        self.assertTrue(pm.forwards_to_rob("hello", BLOG))
+
+
+class RecordedSecretKeyTests(unittest.TestCase):
+    def test_main_domain_keeps_the_bare_local_part(self):
+        self.assertEqual(pm.recorded_secret_key("rob", "branchleft.co.uk"), "rob")
+
+    def test_another_domain_uses_the_full_address(self):
+        self.assertEqual(pm.recorded_secret_key("hello", BLOG), f"hello@{BLOG}")
+
+    def test_the_full_address_round_trips_through_the_credentials_file_format(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = pathlib.Path(tmp) / "creds"
+            path.write_text(f"rob:a\nhello@{BLOG}:b:with:colons\n", encoding="utf-8")
+            with mock.patch.object(pm, "MAILBOX_CREDENTIALS_PATH", str(path)):
+                self.assertEqual(
+                    pm._load_recorded_secrets(), {"rob": "a", f"hello@{BLOG}": "b:with:colons"}
+                )
+
+
+class DefaultRunUnchangedTests(unittest.TestCase):
+    """With neither flag the output is what it was before the flags existed.
+    The golden text below was captured from the unmodified script."""
+
+    def _run_default(self, existing):
+        out = io.StringIO()
+
+        with mock.patch("sys.stdout", out), \
+             mock.patch.object(pm, "_load_admin_credentials", return_value=("admin", "s")), \
+             mock.patch.object(pm, "_get_domain_id", return_value="d1") as domain_id, \
+             mock.patch.object(pm, "_get_existing_account_names", return_value=existing), \
+             mock.patch.object(pm, "_load_recorded_secrets", return_value={}), \
+             mock.patch.object(pm, "_record_mailbox_secret"), \
+             mock.patch.object(pm, "_create_account", side_effect=lambda a, n, c: f"id-{n}"), \
+             mock.patch.object(pm, "_get_sieve_script", return_value=None), \
+             mock.patch.object(pm, "_create_sieve_script"), \
+             mock.patch.object(pm.secrets, "token_urlsafe", return_value="s"):
+            result = pm.main()
+        return result, out.getvalue(), domain_id
+
+    def test_a_fresh_default_run_prints_exactly_the_old_lines(self):
+        result, out, domain_id = self._run_default({})
+
+        self.assertEqual(result, 0)
+        domain_id.assert_called_once_with(("admin", "s"), "branchleft.co.uk")
+        expected = "".join(
+            f"provision_mailboxes: created mailbox {local}@branchleft.co.uk (id id-{local})\n"
+            for local in MAILBOXES
+        ) + "".join(
+            f"provision_mailboxes: created and activated the forwarding script for {local}@branchleft.co.uk\n"
+            for local in ROLE_ADDRESSES
+        )
+        self.assertEqual(out, expected)
+
+    def test_a_reconciled_default_run_prints_exactly_the_old_lines(self):
+        existing = dict.fromkeys(MAILBOXES, "x")
+        out = io.StringIO()
+        script = {"id": "sid", "isActive": True, "blobId": "b"}
+        with mock.patch("sys.stdout", out), \
+             mock.patch.object(pm, "_load_admin_credentials", return_value=("admin", "s")), \
+             mock.patch.object(pm, "_get_domain_id", return_value="d1"), \
+             mock.patch.object(pm, "_get_existing_account_names", return_value=existing), \
+             mock.patch.object(pm, "_load_recorded_secrets", return_value={}), \
+             mock.patch.object(pm, "_get_sieve_script", return_value=script), \
+             mock.patch.object(pm, "_download_blob", return_value=sieve_script_contents(FORWARD_TARGET)):
+            result = pm.main()
+
+        self.assertEqual(result, 0)
+        expected = "provision_mailboxes: all mailboxes already exist, no-op\n" + "".join(
+            f"provision_mailboxes: forwarding script for {local}@branchleft.co.uk already up to date, no-op\n"
+            for local in ROLE_ADDRESSES
+        ) + "provision_mailboxes: nothing left to reconcile\n"
+        self.assertEqual(out.getvalue(), expected)
+
+
+class CommandLineTests(unittest.TestCase):
+    """The real script as a subprocess. A refused pair must exit 2 before the
+    admin credential path (pointed at a file that does not exist, so a read
+    would end in a traceback and exit 1) is touched."""
+
+    SCRIPT = str(pathlib.Path(__file__).resolve().parent / "provision_mailboxes.py")
+
+    def _run(self, *args):
+        import subprocess
+        import sys
+
+        env = {"PATH": os.environ.get("PATH", ""), "STALWART_CREDENTIALS_PATH": "/nonexistent/creds"}
+        return subprocess.run(
+            [sys.executable, "-I", self.SCRIPT, *args],
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+
+    def test_a_domain_outside_the_set_exits_2_without_reading_credentials(self):
+        proc = self._run("--domain", "example.com", "--only", "hello")
+
+        self.assertEqual(proc.returncode, 2)
+        self.assertIn("refused, nothing written", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_a_bad_local_part_exits_2_without_reading_credentials(self):
+        proc = self._run("--domain", BLOG, "--only", "../hello")
+
+        self.assertEqual(proc.returncode, 2)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_one_flag_alone_exits_2(self):
+        self.assertEqual(self._run("--only", "hello").returncode, 2)
+        self.assertEqual(self._run("--domain", BLOG).returncode, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
