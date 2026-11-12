@@ -1,110 +1,121 @@
-# Owner-only files are the ones that judge or gate a merge or a deploy (m14,
-# branchLeft/workspace#2265; source list: branchLeft/workspace#2314). Every
-# other path is merged on the reviewer App's approval, with no catch-all line.
-# Gate files are listed by their existing path. The Ansible loader directories are the
-# exception: they are listed before any file is in them, so a first file in one is already
-# the owner's. Their names come from ansible-core, and ansible/checks/test_codeowners.py
-# fails when a loader has no line. No pattern is matched by a word in a file name, so
-# ordinary role work is not owner-gated by its name.
-# A new gate file is added here by its path, in the pull request that adds it.
+# What the owner reviews, and nothing else. A path is the owner's when a change to it could do harm
+# that no later check of the owner's would catch: it moves a secret or a key, changes who may log in
+# or what runs as root, reaches the mail host, creates or changes a billed resource, changes what
+# the public can reach, shortens a database backup, or weakens a rule, a gate or an exemption that
+# judges a merge or a deploy. Every other path merges on the reviewer App's approval, and a host
+# configuration change that is merged still reaches a host only through the gated apply.
+# The last matching line wins and there is no catch-all line. A line with no owner un-owns what it
+# matches, so the released paths below come after the directories they are cut out of, and the
+# files that must stay the owner's are listed again after them. The shared standards lines are
+# last (SYNC-1). A directory that is owned below and not released stays owned for every new file in
+# it, so a new file of a kept kind fails closed. ansible/checks/test_codeowners.py proves this file
+# against sample paths and against the paths each kept class names.
 
-# Estate files the merge script refuses at gate 6: mail/ runs under plan credentials on push, and every credentialed plan job installs from the lockfiles, pnpm-workspace.yaml files (which hold allowBuilds) and .npmrc files below.
-/mail/                                   @branchLeft/branchleft-admin
-/pnpm-lock.yaml                          @branchLeft/branchleft-admin
-/hetzner/pnpm-lock.yaml                  @branchLeft/branchleft-admin
-/hetzner-host/pnpm-lock.yaml             @branchLeft/branchleft-admin
-/hetzner/pnpm-workspace.yaml             @branchLeft/branchleft-admin
-/hetzner-host/pnpm-workspace.yaml        @branchLeft/branchleft-admin
-/.npmrc                                  @branchLeft/branchleft-admin
-/hetzner/.npmrc                          @branchLeft/branchleft-admin
-/hetzner-host/.npmrc                     @branchLeft/branchleft-admin
+# The mail host and what runs on it: mx1 is live production mail, and the mail programs run under
+# plan credentials. Only the mail documents are released, by the markdown line below.
+/mail/                                                       @branchLeft/branchleft-admin
+/ansible/playbooks/mx1.yml                                   @branchLeft/branchleft-admin
+/ansible/inventories/production/hosts.yml                    @branchLeft/branchleft-admin
+/ansible/inventories/production/group_vars/mx*               @branchLeft/branchleft-admin
+/ansible/inventories/production/host_vars/mx1*               @branchLeft/branchleft-admin
+/ansible/playbooks/group_vars/mx*                            @branchLeft/branchleft-admin
+/ansible/playbooks/host_vars/mx1*                            @branchLeft/branchleft-admin
+/ansible/roles/mail_reconcilers/                             @branchLeft/branchleft-admin
 
-# ovh/ creates Object Storage buckets with object lock at OVHcloud, and a Compliance lock cannot be undone once an object is written, so the whole project, its guards and their tests are the owner's to review.
-/ovh/                                    @branchLeft/branchleft-admin
+# Billed resources and what plans them: the Pulumi programs, their stack files and the install-time
+# controls the credentialed plan jobs run (package.json scripts, pnpm-workspace.yaml allowBuilds,
+# .npmrc), and the DNS zone data. A dependency bump that touches package.json therefore still
+# reaches the owner. Lockfiles are released below. ovh/ creates Object Storage with object lock,
+# and a Compliance lock cannot be undone once an object is written.
+/hetzner/*.ts                                                @branchLeft/branchleft-admin
+/hetzner-host/                                               @branchLeft/branchleft-admin
+/ovh/                                                        @branchLeft/branchleft-admin
+Pulumi*.yaml                                                 @branchLeft/branchleft-admin
+/package.json                                                @branchLeft/branchleft-admin
+/hetzner/package.json                                        @branchLeft/branchleft-admin
+/hetzner-host/package.json                                   @branchLeft/branchleft-admin
+pnpm-workspace.yaml                                          @branchLeft/branchleft-admin
+.npmrc                                                       @branchLeft/branchleft-admin
+/tsconfig.json                                               @branchLeft/branchleft-admin
+/hetzner/tsconfig.json                                       @branchLeft/branchleft-admin
+/hetzner/dns/zone.json                                       @branchLeft/branchleft-admin
+/hetzner/dns/publicpress.co.uk.json                          @branchLeft/branchleft-admin
+/hetzner-host/vitest.config.ts                               @branchLeft/branchleft-admin
+/hetzner/vitest.config.ts                                    @branchLeft/branchleft-admin
 
-# The review rule itself. GitHub reads this file from .github/ first; /.github/ at the foot of this file owns the workflows and actions as well.
-/.github/CODEOWNERS      @branchLeft/branchleft-admin
-# The floors file is a gate the standards job reads. It is listed here, with the other gate files, and not in the shared tail below, because the tail must be the template's own lines.
-/tools/floors.tsv        @branchLeft/branchleft-admin
+# The launch page and the owner's words on it.
+/hetzner/edge/publicpress/                                   @branchLeft/branchleft-admin
+/hetzner/edge/publicpressHolding.ts                          @branchLeft/branchleft-admin
 
-# CI gate scripts and their tests: ci.yml runs the scripts/ and hetzner/scripts/ checks to pass or fail.
-/scripts/                @branchLeft/branchleft-admin
-/hetzner/scripts/        @branchLeft/branchleft-admin
+# Rules, gates and exemption files: the hook set and format skips, the lint floors, the Ansible
+# harness, every CI gate and its tests under ansible/checks/, the CI scripts, the deploy account's
+# command and slot provisioner and their tests, the suite-size floor, the image verifier and the
+# image-scan exemptions. Each directory is owned whole and its released files are listed below.
+/.pre-commit-config.yaml                                     @branchLeft/branchleft-admin
+/.prettierignore                                             @branchLeft/branchleft-admin
+/.ansible-lint                                               @branchLeft/branchleft-admin
+/.yamllint                                                   @branchLeft/branchleft-admin
+/.image-scan-exemptions.json                                 @branchLeft/branchleft-admin
+/tools/floors.tsv                                            @branchLeft/branchleft-admin
+/ansible/pyproject.toml                                      @branchLeft/branchleft-admin
+/ansible/harness/                                            @branchLeft/branchleft-admin
+/ansible/checks/                                             @branchLeft/branchleft-admin
+/scripts/                                                    @branchLeft/branchleft-admin
+/hetzner/scripts/                                            @branchLeft/branchleft-admin
+/hetzner/provision/branchleft_deploy.py                      @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_deploy.py                 @branchLeft/branchleft-admin
+/hetzner/provision/provision_deploy_slot.py                  @branchLeft/branchleft-admin
+/hetzner/provision/test_provision_deploy_slot.py             @branchLeft/branchleft-admin
+/hetzner/provision/test_suite_size.py                        @branchLeft/branchleft-admin
+branchleft-verify-image*                                     @branchLeft/branchleft-admin
+test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
+/hetzner/edge/breakGlassToken.test.ts                        @branchLeft/branchleft-admin
+/hetzner/control-plane/stack/postgres/pg_hba.conf            @branchLeft/branchleft-admin
 
-# Guard and deploy-account files the merge script names as gates: the project guard and the guard tests of the Hetzner stacks, and the deploy account's command, its slot provisioner, their tests and the installer that puts them on a host.
-/hetzner/projectGuard.ts                          @branchLeft/branchleft-admin
-/hetzner/projectGuard.test.ts                     @branchLeft/branchleft-admin
-/hetzner/dns.guard.test.ts                        @branchLeft/branchleft-admin
-/hetzner/tenants.guard.test.ts                    @branchLeft/branchleft-admin
-/hetzner/provision/branchleft_deploy.py           @branchLeft/branchleft-admin
-/hetzner/provision/test_branchleft_deploy.py      @branchLeft/branchleft-admin
-/hetzner/provision/provision_deploy_slot.py       @branchLeft/branchleft-admin
-/hetzner/provision/test_provision_deploy_slot.py  @branchLeft/branchleft-admin
-/hetzner/provision/30-install-deploy-tooling.sh   @branchLeft/branchleft-admin
+# Trust, keys and access: the signer lists, the owner's values for each host, the roles that write
+# sshd, sudoers, authorized_keys, login accounts or signing keys, the verifier's trusted keys, the
+# owner-run bootstrap guards and their fixtures. Every role directory is owned whole and its
+# documents are released below. Pull roles are the owner's alone.
+/ansible/trust/                                              @branchLeft/branchleft-admin
+/ansible/owner_vars/                                         @branchLeft/branchleft-admin
+/ansible/playbooks/includes/                                 @branchLeft/branchleft-admin
+/ansible/tools/seed_host_inputs.py                           @branchLeft/branchleft-admin
+/ansible/tools/test_seed_host_inputs.py                      @branchLeft/branchleft-admin
+/ansible/tools/pubkey_only.py                                @branchLeft/branchleft-admin
+/ansible/tools/test_pubkey_only.py                           @branchLeft/branchleft-admin
+/ansible/tools/ci_key_line.py                                @branchLeft/branchleft-admin
+/ansible/tools/test_ci_key_line.py                           @branchLeft/branchleft-admin
+/ansible/tools/spool_image_gate.py                           @branchLeft/branchleft-admin
+/ansible/tools/test_spool_image_gate.py                      @branchLeft/branchleft-admin
+/ansible/tools/fixtures/                                     @branchLeft/branchleft-admin
+/ansible/roles/pull_trigger/                                 @branchLeft/branchleft-admin
+/ansible/roles/ansible_runtime/                              @branchLeft/branchleft-admin
+/ansible/roles/host_inputs/                                  @branchLeft/branchleft-admin
+/ansible/roles/ci_login/                                     @branchLeft/branchleft-admin
+/ansible/roles/ci_jump/                                      @branchLeft/branchleft-admin
+/ansible/roles/deploy_slot_keys/                             @branchLeft/branchleft-admin
+/ansible/roles/control_plane_db/                             @branchLeft/branchleft-admin
+/ansible/roles/safety_channel_key/                           @branchLeft/branchleft-admin
+/ansible/roles/ring_controller_host/                         @branchLeft/branchleft-admin
+/ansible/roles/safety_service/                               @branchLeft/branchleft-admin
+/ansible/roles/db1_grants/                                   @branchLeft/branchleft-admin
+/ansible/roles/breakglass_grant_host/                        @branchLeft/branchleft-admin
+/ansible/roles/breakglass_mint_host/                         @branchLeft/branchleft-admin
+/ansible/roles/tunnel_account/                               @branchLeft/branchleft-admin
+/ansible/roles/broker_deploy/tasks/_sudoers.yml              @branchLeft/branchleft-admin
+/ansible/roles/broker_deploy/tasks/_admin_keys_dir.yml       @branchLeft/branchleft-admin
+/ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2 @branchLeft/branchleft-admin
+broker-verify-key*                                           @branchLeft/branchleft-admin
+/ansible/roles/host_baseline/tasks/_ssh.yml                  @branchLeft/branchleft-admin
+/ansible/roles/host_baseline/files/01-branchleft-hardening.conf @branchLeft/branchleft-admin
+/ansible/roles/demo1_build/files/judge_caddy_config.py       @branchLeft/branchleft-admin
+/ansible/roles/demo1_build/tests/unit/test_caddy_judge.py    @branchLeft/branchleft-admin
+/ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/branchleft_slot.py @branchLeft/branchleft-admin
+/ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/render_slot_sudoers.py @branchLeft/branchleft-admin
+/ansible/patterns/sudoers_and_keys/                          @branchLeft/branchleft-admin
 
-# Named gates: the DNS cutover stop check and its test, the suite-size pin.
-/hetzner/dns/zonecheck.py                @branchLeft/branchleft-admin
-/hetzner/dns/test_zonecheck.py           @branchLeft/branchleft-admin
-/hetzner/provision/test_suite_size.py    @branchLeft/branchleft-admin
-
-# Test runner and coverage configs: they set the coverage scope and the exclusions that skip files.
-/hetzner/vitest.config.ts                @branchLeft/branchleft-admin
-/hetzner-host/vitest.config.ts           @branchLeft/branchleft-admin
-
-# Hook set and format skip rules: they decide which checks run and which files they skip.
-/.pre-commit-config.yaml                 @branchLeft/branchleft-admin
-/.prettierignore                         @branchLeft/branchleft-admin
-
-# The Ansible lint floors are exemption files (ANS-5, ANS-6), and the harness is the gate that runs them: a role pull request does not loosen them.
-/.ansible-lint                           @branchLeft/branchleft-admin
-/.yamllint                               @branchLeft/branchleft-admin
-/ansible/harness/                        @branchLeft/branchleft-admin
-/ansible/pyproject.toml                  @branchLeft/branchleft-admin
-/ansible/requirements.in                 @branchLeft/branchleft-admin
-/ansible/requirements.txt                @branchLeft/branchleft-admin
-/ansible/requirements.yml                @branchLeft/branchleft-admin
-# Every file CI runs as an Ansible gate: the checks (check_delivery, check_enrolment, check_pins, check_role_imports, check_role_paths), their tests, the CI-shape tests (test_ci_python_steps, test_ci_watched_paths), test_codeowners, test_lock_reader_parity and the hash-locked pip-requirements.txt the gates install from. The pin check is the gate that vouches for the locked toolchain and for the update route (ANS-4).
-/ansible/checks/                         @branchLeft/branchleft-admin
-# Pull-role paths are the owner's alone (owner ruling pull-roles-owner-only, branchLeft/workspace#2340, 2026-10-21). Host playbooks are not: the reviewer App may wire a listed role into one (branchLeft/workspace#2341), and the per-host role list is under /ansible/checks/ above.
-# pull_trigger decides which signed commits a host applies as root, so a change to it is the owner's to review.
-/ansible/roles/pull_trigger/             @branchLeft/branchleft-admin
-# ansible_runtime installs the Ansible that runs as root. Its install program is also what the pin check loads the lock reader and the allowed marker set from, keeping no copy, so what the gate reads is decided in this directory.
-/ansible/roles/ansible_runtime/          @branchLeft/branchleft-admin
-# host_inputs is the one loader of every pulled host's private role inputs (owner ruling, option A): the values of every host pass through it as root, and a check that fails open there exposes them all, so a change to it is the owner's to review.
-/ansible/roles/host_inputs/              @branchLeft/branchleft-admin
-# The owner-run writer of a host's inputs file runs as root, takes every input value and writes the file the loader reads. Its test holds the proofs of what it keeps secret, so the test is the owner's too.
-/ansible/tools/seed_host_inputs.py       @branchLeft/branchleft-admin
-/ansible/tools/test_seed_host_inputs.py  @branchLeft/branchleft-admin
-# The three guards the demo1 root bootstrap runbook calls before it changes anything on a production host: whether a file is a public key and nothing else, whether an authorized_keys read-back is exactly the two forced-command lines, and whether the mail spool image is on the host. Their tests and the captured docker output they read are the proof each guard stops, so weakening any of them is the owner's to review.
-/ansible/tools/pubkey_only.py            @branchLeft/branchleft-admin
-/ansible/tools/test_pubkey_only.py       @branchLeft/branchleft-admin
-/ansible/tools/ci_key_line.py            @branchLeft/branchleft-admin
-/ansible/tools/test_ci_key_line.py       @branchLeft/branchleft-admin
-/ansible/tools/spool_image_gate.py       @branchLeft/branchleft-admin
-/ansible/tools/test_spool_image_gate.py  @branchLeft/branchleft-admin
-/ansible/tools/fixtures/                 @branchLeft/branchleft-admin
-# ci_login grants the pipeline account root-run sudo for the trigger and writes its authorized_keys, so a change to it is the owner's to review.
-/ansible/roles/ci_login/                 @branchLeft/branchleft-admin
-# ci_jump writes the authorized_keys options of the CI jump account, which decide which private hosts the gated run may reach through edge1: SSH access control on the estate's one gateway, so a change to it is the owner's to review.
-/ansible/roles/ci_jump/                  @branchLeft/branchleft-admin
-# owner_vars holds the owner's values for a host's roles, such as the pipeline's public keys. check_enrolment.py (R10) pins which keys each file may set.
-/ansible/owner_vars/                     @branchLeft/branchleft-admin
-# The broker deploy role's sudoers task and template decide which commands the deploy user may run as root: sudoers is a safety class, so the owner reviews it.
-/ansible/roles/broker_deploy/tasks/_sudoers.yml                    @branchLeft/branchleft-admin
-/ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2  @branchLeft/branchleft-admin
-# deploy_slot_keys writes the deploy account's authorized_keys, which decides who may run a stack's deploy command as root, and its module pins the shape of every line it writes. Both are a safety class, so the whole role is the owner's to review.
-/ansible/roles/deploy_slot_keys/         @branchLeft/branchleft-admin
-/ansible/roles/control_plane_db/         @branchLeft/branchleft-admin
-# mail_reconcilers creates the mail host's submission credentials and installs its programs from mail/, which is the owner's, so the whole role is the owner's to review.
-/ansible/roles/mail_reconcilers/         @branchLeft/branchleft-admin
-# safety_channel_key generates the content-safety channel's signing key on ops1 as root and publishes its public half, so the whole role is the owner's to review.
-/ansible/roles/safety_channel_key/       @branchLeft/branchleft-admin
-# ring_controller_host generates the ring controller's record-signing key on ops1 as root, publishes its public half, and installs the unit that hands the key to the controller's service account, so the whole role is the owner's to review.
-/ansible/roles/ring_controller_host/     @branchLeft/branchleft-admin
-# safety_service runs the content-safety service on ops1 as a container with the hash-source credential and the channel signing key mounted, so the unit's mounts and flags decide who can read both and the whole role is the owner's to review.
-/ansible/roles/safety_service/           @branchLeft/branchleft-admin
-# Each host's trusted signer list is the trust anchor of the pull. An edit to a file here is the owner's merge. check_enrolment.py (R2, R3, R6, R8) fails a change that sets a protected key outside its own file. It does not judge a role edit: roles run as root. The reusable gated apply exists in branchLeft/github-workflows, but nothing here calls it, so no gate on a role edit is wired.
-/ansible/trust/                          @branchLeft/branchleft-admin
+# Stopping or shortening a database backup: the role that writes the dump and prune timers.
+/ansible/roles/db1_backup_timers/                            @branchLeft/branchleft-admin
 
 # Ansible runs code from the directories beside each playbook it loads, in an imported
 # playbook's directory and in each role. The pull sets no variable that names a plugin or
@@ -191,10 +202,81 @@
 /ansible/roles/*/terminal_plugins        @branchLeft/branchleft-admin
 /ansible/roles/*/test_plugins            @branchLeft/branchleft-admin
 /ansible/roles/*/vars_plugins            @branchLeft/branchleft-admin
-/tools/floors.tsv        @branchLeft/branchleft-admin
 
-# The image-scan exemption file (SEC-5): every entry is a reviewed exception to the image scan, so the owner reviews each one.
-/.image-scan-exemptions.json             @branchLeft/branchleft-admin
+# Released, with no owner: documents, lockfiles and version pins, tests and fixtures that are not
+# the tests of a kept gate, checkers and probes that run in no job holding a secret, and host
+# configuration that reaches a host only through the gated apply.
+*.md
+pnpm-lock.yaml
+.nvmrc
+/ansible/requirements.txt
+/ansible/requirements.in
+/ansible/requirements.yml
+/ansible/checks/pip-requirements.txt
+/ovh/copy2/probe/requirements.txt
+/hetzner/*.test.ts
+/hetzner-host/*.test.ts
+/hetzner-host/testdata/
+/scripts/assert-min-python-version.py
+/scripts/test_assert_min_python_version.py
+/scripts/nvmrc-node-exec.*
+/scripts/test_nvmrc_node_exec.py
+/hetzner/scripts/check-address-plan-drift.py
+/hetzner/scripts/test_check_address_plan_drift.py
+/hetzner/scripts/probe-*
+/hetzner/scripts/test_probe_*
+/hetzner/scripts/lib/docker-pull.sh
+/hetzner/scripts/test-control-plane-port-policy.sh
+/hetzner/scripts/test-spool-bridge-egress.sh
+/ansible/checks/advisory_passes.py
+/ansible/checks/advisory_passes_fixture.json
+/ansible/checks/offline/
+/ansible/checks/offline_render.py
+/ansible/checks/sabotage_offline_render.py
+/ansible/checks/test_offline_render.py
+/ansible/checks/test_broker_paths_agree.py
+/ansible/checks/test_db1_stack_verify_parts.py
+/ansible/checks/test_demo1_egress_spool_agree.py
+/ansible/checks/test_demo1_no_github_fetch.py
+/ansible/checks/test_deploy_tooling_edge1_class.py
+/ansible/checks/test_deploy_tooling_internal_class.py
+/ansible/checks/test_deploy_tooling_links.py
+/ansible/checks/test_deploy_tooling_probe_name.py
+/ansible/checks/test_deploy_tooling_single_owner.py
+/ansible/checks/test_deploy_verifier_coverage.py
+/ansible/checks/test_edge_single_home.py
+/ansible/checks/test_egress_nat_single_gateway.py
+/ansible/checks/test_host_baseline_matches_scripts.py
+/ansible/checks/test_monitoring_single_home.py
+/ansible/checks/test_mx1_stack_agree.py
+/ansible/checks/test_patterns_typecheck.py
+/ansible/checks/test_ci_jump_hosts.py
+/ansible/checks/test_*_agree*.py
+/ansible/checks/test_*_single_home*.py
+/ansible/roles/db1_grants/tests/
+/ansible/roles/db1_grants/molecule/
+/ansible/roles/db1_backup_timers/tests/
+/ansible/roles/db1_backup_timers/molecule/
+/ansible/roles/tunnel_account/tests/
+/ansible/roles/tunnel_account/molecule/
+/ansible/roles/breakglass_grant_host/tests/
+/ansible/roles/breakglass_grant_host/molecule/
+/ansible/roles/breakglass_mint_host/tests/
+/ansible/roles/breakglass_mint_host/molecule/
+/ansible/patterns/sudoers_and_keys/molecule/
+/hetzner/dns/zonecheck.py
+/hetzner/dns/test_zonecheck.py
+
+# Owned again after the releases: guard tests, the repo's own instructions, the licence, and this
+# file. The standards lines below own /.github/, so this line is also the review rule's own line.
+/ansible/checks/test_deploy_slot_keys_single_home.py         @branchLeft/branchleft-admin
+/hetzner/projectGuard.test.ts                                @branchLeft/branchleft-admin
+/hetzner/*.guard.test.ts                                     @branchLeft/branchleft-admin
+/hetzner/tenants.structure.test.ts                           @branchLeft/branchleft-admin
+/hetzner-host/enrolment.test.ts                              @branchLeft/branchleft-admin
+CLAUDE.md                                                    @branchLeft/branchleft-admin
+LICENSE                                                      @branchLeft/branchleft-admin
+/.github/CODEOWNERS                                          @branchLeft/branchleft-admin
 
 # The shared set from branchLeft/standards templates/codeowners at the v0.8.6 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above with the gate files.
 /.standardsignore        @branchLeft/branchleft-admin

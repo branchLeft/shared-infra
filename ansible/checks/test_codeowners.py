@@ -1,25 +1,35 @@
 """Tests that the files which judge or gate a merge or a deploy are the owner's in CODEOWNERS.
 
-This reads .github/CODEOWNERS the way GitHub does (the last matching line wins) and fails
-when a file that must be the owner's is not. It covers the standards template's lines being
-the file's final lines (SYNC-1), the estate and gate files, the pull-role paths, and the pin
-gate's install program (check_pins.py loads the lock reader from it and keeps no copy), and
-that a host playbook is not the owner's, and that every Ansible loader directory, and a bare
-file or symlink of its name, is the owner's at each level it can sit in.
+This reads .github/CODEOWNERS the way GitHub does (the last matching line wins; the matcher is
+codeowners_match.py) and fails when a file that must be the owner's is not, or when a released
+file is. It covers the standards template's lines being the file's final lines (SYNC-1), the
+estate, gate, access and mail files, the pull-role paths, the pin gate's install program
+(check_pins.py loads the lock reader from it and keeps no copy), that every Ansible loader
+directory, and a bare file or symlink of its name, is the owner's at each level it can sit in, that
+a new file of a kept kind is the owner's before it is listed, and that documents, lockfiles, host
+configuration and the tests of no gate are not.
 """
 
 from __future__ import annotations
 
 import importlib
+import os
 import unittest
 from pathlib import Path
 
 import check_pins
 import pathspec
+from codeowners_match import (
+    CODEOWNERS,
+    OWNER,
+    PENDING,
+    ROOT,
+    SAMPLES,
+    mismatches,
+    owners_of,
+    parse_rules,
+)
 
-ROOT = Path(__file__).resolve().parents[2]
-CODEOWNERS = ROOT / ".github" / "CODEOWNERS"
-OWNER = "@branchLeft/branchleft-admin"
 INSTALL_PROGRAM = "ansible/roles/ansible_runtime/files/install_runtime.py"
 # The loader directories ansible-core searches, derived from the installed ansible-core rather
 # than typed here, so a loader a bump adds is missing from this set until its lines are in
@@ -43,19 +53,82 @@ STANDARDS_TEMPLATE = [
     ("/.github/", [OWNER]),
 ]
 
-# Estate files the merge script refuses at gate 6: mail/ runs under plan credentials, and every
-# credentialed plan job installs from these lockfiles, pnpm-workspace.yaml files and .npmrc files.
+# Install-time controls: every credentialed plan job installs with the registry token in its
+# environment, so a package.json script or main, a pnpm-workspace.yaml allowBuilds list and an
+# .npmrc decide what runs there, and the mail programs run under plan credentials. Lockfiles are
+# released (UNOWNED_PATHS), so a dependency bump that touches package.json still reaches the owner.
 # A directory path stands for a file under it.
 ESTATE_PATHS = [
     "mail/index.ts",
-    "pnpm-lock.yaml",
-    "hetzner/pnpm-lock.yaml",
-    "hetzner-host/pnpm-lock.yaml",
+    "package.json",
+    "hetzner/package.json",
+    "hetzner-host/package.json",
     "hetzner/pnpm-workspace.yaml",
     "hetzner-host/pnpm-workspace.yaml",
     ".npmrc",
     "hetzner/.npmrc",
     "hetzner-host/.npmrc",
+    "tsconfig.json",
+    "hetzner/tsconfig.json",
+]
+
+# The Pulumi programs and stack files that create billed resources, the DNS zone data, and the
+# guard tests that stand over them. A program file is the owner's even when no test names it.
+BILLED_PATHS = [
+    "hetzner/estate.ts",
+    "hetzner/network.ts",
+    "hetzner/dns.ts",
+    "hetzner/dnsZone.ts",
+    "hetzner/egress.ts",
+    "hetzner/index.ts",
+    "hetzner/projects.ts",
+    "hetzner/tenants.ts",
+    "hetzner/tenants.structure.scan.ts",
+    "hetzner/tenants.fixtures.ts",
+    "hetzner/Pulumi.yaml",
+    "hetzner/Pulumi.production.yaml",
+    "hetzner/dns/Pulumi.yaml",
+    "hetzner/estate/Pulumi.production.yaml",
+    "hetzner/tenants/Pulumi.production.yaml",
+    "hetzner/dns/zone.json",
+    "hetzner/dns/publicpress.co.uk.json",
+    "hetzner-host/host.ts",
+    "hetzner-host/index.ts",
+    "hetzner-host/cloudInit.ts",
+    "hetzner-host/firewalls.ts",
+    "hetzner-host/addressPlan.ts",
+    "hetzner-host/enrolment.fixtures.ts",
+    "hetzner-host/enrolment.test.ts",
+    "hetzner-host/pullBootstrapFixed.json",
+    "hetzner/estate.guard.test.ts",
+    "hetzner/dns.guard.test.ts",
+    "hetzner/tenants.guard.test.ts",
+    "hetzner/tenants.structure.test.ts",
+    "hetzner/edge/breakGlassToken.test.ts",
+    "mail/Pulumi.yaml",
+    "ovh/copy2/Pulumi.yaml",
+    "ovh/copy2/index.ts",
+    "ovh/copy2/probe/probe.py",
+    "ovh/copy2/probe/test_probe.py",
+]
+
+# The mail host: mx1 is live production mail. The server's playbook, inventory and variables, the
+# role that makes its credentials, and the mail programs are the owner's; only mail documents are
+# released.
+MAIL_PATHS = [
+    "mail/provision/provision_mailboxes.py",
+    "ansible/playbooks/mx1.yml",
+    "ansible/inventories/production/hosts.yml",
+    "ansible/roles/mail_reconcilers/tasks/main.yml",
+]
+
+# The launch page and the owner's words.
+PUBLIC_PATHS = [
+    "hetzner/edge/publicpressHolding.ts",
+    "hetzner/edge/publicpress/index.html",
+    "LICENSE",
+    "hetzner-host/LICENSE",
+    "CLAUDE.md",
 ]
 
 # Gate files the CODEOWNERS header says judge a merge or a deploy: the review rule, the CI gate
@@ -65,7 +138,9 @@ GATE_PATHS = [
     ".github/CODEOWNERS",
     ".github/workflows/ci.yml",
     "scripts/assert-no-hetzner-deletes.py",
+    "scripts/choose-apply-environment.py",
     "hetzner/scripts/anything.sh",
+    "hetzner/scripts/check-crowdsec-hub-pin.py",
     "hetzner/projectGuard.ts",
     "hetzner/projectGuard.test.ts",
     "hetzner/dns.guard.test.ts",
@@ -74,9 +149,6 @@ GATE_PATHS = [
     "hetzner/provision/test_branchleft_deploy.py",
     "hetzner/provision/provision_deploy_slot.py",
     "hetzner/provision/test_provision_deploy_slot.py",
-    "hetzner/provision/30-install-deploy-tooling.sh",
-    "hetzner/dns/zonecheck.py",
-    "hetzner/dns/test_zonecheck.py",
     "hetzner/provision/test_suite_size.py",
     "hetzner/vitest.config.ts",
     "hetzner-host/vitest.config.ts",
@@ -87,20 +159,25 @@ GATE_PATHS = [
     "ovh/copy2/stack.ts",
     "ovh/copy2/stack.test.ts",
     "ovh/copy2/vitest.config.ts",
-    "ovh/copy2/pnpm-lock.yaml",
     ".pre-commit-config.yaml",
     ".prettierignore",
     ".ansible-lint",
     ".yamllint",
     "ansible/harness/anything.py",
     "ansible/pyproject.toml",
-    "ansible/requirements.in",
-    "ansible/requirements.txt",
-    "ansible/requirements.yml",
     "ansible/checks/check_pins.py",
+    "ansible/checks/check_delivery.py",
+    "ansible/checks/merge_group_proof.py",
+    "ansible/checks/shard_results.py",
+    "ansible/checks/daily_red_issue.py",
     "ansible/checks/test_codeowners.py",
-    "ansible/checks/pip-requirements.txt",
+    "ansible/checks/codeowners_match.py",
+    "ansible/checks/test_ci_watched_paths.py",
+    "ansible/checks/test_no_new_script_dependents.py",
     "ansible/trust/edge1.yml",
+    "hetzner/provision/branchleft-verify-image",
+    "hetzner/provision/test_branchleft_verify_image.py",
+    "hetzner/control-plane/stack/postgres/pg_hba.conf",
 ]
 
 # The pull roles are the owner's alone (owner ruling pull-roles-owner-only, 2026-10-21):
@@ -109,28 +186,25 @@ GATE_PATHS = [
 # deploy user may run as root.
 PULL_ROLE_PATHS = [
     "ansible/roles/pull_trigger/tasks/main.yml",
-    "ansible/roles/pull_trigger/README.md",
     INSTALL_PROGRAM,
-    "ansible/roles/ansible_runtime/README.md",
     "ansible/roles/ansible_runtime/tasks/main.yml",
     "ansible/roles/broker_deploy/tasks/_sudoers.yml",
+    "ansible/roles/broker_deploy/tasks/_admin_keys_dir.yml",
     "ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2",
     "ansible/roles/deploy_slot_keys/tasks/main.yml",
     "ansible/roles/deploy_slot_keys/library/deploy_slot_keys_reconcile.py",
     "ansible/roles/deploy_slot_keys/tests/unit/test_deploy_slot_keys_reconcile.py",
-    "ansible/roles/deploy_slot_keys/README.md",
     "ansible/checks/test_deploy_slot_keys_single_home.py",
 ]
 
 # The loader of every pulled host's private role inputs is the owner's alone (owner ruling,
-# option A): its tasks, its per-host rows, its molecule proof of the
-# refusals, and its README all sit under one path.
+# option A): its tasks, its per-host rows and its molecule proof of the refusals all sit under
+# one path.
 HOST_INPUTS_PATHS = [
     "ansible/roles/host_inputs/tasks/main.yml",
     "ansible/roles/host_inputs/vars/main.yml",
     "ansible/roles/host_inputs/meta/argument_specs.yml",
     "ansible/roles/host_inputs/molecule/default/verify.yml",
-    "ansible/roles/host_inputs/README.md",
 ]
 
 # ci_login grants the pipeline account root-run sudo and writes its authorized_keys; the owner's
@@ -158,7 +232,6 @@ CI_JUMP_PATHS = [
     "ansible/roles/ci_jump/tests/unit/test_ci_jump_authorized_keys.py",
     "ansible/roles/ci_jump/molecule/default/verify.yml",
     "ansible/roles/ci_jump/molecule/refusals/converge.yml",
-    "ansible/roles/ci_jump/README.md",
     "ansible/checks/test_ci_jump_pins.py",
 ]
 
@@ -192,7 +265,6 @@ BOOTSTRAP_GUARD_PATHS = [
 KEY_ROLE_PATHS = [
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
-    "ansible/roles/safety_channel_key/README.md",
     "ansible/roles/ring_controller_host/tasks/main.yml",
     "ansible/roles/ring_controller_host/vars/main.yml",
     "ansible/roles/ring_controller_host/meta/argument_specs.yml",
@@ -203,7 +275,6 @@ KEY_ROLE_PATHS = [
     "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_record_key.py",
     "ansible/roles/ring_controller_host/tests/unit/test_ring_controller_host_units.py",
     "ansible/roles/ring_controller_host/molecule/default/verify.yml",
-    "ansible/roles/ring_controller_host/README.md",
     "ansible/roles/safety_service/tasks/main.yml",
     "ansible/roles/safety_service/vars/main.yml",
     "ansible/roles/safety_service/meta/argument_specs.yml",
@@ -212,7 +283,34 @@ KEY_ROLE_PATHS = [
     "ansible/roles/safety_service/templates/config.json.j2",
     "ansible/roles/safety_service/tests/unit/test_safety_service.py",
     "ansible/roles/safety_service/molecule/default/verify.yml",
-    "ansible/roles/safety_service/README.md",
+]
+
+# Roles that write sshd, sudoers, authorized_keys, login accounts, database grants, a break-glass
+# key or the verifier's trusted keys, and the files that hold what the deploy verifier accepts.
+# These had no line before; each is the owner's whole role, or the named file of it.
+ACCESS_PATHS = [
+    "ansible/roles/db1_grants/tasks/main.yml",
+    "ansible/roles/breakglass_grant_host/tasks/main.yml",
+    "ansible/roles/breakglass_mint_host/tasks/main.yml",
+    "ansible/roles/tunnel_account/tasks/main.yml",
+    "ansible/roles/tunnel_account/tasks/_account.yml",
+    "ansible/roles/host_baseline/tasks/_ssh.yml",
+    "ansible/roles/host_baseline/files/01-branchleft-hardening.conf",
+    "ansible/roles/demo1_build/files/judge_caddy_config.py",
+    "ansible/roles/demo1_build/tests/unit/test_caddy_judge.py",
+    "ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/branchleft_slot.py",
+    "ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/render_slot_sudoers.py",
+    "ansible/patterns/sudoers_and_keys/tasks/main.yml",
+    "ansible/patterns/sudoers_and_keys/templates/authorized_keys.j2",
+    "ansible/playbooks/includes/require_signers.yml",
+    "ansible/playbooks/includes/pull_trigger_common.yml",
+]
+
+# Stopping or shortening a database backup: the dump and prune timers, and their units.
+BACKUP_PATHS = [
+    "ansible/roles/db1_backup_timers/tasks/main.yml",
+    "ansible/roles/db1_backup_timers/files/units/branchleft-db-prune.timer",
+    "ansible/roles/db1_backup_timers/files/units/branchleft-db-dump.service",
 ]
 
 # The image-scan exemption file (SEC-5): each entry is an exception to the image scan, so each is
@@ -229,28 +327,94 @@ UNOWNED_PATHS = [
     "ansible/roles/host_baseline/tasks/main.yml",
     "ansible/roles/broker_deploy/tasks/main.yml",
     "ansible/roles/broker_deploy/templates/broker.env.j2",
+    # Host configuration that reaches a host only through the gated apply: the edge stack, the
+    # NAT gateway, the mx1 stack's role and the deploy tooling's wiring.
+    "ansible/roles/edge_stack/tasks/main.yml",
+    "ansible/roles/egress_nat/tasks/main.yml",
+    "ansible/roles/mx1_stack/tasks/main.yml",
+    "ansible/roles/deploy_tooling/tasks/main.yml",
+    "ansible/roles/monitoring_stack/tasks/main.yml",
 ]
 
+# Released documents: every markdown file, the owner's directories' included. CLAUDE.md is the
+# one markdown file that is owned again, and the files under /.github/ are the standards lines'.
+RELEASED_DOCUMENT_PATHS = [
+    "README.md",
+    "mail/RUNBOOK-mx1-provision.md",
+    "ansible/checks/README.md",
+    "ansible/trust/README.md",
+    "ansible/roles/pull_trigger/README.md",
+    "ansible/roles/ansible_runtime/README.md",
+    "ansible/roles/deploy_slot_keys/README.md",
+    "ansible/roles/host_inputs/README.md",
+    "ansible/roles/ci_jump/README.md",
+    "ansible/roles/safety_channel_key/README.md",
+    "ansible/roles/ring_controller_host/README.md",
+    "ansible/roles/safety_service/README.md",
+    "hetzner/scripts/check-address-plan-drift.md",
+    "scripts/assert-no-hetzner-deletes.md",
+]
 
-def parse_rules(text: str) -> list[tuple[str, list[str]]]:
-    """Return each line of a CODEOWNERS file as its pattern and its owners, in file order."""
-    rules: list[tuple[str, list[str]]] = []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        pattern, *owners = line.split()
-        rules.append((pattern, owners))
-    return rules
+# Released lockfiles and version pins: every one is hash-locked or an exact pin, and the deep
+# review of a bump belongs to the merge route, not to this file.
+RELEASED_PIN_PATHS = [
+    "pnpm-lock.yaml",
+    "hetzner/pnpm-lock.yaml",
+    "hetzner-host/pnpm-lock.yaml",
+    "mail/pnpm-lock.yaml",
+    "ovh/copy2/pnpm-lock.yaml",
+    "ansible/requirements.in",
+    "ansible/requirements.txt",
+    "ansible/requirements.yml",
+    "ansible/checks/pip-requirements.txt",
+    "ovh/copy2/probe/requirements.txt",
+    ".nvmrc",
+    "hetzner/.nvmrc",
+    "mail/.nvmrc",
+]
+
+# Released tests, checkers and probes: agreement tests of a role and a list that stay owned, Pulumi
+# program tests, and checkers and probes that no job holding a secret runs.
+RELEASED_CHECK_PATHS = [
+    "hetzner/estate.test.ts",
+    "hetzner/tenants.test.ts",
+    "hetzner-host/host.test.ts",
+    "hetzner-host/testdata/cloud-init-public.golden",
+    "hetzner/dns/zonecheck.py",
+    "hetzner/dns/test_zonecheck.py",
+    "hetzner/scripts/probe-object-storage.py",
+    "hetzner/scripts/test_probe_object_storage.py",
+    "hetzner/scripts/check-address-plan-drift.py",
+    "hetzner/scripts/test_check_address_plan_drift.py",
+    "scripts/assert-min-python-version.py",
+    "scripts/nvmrc-node-exec.sh",
+    "ansible/checks/offline_render.py",
+    "ansible/checks/test_offline_render.py",
+    "ansible/checks/test_edge_single_home.py",
+    "ansible/checks/test_mx1_stack_agree.py",
+    "ansible/checks/test_deploy_tooling_links.py",
+    "ansible/checks/test_ci_jump_hosts.py",
+    "ansible/roles/db1_grants/molecule/default/verify.yml",
+    "ansible/patterns/sudoers_and_keys/molecule/default/verify.yml",
+]
+
+# Paths named above that the repository does not hold yet: the launch page directory is listed
+# before a file is in it. Samples that stand for a directory or a wildcard are not files on disk.
+STANDS_FOR_MORE = {
+    "mail/index.ts",
+    "hetzner/scripts/anything.sh",
+    "ansible/harness/anything.py",
+    "hetzner/edge/publicpress/index.html",
+}
 
 
-def owners_of(path: str, rules: list[tuple[str, list[str]]]) -> list[str]:
-    """Return the owners of ``path``: those of the last rule that matches it, or none."""
-    owners: list[str] = []
-    for pattern, rule_owners in rules:
-        if pathspec.GitIgnoreSpec.from_lines([pattern]).match_file(path):
-            owners = rule_owners
-    return owners
+def repository_files() -> list[str]:
+    """Return every file in the checkout as a repo-relative path, outside .git and node_modules."""
+    found: list[str] = []
+    for directory, subdirectories, names in os.walk(ROOT):
+        subdirectories[:] = [d for d in subdirectories if d not in {".git", "node_modules"}]
+        found.extend(Path(directory, name).relative_to(ROOT).as_posix() for name in names)
+    return sorted(found)
 
 
 class CodeownersTests(unittest.TestCase):
@@ -264,6 +428,11 @@ class CodeownersTests(unittest.TestCase):
             with self.subTest(path=path):
                 self.assertEqual([OWNER], owners_of(path, self.rules))
 
+    def assert_unowned(self, paths: list[str]) -> None:
+        for path in paths:
+            with self.subTest(path=path):
+                self.assertEqual([], owners_of(path, self.rules))
+
     def test_the_install_program_is_owned_by_the_owner(self) -> None:
         self.assertEqual([OWNER], owners_of(INSTALL_PROGRAM, self.rules))
 
@@ -276,8 +445,40 @@ class CodeownersTests(unittest.TestCase):
         # or between them can take ownership back, because the last matching line wins.
         self.assertEqual(STANDARDS_TEMPLATE, self.rules[-len(STANDARDS_TEMPLATE) :])
 
+    def test_every_sample_gets_the_answer_the_table_requires(self) -> None:
+        # The fixed table in codeowners_match.py: a path for each class the owner keeps and each
+        # class that is released. The command line prints the same rows for any CODEOWNERS file.
+        self.assertEqual([], mismatches(self.rules))
+
+    def test_the_samples_cover_every_kept_class_and_the_released_ones(self) -> None:
+        # A table that lost a class would pass for a file that lost the class's line.
+        classes = {sample.klass.split(":")[0] for sample in SAMPLES if sample.owned}
+        for kept in (
+            "rule",
+            "gate",
+            "trust",
+            "access",
+            "mail",
+            "billed",
+            "dns",
+            "public",
+            "backup",
+        ):
+            self.assertIn(kept, classes)
+        self.assertTrue(any(sample.klass.startswith("loader") for sample in SAMPLES))
+        self.assertGreaterEqual(sum(1 for sample in SAMPLES if not sample.owned), 8)
+
     def test_the_estate_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(ESTATE_PATHS)
+
+    def test_the_billed_programs_and_stack_files_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(BILLED_PATHS)
+
+    def test_the_mail_host_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(MAIL_PATHS)
+
+    def test_the_launch_page_and_the_owners_words_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(PUBLIC_PATHS)
 
     def test_the_gate_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(GATE_PATHS)
@@ -299,11 +500,16 @@ class CodeownersTests(unittest.TestCase):
         # path above that is not under a loader directory falls back to no owner and this fails.
         self.assert_owned(KEY_ROLE_PATHS)
 
+    def test_the_access_roles_and_the_verifier_files_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(ACCESS_PATHS)
+
+    def test_the_database_backup_timers_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(BACKUP_PATHS)
+
     def test_the_ring_controller_role_line_is_its_own_not_a_loader_line(self) -> None:
         patterns = {pattern for pattern, _ in self.rules}
         self.assertIn("/ansible/roles/ring_controller_host/", patterns)
         for path in (
-            "ansible/roles/ring_controller_host/README.md",
             "ansible/roles/ring_controller_host/vars/main.yml",
             "ansible/roles/ring_controller_host/tasks/main.yml",
         ):
@@ -334,32 +540,69 @@ class CodeownersTests(unittest.TestCase):
                 "tools/floors.tsv",
                 ".standards-db-tooling",
                 ".github/workflows/standards.yml",
+                ".github/workflows/ci.md",
             ]
         )
 
     def test_a_host_playbook_and_ordinary_role_files_are_not_the_owners(self) -> None:
-        for path in UNOWNED_PATHS:
-            with self.subTest(path=path):
-                self.assertEqual([], owners_of(path, self.rules))
+        self.assert_unowned(UNOWNED_PATHS)
+
+    def test_documents_are_not_the_owners_but_the_repository_instructions_are(self) -> None:
+        self.assert_unowned(RELEASED_DOCUMENT_PATHS)
+        self.assert_owned(["CLAUDE.md"])
+
+    def test_lockfiles_and_version_pins_are_not_the_owners(self) -> None:
+        self.assert_unowned(RELEASED_PIN_PATHS)
+
+    def test_agreement_tests_program_tests_checkers_and_probes_are_not_the_owners(self) -> None:
+        self.assert_unowned(RELEASED_CHECK_PATHS)
+
+    def test_the_tests_of_a_kept_gate_stay_the_owners(self) -> None:
+        # A released agreement test is not a gate; the tests that stand over a kept gate are.
+        self.assert_owned(
+            [
+                "ansible/checks/test_check_delivery.py",
+                "ansible/checks/test_check_enrolment.py",
+                "ansible/checks/test_check_pins.py",
+                "ansible/checks/test_check_host_roles.py",
+                "ansible/checks/test_ci_gate_order.py",
+                "ansible/checks/test_ci_python_steps.py",
+                "ansible/checks/test_ci_watched_paths.py",
+                "ansible/checks/test_lock_reader_parity.py",
+                "ansible/checks/test_step_allowlist.py",
+                "ansible/checks/test_plan_diff_scan.py",
+                "ansible/checks/test_host_inputs_registry.py",
+                "ansible/checks/test_deploy_tooling_sudoers_seam.py",
+                "ansible/checks/test_offline_workflow.py",
+                "ansible/checks/test_shard_results.py",
+            ]
+        )
 
     def test_every_listed_file_exists(self) -> None:
-        # A path typed wrongly in CODEOWNERS owns nothing and nothing says so. The sample
+        # A path typed wrongly in a list here owns nothing and nothing says so. The sample
         # paths that stand for a directory or a wildcard are not files on disk.
-        stands_for_more = {
-            "mail/index.ts",
-            "hetzner/scripts/anything.sh",
-            "ansible/harness/anything.py",
-        }
-        owned = (
-            PULL_ROLE_PATHS
+        listed = (
+            ESTATE_PATHS
+            + BILLED_PATHS
+            + MAIL_PATHS
+            + PUBLIC_PATHS
+            + GATE_PATHS
+            + PULL_ROLE_PATHS
             + HOST_INPUTS_PATHS
             + CI_LOGIN_PATHS
             + SEEDING_TOOL_PATHS
             + BOOTSTRAP_GUARD_PATHS
             + KEY_ROLE_PATHS
+            + ACCESS_PATHS
+            + BACKUP_PATHS
+            + UNOWNED_PATHS
+            + RELEASED_DOCUMENT_PATHS
+            + RELEASED_PIN_PATHS
+            + RELEASED_CHECK_PATHS
+            + [sample.path for sample in SAMPLES]
         )
-        for path in ESTATE_PATHS + GATE_PATHS + owned + UNOWNED_PATHS:
-            if path in stands_for_more:
+        for path in listed:
+            if path in STANDS_FOR_MORE or path in PENDING:
                 continue
             with self.subTest(path=path):
                 self.assertTrue((ROOT / path).exists(), path)
@@ -374,6 +617,94 @@ class CodeownersTests(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual([OWNER], owners_of(path, self.rules))
+
+    def test_a_new_file_of_a_kept_kind_is_the_owners_before_it_is_listed(self) -> None:
+        # No line names these files, so only a directory or a pattern can own them. A new check,
+        # a new gate test, a new Pulumi program or stack file, and a new loader file fail closed.
+        self.assert_owned(
+            [
+                "ansible/checks/check_a_new_gate.py",
+                "ansible/checks/test_check_a_new_gate.py",
+                "ansible/checks/a_new_gate_data.yml",
+                "hetzner/aNewProgram.ts",
+                "hetzner-host/aNewProgram.ts",
+                "hetzner/new/Pulumi.production.yaml",
+                "ovh/copy2/aNewGuard.ts",
+                "mail/provision/a_new_program.py",
+                "scripts/a_new_ci_script.py",
+                "hetzner/scripts/a_new_ci_script.py",
+                "ansible/trust/newhost.yml",
+                "ansible/owner_vars/newhost.yml",
+                "ansible/roles/mail_reconcilers/tasks/new.yml",
+                "ansible/roles/db1_backup_timers/tasks/new.yml",
+                "ansible/roles/a_new_role/library/a_new_module.py",
+            ]
+        )
+
+    def test_every_check_script_and_its_test_is_the_owners_but_the_released_ones(self) -> None:
+        # Each file in ansible/checks/ is the owner's unless a line releases it. The released
+        # ones are named here, so a release line that spreads past them is seen.
+        released = {
+            "README.md",
+            "advisory_passes.py",
+            "advisory_passes_fixture.json",
+            "offline_render.py",
+            "sabotage_offline_render.py",
+            "pip-requirements.txt",
+            "test_offline_render.py",
+            "test_broker_paths_agree.py",
+            "test_db1_stack_verify_parts.py",
+            "test_demo1_egress_spool_agree.py",
+            "test_demo1_no_github_fetch.py",
+            "test_deploy_tooling_edge1_class.py",
+            "test_deploy_tooling_internal_class.py",
+            "test_deploy_tooling_links.py",
+            "test_deploy_tooling_probe_name.py",
+            "test_deploy_tooling_single_owner.py",
+            "test_deploy_verifier_coverage.py",
+            "test_edge_single_home.py",
+            "test_egress_nat_single_gateway.py",
+            "test_host_baseline_matches_scripts.py",
+            "test_monitoring_single_home.py",
+            "test_mx1_stack_agree.py",
+            "test_patterns_typecheck.py",
+            "test_ci_jump_hosts.py",
+        }
+        checks = ROOT / "ansible" / "checks"
+        top_level = sorted(p.name for p in checks.iterdir() if p.is_file())
+        self.assertIn("check_pins.py", top_level)
+        for name in top_level:
+            path = f"ansible/checks/{name}"
+            with self.subTest(path=path):
+                if name in released:
+                    self.assertEqual([], owners_of(path, self.rules))
+                else:
+                    self.assertEqual([OWNER], owners_of(path, self.rules))
+
+    def test_every_pulumi_program_and_stack_file_and_package_manifest_is_the_owners(self) -> None:
+        # Every Pulumi program file of hetzner/ and hetzner-host/ that is not a test, every
+        # Pulumi*.yaml, and every package.json outside the Ansible roles' payload files.
+        files = repository_files()
+        programs = [
+            f
+            for f in files
+            if f.startswith(("hetzner/", "hetzner-host/"))
+            and f.endswith(".ts")
+            and f.count("/") == 1
+            and not f.endswith(".test.ts")
+        ]
+        stacks = [
+            f for f in files if os.path.basename(f).startswith("Pulumi") and f.endswith(".yaml")
+        ]
+        manifests = [
+            f
+            for f in files
+            if os.path.basename(f) == "package.json" and not f.startswith("ansible/")
+        ]
+        self.assertGreaterEqual(len(programs), 10)
+        self.assertGreaterEqual(len(stacks), 8)
+        self.assertGreaterEqual(len(manifests), 4)
+        self.assert_owned(programs + stacks + manifests)
 
     def test_the_loader_names_are_derived_from_ansible_core(self) -> None:
         # An empty or partial derivation must not pass, so four names every Ansible install has
@@ -415,20 +746,25 @@ class CodeownersTests(unittest.TestCase):
     def test_the_paths_beside_a_loader_directory_stay_unowned(self) -> None:
         # A molecule scenario's library, a directory that is not a loader and a role's tasks are
         # ordinary work and stay on the reviewer App's approval.
-        for path in (
-            "ansible/roles/r/molecule/default/library/x.py",
-            "ansible/patterns/typed_module/library/x.py",
-            "ansible/roles/r/tasks/main.yml",
-            "ansible/library.md",
-        ):
-            with self.subTest(path=path):
-                self.assertEqual([], owners_of(path, self.rules))
+        self.assert_unowned(
+            [
+                "ansible/roles/r/molecule/default/library/x.py",
+                "ansible/patterns/typed_module/library/x.py",
+                "ansible/roles/r/tasks/main.yml",
+                "ansible/library.md",
+            ]
+        )
 
     def test_the_last_matching_line_wins(self) -> None:
         rules = [("/a/", [OWNER]), ("/a/b.py", ["@someone-else"])]
         self.assertEqual(["@someone-else"], owners_of("a/b.py", rules))
         self.assertEqual([OWNER], owners_of("a/c.py", rules))
         self.assertEqual([], owners_of("z/c.py", rules))
+
+    def test_a_line_with_no_owner_un_owns_what_it_matches(self) -> None:
+        rules = [("/a/", [OWNER]), ("*.md", [])]
+        self.assertEqual([], owners_of("a/README.md", rules))
+        self.assertEqual([OWNER], owners_of("a/x.py", rules))
 
 
 if __name__ == "__main__":
