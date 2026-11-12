@@ -1,7 +1,7 @@
 # Inventories
 
 This directory holds the inventories and the group variables that go with
-them. It holds four hosts: `edge1`, in the group `edge`, which has no group
+them. It holds five hosts: `edge1`, in the group `edge`, which has no group
 variables now. Its values, and its trusted signer list, are loaded by
 `playbooks/edge1.yml` through `vars_files`. `edget` (the server edge-t, the
 tenants project's gateway; its logical name has no hyphen because the checks
@@ -12,14 +12,13 @@ through its delivery channel (the `roles/host_inputs` loader). `playbooks/db1.ym
 pull and loads its trust file, `trust/db1.yml`, through `vars_files`.
 `dbt1` (the server db-t1, in group `db` beside `db1`) is under the pull the same way:
 `playbooks/dbt1.yml` loads only its trust file, `trust/dbt1.yml`, and has no owner
-variables. A role applied to a new host adds its host and variables in the same pull request. `ops1`, `app1` and `demo1` have
+variables. `mx1` (the mail host, in the group `mail`) is under the pull too:
+`playbooks/mx1.yml` loads its trust file, `trust/mx1.yml`. A role applied to a new host adds its host and variables in the same pull request. `ops1`, `app1` and `demo1` have
 playbooks under the pull route but no inventory entry: an inventory entry does not enrol a host
 (a playbook and its trust file do), so against this inventory `--limit ops1`, `--limit app1` and
 `--limit demo1` match nothing.
 Their bootstrap route is the one the refusal include describes: on an inline
 one-host inventory (`-i 'HOST,'`) the one-host test is true by construction.
-`ANS-13` leaves the placement of inventories undecided; this layout is a
-proposal that the repository owner confirms or changes.
 
 ## Layout
 
@@ -27,11 +26,9 @@ proposal that the repository owner confirms or changes.
 inventories/
   README.md                 this file
   ENVIRONMENT/
-    hosts.yml               groups and logical host names (does not exist yet)
+    hosts.yml               groups and logical host names
     group_vars/
       README.md             what group variables hold
-      all/                  variables for every host (does not exist yet)
-      GROUP_NAME/           variables for one group (does not exist yet)
 ```
 
 One directory per environment, with that environment's variables inside it.
