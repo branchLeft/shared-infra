@@ -262,8 +262,8 @@ directories only root can write. The role never writes it. For edge1, edget, ops
 - takes each key's value from the live file the hand install wrote (its one table of
   key-to-file is held by a test to this row and to the roles that write those files), so the
   values equal what is live and the first apply changes nothing. app1's `tenant_compose_stacks`
-  is not one file: the tool asks the volume program (`provision_tenant_volume.py --list-claims`,
-  run by its fixed path, as root, with no shell) which tenants are claimed, then reads each one's
+  is not one file: the tool asks the tenant volume program (its `--list-claims` mode, which
+  `ansible/tools/README.md` names with the path; run by its fixed path, as root, with no shell) which tenants are claimed, then reads each one's
   `/opt/branchleft/<slug>/compose.yml`, `/etc/branchleft/<slug>.env` and
   `/etc/branchleft/<slug>.image.env`, with the same checks as every source (opened without
   following a link, owned by root, not writable by others). A claimed tenant with none of the
