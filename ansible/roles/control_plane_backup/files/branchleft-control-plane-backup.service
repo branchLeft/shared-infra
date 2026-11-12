@@ -1,0 +1,24 @@
+# Nightly backup of the control plane's portal and sign-in databases: taken in one
+# snapshot, restored into a throwaway PostgreSQL and counted, sealed with age to the
+# estate recipient, and put to backup copy 1. Installed by the control_plane_backup role.
+[Unit]
+Description=branchLeft control-plane database backup (take, prove by restore, ship ciphertext)
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -I /opt/branchleft/control-plane-backup/branchleft_control_plane_backup.py run
+UMask=0077
+# A take, a restore into a throwaway server, a seal and a put, bounded so a hung run
+# cannot pile up behind the next night's.
+TimeoutStartSec=2h
+MemoryMax=1G
+
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes

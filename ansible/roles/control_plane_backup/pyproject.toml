@@ -1,0 +1,28 @@
+[project]
+name = "control-plane-backup-role"
+version = "0.0.0"
+# The oldest interpreter any machine that runs these tests provides: the repository's floor.
+requires-python = ">=3.12"
+
+[tool.mypy]
+strict = true
+disallow_any_explicit = true
+python_version = "3.12"
+# The program the role installs, checked with its tests (ansible.yml, "Check each role's own program").
+mypy_path = "./files"
+
+# PyYAML and Jinja2 ship no type information in the pinned toolchain. This names the modules; it
+# is not a blanket ignore.
+[[tool.mypy.overrides]]
+module = ["yaml"]
+ignore_missing_imports = true
+
+[tool.ruff]
+# The repository's ruff policy (ansible/pyproject.toml).
+extend = "../../pyproject.toml"
+
+# The tests raise AssertionError from their own helpers to fail a test, as unittest expects. The
+# three rules that want a TypeError, a message kept in the class and a docstring Raises section
+# are for code that a caller catches, not for a test helper.
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["TRY003", "TRY004", "DOC501"]

@@ -1,0 +1,99 @@
+---
+# The timer variables are the only inputs. The argument spec coerces a wrong type
+# rather than rejecting it, so the first task rejects it.
+- name: Refuse a timer switch that is not a boolean
+  ansible.builtin.assert:
+    that:
+      - control_plane_backup_timer_enabled is boolean
+      - control_plane_backup_timer_may_disable is boolean
+    fail_msg: >-
+      control_plane_backup refused its input (rule: types): both timer switches
+      must be true or false.
+    quiet: true
+
+# The program's directory and the on-host backup directory, made before any file
+# goes into them. The backup directory is root-only from the first run, so no copy
+# is ever in a wider directory.
+- name: Create the directory the program is installed into
+  ansible.builtin.file:
+    path: '{{ control_plane_backup_program_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Create the on-host backup directory, root only
+  ansible.builtin.file:
+    path: '{{ control_plane_backup_root }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+# The copy runs the program's own install-time check on a temporary file first, so a
+# program that does not load is never installed and the previous one stays.
+- name: Install the program after its own check passes
+  ansible.builtin.copy:
+    src: '{{ control_plane_backup_program_name }}'
+    dest: '{{ control_plane_backup_program_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+    validate: /usr/bin/python3 -I %s --check
+
+- name: Install the service and timer units
+  ansible.builtin.copy:
+    src: '{{ item }}'
+    dest: '{{ control_plane_backup_unit_dir }}/{{ item }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - '{{ control_plane_backup_service_unit }}'
+    - '{{ control_plane_backup_timer_unit }}'
+  notify: Reload systemd manager
+
+# Queued handlers run here, so the timer task below meets the unit as it now is.
+- name: Load queued unit changes before the timer is handled
+  ansible.builtin.meta: flush_handlers
+
+# Check mode writes no unit, so on a fresh host there is nothing for systemd to
+# enable. The stat runs in check mode as it does in a real run.
+- name: Read back the timer unit file
+  ansible.builtin.stat:
+    path: '{{ control_plane_backup_unit_dir }}/{{ control_plane_backup_timer_unit }}'
+    get_checksum: false
+  register: control_plane_backup_timer_stat
+
+# A nightly run with nowhere to put the ciphertext would fail every night, so the
+# timer is refused while the file the program reads the destination from is absent.
+# The read is of the file's presence only: no content is read.
+- name: Read the file the program takes its destination from
+  ansible.builtin.stat:
+    path: '{{ control_plane_backup_env_file }}'
+    get_checksum: false
+  register: control_plane_backup_env_stat
+  when: control_plane_backup_timer_enabled | bool
+
+- name: Refuse the timer while the destination file is not on the host
+  ansible.builtin.assert:
+    that:
+      - control_plane_backup_env_stat.stat.exists
+    fail_msg: >-
+      control_plane_backup refused to enable the timer: the state-copy environment
+      file is not on the host, so a nightly run could not ship its ciphertext. Apply
+      backup_restore with its inputs and secret files in place first.
+    quiet: true
+  when: control_plane_backup_timer_enabled | bool
+
+# A timer the host already has on is left alone unless control_plane_backup_timer_may_disable
+# is true: with the defaults this task does nothing, so a first apply cannot stop
+# nightly backups that were enabled by hand.
+- name: Hold the nightly timer to the state the variable asks for
+  ansible.builtin.systemd_service:
+    name: '{{ control_plane_backup_timer_unit }}'
+    enabled: '{{ control_plane_backup_timer_enabled | bool }}'
+    state: "{{ 'started' if control_plane_backup_timer_enabled | bool else 'stopped' }}"
+  when:
+    - control_plane_backup_timer_stat.stat.exists
+    - control_plane_backup_timer_enabled | bool or control_plane_backup_timer_may_disable | bool
