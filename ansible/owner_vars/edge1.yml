@@ -1,6 +1,6 @@
 ---
-# The owner's values for the roles edge1 applies. check_enrolment.py (R10) allows these six
-# keys and no others. With a flag false the role leaves its account's keys alone.
+# The owner's values for the roles edge1 applies. check_enrolment.py (R10) allows exactly the
+# keys below and no others. With a flag false the role leaves its account's keys alone.
 ci_login_manage_keys: false
 ci_login_keys: []
 # The jump account's key file and sshd Match block (the ci_jump role). With the flag false the
@@ -23,3 +23,10 @@ ci_jump_destinations:
   - '94.130.108.53'
 ci_jump_keys:
   - key: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOKdVw+4KmgNBt/qi/41FLl5HPj16+vR2mfzm7LqxrjL'
+# The Sweego complaint receiver (the sweego_receiver role): the two host ports, published on edge1's
+# private address only. The webhook port is the one the edge proxies to (it is in
+# EDGE_HOST_ALLOWED_PORTS of hetzner/edge/render.ts); the drain port is reachable from ops1 alone by
+# the role's DOCKER-USER rules and is never an edge upstream. The two must differ and each is an
+# unprivileged port. ansible/checks/test_sweego_receiver_wiring.py holds both facts.
+sweego_receiver_port: 18080
+sweego_receiver_drain_port: 18081

@@ -8,9 +8,10 @@ depends on.
 This README is self-contained and is written for a maintainer new to the repository. It follows
 the order the standard sets for a role README (ANS-14).
 
-Nothing in this role is wired in. It is not listed in `ansible/playbooks/edge1.yml` or in
-`ansible/checks/host_roles.yml`, and it holds no value the owner names (the hostname, the two
-ports, the image). Applying it is a separate, gated step (below, "What the owner does").
+The role is applied on edge1 alone, last of the roles of `ansible/playbooks/edge1.yml`, and is on
+edge1's list in `ansible/checks/host_roles.yml`. The two host ports are the owner's values in
+`ansible/owner_vars/edge1.yml`; the role holds no value for the hostname or the image. It is applied
+only through the gated workflow (below, "What the owner does").
 
 ## What the role does, and what it does not
 
@@ -173,9 +174,10 @@ template unit, and `branchleft-deploy` to write the image pin.
 The role never needs these values from a caller, and the build does not know them, so none is
 written here as a placeholder. In order:
 
-1. Name the two ports in the host's owner variables, wire the role into the edge1 playbook and the
-   host-role map, and add the ports to the edge allow-list of ports and the site constants.
-   (Each of those files is owner-merged.)
+1. Merge the wiring: the two ports in the host's owner variables, the role in the edge1 playbook
+   and the host-role map, and the webhook port (never the drain port) in the edge's list of ports
+   it may proxy to. Each of those files is owner-merged. Place the secret files (step 2) before it
+   merges: the role refuses to run, and so fails the plan, while either is missing.
 2. Place the signing secret and the drain token as root-owned files (`root:31100`, mode `0440`) at
    the paths above.
 3. Publish the receiver image, and run `branchleft-deploy` for the stack `sweego-receiver` so the

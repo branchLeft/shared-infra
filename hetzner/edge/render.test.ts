@@ -84,8 +84,9 @@ describe('resolvePrivateAddress', () => {
     expect(() => resolvePrivateAddress('mx1', 443)).toThrow(/not a backend this edge proxies to/);
   });
 
-  it.each([80, 443, 3000, 9090, 9093, 2587, 25860])(
-    'refuses edge1 on port %s: only the pager port is published for the edge',
+  // 18081 is the Sweego receiver's drain port: ops1 alone reaches it, so no edge route may name it.
+  it.each([80, 443, 3000, 9090, 9093, 2587, 25860, 18079, 18081])(
+    'refuses edge1 on port %s: only the pager port and the receiver webhook port are published for the edge',
     (port) => {
       expect(() => resolvePrivateAddress('edge1', port)).toThrow(
         /not a backend this edge proxies to/
@@ -93,9 +94,10 @@ describe('resolvePrivateAddress', () => {
     }
   );
 
-  it('allows edge1 only on the pager port', () => {
-    expect([...EDGE_HOST_ALLOWED_PORTS]).toEqual([2586]);
+  it('allows edge1 only on the pager port and the receiver webhook port', () => {
+    expect([...EDGE_HOST_ALLOWED_PORTS]).toEqual([2586, 18080]);
     expect(resolvePrivateAddress('edge1', 2586)).toBe('10.20.1.10:2586');
+    expect(resolvePrivateAddress('edge1', 18080)).toBe('10.20.1.10:18080');
   });
 
   it.each([0, -1, 65536, 1.5, Number.NaN])('refuses port %s', (port) => {

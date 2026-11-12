@@ -181,7 +181,10 @@ is not loaded there.
   exactly the keys its host is allowed and no other, with values of the right shape. For
   edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
   `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
-  key (a source address list, say) is refused. The four values of the `ci_jump` role that live in the repository are
+  key (a source address list, say) is refused. edge1 also holds `sweego_receiver_port` and
+  `sweego_receiver_drain_port`, each a whole number (a bool or text is refused; the role holds
+  the range and that the two differ); `test_sweego_receiver_wiring.py` holds the webhook port to
+  the edge's list of upstream ports and the drain port out of it and out of the public firewall. The four values of the `ci_jump` role that live in the repository are
   allowed on every host in `JUMP_HOSTS` (each jump host has its own file, address,
   destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
   `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
