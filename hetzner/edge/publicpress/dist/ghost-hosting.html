@@ -38,14 +38,18 @@ summary:focus-visible{outline:2px solid currentColor;outline-offset:2px}
 .deep>summary::after{color:var(--blue)}
 .deep .body{max-width:40rem;padding-top:1rem}
 .deep .big{font-size:1.5rem;line-height:1.35;font-weight:500}
-footer{margin-top:4rem;padding-bottom:3rem;font:400 .875rem/1.5 var(--mono)}
-.footer-inner{border-top:2px solid var(--pink);padding-top:1.25rem;display:grid;gap:1.5rem}
-footer p{margin:0 0 .5rem}
-.addr{display:block;color:var(--blue);user-select:all}
-.credit{font:400 1rem/1.5 var(--sans)}
+.site-foot{background:var(--ink);color:var(--paper);border-top:.4rem solid var(--pink);padding-block:3rem 3.5rem;font:400 .875rem/1.6 var(--mono)}
+.footer-inner{display:grid;gap:2rem 4rem}
+.site-foot p{margin:0 0 .75rem;max-width:34rem}
+.site-foot p:last-child{margin-bottom:0}
+.foot-brand p:not(.credit){color:rgba(250,250,247,.72)}
+.credit{font:400 1.125rem/1.5 var(--sans);color:var(--paper)}
 .credit svg{display:inline-block;vertical-align:-.15em;width:1.1em;height:1.1em;margin-right:.2em}
-.credit b{font-family:'Syne',sans-serif;font-weight:500;font-synthesis-weight:none;color:var(--blue)}
-@media (min-width:48rem){.three{grid-template-columns:repeat(3,1fr);gap:3rem}.footer-inner{grid-template-columns:1fr 1fr}}
+.credit b{font-family:'Syne',sans-serif;font-weight:500;font-synthesis-weight:none;color:var(--paper)}
+.foot-contact p{display:grid;gap:.15rem;margin-bottom:1.25rem}
+.foot-contact .label{color:rgba(250,250,247,.72)}
+.addr{display:block;color:var(--yellow);user-select:all;overflow-wrap:anywhere}
+@media (min-width:48rem){.three{grid-template-columns:repeat(3,1fr);gap:3rem}.footer-inner{grid-template-columns:minmax(0,3fr) minmax(0,2fr)}}
 @media (prefers-reduced-motion:reduce){summary::after{transition:none}}
 
 :root{--strong-blue:#1F3C8F}
@@ -85,7 +89,7 @@ sup a{text-decoration:none;font-family:var(--mono);padding-inline:.1em}
 .anchor{margin-left:.3em;font-size:.55em;vertical-align:.25em;color:var(--blue);text-decoration:none;opacity:0;transition:opacity .15s}
 h2:hover .anchor,h3:hover .anchor,.anchor:focus-visible{opacity:1}
 @media (hover:none){.anchor{opacity:.45}}
-.more{background:none;border:0;padding:0;font:500 1.0625rem/1.5 var(--sans);color:var(--blue);text-decoration:underline;text-decoration-color:var(--pink);text-decoration-thickness:2px;text-underline-offset:3px;cursor:pointer}
+.more{background:none;border:0;padding:0;text-align:left;font:500 1.0625rem/1.5 var(--sans);color:var(--blue);text-decoration:underline;text-decoration-color:var(--pink);text-decoration-thickness:2px;text-underline-offset:3px;cursor:pointer}
 .more:hover,.more:focus-visible{background:var(--yellow);color:var(--ink);outline:none}
 .band{padding-block:clamp(3rem,7vw,5.5rem)}
 .band .inner{display:grid;gap:1rem}
@@ -104,7 +108,7 @@ h2:hover .anchor,h3:hover .anchor,.anchor:focus-visible{opacity:1}
 .amount{font-size:clamp(2.25rem,5vw,3.5rem);line-height:1.1;font-weight:500;margin:0}
 .per{font:400 .875rem/1.4 var(--mono);margin:0 0 .75rem}
 .price p:last-child{margin:0}
-.mail{background:var(--paper);border:2px solid var(--ink);box-shadow:.4rem .4rem 0 var(--ink);margin-top:2rem;padding:1.5rem;max-width:52rem;min-width:0}
+.mail{background:var(--paper);border:2px solid var(--ink);box-shadow:.4rem .4rem 0 var(--ink);margin-top:2rem;padding:1.5rem;min-width:0}
 .mail h3{font-size:1.5rem;line-height:1.25;font-weight:500;margin:0 0 .5rem;color:var(--blue)}
 .mail>p{font-size:1.0625rem;line-height:1.5;max-width:44rem}
 .tabs{display:flex;flex-wrap:wrap;gap:.5rem;margin:1.25rem 0 1rem}
@@ -112,11 +116,13 @@ h2:hover .anchor,h3:hover .anchor,.anchor:focus-visible{opacity:1}
 .tabs button[aria-selected=true]{background:var(--ink);color:var(--paper)}
 .tabs button:hover{background:var(--yellow);color:var(--ink)}
 .tabs button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
-.panel>p{margin:0 0 .75rem}
+.panel>p{margin:0 0 .75rem;max-width:44rem}
 .scroll{overflow-x:auto}
-.mail table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;min-width:30rem}
-.mail th,.mail td{text-align:left;padding:.6rem .75rem .6rem 0;border-bottom:1px solid rgba(0,0,0,.25);vertical-align:top}
-.mail thead th{font:400 .8125rem/1.4 var(--mono);border-bottom:2px solid var(--ink)}
+.mail table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.mail th,.mail td{text-align:left;padding:.6rem 1.25rem .6rem 0;border-bottom:1px solid rgba(0,0,0,.25);vertical-align:top;white-space:nowrap}
+.mail th:last-child,.mail td:last-child{padding-right:0}
+.mail thead th{font:400 .8125rem/1.4 var(--mono);border-bottom:2px solid var(--ink);white-space:normal}
+.mail thead th.w{width:10.5rem}
 .mail tbody th{font-weight:500}
 .mail td:last-child{font-weight:500}
 .fine{font:400 .6875rem/1.5 var(--sans);color:#4A4A4A;margin:1rem 0 0}
@@ -125,9 +131,10 @@ b .bl,strong .bl{font-weight:700;font-synthesis-weight:auto}
 .sources{font:400 .8125rem/1.5 var(--mono);border-top:1px solid rgba(0,0,0,.25);margin-top:1.75rem;padding-top:.75rem}
 .sources ol{padding-left:1.25rem;margin:.25rem 0 0}
 .cite{font:400 .75em/1 var(--mono);vertical-align:.4em;text-decoration:none;margin-left:.1em}
-.prices .note{background:var(--paper);border:2px solid var(--ink);margin:2rem 0 0;max-width:44rem;font-size:1.125rem;line-height:1.5;padding:1rem 1.25rem}
-.who{display:grid;gap:1.5rem;padding-block:clamp(3rem,7vw,5.5rem);align-items:center}
-.who img{display:block;width:10rem;height:10rem;object-fit:cover;box-shadow:.4rem .4rem 0 var(--pink)}
+.prices .note{background:var(--paper);border:2px solid var(--ink);box-shadow:.4rem .4rem 0 var(--ink);margin:2rem 0 0;font-size:1.125rem;line-height:1.5;padding:1.25rem 1.5rem}
+.who{display:flex;flex-wrap:wrap;align-items:flex-start;gap:1.5rem clamp(1.25rem,4vw,3rem);padding-block:clamp(3rem,7vw,5.5rem)}
+.who>div{flex:1 1 11rem;min-width:0}
+.who img{display:block;flex:none;width:clamp(5.5rem,24vw,10rem);height:auto;aspect-ratio:1;object-fit:cover;box-shadow:.4rem .4rem 0 var(--pink)}
 .who h2{margin:0 0 .75rem;color:var(--blue);font-size:clamp(2.25rem,5vw,3.25rem);line-height:1.08}
 .who h2 .bl{color:var(--ink)}
 .who p{font-size:1.25rem;line-height:1.5;margin:0 0 1rem;max-width:40rem}
@@ -138,15 +145,17 @@ b .bl,strong .bl{font-weight:700;font-synthesis-weight:auto}
 .small{font:400 .875rem/1.5 var(--mono);margin:0}
 .reg-go{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem 1.25rem;margin:0 0 1.5rem}
 .reg-addr{font:400 1rem/1.4 var(--mono);user-select:all;overflow-wrap:anywhere}
-footer{margin-top:0;padding-top:2.5rem}
-.footer-inner{border-top:0;padding-top:0}
 dialog{border:0;padding:0;width:min(48rem,calc(100% - 2rem));max-width:none;max-height:92vh;background:var(--paper);color:var(--ink);box-shadow:.4rem .4rem 0 var(--pink);overflow:auto}
 dialog::backdrop{background:rgba(0,0,0,.55)}
-.bar{position:sticky;top:0;z-index:1;display:flex;justify-content:space-between;align-items:center;gap:1rem;padding:.7rem 1.5rem;background:var(--paper);border-bottom:2px solid var(--pink);font:400 .875rem/1.4 var(--mono)}
-.close{background:none;border:0;padding:.15rem .4rem;font:500 1rem/1.3 var(--sans);color:var(--blue);cursor:pointer}
-.close:hover,.close:focus-visible{background:var(--yellow);color:var(--ink);outline:none}
+.bar{position:sticky;top:0;z-index:2;height:0;display:flex;justify-content:flex-end}
+.close{flex:none;display:inline-flex;align-items:center;justify-content:center;width:2.75rem;height:2.75rem;margin:.85rem .85rem 0 0;padding:0;background:var(--paper);color:var(--ink);border:2px solid var(--ink);border-radius:50%;box-shadow:.2rem .2rem 0 var(--pink);cursor:pointer;transition:transform .2s cubic-bezier(.2,.7,.2,1),box-shadow .2s cubic-bezier(.2,.7,.2,1),background-color .15s ease}
+.close svg{display:block;width:1.15rem;height:1.15rem;transition:transform .3s cubic-bezier(.2,.7,.2,1)}
+.close:hover,.close:focus-visible{background:var(--yellow);transform:translate(-.1rem,-.1rem);box-shadow:.32rem .32rem 0 var(--pink);outline:none}
+.close:hover svg,.close:focus-visible svg{transform:rotate(90deg)}
+.close:focus-visible{outline:2px solid var(--blue);outline-offset:3px}
+.close:active{transform:translate(.15rem,.15rem);box-shadow:0 0 0 var(--pink)}
 .sheet{padding:2rem 1.5rem 2.5rem}
-.sheet h2{color:var(--blue);margin:0 0 1rem}
+.sheet h2{color:var(--blue);margin:0 0 1rem;padding-right:3.5rem}
 .sheet h3{font-size:1.25rem;line-height:1.3;font-weight:500;margin:1.75rem 0 .35rem;scroll-margin-top:4rem}
 .sheet .big{font-size:1.5rem;line-height:1.35;font-weight:500}
 .sheet .end{margin:2rem 0 0}
@@ -171,10 +180,10 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 .n-infra{background:var(--ink);color:var(--paper)}
 .key{font:400 .875rem/1.5 var(--mono);margin:.75rem 0 0}
 @media (min-width:44rem){.lay{grid-template-columns:12rem 1fr}.sheet .person{grid-template-columns:8rem 1fr}}
-@media (min-width:60rem){.beat,.band .inner{grid-template-columns:1fr 1fr;column-gap:4rem;align-items:start}.price-grid{grid-template-columns:repeat(3,1fr);column-gap:2rem}.who{grid-template-columns:10rem 1fr;column-gap:3rem}}
+@media (min-width:60rem){.beat,.band .inner{grid-template-columns:1fr 1fr;column-gap:4rem;align-items:start}.price-grid{grid-template-columns:repeat(3,1fr);column-gap:2rem}}
 @media (max-width:44rem){dialog{width:100%;height:100%;max-height:100%;margin:0;box-shadow:none}}
 @media (max-width:30rem){.logo{--h:1.9rem}.top .btn{padding:.55rem 1rem}}
-@media (prefers-reduced-motion:reduce){.logo,.logo svg,.top .inner,.top{transition:none}}
+@media (prefers-reduced-motion:reduce){.logo,.logo svg,.top .inner,.top,.close,.close svg{transition:none}.close:hover svg,.close:focus-visible svg{transform:none}}
 
 .hero.short{min-height:auto;padding-block:clamp(3rem,8vw,6rem)}
 .hero.short h1{font-size:clamp(2.4rem,7vw,5.5rem)}
@@ -369,7 +378,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p><b>A unique integration:</b> we're not aware of any other Ghost hosting company that offers integration with an alternative to Mailgun. Enables the quality of service of a third-party email provider but from Sweego, an EU-based email provider closer aligned with our values. Higher-reliability delivery at Sweego's price on top of your plan.</p>
 <p>We hold one plan with Sweego and your emails draw from it, so there is no Sweego account for you to manage and you pay for what you send.</p>
 <div class="scroll"><table>
-<thead><tr><th scope="col">Plan</th><th scope="col">Emails a month, newsletters and log-ins together</th><th scope="col">Mail costs</th><th scope="col">You pay a month</th></tr></thead>
+<thead><tr><th scope="col">Plan</th><th scope="col" class="w">Emails a month, newsletters and log-ins together</th><th scope="col">Mail costs</th><th scope="col">You pay a month</th></tr></thead>
 <tbody>
 <tr><th scope="row">Essentials</th><td>10,000</td><td>about €4*</td><td>£15 + about €4*</td></tr>
 <tr><th scope="row">Essentials</th><td>50,000</td><td>about €20*</td><td>£15 + about €20*</td></tr>
@@ -379,7 +388,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <div class="panel" role="tabpanel" id="mail-mg" aria-labelledby="tab-mg" hidden>
 <p>Already have a Mailgun plan? Bring it and pay Mailgun directly. We support it because it's the default that Ghost supports, but we don't set it up for you.</p>
 <div class="scroll"><table>
-<thead><tr><th scope="col">Plan</th><th scope="col">Emails a month, newsletters and log-ins together</th><th scope="col">Mail costs</th><th scope="col">You pay a month</th></tr></thead>
+<thead><tr><th scope="col">Plan</th><th scope="col" class="w">Emails a month, newsletters and log-ins together</th><th scope="col">Mail costs</th><th scope="col">You pay a month</th></tr></thead>
 <tbody>
 <tr><th scope="row">Essentials</th><td>10,000</td><td>from $15*, paid to Mailgun</td><td>£15 + from $15*</td></tr>
 <tr><th scope="row">Professional</th><td>100,000</td><td>$90*, paid to Mailgun</td><td>from £65 + $90*</td></tr>
@@ -402,22 +411,20 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p class="small">We use these details only to contact you about PublicPress.</p>
 </div></section>
 
-<footer class="wrap">
-<div class="footer-inner">
-<div>
+<footer class="site-foot"><div class="wrap footer-inner">
+<div class="foot-brand">
 <p class="credit">PublicPress&trade;, a platform, ecosystem &amp; community for independent journalism. Built for people &amp; planet by <svg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 1080 1080' aria-hidden='true'><path id='backdrop' fill='black' stroke='black' stroke-width='1' d='M 7,227            C 7,227 10,260 10,260              10,260 329,550 329,550              329,550 344,365 344,365              344,365 521,362 521,362              521,362 359,765 359,765              359,765 791,746 791,746              791,746 780,919 780,919              780,919 1056,1056 1056,1056              1056,1056 802,910 802,910              802,910 822,718 822,718              822,718 412,738 412,738              412,738 590,319 590,319              590,319 322,323 322,323              322,323 317,488 317,488              317,488 49,236 49,236              49,236 7,227 7,227 Z'></path><path id='main' fill='#B31761' stroke='#B31761' stroke-width='1' d='M 375,26            C 375,26 360,179 360,179              360,179 732,185 732,185              732,185 580,608 580,608              580,608 941,652 941,652              941,652 887,881 887,881              887,881 1057,1056 1057,1056              1057,1056 789,917 789,917              789,917 799,739 799,739              799,739 385,754 385,754              385,754 547,345 547,345              547,345 344,347 344,347              344,347 328,528 328,528              328,528 7,227 7,227              7,227 375,26 375,26 Z'></path><path id='overlay' fill='#FF006E' stroke='#FF006E' stroke-width='1' opacity='0.2' d='M 7,227            C 7,227 10,260 10,260              10,260 329,550 329,550              329,550 344,365 344,365              344,365 521,362 521,362              521,362 359,765 359,765              359,765 791,746 791,746              791,746 780,919 780,919              780,919 1056,1056 1056,1056              1056,1056 802,910 802,910              802,910 822,718 822,718              822,718 412,738 412,738              412,738 590,319 590,319              590,319 322,323 322,323              322,323 317,488 317,488              317,488 49,236 49,236              49,236 7,227 7,227 Z'></path></svg><b>branchLeft</b>.</p>
 <p>Operated by BRANCHLEFT LTD</p>
 <p>Ghost is a trade mark of the Ghost Foundation. PublicPress is independent of it.</p>
 </div>
-<div>
-<p><span data-copy>Complaints</span><span class="addr">complaints@branchleft.co.uk</span></p>
-<p><span data-copy>Seen spam, phishing or other misuse on a PublicPress site? Report it to:</span><span class="addr">abuse@branchleft.co.uk</span></p>
+<div class="foot-contact">
+<p><span class="label" data-copy>Complaints</span><span class="addr">complaints@branchleft.co.uk</span></p>
+<p><span class="label" data-copy>Seen spam, phishing or other misuse on a PublicPress site? Report it to:</span><span class="addr">abuse@branchleft.co.uk</span></p>
 </div>
-</div>
-</footer>
+</div></footer>
 </main>
 
-<dialog id="ghost" aria-labelledby="t-ghost"><div class="bar"><span>publicpress.co.uk/what-is-ghost</span><button class="close">Close</button></div><div class="sheet">
+<dialog id="ghost" aria-labelledby="t-ghost"><div class="bar" data-path="/what-is-ghost"><button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="sheet">
 <h2 id="t-ghost">What is Ghost?</h2>
 <p class="big">Ghost is publishing software that connects you directly with your readers, with no platform in between.</p>
 <h3 id="ghost-publish">Publishing</h3><p>A clean editor for articles, images and video, with your own design, sections and authors.<sup><a href="#src-g2">2</a></sup></p>
@@ -438,7 +445,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p class="end"><a class="btn" href="#register" data-close>Register interest</a></p>
 </div></dialog>
 
-<dialog id="included" aria-labelledby="t-included"><div class="bar"><span>publicpress.co.uk/included</span><button class="close">Close</button></div><div class="sheet">
+<dialog id="included" aria-labelledby="t-included"><div class="bar" data-path="/included"><button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="sheet">
 <h2 id="t-included">Included on every paid plan</h2>
 <h3 id="upgrades">Upgrades and maintenance</h3><p>Ghost's patch and minor releases go on automatically, and we handle major versions for you. You never touch a server.</p>
 <h3 id="backups">Backups</h3><p>Taken every night, encrypted with your site's own key, and kept in two places apart from your live site.</p>
@@ -459,7 +466,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p class="end"><a class="btn" href="#register" data-close>Register interest</a></p>
 </div></dialog>
 
-<dialog id="yours" aria-labelledby="t-yours"><div class="bar"><span>publicpress.co.uk/your-site</span><button class="close">Close</button></div><div class="sheet">
+<dialog id="yours" aria-labelledby="t-yours"><div class="bar" data-path="/your-site"><button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="sheet">
 <h2 id="t-yours">Your site, your way</h2>
 <h3 id="standard-theme">A standard theme with your brand</h3><p>Ghost has a library of open-source and configurable themes which are available in your Ghost site via PublicPress. We provide support for picking the right one for you in the onboarding journey.</p>
 <h3 id="bespoke-theme">A bespoke theme that's authentically your identity</h3><p>Designed and built around who you are, at our bespoke rate.</p>
@@ -467,7 +474,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p class="end"><a class="btn" href="#register" data-close>Register interest</a></p>
 </div></dialog>
 
-<dialog id="moving" aria-labelledby="t-moving"><div class="bar"><span>publicpress.co.uk/moving</span><button class="close">Close</button></div><div class="sheet">
+<dialog id="moving" aria-labelledby="t-moving"><div class="bar" data-path="/moving"><button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="sheet">
 <h2 id="t-moving">Moving to PublicPress</h2>
 <p class="big">We bring the expertise, and we run the move for you.</p>
 <p>From WordPress and similar technologies, including Substack, Medium, Squarespace and Mailchimp. Even easier if you're already on Ghost elsewhere. We have playbooks and the right tooling to hand to make this seamless.</p>
@@ -479,7 +486,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p class="end"><a class="btn" href="#register" data-close>Register interest</a></p>
 </div></dialog>
 
-<dialog id="built" aria-labelledby="t-built"><div class="bar"><span>publicpress.co.uk/how-its-built</span><button class="close">Close</button></div><div class="sheet">
+<dialog id="built" aria-labelledby="t-built"><div class="bar" data-path="/how-its-built"><button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="sheet">
 <h2 id="t-built">How PublicPress is built</h2>
 <p>Each layer, from your readers down to the electricity, what it does and why it is there.</p>
 <div class="frame">
@@ -493,7 +500,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p class="end"><a class="btn" href="#register" data-close>Register interest</a></p>
 </div></dialog>
 
-<dialog id="why" aria-labelledby="t-why"><div class="bar"><span>publicpress.co.uk/why</span><button class="close">Close</button></div><div class="sheet">
+<dialog id="why" aria-labelledby="t-why"><div class="bar" data-path="/why"><button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="sheet">
 <h2 id="t-why">Why we are doing this</h2>
 <p class="big">Nobody in a newsroom should have to be a systems administrator.</p>
 <p>The average independent news outlet in the UK has about two full-time-equivalent staff and £62,000 a year coming in (<a href="https://pressgazette.co.uk/publishers/pinf-independent-publishers-2024-revenue-falls/">PINF Index 2024, reported by Press Gazette</a>). Your website, mailing list and membership system still have to work every day, and between them they hold the most valuable thing you have: a direct relationship with your readers.</p>
@@ -503,7 +510,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p class="end"><a class="btn" href="#register" data-close>Register interest</a></p>
 </div></dialog>
 
-<dialog id="everyone" aria-labelledby="t-everyone"><div class="bar"><span>publicpress.co.uk/everyone</span><button class="close">Close</button></div><div class="sheet">
+<dialog id="everyone" aria-labelledby="t-everyone"><div class="bar" data-path="/everyone"><button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="sheet">
 <h2 id="t-everyone">Ghost hosting for everyone</h2>
 <p class="big">We built PublicPress for journalism. It is open to anyone who wants a Ghost site done well.</p>
 <p>Writers, clubs, charities, small businesses, hobbyists, bloggers: you get the same upgrades, backups, reliability and support as a newsroom.</p>
@@ -512,7 +519,7 @@ dialog::backdrop{background:rgba(0,0,0,.55)}
 <p class="end"><a class="btn" href="#register" data-close>Register interest</a></p>
 </div></dialog>
 
-<dialog id="about" aria-labelledby="t-about"><div class="bar"><span>publicpress.co.uk/about</span><button class="close">Close</button></div><div class="sheet">
+<dialog id="about" aria-labelledby="t-about"><div class="bar" data-path="/about"><button class="close" type="button" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div><div class="sheet">
 <h2 id="t-about"><span class="bl"><span class="blm"><svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1080 1080' role='img' aria-label='branchLeft logo'><path id='backdrop' fill='black' stroke='black' stroke-width='1' d='M 7,227            C 7,227 10,260 10,260              10,260 329,550 329,550              329,550 344,365 344,365              344,365 521,362 521,362              521,362 359,765 359,765              359,765 791,746 791,746              791,746 780,919 780,919              780,919 1056,1056 1056,1056              1056,1056 802,910 802,910              802,910 822,718 822,718              822,718 412,738 412,738              412,738 590,319 590,319              590,319 322,323 322,323              322,323 317,488 317,488              317,488 49,236 49,236              49,236 7,227 7,227 Z'></path><path id='main' fill='#B31761' stroke='#B31761' stroke-width='1' d='M 375,26            C 375,26 360,179 360,179              360,179 732,185 732,185              732,185 580,608 580,608              580,608 941,652 941,652              941,652 887,881 887,881              887,881 1057,1056 1057,1056              1057,1056 789,917 789,917              789,917 799,739 799,739              799,739 385,754 385,754              385,754 547,345 547,345              547,345 344,347 344,347              344,347 328,528 328,528              328,528 7,227 7,227              7,227 375,26 375,26 Z'></path><path id='overlay' fill='#FF006E' stroke='#FF006E' stroke-width='1' opacity='0.2' d='M 7,227            C 7,227 10,260 10,260              10,260 329,550 329,550              329,550 344,365 344,365              344,365 521,362 521,362              521,362 359,765 359,765              359,765 791,746 791,746              791,746 780,919 780,919              780,919 1056,1056 1056,1056              1056,1056 802,910 802,910              802,910 822,718 822,718              822,718 412,738 412,738              412,738 590,319 590,319              590,319 322,323 322,323              322,323 317,488 317,488              317,488 49,236 49,236              49,236 7,227 7,227 Z'></path></svg></span>branchLeft</span> and its founder</h2>
 <p><span class="bl">branchLeft</span> is a UK company building technology for people &amp; planet. The name reflects the subversion of the capitalistic model typically associated with tech. Extractive and exploitative practices are not a prerequisite for success, and we're here to prove it.</p>
 <p>We don't answer to any external investors or private equity, and never will. We're committed to becoming a formal <b>non-profit worker's cooperative</b> as soon as we start scaling.</p>
@@ -546,13 +553,13 @@ info.addEventListener('click', function (e) { e.stopPropagation(); tip(!when.cla
 document.addEventListener('click', function () { tip(false); });
 document.addEventListener('keydown', function (e) { if (e.key === 'Escape') tip(false); });
 
-// Each pop-up has an address, the path its bar shows. Opening one puts that path
-// in the address bar, closing returns to this page's own path, and Back closes it.
-// The server answers every one of these paths with the page that holds the pop-up.
+// Each pop-up has an address, the path its bar carries in data-path. Opening one puts
+// that path in the address bar, closing returns to this page's own path, and Back closes
+// it. The server answers every one of these paths with the page that holds the pop-up.
 var HOME = new URL(document.querySelector('link[rel=canonical]').href).pathname;
 var dialogs = Object.create(null);
 document.querySelectorAll('dialog').forEach(function (d) {
- var path = d.querySelector('.bar span').textContent.replace(/^[^\/]*/, '');
+ var path = d.querySelector('.bar').getAttribute('data-path');
  d.setAttribute('data-path', path);
  dialogs[path] = d;
 });

@@ -18,13 +18,13 @@ info.addEventListener('click', function (e) { e.stopPropagation(); tip(!when.cla
 document.addEventListener('click', function () { tip(false); });
 document.addEventListener('keydown', function (e) { if (e.key === 'Escape') tip(false); });
 
-// Each pop-up has an address, the path its bar shows. Opening one puts that path
-// in the address bar, closing returns to this page's own path, and Back closes it.
-// The server answers every one of these paths with the page that holds the pop-up.
+// Each pop-up has an address, the path its bar carries in data-path. Opening one puts
+// that path in the address bar, closing returns to this page's own path, and Back closes
+// it. The server answers every one of these paths with the page that holds the pop-up.
 var HOME = new URL(document.querySelector('link[rel=canonical]').href).pathname;
 var dialogs = Object.create(null);
 document.querySelectorAll('dialog').forEach(function (d) {
- var path = d.querySelector('.bar span').textContent.replace(/^[^\/]*/, '');
+ var path = d.querySelector('.bar').getAttribute('data-path');
  d.setAttribute('data-path', path);
  dialogs[path] = d;
 });

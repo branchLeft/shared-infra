@@ -1414,7 +1414,7 @@ describe('the publicpress.co.uk site', () => {
     }
   });
 
-  it('gives every pop-up its own address, the path its bar shows, on both pages', () => {
+  it('gives every pop-up its own address, the path its bar carries, on both pages', () => {
     const paths = [
       '/what-is-ghost',
       '/included',
@@ -1427,9 +1427,10 @@ describe('the publicpress.co.uk site', () => {
     ];
     for (const page of [journey, ghostHosting]) {
       const bars = [
-        ...page.html.matchAll(/<div class="bar"><span>publicpress\.co\.uk(\/[^<]*)<\/span>/g),
+        ...page.html.matchAll(/<div class="bar" data-path="(\/[^"]*)"><button class="close"/g),
       ];
       expect(bars.map(([, path]) => path)).toEqual(paths);
+      expect(page.html).not.toContain('publicpress.co.uk/what-is-ghost<');
       expect(page.html).toContain('history.pushState');
       expect(page.html).toContain('popstate');
     }

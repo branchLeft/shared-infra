@@ -43,8 +43,8 @@ fetches nothing, so:
 
 ## Pop-up addresses
 
-Each pop-up's bar shows its path (`/what-is-ghost`, `/included`, `/your-site`, `/moving`,
-`/how-its-built`, `/why`, `/everyone`, `/about`). The server answers all of them, and every
+Each pop-up's bar carries its path in `data-path` (`/what-is-ghost`, `/included`, `/your-site`,
+`/moving`, `/how-its-built`, `/why`, `/everyone`, `/about`); the bar shows only the close button. The server answers all of them, and every
 unknown path, with the journey page; the script reads the path and opens that pop-up. Opening one
 pushes its path, closing returns to the page's own path (its canonical link), Back closes it, and
 `#hash` links, including the sources in the "What is Ghost?" pop-up, still work. A pop-up opened
