@@ -2,8 +2,8 @@
 
 This role is the baseline every container host needs, in three parts that run in
 this order: a key-only sshd, unattended upgrades with fail2ban, and Docker CE.
-It replaces three provisioning scripts, one for each part, and keeps their
-files, modes, owners and order.
+It writes what three provisioning scripts write, one script for each part, and keeps
+their files, modes, owners and order.
 
 This README is written for a maintainer who is new to the repository. It
 follows the order the standard sets for a role README (ANS-14).
@@ -58,6 +58,13 @@ newline, or any character other than hex digits, `:`, `.`, `/` and space, is ref
 before the jail is written, so a host name is refused too. Every other value the role writes is the same on every
 container host. None of the role's values is a secret and the role handles no
 secret.
+
+A second input, `host_baseline_fail2ban_ignoreip_none`, defaults to `false`. A host
+that must write no `ignoreip` line sets it `true` in its own playbook, and the jail
+then has no such line. It is an explicit per-host choice, not a way to leave the
+ignore list empty: `host_baseline_fail2ban_ignoreip` is still checked on every host,
+so an empty value refuses whether or not the opt-out is set. The mail host
+(`mx1`) is the one host that sets it, because its jail has always had no ignore list.
 
 `vars/main.yml` holds the constants of the baseline: the settings sshd must
 resolve to, the package names, the pinned digest and fingerprint of Docker's key,
@@ -280,7 +287,7 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. A plan job shows the host's diff in
 check mode first; after the approval the host pulls that exact commit of `main`
 and applies it, and a second run must report zero changes. Nothing is applied
-from a laptop. This role is not applied to any host yet.
+from a laptop.
 
 ## How to change it safely
 

@@ -3,7 +3,7 @@
   "compilerOptions": {
     "pretty": true
   },
-  // `mail` and `hetzner` are separate Pulumi projects with their own
+  // `mail`, `hetzner` and `ovh` are separate Pulumi projects with their own
   // package.json; `hetzner-host` is the published package `hetzner/`
   // consumes, also with its own package.json. None of their dependencies are
   // installed here, so compiling them from the root fails on imports this
@@ -11,5 +11,5 @@
   // worktrees — full checkouts of this repo, which a recursive glob would
   // otherwise compile once per branch. Neither is covered by tsc's defaults.
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "mail", "hetzner", "hetzner-host", ".claude", ".worktrees"]
+  "exclude": ["node_modules", "mail", "hetzner", "hetzner-host", "ovh", ".claude", ".worktrees"]
 }

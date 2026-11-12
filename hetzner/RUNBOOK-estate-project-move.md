@@ -27,8 +27,8 @@ is still true immediately before starting — this is the gate, not a formality:
 dig +short branchleft.co.uk www.branchleft.co.uk blog.branchleft.co.uk blog2.branchleft.co.uk A
 ```
 
-Expected: the first three answer `34.149.131.244` and
-`blog2` answers nothing. **If any of them answers `46.225.95.167`, stop** — the
+Expected: none of them answers the edge's address. **If any of them answers
+`46.225.95.167`, stop** — the
 edge is serving live traffic, and this runbook would take it down for the
 length of a rebuild plus a re-provision with no DNS undo. The zone is manual
 at the registrar unless `hetzner/dns/RUNBOOK-dns-cutover.md` has already been
@@ -46,11 +46,11 @@ Steps 4 and 5 destroy estate resources that are sitting **in the mail
 project**. `projectGuard.ts` exists to refuse exactly that, and it has no
 bypass, so those two steps must run from a checkout that predates it.
 
-| Steps           | Checkout                                         |
-| --------------- | ------------------------------------------------ |
-| 1–3             | Anything — console work                          |
-| 4–5 (teardown)  | `main` **before** the project-split commit lands |
-| 6–10 (bring-up) | `main` **after** it lands, or the branch itself  |
+| Steps           | Checkout                                       |
+| --------------- | ---------------------------------------------- |
+| 1–3             | Anything — console work                        |
+| 4–5 (teardown)  | A checkout that **predates** `projectGuard.ts` |
+| 6–10 (bring-up) | A checkout that **has** `projectGuard.ts`      |
 
 Confirm before step 4: `git log --oneline -1 -- hetzner/projectGuard.ts` must
 print nothing.
@@ -315,9 +315,8 @@ past a warning you have not read.
 - The edge answers on its new address, and a probe still raises a `waf` alert
   with an empty decisions column — `RUNBOOK-edge.md` carries that check. A
   `204` alone does not prove detect-only is working; the alert does.
-- A private-only host's egress cannot be proven until `db1` exists. The route
-  and the NAT service are verifiable on their own —
-  `RUNBOOK-provision-host.md` carries both checks.
+- A private-only host's egress: the route and the NAT service are verifiable
+  on their own — `RUNBOOK-provision-host.md` carries both checks.
 
 ## 10. Close it out
 

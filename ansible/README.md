@@ -6,12 +6,12 @@ page of the standards repository (clauses ANS-1 to ANS-17).
 
 This directory holds the pattern every role is built from: a role skeleton, a
 test harness that proves a role in containers, and one worked role made from
-the skeleton. Its real hosts are `edge1`, `ops1`, `app1`, `db1` and `demo1`. Each has a playbook
+the skeleton. Its real hosts are `edge1`, `edget`, `ops1`, `app1`, `db1`, `dbt1`, `demo1` and `mx1`. Each has a playbook
 enrolled in the gated pull, except that `demo1` takes its commit by push and never fetches.
 `edge1` and `ops1` apply `roles/ansible_runtime` and
 `roles/pull_trigger`, then `roles/host_inputs` (the loader of the host's private inputs, which goes
 first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
-`roles/egress_nat` (the estate's NAT gateway; edge1 alone, with `egress_nat_gateway_enabled` pinned
+`roles/egress_nat` (the estate's NAT gateway, with `egress_nat_gateway_enabled` pinned
 in `checks/check_enrolment.py`), then
 `roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
 until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
@@ -32,7 +32,9 @@ the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, t
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
 `roles/broker_deploy`.
-The other trees hold only what those hosts need.
+The other trees hold only what those hosts need. Delivery is `.github/workflows/ansible-delivery.yml`,
+which calls the reusable workflow in `branchLeft/github-workflows`; the trigger on the host is
+`roles/pull_trigger`, and ANS-17 describes the only approved path.
 
 ## Layout
 
@@ -47,7 +49,7 @@ The other trees hold only what those hosts need.
 | `requirements.yml`    | Empty by design: no collection is fetched outside the lock (ANS-4).    |
 | `checks/`             | The pin, enrolment, delivery, role and path checks, with tests.        |
 | `tools/`              | The record a new host's first boot is built from, and its tests.       |
-| `inventories/`        | The inventory and group-variable trees. `production` holds edge1, db1. |
+| `inventories/`        | The inventory and group-variable trees. `production` holds five hosts. |
 | `playbooks/`          | One playbook per host: selects hosts and lists roles (ANS-13).         |
 | `playbooks/includes/` | The shared pull values and refusals, each defined once.                |
 | `trust/`              | One signer file per host under the pull, loaded only by its playbook.  |
@@ -202,8 +204,18 @@ What runs, by event:
 | pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, the lock, the lint config, the workflow, or `ci_select.py`, `check_pins.py` or `pip-requirements.txt` changed |
 | merge queue    | yes  | none: the pull request ran them on its own head, so the queue runs the lint and the unit tests only                                                                                                                                                       |
 | push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything                                                                                                                                                                                   |
+| schedule       | yes  | every shard, each blocking for the run's own result, once a day and on a manual run; a red scheduled run opens one issue                                                                                                                                  |
 
-The workflow has three kinds of job:
+Every container test (shard) the table names runs on every pull request, and each is
+either blocking or advisory. The one list of blocking shards is
+`ansible/checks/blocking_shards.json`; every shard not on it is advisory. A blocking shard
+fails the required check. An advisory shard runs, shows red on its own check line when it
+fails, and the required check neither waits for it nor reads it. The `report` job writes the
+counts and one table of every red shard to the run's step summary, and the approver records
+each red advisory shard on the pull request. Rules for moving a shard on or off the list are
+in `ansible/checks/README.md`.
+
+The workflow has these kinds of job:
 
 - `discover` runs `ansible/harness/list_shards.py`, which lists one shard for
   each scenario of every directory directly under `ansible/roles/` and
@@ -221,10 +233,11 @@ The workflow has three kinds of job:
 - `lint` runs the static checks once, all of them, alongside the shards:
   yamllint, ansible-lint, mypy, ruff and the harness's unit tests. The gate job
   still fails unless it passed.
-- `shard` runs the harness once for each entry `discover` kept, in parallel,
+- `shard` runs the harness once for each blocking entry `discover` kept, in parallel,
   with `--scenario` set to the entry's scenario, and only after `quick-lint` has
   passed, so a malformed file is red in minutes and starts no container. It does
-  not wait for the full `lint`. Each shard
+  not wait for the full `lint`. `shard-advisory` is the same job for the advisory
+  entries. `report` and `daily-issue` are described below. Each shard
   has its own time limit (25 minutes), so the run time does not grow with the
   number of roles in one job. A role whose one scenario would not fit in the
   limit puts its refusal cases in a second scenario, which is a second shard,
@@ -234,12 +247,23 @@ The gate job is named `Lint and test the Ansible roles`. The ruleset requires
 a check with exactly that name, and a matrix job would report its checks under
 other names, so the gate stays one job. It fails unless `discover` succeeded
 and, when the Ansible inputs changed, `lint` succeeded and, when `discover`
-chose shards, every chosen shard did. When nothing changed, `lint` and the
-shards are skipped and the gate passes; when the lint passed and no shard was
+chose blocking shards, every chosen blocking shard did. It does not need the
+advisory job, so it does not wait for it. When nothing changed, `lint` and the
+shards are skipped and the gate passes; when the lint passed and no blocking shard was
 needed, the shard job is skipped on purpose and the gate passes. In the merge
 queue the shard job is always skipped, by a condition on the event name, and the
-gate accepts that skip for that event alone: on a pull request, the weekly run or
-a manual run, a skipped shard job fails the gate.
+gate accepts that skip for that event alone: on a pull request, the daily run or
+a manual run, a skipped blocking shard job fails the gate. A scheduled or manual run
+treats every shard as blocking.
+
+`report` runs after every shard job, reads the Actions API with a read-only token and
+writes the step summary; it is not a required check. `daily-issue` runs only for a
+scheduled run whose gate failed. It opens one issue titled "Daily container tests red:
+DATE" with the run link and the failed shard ids and the label `ci-red-daily`, or comments
+on the one still open. It mentions and assigns no one and wakes no agent; it is the only
+job with write access, `issues: write`.
+`ansible/checks/advisory_passes.py SHARD` counts how many daily runs in a row a shard
+passed, for the pull request that moves it on or off the list.
 
 How to add a pattern: nothing to edit here. A directory directly under
 `ansible/patterns/` or `ansible/roles/` is picked up by `discover` on the next
@@ -620,28 +644,6 @@ oversight. Each is a decision the standard assigns to later work.
 - **The standard's own checks.** Of the checks the standard's check plans
   describe, the scenario limits and the pins are scripted. No `shell` tasks and
   no loosened lint file are still review.
-- **Inventories.** The trees under `inventories/` hold one host, and their
-  layout is a proposal.
-- **A required check.** The Ansible job runs on every pull request, so it can be
-  required (CI-14), but making it required is a repository ruleset change and
-  belongs to the owner. Until it is done a red Ansible job does not block a
-  merge on its own.
-- **Delivery.** Each of edge1, db1, app1, ops1 and demo1 has a playbook under `playbooks/`.
-  edge1's first apply is the one-time root bootstrap and then the gated pull; db1's
-  playbook applies the same two pull roles, then `roles/host_inputs`, then `roles/host_baseline`, then `roles/db1_stack`, then `roles/db1_backup_timers`; `roles/host_inputs` refuses the
-  run until the owner has placed the root-only file `/etc/branchleft/host-inputs.json`, and
-  its trust file lists one OpenPGP signer, GitHub's web-flow key, so db1 applies any GitHub-signed commit on main. app1's
-  playbook applies `roles/host_inputs` and then `roles/website_app1` (after `roles/host_baseline` and
-  `roles/breakglass_grant_host`), then `roles/deploy_tooling` and `roles/deploy_slot_keys`, then
-  `roles/export_bundler`, and
-  refuses the run the same way until the owner has placed app1's own
-  `/etc/branchleft/host-inputs.json`, holding the four SMTP values and at least one deploy slot.
-  edge1 and ops1 apply `roles/host_inputs` first as well, and refuse the run until the owner has
-  placed their own `/etc/branchleft/host-inputs.json` (edge1 holds the monitoring and pager
-  inputs, ops1 the backup worker and restore inputs). ANS-17 describes the only approved path. The
-  trigger is
-  `roles/pull_trigger`, and its reusable workflow is in `branchLeft/github-workflows`;
-  `.github/workflows/ansible-delivery.yml` calls that workflow.
 - **Reuse by other repositories.** The harness is code another repository may
   one day run. It is not to be copied between repositories (ANS-13). The
   reusable CI work in the github-workflows repository is where it will be

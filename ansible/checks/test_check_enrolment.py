@@ -59,13 +59,25 @@ class Sabotage(unittest.TestCase):
     def _reset(self) -> None:
         """Put the owner_vars files back as they are on main, between two sabotages of one test.
 
-        The ci_jump sabotages edit edget's file, which ships the role inert and so holds the
-        empty values they replace; edge1's file has the role turned on by the owner.
+        The ci_jump sabotages that need edget's file in its empty shape call _inert_edget; edge1's
+        file has the role turned on by the owner, and so has edget's, as the owner filled it in.
         """
         shutil.copytree(
             ROOT / "ansible" / "owner_vars",
             self.ansible / "owner_vars",
             dirs_exist_ok=True,
+        )
+
+    def _inert_edget(self) -> None:
+        """Write edget's file in the shape the role ships with: the flag false and every value
+        empty. The R10 shape sabotages replace those empty values, so they start from this."""
+        self._write(
+            "owner_vars/edget.yml",
+            "---\n"
+            "ci_jump_manage_keys: false\n"
+            "ci_jump_own_address: ''\n"
+            "ci_jump_destinations: []\n"
+            "ci_jump_keys: []\n",
         )
 
     def _write(self, relative: str, text: str) -> None:
@@ -92,7 +104,7 @@ class Sabotage(unittest.TestCase):
 
     # R1: an empty enrolled set fails, it does not pass over nothing.
     def test_r1_no_enrolled_playbook(self) -> None:
-        for host in ("edge1", "edget", "ops1", "app1", "db1", "dbt1", "demo1"):
+        for host in ("edge1", "edget", "ops1", "app1", "db1", "dbt1", "demo1", "mx1"):
             (self.ansible / "playbooks" / f"{host}.yml").unlink()
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
@@ -1097,11 +1109,13 @@ class Sabotage(unittest.TestCase):
             "ci_jump_keys: []\n",
         ):
             with self.subTest(name=name):
+                self._inert_edget()
                 self._edit("owner_vars/edget.yml", name, "")
                 self._assert_one("R10 owner_vars/edget.yml: must hold exactly")
                 self._reset()
 
     def test_r10_owner_vars_ci_jump_flag_is_text(self) -> None:
+        self._inert_edget()
         self._edit(
             "owner_vars/edget.yml", "ci_jump_manage_keys: false", "ci_jump_manage_keys: 'false'"
         )
@@ -1112,6 +1126,7 @@ class Sabotage(unittest.TestCase):
     def test_r10_owner_vars_refuses_the_jump_accounts_name(self) -> None:
         for value in ("''", "jumper", "[jumper]"):
             with self.subTest(value=value):
+                self._inert_edget()
                 self._edit(
                     "owner_vars/edget.yml",
                     "ci_jump_keys: []\n",
@@ -1128,6 +1143,7 @@ class Sabotage(unittest.TestCase):
         )
 
     def test_r10_owner_vars_ci_jump_own_address_is_a_number(self) -> None:
+        self._inert_edget()
         self._edit("owner_vars/edget.yml", "ci_jump_own_address: ''", "ci_jump_own_address: 5")
         self._assert_one("R10 owner_vars/edget.yml: ci_jump_own_address must be text")
 
@@ -1170,32 +1186,35 @@ class Sabotage(unittest.TestCase):
             self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
 
     def test_r10_owner_vars_ci_jump_destinations_hold_a_mapping(self) -> None:
+        self._inert_edget()
         self._edit(
             "owner_vars/edget.yml",
             "ci_jump_destinations: []",
             "ci_jump_destinations:\n  - host: db-t1",
         )
         self._assert_one("R10 owner_vars/edget.yml: ci_jump_destinations must be a list of text")
-        self._reset()
+        self._inert_edget()
         self._edit(
             "owner_vars/edget.yml", "ci_jump_destinations: []", "ci_jump_destinations: db-t1"
         )
         self._assert_one("R10 owner_vars/edget.yml: ci_jump_destinations must be a list of text")
 
     def test_r10_owner_vars_ci_jump_keys_is_not_a_list(self) -> None:
+        self._inert_edget()
         self._edit("owner_vars/edget.yml", "ci_jump_keys: []", "ci_jump_keys: nothing")
         self._assert_one("R10 owner_vars/edget.yml: ci_jump_keys must be a list")
 
     # R10: a ci_jump key entry is the key and nothing else, so a per-key destination list or a
     # per-key option has no place in the file.
     def test_r10_owner_vars_ci_jump_entry_carries_more_than_a_key(self) -> None:
+        self._inert_edget()
         self._edit(
             "owner_vars/edget.yml",
             "ci_jump_keys: []",
             "ci_jump_keys:\n  - key: x\n    destinations: [db-t1]",
         )
         self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry must hold exactly")
-        self._reset()
+        self._inert_edget()
         self._edit("owner_vars/edget.yml", "ci_jump_keys: []", "ci_jump_keys:\n  - key: 5")
         self._assert_one("R10 owner_vars/edget.yml: a ci_jump_keys entry needs a text key")
 

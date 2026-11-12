@@ -18,10 +18,9 @@ digest to a contract: the secret's label in `SERVICE_CREDENTIALS_PATH` and the
 exact env lines, with `{secret}` marking where the secret goes.
 
 The script reads the single digest out of the compose file compose itself reads
-(`SHIM_COMPOSE_PATH`) and renders that digest's contract. Today the one listed
-digest is the `smtp-delivery` contract, which renders `SMTP_PASS` from
-`blog-shim-bulk-submission`. The `drain` contract renders `SHIM_DRAIN_TOKEN`
-from `shim-drain-token`, and no digest selects it yet.
+(`SHIM_COMPOSE_PATH`) and renders that digest's contract. The `smtp-delivery`
+contract renders `SMTP_PASS` from `blog-shim-bulk-submission`. The `drain`
+contract renders `SHIM_DRAIN_TOKEN` from `shim-drain-token`.
 
 A digest the table does not list is refused, with nothing written. The env of an
 image nobody described is a guess, and a wrong guess stops the container at

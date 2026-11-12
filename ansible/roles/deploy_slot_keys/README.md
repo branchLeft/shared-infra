@@ -118,11 +118,11 @@ Delivery to a host is the gated workflow only (ANS-17): a plan job in check mode
 approval of the protected environment, a pull of that exact commit on the host, and a
 second run that must report zero changes. Nothing in this repository applies the role by
 hand. The role is listed for `app1` in `ansible/checks/host_roles.yml` and applied by
-`ansible/playbooks/app1.yml`, last, after `deploy_tooling` (the slot program needs the wrapper
+`ansible/playbooks/app1.yml`, after `deploy_tooling` (the slot program needs the wrapper
 that role installs). The slot list for a real host is supplied at run time: the owner records it
 in the host's `/etc/branchleft/host-inputs.json` under `deploy_slot_keys_slots`, and the
 `host_inputs` loader sets it, so the pull has no extra variable. The loader refuses an empty
-list, so app1's pull stops until the file holds at least one slot. How the owner records a
+list, so a pull on the host stops until the file holds at least one slot. How the owner records a
 tenant's key and what to check on the host afterwards is in the private ghost-platform-docs
 repository, not here.
 

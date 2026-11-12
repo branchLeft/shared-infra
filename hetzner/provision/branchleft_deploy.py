@@ -89,20 +89,34 @@ VERIFIER_HOME = "/var/lib/branchleft/verifier-home"
 # verifier passes gh's stderr on, so this is read from there.
 _NEEDS_LOGIN = re.compile(r"gh auth login")
 
+# The registry read key's docker config directory, placed by the owner and checked by the
+# deploy_verifier role. branchleft-compose@.service sets DOCKER_CONFIG to the same path for its
+# pull. An absent directory is anonymous access. See branchleft_deploy.md, "The registry read key".
+REGISTRY_DOCKER_CONFIG = "/etc/branchleft/registry/docker"
+
+# What a registry says to a client it will not serve, in the wording gh passes on (UNAUTHORIZED,
+# DENIED, "unauthorised"). Whole words only, so a digest or a status number cannot match.
+_REGISTRY_REFUSED = re.compile(
+    r"\b(?:unauthori[sz]ed|denied|authentication required)\b", re.IGNORECASE
+)
+
 
 def verifier_env() -> dict[str, str]:
     """The verifier's entire environment. Nothing is inherited from the host.
 
-    No GitHub credential is in it, and that is the design: the host holds none,
-    and a token read from anywhere would make the check depend on what the host
-    happens to hold. VERIFY_PLAIN_ERRORS keeps the verifier's refusals as plain
-    text, so the auth refusal above can be read off stderr.
+    No GitHub API credential is in it, and that is the design: a token read from
+    anywhere would make the check depend on what the host happens to hold. The one
+    credential path is DOCKER_CONFIG, the registry read key's directory, which lets
+    the verifier read a private image's attestation from the registry. VERIFY_PLAIN_ERRORS
+    keeps the verifier's refusals as plain text, so the refusals below can be read off
+    stderr.
     """
     return {
         "PATH": f"{VERIFIER_GH_DIR}:/usr/bin:/bin",
         "HOME": VERIFIER_HOME,
         "GH_CONFIG_DIR": VERIFIER_HOME,
         "XDG_CONFIG_HOME": VERIFIER_HOME,
+        "DOCKER_CONFIG": REGISTRY_DOCKER_CONFIG,
         "GH_PROMPT_DISABLED": "1",
         "GH_NO_UPDATE_NOTIFIER": "1",
         "LC_ALL": "C",
@@ -130,10 +144,11 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     reason: refused, unknown digest, or the verifier missing. There is no
     argument, environment variable or stack setting that skips this.
 
-    The design is fail-closed. The host holds no GitHub credential and the
+    The design is fail-closed. The host holds no GitHub API credential and the
     verifier needs none (see branchleft_deploy.md). A gh that still asks for a
-    login is refused with the credential message, and nothing falls back to an
-    unverified deploy.
+    login is refused with the credential message, a registry that will not serve
+    the image is refused with a message that names the registry read key, and
+    nothing falls back to an unverified deploy.
     """
     name = attested_name(image)
     signer = ATTESTED_IMAGES.get(name)
@@ -160,6 +175,12 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
         raise DeployError(
             "the host verifier needs GitHub credentials this host does not hold; "
             "the deploy is refused; see branchleft_deploy.md"
+        )
+    if result.returncode != 0 and _REGISTRY_REFUSED.search(result.stderr or ""):
+        raise DeployError(
+            f"the registry refused to serve {name} to this host (unauthorised); the "
+            f"registry read key in {REGISTRY_DOCKER_CONFIG} is missing, expired or "
+            "lacks read:packages; the deploy is refused; see branchleft_deploy.md"
         )
     if result.returncode != 0:
         raise DeployError(

@@ -328,27 +328,21 @@ agent. It is listed so that the owner's steps are in one place:
    step account, with the line above.
 2. Add the step account and its sudoers lines (above) through the `sudoers_and_keys`
    pattern, and add the host's known-hosts entry to the environment.
-3. Create the GitHub environment `control-plane-step` with the owner as its only
-   required reviewer, and with deployment limited to the `main` branch. These are
+3. Create the GitHub environment `control-plane-step` with a required reviewer, and
+   with deployment limited to the `main` branch. These are
    settings of the environment and cannot be tested from the repository.
 4. Add the step entries to the host's inventory file, in a reviewed pull request.
 
 Wiring a host is not done by this role or by its pull request. For ops1 the roles
 (`control_plane` and `control_plane_db` in `playbooks/ops1.yml`) and the allow-list
-(`pull_trigger_steps` in `owner_vars/ops1.yml`) are done. Still to do under
-[ISSUE branchLeft/workspace#2531](https://github.com/branchLeft/workspace/issues/2531) are
-the shared-infra caller of the reusable `ansible-gated-apply.yml` with the github-workflows
-tag it pins, which needs a step sender that does not yet exist there, and the one-time host
-steps above. The ops1 enrolment ticket (branchLeft/workspace#2340) does not do them. A host
-with no `pull_trigger_steps` has the default empty list, which allows no step. The first live run also waits
-on [ISSUE branchLeft/workspace#2483](https://github.com/branchLeft/workspace/issues/2483)
-(the signer ops1 trusts) and [ISSUE branchLeft/workspace#2338](https://github.com/branchLeft/workspace/issues/2338)
-(the reusable workflow in a form a caller can use).
+(`pull_trigger_steps` in `owner_vars/ops1.yml`) are in place. The one-time host steps
+above are not done by the enrolment. A host with no `pull_trigger_steps` has the default
+empty list, which allows no step.
 
 When a step is run live, the evidence is the workflow run, the host's summary line with
 `mode=step` and `step=ID` that reports `verdict=applied` with a change count above zero on
 the first live run of that step, a second run of the same step that reports no change, and
-the deployment's review record showing that the owner approved that run in that
+the deployment's review record showing that the run was approved in that
 environment (the environment is the only control here that is not public).
 
 The change count above zero is part of the evidence on purpose. The program cannot tell
@@ -764,8 +758,8 @@ built here.
 
 A role is meant to reach a host only through the gated workflow (ANS-17), never by running
 `ansible-playbook` by hand. The program is the host's half of that: the workflow
-holds a key that can run only this command, the deployment gate (ANS-17) is the planned approval of a merge
-commit: its reusable workflow exists in `branchLeft/github-workflows`, but nothing in this repo calls it yet, and the host verifies the commit again by itself. `edge1` is the first host: its
+holds a key that can run only this command, the deployment gate (ANS-17) is the approval of a merge
+commit: `.github/workflows/ansible-delivery.yml` calls the reusable workflow in `branchLeft/github-workflows`, and the host verifies the commit again by itself. `edge1` is the first host: its
 bootstrap and its playbook are `playbooks/edge1.yml`, and the signer it trusts is the one in `trust/edge1.yml`, loaded by that playbook through `vars_files`. The remote and the playbook derivation are in `playbooks/includes/pull_trigger_common.yml`.
 
 ### The controls of a step request, and how each is shown to fail

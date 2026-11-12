@@ -1,8 +1,7 @@
 # Hetzner foundations
 
 The private network every platform host attaches to, and the estate that
-network builds. Both stacks are applied and live, in the estate hcloud
-project. The VM-create pattern itself —
+network builds. The VM-create pattern itself —
 `Host`, its firewall rule sets, its cloud-init and the shared address plan —
 is no longer part of this directory: it is the published package
 `@branchleft/hetzner-host`, in the sibling `hetzner-host/` directory. See
@@ -47,12 +46,11 @@ both read it.
 | -------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | mail     | `mx1` alone                                                               | `hcloud:token` / `HCLOUD_TOKEN_MAIL`                                                                                                                                                                                   |
 | org      | The `platform` network, `edge1`, `ops1` (was `nextcloud1`), `app1`, `db1` | `hcloud:token` / `HCLOUD_TOKEN_ESTATE`                                                                                                                                                                                 |
-| tenants  | Built fresh: `edge-t`, `db-t1` (switch off), `app-t1`                     | a Read probe token only, until a stack needs one                                                                                                                                                                       |
+| tenants  | Built fresh: `edge-t`, `db-t1`, `app-t1`                                  | a Read probe token only, until a stack needs one                                                                                                                                                                       |
 | demos    | Built fresh: `demo1`                                                      | a Read probe token only, until a stack needs one                                                                                                                                                                       |
 | dns      | The branchleft.co.uk and publicpress.co.uk DNS zones and no hosts         | `HCLOUD_TOKEN`: first-time init by hand per `hetzner/dns/RUNBOOK-dns-cutover.md`; CI plans and applies every later change (`HCLOUD_TOKEN_DNS`, plan in `dns-plan`, apply in `production-dns`) — `hetzner/dns/`'s stack |
 | backup   | The Hetzner Object Storage backup bucket and no hosts, ever               | a Read probe token only, until a stack needs one                                                                                                                                                                       |
 | demo-dns | The demo domain's own DNS zone and no hosts, ever                         | a Read probe token only, until a stack needs one                                                                                                                                                                       |
-| lab      | Spikes and scratch tenants; no production data ever                       | Local work only — never a repository secret                                                                                                                                                                            |
 
 A stolen dns or demo-dns token reaches no data outside that one zone. A
 stolen backup _Cloud API_ token reaches no bucket at all — Object Storage is
@@ -143,9 +141,9 @@ The estate and mail stacks stay on the weaker, servers-only form above —
 unchanged by this — because their state already names their resources; see
 the paragraph before this one.
 
-The lab project does not exist yet. Projects are console-only; there is no
-API for creating one — which is also why creating the estate project is a
-platform-owner step and not something a stack can do for itself.
+Projects are console-only; there is no API for creating one — which is also why
+creating the estate project is a platform-owner step and not something a stack
+can do for itself.
 
 ## The network
 
@@ -251,15 +249,10 @@ reference rather than copied into config.
 | `app1`  | `app`  | undecided        | `10.20.1.100`   | `ghost-platform` |
 | `db1`   | `db`   | none             | `10.20.1.20`    | `ghost-platform` |
 
-**Only `edge1` today, and that boundary is the placement rule rather than a
-staging convenience.** The edge and monitoring hosts are this repository's; the
-application and database hosts are the Ghost platform's, and the stack that
-creates them lives there. It cannot yet: `@branchleft/hetzner-host` exists as
-a package, but publishing it and setting its GitHub Packages visibility to
-public are platform-owner-gated steps that have not run, so `ghost-platform`
-cannot yet depend on it. Creating `app1` and `db1` is separately scoped once
-it can. The monitoring host is a later addition to this stack, and not yet:
-monitoring shares `edge1` until the first external tenant.
+**The boundary between this stack and the Ghost platform's is the placement
+rule rather than a staging convenience.** The edge and monitoring hosts are this
+repository's; the application and database hosts are the Ghost platform's, and
+the stack that creates them lives there. Monitoring shares `edge1`.
 
 **The location is a shared constant, not this stack's config.** `location` is
 create-time-only on `hcloud.Server`, the `cx` line's availability moves per
@@ -313,16 +306,13 @@ actually be working.
 
 `estate.ts` is the worked example of consuming it: `import { Host, ... } from
 '@branchleft/hetzner-host'`, a package dependency rather than a relative
-import. It is currently a `file:` dependency on `../hetzner-host`, pending
-the platform owner's publish (see "The published package" above) — once that
-lands, `ghost-platform` consumes the identical package the same way, and
-neither repository imports the other's files directly.
+import. It is a `link:` dependency on `../hetzner-host`, and neither repository
+imports the other's files directly.
 
-**Nothing runs `provision/` automatically, so a freshly created host is not
-yet a hardened one** — no `fail2ban`, no unattended security upgrades, no
-Docker, no deploy wrapper. `RUNBOOK-provision-host.md` is the step that closes
-that, it is manual, and it belongs in the same session as the apply that
-created the host. The first run cannot come from the deploy path, because the
+**A freshly created host is not yet a hardened one** — no `fail2ban`, no
+unattended security upgrades, no Docker, no deploy wrapper.
+`RUNBOOK-provision-host.md` is the step that closes that, its first run is
+manual, and it belongs in the same session as the apply that created the host. The first run cannot come from the deploy path, because the
 deploy account it installs does not exist until it has run. This stays here
 rather than moving with the pattern: it operates on a created host, not on
 the create pattern itself.
@@ -414,9 +404,9 @@ buy nothing while a broader rule still matches — sudo takes the last matching
 rule.
 
 **Exactly one caller keeps that broader rule alive, and it is not the three you
-would guess.** `edge` and `monitoring` are deployed by an operator over SSH
-**as root** (`RUNBOOK-edge.md` §6, `RUNBOOK-monitoring.md`), which needs no
-sudoers grant at all. The single remaining user of the `deploy` account is
+would guess.** `edge` and `monitoring` are delivered by the `edge_stack` and
+`monitoring_stack` Ansible roles on each gated apply, which needs no sudoers
+grant at all. The single remaining user of the `deploy` account is
 `branchLeft/website`'s CI, which calls
 `sudo -n /usr/local/sbin/branchleft-deploy website <image>@<digest>`. That same
 workflow then runs an arbitrary `curl` over the same key as its smoke test —
@@ -509,8 +499,9 @@ This is the replacement for the website's `imageTag` mechanism, not a port of
 it. The stack's Pulumi config carries no image reference at all, so there is
 no committed placeholder for a local apply to revert production to.
 
-Stack secrets live in `/etc/branchleft/<stack>.env`, which no automated path
-writes — the unit loads both files and only the image pin is machine-managed.
+Stack secrets live in `/etc/branchleft/<stack>.env`, which `branchleft-deploy`
+does not write — the unit loads both files and the image pin is the only one
+`branchleft-deploy` manages.
 
 **A stack that pins every image inline is outside this mechanism entirely, and
 has to say so.** `branchleft-deploy` refuses it by design, so nothing writes its
@@ -581,6 +572,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@mail-spool`                            | nowhere: `branchLeft/ghost-platform`'s `render-core` golden, fetched by the `demo1_egress_spool` role    | no                |
 | `branchleft-compose@status`, which is not an instance      | nowhere: the project directory of the `status_page` role's plain `docker compose` Gatus page             | no                |
 | `branchleft-compose@dbt1`                                  | nowhere: rendered from a template by the `db_t1` role of `branchLeft/shared-infra`                       | no                |
+| `branchleft-compose@sweego-receiver`                       | nowhere: rendered from a template by the `sweego_receiver` role of `branchLeft/shared-infra`             | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that

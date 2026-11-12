@@ -1,8 +1,7 @@
 # db1_backup_timers
 
 Puts the nightly dump, the retention prune and the binary-log ship of db1 on the
-host, and enables their three timers. It is the Ansible form of the timers that
-the runbooks for db1 currently describe as hand steps.
+host, and enables their three timers.
 
 This README is written for a maintainer who is new to the repository. It follows
 the order the standard sets for a role README (ANS-14).
@@ -107,5 +106,4 @@ Live blockers 1 and 6 say.
 - The restore drill (runbook section 7) and the marker writes (sections 5a and
   7.1) are run by a person and stay in the runbook.
 - The retention runbook's section 6 copy of `db/provision` to db1 is replaced by
-  this role only once the role is applied on the host; until then that section
-  still applies.
+  this role.

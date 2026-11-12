@@ -325,7 +325,10 @@ does not change the live Grafana password. The four `NTFY_` keys are written by
 the `ntfy_pager` role, which runs before `monitoring_stack`, into their own file,
 `/etc/branchleft/ntfy-pager.env` (one path has one writer; the unit's drop-in
 loads that file after `monitoring.env`, and a `NTFY_` line in both takes the
-value from the later one), and
+value from the later one). Once that file holds a value for all four keys,
+`monitoring_stack` removes any `NTFY_` line from `monitoring.env`, and it writes
+the `branchleft_pager_route_configured` gauge (0 when the pager file is missing or
+lacks a key), which the `NtfyPagerDisabled` alert fires on. And
 `STALWART_PROMETHEUS_SECRET` is not written by either role: it keeps its own
 hand step below. The gated run that applies the role is an owner step, not a
 command an agent runs.
@@ -347,9 +350,7 @@ secrets file except its `SNDS_DATA_URL` line) changes the hashed file, so the
 first role run after it restarts the stack once, even when the role's own inputs
 are unchanged. The role's README, "Restart", has the detail.
 
-**The role runs on edge1.** The edge1 playbook wires `monitoring_stack` (PR #544,
-merged 2026-10-31), and the gated apply of commit c3ef323 converged the host on
-2026-11-01. The role writes the six keys above from the host's inputs on each
+**The role runs on edge1.** The edge1 playbook wires `monitoring_stack`. The role writes the six keys above from the host's inputs on each
 gated apply, so rotating one of them is a change to its input followed by that
 apply. No hand block writes them any more. The `STALWART_PROMETHEUS_SECRET` block
 below is the one hand path left in this step.
@@ -472,9 +473,10 @@ for a reason unrelated to this stack.
 
 First-time bring-up enables and starts the unit (7a). Every later change
 under `hetzner/monitoring/stack/` -- a rules edit, a new scrape target, an
-Alertmanager template change, an image bump -- is step 4 followed by 7b: copy,
-then restart, nothing else. The unit is already enabled, so 7b never runs
-`enable` again.
+Alertmanager template change, an image bump -- is made by the `monitoring_stack`
+role on each gated apply, which copies and then restarts the unit (step 3, "How
+the role restarts the stack"); 7b is the by-hand restart. The unit is already
+enabled, so 7b never runs `enable` again.
 
 ### 7a. First-time bring-up
 
@@ -591,7 +593,7 @@ Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `blackbox_mail` (four targets on `mx1.branchleft.co.uk`: 25 and 587 read the
 SMTP banner, 465 and 993 complete a TLS handshake), `stalwart` (Stalwart's own
 Prometheus exporter on `mx1`, over HTTPS on 443), the `node` target for
-`edge1` and the `mysqld` target for `db1` all `up`. All of those carry
+`edge1`, `db1` and `ops1`, and the `mysqld` target for `db1` all `up`. All of those carry
 `expected_up: 'true'` -- a sustained `down` on any of them pages within 5
 minutes via `HostOrServiceDown`. `website` is the contact-form send-failure
 counter on `app1` (`render.ts`'s `WEBSITE_METRICS_PORT`). `blackbox_http`'s
@@ -599,6 +601,12 @@ and `blackbox_mail`'s labels are what catch the exporter itself being down --
 a dead exporter runs no probe, so there is no `probe_success` series for
 `BlackboxProbeFailed` or `MailHostDown` to see; those alerts instead cover a
 live exporter reporting a failed probe, on `probe_success` rather than `up`.
+
+Judge a mail port by its banner or a completed TLS handshake, never by a connect
+that succeeds: a scan-banned source or a dead backend still completes the TCP
+handshake and then closes. For the same reason a probe from a
+source that is itself banned proves nothing in either direction; read the result
+on the host, or from a second source address.
 
 `blackbox_object_storage` is one target: the Hetzner Object Storage endpoint
 `hel1.your-objectstorage.com`, probed over HTTPS through blackbox_exporter's
@@ -608,11 +616,8 @@ refuses anonymous requests there by design. A `down` here means the connection
 was refused or timed out, which `ObjectStorageProbeFailed` pages on after 15
 minutes.
 
-Only `node` for `app1`, `node` for `db1` and `node` for `ops1` are expected
-`down`: `app1`/`db1`'s exporters are not provisioned yet, and `ops1`'s carries
-`expected_up: 'false'` until §15 below confirms it live and flips that label
-in its own follow-up PR (see `render.ts`'s `MONITORED_NODE_HOSTS`
-docstring). A `down` target with `expected_up: 'true'` in its labels is the
+Only `node` for `app1` is expected `down`: it carries `expected_up: 'false'`
+(see `render.ts`'s `MONITORED_NODE_HOSTS` docstring). A `down` target with `expected_up: 'true'` in its labels is the
 only one worth investigating -- but an `up` target with `expected_up: 'false'`
 is worth one too: `ExpectedDownTargetAnswering` pages on exactly that, because
 it is the label going stale in the other direction (a target shipped and
@@ -757,7 +762,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 Expect the container's cgroup path to read something like
 `0::/system.slice/docker-<container-id>.scope` and the unit's `ControlGroup`
 to read `/system.slice/branchleft-compose@edge.service` -- two different,
-sibling paths under `system.slice`, not one nested inside the other. If a
+sibling paths under `system.slice`, not one nested inside the other. The unit
+is `Type=oneshot` with `RemainAfterExit=yes`, so once `docker compose up -d`
+has returned it owns no process and may own no cgroup either: an empty
+`ControlGroup=` is a pass of the same kind, and means the `MemoryMax` bounds a
+cgroup that does not exist. If a
 future Docker/systemd upgrade changes this and the container's path _does_
 start with the unit's path, the systemd-level bound has started doing real
 work and this section is due a rewrite -- but do not assume that from a
@@ -877,9 +886,7 @@ every command below reuses it.
 Run the seeding tool on edge1. It asks for the URL at a hidden prompt (`-t` gives
 it a terminal), so the URL never reaches a command line, shell history or `ps`,
 on either machine. The tool is in the checkout the host's last apply pulled, at
-`/var/lib/pull-trigger/current`; before the commit that added the tool has
-applied, the pull request that added it carries the step that copies it to the
-host.
+`/var/lib/pull-trigger/current`.
 
 ```bash
 ssh -t -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
@@ -1001,31 +1008,10 @@ gauge in the health textfile) before concluding which it is.
 
 ## 15. Deploy node_exporter to ops1 and prove HostOrServiceDown covers it
 
-branchLeft/workspace#1163. Closes the last gap `render.ts`'s
-`MONITORED_NODE_HOSTS` docstring names: `ops1` has never carried a
-node_exporter. **This section must not run before the `nextcloud1`-to-`ops1`
-host rename (branchLeft/workspace#1149) has merged** — that rename is
-sequenced first, alone, precisely so a failure afterwards has one candidate
-cause, and running this section against a host still mid-rename gives any
-failure two. As of this story's own delivery the rename has already merged
-([PR branchLeft/shared-infra#228](https://github.com/branchLeft/shared-infra/pull/228)),
-so the check below should already pass — it stays here as a standing gate
-for whoever executes this section, not a one-time note.
-
-Confirm the rename landed before starting:
-
-```bash
-git -C ~/branchLeft/shared-infra fetch origin main
-grep -n "ops1" ~/branchLeft/shared-infra/hetzner-host/addressPlan.ts
-```
-
-Expect `HOST_IPS.ops1` (not `.nextcloud1`) in `addressPlan.ts`. If it is
-missing, stop — running this section against a host still mid-rename is the
-exact ordering mistake branchLeft/workspace#1149 exists to prevent.
-
 ### 15a. Install node_exporter on ops1
 
-Same shape as "5. Provision a host that has no public address" above, reached
+Same shape as "5. Provision a host that has no public address" in
+`RUNBOOK-provision-host.md`, reached
 through the `edge1` jump host — `$EDGE1_IPV4` is set there; re-set it first if
 entering here independently. **Native binary, not a Compose service**:
 The native install is the `node_exporter` role (`ansible/roles/node_exporter`),
@@ -1035,7 +1021,7 @@ which drops every forwarded packet to the subnet with no carve-out for this host
 and a published container port is forwarded traffic. A process bound to the
 host's own private address and reached over `INPUT` is not.
 
-There is no command to run by hand here. The step is the owner's gate approval of
+There is no command to run by hand here. The step is the gate approval of
 the ops1 pull once the role is on `main`. After that apply, read the result on
 ops1: `systemctl is-active node_exporter.service` prints `active`, and the
 exporter listens on `10.20.1.50:9100`. If the role refuses with `no address in
@@ -1050,10 +1036,10 @@ proven not to be needed, not merely assumed:
 
 - **Hetzner's firewall filters the public interface only**
   (`hetzner-host/firewalls.ts`'s own header, and "5. Provision a host that has
-  no public address" above) — private-network traffic, including
+  no public address" in `RUNBOOK-provision-host.md`) — private-network traffic, including
   `edge1` → `ops1:9100`, is never evaluated against it.
 - **`DOCKER-USER` only sees forwarded traffic** ("6. Confine tenant containers
-  on each app host" above) — a native process delivered via `INPUT` is
+  on each app host" in `RUNBOOK-provision-host.md`) — a native process delivered via `INPUT` is
   outside its scope entirely, which is the whole reason 15a installs
   node_exporter natively rather than as a fourth Compose service on this
   host.
@@ -1065,18 +1051,17 @@ scrape target exists:
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" "iptables -t filter -S DOCKER-USER"
 ```
 
-Expect the same four rules "6. Confine tenant containers on each app host"
-documents (the metadata drop, the subnet drop, no `db1` accept for this host,
+Expect the same four rules "6. Confine tenant containers on each app host" in
+`RUNBOOK-provision-host.md` documents (the metadata drop, the subnet drop, no `db1` accept for this host,
 the conntrack accept) — unchanged by this section, because nothing in it
 touched that chain.
 
 ### 15c. Deploy the updated scrape config and reload
 
-Standard config-only redeploy of the monitoring stack, same command as any
-other `render.ts` change — see "1. Copy the updated edge stack" and "7b.
-Updating an already-running stack" above for the full rsync/restart shape.
-The new target is additive (`ops1`'s `node` entry, `expected_up: 'false'`),
-so this redeploy pages nobody on its own.
+Standard config-only redeploy of the monitoring stack, the same as any other
+`render.ts` change: the `monitoring_stack` role copies it and restarts the unit
+on the gated apply (step 3, "How the role restarts the stack"; 7b is the
+by-hand restart).
 
 ### 15d. Verify
 
@@ -1087,32 +1072,20 @@ curl -s --get http://127.0.0.1:9090/api/v1/query --data-urlencode 'query=up{host
 ```
 
 Expect one series, value `1` — the exporter answering, labelled
-`expected_up="false"`. **`1` here is necessary and not sufficient**: it proves
-the exporter is reachable, not that `HostOrServiceDown` covers it yet, which
-is still gated on the flip in 15e. A `0` or an empty result means 15a or 15b
-needs re-checking before going further — do not proceed to 15e against a
-target that has never actually answered.
+`expected_up="true"`. A `0` or an empty result means 15a or 15b needs
+re-checking before going further.
 
-### 15e. Flip expected_up, as its own one-line PR
+A flip of a host's `expectedUp` needs its own diff because the two suites each
+prove half of it: `render.test.ts` proves the scrape config attaches the label,
+and `alert_rules_test.yml` proves the rules fire on a hand-written series
+carrying it, so a revert of the flip fails only the first.
 
-**Not part of this PR, and not a hand edit.** `render.ts`'s
-`MONITORED_NODE_HOSTS` docstring names the reason: a hand edit here is
-exactly the gap that hid `db1`'s four-day `mysqld_exporter` crash loop
-(`RUNBOOK-monitoring.md` cites it above, and [[expected-up-flip-traps]]
-carries the full account). Once 15d's `1` is confirmed:
-
-1. Change `ops1`'s `expectedUp: false` to `true` in `MONITORED_NODE_HOSTS`.
-2. `pnpm run render` in `hetzner/` to regenerate `stack/prometheus/prometheus.yml`.
-3. Open a PR for that diff alone, citing this section and 15d's read-back.
-4. Once merged, redeploy per 15c again — this second redeploy is the one that
-   actually arms `HostOrServiceDown`/`ServiceFlapping` for `ops1`.
-
-### 15f. The control case — owner-executed, same proof standard as §12
+### 15e. The control case — owner-executed, same proof standard as §12
 
 Two halves, matching §12's standard: a real alert reaching the real receiver,
 and proof the path does not depend on the host being monitored.
 
-**First, the routing half — safe to run before 15e, needs no live outage.**
+**First, the routing half — needs no live outage.**
 Over the tunnel from §11:
 
 ```bash
@@ -1127,7 +1100,7 @@ dispatched. It arrives by the same `email` receiver and the same
 that path runs on `ops1`, which is the property this half proves: the page
 for `ops1` being down does not depend on `ops1` being up to send it.
 
-**Second, the detection half — after 15e, a real outage.** Stop the exporter
+**Second, the detection half — a real outage.** Stop the exporter
 and watch the real rule fire, rather than an injected alert:
 
 ```bash
@@ -1146,7 +1119,7 @@ back:
 ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP" 'systemctl start node_exporter.service'
 ```
 
-Confirm 15d's query returns `1` again before closing the issue.
+Confirm 15d's query returns `1` again.
 
 ## 16. The page register
 
@@ -1176,8 +1149,8 @@ release watcher can only write to it. The phone subscribes at
 `ntfy.branchleft.co.uk` through the edge. `upstream-base-url` is unset on
 purpose, so no message is relayed to a third-party server.
 
-The secrets reach the host the way the other receivers' do: four variables in
-`/etc/branchleft/monitoring.env` (`NTFY_PAGER_TOKEN`, `NTFY_WATCHER_TOKEN`,
+The secrets reach the host in a file of their own, `/etc/branchleft/ntfy-pager.env`,
+written by the `ntfy_pager` role: four variables (`NTFY_PAGER_TOKEN`, `NTFY_WATCHER_TOKEN`,
 `NTFY_OWNER_PASSWORD_HASH`, `NTFY_MACHINE_PASSWORD_HASH`), substituted by
 `render_alertmanager_config.py` into `alertmanager.yml` and `ntfy/server.yml`.
 **They are optional to the stack, not to the pager.** If any is missing or
@@ -1410,19 +1383,12 @@ is the gauge that now contradicts the panel within the hour.
 
 ## What this stack deliberately does not do
 
-- **It does not scrape mx1's own metrics.** `blackbox_mail` probes mx1's
-  public mail ports for liveness (`MailHostDown`), but mx1 is still in a
-  different hcloud project, off the private network entirely (doc 14 §3.4),
-  and Stalwart's own metrics are not configured anywhere in this repo --
-  scraping them would need a firewalled, authenticated public endpoint on
-  mx1, which is outside this repository's authority over that host and a
-  separate story.
 - **It does not run on its own host.** Doc 14 §3.1's `mon1` split is gated on
   TENANT_1, not on this story; everything here is sized on the assumption
   that it shares `edge1`'s 4 GB with the edge stack.
-- **It does not alert on `app1` or `db1` node metrics yet.** Both hosts carry
-  `expected_up: "false"` in `render.ts` until their own exporters land in
-  later stories -- see that file's `MONITORED_NODE_HOSTS` docstring.
+- **It does not alert on `app1` node metrics.** The host carries
+  `expected_up: "false"` in `render.ts` -- see that file's
+  `MONITORED_NODE_HOSTS` docstring.
 - **It does not send application-level alerts** (contact-form failures,
   per-tenant p95 latency, shim queue drain time). Doc 14 §9.2 and §4 name
   these as later, separately-scoped additions; this story covers the host

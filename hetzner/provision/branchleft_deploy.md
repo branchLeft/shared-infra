@@ -243,13 +243,44 @@ and nothing inherited from the host. `PATH` names the pinned gh directory and
 then `/usr/bin:/bin`. `HOME`, `GH_CONFIG_DIR` and `XDG_CONFIG_HOME` point at an
 empty, root-only directory, so root's own `~/.config/gh` cannot become an
 ambient credential. Neither `GH_TOKEN` nor `GITHUB_TOKEN` is passed, whatever
-the host holds. `test_branchleft_deploy.py` pins the exact dictionary.
+the host holds. `DOCKER_CONFIG` is passed, and names the registry read key's
+directory (next section). `test_branchleft_deploy.py` pins the exact dictionary.
 
-The design is fail-closed. The host holds no GitHub credential, and a registered
-image is deployed only when gh verifies its attestation without one. When gh
-says it needs a credential, the deploy is refused with "the host verifier needs
+The design is fail-closed. The host holds no GitHub API credential; it holds a
+registry read key, reached only through `DOCKER_CONFIG`. A registered
+image is deployed only when gh verifies its attestation with no API credential.
+When gh says it needs a credential, the deploy is refused with "the host verifier needs
 GitHub credentials this host does not hold; the deploy is refused". Nothing in
 the code falls back to an unverified deploy.
+
+### The registry read key
+
+A private image's attestation is read from the registry, so the host needs a
+key the registry accepts. The key is a classic token with only `read:packages`,
+owned by a reader account, kept as a docker config in
+`/etc/branchleft/registry/docker/config.json` (directory `root:root` 0700, file
+`root:root` 0600), with an auth entry for `ghcr.io` and for no other registry.
+The owner places it. Nothing in this repository writes, fetches or prints it.
+
+Three things name that one directory, and
+`test_the_registry_key_directory_is_one_path_in_wrapper_unit_and_role` holds
+them to one path:
+
+- `REGISTRY_DOCKER_CONFIG` in `branchleft_deploy.py`, handed to the verifier as
+  `DOCKER_CONFIG` in `verifier_env()`.
+- `Environment=DOCKER_CONFIG=...` in `branchleft-compose@.service`, for the pull.
+- `deploy_verifier_registry_docker_dir` in the `deploy_verifier` role, which
+  only checks the directory and the file (modes, owner, one registry, no
+  credential helper) and refuses a wrong one. It is applied on `app1`, `db1`,
+  `dbt1`, `edge1` and `ops1`.
+
+An absent directory is anonymous access. The verifier and the pull still work
+for a public image, and the role reports the absence without refusing. When the
+registry will not serve a registered image (its words: unauthorised, denied,
+authentication required), `verify_attestation` refuses before the lock, the
+compose read and the pin write, and the message names the registry read key and
+its directory. A refusal for any other reason keeps the "is not attested by"
+message. gh's login refusal outranks both.
 
 **gh's local token gate, and the placeholder.** gh refuses to start without a
 non-empty token (`gh auth login`), even on `--bundle-from-oci`, where it makes no
@@ -275,7 +306,7 @@ store. `verifier_env()` still carries no token, and the placeholder is added ins
 the verifier, so the wrapper's pinned environment is unchanged.
 
 The honest limit: this shows gh's local gate is satisfied, not that the host is
-authenticated. Verification is cryptographic, against the Sigstore trust root (TUF)
+authenticated to GitHub's API. Verification is cryptographic, against the Sigstore trust root (TUF)
 and the signer identity, digest and `refs/heads/main`, and is not account-based.
 **A host credential is still not the fallback**: if the placeholder stops working,
 the registered deploys stay refused and the next step is a tokenless sigstore

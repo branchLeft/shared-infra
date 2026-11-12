@@ -113,9 +113,7 @@ each state and asserts which task stopped it and that nothing was written.
 
 The role is the way this host is set up. The one-off steps and anything that holds
 a secret stay as written in the break-glass runbook, run by the owner at the host.
-Until the first apply of this role on the host is cited, the runbook's hand steps
-for the files, the image and the timer stay as the fallback; after that, use the
-digest in this role's `vars/main.yml`, not a copy of it.
+Use the digest in this role's `vars/main.yml`, not a copy of it.
 
 ## Named limits
 

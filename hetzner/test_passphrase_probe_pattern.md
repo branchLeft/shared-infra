@@ -49,8 +49,9 @@ allowlisted as data rather than left out of scope.
 # surrounding prose -- never a line a shell would execute. The exception is
 # the two evidence strings in scripts/pulumi-stack-inventory.json, which
 # record a completed operation in the past tense; they are data, not
-# instructions. There are currently zero legitimate live uses of the flag
-# anywhere in the scanned tree.
+# instructions. The one live use is ovh/copy2/probe/probe_stack.py, which
+# reads the throwaway probe credentials (never as a decrypt proof). The
+# ALLOWLIST is an escape-hatch list the owner reviews.
 ```
 
 ## SCAN SCOPE

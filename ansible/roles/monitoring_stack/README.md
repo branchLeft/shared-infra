@@ -78,6 +78,27 @@ on this role's next run. The monitoring drop-in loads both files with
 that still holds the hand-written `NTFY_` lines in `monitoring.env` keeps working
 until `ntfy_pager` has run: the later file takes the value when both name a key.
 
+**Stale `NTFY_` lines.** Once the pager's file holds a value for all four keys, the
+role removes every line that starts with `NTFY_` from `monitoring.env`
+(`monitoring_stack_stale_key_regexp`, one `lineinfile` with `state: absent`,
+`no_log` and `diff: false`), so the hand-written values cannot take over if the
+pager's file is later deleted. While the pager's file is missing or lacks a key the
+lines are left, because they are what the host pages with. On a host whose last
+restart was stamped with the lines present, removing them moves the fingerprint, so
+the unit restarts once on that run; the values it reads are the same, because the
+pager's file already shadowed them.
+
+**The pager gauge.** A disabled pager is not a failed apply: a host may have no pager
+and email still works. The role instead writes
+`/var/lib/branchleft/snds-exporter/pager.prom`, a textfile metric the stack's
+node-exporter already reads: `branchleft_pager_route_configured` is `1` when
+`ntfy-pager.env` holds a value for all four keys and `0` when it does not (missing
+file, or a key absent or blank). The `NtfyPagerDisabled` alert in
+`hetzner/monitoring/render.ts` fires on `0`. The gauge is as fresh as the last
+apply, so a file deleted afterwards shows as `1` until the next run; the nightly
+drift check in check mode reports the pending rewrite. It says the keys are
+present, not that the renderer accepts their shape: that check is the renderer's.
+
 ### Restart
 
 No task in this role notifies a handler, and the role has none. A handler loses
@@ -156,6 +177,12 @@ arguments are `path` and `skip_key`; it returns `digest` (64 hex characters) and
 the argument, never a line. Its unit test is `tests/unit/test_monitoring_stack_envfile_digest.py`;
 the role's unit suites run with `ansible/checks/run_role_unit_tests.sh`.
 
+`library/monitoring_stack_envfile_keys.py` is the second. Its arguments are `path` and
+`keys`; it returns `configured` and `missing` (key names only) and `changed: false` in
+both modes, never writes the file, and reads a missing file as every key missing. Its unit
+test is `tests/unit/test_monitoring_stack_envfile_keys.py`, which also runs the
+stale-line expression over sample lines and checks the removal task's flags.
+
 ### Order
 
 On a fresh host `ntfy_pager` runs first, and `monitoring_stack` second.
@@ -177,8 +204,7 @@ last on the playbook. The seven secret inputs of this role come from the
 `/etc/branchleft/host-inputs.json` the owner places on edge1; no value is in the
 repository. Their values must equal what is live, or the first apply rewrites
 `monitoring.env` with different ones. The first apply has no stamp, so it
-restarts the monitoring unit once. The fresh-host run across both is not yet
-shown live. The seam between
+restarts the monitoring unit once. The seam between
 the two is tested with the real `ntfy_pager` role: the `verify.yml` of this role
 runs it by path (`include_role`), then this role, and rotates a pager token to
 see one restart. A second assertion makes the places that name the two secrets
@@ -232,7 +258,8 @@ also does not check the Compose file with `docker compose config`: the Grafana
 password is a required variable in that file, so the check fails on a host where
 the secrets file does not exist yet.
 
-It does not delete anything. The shell copy it replaces used `rsync --delete`,
+It deletes no file. The one thing it removes is the stale `NTFY_` lines from
+`monitoring.env` (see "Secrets"). The shell copy it replaces used `rsync --delete`,
 so a file removed from the repository was removed from the host; this role
 leaves such a file in place, and it must be removed by hand until a later change
 decides how.
@@ -307,8 +334,11 @@ their own user, so a file or directory tighter than this makes a container fail.
 - `/etc/branchleft/`, mode `0755`, if absent, and `/etc/branchleft/monitoring.env`,
   created with `state: touch` if absent, mode `0600`, `root:root`, with the access
   and modification times preserved so a second run changes nothing.
-- The seven keys of "Secrets", one line each. `/etc/branchleft/ntfy-pager.env` is
-  read, never written or created here.
+- The seven keys of "Secrets", one line each, and no `NTFY_` line once the pager's
+  file holds all four keys. `/etc/branchleft/ntfy-pager.env` is read, never written
+  or created here.
+- `/var/lib/branchleft/snds-exporter`, mode `0755` (also made by
+  `exporters_and_collectors`), and in it `pager.prom`, mode `0644`, the pager gauge.
 - `/var/lib/branchleft`, mode `0755`, and the stamp `monitoring.applied` in it,
   mode `0600`, written only after a restart was read back as active.
 - One `daemon-reload` of the systemd manager, only when a drop-in changed or a
@@ -552,7 +582,7 @@ is not shown to fail):
   systemd loads the drop-in, and that the restart decision is right against a
   stand-in `docker`; it does not prove the stack starts, that the render step
   works, or that the real unit template accepts the drop-in. The first live apply
-  is the proof (ANS-17), and it waits on the enrolment of the hosts and on the gate.
+  is the proof (ANS-17).
 - **The unit template is a placeholder in the test.** The drop-in is loaded
   against a oneshot whose `ExecStart` runs the stand-in. `MemoryMax` and
   `CPUWeight` are read from systemd's properties; the drop-in's `ExecStart`,
@@ -585,11 +615,9 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after
 the approval of its protected environment. A plan job shows the host's diff in
 check mode first; after the approval the host pulls that exact commit and applies
 it, and a second run must report zero changes. Nothing is applied from a laptop.
-`ansible/playbooks/edge1.yml` applies this role; the live run waits on the owner's
-`host-inputs.json` on edge1 and on the gate. The runbook keeps its hand
-paths for steps 3, 4, 5 and 13 until then; each is marked and listed in
-`hetzner/provision/test_runbook_monitoring_hand_blocks.py`, and they are retired
-together after the first gated converge.
+`ansible/playbooks/edge1.yml` applies this role. The runbook keeps its hand
+paths for steps 3, 4, 5 and 13; each is marked and listed in
+`hetzner/provision/test_runbook_monitoring_hand_blocks.py`.
 
 ## How to change it safely
 

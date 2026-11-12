@@ -282,7 +282,7 @@ and mode from that list too, so the values are not written twice.
 
 ### Differences from the runbook
 
-- On a host where the stack already runs (ops1 today) the init phase is not run
+- On a host where the stack already runs the init phase is not run
   and no stamp is written: the stack's existence is the evidence that it ran.
   Where the stack is not deployed, the init phase runs when the stamp is absent,
   which is the check the runbook made by hand.

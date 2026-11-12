@@ -241,7 +241,7 @@ a second run must report zero changes. Nothing is applied from a laptop. The rol
 wired into three playbooks, each after `host_baseline` (Docker and `iptables` come from
 there): `ansible/playbooks/edge1.yml` (before `ci_login`), `ansible/playbooks/edget.yml`
 (before `ci_jump`) and `ansible/playbooks/dbt1.yml` (before `deploy_verifier`), and no
-other. The live run waits on the gate.
+other.
 edge1 and edget are the two gateways. Their switch `egress_nat_gateway_enabled` is set in
 their play vars, not in an inventory (the inventory trees load no group variables), and the
 enrolment checker pins it to exactly those two hosts in `HOST_PLAY_VARS` (R2), so no other

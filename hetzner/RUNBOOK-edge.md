@@ -3,7 +3,7 @@
 Deploying Caddy and CrowdSec onto `edge1`, verifying that the edge detects
 without acting, and later turning enforcement on.
 
-`edge1` is `46.225.95.167` (private `10.20.1.10`), a `cx23` in `nbg1`. Every
+`edge1` is a `cx23` in `nbg1` (private `10.20.1.10`). Every
 `ssh`/`scp` below uses the platform owner's key, `~/.ssh/id_ed25519_hetzner` —
 the one registered in the hcloud project and injected on `root` at server
 creation. The CI deploy account cannot run any of this and is not meant to.
@@ -56,13 +56,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 Expect `active` then `provisioned`. Anything else: run
 `RUNBOOK-provision-host.md` first and come back.
 
-**No hostname resolves to `edge1` yet**, and nothing in this runbook changes
-that. The rendered Caddy configuration contains a site block only for a site
-whose registry entry carries a `privateUpstream`, and no site does today, so
-Caddy binds no public port and requests no certificate. That is deliberate: a
-hostname whose DNS still points anywhere but edge1 would fail HTTP-01 validation
-in a loop and spend the Let's Encrypt failure budget for the whole account.
-Everything below is verified through the loopback probe listener instead.
+The rendered Caddy configuration contains a site block only for a site whose
+registry entry carries a `privateUpstream`. A hostname whose DNS points anywhere
+but edge1 would fail HTTP-01 validation in a loop and spend the Let's Encrypt
+failure budget for the whole account, so everything below is verified through
+the loopback probe listener.
 
 ## 1. Build and publish the Caddy image
 
@@ -81,8 +79,7 @@ builds anything.
 The tag is `caddy-<CADDY_VERSION>-<revision>`. `<CADDY_VERSION>` is read from
 the `ARG CADDY_VERSION=` line in the Dockerfile, so a change there changes the
 tag with it. `<revision>` is a positive integer you choose: the next one not
-yet used for that Caddy version. `caddy-2.11.4-1` is taken, so the first run
-uses `2`. Rebuilding a revision that exists is refused (the run fails at the
+yet used for that Caddy version. Rebuilding a revision that exists is refused (the run fails at the
 step that checks for the tag and pushes nothing), so a pushed tag is never
 overwritten; dispatch again with the next number. There is no `latest` tag.
 
@@ -322,7 +319,7 @@ is in the state that file says:
 
 | Switch                      | Committed state | What that means here                                           |
 | --------------------------- | --------------- | -------------------------------------------------------------- |
-| `crowdsec`                  | `detect-only`   | sees everything, records what it would act on, blocks nothing  |
+| `crowdsec`                  | `enforcing`     | in-band 403 on known-bad shapes, and banned addresses refused  |
 | `rateLimit`                 | `enforcing`     | the general 200/60s per-address throttle is on for every block |
 | `membersMagicLinkRateLimit` | `enforcing`     | POSTs to Ghost's magic-link path are throttled at 5/60s        |
 
@@ -509,7 +506,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 ```
 
 Expect `204`. The request reached the WAF, tripped an OWASP Core Rule Set rule,
-and was answered normally — which is the whole of what detect-only means.
+and was answered normally, because the Core Rule Set is loaded out-of-band: it
+alerts and never refuses a request, in every posture.
 
 **d. The detection is recorded.**
 
@@ -521,8 +519,8 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 ```
 
 Expect at least one alert naming an AppSec scenario. Decisions may be empty or
-may list bans that nothing is enforcing — either is correct in this posture, and
-the second is the evidence the review in step 9 is about.
+may list bans; with the IP-decision handler committed, a listed ban is refused
+at the edge, and the review in step 9 is about whether each one is deserved.
 
 ## 9. The detect-only period, and the review that ends it
 
@@ -541,6 +539,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker exec "$CROWDSEC_CTR" cscli metrics'
 ```
 
+- The Acquisition Metrics table in `cscli metrics` names
+  `file:/var/log/caddy/access.log` with lines read. A `healthy` container and a
+  passing `cscli lapi status` do not show it: the healthcheck covers the Local
+  API only, so CrowdSec can answer correctly while reading no log at all.
 - Alerts against addresses that are plainly hostile: expected, and the argument
   for enforcing.
 - Alerts against the platform owner's own address, a member's, or a search
@@ -561,7 +563,7 @@ literally the configuration the host will run.
 | --------------------------- | --------------------------------- | -------------------------------------------------------------------- |
 | `membersMagicLinkRateLimit` | **`enforcing`** — already flipped | §8b                                                                  |
 | `rateLimit`                 | **`enforcing`** — committed       | §10a: the pre-apply check gates the apply; §8a proves it trips after |
-| `crowdsec`                  | `inband-only`                     | §10b below completes it with the IP-decision handler                 |
+| `crowdsec`                  | **`enforcing`** — committed       | §10b: the in-band 403 and the IP-decision handler are both in force  |
 
 `rateLimit` is committed as `enforcing`, but committing does not deliver it:
 `hetzner/edge/stack/**` reaches `edge1` only through the gated apply, and §10a's
@@ -578,18 +580,15 @@ through the protection chain — site, redirect, static and probe blocks — and
 the `:9091` metrics listener. Steps 1 to 3 below are done in the pull request
 that committed it.
 
-**That number has never been measured against traffic.** It was carried over
-from the retired edge, whose rule was live at `preview: true` and never enforced
-anything. `edge1` averages well under 1 req/s but has 1-minute bursts two orders
-of magnitude above that, and nothing currently attributes those to one client or
-to many. The key is the direct peer (`{http.request.remote.host}`), which can
+The number was carried over from the retired edge, whose rule was live at
+`preview: true` and never enforced anything. The key is the direct peer (`{http.request.remote.host}`), which can
 also collapse real clients onto a Docker bridge address such as `172.18.0.1`
 behind the docker-proxy, so that every collapsed client shares one budget per
 site. `RateLimitDecliningRealClients` excludes `172.16.0.0/12` keys, so that
 collapse would not alert on its own; the tripwire is the blackbox probes seeing
 `429`.
 
-**Pre-apply check: the owner's go/no-go, run before step 4.** Read the access
+**Pre-apply check: the go/no-go, run before step 4.** Read the access
 log, which `posture.ts` names as this throttle's observation instrument and
 which is enabled in every posture. The command below prints the distribution of
 requests per client address per minute, and the count and share of IP-minutes
@@ -777,10 +776,16 @@ above, performed by whoever holds `~/.ssh/id_ed25519_hetzner`.
 
 ### 10b. The WAF and IP remediation
 
-Same four steps. The committed `crowdsec: 'inband-only'` already loads the
-in-band AppSec configuration in `crowdsec/acquis.d/appsec.yaml`: a known-bad
-request shape gets a 403 and no address is banned. Setting
-`crowdsec: 'enforcing'` adds the IP-decision handler to the Caddy route chain.
+Same four steps. The committed `crowdsec: 'enforcing'` loads the in-band AppSec
+configuration in `crowdsec/acquis.d/appsec.yaml`, so a known-bad request shape
+gets a 403, and puts the IP-decision handler in every protected Caddy route
+chain, so a banned address is refused ahead of the proxy. Setting
+`crowdsec: 'inband-only'` takes the handler out again and leaves the 403.
+
+When the checker is slow or down the edge lets requests through: the AppSec
+verdict is bounded at one second and then waived (`appsec_fail_open`), and the
+bouncer is not set to refuse when it cannot reach CrowdSec, so a stopped
+CrowdSec leaves the last decisions in force and everything else served.
 
 Confirm it took. `$EDGE1_IPV4` is set under "What has to be true first"
 above; re-set it first if you are entering this section independently:
@@ -827,7 +832,7 @@ One registry entry, then a re-render. Nothing else.
    to nothing).
 2. `cd hetzner && pnpm run render`, commit both files, open a pull request.
 3. After merge: `rsync` (step 4) and reload (step 10a.4).
-4. **Only then** cut the hostname's DNS at IONOS to `46.225.95.167`. The order
+4. **Only then** cut the hostname's DNS at IONOS to `$EDGE1_IPV4`. The order
    is forced: Caddy issues its certificate over HTTP-01, which cannot succeed
    until the hostname resolves here, and it will not attempt issuance at all
    until the site block exists.
@@ -862,6 +867,11 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" \
 
 Then run §10a.4's mount check and probe read-back in full, and expect the same
 results.
+
+`branchleft-deploy` rolls back automatically by restoring the previous image
+pin only. A deploy that changes configuration and keeps the same image digest
+has nothing to roll back to, so the git restore above is the only undo for a
+bad configuration.
 
 **A rollback is applied by the reload, not by the unit.** A rollback is reached
 for during an outage, and `systemctl restart branchleft-compose@edge` would
@@ -904,6 +914,10 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
   docker compose exec -T caddy wget -qO- http://127.0.0.1:2019/config/ | grep -o "\"roll_[a-z_]*\":[^,}]*" | sort | uniq -c
   grep -c "output file" caddy/Caddyfile'
 ```
+
+Caddy's admin API listens on port 2019 inside the container and the compose file
+does not publish it, so a `curl` to `127.0.0.1:2019` on the host returns nothing,
+which reads like a failed restart. Query it through the container, as above.
 
 Expect, on every log, `"roll_at":["00:00"]`, `"roll_keep":31` and `"roll_keep_days":30`,
 each with the same count, and that count equal to the last line (the number of `output

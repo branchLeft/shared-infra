@@ -3,7 +3,7 @@
 This role delivers the status page of the estate: a Gatus container that probes every
 hostname in the site registry once a minute and shows the result, with a history that
 survives a restart. The page is served on loopback only. It is reached through an SSH
-tunnel until a public route is chosen, and that route is not this role's work.
+tunnel; a public route is not this role's work.
 
 ## What it does, and what it does not
 

@@ -70,6 +70,75 @@
   diff: false
   when: not ansible_check_mode or monitoring_stack_env_stat.stat.exists
 
+# One read of the pager's secrets file, which ntfy_pager writes and this role only
+# reads. The module returns the names of the keys that lack a value and one flag,
+# never a line, so no value reaches a variable or a log. A file that is not there
+# reads as every key missing, which is the disabled pager the gauge below reports.
+# It is a read, so it runs in check mode too.
+- name: Check which pager keys the pager secrets file holds a value for
+  monitoring_stack_envfile_keys:
+    path: '{{ monitoring_stack_ntfy_env_file }}'
+    keys: '{{ monitoring_stack_ntfy_env_keys }}'
+  register: monitoring_stack_pager_state
+  changed_when: false
+  check_mode: false
+  no_log: true
+  diff: false
+
+# The four NTFY_ keys used to be written into monitoring.env by hand. While the
+# pager's own file holds all four, the later EnvironmentFile wins, so these lines
+# are shadowed; if that file were ever deleted the stale values would take over
+# without a word. They are removed only while the pager file holds all four keys,
+# so a host whose pager has not been placed yet keeps the lines it pages with.
+# One lineinfile with state absent removes every matching line and, once none is
+# left, changes nothing. no_log hides the lines and diff is off, so no value is
+# shown under --diff. In check mode the file is not created, so the task runs only
+# when it exists: a pending removal is then a change in the plan and the drift run.
+- name: Remove the stale NTFY_ lines from the monitoring secrets file
+  ansible.builtin.lineinfile:
+    path: '{{ monitoring_stack_env_file }}'
+    regexp: '{{ monitoring_stack_stale_key_regexp }}'
+    state: absent
+  no_log: true
+  diff: false
+  when:
+    - monitoring_stack_pager_state.configured | bool
+    - not ansible_check_mode or monitoring_stack_env_stat.stat.exists
+
+# The pager gauge: 1 when the pager's file holds all four keys, 0 when it does not,
+# written where the stack's node-exporter reads textfile metrics, so the NtfyPagerDisabled
+# alert can see a pager that is off while email carries on. It is a signal, not a
+# failure: a host with no pager is a legitimate state, so the apply does not fail on
+# it. The file holds a name and a 0 or 1, never a value. The directory is made by
+# exporters_and_collectors too, with the same owner and mode, so the second role to
+# run finds it and changes nothing. copy replaces the file whole, so the exporter
+# never reads half a file. In check mode the directory may not exist yet on a fresh
+# host, so the write runs only when it does.
+- name: Create the textfile directory of the stack's node-exporter
+  ansible.builtin.file:
+    path: '{{ monitoring_stack_textfile_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Look at the textfile directory of the stack's node-exporter
+  ansible.builtin.stat:
+    path: '{{ monitoring_stack_textfile_dir }}'
+  register: monitoring_stack_textfile_stat
+
+- name: Write the pager gauge for the stack's node-exporter
+  ansible.builtin.copy:
+    content: |
+      # HELP {{ monitoring_stack_pager_gauge }} 1 when the pager's secrets file holds all four keys, 0 when the pager is disabled.
+      # TYPE {{ monitoring_stack_pager_gauge }} gauge
+      {{ monitoring_stack_pager_gauge }} {{ 1 if monitoring_stack_pager_state.configured | bool else 0 }}
+    dest: '{{ monitoring_stack_pager_gauge_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  when: not ansible_check_mode or monitoring_stack_textfile_stat.stat.exists
+
 # The stack's files go into the project directory, as before.
 - name: Create the project directory
   ansible.builtin.file:

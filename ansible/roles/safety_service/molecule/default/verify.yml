@@ -61,7 +61,8 @@
         that:
           - config.keys() | sort | list == ['arachnid', 'audit', 'cache', 'channel', 'hosts']
           - config.arachnid.baseUrl == scenario_origin
-          - config.arachnid.credentialFile == scenario_credential_file
+          - config.arachnid.usernameFile == scenario_username_file
+          - config.arachnid.passwordFile == scenario_password_file
           - config.channel.signingKeyFile == scenario_key_file
           - config.hosts | length == 1
           - config.hosts[0].id == scenario_host_id

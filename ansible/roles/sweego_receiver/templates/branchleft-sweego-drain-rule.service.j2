@@ -1,0 +1,25 @@
+# Reasserts the drain-port rule of the Sweego receiver at every boot. The rule lives in
+# DOCKER-USER, in the kernel's netfilter tables, and nothing else persists it: there is no
+# iptables-persistent here, for the reason branchleft-nat.service gives (a saved ruleset
+# would also save Docker's chains and restore a stale copy before dockerd owns them).
+[Unit]
+Description=branchLeft Sweego receiver drain-port rule
+# After docker.service, so the DOCKER-USER chain exists. After the NAT unit as well, so its
+# two rules are in the chain before these are inserted above them: the program takes the
+# first two places, and whichever unit ran second would otherwise leave them out of place by
+# the luck of start order. After only, never Requires: that unit stays the egress role's.
+# The receiver's own stack unit is ordered after and bound to this one by a drop-in (the
+# role writes it), so the receiver never starts on a host where this rule failed.
+After=network-online.target docker.service {{ sweego_receiver_nat_unit_name }}
+Wants=network-online.target
+# PartOf, not Requires: a restart of docker.service reasserts the rule against whatever
+# chain dockerd just rebuilt, and boot ordering is unaffected.
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart={{ sweego_receiver_program_dest }} --address {{ sweego_receiver_private_address }} --port {{ sweego_receiver_drain_port }} --allow-source {{ sweego_receiver_drain_peer_address }} --container-address {{ sweego_receiver_container_address }} --container-port {{ sweego_receiver_container_drain_port }}
+
+[Install]
+WantedBy=multi-user.target

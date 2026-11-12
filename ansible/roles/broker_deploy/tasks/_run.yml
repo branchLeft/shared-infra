@@ -1,0 +1,61 @@
+---
+# Internal to the role: the broker is enabled, started, restarted when what it runs changed,
+# and asked for its status. It expects broker_deploy_inputs_changed, which main.yml sets from
+# the changes of the tasks that deliver the release, the key, the environment file and the
+# unit. The unit is loaded already: main.yml flushes the reload before it includes this file.
+- name: Look for the broker unit file
+  ansible.builtin.stat:
+    path: '{{ broker_deploy_unit_path }}'
+    follow: false
+  register: broker_deploy_unit_stat
+
+# In check mode nothing is restarted, so a plan reports a start or a restart here when the
+# unit is not yet on the host or what it runs would change. The task runs true, which
+# changes nothing.
+- name: Report in check mode that the broker would be started or restarted
+  ansible.builtin.command:
+    argv:
+      - 'true'
+  changed_when: true
+  check_mode: false
+  when: ansible_check_mode and (not broker_deploy_unit_stat.stat.exists or broker_deploy_inputs_changed | bool)
+
+# A restart, never a reload: the broker reads its key and environment at start and keeps its
+# release files open. Ahead of the enable, so on a first install the broker is started once.
+- name: Restart the broker because its release, key, environment file or unit changed
+  ansible.builtin.systemd_service:
+    name: '{{ broker_deploy_unit_name }}'
+    state: restarted
+  when: not ansible_check_mode and broker_deploy_unit_stat.stat.exists and (broker_deploy_inputs_changed | bool)
+
+# Skipped on a host where check mode has not yet written the unit (ANS-10): the module would
+# fail with "Could not find the requested service". The report task above shows the start.
+- name: Enable the broker at boot and start it
+  ansible.builtin.systemd_service:
+    name: '{{ broker_deploy_unit_name }}'
+    enabled: true
+    state: started
+  when: broker_deploy_unit_stat.stat.exists
+
+# Skipped in check mode (ANS-10): a plan starts nothing, so there is nothing to ask. An apply
+# fails here when the broker does not answer, so a unit that starts and then dies is not
+# reported as converged. The request is a read of the loopback address.
+- name: Wait for the broker to answer its status request
+  ansible.builtin.uri:
+    url: 'http://127.0.0.1:{{ broker_deploy_port }}{{ broker_deploy_status_path }}'
+    return_content: true
+    status_code: 200
+  register: broker_deploy_status
+  until: broker_deploy_status.status is defined and broker_deploy_status.status == 200
+  retries: '{{ broker_deploy_ready_attempts }}'
+  delay: '{{ broker_deploy_ready_delay_seconds }}'
+  changed_when: false
+  when: not ansible_check_mode
+
+- name: Refuse a broker whose status answer is not the status of slot 0
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_status.json.slot == '0'
+    quiet: true
+    fail_msg: The broker answered, but not with the status of slot 0.
+  when: not ansible_check_mode

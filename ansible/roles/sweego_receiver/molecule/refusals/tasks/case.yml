@@ -1,0 +1,52 @@
+---
+# Test scaffolding, not role tasks. One refusal case, included with `case` set:
+#   name    what the case is
+#   break   commands (argv lists) that make the host bad; none for a control or an input case
+#   expect  a phrase the refusal must carry; absent for a control, which must be accepted
+#   fix     commands (argv lists) that put the host right again
+#   port, drain_port, signing_secret_file, drain_token_file
+#           a role input for this case only; the scenario's own value where absent
+# The role is applied whole. A bad secret, input or pin is refused by its own step, before
+# the steps that write, so the host a case leaves is the host it found (verify.yml reads it).
+- name: Make the state bad, as the case says
+  ansible.builtin.command:
+    argv: '{{ item }}'
+  loop: '{{ case.break | default([]) }}'
+  loop_control:
+    label: '{{ case.name }}: {{ item | join(" ") }}'
+  changed_when: true
+
+- name: Apply the role and expect what the case expects
+  block:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.sweego_receiver
+      vars:
+        sweego_receiver_port: '{{ case.port | default(standin_port) }}'
+        sweego_receiver_drain_port: '{{ case.drain_port | default(standin_drain_port) }}'
+        sweego_receiver_signing_secret_file: '{{ case.signing_secret_file | default(standin_signing_secret_file) }}'
+        sweego_receiver_drain_token_file: '{{ case.drain_token_file | default(standin_drain_token_file) }}'
+
+    - name: Say that the role accepted what it should have refused
+      ansible.builtin.fail:
+        msg: 'REFUSAL-CASE-ACCEPTED {{ case.name }}'
+      when: case.expect is defined
+  rescue:
+    - name: Assert the refusal was the one this case is for
+      ansible.builtin.assert:
+        that:
+          - case.expect is defined
+          - case.expect in (ansible_failed_result | to_json)
+        quiet: true
+        fail_msg: >-
+          The case '{{ case.name }}' ended in a way other than the one it is for. Expected
+          '{{ case.expect | default('no refusal: the role should have accepted it') }}'; the failed result
+          was: {{ ansible_failed_result | to_json }}
+  always:
+    - name: Put the state right again
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop: '{{ case.fix | default([]) }}'
+      loop_control:
+        label: '{{ case.name }}: {{ item | join(" ") }}'
+      changed_when: true

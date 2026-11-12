@@ -1,0 +1,16 @@
+---
+# Constants of the broker's install, not inputs: a role variable outranks play and
+# inventory variables, so a caller does not move them by accident.
+
+# Who owns the unpacked release. root, so the broker account can read what it runs and
+# cannot change it. The role's own test sets these two to the account that runs the test.
+broker_deploy_release_owner: root
+broker_deploy_release_group: root
+
+# The broker's unit, and the port the environment file's PORT line names. The role asks the
+# broker for its status on the loopback address only, and the unit allows nothing else.
+broker_deploy_unit_name: branchleft-broker.service
+broker_deploy_port: 8090
+broker_deploy_status_path: /status/0
+broker_deploy_ready_attempts: 15
+broker_deploy_ready_delay_seconds: 2

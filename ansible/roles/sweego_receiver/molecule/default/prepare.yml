@@ -1,0 +1,174 @@
+---
+# Test scaffolding, not role tasks. What edge1 has before the role runs, as the host baseline
+# and the owner's steps leave it: iptables with Docker's DOCKER-USER chain, the private address
+# on an interface, a running docker.service, the shared Compose unit template, the two secret
+# files the owner places, and stand-ins for docker and the receiver. The stand-ins prove wiring
+# only (README, "Limits"). The iptables rules are real, in the container's own network namespace.
+- name: Prepare
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Install iptables, which loads the rule, and iproute2, which lists listeners
+      ansible.builtin.apt:
+        name:
+          - iptables
+          - iproute2
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Create the directories the host baseline and the host build leave
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /opt/branchleft
+
+    # Docker creates DOCKER-USER with one RETURN rule and sends FORWARD to it. There is no
+    # Docker here, so the chain is made the same way, once.
+    - name: Look for the DOCKER-USER chain
+      ansible.builtin.command:
+        argv: [iptables, -t, filter, -S, DOCKER-USER]
+      register: sweego_receiver_standin_chain
+      changed_when: false
+      failed_when: false
+
+    - name: Create the DOCKER-USER chain where it is missing
+      ansible.builtin.command:
+        argv: [iptables, -t, filter, -N, DOCKER-USER]
+      changed_when: true
+      when: sweego_receiver_standin_chain.rc != 0
+
+    - name: Give a new DOCKER-USER chain the one rule Docker gives it
+      ansible.builtin.command:
+        argv: [iptables, -t, filter, -A, DOCKER-USER, -j, RETURN]
+      changed_when: true
+      when: sweego_receiver_standin_chain.rc != 0
+
+    # The published ports are on edge1's private address, so the container needs it on an
+    # interface for the stub to bind it. On the loopback, as a single address.
+    - name: Look for the private address on the loopback
+      ansible.builtin.command:
+        argv: [ip, -4, -o, addr, show, dev, lo]
+      register: sweego_receiver_standin_addresses
+      changed_when: false
+
+    - name: Give the loopback edge1's private address
+      ansible.builtin.command:
+        argv: [ip, addr, add, 10.20.1.10/32, dev, lo]
+      changed_when: true
+      when: "'10.20.1.10/32' not in sweego_receiver_standin_addresses.stdout"
+
+    - name: Install a stand-in for docker.service
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Test stand-in for docker.service
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/bin/true
+          [Install]
+          WantedBy=multi-user.target
+        dest: /etc/systemd/system/docker.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install a stand-in for docker
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../default/files/standin-docker.sh'
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create the log of the stand-in's calls, empty
+      ansible.builtin.copy:
+        content: ''
+        dest: /var/log/docker-standin.calls
+        owner: root
+        group: root
+        mode: '0644'
+        force: false
+
+    - name: Create the directories of the stand-in docker and the stand-in receiver
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /var/lib/standin-docker
+        - /usr/local/lib/standin
+
+    - name: Install the stand-in receiver
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../default/files/receiver-stub.py'
+        dest: /usr/local/lib/standin/receiver-stub.py
+        owner: root
+        group: root
+        mode: '0644'
+
+    # What the stand-in docker reports for a healthy receiver, the way the role's template
+    # sets it up. The image is filled in by the stand-in from the one it was started with.
+    - name: Write what the stand-in docker inspect reports
+      ansible.builtin.copy:
+        content: |
+          [{"Name": "/sweego-receiver-receiver-1",
+            "State": {"Status": "running", "Running": true, "Health": {"Status": "healthy"}},
+            "Config": {"Image": "@@IMAGE@@", "User": "31100:31100"},
+            "Mounts": [{"Source": "/var/lib/branchleft/sweego-receiver"}],
+            "HostConfig": {"ReadonlyRootfs": true, "Privileged": false, "CapDrop": ["ALL"],
+              "CapAdd": null, "SecurityOpt": ["no-new-privileges:true"],
+              "NetworkMode": "sweego-receiver_receiver",
+              "PortBindings": {
+                "8080/tcp": [{"HostIp": "10.20.1.10", "HostPort": "{{ sweego_receiver_port }}"}],
+                "8081/tcp": [{"HostIp": "10.20.1.10", "HostPort": "{{ sweego_receiver_drain_port }}"}]}}}]
+        dest: /var/lib/standin-docker/inspect.json
+        owner: root
+        group: root
+        mode: '0644'
+
+    # The shared Compose unit template the host baseline hand-installs, taken from the
+    # repository so the test runs the role against the real unit and not against a copy.
+    - name: Install the shared Compose unit template
+      ansible.builtin.copy:
+        src: '{{ playbook_dir }}/../../../../../hetzner/provision/branchleft-compose@.service'
+        dest: /etc/systemd/system/branchleft-compose@.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Make systemd read the units
+      ansible.builtin.systemd_service:
+        daemon_reload: true
+
+    - name: Start the stand-in for docker.service
+      ansible.builtin.systemd_service:
+        name: docker.service
+        state: started
+
+    # The owner places these once; the role only looks at them. The content is a sentinel,
+    # not a secret: it goes into a throwaway container, and verify.yml reads it back to prove
+    # the role left it alone and put it nowhere else.
+    - name: Place the secret files the way the owner does
+      ansible.builtin.copy:
+        content: '{{ item.content }}'
+        dest: '{{ item.dest }}'
+        owner: root
+        group: '31100'
+        mode: '0440'
+      loop:
+        - dest: /etc/branchleft/sweego-receiver-signing-secret
+          content: "test-sentinel-signing-secret-0001\n"
+        - dest: /etc/branchleft/sweego-receiver-drain-token
+          content: "test-sentinel-drain-token-0002\n"
+      loop_control:
+        label: '{{ item.dest }}'
+      no_log: true

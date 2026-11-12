@@ -14,9 +14,11 @@
 # reach the database host, so it has no protected-port drops), and installs the deploy
 # wrapper and the container isolation policy. The deploy slot keys follow it because they
 # need the wrapper it installs; both come last so that a failure in either, which acts on
-# the Docker firewall or on SSH keys, cannot hold the website back. The export bundler is
-# last of all: it copies pinned files into root-only directories and runs nothing, so a
+# the Docker firewall or on SSH keys, cannot hold the website back. The export bundler
+# follows: it copies pinned files into root-only directories and runs nothing, so a
 # failure in it, which is a refusal of a changed file, holds back none of the others.
+# The tenant stacks (tenant_compose) are last of all: the role restarts the tenants' live
+# stacks and takes its stacks from the loader's input tenant_compose_stacks.
 # Only this host's name
 # and its deploy class are set here; the remote, the playbook allowlist and the
 # signer list come from the shared includes and the one trust file, all loaded through

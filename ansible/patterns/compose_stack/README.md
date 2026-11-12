@@ -310,7 +310,7 @@ drives the `docker` command line and parses what that prints. Its source (the pi
 `docker compose version --format json`, the `up` itself, whose progress it reads as
 JSON lines on standard error, then `docker compose ps --format json --all --no-trunc`
 and `docker compose images --format json`. The test installs a small stand-in for the
-`docker` command in the instance (`molecule/default/files/docker_standin.sh`, installed
+`docker` command in the instance (`molecule/default/files/docker_standin.py`, installed
 by `prepare.yml`): it appends its arguments to a log and prints canned answers in those
 shapes. The module runs against it, and the verify play reads the log.
 
@@ -331,8 +331,8 @@ does on an engine, in particular when images are not yet pulled and without `--w
 (**unverified**), what real `up` reports as changed, or the real `ps` field set (the
 stand-in sends a subset; the role reads only `Service`, `State` and `Health`). The
 gated run of a live role that brings its stack up is the real proof (ANS-17). The one
-live consumer so far, `roles/monitoring_stack`, delivers files only, so this path has no
-live run yet.
+live consumer, `roles/monitoring_stack`, delivers files only, so this path has no
+live run.
 
 ## How to run its test
 
@@ -561,8 +561,7 @@ pattern is not applied to any host itself: it exists to be copied. Two roles on 
 use its recipe, and the gated workflow delivers both. `roles/monitoring_stack`, in
 `ansible/playbooks/edge1.yml`, uses the file-delivery half and has no `docker compose`
 task. `roles/status_page`, in `ansible/playbooks/ops1.yml`, is a standalone full copy of
-the recipe, not a consumer of these files. The trigger and the reusable workflow are
-separate work.
+the recipe, not a consumer of these files.
 
 ## How a service role copies it
 

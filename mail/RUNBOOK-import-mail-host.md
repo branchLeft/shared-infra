@@ -54,10 +54,6 @@ You need:
   Console → Security → API Tokens if you don't already have one for this
   project. **Never commit this token, paste it into a PR, or put it in a
   shell history file that gets synced anywhere.**
-- The same GCP credentials you already use for `shared-infra`'s root stack
-  (`gcloud auth application-default login`, or whatever you have configured
-  today) — the secrets provider below is the same GCP KMS key ring the root
-  stack uses, just a different per-stack wrapped data key.
 
 ## 1. How the stack was originally created
 
@@ -90,8 +86,8 @@ engineered to public hygiene, same as the root stack's file).
 Two supported ways — pick one, do not do both:
 
 ```bash
-# Option A: Pulumi config, encrypted at rest via the same gcpkms provider
-# as every other secret in this stack's config file.
+# Option A: Pulumi config, encrypted at rest by the stack's passphrase secrets
+# provider, as every other secret in this stack's config file.
 pulumi config set --secret hcloud:token
 # (prompts; paste the token, it is not echoed and not stored in shell history)
 

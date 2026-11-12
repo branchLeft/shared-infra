@@ -9,7 +9,7 @@ export interface EdgePosture {
 }
 
 export const POSTURE: EdgePosture = {
-  crowdsec: 'inband-only',
+  crowdsec: 'enforcing',
   rateLimit: 'enforcing',
   membersMagicLinkRateLimit: 'enforcing',
 };

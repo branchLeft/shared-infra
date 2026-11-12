@@ -17,7 +17,7 @@
       ansible.builtin.include_role:
         name: branchleft.program_and_timer
       vars:
-        program_and_timer_program_src: '{{ refused_input.src | default("example_program.sh") }}'
+        program_and_timer_program_src: '{{ refused_input.src | default("example_program.py") }}'
         program_and_timer_program_dir: '{{ refused_input.dir | default("/usr/local/lib/program_and_timer") }}'
         program_and_timer_program_name: '{{ refused_input.file | default("program.sh") }}'
         program_and_timer_service_user: '{{ refused_input.user | default(hostvars[inventory_hostname].program_and_timer_service_user) }}'
