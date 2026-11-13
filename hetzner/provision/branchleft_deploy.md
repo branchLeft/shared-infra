@@ -221,7 +221,9 @@ an image signed by another workflow are all refused, and each refusal leaves
 the pin file and the running stack as they were. There is no argument,
 environment variable or stack setting that skips it. An image name outside the
 register is not verified here, so the other images on this host deploy as
-before.
+before. The register holds `ghcr.io/branchleft/ghost-tenant`,
+`ghcr.io/branchleft/portal-apps` and `ghcr.io/branchleft/percona-server` (the
+database image of `db-t1`, signed by the Percona image workflow).
 
 The register is looked up by registry host and path alone (`attested_name`). A
 tag or a registry port on the reference is a spelling, not another image: the
