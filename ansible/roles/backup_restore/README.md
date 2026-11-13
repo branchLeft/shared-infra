@@ -158,8 +158,11 @@ drill's timer stays refused either way.
   reload when any changed.
 - `/etc/branchleft/secrets`, `root:root` `0700`. The role never creates a file in it.
 - `/etc/branchleft/state-copy.env` and, when switched on, `/etc/branchleft/restore-drill.env`,
-  each `root:root` `0600`, created empty first and then written, so no moment
-  exists in which a value is in a wider file.
+  each `root:root` `0600`, created empty first when absent, their owner, group and
+  mode set back on every run, and only then written, so no value goes into a wider
+  file. The values come from `backup_restore_secret_files` in `vars/main.yml`. The
+  correction happens on each run, not continuously. The order is pinned by
+  `tests/unit/test_backup_restore_env_files.py`; Molecule cannot see the window.
 - The state-copy timer's enabled and active state, and the drill timer's only
   when its `may_disable` is true.
 

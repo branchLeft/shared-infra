@@ -10,6 +10,31 @@
 backup_restore_drill_env_file: /etc/branchleft/restore-drill.env
 backup_restore_state_copy_env_file: /etc/branchleft/state-copy.env
 
+# The owner, group and mode of the two environment files: the one home of those
+# values. Each file's create-empty task, attribute task and write read them through
+# the lookup below it, so no literal is repeated. Only attributes are here, never
+# content.
+backup_restore_secret_files:
+  - path: '{{ backup_restore_state_copy_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  - path: '{{ backup_restore_drill_env_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+
+# The entry for each file, found by path. A list without that entry fails the
+# lookup, loudly.
+backup_restore_state_copy_env_secret: >-
+  {{ backup_restore_secret_files
+     | ansible.builtin.selectattr('path', 'equalto', backup_restore_state_copy_env_file)
+     | ansible.builtin.first }}
+backup_restore_drill_env_secret: >-
+  {{ backup_restore_secret_files
+     | ansible.builtin.selectattr('path', 'equalto', backup_restore_drill_env_file)
+     | ansible.builtin.first }}
+
 # The directory the owner places each secret access key in: root only.
 backup_restore_secrets_dir: /etc/branchleft/secrets
 
