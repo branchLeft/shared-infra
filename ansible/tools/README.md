@@ -62,8 +62,10 @@ What it does, in this order:
    file later, so it wins, and the hand runbook put them in `monitoring.env` first);
    `backup-worker.env` for the worker keys; `db1-ca.pem` whole for the CA; the lines of
    `backup-worker-recipients` for the tenants, in order; `state-copy.env` for the state-copy keys;
-   `website.env` for the app1 contact keys. app1's `tenant_compose_stacks` is not a file: the
-   tool runs the volume program (`/root/platform-provision/provision_tenant_volume.py
+   `website.env` for the app1 contact keys. `tenant_compose_stacks` is not a file, and no host's
+   row holds it yet: the tool lists it in `NOT_YET_ROUTED`, so it reads it for a host only once
+   that host's loader row names it (the tenant ring's app host, wired later; app1 never). For
+   such a host the tool runs the volume program (`/root/platform-provision/provision_tenant_volume.py
 --list-claims`, the one process it starts, by that fixed path with no shell, no input and a
    clean environment, and only when the program is a regular file owned by root and writable by
    no one else) and reads each claimed tenant's `/opt/branchleft/<slug>/compose.yml`,
@@ -110,9 +112,10 @@ step that adds the twelfth key, as root on the host:
 `python3 -I seed_host_inputs.py --host edge1 --set ci_jump_user`. Do not run the fill step with `--replace` between a `--set` and the apply that delivers it:
 the fill reads the live files, which still hold the old value.
 
-`--set tenant_compose_stacks` is the one `--set` that asks nothing: it reads the stacks from the
+`--set tenant_compose_stacks`, on a host whose row holds the key (none does yet, so today it is
+refused as `bad-key`), is the one `--set` that asks nothing: it reads the stacks from the
 live files exactly as the fill does, and changes that key only. Every other key of the existing
-file is carried over as it stands. This is the command for an app1 whose file already holds other
+file is carried over as it stands. This is the command for a host whose file already holds other
 keys, and above all one that holds a key with no live source (one that was only ever typed, such
 as `deploy_slot_keys_slots`). `--replace` is not that command: the fill never reads the old file,
 so it asks for such a key again and writes nothing if it is not answered, and a tool that does not

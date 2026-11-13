@@ -78,7 +78,6 @@ host_inputs_required_by_host:
     - website_app1_smtp_port
     - website_app1_smtp_user
     - website_app1_smtp_password
-    - tenant_compose_stacks
     - deploy_slot_keys_slots
 
 # The inputs of a row that the file may leave out. Each is a name from the same host's row above

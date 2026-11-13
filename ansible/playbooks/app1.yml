@@ -17,17 +17,13 @@
 # reach the database host, so it has no protected-port drops), and installs the deploy
 # wrapper and the container isolation policy. The deploy slot keys follow it because they
 # need the wrapper it installs; both come last so that a failure in either, which acts on
-# the Docker firewall or on SSH keys, cannot hold the website back. The export bundler
-# follows: it copies pinned files into root-only directories and runs nothing, so a
+# the Docker firewall or on SSH keys, cannot hold the website back. The export bundler is
+# last of all: it copies pinned files into root-only directories and runs nothing, so a
 # failure in it, which is a refusal of a changed file, holds back none of the others.
 # The tenant onboarding role fetches its program and register from the network. If a fetch
 # fails or a fetched file does not match its pinned digest, the role fails closed: the run
-# ends there and the roles after it (the export bundler and the tenant stacks) do not run, but
-# the roles before it, the website among them, have already been applied, so it does not hold
-# the website back.
-# The tenant stacks (tenant_compose) are last of all: the role restarts the tenants' live
-# stacks, takes its stacks from the loader's input tenant_compose_stacks, and calls the
-# program the tenant onboarding role installs, so it must follow that role.
+# ends there and the roles after it (the export bundler) do not run, but the roles before it,
+# the website among them, have already been applied, so it does not hold the website back.
 # Only this host's name
 # and its deploy class are set here; the remote, the playbook allowlist and the
 # signer list come from the shared includes and the one trust file, all loaded through
@@ -67,6 +63,3 @@
     - role: ../roles/deploy_slot_keys # noqa: role-name[path]
     - role: ../roles/tenant_onboarding # noqa: role-name[path]
     - role: ../roles/export_bundler # noqa: role-name[path]
-    # Last: it restarts the tenants' live stacks, so a failure here must not hold the website
-    # back, and it needs the deploy tooling's directories and unit to be in place first.
-    - role: ../roles/tenant_compose # noqa: role-name[path]

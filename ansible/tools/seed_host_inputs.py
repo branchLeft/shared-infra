@@ -113,10 +113,15 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "website_app1_smtp_port",
         "website_app1_smtp_user",
         "website_app1_smtp_password",
-        "tenant_compose_stacks",
         "deploy_slot_keys_slots",
     ),
 }
+
+# Inputs the tool can read live although no host's row holds them yet. The tenant stacks are for
+# the tenant ring's app host, which the loader does not have a row for yet; until a row names the
+# key, `--host` never seeds it and `--set` refuses it. A test fails once a row holds a key that is
+# still listed here, so the list only shrinks.
+NOT_YET_ROUTED: Final = frozenset({STACKS_KEY})
 
 # The one table of live homes, by input: the files are in CONFIG_DIR and are tried in order. The
 # pager keys look in the pager's own file first (the unit loads it later, so it wins), then in

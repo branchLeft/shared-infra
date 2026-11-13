@@ -103,6 +103,14 @@ SLOT_KEY = "ssh-ed25519 " + "A" * 68
 SLOT_LINE = f"{SLOT_STACK} {SLOT_KEY}"
 # What a fill of app1 is answered at the slot prompt: one line, then the empty line that ends it.
 SLOT_ANSWERS = (SLOT_LINE, "")
+# No host's row holds the tenant stacks yet (the tenant ring's app host gets that row later), so
+# app1's real row neither seeds nor sets them. The tests of the tool's stack path give app1's row
+# the key for the length of each test, in the place a row would hold it, because app1's other
+# inputs are the ones the rig lays out. TableTests and FillTests run on the real rows.
+STACKS_ROUTED = mock.patch.dict(
+    tool.HOSTS,
+    {"app1": (*(key for key in tool.HOSTS["app1"] if key != SLOTS_KEY), STACKS_KEY, SLOTS_KEY)},
+)
 # Typed only on edge1: the CI jump account's name exists nowhere on the host to read.
 JUMP_KEY = "ci_jump_user"
 CA_KEY = "backup_worker_db_ca_pem"
@@ -228,9 +236,18 @@ class TableTests(unittest.TestCase):
 
     def test_every_key_of_a_row_has_a_source_and_no_source_is_orphaned(self) -> None:
         in_rows = {key for keys in tool.HOSTS.values() for key in keys}
-        self.assertEqual(in_rows, set(tool.SOURCES))
+        self.assertEqual(in_rows, set(tool.SOURCES) - tool.NOT_YET_ROUTED)
         for key, sources in tool.SOURCES.items():
             self.assertTrue(sources, key)
+
+    def test_a_key_not_yet_routed_is_in_no_row_and_has_a_source(self) -> None:
+        # Once a row names the key, it leaves the list: the list only shrinks.
+        in_rows = {key for keys in tool.HOSTS.values() for key in keys}
+        self.assertEqual(set(), in_rows & tool.NOT_YET_ROUTED)
+        self.assertEqual(set(), tool.NOT_YET_ROUTED - set(tool.SOURCES))
+        self.assertEqual(frozenset({STACKS_KEY}), tool.NOT_YET_ROUTED)
+        for host, keys in self.rows.items():
+            self.assertNotIn(STACKS_KEY, keys, host)
 
     def test_the_unsupported_hosts_are_real_hosts_of_the_loader(self) -> None:
         self.assertEqual(set(), UNSUPPORTED - set(self.rows))
@@ -390,6 +407,7 @@ class Rig:
         self.opt.chmod(0o755)
         # What the volume program lists; None stands for a program that cannot be run.
         self.claims_text: str | None = ""
+        self.claims_runs = 0
         self.ctx = tool.Context(
             config_dir=self.cfg,
             ancestors=(self.cfg,),
@@ -406,6 +424,7 @@ class Rig:
         )
 
     def claims(self) -> str:
+        self.claims_runs += 1
         if self.claims_text is None:
             raise tool.SeedError("claims")
         return self.claims_text
@@ -526,9 +545,11 @@ def app1_value(key: str) -> str:
     return plain.get(key, value_for(key))
 
 
-def app1_document() -> dict[str, object]:
+def app1_document(stacks: bool = True) -> dict[str, object]:
+    """app1's file as the tool writes it; with the stacks only under STACKS_ROUTED."""
     document: dict[str, object] = {key: app1_value(key) for key in APP1_LIVE}
-    document[STACKS_KEY] = stacks_document()
+    if stacks:
+        document[STACKS_KEY] = stacks_document()
     document[SLOTS_KEY] = [{"stack": SLOT_STACK, "public_key": SLOT_KEY, "adopt_existing": False}]
     return document
 
@@ -725,17 +746,36 @@ class FillTests(unittest.TestCase):
         rig = Rig(self, answers=[SLOT_LINE, ""])
         rig.seed_app1()
         self.assertEqual(0, rig.run("--host", "app1"))
-        self.assertEqual(app1_document(), rig.document())
+        self.assertEqual(app1_document(stacks=False), rig.document())
         # One prompt for the slot line and one for the empty line that ends the list.
         self.assertEqual(2, len(rig.prompts))
         self.assertTrue(all(SLOTS_KEY in prompt for prompt in rig.prompts))
         self.assertIn(
-            "filled from live (5): website_app1_smtp_host, website_app1_smtp_port, "
-            "website_app1_smtp_user, website_app1_smtp_password, tenant_compose_stacks",
+            "filled from live (4): website_app1_smtp_host, website_app1_smtp_port, "
+            "website_app1_smtp_user, website_app1_smtp_password",
             rig.stdout,
         )
         self.assertIn(f"typed (1): {SLOTS_KEY}", rig.stdout)
         self.assertIn("still missing (0): none", rig.stdout)
+
+    def test_app1_seeds_no_tenant_stack_and_never_runs_the_volume_program(self) -> None:
+        # app1's row does not hold the stacks: tenant stacks laid out on the host are not read.
+        rig = Rig(self, answers=[SLOT_LINE, ""])
+        rig.seed_app1()
+        self.assertEqual(0, rig.run("--host", "app1"))
+        self.assertNotIn(STACKS_KEY, rig.document())
+        self.assertNotIn("tenant stacks seeded", rig.stdout)
+        self.assertEqual(0, rig.claims_runs)
+
+    def test_setting_the_stacks_on_app1_is_refused_and_changes_nothing(self) -> None:
+        rig = Rig(self)
+        rig.seed_app1()
+        rig.put(tool.DEST_NAME, json.dumps(app1_document(stacks=False)))
+        before = rig.dest.read_bytes()
+        self.assertEqual(1, rig.run("--host", "app1", "--set", STACKS_KEY))
+        self.assertEqual(before, rig.dest.read_bytes())
+        self.assertIn(tool.MESSAGES["bad-key"], rig.err.getvalue())
+        self.assertEqual(0, rig.claims_runs)
 
     def test_app1_port_stays_a_string(self) -> None:
         rig = Rig(self, answers=[SLOT_LINE, ""])
@@ -765,8 +805,10 @@ class FillTests(unittest.TestCase):
         self.assertFalse(rig.dest.exists())
 
 
+@STACKS_ROUTED
 class StackTests(unittest.TestCase):
-    """app1's tenant stacks: the tenants the volume program lists, from the files that are live."""
+    """A host's tenant stacks: the tenants the volume program lists, from the files that are live.
+    Run as app1 with the key in its row (STACKS_ROUTED); no real row holds it yet."""
 
     def test_the_stacks_equal_the_live_files_byte_for_byte_in_the_claimed_order(self) -> None:
         rig = Rig(self, answers=SLOT_ANSWERS)
@@ -1393,6 +1435,7 @@ class SetTests(unittest.TestCase):
         self.assertEqual([{"slug": "gamma", "recipient": RECIPIENT_A}], rig.document()[TENANTS_KEY])
 
 
+@STACKS_ROUTED
 class SlotTests(unittest.TestCase):
     """The app1 slot list is typed one line each, and each line is held to its shape."""
 
@@ -1550,6 +1593,7 @@ class SlotTests(unittest.TestCase):
         self.assertIn("SENTSTACK", json.dumps(rig.document()))
 
 
+@STACKS_ROUTED
 class LeakTests(unittest.TestCase):
     """No value reaches stdout, stderr or a prompt, on any path."""
 

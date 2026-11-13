@@ -56,7 +56,6 @@ app1:
   - publicpress_website_app1
   - breakglass_grant_host
   - host_baseline
-  - tenant_compose
 db1:
   - host_inputs
   - deploy_verifier
