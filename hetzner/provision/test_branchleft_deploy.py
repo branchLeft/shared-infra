@@ -25,6 +25,24 @@ DIGEST = "a" * 64
 VALID_IMAGE = f"ghcr.io/branchleft/example@sha256:{DIGEST}"
 
 
+def exempt_example_image(case: unittest.TestCase) -> None:
+    """Exempt VALID_IMAGE's name for the stacks the mechanics tests deploy to.
+
+    Those tests are about the lock, the pin file, the rollback and the health
+    signal, not about which image is allowed, so they borrow a reviewed
+    exemption for the duration of one test. The real table is restored after.
+    """
+    patcher = mock.patch.dict(
+        bd.UNATTESTED_STACK_IMAGES,
+        {
+            stack: frozenset({"ghcr.io/branchleft/example"})
+            for stack in ("edge", "missing", "monitoring", "website")
+        },
+    )
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
 class FakeRun:
     """Stands in for subprocess.run, recording calls and returning a queue of
     canned responses.
@@ -333,6 +351,7 @@ class DeployLockTests(unittest.TestCase):
 
 class DeployTests(unittest.TestCase):
     def setUp(self):
+        exempt_example_image(self)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.config_dir = os.path.join(self.directory.name, "etc")
@@ -736,21 +755,108 @@ class AttestationTests(unittest.TestCase):
         )
         self.assertEqual(bd.read_current_image(self.env_path()), image)
 
-    def test_a_third_party_image_with_a_tag_or_port_is_never_sent_to_the_verifier(self):
-        mysql = f"registry.example:5000/library/mysql:8@sha256:{'d' * 64}"
-        run = FakeRun([0])
-        self.deploy(mysql, run)
-        self.assertEqual(
-            run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
+    def deploy_to(self, stack, image, run):
+        directory = os.path.join(self.stack_dir, stack)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, "compose.yml"), "w", encoding="utf-8") as handle:
+            handle.write(
+                "services:\n"
+                "  app:\n"
+                "    image: ${IMAGE}\n"
+                "    healthcheck:\n"
+                "      test: ['CMD', 'true']\n"
+            )
+        bd.deploy(
+            stack, image, config_dir=self.config_dir, stack_dir=self.stack_dir, run=run
         )
 
-    def test_a_third_party_image_is_never_sent_to_the_verifier(self):
-        mysql = f"docker.io/library/mysql@sha256:{'d' * 64}"
-        run = FakeRun([0])
-        self.deploy(mysql, run)
-        self.assertEqual(
-            run.calls, [["systemctl", "restart", "branchleft-compose@edge"]]
+    def assert_refused_with_nothing_run(self, stack, image):
+        run = FakeRun([0, 0])
+        with self.assertRaises(bd.DeployError) as caught:
+            self.deploy_to(stack, image, run)
+        self.assertIn("no reviewed exemption", str(caught.exception))
+        self.assertEqual(run.calls, [])
+        self.assertFalse(os.path.exists(bd.image_env_path(stack, self.config_dir)))
+
+    def test_an_image_from_any_other_registry_is_refused_before_any_host_change(self):
+        attacker = f"attacker.example/evil@sha256:{'d' * 64}"
+        self.assert_refused_with_nothing_run("edge", attacker)
+
+    def test_an_unregistered_image_with_a_tag_or_port_is_refused_too(self):
+        for image in (
+            f"registry.example:5000/library/mysql:8@sha256:{'d' * 64}",
+            f"docker.io/library/mysql@sha256:{'d' * 64}",
+            f"ghcr.io:443/attacker/evil:v1@sha256:{'d' * 64}",
+        ):
+            with self.subTest(image=image):
+                self.assert_refused_with_nothing_run("edge", image)
+
+    def test_an_unregistered_image_is_refused_on_a_tenant_slot_stack(self):
+        self.assert_refused_with_nothing_run(
+            "blog", f"attacker.example/evil@sha256:{'d' * 64}"
         )
+
+    def test_a_branchleft_image_is_not_exempt_just_for_its_registry(self):
+        self.assert_refused_with_nothing_run(
+            "blog", f"ghcr.io/branchleft/anything-else@sha256:{'d' * 64}"
+        )
+
+    def test_an_exemption_is_for_its_own_stack_only(self):
+        # edge-caddy is exempt for the edge stack; a slot key for another stack
+        # cannot pin it there, and edge cannot pin another stack's image.
+        edge_caddy = f"ghcr.io/branchleft/edge-caddy@sha256:{'d' * 64}"
+        self.assert_refused_with_nothing_run("blog", edge_caddy)
+        self.assert_refused_with_nothing_run(
+            "edge", f"ghcr.io/branchleft/website@sha256:{'d' * 64}"
+        )
+
+    def test_every_stack_pinned_through_the_wrapper_today_still_deploys_its_image(self):
+        today = {
+            "website": "ghcr.io/branchleft/website",
+            "publicpress-website": "ghcr.io/branchleft/publicpress-website",
+            "edge": "ghcr.io/branchleft/edge-caddy",
+            "db": "mysql:8.4",
+            "dbt1": "ghcr.io/branchleft/percona-server",
+        }
+        for stack, name in today.items():
+            image = f"{name}@sha256:{'d' * 64}"
+            with self.subTest(stack=stack):
+                run = FakeRun([0])
+                self.deploy_to(stack, image, run)
+                # An exempt image is not sent to the verifier.
+                self.assertEqual(
+                    run.calls, [["systemctl", "restart", f"branchleft-compose@{stack}"]]
+                )
+                self.assertEqual(
+                    bd.read_current_image(bd.image_env_path(stack, self.config_dir)), image
+                )
+
+    def test_the_registered_images_still_deploy_on_any_stack_through_the_verifier(self):
+        # control-plane pins portal-apps; tenant slots pin ghost-tenant.
+        for stack, name in (
+            ("blog", "ghcr.io/branchleft/ghost-tenant"),
+            ("control-plane", "ghcr.io/branchleft/portal-apps"),
+        ):
+            image = f"{name}@sha256:{'e' * 64}"
+            with self.subTest(stack=stack):
+                run = FakeRun([0, 0])
+                self.deploy_to(stack, image, run)
+                self.assertEqual(run.calls[0][0], bd.VERIFIER)
+                self.assertEqual(bd.read_current_image(bd.image_env_path(stack, self.config_dir)), image)
+
+    def test_the_exemption_list_is_reviewed_and_disjoint_from_the_register(self):
+        self.assertEqual(
+            bd.UNATTESTED_STACK_IMAGES,
+            {
+                "website": frozenset({"ghcr.io/branchleft/website"}),
+                "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
+                "edge": frozenset({"ghcr.io/branchleft/edge-caddy"}),
+                "db": frozenset({"mysql"}),
+                "dbt1": frozenset({"ghcr.io/branchleft/percona-server"}),
+            },
+        )
+        for names in bd.UNATTESTED_STACK_IMAGES.values():
+            self.assertFalse(names & set(bd.ATTESTED_IMAGES))
 
     def test_no_environment_variable_switches_verification_off(self):
         run = FakeRun([1])
@@ -1140,6 +1246,7 @@ class FailOpenImageReferenceTests(unittest.TestCase):
         self.assertFalse(bd.has_fail_open_image_reference("    # image: ${IMAGE:-x}\n"))
 
     def test_deploy_names_the_fail_open_form_specifically(self):
+        exempt_example_image(self)
         with tempfile.TemporaryDirectory() as stack_dir:
             os.makedirs(os.path.join(stack_dir, "edge"))
             with open(os.path.join(stack_dir, "edge", "compose.yml"), "w", encoding="utf-8") as f:
@@ -1244,6 +1351,7 @@ class DeployHealthSignalTests(unittest.TestCase):
     reviewed gap, and never crash on a file the parser cannot read."""
 
     def setUp(self):
+        exempt_example_image(self)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.config_dir = os.path.join(self.directory.name, "etc")
