@@ -1260,13 +1260,40 @@ mx1 delivers locally, so they cost no sending reputation. Two kinds carry it:
 
 - **The SNDS rules.** They are expected to fire while mx1's volume is too
   low for Microsoft to report, and unengaged repeats of machine mail to an
-  external provider spend the very reputation they watch.
+  external provider spend the very reputation they watch. The exception is
+  `SNDSAccessLinkExpiringSoon`, which also carries `owner_action` (below) and
+  so reaches the off-host mailbox too.
 - **The two deferral rules above.** The provider deferring mx1 is usually
   the one hosting the off-host mailbox, so the alert would queue behind the
   mail it reports on.
 
+**The `owner_action` label.** An alert whose fix needs the owner's own hands
+carries `owner_action: "true"`: a portal visit, a spend, a dated expiry, or a
+value only the owner can set. The `owner_action` route in
+`alertmanager.yml.tmpl` (lines 42-46) sends such a warning to the off-host `email` receiver as well as to
+`email-on-host`, so the owner reads it off-host. Criticals are not
+duplicated: they already reach the off-host mailbox. Seven alerts carry the
+label, in `hetzner/monitoring/stack/prometheus/alerts.yml` (rendered from
+`hetzner/monitoring/render.ts`):
+
+- `HostMemoryPressure` and `HostDiskSpaceLow`: the scale-out triggers in the
+  capacity doc (provision a host, grow a volume), which the owner funds.
+- `MySQLConnectionsHigh`: the database scale-out trigger, which needs the
+  owner's decision on the next database rung.
+- `TLSCertificateExpiringSoon` and `MailCertificateExpiringSoon`: a certificate
+  renewal has failed and needs fixing by hand before hard expiry.
+- `NtfyPagerDisabled`: the pager's `NTFY_` values are missing from
+  `/etc/branchleft/ntfy-pager.env`, and only the owner sets them.
+- `SNDSAccessLinkExpiringSoon`: Microsoft's 30-day SNDS access link has a
+  dated expiry, renewed in the SNDS portal.
+
+The routing step in `.github/workflows/ci.yml` tests four of the seven
+(`HostMemoryPressure`, `HostDiskSpaceLow`, `MySQLConnectionsHigh` and
+`SNDSAccessLinkExpiringSoon`).
+
 **Every `severity: warning` alert also routes to `email-on-host`.** The
-off-host mailbox receives critical alerts only, with no resolved notices,
+off-host mailbox receives critical alerts, and the warnings that carry
+`owner_action`, with no resolved notices,
 `group_interval: 1h` and `repeat_interval: 24h`, because repeated unread
 machine mail to Gmail is what spent mx1's reputation. Three `inhibit_rules`
 mute an alert whose cause is already firing (`ServiceFlapping` under
@@ -1275,7 +1302,8 @@ three mail-delivery rules under `MailHostDown`). The route tree is proven by
 CI's `Test the Alertmanager routing` step; amtool cannot test inhibition, so
 read it back from `/api/v2/status` on the host after a deploy.
 
-Read these in the on-host mailbox, not the off-host one. CI's
+Read the warnings in the on-host mailbox; the `owner_action` ones are read in
+both. CI's
 `Test the Alertmanager routing` step proves the route tree delivers each to
 exactly the receiver it names; `MailHostDown` keeps its off-host path, since
 it fires precisely when mx1 cannot deliver anything.
