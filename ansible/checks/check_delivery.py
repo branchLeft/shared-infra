@@ -453,7 +453,7 @@ def environment_findings(
         ]
     findings: list[str] = []
     # The administrator bypass must be ticked, so the owner is never blocked from taking an apply.
-    # Ruling: https://github.com/branchLeft/workspace/issues/2870#issuecomment-6564958314
+    # Ruling: the owner's, on record.
     # Only exactly True passes; a missing key or any other value is a finding.
     if described.get("can_admins_bypass") is not True:
         findings.append(

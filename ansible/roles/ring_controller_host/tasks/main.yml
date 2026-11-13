@@ -283,7 +283,7 @@
 
 # The service unit's diff is not shown: it names the record-signing key to systemd with a
 # directive whose name the plan's secret scan would read as a credential assignment, and the
-# directive cannot be reworded (ANS-16, owner ruling on workspace#2348 choice A). The timer is
+# directive cannot be reworded (ANS-16, owner ruling: choice A). The timer is
 # delivered by the next task, which shows its diff.
 - name: Install the unit whose diff is not shown
   ansible.builtin.copy:

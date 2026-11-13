@@ -961,7 +961,7 @@ class ConfigSourceTests(unittest.TestCase):
 
 
 class PullRouteUnchangedTests(unittest.TestCase):
-    """The pull route's line is frozen: same prefix, same fields, a dash for changed."""
+    """The pull route's line is frozen: same prefix, same fields, a digit for changed on a refusal."""
 
     commit = "0123456789abcdef" * 2 + "01234567"
 
@@ -974,7 +974,7 @@ class PullRouteUnchangedTests(unittest.TestCase):
             (trigger.Exit.UNCHANGED, "ok", 0, "apply"): "pull-trigger verdict=unchanged exit=0 "
             f"reason=ok mode=apply commit={self.commit} playbook={PLAY} changed=0",
             (trigger.Exit.REFUSED, "rollback", None, "apply"): "pull-trigger verdict=refused "
-            f"exit=20 reason=rollback mode=apply commit={self.commit} playbook={PLAY} changed=-",
+            f"exit=20 reason=rollback mode=apply commit={self.commit} playbook={PLAY} changed=0",
             (trigger.Exit.BUSY, "busy", None, "check"): "pull-trigger verdict=busy exit=21 "
             f"reason=busy mode=check commit={self.commit} playbook={PLAY} changed=-",
         }
@@ -983,7 +983,7 @@ class PullRouteUnchangedTests(unittest.TestCase):
                 verdict = trigger.Verdict(code, reason, changed)
                 self.assertEqual(line, trigger.summary(verdict, mode, self.commit, PLAY))
 
-    def test_a_remote_host_prints_the_pull_prefix_and_a_dash_for_changed_on_a_refusal(self) -> None:
+    def test_a_remote_host_prints_the_pull_prefix_and_a_zero_for_changed_on_a_refusal(self) -> None:
         root = Path(tempfile.mkdtemp(prefix="pr", dir="/tmp")).resolve()  # noqa: S108
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
         root.chmod(0o700)
@@ -1006,9 +1006,26 @@ class PullRouteUnchangedTests(unittest.TestCase):
         self.assertEqual(20, code)
         self.assertEqual(
             f"pull-trigger verdict=refused exit=20 reason=bad-request mode=apply commit=- "
-            f"playbook={PLAY} changed=-",
+            f"playbook={PLAY} changed=0",
             out.getvalue().strip(),
         )
+
+    def test_a_refusal_line_matches_the_digit_reader_the_pull_judge_holds(self) -> None:
+        # The judge's pull expression (ansible-gated-apply.yml in github-workflows) names the
+        # apply line. This is the digit-only reader the refusal must match: changed is [0-9]+.
+        reader = re.compile(
+            r"^pull-trigger verdict=(?P<verdict>[a-z-]+) exit=(?P<exit>[0-9]+) "
+            r"reason=(?P<reason>[a-z-]+) mode=apply commit=(?P<commit>[0-9a-f]{40}) "
+            r"playbook=[A-Za-z0-9_./-]+ changed=(?P<changed>[0-9]+)( floor=[0-9a-f]{40})?$"
+        )
+        for reason in ("rollback", "bad-request", "step-not-allowed"):
+            with self.subTest(reason=reason):
+                verdict = trigger.Verdict(trigger.Exit.REFUSED, reason, None)
+                line = trigger.summary(verdict, "apply", self.commit, PLAY)
+                match = reader.match(line)
+                self.assertIsNotNone(match, line)
+                self.assertEqual("0", match.group("changed"))
+                self.assertEqual("20", match.group("exit"))
 
     def test_the_pull_route_does_not_make_the_bundle_directories(self) -> None:
         workspace = trigger.Workspace(Path(tempfile.mkdtemp(prefix="pt-ws-")))

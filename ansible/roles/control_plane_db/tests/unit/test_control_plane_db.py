@@ -652,7 +652,7 @@ class InterfaceTests(unittest.TestCase):
             if path.is_file() and path.suffix in {".yml", ".md", ".py"}:
                 self.assertNotRegex(
                     path.read_text(encoding="utf-8"),
-                    r"(?i)workspace#\d|issue #\d|\bws#\d",
+                    r"(?i)workspace\#\d|issue #\d|\bws\#\d",
                     str(path),
                 )
 

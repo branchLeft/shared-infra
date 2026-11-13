@@ -53,7 +53,7 @@ It does not:
   volume, an orphan container or a file, or run `docker compose down`.
 - start the shim's Caddy certificate issuance beyond what bringing the project up does. The
   public-port 8443 check is not made on the host; the role checks it role-side only (a probe for
-  it is [branchLeft/workspace#2888](https://github.com/branchLeft/workspace/issues/2888)).
+  it is a separate work item).
 
 `ansible/checks/test_mx1_stack_agree.py` holds the role in step with the hand scripts it replaces
 (see "One home for every file") and fails if another role names the paths this role owns.

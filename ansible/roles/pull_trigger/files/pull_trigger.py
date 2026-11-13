@@ -1459,7 +1459,12 @@ def describe(verdict: Verdict, mode: str, commit: str, playbook: str, step: str 
     other mode, so the line of an apply and of a check is byte for byte what it was
     before steps existed, which the workflow that reads it still expects.
     """
-    changed = "-" if verdict.changed is None else str(verdict.changed)
+    if verdict.changed is None and verdict.exit_code is Exit.REFUSED:
+        # A refusal ran no playbook, so it changed nothing: a digit, so a digit-matching reader
+        # can read the line. Other outcomes with no recap keep the dash.
+        changed = "0"
+    else:
+        changed = "-" if verdict.changed is None else str(verdict.changed)
     fields = (
         f"verdict={verdict.name} exit={int(verdict.exit_code)} reason={verdict.reason} "
         f"mode={mode} commit={commit} playbook={playbook} changed={changed}"
