@@ -358,6 +358,26 @@ which is not true of every site this edge serves.
 
 No members-magic-link matcher: that route is Ghost's, and nothing here is Ghost.
 
+## `staticFilesBlock`
+
+The same posture as `staticBlock`, for a hostname that answers with a small set of fixed
+text files instead of a page: `sites.publicpress.co.uk`, whose files are in
+`hetzner/edge/sharedTenantFiles.ts`. The files are picked by the entry's `name`, and
+`staticBlock` dispatches to this block before it looks for a page.
+
+Each file is one literal path with a `@file_N path` matcher, its own `Content-Type`, and a
+`respond` with its body as a Caddy heredoc (`<<SHARED_TENANT_FILE_EOF`). The heredoc is
+used because a `security.txt` has several fields on separate lines, and a quoted one-line
+body cannot carry them. Heredoc bodies are not indented, so the renderer writes each body
+line at column 0, and only the `respond` line carries the block's indentation. The
+renderer refuses a path that is not a plain literal, a body without a trailing newline,
+and a body with a line equal to the marker. Every other path gets `respond 404`.
+
+The heredoc is not checked by a local Caddy binary: this repository's CI `caddy validate`
+over `stack/caddy/Caddyfile` is the check that the syntax is accepted.
+
+The CSP is `staticSiteCsp('')`, the strictest form, since a text file runs nothing.
+
 ## `probeBlock`
 
 A listener on loopback only, carrying the same handler chain as the public sites and

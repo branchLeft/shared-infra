@@ -12,6 +12,7 @@ import {
   type EdgePosture,
 } from './posture';
 import { PUBLICPRESS_HOLDING_HTML } from './publicpressHolding';
+import { SHARED_TENANT_FILES, type StaticTextFile } from './sharedTenantFiles';
 
 // Why: renders config from sites.ts & posture.ts; pure strings, committed to
 // stack/, hand-copied. Registry is the only hostname list. See render.md
@@ -567,9 +568,72 @@ function redirectBlock(redirect: HostRedirect, zone: string, posture: EdgePostur
   };
 }
 
+// Why: the heredoc marker a fixed file's body is closed by. A body line equal to it
+// would end the heredoc early, so the renderer refuses one. See render.md §"staticFilesBlock".
+const SHARED_FILE_HEREDOC = 'SHARED_TENANT_FILE_EOF';
+
+// Why: a fixed-file hostname with the same TLS, throttle, HSTS and body-size posture as
+// staticBlock, and its own CSP (no script, style or font of any kind, since a text file
+// runs none). Each file is one literal path answered with its own media type; every other
+// path gets 404. Bodies are heredocs, whose lines are not indented, so each body line is
+// written at column 0 and only the `respond` line carries the block's indentation. See
+// render.md §"staticFilesBlock".
+function staticFilesBlock(
+  site: StaticSite,
+  files: readonly StaticTextFile[],
+  posture: EdgePosture
+): Block {
+  const routes = files.flatMap((file, index) => {
+    if (!/^\/[A-Za-z0-9_./-]+$/.test(file.path) || file.path.includes('..')) {
+      throw new Error(
+        `static file path ${file.path} must be a plain literal path (letters, digits, _ . - /)`
+      );
+    }
+    if (!file.body.endsWith('\n')) {
+      throw new Error(
+        `static file ${file.path} must end with a newline, so its heredoc closes on its own line`
+      );
+    }
+    if (file.body.split('\n').includes(SHARED_FILE_HEREDOC)) {
+      throw new Error(
+        `static file ${file.path} has a body line equal to the heredoc marker ${SHARED_FILE_HEREDOC}`
+      );
+    }
+    const matcher = `@file_${index}`;
+    return [
+      `${matcher} path ${file.path}`,
+      `header ${matcher} Content-Type "${file.contentType}"`,
+      `respond ${matcher} <<${SHARED_FILE_HEREDOC}\n${file.body}${SHARED_FILE_HEREDOC}`,
+    ];
+  });
+  return {
+    addresses: [assertHostname(site.hostname)],
+    body: [
+      ...logDirective(ACCESS_LOG),
+      ...tlsDirective(),
+      'route {',
+      ...[
+        ...hstsDirective(),
+        ...cspDirective(staticSiteCsp('')),
+        'request_body {',
+        `\tmax_size ${STATIC_SITE_REQUEST_BODY_MAX_SIZE}`,
+        '}',
+        ...protectionChain(posture, `${site.name}_per_ip`, { appsec: 'all' }),
+        ...routes,
+        'respond 404',
+      ].map((line) => `\t${line}`),
+      '}',
+    ],
+  };
+}
+
 // Why: fixed-page hostname with same TLS/throttle posture as siteBlock; no upstream,
 // no members route; strict CSP (inline only). See render.md §"staticBlock".
 function staticBlock(site: StaticSite, posture: EdgePosture): Block {
+  const files: readonly StaticTextFile[] | undefined = SHARED_TENANT_FILES[site.name];
+  if (files !== undefined) {
+    return staticFilesBlock(site, files, posture);
+  }
   const html = staticSiteContent(site);
   return {
     addresses: [assertHostname(site.hostname)],

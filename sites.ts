@@ -148,10 +148,20 @@ export const hostRedirects: HostRedirect[] = [
  */
 export const staticSites: StaticSite[] = [
   {
-    // No `www`, no `sites.*`, no wildcard: publicpress.co.uk's own eventual
-    // platform, and its subdomains, are a separate onboarding when they
-    // exist. This entry is a temporary holding page for the apex alone.
+    // No `www`, no `sites.*`, no wildcard: this entry is a temporary holding
+    // page for the apex alone. The `sites.*` name is the next entry, which
+    // carries fixed files, not this page.
     name: 'publicpress-holding',
     hostname: 'publicpress.co.uk',
+  },
+  {
+    // The shared tenant domain (ghost-platform-docs D10): customer sites live
+    // at *.sites.publicpress.co.uk, and this apex answers only the fixed files
+    // that say PublicPress hosts those sites and does not publish them. Their
+    // text is in hetzner/edge/sharedTenantFiles.ts. It is not a wildcard: a
+    // tenant's own hostname does not inherit these files, and each tenant that
+    // needs one is its own deliberate entry.
+    name: 'sites-tenant-signals',
+    hostname: 'sites.publicpress.co.uk',
   },
 ];
