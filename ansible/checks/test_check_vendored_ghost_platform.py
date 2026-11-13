@@ -1,4 +1,4 @@
-"""Tests for check_vendored_ghost_platform: one flipped byte is named, and a faithful copy passes."""
+"""Tests for check_vendored_ghost_platform: a flipped byte is named, a faithful copy passes."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Check demo1's vendored ghost-platform files are the bytes ghost-platform has at the pinned commit.
+"""Check demo1's vendored files are the bytes ghost-platform has at the pinned commit.
 
 demo1_build and demo1_egress_spool carry copies of ghost-platform files under
 files/ghost-platform, at the paths they have upstream, and pin each copy's sha256 in this
@@ -26,6 +26,7 @@ import sys
 import tempfile
 from collections.abc import Sequence
 from pathlib import Path
+from typing import NoReturn
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 ROLES_DIR = Path("ansible/roles")
@@ -41,6 +42,15 @@ class VendoredCheckError(Exception):
     """The check cannot read what it compares, so it cannot say the files agree."""
 
 
+def refuse(message: str) -> NoReturn:
+    """Stop the check with a message.
+
+    Raises:
+        VendoredCheckError: always, carrying the message.
+    """
+    raise VendoredCheckError(message)
+
+
 def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     """Run git in ``repo`` and return the completed process, whatever its status.
 
@@ -53,11 +63,14 @@ def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
             capture_output=True,
             check=False,
             timeout=GIT_TIMEOUT_SECONDS,
-            env={"GIT_TERMINAL_PROMPT": "0", "PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(repo)},
+            env={
+                "GIT_TERMINAL_PROMPT": "0",
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "HOME": str(repo),
+            },
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise VendoredCheckError(f"git {args[0]} did not run: {type(error).__name__}") from error
-
+        refuse(f"git {args[0]} did not run: {type(error).__name__}")
 
 
 def read_pin(role_dir: Path, role: str) -> str:
@@ -70,10 +83,12 @@ def read_pin(role_dir: Path, role: str) -> str:
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
-        raise VendoredCheckError(f"{path} cannot be read: {type(error).__name__}") from error
-    found = re.findall(rf"^{role}_source_sha:\s*['\"]?([^'\"\s#]+)['\"]?\s*(?:#.*)?$", text, re.M)
+        refuse(f"{path} cannot be read: {type(error).__name__}")
+    found: list[str] = re.findall(
+        rf"^{role}_source_sha:\s*['\"]?([^'\"\s#]+)['\"]?\s*(?:#.*)?$", text, re.M
+    )
     if len(found) != 1 or not SHA_PATTERN.fullmatch(found[0]):
-        raise VendoredCheckError(f"{path} does not set {role}_source_sha to one 40-hex commit")
+        refuse(f"{path} does not set {role}_source_sha to one 40-hex commit")
     return found[0]
 
 
@@ -84,7 +99,7 @@ def vendored_files(role_dir: Path) -> list[str]:
 
 
 def upstream_blob(repo: Path, sha: str, path: str) -> bytes | None:
-    """Return the bytes of ``path`` at ``sha`` in ``repo``, or None when the commit has no such file."""
+    """Return the bytes of ``path`` at ``sha`` in ``repo``, or None when there is no such file."""
     result = run_git(repo, "cat-file", "blob", f"{sha}:{path}")
     return result.stdout if result.returncode == 0 else None
 
@@ -119,12 +134,12 @@ def fetch_commit(sha: str, url: str, into: Path) -> Path:
         result = run_git(into, *args)
         if result.returncode != 0:
             detail = result.stderr.decode("utf-8", "replace").strip().splitlines()[-1:]
-            raise VendoredCheckError(f"git {args[0]} of {sha} from {url} failed: {detail}")
+            refuse(f"git {args[0]} of {sha} from {url} failed: {detail}")
     return into
 
 
 def run_checks(root: Path, upstream: dict[str, Path], url: str) -> list[str]:
-    """Return every finding for both roles; fetch a role's commit unless ``upstream`` names a clone."""
+    """Return every finding for both roles, fetching a commit unless ``upstream`` has a clone."""
     findings: list[str] = []
     with tempfile.TemporaryDirectory(prefix="vendored-ghost-platform-") as scratch:
         for role in ROLES:
@@ -149,7 +164,7 @@ def parse_upstream(values: Sequence[str]) -> dict[str, Path]:
     for value in values:
         role, _, directory = value.partition("=")
         if role not in ROLES or not directory:
-            raise VendoredCheckError(f"--upstream wants ROLE=DIR with ROLE one of {ROLES}")
+            refuse(f"--upstream wants ROLE=DIR with ROLE one of {ROLES}")
         parsed[role] = Path(directory)
     return parsed
 
