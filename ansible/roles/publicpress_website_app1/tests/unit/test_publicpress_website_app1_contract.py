@@ -57,6 +57,22 @@ def compose_service() -> dict[str, object]:
     return services[STACK]
 
 
+def edge_site_app1_ports(sites: str, own_site: str) -> set[int]:
+    """The app1 ports the edge sites other than `own_site` proxy to.
+
+    An edge entry opens with `name: '<site>'` and states its `privateUpstream` after it, so the
+    text is cut at each name and the port is read from that site's own section. The site named
+    `own_site` is this stack's own entry, so its port is not another user of it.
+    """
+    used: set[int] = set()
+    for section in re.split(r"(?=\bname: ')", sites):
+        named = re.match(r"name: '([^']*)'", section)
+        if named is None or named.group(1) == own_site:
+            continue
+        used.update(int(port) for port in re.findall(r"host: 'app1', port: (\d+)", section))
+    return used
+
+
 def ports_used_on_app1() -> set[int]:
     """Every port another stack, an edge site or a monitoring target has on app1."""
     used: set[int] = set()
@@ -68,7 +84,7 @@ def ports_used_on_app1() -> set[int]:
     prometheus = REPO / "hetzner" / "monitoring" / "stack" / "prometheus" / "prometheus.yml"
     used.update(int(port) for port in bound.findall(prometheus.read_text(encoding="utf-8")))
     sites = (REPO / "sites.ts").read_text(encoding="utf-8")
-    used.update(int(port) for port in re.findall(r"host: 'app1', port: (\d+)", sites))
+    used.update(edge_site_app1_ports(sites, STACK))
     return used
 
 
@@ -95,6 +111,27 @@ class PortTests(unittest.TestCase):
         for known in (8080, 9092, 8101):
             self.assertIn(known, used)
         self.assertNotIn(PORT, used)
+
+    def test_the_stacks_own_edge_entry_is_not_another_user_of_the_port(self) -> None:
+        sites = (
+            "{ name: 'website', privateUpstream: { host: 'app1', port: 8080 } },\n"
+            f"{{ name: '{STACK}', privateUpstream: {{ host: 'app1', port: {PORT} }} }},\n"
+        )
+        self.assertEqual({8080}, edge_site_app1_ports(sites, STACK))
+
+    def test_a_second_edge_site_on_the_port_is_found(self) -> None:
+        for order in (("other", STACK), (STACK, "other")):
+            entries = {
+                STACK: f"{{ name: '{STACK}', privateUpstream: {{ host: 'app1', port: {PORT} }} }},\n",
+                "other": f"{{ name: 'other', privateUpstream: {{ host: 'app1', port: {PORT} }} }},\n",
+            }
+            sites = "".join(entries[name] for name in order)
+            self.assertIn(PORT, edge_site_app1_ports(sites, STACK), order)
+
+    def test_the_real_edge_registry_has_the_stacks_own_entry_and_no_other_on_the_port(self) -> None:
+        sites = (REPO / "sites.ts").read_text(encoding="utf-8")
+        self.assertIn(f"name: '{STACK}'", sites)
+        self.assertNotIn(PORT, edge_site_app1_ports(sites, STACK))
 
 
 class DeployProgramTests(unittest.TestCase):

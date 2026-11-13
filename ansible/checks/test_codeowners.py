@@ -125,7 +125,6 @@ MAIL_PATHS = [
 
 # The launch page and the owner's words.
 PUBLIC_PATHS = [
-    "hetzner/edge/publicpressHolding.ts",
     "hetzner/edge/publicpress/index.html",
     "LICENSE",
     "hetzner-host/LICENSE",
