@@ -16,6 +16,18 @@ tenant_compose_unit_prefix: branchleft-compose
 # role installs it; this one only calls it and fails closed when it is absent.
 tenant_compose_volume_program: /root/platform-provision/provision_tenant_volume.py
 
+# The deploy wrapper, which the deploy tooling role installs. It is the only writer of a
+# tenant's pin: it verifies the image's attestation first and refuses an image that is not
+# attested, before it writes the pin or restarts anything, then writes the pin and restarts
+# the stack under the deploy lock. This role only runs it.
+tenant_compose_deploy_program: /usr/local/sbin/branchleft-deploy
+
+# The one image a tenant's stack may run, as its pin line: the tenant image, pinned by
+# digest, with no tag. The deploy wrapper verifies only the images its register lists and
+# deploys any other unverified, so the role refuses every other name before it writes
+# anything. A unit test holds the name to the wrapper's register.
+tenant_compose_tenant_image_pattern: '\AIMAGE=ghcr\.io/branchleft/ghost-tenant@sha256:[0-9a-f]{64}\n\Z'
+
 # The deploy wrapper takes this lock around its read-modify-write-restart of a
 # stack, and waits for it this long. A restart here takes the same lock for the
 # same time, so the two never overlap.

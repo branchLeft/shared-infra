@@ -8,6 +8,8 @@
     # The placeholder tenants. Names, uids and ports are made up; no real tenant is named.
     scenario_a: { slug: tenant-a, uid: 30901, port: 3901 }
     scenario_b: { slug: tenant-b, uid: 30902, port: 3902 }
+    # A tenant that is only ever refused: its image is not one the wrapper may deploy.
+    scenario_d: { slug: tenant-d, uid: 30904, port: 3904 }
   tasks:
     # The control for the secret scan in verify.yml: this loop prints its item, because it
     # does not set no_log. If the scan cannot find this value in the run's log, the scan
@@ -242,6 +244,71 @@
           - { slug: tenant-c, uid: 30901, port: 3903 }
         refuse_expect: A slug or a uid is named by two stacks
         refuse_watch: ['{{ tenant_compose_stack_root }}/tenant-a/compose.yml']
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # The deploy wrapper verifies only the images its register lists, so a new tenant whose
+    # image is any other name is refused before anything is written.
+    - name: Refuse a new tenant whose image the deploy wrapper would not verify
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Image outside the wrapper's register
+        refuse_specs:
+          - '{{ scenario_a | combine({"memory": "900m"}) }}'
+          - '{{ scenario_d | combine({"image": scenario_unregistered_image}) }}'
+        refuse_expect: 'the image pin of tenant-d is not the tenant image pinned by digest'
+        refuse_watch: ['{{ tenant_compose_stack_root }}/tenant-a/compose.yml']
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Look for the refused tenant's directory
+      ansible.builtin.stat:
+        path: '{{ tenant_compose_stack_root }}/tenant-d'
+      register: tenant_compose_converge_unregistered
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Assert nothing of the refused tenant was written
+      ansible.builtin.assert:
+        that:
+          - not tenant_compose_converge_unregistered.stat.exists
+        quiet: true
+        fail_msg: The role wrote a stack for a tenant whose image the deploy wrapper would not verify.
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    # A new tenant's first pin goes through the deploy wrapper, which verifies the image's
+    # attestation first. An image of the registered name whose digest was never attested is
+    # refused by the wrapper: no pin is written and the tenant's stack is never started. The
+    # files delivered before the pin stay (named in the README), and the tenant drops out of
+    # the list after this case, so the role leaves them as they are.
+    - name: Refuse a new tenant whose image is not attested
+      ansible.builtin.include_tasks: tasks/refuse.yml
+      vars:
+        refuse_title: Image not attested
+        refuse_specs:
+          - '{{ scenario_a }}'
+          - '{{ scenario_b }}'
+          - '{{ scenario_d | combine({"image": scenario_unattested_image}) }}'
+        refuse_expect: 'branchleft-deploy: {{ scenario_unattested_image }} is not attested by'
+        refuse_watch: []
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Look at the unattested tenant's pin
+      ansible.builtin.stat:
+        path: '{{ tenant_compose_config_root }}/tenant-d.image.env'
+      register: tenant_compose_converge_unattested_pin
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Read the unattested tenant's unit
+      ansible.builtin.systemd_service:
+        name: '{{ tenant_compose_unit_prefix }}@tenant-d.service'
+      register: tenant_compose_converge_unattested_unit
+      when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
+
+    - name: Assert the unattested image was never pinned and its stack never started
+      ansible.builtin.assert:
+        that:
+          - not tenant_compose_converge_unattested_pin.stat.exists
+          - tenant_compose_converge_unattested_unit.status.ActiveState != 'active'
+        quiet: true
+        fail_msg: An image that is not attested was pinned, or its stack was started.
       when: not tenant_compose_converge_existing.stat.exists and not ansible_check_mode
 
     # The spool is refused while its drain bridge's rules are not in the firewall. The rule

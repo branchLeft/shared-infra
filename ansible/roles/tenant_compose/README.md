@@ -19,8 +19,11 @@ For each tenant the role:
 1. Judges the text with the module `tenant_compose_check` and writes nothing if any stack is refused.
 2. Asks the volume program to make the tenant's volumes, when the program does not list the
    tenant's uid. This replaces the generated `provision.sh`, which called the same program.
-3. Writes the compose file, the secrets file and the image pin.
-4. Enables the tenant's unit, `branchleft-compose@<slug>`, and restarts it only when it must (below).
+3. Writes the compose file and the secrets file.
+4. For a tenant with no pin yet, asks the deploy wrapper, `branchleft-deploy <slug> <image>`, for
+   its first pin. The wrapper verifies the image's attestation first and refuses an image that is
+   not attested; only then does it write the pin and start the stack (below).
+5. Enables the tenant's unit, `branchleft-compose@<slug>`, and restarts it only when it must (below).
 
 When a mail spool is given it is delivered first, because the tenants' per-uid networks belong to
 the spool's stack. It is delivered only after the host's firewall is read back and shown to fence
@@ -87,9 +90,11 @@ For each tenant `<slug>`:
   can start any container as root, so the file is not the tenant's.
 - `/etc/branchleft/<slug>.env`: `root:root`, `0600`. It is made empty and closed first and the
   content goes into the existing file, so the content is never readable by others.
-- `/etc/branchleft/<slug>.image.env`: `root:root`, `0600`. Created once, with the pin the renderer
-  produced, and **never replaced afterwards**. The deploy wrapper advances the pin, and a run of this
-  role must not roll an image back.
+- `/etc/branchleft/<slug>.image.env`: `root:root`, `0600`. **Written by the deploy wrapper, never by
+  this role.** For a tenant with no pin, the role runs the wrapper with the image of the pin the
+  renderer produced, once; the wrapper writes the pin only for an attested image. The role never
+  replaces a pin afterwards: the deploy wrapper advances it, and a run of this role must not roll an
+  image back.
 - `/opt/branchleft/<slug>/.tenant_compose_stamp`: `root:root`, `0600`. One SHA-256 digest of the
   compose text and the secrets text. It is derived from the secrets, so it is kept as closed as they are.
 - `/etc/branchleft/<slug>.deploy.lock`: created by `flock` if absent. The deploy wrapper takes the same file.
@@ -97,8 +102,34 @@ For each tenant `<slug>`:
 - The unit `branchleft-compose@<slug>`: enabled, and restarted when the next section says so.
 
 For the spool, `mail-spool` takes the place of `<slug>`, with no secrets file and no volume program
-call. Its pin file is replaced whenever it differs, because it is derived from the digest in the
-spool's compose file, which has no `${IMAGE}`.
+call. Its pin file is copied, and replaced whenever it differs, because it is derived from the
+digest in the spool's compose file, which has no `${IMAGE}` (the wrapper refuses such a file). The
+spool's image is not verified by this role.
+
+### A tenant's first pin, through the deploy wrapper
+
+A tenant with no pin on the host is deployed by `branchleft-deploy` (installed by the deploy tooling
+role), after its volumes, compose file and secrets are in place:
+
+1. The wrapper verifies the image's attestation with the host's verifier (installed by the deploy
+   verifier role) against its register: the tenant image must be attested by the Ghost platform's
+   registry publishing workflow on `main`. It refuses an image that is not attested, and then writes
+   no pin and restarts nothing. The run stops there with the wrapper's reason, records no stamp, and
+   the next run asks the wrapper again.
+2. For an attested image it writes the pin and restarts the unit under the stack's deploy lock; the
+   unit's `up --wait` is the health gate. The role does not restart that stack again in the same run.
+
+The wrapper verifies only the images its register lists, and deploys any other unverified. So the
+role refuses, before anything is written, a tenant whose pin is not the tenant image
+`ghcr.io/branchleft/ghost-tenant` pinned by digest with no tag (`tenant_compose_tenant_image_pattern`;
+a unit test holds the name to the wrapper's register).
+
+A refusal by the wrapper comes after that tenant's files are in place, so it is the one refusal that
+does not leave the host exactly as it was: the tenant's directory, volumes, compose file and secrets
+stay. It has no pin, so its unit cannot start, and no stack is restarted by the refusal.
+
+In a plan (check mode) the wrapper is not run; the plan says in a line which tenant's image it would
+verify and start.
 
 No port is opened, no user or group is made, and no firewall rule is written. The role only reads
 the firewall.
@@ -126,7 +157,8 @@ file is missing is inactive, not failed, so the check reads `ActiveState`.
 ### What is refused, and when
 
 Everything that can refuse runs over every stack before anything is written, so a refusal on one
-stack leaves the host exactly as it was. The module `tenant_compose_check` is pure: it reads text
+stack leaves the host exactly as it was. The one exception is the wrapper's refusal of a new
+tenant's image (see "A tenant's first pin, through the deploy wrapper"). The module `tenant_compose_check` is pure: it reads text
 and returns sentences that name a rule, a service or a key, never a value. It refuses:
 
 - a slug or uid of the wrong shape (uids are 30000 to 30999), a compose `name` that is not the slug,
@@ -139,7 +171,8 @@ and returns sentences that name a rule, a service or a key, never a value. It re
   secrets text may hold a key the compose file does not use), a referenced key whose value is empty,
   a key that does not start with `GHOST_` (so the secrets file can never override the pin), a
   duplicate key, a line that is not `KEY=value`, a control character, and a variable the role does not supply;
-- a pin that is not exactly one `IMAGE=<name>@sha256:<64 hex digits>` line;
+- a pin that is not exactly one `IMAGE=<name>@sha256:<64 hex digits>` line, and (in the role, not
+  the module) a tenant pin whose image is not the tenant image the deploy wrapper verifies;
 - a uid the volume program lists for another slug, or a slug it lists with another uid.
 
 This list is deliberately smaller than the renderer's own posture checks (`assertRuntimePosture`
@@ -195,11 +228,16 @@ PYTHONPATH=library ../../../.venv/bin/python -m unittest discover -b -s tests/un
 ```
 
 The container test (`molecule/default/`) starts a Debian 13 container with systemd, installs stand-ins
-for the volume program and the compose template unit (they record what they are asked and never
-touch a container), and fences the spool's drain bridge with real `iptables`. It then:
+for the volume program, the compose template unit and the image verifier (they record what they are
+asked and never touch a container; the verifier passes only the scenario's one attested digest),
+installs the real deploy wrapper from `hetzner/provision`, and fences the spool's drain bridge with
+real `iptables`. It then:
 
-- applies the role to two placeholder tenants and a spool, and edits one stack at a time, counting the
+- applies the role to two placeholder tenants and a spool: the wrapper verifies each tenant's
+  attested image and starts it once; then edits one stack at a time, counting the
   starts the unit stand-in recorded: only the stack whose content changed restarts;
+- refuses a new tenant whose image is not the tenant image, before anything is written, and a new
+  tenant whose image digest is not attested, at the wrapper: no pin, no start;
 - advances a pin as the deploy wrapper does and applies the old pin again: the pin stays, nothing restarts;
 - makes the stand-in unit fail, so the restart fails and the run stops, and applies the same values
   again: the stack restarts (the stamp was not recorded), then once more: nothing;
@@ -216,13 +254,15 @@ Every secret in the test is a throwaway made for the run from the harness's run 
 
 Each row was done by an edit, one run, and a restore.
 
-| Edit to the role                                                  | Step that fails                                                   |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Take `no_log` off the task that judges each tenant's stack        | `verify`: the log scan finds a throwaway secret in the run's log  |
-| Let the module accept an image tag and a port on every address    | the unit tests, and `converge` at the image-tag refusal           |
-| Replace the image pin on every run (`force: true`)                | `converge`, at the pin the deploy wrapper advanced                |
-| Record the stamp before the restart, not after the unit is active | `converge`, at the run that retries after a failed restart        |
-| Skip the read-back of the spool's firewall rules                  | `converge`, at the refusal of a spool whose firewall rule is gone |
+| Edit to the role                                                    | Step that fails                                                   |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| Take `no_log` off the task that judges each tenant's stack          | `verify`: the log scan finds a throwaway secret in the run's log  |
+| Let the module accept an image tag and a port on every address      | the unit tests, and `converge` at the image-tag refusal           |
+| Replace the image pin on every run (`force: true`)                  | `converge`, at the pin the deploy wrapper advanced                |
+| Record the stamp before the restart, not after the unit is active   | `converge`, at the run that retries after a failed restart        |
+| Skip the read-back of the spool's firewall rules                    | `converge`, at the refusal of a spool whose firewall rule is gone |
+| Copy a tenant's first pin into place instead of running the wrapper | `converge`, at the refusal of an image that is not attested       |
+| Take out the refusal of an image outside the wrapper's register     | `converge`, at the refusal of an image outside the register       |
 
 ## How it is delivered
 
@@ -239,7 +279,10 @@ The wiring that change makes has three requirements:
 
 - The role runs after the deploy tooling role, which makes the directories, installs the template
   unit and, on an app host, the isolation policy that fences in the spool's drain bridge. The role
-  reads that policy back, but the order is the playbook's to keep. It runs last of the host's
+  reads that policy back, but the order is the playbook's to keep. It also runs after the deploy
+  verifier role, which installs the verifier the deploy wrapper runs for a tenant's first pin
+  (`ansible/checks/test_deploy_verifier_coverage.py` holds this for every playbook that applies the
+  role). It runs last of the host's
   roles, because it restarts the tenants' live stacks: a failure there must not hold other roles
   back.
 - The role runs after the tenant onboarding role, which installs the volume program. The role

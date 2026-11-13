@@ -77,10 +77,17 @@ provisioner:
         # ever committed, and the verify play looks for them in the run's log.
         scenario_secret: "THROWAWAY-{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
         scenario_mail_secret: "THROWAWAY-MAIL-{{ lookup('ansible.builtin.env', 'ROLE_TEST_RUN_ID') }}"
-        # Images use the .invalid top-level domain, which never resolves, and
-        # fixed made-up digests: no image is ever pulled.
-        scenario_image: example.invalid/example-app@sha256:2222222222222222222222222222222222222222222222222222222222222222
-        scenario_newer_image: example.invalid/example-app@sha256:3333333333333333333333333333333333333333333333333333333333333333
+        # Fixed made-up digests: no image is ever pulled (the compose unit is a
+        # stand-in). A tenant's image is the tenant image, the one the deploy
+        # wrapper's register lists, so the real wrapper asks the verifier about it.
+        # The verifier stand-in holds scenario_image as attested and nothing else:
+        # scenario_unattested_image is the same name with a digest that was never
+        # attested. The spool and the unregistered image use the .invalid
+        # top-level domain, which never resolves.
+        scenario_image: ghcr.io/branchleft/ghost-tenant@sha256:2222222222222222222222222222222222222222222222222222222222222222
+        scenario_newer_image: ghcr.io/branchleft/ghost-tenant@sha256:3333333333333333333333333333333333333333333333333333333333333333
+        scenario_unattested_image: ghcr.io/branchleft/ghost-tenant@sha256:5555555555555555555555555555555555555555555555555555555555555555
+        scenario_unregistered_image: example.invalid/example-app@sha256:6666666666666666666666666666666666666666666666666666666666666666
         scenario_spool_image: example.invalid/example-spool@sha256:4444444444444444444444444444444444444444444444444444444444444444
 verifier:
   name: ansible
