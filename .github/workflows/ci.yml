@@ -80,7 +80,7 @@ jobs:
     # Observed 0.2-0.32min over the last 20 successful runs (p95 0.32min).
     timeout-minutes: 10
     # Separate project (mail/, own package.json and Pulumi.yaml), separate
-    # job: `hcloud` and `gcp` are different providers with independent
+    # job: the mail project and the Hetzner projects have independent
     # dependency trees, and a failure or credential need in one must never
     # block or touch the other. This job stays credential-free; the mail
     # stack's own apply path is the mail-plan/mail-apply pair below.
@@ -500,8 +500,8 @@ jobs:
     # is the job that catches that class, and it catches it on every posture
     # flip rather than once.
     #
-    # Deliberately NOT in `deploy`'s `needs`. That job applies the *GCP* edge,
-    # which shares nothing with this configuration, and gating a Pulumi apply on
+    # Deliberately NOT in the `needs` of any apply job. Applying a Pulumi stack
+    # shares nothing with this configuration, and gating a Pulumi apply on
     # a Go build that reaches the module proxy would couple an unrelated
     # production path to a network dependency. It gates review, not the apply.
     steps:
@@ -993,10 +993,9 @@ jobs:
     timeout-minutes: 10
     # Credential-free by construction: the audit reads committed files only and
     # never contacts a backend, so it says nothing about live state and needs
-    # nothing to run. What it defends is an ordering with no undo -- every
-    # stack's secrets are wrapped by one KMS key that the GCP wind-down
-    # destroys, and a stack missed before that point cannot be decrypted or
-    # even torn down afterwards. It also fails on a state-backend reference
+    # nothing to run. What it defends is an ordering with no undo -- a stack
+    # whose secrets are wrapped by a key that is later destroyed cannot be
+    # decrypted or even torn down afterwards. It also fails on a state-backend reference
     # this repo gained without anyone adding it to the inventory, because the
     # backend is selected per workflow rather than anywhere central.
     #
@@ -1122,7 +1121,7 @@ jobs:
     timeout-minutes: 30
     # Only the jobs that actually gate this stack: its own project checks, the
     # delete guard's unit tests, and the backend/secrets inventory audit. The
-    # GCP edge's parity and typecheck jobs share nothing with mx1, and
+    # edge validation jobs share nothing with mx1, and
     # coupling them would block a mail fix on an unrelated red.
     needs: [changes, mail-typecheck, mail-provision-checks, scripts-tests, pulumi-inventory-audit]
     if: >-
@@ -1444,7 +1443,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Only the jobs that gate this stack's own surface, same reasoning as
-    # mail-plan: coupling the GCP edge's checks here would block a network
+    # mail-plan: coupling the edge's checks here would block a network
     # fix on an unrelated red.
     needs:
       [
