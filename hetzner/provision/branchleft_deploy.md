@@ -121,12 +121,14 @@ is at least as likely as a genuinely stuck one.
 
 ## strip_yaml_comments
 
-Trailing comments are cut as well as whole lines: `image: foo@sha256:...
+Trailing comments are cut as well as whole lines:
 
-# was ${IMAGE}` otherwise reads as a live pin reference while the service
+```yaml
+image: foo@sha256:... # was ${IMAGE}
+```
 
-below it runs a hardcoded digest, which is exactly the state being guarded
-against.
+Otherwise that line reads as a live pin reference while the service below it
+runs a hardcoded digest, which is exactly the state being guarded against.
 
 Quoting is not tracked. The only question asked of the result is whether an
 IMAGE reference is live configuration or commentary, and a `#` inside a
