@@ -1,16 +1,16 @@
 # Runbook — creating a new Hetzner Pulumi stack
 
-For **new** stacks only. Moving an existing stack off `gs://` state and off
-the shared GCP KMS secrets provider is a different, ordered, one-way
-operation and is not this runbook.
+For **new** stacks only. The one-way move of the older stacks off `gs://`
+state and off the retired shared KMS secrets provider is done and is not this
+runbook; it is kept as history in
+[`RUNBOOK-existing-stack-migration.md`](RUNBOOK-existing-stack-migration.md).
 
-Two things differ from every stack in this repo today, and they are
-independent of each other:
+Two things define a stack in this repo, and they are independent of each
+other:
 
 - **State** lives in Hetzner Object Storage over Pulumi's S3-compatible
-  backend, not in `gs://branchleft-pulumi-state`.
-- **Secrets** are wrapped by Pulumi's passphrase provider, not by the shared
-  GCP KMS key. Unlike every stack in this repo today, neither the
+  backend, not in the retired `gs://branchleft-pulumi-state`.
+- **Secrets** are wrapped by Pulumi's passphrase provider. Neither the
   `encryptionsalt` nor the `hcloud:token` ciphertext is ever committed to
   `Pulumi.<stack>.yaml` — both are operator-held and supplied on whichever
   machine applies the stack.
@@ -142,13 +142,12 @@ also means an unrelated AWS profile on the workstation will be picked up if
 these are unset — check `pulumi whoami --verbose` before trusting the result
 of anything below.
 
-**Two backends share the bucket name `branchleft-pulumi-state`** — the legacy
-GCS bucket (`gs://`) that predates the migration, and this Object Storage
-one. A stack lives in exactly one of them, so "no stack named X" against a
-backend that answers fine usually means the _other_ backend, not a missing
-stack. `scripts/pulumi-stack-inventory.json` **at the repository root** (not
-`hetzner/scripts/`, where step 2's `cd` puts you) records which stack lives
-where. Related trap: a `PULUMI_BACKEND_URL` export overrides everything and
+**A stale login can point at the wrong backend.** The retired `gs://` state
+bucket used the same name, `branchleft-pulumi-state`, as this Object Storage
+one. A workstation still logged in to a backend that no longer holds the stack
+answers "no stack named X" for a stack that exists. `scripts/pulumi-stack-inventory.json`
+**at the repository root** (not `hetzner/scripts/`, where step 2's `cd` puts
+you) records which backend each stack lives in. Related trap: a `PULUMI_BACKEND_URL` export overrides everything and
 survives into the next project you `cd` into — unset it when switching
 projects, and let `pulumi whoami --verbose` arbitrate whenever the answer
 matters.
@@ -446,10 +445,9 @@ Every Hetzner stack in this repository applies from CI on merge to `main`
 (`.github/workflows/ci.yml`): a plan job previews and gates on
 `scripts/assert-no-hetzner-deletes.py`, then an apply job — paused for an
 environment approval — runs `pulumi up`. A new stack joins by adding its own plan/apply job
-pair on that template and the secrets below. There is no Workload Identity
-Federation equivalent here: the Hetzner API authenticates a bearer token and
-nothing else, so the short-lived-credential posture the GCP stacks have does
-not carry over. That trade is accepted deliberately (doc 14 §3.5); what it
+pair on that template and the secrets below. There is no federated,
+short-lived credential here: the Hetzner API authenticates a bearer token and
+nothing else. That trade is accepted deliberately (doc 14 §3.5); what it
 demands in return is that each token is scoped to one project and one
 pipeline.
 
@@ -474,13 +472,12 @@ stack that can be applied against the wrong state.
 
 ## What this runbook deliberately does not cover
 
-Migrating an existing stack. Every stack that predates this pattern has its
-secrets wrapped by one shared KMS key, and re-wrapping them requires that key
-to still exist. That is a single ordered sweep across every surviving stack,
-gated before any GCP teardown, with a lab rehearsal first. Running
-`pulumi stack change-secrets-provider` on a live stack outside that sweep
-rewrites every secret in place, and it is not an agent action.
+Migrating an existing stack. The older stacks' secrets were wrapped by one
+shared KMS key, and a single ordered sweep re-wrapped every one of them onto
+the passphrase provider before that key was destroyed. Running
+`pulumi stack change-secrets-provider` on a live stack rewrites every secret
+in place, and it is not an agent action.
 
-The sweep itself, its stack-by-stack commands, its rollback and the point
-after which there is none:
+The sweep, kept as history, with its stack-by-stack commands, its rollback and
+the point after which there was none:
 [`RUNBOOK-existing-stack-migration.md`](RUNBOOK-existing-stack-migration.md).

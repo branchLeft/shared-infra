@@ -1,5 +1,13 @@
 # Runbook — migrating an existing stack off GCP KMS and off `gs://` state
 
+> **History: this migration is finished.** Every stack in
+> `scripts/pulumi-stack-inventory.json` is on the passphrase provider, and the
+> GCP estate, state buckets included, was destroyed on 2026-09-13
+> (`PULUMI-BACKEND-INVENTORY.md` section 5). Nothing below can or needs to be
+> run again. The document is kept as the record of how it
+> was done, and because tests pin its gate lines (`hetzner/test_passphrase_probe_pattern.py`).
+> Read the rest in the past tense.
+
 For stacks that already exist. Creating a new one is
 [`RUNBOOK-new-stack.md`](RUNBOOK-new-stack.md), which starts on the passphrase
 provider and the Object Storage backend and never touches any of this.
