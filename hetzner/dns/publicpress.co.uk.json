@@ -106,6 +106,14 @@
       "values": [
         "s2.dkim.ionos.com."
       ]
+    },
+    {
+      "name": "sites",
+      "type": "A",
+      "ttl": 3600,
+      "values": [
+        "46.225.95.167"
+      ]
     }
   ],
   "probe_names": [

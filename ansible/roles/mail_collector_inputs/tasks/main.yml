@@ -1,0 +1,51 @@
+---
+# One module does the whole read, so that no line of the owner's file passes through a task
+# variable, a lookup, a slurp or a stat. It returns fixed codes and a count, never a value.
+# The task is hidden anyway (ANS-16): a later change to the module must not be able to show
+# a value. The module only reads, so it runs the same in check mode (ANS-10) and the plan the
+# approver reads fails on the same codes an apply would.
+
+- name: Check the collector's input file and its descriptor directory
+  mail_collector_inputs_check:
+    credentials_path: '{{ mail_collector_inputs_credentials_path }}'
+    descriptor_dir: '{{ mail_collector_inputs_descriptor_dir }}'
+    # The number of hosts the owner has listed for the collector, read here and never set. The
+    # collector's role writes a descriptor for each after this check, so a listed host counts
+    # as named before its file exists. With the collector's role absent the variable is undefined
+    # and the count is zero.
+    declared_hosts: '{{ mail_collector_hosts | default([]) | length }}'
+  register: mail_collector_inputs_result
+  failed_when: false
+  no_log: true
+  diff: false
+
+# failed_when: false makes the result's failed flag false, so a refusal of the module itself
+# (a path that is not absolute, an I/O error) is read from its message, which is a fixed code.
+- name: Stop if the check module refused
+  ansible.builtin.assert:
+    that:
+      - mail_collector_inputs_result.msg is not defined
+    fail_msg: >-
+      {{ mail_collector_inputs_result.msg | default('the check module returned no result') }}
+    quiet: true
+
+# The codes name a line number or a key the collector defines, never a value, so they are
+# safe to show although the task above is hidden.
+- name: Stop if the input file or the drain list is wrong
+  ansible.builtin.assert:
+    that:
+      - mail_collector_inputs_result.problems | length == 0
+    fail_msg: >-
+      The collector's inputs are not ready:
+      {{ mail_collector_inputs_result.problems | join(', ') }}.
+      Each code is defined in the role's README.
+    quiet: true
+
+# An absent file is the state before the owner places it. Saying so is the plan's only output,
+# and it changes nothing.
+- name: Say that the collector's inputs are not placed yet
+  ansible.builtin.debug:
+    msg: >-
+      The collector's input file is not on this host, so the collector is not meant to run yet.
+      Nothing is checked and nothing is changed.
+  when: not mail_collector_inputs_result.present

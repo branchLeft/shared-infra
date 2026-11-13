@@ -386,6 +386,25 @@ class AdoptionTests(HostCase):
         self.assertEqual(1, self.host.converge(declared).granted)
         self.assertEqual(slots.Result(0, 0, 0, 1, changed=False), self.host.converge(declared))
 
+    def test_the_publicpress_website_slot_is_adopted_after_its_role_made_the_stack(self) -> None:
+        # The app1 playbook applies the stack's role before the slot keys, so the stack directory
+        # exists when the slot is first granted and the entry must adopt it. The line is written
+        # out in full here, not built by pinned_line, so a change to the shape or to the name
+        # rule fails this case on its own.
+        stack = "publicpress-website"
+        self.host.fs.add_dir(f"/opt/branchleft/{stack}", 0, 0, 0o755)
+        self.assertEqual(
+            "slot entry number 1: stack-already-on-host-not-adopted",
+            self.refusal([entry(stack, KEY_A)]),
+        )
+        self.assert_nothing_written()
+        self.assertEqual(1, self.host.converge([entry(stack, KEY_A, adopt=True)]).granted)
+        self.assertEqual(
+            'restrict,command="/usr/bin/sudo -n /usr/local/sbin/branchleft-deploy --slot '
+            f'publicpress-website" {KEY_A} branchleft-slot:publicpress-website',
+            self.host.authorized().splitlines()[-1],
+        )
+
     def test_a_granted_slot_does_not_need_adoption_again(self) -> None:
         self.host.converge([entry("website", KEY_A, adopt=True)])
         result = self.host.converge([entry("website", KEY_A)])

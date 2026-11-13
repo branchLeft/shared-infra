@@ -348,8 +348,10 @@ class RealTree(unittest.TestCase):
                 "breakglass_grant_host",
                 "deploy_verifier",
                 "website_app1",
+                "publicpress_website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "tenant_onboarding",
                 "export_bundler",
             ],
         )
@@ -370,6 +372,7 @@ class Mutations(unittest.TestCase):
             "tunnel_account",
             "ci_jump",
             "website_app1",
+            "publicpress_website_app1",
             "deploy_tooling",
             "deploy_slot_keys",
             "monitoring_stack",

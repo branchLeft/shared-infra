@@ -43,14 +43,17 @@ ops1:
   - backup_restore
   - control_plane_db
   - node_exporter
+  - mail_collector_inputs
   - ring_controller_host
 app1:
   - host_inputs
   - deploy_tooling
   - deploy_slot_keys
   - export_bundler
+  - tenant_onboarding
   - deploy_verifier
   - website_app1
+  - publicpress_website_app1
   - breakglass_grant_host
   - host_baseline
 db1:

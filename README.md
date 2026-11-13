@@ -24,8 +24,9 @@ registry they share:
 
 A second, separate Pulumi project lives at [`mail/`](mail/) —
 `branchleft-mail`, its own `Pulumi.yaml`, own `package.json`, own stack. It
-declares the Hetzner delivery host (`mx1`) and its firewall — the reason it
-is not on GCP is that GCP blocks outbound port 25 unconditionally. It is a
+declares the Hetzner delivery host (`mx1`) and its firewall — a delivery host
+needs outbound port 25 open, which the cloud this estate used to run on (since
+destroyed) blocked unconditionally. It is a
 separate project rather than a stack of the Hetzner network/estate program,
 or resources added there, for three reasons: a different credential shape
 (Hetzner API bearer token, scoped to its own hcloud project) with nothing
@@ -94,8 +95,9 @@ based on another pull request's branch gets every check except `ci.yml`'s jobs
   past Pulumi state move and its policy drift incident (appendix A). Nothing
   in it is actionable any more.
 - [`hetzner/RUNBOOK-existing-stack-migration.md`](hetzner/RUNBOOK-existing-stack-migration.md)
-  — moving every stack in the estate off the shared GCP KMS secrets provider
-  and off `gs://` state.
+  — history: the one-way move of every stack in the estate off the retired
+  shared KMS secrets provider and off `gs://` state. Every stack in
+  `scripts/pulumi-stack-inventory.json` is on the passphrase provider now.
 - `PULUMI-BACKEND-INVENTORY.md` — the state-backend enumeration across the
   repos that still have Pulumi programs.
 
