@@ -465,13 +465,36 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // excludes 172.16.0.0/12 keys, so real clients collapsed onto a Docker
     // bridge address would not raise it: the blackbox probes seeing 429 are
     // the tripwire for that.
-    '      - alert: RateLimitDecliningRealClients',
-    '        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[15m]) > 0',
+    //
+    // Sustained, not instantaneous: an internet scanner tripping the
+    // throttle is the expected, handled case, because CrowdSec bans it
+    // (a 4h ban) within a few minutes and the declines stop. CrowdSec's
+    // Prometheus metrics, which the `crowdsec` job already scrapes, carry no
+    // per-address series (cs_active_decisions has only reason, origin and
+    // action labels), so a key with an active ban cannot be subtracted here
+    // and a new exporter is not worth it for one warning. The rule requires
+    // the decline rate to persist instead: increase() over 10m must stay
+    // above zero for 30m running, so a burst fires it only if it lasts more
+    // than 20 minutes (30m for, less the 10m window the expression keeps
+    // reading true after the last decline). That is longer than a burst
+    // CrowdSec bans, and a key that keeps declining past that point is one
+    // CrowdSec did not ban. Warning, with no owner_action and no page
+    // register entry, so it routes to the on-host mailbox only.
+    '      - alert: RateLimitDeclinesSustained',
+    '        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[10m]) > 0',
+    '        for: 30m',
     '        labels:',
     '          severity: warning',
     '        annotations:',
-    '          summary: "Caddy declined at least one non-bridge rate-limited request in the last 15 minutes."',
+    '          summary: "Caddy has kept declining rate-limited requests from {{ $labels.key }} for at least 30 minutes."',
     '          description: >-',
+    '            A scanner burst that CrowdSec bans stops declining within',
+    '            minutes and does not reach this rule: the expression must',
+    '            hold for 30 minutes, which takes a burst of more than 20.',
+    '            Declines that persist that long come from a key CrowdSec has',
+    '            not banned. Check `cscli decisions list` on edge1 for the key',
+    '            and the access log for what it is requesting, before',
+    '            deciding whether to ban it by hand or raise the zone budget.',
     '            key!="" excludes the keyless zone-aggregate series -- an absent',
     '            label reads as "" in PromQL, and without this exclusion the',
     '            alert double-counts every decline once under the aggregate and',

@@ -652,14 +652,28 @@ Two alert rules read metrics this stack already scrapes rather than a new
 target: `AlertEmailDeliveryFailing` reads `alertmanager_notifications_failed_total`
 from the `alertmanager` job above -- it fires on a failed email delivery
 attempt, not on the process being unreachable, which is exactly what
-`HostOrServiceDown` cannot see. `RateLimitDecliningRealClients` reads Caddy's
+`HostOrServiceDown` cannot see. `RateLimitDeclinesSustained` reads Caddy's
 own `caddy_rate_limit_declined_requests_total` from the `caddy` job -- see
 `render.ts`'s comment on the rule for why it excludes the keyless
 zone-aggregate series and the Docker bridge range. Only `AlertEmailDeliveryFailing`
 (and `MailHostDown`) route to the `mailhost-deadman` receiver in addition to
-`email`, per the rewritten circularity note above -- `RateLimitDecliningRealClients`
-is an ordinary `warning` routed through `email` alone, unrelated to the mx1
-circularity this PR closes.
+`email`, per the rewritten circularity note above -- `RateLimitDeclinesSustained`
+is an ordinary `warning`, which routes to the on-host mailbox only (see "Alerts
+that stay on mx1" below), unrelated to the mx1 circularity this PR closes.
+
+`RateLimitDeclinesSustained` fires only when one key has kept being declined for
+30 minutes running (`increase(...[10m]) > 0` held `for: 30m`, so a burst has to
+last more than 20 minutes). An internet scanner that trips the throttle is the
+expected case, and CrowdSec bans it within minutes (a 4h ban), after which the
+declines stop and the alert stays silent. The `crowdsec` job on `:6060` exposes
+only aggregate decision counts (`cs_active_decisions` has `reason`, `origin` and
+`action` labels, no address), so a key with an active ban cannot be subtracted
+in PromQL; the persistence window is the stand-in. When it does fire, the key
+declined for half an hour without being banned: on `edge1`, read
+`cscli decisions list` for that address (an owner step) and the access log for
+what it asks for, then ban it by hand or raise the zone's budget. Absence of
+the alert does not mean no declines: a short burst that is banned is meant to
+stay quiet, and the counter itself still records it.
 
 `mysqld` being `up` is necessary and not sufficient -- the exporter answers
 with a full 200 and `mysql_up 0` when it cannot read MySQL, which is the state
@@ -1204,8 +1218,10 @@ abusive signup flood looks like from the mail host, an hour or more before any
 bounce ratio moves. The edge rate limiter is the control that should have
 stopped it; this alert firing means the control did not. Check Caddy's
 `caddy_rate_limit_declined_requests_total` for the same window --
-`RateLimitDecliningRealClients` reads the same counter -- and confirm the
-traffic is actually transiting the edge before concluding the limiter failed.
+`RateLimitDeclinesSustained` reads the same counter, but only fires after 30
+minutes of continuous declines, so its silence says nothing about a short
+burst -- and confirm the traffic is actually transiting the edge before
+concluding the limiter failed.
 The threshold is a ceiling picked from "this estate has no reason to send at
 this rate", not from observed volume; re-tune it once a fortnight of real data
 exists.
@@ -1294,7 +1310,7 @@ that is accepted, delivered, and then marked as junk by its recipient never
 touches any of Stalwart's own delivery counters, which is exactly the shape
 of a magic-link signup flood landing on real, harvested addresses
 (branchLeft/workspace#222). Check the volume alerts
-(`MailDeliveryVolumeSpike`, `RateLimitDecliningRealClients`) for the same
+(`MailDeliveryVolumeSpike`, `RateLimitDeclinesSustained`) for the same
 period first -- a real complaint spike from a flood usually arrives a day
 after the volume spike that caused it, not alongside it.
 

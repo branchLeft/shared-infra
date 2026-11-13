@@ -499,7 +499,7 @@ tests:
               description: >-
                 The blackbox_exporter replacement for the GCP uptime check (doc 14 §9.1), probing every hostname in sites.ts over HTTPS. Excludes blackbox_mail, which has its own MailHostDown alert below, and blackbox_object_storage, which has ObjectStorageProbeFailed.
 
-  # RateLimitDecliningRealClients: the exact live label schema on edge1
+  # RateLimitDeclinesSustained: the exact live label schema on edge1
   # (verified 2026-08-30) is a keyless zone-aggregate series and a
   # key="172.18.0.1" series, both flat at 6 -- no new declines since. Neither
   # should fire: increase() over a flat counter is ~0. This is also the
@@ -512,45 +512,76 @@ tests:
         values: '6+0x30'
     alert_rule_test:
       - eval_time: 15m
-        alertname: RateLimitDecliningRealClients
+        alertname: RateLimitDeclinesSustained
         exp_alerts: []
 
   # key!="" : the keyless zone-aggregate series climbing on its own must not
   # fire -- it is not a real client, it is the sum every keyed series is
   # already counted under. Without this exclusion the alert double-counts
-  # every decline once here and once under its key.
+  # every decline once here and once under its key. The series climbs for the
+  # full hour, so only the key exclusion (not the `for:`) can be keeping this
+  # silent at 45m.
   - interval: 30s
     input_series:
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
     alert_rule_test:
-      - eval_time: 15m
-        alertname: RateLimitDecliningRealClients
+      - eval_time: 45m
+        alertname: RateLimitDeclinesSustained
         exp_alerts: []
 
   # key!~"172\.(1[6-9]|2\d|3[01])\..*" : a climbing count from the Docker
   # bridge address alone -- edge1's own loopback smoke test tripping the
   # magic-link limiter, the only source of declines on record today -- must
-  # not fire either.
+  # not fire either, even sustained for the full hour.
   - interval: 30s
     input_series:
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.18.0.1", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
     alert_rule_test:
-      - eval_time: 15m
-        alertname: RateLimitDecliningRealClients
+      - eval_time: 45m
+        alertname: RateLimitDeclinesSustained
         exp_alerts: []
 
-  # A real client's key climbing does fire -- the whole point of the rule.
+  # A scanner burst: one address trips the throttle for 15 minutes and then
+  # stops, because CrowdSec bans it a few minutes in (a 4h ban; the live case
+  # of 13 Nov was a secret-file probe answered only with 302/403/404/429).
+  # The expression reads true for the burst plus its 10m window, 25m here,
+  # which is less than the 30m `for:`, so the alert must stay silent at every
+  # point, pending included at 45m and after the series goes flat.
+  - interval: 30s
+    input_series:
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="198.51.100.7", host="edge1"}'
+        values: '0+1x30 30x170'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RateLimitDeclinesSustained
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: RateLimitDeclinesSustained
+        exp_alerts: []
+      - eval_time: 80m
+        alertname: RateLimitDeclinesSustained
+        exp_alerts: []
+
+  # Sustained declines from one key that nothing banned still fire: this is
+  # the whole point of the rule. The counter climbs for the full hour, so the
+  # expression has been true for the whole `for:` by 45m. At 20m it is only
+  # pending, which proves the `for:` is in effect rather than the alert
+  # firing on the first decline.
   - interval: 30s
     input_series:
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="203.0.113.5", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: RateLimitDeclinesSustained
+        exp_alerts: []
     promql_expr_test:
-      - expr: ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing"}
-        eval_time: 15m
+      - expr: ALERTS{alertname="RateLimitDeclinesSustained", alertstate="firing"}
+        eval_time: 45m
         exp_samples:
-          - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="203.0.113.5", host="edge1"}'
+          - labels: 'ALERTS{alertname="RateLimitDeclinesSustained", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="203.0.113.5", host="edge1"}'
             value: 1
 
   # Boundary coverage for the character class itself: 1[6-9]|2\d|3[01] must
@@ -561,47 +592,50 @@ tests:
   - interval: 30s
     input_series:
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.16.0.1", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.19.9.9", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.20.0.0", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.29.9.9", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.30.0.0", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.31.255.255", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
       # Just outside the range on both sides -- these must fire.
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.15.255.255", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.32.0.1", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
     promql_expr_test:
-      - expr: ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing"}
-        eval_time: 15m
+      - expr: ALERTS{alertname="RateLimitDeclinesSustained", alertstate="firing"}
+        eval_time: 45m
         exp_samples:
-          - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="172.15.255.255", host="edge1"}'
+          - labels: 'ALERTS{alertname="RateLimitDeclinesSustained", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="172.15.255.255", host="edge1"}'
             value: 1
-          - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="172.32.0.1", host="edge1"}'
+          - labels: 'ALERTS{alertname="RateLimitDeclinesSustained", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="172.32.0.1", host="edge1"}'
             value: 1
 
-  # Both a bridge key and a real key climbing together: exactly one series
-  # fires. Exhaustive on purpose, the same reason the BlackboxProbeFailed /
-  # MailHostDown mutual-exclusivity case above checks both sides -- a
-  # matcher typo that let 172.18.0.1 back in would show up here as a second,
+  # A bridge key, a scanner that stopped, and one key that kept declining, all
+  # at once: exactly one series fires. Exhaustive on purpose, the same reason
+  # the BlackboxProbeFailed / MailHostDown mutual-exclusivity case above
+  # checks both sides -- a matcher typo that let 172.18.0.1 back in, or a
+  # `for:` dropped so the burst key fires too, would show up here as a second,
   # unexpected sample and fail this assertion.
   - interval: 30s
     input_series:
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="172.18.0.1", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
+      - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="198.51.100.7", host="edge1"}'
+        values: '0+1x30 30x90'
       - series: 'caddy_rate_limit_declined_requests_total{zone="members_magic_link_per_ip", key="203.0.113.9", host="edge1"}'
-        values: '0+1x30'
+        values: '0+1x120'
     promql_expr_test:
-      - expr: ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing"}
-        eval_time: 15m
+      - expr: ALERTS{alertname="RateLimitDeclinesSustained", alertstate="firing"}
+        eval_time: 45m
         exp_samples:
-          - labels: 'ALERTS{alertname="RateLimitDecliningRealClients", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="203.0.113.9", host="edge1"}'
+          - labels: 'ALERTS{alertname="RateLimitDeclinesSustained", alertstate="firing", severity="warning", zone="members_magic_link_per_ip", key="203.0.113.9", host="edge1"}'
             value: 1
 
   # AlertEmailDeliveryFailing: a climbing failure count on the email
