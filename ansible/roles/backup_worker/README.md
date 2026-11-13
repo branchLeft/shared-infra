@@ -132,6 +132,12 @@ The file holds the nine names the installer requires and no age recipient.
 Credentials may use letters, digits and `/ + = _ . -` only: the file is read by
 systemd, which treats quotes and backslashes specially.
 
+The tenants and recipients files follow the same steps: each is created empty at
+`root:backup-worker` `0640` when absent, both have their owner, group and mode set
+back on every run, and only then are they written. The values come from
+`backup_worker_private_files` in `vars/main.yml`. The order is pinned by the same
+unit test.
+
 ### Differences from the runbook
 
 - The runbook copies three whole directories with `git archive`. The role
