@@ -1457,11 +1457,13 @@ def describe(verdict: Verdict, mode: str, commit: str, playbook: str, step: str 
     shown only after it has been found on the root-owned allow-list, and then it is
     the allow-list's own text. The ``step`` field is added for ``mode=step`` and for no
     other mode, so the line of an apply and of a check is byte for byte what it was
-    before steps existed, which the workflow that reads it still expects.
+    before steps existed, which the workflow that reads it still expects. A refusal
+    prints ``changed=0`` (it ran no playbook); every other outcome with no recap keeps
+    ``changed=-``. Only the refusal's count differs from the line before this change.
     """
     if verdict.changed is None and verdict.exit_code is Exit.REFUSED:
-        # A refusal ran no playbook, so it changed nothing: a digit, so a digit-matching reader
-        # can read the line. Other outcomes with no recap keep the dash.
+        # A refusal ran no playbook, so it changed nothing: a digit, so a reader whose pattern
+        # needs a digit (the push judge's) can read the line. Other outcomes keep the dash.
         changed = "0"
     else:
         changed = "-" if verdict.changed is None else str(verdict.changed)

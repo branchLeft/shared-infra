@@ -1010,9 +1010,11 @@ class PullRouteUnchangedTests(unittest.TestCase):
             out.getvalue().strip(),
         )
 
-    def test_a_refusal_line_matches_the_digit_reader_the_pull_judge_holds(self) -> None:
-        # The judge's pull expression (ansible-gated-apply.yml in github-workflows) names the
-        # apply line. This is the digit-only reader the refusal must match: changed is [0-9]+.
+    def test_a_refusal_line_matches_a_digit_only_reader(self) -> None:
+        # A local, digit-only stand-in for a reader of the apply line. It is not the judge's
+        # expression: the pull judge (ansible-gated-apply.yml in github-workflows) accepts
+        # changed=([0-9]+|-) and fails a refusal on the dash itself. The digit-only reader is the
+        # push judge, which needs a digit. This test pins that a refusal line has a digit.
         reader = re.compile(
             r"^pull-trigger verdict=(?P<verdict>[a-z-]+) exit=(?P<exit>[0-9]+) "
             r"reason=(?P<reason>[a-z-]+) mode=apply commit=(?P<commit>[0-9a-f]{40}) "
@@ -1024,6 +1026,7 @@ class PullRouteUnchangedTests(unittest.TestCase):
                 line = trigger.summary(verdict, "apply", self.commit, PLAY)
                 match = reader.match(line)
                 self.assertIsNotNone(match, line)
+                assert match is not None
                 self.assertEqual("0", match.group("changed"))
                 self.assertEqual("20", match.group("exit"))
 
