@@ -259,12 +259,87 @@
 - name: Refuse a listing of two images
   ansible.builtin.import_playbook: refused_case.yml
   vars:
+    golden_compose: '{{ playbook_dir }}/../../files/ghost-platform/render-core/test/golden/mail-spool-compose.demo1.yml'
+    golden_image: >-
+      {{ lookup('ansible.builtin.file', golden_compose) | regex_findall("image: '([^']+)'") | first }}
     converge_case:
       name: docker lists two images for the one reference
       tasks_from: _image.yml
       standin:
+        images:
+          - '{{ golden_image }}'
         image_count: 2
       expect: 'that is not the pinned image'
+
+# The signed image push loads the image and leaves it with no name, held by its digest alone.
+# The role gives it the name part of the pin as a local tag, finds it by the pinned reference
+# and holds it to the pinned digest. The host is cut off from GitHub and its registry in this
+# scenario (molecule.yml), so none of this can have come from a pull. The control tags the
+# image once and pulls nothing; each case below it is one way the arrival is wrong, and is
+# refused with the image left untagged. The wrong digest is the pin's against an image of
+# another digest: the role must not name it.
+- name: Accept an image that arrived unnamed from the signed image push
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    golden_compose: '{{ playbook_dir }}/../../files/ghost-platform/render-core/test/golden/mail-spool-compose.demo1.yml'
+    golden_digest: >-
+      {{ lookup('ansible.builtin.file', golden_compose) | regex_findall("image: '[^']+@(sha256:[0-9a-f]{64})'") | first }}
+    converge_case:
+      name: the pinned image is on the host held by its digest alone
+      tasks_from: _image.yml
+      setup:
+        - [truncate, -s, '0', /var/log/docker-standin.calls]
+      standin:
+        images:
+          - '{{ golden_digest }}'
+      expect_calls:
+        - '^docker tag {{ golden_digest }} ghcr\.io/branchleft/mailgun-shim:carried$'
+      refuse_calls:
+        - '^docker (image )?pull'
+      accepted: true
+
+- name: Refuse an unnamed image of another digest than the pin
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    converge_case:
+      name: the host holds an unnamed image, and its digest is not the pinned one
+      tasks_from: _image.yml
+      setup:
+        - [truncate, -s, '0', /var/log/docker-standin.calls]
+      standin:
+        images:
+          - 'sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'
+      expect: 'is not on this host'
+
+- name: Refuse an unnamed image whose id is not the pinned digest
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    golden_compose: '{{ playbook_dir }}/../../files/ghost-platform/render-core/test/golden/mail-spool-compose.demo1.yml'
+    golden_digest: >-
+      {{ lookup('ansible.builtin.file', golden_compose) | regex_findall("image: '[^']+@(sha256:[0-9a-f]{64})'") | first }}
+    converge_case:
+      name: docker answers the digest lookup with an image of another id
+      tasks_from: _image.yml
+      standin:
+        images:
+          - '{{ golden_digest }}'
+        image_id: 'sha256:fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'
+      expect: 'is not on this host'
+
+- name: Refuse a digest lookup that lists two images
+  ansible.builtin.import_playbook: refused_case.yml
+  vars:
+    golden_compose: '{{ playbook_dir }}/../../files/ghost-platform/render-core/test/golden/mail-spool-compose.demo1.yml'
+    golden_digest: >-
+      {{ lookup('ansible.builtin.file', golden_compose) | regex_findall("image: '[^']+@(sha256:[0-9a-f]{64})'") | first }}
+    converge_case:
+      name: docker lists two images for the pinned digest
+      tasks_from: _image.yml
+      standin:
+        images:
+          - '{{ golden_digest }}'
+        image_count: 2
+      expect: 'is not on this host'
 
 # The loaded egress policy, read from the kernel. The control, then one rule taken away or
 # put out of order at a time. A restart of the egress unit rebuilds both policy chains and
