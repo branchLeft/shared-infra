@@ -103,6 +103,11 @@ as `install -m 0755 -o root -g root` and `-m 0644` made them.
   `/etc/systemd/system/branchleft-host-egress.service`, enabled, and run at every boot.
 - When `egress_nat_gateway_enabled` is true: `/usr/local/sbin/branchleft-nat` and
   `/etc/systemd/system/branchleft-nat.service`, enabled, and run at every boot.
+- The NAT unit retries a refused run: `Restart=on-failure` after 30 seconds, and a start limit of five
+  starts in 900 seconds (one try, four retries, about two minutes). Then the unit stays `failed` until
+  `systemctl reset-failed` or the window passes, and a restart inside the window is refused with
+  `start-limit-hit`. A rerun is safe because the program checks each rule before it inserts it.
+  Needs systemd 244 or later. The host egress unit has its own retry.
 - One `daemon-reload` of the systemd manager, only when a unit file changed.
 - One restart of a unit, only when its reconciler or its unit file changed.
 - While a replaced file is being swapped, a kept copy of it beside it, ending in `~`.
