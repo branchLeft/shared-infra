@@ -143,7 +143,6 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("ovh/copy2/stack.ts", "billed: object storage with object lock", True),
     Sample("hetzner/dns/zone.json", "dns: live zone data", True),
     # The launch page, the owner's words.
-    Sample("hetzner/edge/publicpressHolding.ts", "public: the holding page", True),
     Sample("hetzner/edge/publicpress/index.html", "public: the launch page", True),
     Sample("LICENSE", "public: the licence", True),
     Sample("sites.ts", "public: the hostname registry", True),
