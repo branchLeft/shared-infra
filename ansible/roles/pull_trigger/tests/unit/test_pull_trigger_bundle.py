@@ -961,7 +961,7 @@ class ConfigSourceTests(unittest.TestCase):
 
 
 class PullRouteUnchangedTests(unittest.TestCase):
-    """The pull route's line is frozen: same prefix, same fields, a digit for changed on a refusal."""
+    """The pull route's line is frozen: same prefix and fields, a digit on a refusal."""
 
     commit = "0123456789abcdef" * 2 + "01234567"
 
