@@ -158,7 +158,10 @@
       the tenant image pinned by digest (tenant_compose_tenant_image_pattern), the one tenant image the deploy
       wrapper verifies.
   vars:
-    tenant_compose_unverifiable: "{{ tenant_compose_verdicts.results | rejectattr('image_env', 'match', tenant_compose_tenant_image_pattern) | map(attribute='slug') | list }}"
+    tenant_compose_unverifiable: >-
+      {{ tenant_compose_verdicts.results
+      | rejectattr('image_env', 'match', tenant_compose_tenant_image_pattern)
+      | map(attribute='slug') | list }}
 
 # ----- The deliveries -----
 
