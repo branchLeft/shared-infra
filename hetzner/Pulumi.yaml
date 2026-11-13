@@ -6,8 +6,8 @@ runtime: nodejs
 # ~/.pulumi/credentials.json for every project on the machine — so a project
 # that does not name its own backend is one `pulumi login` away from being
 # operated against the wrong state, silently, by anyone who was last working
-# in a GCP-backed checkout. Every other project in this repo predates the
-# split and still relies on the login; this one does not have to.
+# in a checkout of a different backend. Every project in this repo pins its
+# own backend this way.
 #
 # The location below is the bucket's, and it is not the location the servers
 # are in — they are in `nbg1`, this bucket is in `hel1`. Object Storage is

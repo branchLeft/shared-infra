@@ -13,7 +13,7 @@ argument_specs:
     options:
       safety_service_image:
         type: str
-        default: ghcr.io/branchleft/content-safety@sha256:b091ebcff98f12378a5822cde12b72ab7ea235d4f718c43e2bbe619eb798c62a
+        default: ghcr.io/branchleft/content-safety@sha256:306cb9b35751a65de78d14ac2fd6076431270a5371d6c544e94549e4991f4b98
         description: >-
           The image the unit runs, as ghcr.io/branchleft/content-safety@sha256: and 64 lowercase
           hex digits. A tag is not a pin and is refused.

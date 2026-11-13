@@ -24,8 +24,9 @@ registry they share:
 
 A second, separate Pulumi project lives at [`mail/`](mail/) —
 `branchleft-mail`, its own `Pulumi.yaml`, own `package.json`, own stack. It
-declares the Hetzner delivery host (`mx1`) and its firewall — the reason it
-is not on GCP is that GCP blocks outbound port 25 unconditionally. It is a
+declares the Hetzner delivery host (`mx1`) and its firewall — a delivery host
+needs outbound port 25 open, which the cloud this estate used to run on (since
+destroyed) blocked unconditionally. It is a
 separate project rather than a stack of the Hetzner network/estate program,
 or resources added there, for three reasons: a different credential shape
 (Hetzner API bearer token, scoped to its own hcloud project) with nothing
@@ -82,18 +83,23 @@ whose actor is the merger, and the `ansible-hosts` environment's
 every later apply. A merge through the queue runs as `github-merge-queue[bot]`,
 and its apply can be approved.
 
+Base every pull request on `main`, never on another pull request's branch.
+`ci.yml` runs on pull requests that target `main` only, so a pull request
+based on another pull request's branch gets every check except `ci.yml`'s jobs
+(type-check, test, validate). Those have not run until it is retargeted to
+`main`.
+
 ## Related documents
 
 - [`RUNBOOK-edge-state-move.md`](RUNBOOK-edge-state-move.md) — history: one
   past Pulumi state move and its policy drift incident (appendix A). Nothing
   in it is actionable any more.
 - [`hetzner/RUNBOOK-existing-stack-migration.md`](hetzner/RUNBOOK-existing-stack-migration.md)
-  — moving every stack in the estate off the shared GCP KMS secrets provider
-  and off `gs://` state.
+  — history: the one-way move of every stack in the estate off the retired
+  shared KMS secrets provider and off `gs://` state. Every stack in
+  `scripts/pulumi-stack-inventory.json` is on the passphrase provider now.
 - `PULUMI-BACKEND-INVENTORY.md` — the state-backend enumeration across the
   repos that still have Pulumi programs.
-- `website/infra/KNOWN_ISSUES.md` — GCP/Pulumi bootstrap failure modes; that
-  repo's own infra program is a separate, later removal.
 
 ## License
 

@@ -1,8 +1,5 @@
 import { createHash } from 'node:crypto';
 
-import { PublicPressLogo, PublicPressWordmark } from '@branchleft/components';
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 
 import { hostRedirects, sites, staticSites } from '../../sites';
@@ -15,7 +12,6 @@ import {
   RATE_LIMIT_WINDOW_SECONDS,
 } from './posture';
 import type { EdgePosture } from './posture';
-import { PUBLICPRESS_ABUSE_CONTACT } from './publicpressHolding';
 import {
   renderAppsecAcquisition,
   renderCaddyfile,
@@ -34,6 +30,13 @@ import {
  * with no second tool to install and nothing that can render on one machine and
  * not another. `pnpm run render` updates them; `pnpm run test` fails if they drift.
  */
+
+/**
+ * A block kind with no entry in its registry has nothing to count. Static sites
+ * are empty today; the kind is counted again the moment an entry returns.
+ */
+const withEntries = (kinds: Array<[string, string[]]>): Array<[string, string[]]> =>
+  kinds.filter(([, addresses]) => addresses.length > 0);
 
 const DETECT_ONLY: EdgePosture = {
   crowdsec: 'detect-only',
@@ -917,9 +920,11 @@ describe('detect-only', () => {
    */
   it('is what the committed posture says, so enforcement cannot arrive by redeploy', () => {
     expect(POSTURE).toEqual({
-      // In-band AppSec only: a known-bad request shape gets a 403, and no
-      // address is banned. The IP-decision handler is the next stage.
-      crowdsec: 'inband-only',
+      // In-band AppSec and the IP-decision handler: a known-bad request shape
+      // gets a 403, and an address the checker has banned is refused ahead of
+      // the proxy. When the checker is slow or down, requests pass: see the
+      // fail-open describe below.
+      crowdsec: 'enforcing',
       // On, by the owner's ruling (2026-11-03,
       // "Turn it on") at the parity value, RATE_LIMIT_EVENTS per
       // RATE_LIMIT_WINDOW_SECONDS per direct peer address, answered 429. It
@@ -998,14 +1003,17 @@ describe("the committed posture's general throttle", () => {
     ['probe blocks', PROBE_ADDRESSES],
   ];
 
-  it.each(kinds)('puts exactly one general rate_limit in each of the %s', (_kind, addresses) => {
-    expect(addresses.length).toBeGreaterThan(0);
-    for (const address of addresses) {
-      const block = blockAt(address);
-      expect(block, `block ${address} must be rendered`).toBeDefined();
-      expect(generalCount(block!.text), `general rate_limit in ${address}`).toBe(1);
+  it.each(withEntries(kinds))(
+    'puts exactly one general rate_limit in each of the %s',
+    (_kind, addresses) => {
+      expect(addresses.length).toBeGreaterThan(0);
+      for (const address of addresses) {
+        const block = blockAt(address);
+        expect(block, `block ${address} must be rendered`).toBeDefined();
+        expect(generalCount(block!.text), `general rate_limit in ${address}`).toBe(1);
+      }
     }
-  });
+  );
 
   it('renders as many general directives as there are throttled blocks, and no more', () => {
     const expected =
@@ -1063,6 +1071,129 @@ describe("the committed posture's general throttle", () => {
   });
 });
 
+/**
+ * The committed posture's IP-decision handler and the checker's failure
+ * behaviour. Each throttled block kind is counted from the registries, never
+ * from a hard-coded total, so a block that stops calling `protectionChain`
+ * fails on its own kind. The decision on a slow or unreachable checker is
+ * "let the request through": the assertions below pin each token that makes
+ * that so, because the bouncer's default for the AppSec half is the opposite.
+ */
+describe("the committed posture's IP-decision handler", () => {
+  const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
+
+  /** Top-level blocks keyed by their address list. */
+  const blocksOf = (text: string): Array<{ addresses: string[]; text: string }> => {
+    const found: Array<{ addresses: string[]; text: string }> = [];
+    for (const chunk of text.split(/\n(?=\S.* \{\n)/)) {
+      const header = chunk.split('\n')[0] ?? '';
+      if (!header.endsWith(' {')) continue;
+      found.push({ addresses: header.slice(0, -2).split(', '), text: chunk });
+    }
+    return found;
+  };
+  const blocks = blocksOf(rendered);
+  const blockAt = (address: string) => blocks.find((block) => block.addresses.includes(address));
+
+  /** The handler only: two tabs deep, bare. The global options block is one tab deep with a brace. */
+  const HANDLER = /^\t\tcrowdsec$/gm;
+  const handlerCount = (text: string): number => (text.match(HANDLER) ?? []).length;
+
+  const servable = servableSites(sites);
+  const servableHostnames = new Set(servable.flatMap((entry) => entry.hostnames));
+  const redirects = hostRedirects.filter(
+    (redirect) => servableHostnames.has(redirect.from) && servableHostnames.has(redirect.to)
+  );
+  const redirectSources = new Set(redirects.map((redirect) => redirect.from));
+  const siteAddresses = servable
+    .map((entry) => entry.hostnames.find((hostname) => !redirectSources.has(hostname)))
+    .filter((address): address is string => address !== undefined);
+  const redirectBlockAddresses = redirects.map((redirect) => redirect.from);
+  const staticAddresses = staticSites.map((entry) => entry.hostname);
+  const PROBE_ADDRESSES = ['http://edge-probe.invalid:8080', ':8080'];
+
+  const kinds: Array<[string, string[]]> = [
+    ['servable site blocks', siteAddresses],
+    ['redirect blocks', redirectBlockAddresses],
+    ['static site blocks', staticAddresses],
+    ['probe blocks', PROBE_ADDRESSES],
+  ];
+
+  it.each(withEntries(kinds))(
+    'puts exactly one IP-decision handler in each of the %s',
+    (_kind, addresses) => {
+      expect(addresses.length).toBeGreaterThan(0);
+      for (const address of addresses) {
+        const block = blockAt(address);
+        expect(block, `block ${address} must be rendered`).toBeDefined();
+        expect(handlerCount(block!.text), `crowdsec handler in ${address}`).toBe(1);
+      }
+    }
+  );
+
+  it('renders as many handlers as there are protected blocks, and no more', () => {
+    const expected =
+      siteAddresses.length +
+      redirectBlockAddresses.length +
+      staticAddresses.length +
+      PROBE_ADDRESSES.length;
+    expect(handlerCount(rendered)).toBe(expected);
+  });
+
+  it('leaves the :9091 metrics listener without the handler', () => {
+    const metrics = blockAt(':9091');
+    expect(metrics, 'the metrics listener must be rendered').toBeDefined();
+    expect(metrics!.text).not.toMatch(/^\t+crowdsec$/m);
+  });
+
+  it('never lets a block reach AppSec or the proxy without the IP-decision handler first', () => {
+    const guarded = blocks.filter((entry) => handlerCount(entry.text) === 1);
+    expect(guarded.length).toBeGreaterThan(0);
+    for (const block of guarded) {
+      const handler = block.text.search(/^\t\tcrowdsec$/m);
+      const appsec = block.text.search(/^\t\tappsec\b/m);
+      const proxy = block.text.indexOf('reverse_proxy');
+      if (appsec !== -1) expect(handler, block.addresses[0]).toBeLessThan(appsec);
+      if (proxy !== -1) expect(handler, block.addresses[0]).toBeLessThan(proxy);
+    }
+    const unguarded = blocks.filter(
+      (entry) => /^\t\tappsec\b/m.test(entry.text) && handlerCount(entry.text) === 0
+    );
+    expect(unguarded.map((entry) => entry.addresses[0])).toEqual([]);
+  });
+
+  it('loads the in-band AppSec configuration, so the known-exploit refusal is armed', () => {
+    const configs = renderAppsecAcquisition(POSTURE)
+      .split('\n')
+      .filter((line) => line.startsWith('  - '))
+      .map((line) => line.slice(4));
+    expect(configs).toEqual(['crowdsecurity/appsec-default', 'crowdsecurity/crs']);
+  });
+
+  describe('when the checker is slow or down, the request is let through', () => {
+    const globalBlock = rendered.split('\n}\n')[0] ?? '';
+
+    it('lets a request pass when the AppSec verdict does not arrive', () => {
+      expect(globalBlock).toMatch(/^\t\tappsec_fail_open$/m);
+    });
+
+    it('bounds the wait for a verdict at one second', () => {
+      expect(globalBlock).toContain('\t\tappsec_timeout 1s\n');
+    });
+
+    it('does not turn a failure to reach the decision service into a refusal', () => {
+      // `enable_hard_fails` is the bouncer's switch for refusing when the local
+      // decision service cannot be reached. Absent, a stopped CrowdSec leaves
+      // the last decisions in force and everything else through.
+      expect(globalBlock).not.toMatch(/hard_fail/);
+    });
+
+    it('polls decisions on an interval, so the handler answers from its cache', () => {
+      expect(globalBlock).toMatch(/^\t\tticker_interval \d+s$/m);
+    });
+  });
+});
+
 describe('the CrowdSec acquisition files', () => {
   it('never publish the AppSec port beyond the Compose network', () => {
     expect(renderAppsecAcquisition(POSTURE)).toContain('listen_addr: 0.0.0.0:7422');
@@ -1084,164 +1215,96 @@ describe('the CrowdSec acquisition files', () => {
 // exercised directly above, against the rendered output; the TLS floor is
 // covered by the 'protocols tls1.2 tls1.3' assertion above too.
 
-describe('the publicpress.co.uk holding page', () => {
+describe('the publicpress.co.uk website', () => {
+  const publicpress = sites.find((entry) => entry.name === 'publicpress-website') as EdgeSite;
   const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
-  const block = () => rendered.split('\npublicpress.co.uk {')[1]?.split('\n}')[0] ?? '';
+  const enforcing = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites);
+  const blockIn = (text: string) => text.split('\npublicpress.co.uk {')[1]?.split('\n}')[0] ?? '';
+  const block = () => blockIn(rendered);
+  const lines = (text: string) => text.split('\n').map((line) => line.trim());
 
   it('serves exactly the apex hostname -- no www, no sites.* subdomain, no wildcard', () => {
+    expect(publicpress.hostnames).toEqual(['publicpress.co.uk']);
     expect(rendered).toContain('\npublicpress.co.uk {');
     expect(rendered).not.toContain('www.publicpress.co.uk');
     expect(rendered).not.toContain('sites.publicpress.co.uk');
     expect(rendered).not.toContain('*.publicpress.co.uk');
   });
 
-  it('carries the site-wide TLS floor and HSTS header, the same as every proxied site', () => {
-    expect(block()).toContain('tls {');
-    expect(block()).toContain('protocols tls1.2 tls1.3');
-    expect(block()).toContain('Strict-Transport-Security "max-age=31536000; includeSubDomains"');
+  it('proxies to the app on app1 port 8081, its own port, and answers nothing itself', () => {
+    expect(publicpress.privateUpstream).toEqual({ host: 'app1', port: 8081 });
+    expect(block()).toContain('reverse_proxy 10.20.1.100:8081');
+    expect(block().match(/reverse_proxy/g)).toHaveLength(1);
+    expect(block()).not.toMatch(/respond [^@\n]/);
+    expect(staticSites.map((entry) => entry.hostname)).not.toContain('publicpress.co.uk');
   });
 
-  it('carries a strict Content-Security-Policy refusing every external resource', () => {
-    expect(block()).toContain("Content-Security-Policy \"default-src 'none'");
-    expect(block()).toContain("connect-src 'none'");
-    expect(block()).toContain('img-src data:;');
-    expect(block()).toContain('font-src data:;');
+  it('carries the site-wide TLS floor and HSTS first in the route, ahead of the body cap and the proxy', () => {
+    expect(block()).toContain('protocols tls1.2 tls1.3');
+    const at = (needle: string) => block().indexOf(needle);
+    const hsts = at('header Strict-Transport-Security "max-age=31536000; includeSubDomains"');
+    expect(hsts).toBeGreaterThan(-1);
+    expect(hsts).toBeLessThan(at('request_body'));
+    expect(hsts).toBeLessThan(at('reverse_proxy'));
+  });
+
+  it('caps the request body at 64KiB, ahead of the proxy: the register form is a few short fields', () => {
+    expect(publicpress.requestBodyMaxSize).toBe('64KiB');
+    expect(block()).toContain('request_body {\n\t\t\tmax_size 64KiB\n\t\t}');
+    expect(block().indexOf('request_body')).toBeLessThan(block().indexOf('reverse_proxy'));
+  });
+
+  it("leaves the app's own Content-Security-Policy and response headers exactly as it sent them", () => {
+    for (const text of [block(), blockIn(enforcing)]) {
+      // HSTS is the only response header the edge sets on a proxied site.
+      const headerLines = lines(text).filter((line) => /^header\b/.test(line));
+      expect(headerLines).toEqual([
+        'header Strict-Transport-Security "max-age=31536000; includeSubDomains"',
+      ]);
+      expect(text).not.toContain('Content-Security-Policy');
+      expect(text).not.toMatch(/header_down|handle_response|\bdefer\b/);
+    }
+  });
+
+  it('carries the general throttle, CrowdSec and AppSec once the posture enforces them, all ahead of the proxy', () => {
+    const text = blockIn(enforcing);
+    for (const directive of ['rate_limit {', 'crowdsec', 'appsec\n']) {
+      expect(text).toContain(directive);
+      expect(text.indexOf(directive)).toBeLessThan(text.indexOf('reverse_proxy'));
+    }
+  });
+
+  it('shares no upstream with the branchLeft website, which keeps its own port and block', () => {
+    const website = sites.find((entry) => entry.name === 'website') as EdgeSite;
+    expect(website.privateUpstream).toEqual({ host: 'app1', port: 8080 });
+    expect(blockOf(rendered, 'branchleft.co.uk')).toContain('reverse_proxy 10.20.1.100:8080');
+    expect(blockOf(rendered, 'branchleft.co.uk')).toContain('max_size 1MiB');
+  });
+});
+
+describe('the static site mechanism, with no static site registered', () => {
+  it('ships none today: every served name is proxied', () => {
+    expect(staticSites).toEqual([]);
+  });
+
+  it('admits exactly the inline script and style of the page served, by SHA-256', () => {
+    const style = 'body{color:red}';
+    const script = 'document.title="x"';
+    const hash = (body: string) =>
+      `'sha256-${createHash('sha256').update(body, 'utf8').digest('base64')}'`;
+    const csp = staticSiteCsp(`<style>${style}</style><script>${script}</script>`);
+    expect(csp).toContain(`script-src ${hash(script)};`);
+    expect(csp).toContain(`style-src ${hash(style)};`);
   });
 
   it('refuses every font on a page whose stylesheet carries no inline data: font', () => {
     expect(staticSiteCsp('<style>body{color:red}</style>')).toContain("font-src 'none';");
   });
 
-  it("admits exactly the page's own stylesheet by the hash of the body actually served", () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const styles = [...body.matchAll(/<style>([^<]*)<\/style>/g)].map(([, css]) => css);
-    expect(styles).toHaveLength(1);
-    const expected = createHash('sha256').update(styles[0], 'utf8').digest('base64');
-    const styleSrc = /style-src ([^;]*);/.exec(block())?.[1];
-    expect(styleSrc).toBe(`'sha256-${expected}'`);
-  });
-
-  it('carries no style attribute, script, stylesheet link, image or remote URL the CSP would silently drop', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    expect(body).not.toMatch(/\sstyle=/);
-    expect(body).not.toMatch(/<(img|iframe|object)\b/);
-    const links = [...body.matchAll(/<link\b[^>]*>/g)].map(([link]) => link);
-    expect(links).toHaveLength(1);
-    expect(links[0]).toMatch(
-      /^<link rel='icon' type='image\/svg\+xml' href='data:image\/svg\+xml,/
-    );
-    expect(body).not.toMatch(/<script\s[^>]*src=/);
-    expect(body).not.toMatch(/\son[a-z]+=/);
-    // url(data:...) is the one exception: the self-hosted font, which fetches
-    // nothing, same reasoning as the data: favicon above.
-    expect(body).not.toMatch(
-      /url\((?!data:)|@import|https?:\/\/(?!www\.w3\.org\/2000\/svg'|branchleft\.co\.uk')/
-    );
-  });
-
-  it('heads the page with the outlined wordmark, named for assistive technology', () => {
-    expect(block()).toMatch(/<h1><svg [^>]*role='img' aria-label='PublicPress'>/);
-  });
-
-  it('sets body copy in the self-hosted Jost face at a readable size, Futura as its own fallback', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
-    expect(styles).toMatch(
-      /body\{[^}]*font:400 1rem\/1\.6 'Jost','Futura','Century Gothic','Avenir Next',system-ui,sans-serif\}/
-    );
-    expect(styles).toMatch(/@font-face\{font-family:'Jost';src:url\(data:font\/woff2;base64,/);
-  });
-
-  it('credits branchLeft with an inline logo mark and the word "branchLeft" in one link', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    expect(body).toMatch(
-      /<a href='https:\/\/branchleft\.co\.uk' class='bl-credit'><svg [^>]*aria-hidden='true'[^>]*>[\s\S]*?<\/svg><span>branchLeft<\/span><\/a>/
-    );
-  });
-
-  it('sets the branchLeft credit word in the self-hosted Syne wordmark face at weight 500', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
-    expect(styles).toMatch(/a\.bl-credit span\{font-family:'Syne',sans-serif;font-weight:500/);
-    expect(styles).toMatch(/@font-face\{font-family:'Syne';src:url\(data:font\/woff2;base64,/);
-  });
-
-  it('embeds the Syne face subsetted to a handful of glyphs, not the whole variable font', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const styles = /<style>([^<]*)<\/style>/.exec(body)?.[1] ?? '';
-    const [, base64] =
-      /@font-face\{font-family:'Syne';src:url\(data:font\/woff2;base64,([^)]*)\)/.exec(styles) ??
-      [];
-    expect(base64).toBeTruthy();
-    // The unsubsetted variable font this page's Syne embed is cut from is
-    // ~38KB; a ten-glyph subset should land under 10KB decoded.
-    expect(Buffer.from(base64 ?? '', 'base64').byteLength).toBeLessThan(10_000);
-  });
-
-  it("admits exactly the page's own script by the hash of the body actually served", () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const scripts = [...body.matchAll(/<script>([\s\S]*?)<\/script>/g)].map(([, js]) => js);
-    expect(scripts).toHaveLength(1);
-    const expected = createHash('sha256').update(scripts[0], 'utf8').digest('base64');
-    const scriptSrc = /script-src ([^;]*);/.exec(block())?.[1];
-    expect(scriptSrc).toBe(`'sha256-${expected}'`);
-  });
-
-  it('serves a script Caddy passes through untouched: no escape, no placeholder', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const script = /<script>([\s\S]*?)<\/script>/.exec(body)?.[1] ?? '';
-    expect(script).not.toMatch(/[\\"]/);
-    expect(script).not.toMatch(/\{[^\s]/);
-  });
-
-  it('refuses every script and image on a page that carries none', () => {
+  it('refuses every script, image and stylesheet on a page that carries none', () => {
     expect(staticSiteCsp('<p>plain</p>')).toContain("script-src 'none';");
     expect(staticSiteCsp('<p>plain</p>')).toContain("img-src 'none';");
-  });
-
-  it('serves the wordmark and favicon exactly as @branchleft/components renders them', () => {
-    const rendered = (mark: typeof PublicPressLogo) =>
-      renderToStaticMarkup(createElement(mark))
-        .replace(/ style="[^"]*"/, '')
-        .replaceAll('"', "'");
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    expect(body).toContain(`<h1>${rendered(PublicPressWordmark)}</h1>`);
-    const href = /<link rel='icon' [^>]*href='([^']*)'/.exec(body)?.[1] ?? '';
-    expect(decodeURIComponent(href.replace('data:image/svg+xml,', ''))).toBe(
-      rendered(PublicPressLogo)
-    );
-  });
-
-  it('refuses every stylesheet on a page that carries none', () => {
     expect(staticSiteCsp('<p>plain</p>')).toContain("style-src 'none';");
-  });
-
-  it('answers with an inline text/html response and no reverse_proxy at all', () => {
-    expect(block()).toContain('header Content-Type "text/html; charset=utf-8"');
-    expect(block()).toContain('respond "');
-    expect(block()).not.toContain('reverse_proxy');
-  });
-
-  it('serves the abuse contact the Public Suffix List submission needs to find on the page', () => {
-    expect(block()).toContain(`mailto:${PUBLICPRESS_ABUSE_CONTACT}`);
-    expect(block()).toContain(PUBLICPRESS_ABUSE_CONTACT);
-  });
-
-  it('sets every email address on a line of its own', () => {
-    const body = /respond "(.*)" 200/.exec(block())?.[1] ?? '';
-    const addresses = [...body.matchAll(/mailto:([^']+)'/g)].map(([, address]) => address);
-    expect(addresses).toHaveLength(3);
-    for (const address of addresses) {
-      expect(body).toContain(`<br><a href='mailto:${address}'>${address}</a></p>`);
-    }
-  });
-
-  it('carries the general throttle and AppSec once the posture enforces them', () => {
-    const enforcingBlock = renderCaddyfile(sites, hostRedirects, ENFORCING, staticSites)
-      .split('\npublicpress.co.uk {')[1]
-      ?.split('\n}')[0];
-    expect(enforcingBlock).toContain('rate_limit {');
-    expect(enforcingBlock).toContain('appsec');
   });
 
   it('refuses a static hostname an EdgeSite in the registry already proxies to', () => {
@@ -1257,6 +1320,12 @@ describe('the publicpress.co.uk holding page', () => {
       { name: 'second', hostname: 'duplicate.invalid' },
     ];
     expect(() => renderCaddyfile([], [], POSTURE, duplicate)).toThrow(/both declare/);
+  });
+
+  it('refuses a static site with no page content registered, rather than rendering an empty page', () => {
+    expect(() =>
+      renderCaddyfile([], [], POSTURE, [{ name: 'nothing-registered', hostname: 'empty.invalid' }])
+    ).toThrow(/no page content registered/);
   });
 });
 
@@ -1354,6 +1423,7 @@ const BLOG_BLOCK = `
 				events 5
 			}
 		}
+		crowdsec
 		appsec @inspected
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.100:8101
@@ -1614,7 +1684,6 @@ describe('the break-glass token in the rendered Caddyfile', () => {
   it('has several block kinds to check, so the checks below are not vacuous', () => {
     expect(siteAddresses.length).toBeGreaterThan(1);
     expect(redirectAddresses.length).toBeGreaterThan(0);
-    expect(staticAddresses.length).toBeGreaterThan(0);
   });
 
   it('filters the token out of the uri, Referer and Location in every log block', () => {

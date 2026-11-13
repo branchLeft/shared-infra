@@ -55,7 +55,7 @@ The design treats all eight as one estate. The ruling names four. That the other
 
 The ruleset on the default branch is active, with no bypass actors. It requires: deletion and non-fast-forward blocked, linear history, signed commits, a pull request with one approval, code-owner review, last-push approval and dismissal of stale reviews, squash merges only, the listed status checks, and a merge queue. Not read: organisation-level rulesets and the membership of the owner team.
 
-`.github/CODEOWNERS` gives the owner these paths: `ansible/trust/`, `ansible/roles/pull_trigger/`, `ansible_runtime`, `host_inputs`, `ci_login`, `ci_jump`, `deploy_slot_keys`, other credential roles, `ansible/checks/`, `ansible/harness/` and `.github/`. It does not give the owner the other roles, although every role runs as root.
+`.github/CODEOWNERS` gives the owner these paths: `ansible/trust/`, `ansible/roles/pull_trigger/`, `ansible_runtime`, `host_inputs`, `ci_login`, `ci_jump`, `deploy_slot_keys`, other credential roles, `ansible/checks/`, `ansible/harness/` and `.github/`. It does not give the owner the other roles, although every role runs as root, nor the version pins in `ansible/requirements.*`, nor a Markdown file other than `CLAUDE.md` and those under `.github/`. The gated apply is the control on a role edit, and its gate is the reviewer App's deployment protection rule on the `ansible-hosts` environment, which refuses the owner's classes of change.
 
 ### The delivery
 

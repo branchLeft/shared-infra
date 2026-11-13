@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import cast
 
 import jinja2
+from ansible.module_utils.common.arg_spec import ArgumentSpecValidator
 from ruamel.yaml import YAML
 
 ROLE = Path(__file__).resolve().parents[2]
@@ -29,12 +30,25 @@ DIGEST = "a" * 64
 # as a credential, and they are the proposed contract with the controller's entrypoint.
 ENV_ALLOW_LIST = [
     "RING_CONTROLLER_LEDGER_URL",
-    "RING_CONTROLLER_LEDGER_PUSH_REMOTE",
-    "RING_CONTROLLER_LEDGER_SIGNING_IDENTITY_FILE",
-    "RING_CONTROLLER_PUSH_IDENTITY_FILE",
-    "RING_CONTROLLER_KNOWN_HOSTS_FILE",
+    "RING_CONTROLLER_RECORD_SIGNING_KEY_NAME",
+    "RING_CONTROLLER_RECORD_PUBLIC_KEY_FILE",
     "RING_CONTROLLER_STATE_DIR",
 ]
+# What the role no longer has: a push key, a push remote, a pinned host key, an OpenSSH key, and
+# the program that made them. A word of one of these in a shipped file is a leftover.
+RETIRED_WORDS = (
+    "push_remote",
+    "push_known_hosts",
+    "known_hosts",
+    "PUSH_IDENTITY",
+    "SIGNING_IDENTITY",
+    "ssh-keygen",
+    "ssh_keygen",
+    "ledger-signing",
+    "ledger_key",
+    "push_key",
+    "keys_directory",
+)
 # Where the role may put a file: its own directories, its own two units, nothing else.
 ALLOWED_PREFIXES = (
     "/etc/branchleft/ring-controller",
@@ -111,6 +125,12 @@ def resolved_list(template: str) -> list[str]:
     """Return the items of a loop that is `{{ some_role_list }}` or a literal list as strings."""
     name = template.strip().removeprefix("{{").removesuffix("}}").strip()
     merged = {**role_defaults(), **role_vars()}
+    # The split loops of the units: `list | intersect(other)` and `list | difference(other)`.
+    split = re.fullmatch(r"(\w+) \| (intersect|difference)\((\w+)\)", name)
+    if split:
+        whole = [render(str(i)) for i in cast("list[object]", merged[split[1]])]
+        other = [render(str(i)) for i in cast("list[object]", merged[split[3]])]
+        return [i for i in whole if (i in other) == (split[2] == "intersect")]
     items = merged[name]
     return [render(str(item)) for item in cast("list[object]", items)]
 
@@ -271,6 +291,45 @@ class UnitFileTests(unittest.TestCase):
         self.assertIn("OnUnitInactiveSec=5min", self.timer)
         self.assertEqual(self.values("TimeoutStartSec"), ["1800"])
 
+    def test_the_key_reaches_the_account_by_one_systemd_load_and_nothing_else(self) -> None:
+        """The key wiring: systemd (root) reads the 0400 file and hands the account a copy."""
+        key_file = (
+            f"{role_vars()['ring_controller_host_record_key_directory']}/"
+            f"{role_vars()['ring_controller_host_record_key_name']}"
+        )
+        key_id = role_vars()["ring_controller_host_record_key_id"]
+        self.assertEqual(self.values("LoadCredential"), [f"{key_id}:{key_file}"])
+        # The account is never given the file on disk: no path setting of the unit names it, and
+        # no other directive hands a credential in.
+        for key, value in self.service_keys:
+            if key != "LoadCredential":
+                self.assertNotIn("record-signing", value, key)
+        for other in ("SetCredential", "ImportCredential", "LoadCredentialEncrypted"):
+            self.assertEqual(self.values(other), [], other)
+        self.assertEqual(self.values("User"), [role_vars()["ring_controller_host_account"]])
+
+    def test_the_name_the_environment_file_gives_is_the_name_the_unit_loads_the_key_under(
+        self,
+    ) -> None:
+        key_id = str(role_vars()["ring_controller_host_record_key_id"])
+        self.assertEqual(self.values("LoadCredential")[0].split(":", 1)[0], key_id)
+        text = render(ENV_TEMPLATE.read_text(encoding="utf-8"))
+        self.assertIn(f"RING_CONTROLLER_RECORD_SIGNING_KEY_NAME={key_id}\n", text)
+
+    def test_the_load_line_is_the_reason_the_service_unit_is_hidden_from_the_plan(self) -> None:
+        # The plan's secret scan reads the directive as an assignment, so the service unit's diff
+        # is hidden and the timer's is not. If the directive went, the hide would be for nothing.
+        scan = re.compile(
+            r"(passw(or)?d|passphrase|secret|token|api[_-]?key|private[_-]?key|credential)"
+            r'[A-Za-z0-9_.-]*"?\s*[:=]\s*"?[^\s"]{4,}',
+            re.IGNORECASE | re.ASCII,
+        )
+        self.assertTrue(any(scan.search(line) for line in self.service.split("\n")))
+        self.assertFalse(any(scan.search(line) for line in self.timer.split("\n")))
+        self.assertFalse(
+            any(scan.search(line) for line in ENV_TEMPLATE.read_text("utf-8").split("\n"))
+        )
+
 
 class EnvironmentFileTests(unittest.TestCase):
     """The unit's environment is an exact allow-list of names, all public."""
@@ -283,7 +342,6 @@ class EnvironmentFileTests(unittest.TestCase):
             text,
             {
                 "ring_controller_host_ledger_url": "https://example.test/ledger",
-                "ring_controller_host_ledger_push_remote": "ssh://git@example.test/org/repo.git",
             },
         )
 
@@ -322,30 +380,60 @@ class TaskTests(unittest.TestCase):
     """The tasks keep the key material hidden, touch only the role's paths and refuse early."""
 
     def test_the_key_module_task_is_hidden_and_its_diff_is_off_and_it_is_the_only_one(self) -> None:
-        users = [t for t in tasks() if module_of(t) == "ring_controller_host_keys"]
+        users = [t for t in tasks() if module_of(t) == "ring_controller_host_record_key"]
         self.assertEqual(len(users), 1)
         task = users[0]
         self.assertIs(task.get("no_log"), True)
         self.assertIs(task.get("diff"), False)
         self.assertNotIn("block", task)
+        self.assertEqual(
+            args_of(task),
+            {
+                "directory": "{{ ring_controller_host_record_key_directory }}",
+                "public_file": "{{ ring_controller_host_record_public_file }}",
+            },
+        )
 
     def test_the_hide_is_not_loosened_by_a_task_that_unhides_it_or_prints_the_result(self) -> None:
         text = (ROLE / "tasks" / "main.yml").read_text(encoding="utf-8")
         self.assertNotRegex(text, r"no_log:\s*(false|no)")
         self.assertNotRegex(text, r"diff:\s*(true|yes)")
-        # The only readers of the module's result are the refusal assert and the two debug
-        # lines, and they name the public fields only.
-        uses = re.findall(r"ring_controller_host_keys_result\.([a-z_]+)", text)
-        self.assertEqual(
-            sorted(set(uses)),
-            [
-                "ledger_signing_fingerprint",
-                "ledger_signing_public",
-                "msg",
-                "push_fingerprint",
-                "push_public",
-            ],
-        )
+        # The only readers of the module's result are the refusal assert, the public copy and the
+        # debug line, and they name the public field and the refusal message only.
+        uses = re.findall(r"ring_controller_host_record_key_result\.([a-z_]+)", text)
+        self.assertEqual(sorted(set(uses)), ["msg", "public_key"])
+
+    def test_the_role_never_names_the_private_file_outside_the_module_task(self) -> None:
+        """Only the module reads the key: no stat, copy, file or fact of any task names it."""
+        for task in tasks():
+            if module_of(task) == "ring_controller_host_record_key":
+                continue
+            text = str(task)
+            self.assertNotIn("record_key_name", text, task.get("name"))
+            self.assertNotIn("record_key_directory", text, task.get("name"))
+            self.assertNotIn("record-signing.key", text, task.get("name"))
+
+    def test_the_public_half_is_written_world_readable_from_the_modules_result(self) -> None:
+        task = named("Write the public half")
+        self.assertEqual(module_of(task), "copy")
+        args = args_of(task)
+        self.assertEqual(args["content"], "{{ ring_controller_host_record_key_result.public_key }}")
+        self.assertEqual(args["dest"], "{{ ring_controller_host_record_public_file }}")
+        self.assertEqual(args["owner"], "root")
+        self.assertEqual(args["mode"], "{{ ring_controller_host_record_public_mode }}")
+        self.assertEqual(role_vars()["ring_controller_host_record_public_mode"], "0444")
+        # A plan on a fresh host cannot know it, and must not fail for it.
+        self.assertIn("length > 0", str(task["when"]))
+
+    def test_the_key_is_made_after_the_directory_it_sits_in_and_before_the_units(self) -> None:
+        names = [str(t.get("name")) for t in tasks()]
+        made = names.index(str(named("Make the directories the role owns").get("name")))
+        key = names.index(str(named("Make the record-signing key").get("name")))
+        public = names.index(str(named("Write the public half").get("name")))
+        unit = names.index(str(named("Install the unit whose diff").get("name")))
+        self.assertLess(made, key)
+        self.assertLess(key, public)
+        self.assertLess(public, unit)
 
     def test_no_task_runs_a_program_reads_a_key_or_looks_up_a_file(self) -> None:
         for task in tasks():
@@ -355,7 +443,7 @@ class TaskTests(unittest.TestCase):
         for task in tasks():
             if module_of(task) == "stat":
                 target = str(args_of(task).get("path", ""))
-                self.assertNotIn("keys_directory", target)
+                self.assertNotIn("record_key", target)
                 self.assertNotIn("key_name", target)
                 self.assertIs(args_of(task).get("get_checksum"), False, task.get("name"))
 
@@ -398,11 +486,11 @@ class TaskTests(unittest.TestCase):
     def test_the_inputs_are_refused_before_anything_changes(self) -> None:
         changing = {
             "group", "user", "file", "copy", "template", "get_url", "unarchive",
-            "systemd_service", "ring_controller_host_keys",
+            "systemd_service", "ring_controller_host_record_key",
         }  # fmt: skip
         first_change = next(i for i, t in enumerate(tasks()) if module_of(t) in changing)
         before = tasks()[:first_change]
-        self.assertGreaterEqual(len([t for t in before if module_of(t) == "assert"]), 9)
+        self.assertGreaterEqual(len([t for t in before if module_of(t) == "assert"]), 5)
         # And every input is read by an assert before the group is made.
         text = "\n".join(str(t) for t in before)
         for name in role_defaults():
@@ -450,15 +538,37 @@ class TaskTests(unittest.TestCase):
         self.assertEqual(timer["name"], "{{ ring_controller_host_timer_unit }}")
 
     def test_the_units_are_static_files_copied_not_templated(self) -> None:
-        install = named("Install the service and timer units")
-        self.assertEqual(module_of(install), "copy")
-        self.assertNotIn("content", args_of(install))
+        for start in ("Install the unit whose diff", "Install the other units"):
+            install = named(start)
+            self.assertEqual(module_of(install), "copy", start)
+            self.assertNotIn("content", args_of(install), start)
         self.assertEqual(
             [
                 render(str(i))
                 for i in cast("list[object]", role_vars()["ring_controller_host_units"])
             ],
             [SERVICE.name, TIMER.name],
+        )
+
+    def test_the_service_unit_alone_is_hidden_from_the_plan_and_the_timer_is_shown(self) -> None:
+        hidden = named("Install the unit whose diff")
+        shown = named("Install the other units")
+        self.assertIs(hidden.get("diff"), False)
+        self.assertNotIn("diff", shown)
+        self.assertEqual(
+            hidden["loop"],
+            "{{ ring_controller_host_units | intersect(ring_controller_host_units_hidden) }}",
+        )
+        self.assertEqual(
+            shown["loop"],
+            "{{ ring_controller_host_units | difference(ring_controller_host_units_hidden) }}",
+        )
+        self.assertEqual(
+            [
+                render(str(i))
+                for i in cast("list[object]", role_vars()["ring_controller_host_units_hidden"])
+            ],
+            [SERVICE.name],
         )
 
     def test_the_account_is_a_system_account_that_cannot_log_in(self) -> None:
@@ -535,19 +645,52 @@ class InterfaceTests(unittest.TestCase):
             ):
                 self.assertIsNone(pattern.match(bad), bad)
 
-    def test_the_push_remote_is_one_ssh_git_remote_with_no_repository_hard_coded(self) -> None:
-        pattern = self.pattern("ring_controller_host_push_remote_pattern")
-        self.assertTrue(pattern.match("ssh://git@example.test/org/repo.git"))
-        self.assertTrue(pattern.match("ssh://git@example.test:2222/org/repo.git"))
-        for bad in (
-            "ssh://root@example.test/org/repo.git",
-            "ssh://git@example.test/org/repo",
-            "git@example.test:org/repo.git",
-            "https://example.test/org/repo.git",
-            "ssh://git@example.test/org/repo.git\n",
-            "ssh://git@example.test/org/repo.git --upload-pack=x",
+    def test_the_role_takes_exactly_three_inputs_and_none_of_them_is_a_push_input(self) -> None:
+        spec = cast(
+            "dict[str, dict[str, dict[str, dict[str, dict[str, object]]]]]",
+            load(ROLE / "meta" / "argument_specs.yml"),
+        )["argument_specs"]["main"]["options"]
+        self.assertEqual(
+            sorted(spec),
+            [
+                "ring_controller_host_bundle_sha256",
+                "ring_controller_host_bundle_url",
+                "ring_controller_host_ledger_url",
+            ],
+        )
+
+    def test_an_old_push_input_is_refused_by_the_argument_spec_as_ansible_reads_it(self) -> None:
+        """The refusal control: put either option back into the spec and this goes red."""
+        spec = cast(
+            "dict[str, dict[str, dict[str, dict[str, dict[str, object]]]]]",
+            load(ROLE / "meta" / "argument_specs.yml"),
+        )["argument_specs"]["main"]["options"]
+        validator = ArgumentSpecValidator(spec)
+        self.assertEqual(validator.validate({}).error_messages, [])
+        for old in (
+            "ring_controller_host_ledger_push_remote",
+            "ring_controller_host_push_known_hosts",
         ):
-            self.assertIsNone(pattern.match(bad), bad)
+            with self.subTest(old=old):
+                result = validator.validate({old: "any text"})
+                self.assertEqual(len(result.error_messages), 1)
+                self.assertEqual(set(result.unsupported_parameters), {old})
+
+    def test_no_shipped_file_names_a_retired_push_input_or_key_tool(self) -> None:
+        # Every file of the role except its tests, which name the words to look for them.
+        skipped = {"tests", "__pycache__", ".mypy_cache", ".ruff_cache"}
+        scanned = 0
+        for path in sorted(ROLE.rglob("*")):
+            if not path.is_file() or skipped & set(path.relative_to(ROLE).parts):
+                continue
+            scanned += 1
+            text = path.read_text(encoding="utf-8")
+            for word in RETIRED_WORDS:
+                with self.subTest(file=str(path.relative_to(ROLE)), word=word):
+                    self.assertNotIn(word, text)
+        self.assertGreater(scanned, 20)
+
+    def test_no_shipped_file_names_a_repository_or_an_organisation(self) -> None:
         # The shipped text files only: not the tests, the scenarios or what a tool caches.
         skipped = {"tests", "molecule", "__pycache__", ".mypy_cache", ".ruff_cache"}
         for path in ROLE.rglob("*"):
@@ -555,23 +698,6 @@ class InterfaceTests(unittest.TestCase):
                 self.assertNotRegex(
                     path.read_text(encoding="utf-8"), r"promotion-ledger|branchLeft/"
                 )
-
-    def test_a_known_hosts_line_is_one_host_one_type_and_one_key(self) -> None:
-        pattern = self.pattern("ring_controller_host_known_hosts_pattern")
-        key = "AAAAC3NzaC1lZDI1NTE5AAAAIA=="
-        for good in (
-            f"example.test ssh-ed25519 {key}",
-            f"[example.test]:2222,203.0.113.4 ssh-ed25519 {key}",
-        ):
-            self.assertTrue(pattern.match(good), good)
-        for bad in (
-            f"example.test ssh-ed25519 {key}\nother ssh-ed25519 {key}",
-            f"example.test ssh-ed25519 {key} comment",
-            f"example.test ssh-dss {key}",
-            f"@cert-authority example.test ssh-ed25519 {key}",
-            f"example.test ssh-ed25519 {key}\n",
-        ):
-            self.assertIsNone(pattern.match(bad), bad)
 
 
 if __name__ == "__main__":

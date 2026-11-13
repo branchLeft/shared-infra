@@ -416,28 +416,29 @@ own README says. `ansible/checks/check_secret_no_log.py` derives this table from
 argument specs and the rows, and fails (R3) when a row is missing, extra, or has the
 wrong source. To add a secret option, add its row here.
 
-| Role               | Option                                    | Source on a pulled host   |
-| ------------------ | ----------------------------------------- | ------------------------- |
-| `backup_worker`    | `backup_worker_db_password`               | host_inputs: ops1         |
-| `backup_worker`    | `backup_worker_s3_access_key_id`          | host_inputs: ops1         |
-| `backup_worker`    | `backup_worker_s3_secret_access_key`      | host_inputs: ops1         |
-| `ci_jump`          | `ci_jump_user`                            | host_inputs: edge1, edget |
-| `control_plane`    | `control_plane_env_content`               | none                      |
-| `control_plane`    | `control_plane_masterkey`                 | none                      |
-| `db1_stack`        | `db1_stack_exporter_password`             | host_inputs: db1          |
-| `monitoring_stack` | `monitoring_stack_alert_recipient_email`  | host_inputs: edge1        |
-| `monitoring_stack` | `monitoring_stack_grafana_admin_password` | host_inputs: edge1        |
-| `monitoring_stack` | `monitoring_stack_healthchecks_ping_url`  | host_inputs: edge1        |
-| `monitoring_stack` | `monitoring_stack_mailhost_ping_url`      | host_inputs: edge1        |
-| `monitoring_stack` | `monitoring_stack_smtp_password`          | host_inputs: edge1        |
-| `monitoring_stack` | `monitoring_stack_smtp_username`          | host_inputs: edge1        |
-| `monitoring_stack` | `monitoring_stack_snds_data_url`          | host_inputs: edge1        |
-| `ntfy_pager`       | `ntfy_pager_machine_password_hash`        | host_inputs: edge1        |
-| `ntfy_pager`       | `ntfy_pager_owner_password_hash`          | host_inputs: edge1        |
-| `ntfy_pager`       | `ntfy_pager_pager_token`                  | host_inputs: edge1        |
-| `ntfy_pager`       | `ntfy_pager_watcher_token`                | host_inputs: edge1        |
-| `typed_module`     | `typed_module_token`                      | none                      |
-| `website_app1`     | `website_app1_smtp_password`              | host_inputs: app1         |
+| Role                       | Option                                    | Source on a pulled host   |
+| -------------------------- | ----------------------------------------- | ------------------------- |
+| `backup_worker`            | `backup_worker_db_password`               | host_inputs: ops1         |
+| `backup_worker`            | `backup_worker_s3_access_key_id`          | host_inputs: ops1         |
+| `backup_worker`            | `backup_worker_s3_secret_access_key`      | host_inputs: ops1         |
+| `ci_jump`                  | `ci_jump_user`                            | host_inputs: edge1, edget |
+| `control_plane`            | `control_plane_env_content`               | none                      |
+| `control_plane`            | `control_plane_masterkey`                 | none                      |
+| `db1_stack`                | `db1_stack_exporter_password`             | host_inputs: db1          |
+| `monitoring_stack`         | `monitoring_stack_alert_recipient_email`  | host_inputs: edge1        |
+| `monitoring_stack`         | `monitoring_stack_grafana_admin_password` | host_inputs: edge1        |
+| `monitoring_stack`         | `monitoring_stack_healthchecks_ping_url`  | host_inputs: edge1        |
+| `monitoring_stack`         | `monitoring_stack_mailhost_ping_url`      | host_inputs: edge1        |
+| `monitoring_stack`         | `monitoring_stack_smtp_password`          | host_inputs: edge1        |
+| `monitoring_stack`         | `monitoring_stack_smtp_username`          | host_inputs: edge1        |
+| `monitoring_stack`         | `monitoring_stack_snds_data_url`          | host_inputs: edge1        |
+| `ntfy_pager`               | `ntfy_pager_machine_password_hash`        | host_inputs: edge1        |
+| `ntfy_pager`               | `ntfy_pager_owner_password_hash`          | host_inputs: edge1        |
+| `ntfy_pager`               | `ntfy_pager_pager_token`                  | host_inputs: edge1        |
+| `ntfy_pager`               | `ntfy_pager_watcher_token`                | host_inputs: edge1        |
+| `publicpress_website_app1` | `publicpress_website_app1_smtp_password`  | none                      |
+| `typed_module`             | `typed_module_token`                      | none                      |
+| `website_app1`             | `website_app1_smtp_password`              | host_inputs: app1         |
 
 ## The secret names the services will need
 
@@ -638,8 +639,7 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after 
 approval of its protected environment. A plan job shows each host's diff in check
 mode first; after the approval the host pulls that exact commit of `main` and applies
 it, and a second run must report zero changes. Nothing is applied from a laptop. This
-pattern is not applied to any host: it exists to be copied, and the trigger and the
-reusable workflow are separate work.
+pattern is not applied to any host: it exists to be copied.
 
 The plan job's diff is the reason `diff: false` is in the recipe: a job summary is
 read by everyone who can see the run. How the value reaches the play on a host that

@@ -19,3 +19,10 @@ argument_specs:
           space-separated IP addresses and CIDR ranges. The default exempts
           loopback and edge1's private address. Changing it changes only the
           ignoreip line of the jail.
+      host_baseline_fail2ban_ignoreip_none:
+        type: bool
+        default: false
+        description: >-
+          Set true, on one host, to write the jail with no ignoreip line at all.
+          Unset (false) keeps the ignore list. The input is still checked, so
+          an empty host_baseline_fail2ban_ignoreip refuses either way.

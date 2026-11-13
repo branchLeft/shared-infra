@@ -1,0 +1,176 @@
+---
+# Internal to the role. Delivers the receiver in the order it needs: its state directory is
+# made and given to the container's account, the compose file is placed, a drop-in orders the
+# stack's unit after, and bound to, the drain-port rule's unit, the image pin the deploy
+# wrapper writes is looked at, and the unit is enabled and, when the pin is there, started.
+# The role never writes the pin: only the deploy wrapper does, and it needs this compose file
+# on the host first, so a host without a pin is delivered everything but a start.
+
+# The one writable place of the container. Owned by the fixed account and closed to every
+# other: the receiver's queue and replay set are kept here.
+- name: Create the state directory and give it to the container's account
+  ansible.builtin.file:
+    path: '{{ sweego_receiver_state_dir }}'
+    state: directory
+    owner: '{{ sweego_receiver_uid }}'
+    group: '{{ sweego_receiver_gid }}'
+    mode: '0750'
+
+- name: Create the project directory
+  ansible.builtin.file:
+    path: '{{ sweego_receiver_project_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# In check mode the directory does not exist yet on a host that has not had the receiver, and
+# copy refuses a destination whose directory is missing, so the copy is skipped there and the
+# plan shows the directory alone (ANS-10).
+- name: Look at the project directory
+  ansible.builtin.stat:
+    path: '{{ sweego_receiver_project_dir }}'
+    follow: false
+  register: sweego_receiver_project_stat
+
+# The diff is not shown (ANS-16): the file names the environment variables that hold the paths
+# of the secret files, and the plan's secret scan would withhold the whole plan of the host over
+# those names. It holds no secret value, only the paths. There is no validate: here. The offline
+# render validates this template with the table validator for compose files, and _compose_check
+# has already parsed it and held it to its posture at the plan.
+- name: Place the compose file
+  ansible.builtin.template:
+    src: compose.yml.j2
+    dest: '{{ sweego_receiver_compose_dest }}'
+    owner: root
+    group: root
+    mode: '0644'
+  register: sweego_receiver_compose
+  when: sweego_receiver_project_stat.stat.exists
+  diff: false
+
+# Compose merges compose.override.yml over compose.yml when both sit in the project directory,
+# without the checks above. None is expected; one is refused.
+- name: Look for a compose override file in the project directory
+  ansible.builtin.find:
+    paths: '{{ sweego_receiver_project_dir }}'
+    patterns:
+      - compose.override.y*ml
+      - docker-compose.override.y*ml
+    file_type: any
+  register: sweego_receiver_overrides
+  when: sweego_receiver_project_stat.stat.exists
+
+- name: Refuse a project directory that holds a compose override file
+  ansible.builtin.assert:
+    that:
+      - sweego_receiver_overrides.files | default([]) | length == 0
+    quiet: true
+    fail_msg: >-
+      The project directory holds a compose override file, which Compose would merge into the
+      stack without the checks of this role. Remove it: {{ sweego_receiver_overrides.files | default([]) | map(attribute='path') | list }}.
+  when: sweego_receiver_project_stat.stat.exists
+
+- name: Look at the compose file on the host
+  ansible.builtin.stat:
+    path: '{{ sweego_receiver_compose_dest }}'
+    follow: false
+  register: sweego_receiver_compose_now
+
+# The drop-in makes systemd start the receiver only with the drain-port rule loaded, and
+# restart it whenever the rule's unit is restarted. It sits beside the shared template unit,
+# which this role never writes.
+- name: Create the drop-in directory of the receiver's unit
+  ansible.builtin.file:
+    path: '{{ sweego_receiver_dropin_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Order the receiver's unit after, and bind it to, the drain-port rule's unit
+  ansible.builtin.copy:
+    content: '{{ sweego_receiver_dropin_content }}'
+    dest: '{{ sweego_receiver_dropin_dest }}'
+    owner: root
+    group: root
+    mode: '0644'
+  register: sweego_receiver_dropin
+  notify: Reload systemd manager
+
+- name: Make systemd read the drop-in before the unit is enabled
+  ansible.builtin.meta: flush_handlers
+
+# The pin is looked at, never written. In a plan on a host where the compose file is not
+# there yet the unit has nothing to start, so the reads below run only where it is.
+- name: Look at the image pin file
+  ansible.builtin.stat:
+    path: '{{ sweego_receiver_image_env_path }}'
+    follow: false
+  register: sweego_receiver_image_env_stat
+
+- name: Read the image pin file
+  ansible.builtin.slurp:
+    src: '{{ sweego_receiver_image_env_path }}'
+  register: sweego_receiver_image_env_raw
+  when: sweego_receiver_image_env_stat.stat.exists
+
+- name: Refuse an image pin file that is not one IMAGE line holding a digest-pinned image
+  ansible.builtin.assert:
+    that:
+      - (sweego_receiver_image_env_raw.content | ansible.builtin.b64decode).splitlines() | length == 1
+      - (sweego_receiver_image_env_raw.content | ansible.builtin.b64decode).splitlines() | first is ansible.builtin.match(sweego_receiver_image_env_pattern)
+    quiet: true
+    fail_msg: >-
+      {{ sweego_receiver_image_env_path }} is not exactly one IMAGE=<name>@sha256:<64 hex digits> line.
+      The shared compose unit reads it, and the deploy wrapper rewrites it. A tag alone can move.
+  when: sweego_receiver_image_env_stat.stat.exists
+
+# Enabled once the compose file is really on disk, so the receiver comes up at boot after the
+# rule. Enabling starts nothing.
+- name: Enable the receiver's unit for boot
+  ansible.builtin.systemd_service:
+    name: '{{ sweego_receiver_compose_unit }}'
+    enabled: true
+  register: sweego_receiver_unit_enable
+  when: sweego_receiver_compose_now.stat.exists
+
+# restart, not start, when the file the stack is made of changed: the unit is a RemainAfterExit
+# oneshot, so a start of an active unit does nothing. A restart reruns `up -d --wait`, which
+# recreates only a service whose configuration changed. Only with a pin: the unit asserts it.
+- name: Restart the receiver's unit because its compose file or drop-in changed
+  ansible.builtin.systemd_service:
+    name: '{{ sweego_receiver_compose_unit }}'
+    state: restarted
+  when:
+    - sweego_receiver_compose_now.stat.exists
+    - sweego_receiver_image_env_stat.stat.exists
+    - (sweego_receiver_compose.changed | default(false)) or sweego_receiver_dropin.changed
+
+# A unit that was not started on an earlier run, or failed, is not active and nothing above
+# touched it. On an active unit this does nothing.
+- name: Start the receiver's unit if it is not active
+  ansible.builtin.systemd_service:
+    name: '{{ sweego_receiver_compose_unit }}'
+    state: started
+  register: sweego_receiver_unit_start
+  when:
+    - sweego_receiver_compose_now.stat.exists
+    - sweego_receiver_image_env_stat.stat.exists
+
+# What a real run would still change.
+- name: Work out whether this run changes the receiver
+  ansible.builtin.set_fact:
+    sweego_receiver_stack_pending: >-
+      {{ (sweego_receiver_compose.changed | default(false)) or sweego_receiver_dropin.changed
+      or not sweego_receiver_compose_now.stat.exists
+      or (sweego_receiver_unit_enable.changed | default(false))
+      or (sweego_receiver_unit_start.changed | default(false)) }}
+
+- name: Report in check mode that the receiver would be delivered or started
+  ansible.builtin.command:
+    argv:
+      - /bin/true
+  changed_when: true
+  check_mode: false
+  when: ansible_check_mode and (sweego_receiver_stack_pending | bool)

@@ -1,8 +1,7 @@
 # node_exporter
 
 This role installs Prometheus's `node_exporter` on a host, as a native binary and a
-systemd unit bound to the host's own estate-subnet address. It replaces
-`hetzner/provision/40-install-node-exporter.sh`, with the same unit file, and the
+systemd unit bound to the host's own estate-subnet address. It replaces the
 install steps (sections 1 to 3) of the db1 node_exporter runbook.
 
 It is native, not a Compose service, because ops1 runs the `DOCKER-USER` policy

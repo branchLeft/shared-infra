@@ -55,7 +55,13 @@ and no address is banned, because the IP-decision handler stays out of the
 route.
 
 `enforcing` adds the in-band AppSec configuration and the IP-decision
-handler.
+handler. It is the committed value.
+
+In every posture a slow or unreachable checker lets the request through: the
+AppSec verdict is bounded (`appsec_timeout`) and then waived
+(`appsec_fail_open`), and the bouncer's hard-fail switch is never rendered, so
+a stopped CrowdSec leaves the last decisions in force rather than refusing
+traffic. `render.test.ts` pins each of those three.
 
 ## rateLimit
 
@@ -71,7 +77,7 @@ hostname: no per-site or per-path exemption.
 
 It throttles every block built through `protectionChain` in `render.ts`: the
 servable site blocks, the redirect blocks (zone `<site>_redirect_per_ip`),
-the static blocks (the `publicpress.co.uk` holding page), and both probe
+the static blocks (none registered today), and both probe
 blocks (`probe_host_per_ip`, `probe_per_ip`). Only the `:9091` metrics
 listener is exempt, because `metricsBlock` never calls `protectionChain`.
 

@@ -7,9 +7,8 @@ running the four packages cloud-init installed and nothing else: **no
 wrapper**, with SSH on the public interface. Treat the gap between creation
 and this runbook as the exposure it is, and close it in the same session.
 
-Nothing automates this today. It is a deliberate ordering rather than an
-omission — the deploy account this installs does not exist until it has run,
-so the first run cannot come from the deploy path it bootstraps.
+The first run is by hand: the deploy account this installs does not exist until
+it has run, so the first run cannot come from the deploy path it bootstraps.
 
 **A host with no public address needs the estate's egress path to exist first,
 and to have existed before the host was created.** "The estate's egress path"
@@ -33,6 +32,22 @@ than a step inside it.
 re-running the set is a no-op on a host that is already correct, which is what
 makes this the right response to "I am not sure whether that host is current".
 
+`/root/platform-provision` on a host is a staging directory: a copy of
+`hetzner/provision/` there changes nothing live. A script takes effect only when
+it is run, so `branchleft-deploy` on a host is as current as the last run of
+`30-install-deploy-tooling.sh` (or of the `deploy_tooling` role that installs
+the same file), whatever the staging directory holds. A host can
+be current for one script and stale for another, so ask which script's installed
+file differs, not whether the host is stale.
+
+`05-configure-host-egress.sh` and `app-host-isolation.sh` end with a
+`systemctl restart` of their unit, so what the reconciler prints (a `no-op`
+line, the rules it inserted) goes to the journal and not to the installer's
+output, which shows only its own `wrote`, `no-op` and `done` lines. The
+installers run under `set -euo pipefail`, so a failed restart stops them before
+`done`: a `done` line is the success signal. Read the reconciler's lines with
+`journalctl -u <unit> --no-pager -n 20`.
+
 `nat-gateway.sh` is deliberately outside `run-all.sh`. Exactly one host in the
 estate is the gateway, and the script refuses to run anywhere the estate's
 egress could not work from. On edge1, the gateway, the `egress_nat` role
@@ -42,7 +57,7 @@ runs the script there by hand; the script stays as code.
 `app-host-isolation.sh` is deliberately outside `run-all.sh` too, for the
 matching reason: it is scoped to app hosts, and its reconciler
 (`branchleft_docker_user_policy.sh`) refuses to run on the gateway rather than
-relying on nobody ever pointing it there. See "5. Confine tenant containers on
+relying on nobody ever pointing it there. See "6. Confine tenant containers on
 each app host" below.
 
 ## The estate's egress path
@@ -89,7 +104,7 @@ first boot and `run-all.sh` actually taking over the same job permanently.
 
 Verify it on a host that has already had `run-all.sh` run — this has no
 public address of its own, so it needs the same gateway jump as every other
-command reaching it (`db1` and `ops1` are the two such hosts today).
+command reaching it.
 Neither address is typed in: each comes from a lookup run once, in the same
 session, ahead of the command that consumes it.
 
@@ -121,7 +136,9 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 ```
 
 Expect a `default` line via the private gateway, `enabled`, and the two
-Hetzner nameservers. A host created before this fix existed, and not yet
+Hetzner nameservers. `ip route show default` exits 0 and prints nothing when the
+host has no default route, so an empty first line is the failure, not a swallowed
+error. A host created before this fix existed, and not yet
 re-provisioned with it, loses the route on every reboot until `run-all.sh` is
 re-run; the immediate one-line repair, run on the host itself, derives the
 gateway the same way the reconciler does rather than restating an address
@@ -398,10 +415,9 @@ drop-in. The edge1 playbook runs both roles on each gated apply, so this step
 has no command of its own. Until that gated apply has run on a freshly rebuilt
 host, the host has the template and no override.
 
-Doc 14 §3.1 keeps monitoring co-located on `edge1` until TENANT_1, so
-`edge1` is the only host carrying a committed drop-in today — re-check that
-split before this step is reused once a standalone monitoring host exists.
-Neither drop-in takes effect until its unit next starts or restarts: see
+`edge1` carries the edge and monitoring drop-ins; `ops1` carries the Nextcloud
+drop-in (`hetzner/nextcloud1/systemd/`).
+Neither edge1 drop-in takes effect until its unit next starts or restarts: see
 `RUNBOOK-monitoring.md` step 6 (`edge`) and step 7a (`monitoring`).
 
 ### 5. Provision a host that has no public address
@@ -456,10 +472,8 @@ reconciler by the `egress_nat` role as the Ansible host `edget`. One gateway
 per network is the rule, not one in the estate: a second gateway on the same
 network loops that network's egress. The same ordering applies as for edge1 —
 the route and the forwarding must be live before a private-only host in that
-project is created, and `db-t1` stays off (`dbt1Enabled`) until they are. The
-forwarding has only been proven with Docker's FORWARD chain on edge1; prove it
-on `edge-t` with Docker running before `db-t1`'s first boot, and record the
-result in the change that brings up `db-t1`. The proof is scripted, from a network
+project is created. The proof that the forwarding holds with Docker running on
+`edge-t` is scripted, from a network
 namespace on `edge-t` itself, which costs nothing: `tenants/RUNBOOK-edget-gateway-proof.md`
 runs it, with the red case (the masquerade deleted, then restored) and the SSH
 refusal probe.
@@ -540,9 +554,9 @@ that needs an `INPUT` rule with a different blast radius and is out of scope
 here. Traffic to `169.254.169.254` _is_ forwarded, so that half of the drop
 is real.
 
-Run it the same way as step 5, on each app host. `app1`, at `10.20.1.100`, is
-the only one that exists today; the command is otherwise unchanged for a
-future `app2`/`app3`, substituting that host's own private IP. `$EDGE1_IPV4`
+Run it the same way as step 5, on each app host. The command below is for
+`app1`, at `10.20.1.100`; for any other app host it is unchanged apart from
+that host's own private IP. `$EDGE1_IPV4`
 is set under step 2 above; re-set it first if you are entering here
 independently:
 
@@ -819,7 +833,7 @@ because its `authorized_keys` entry is rendered rather than appended and the
 append-then-remove ordering below would not apply.
 
 The programme accepts a long-lived SSH deploy key in GitHub Actions secrets —
-a weaker posture than the federated identity the GCP stacks use — on the
+a weaker posture than a federated identity would give — on the
 condition that rotation is a documented procedure rather than an intention.
 This is that procedure.
 

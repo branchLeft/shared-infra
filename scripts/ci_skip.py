@@ -34,6 +34,7 @@ UNITS: dict[str, tuple[str, ...]] = {
     "monitoring-config-validate": ("hetzner/monitoring/", "hetzner/RUNBOOK-monitoring.md"),
     "nextcloud1-config-validate": ("hetzner/nextcloud1/",),
     "shim-image-starts": ("mail/provision/",),
+    "ovh-copy2-checks": ("ovh/copy2/",),
     "control-plane-config-validate": (
         "hetzner/control-plane/",
         "hetzner/provision/stack_keys_check.py",
@@ -63,6 +64,7 @@ ZONES: tuple[str, ...] = (
     "hetzner/",
     "hetzner-host/",
     "mail/",
+    "ovh/",
     "scripts/",
     ".github/",
     ".claude/",

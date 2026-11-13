@@ -46,6 +46,13 @@ describe('the checked-in zone', () => {
     }
   });
 
+  it('lets mx1 receive and send for the blog subdomain, and nothing else send as it', () => {
+    expect(find('blog', 'MX')).toEqual(['10 mx1.branchleft.co.uk.']);
+    const [mx1v4] = find('mx1', 'A');
+    const [mx1v6] = find('mx1', 'AAAA');
+    expect(find('blog', 'TXT')).toEqual([`"v=spf1 ip4:${mx1v4} ip6:${mx1v6} -all"`]);
+  });
+
   it('gives every rrset a distinct resource name', () => {
     const names = spec.rrsets.map((r) => rrsetResourceName(r));
     expect(new Set(names).size).toBe(names.length);
@@ -150,6 +157,8 @@ const BRANCHLEFT_RESOURCE_NAMES = [
   '_dmarc-txt',
   '_domainconnect-cname',
   'blog-a',
+  'blog-mx',
+  'blog-txt',
   'book-a',
   'cloud-a',
   'console-a',
@@ -253,6 +262,7 @@ const PUBLICPRESS_CARRIED: RrsetSpec[] = [
   { name: 'portal', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
   { name: 's1-ionos._domainkey', type: 'CNAME', ttl: 3600, values: ['s1.dkim.ionos.com.'] },
   { name: 's2-ionos._domainkey', type: 'CNAME', ttl: 3600, values: ['s2.dkim.ionos.com.'] },
+  { name: 'sites', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
 ];
 
 describe('the publicpress.co.uk zone holds exactly the records IONOS holds', () => {

@@ -32,6 +32,8 @@
 # against its pinned digest, so a file whose bytes differ fails the apply. Check mode
 # writes no file, so on a fresh host there is nowhere for a fetch to write; the fetches
 # are skipped in check mode and run for real.
+# Mode 0755, not 0644: tenant_compose runs the program directly as argv and asserts that it is
+# executable, so a 0644 program fails that host closed. The pinned blob is 100755 at the commit.
 - name: Fetch the tenant volume program from ghost-platform
   ansible.builtin.get_url:
     url: '{{ tenant_onboarding_ghost_raw_base }}/app/provision/provision_tenant_volume.py'
@@ -39,7 +41,7 @@
     checksum: 'sha256:{{ tenant_onboarding_program_sha256 }}'
     owner: root
     group: root
-    mode: '0644'
+    mode: '0755'
   when: not ansible_check_mode
 
 - name: Fetch the reserved-name register the program reads beside itself

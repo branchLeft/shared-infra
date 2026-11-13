@@ -1,0 +1,17 @@
+---
+argument_specs:
+  main:
+    short_description: Check the mail collector's input file and that a host is named, changing nothing
+    description: >-
+      Reads the root-only file the owner places for the mail collector (its drain token, its
+      dead-man's-switch URL and its submission user and password) and the directory of
+      descriptors the collector drains from, and stops the run with a fixed code if either is
+      wrong. Writes nothing, creates nothing and returns no value. An absent file is not a
+      fault: the role says the collector is not meant to run yet and changes nothing. The
+      paths are constants of the role, not inputs, so no play variable can point the check at
+      another file. The role takes no argument. It reads one variable it never sets, the
+      collector's list of hosts, mail_collector_hosts, only to count it: a listed host counts as
+      named before its descriptor is written, because the collector's role writes it after this
+      check.
+    author: branchLeft
+    options: {}

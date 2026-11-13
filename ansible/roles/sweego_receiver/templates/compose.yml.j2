@@ -1,0 +1,75 @@
+# The Sweego complaint receiver, deployed as `sweego-receiver` under
+# /opt/branchleft/sweego-receiver and started by the shared compose unit.
+#
+# `${IMAGE}` is written by /usr/local/sbin/branchleft-deploy into
+# /etc/branchleft/sweego-receiver.image.env and is always a digest, never a tag.
+# The signing secret and the drain token are files the owner places on the host;
+# this file only names where they are mounted, never what they hold.
+name: {{ sweego_receiver_project_name }}
+
+services:
+  receiver:
+    image: ${IMAGE:?set the image pin in /etc/branchleft/sweego-receiver.image.env}
+    # on-failure, not unless-stopped: Docker starts an unless-stopped container at boot by
+    # itself, before the unit that orders it after the drain-port rule has run. A container
+    # that exited cleanly is left for that unit to start; one that crashed is restarted.
+    restart: on-failure:5
+    user: '{{ sweego_receiver_uid }}:{{ sweego_receiver_gid }}'
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 128m
+    memswap_limit: 128m
+    cpus: '0.5'
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: '3'
+    environment:
+      WEBHOOK_HOST: {{ sweego_receiver_container_address }}
+      WEBHOOK_PORT: '{{ sweego_receiver_container_public_port }}'
+      WEBHOOK_DRAIN_HOST: {{ sweego_receiver_container_address }}
+      WEBHOOK_DRAIN_PORT: '{{ sweego_receiver_container_drain_port }}'
+      WEBHOOK_STATE_DIR: {{ sweego_receiver_container_state_dir }}
+      WEBHOOK_SECRET_FILE: {{ sweego_receiver_container_secret_path }}
+{% if sweego_receiver_previous_signing_secret_file | length > 0 %}
+      WEBHOOK_SECRET_FILE_PREVIOUS: {{ sweego_receiver_container_previous_secret_path }}
+{% endif %}
+      WEBHOOK_DRAIN_TOKEN_FILE: {{ sweego_receiver_container_token_path }}
+    ports:
+      - '{{ sweego_receiver_private_address }}:{{ sweego_receiver_port }}:{{ sweego_receiver_container_public_port }}'
+      - '{{ sweego_receiver_private_address }}:{{ sweego_receiver_drain_port }}:{{ sweego_receiver_container_drain_port }}'
+    networks:
+      receiver:
+        ipv4_address: {{ sweego_receiver_container_address }}
+    volumes:
+      - '{{ sweego_receiver_signing_secret_file }}:{{ sweego_receiver_container_secret_path }}:ro'
+{% if sweego_receiver_previous_signing_secret_file | length > 0 %}
+      - '{{ sweego_receiver_previous_signing_secret_file }}:{{ sweego_receiver_container_previous_secret_path }}:ro'
+{% endif %}
+      - '{{ sweego_receiver_drain_token_file }}:{{ sweego_receiver_container_token_path }}:ro'
+      - '{{ sweego_receiver_state_dir }}:{{ sweego_receiver_container_state_dir }}'    # The receiver has no health route, so the check is that its public listener accepts a
+    # connection, which also proves the process got past its configuration.
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "const s=require('node:net').connect({{ sweego_receiver_container_public_port }},'{{ sweego_receiver_container_address }}');s.once('connect',()=>{s.destroy();process.exit(0)});s.once('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+networks:
+  receiver:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: {{ sweego_receiver_network_subnet }}
+          gateway: {{ sweego_receiver_network_gateway }}

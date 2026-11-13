@@ -72,10 +72,8 @@ input: see "Where the database's secrets are, and what the role does not read".
 **The password is the only secret this role takes.** It reaches the role as a
 variable supplied at run time, never as a default and never in a file of this
 repository. Every task that reads, templates or passes it sets `no_log: true`,
-and `diff: false` where a diff would show it (ANS-16). Where the value comes from,
-and how it reaches a host that pulls its commit, is the owner's decision (PRIN-6)
-and not this role's; until it is made, nothing can supply the password on a real
-host.
+and `diff: false` where a diff would show it (ANS-16). On the database host `host_inputs` sets it
+from the root-only file the owner places there.
 
 The pins that are not inputs (the repository, its suite and component, the key
 digest, the version line, the packages the pin file covers, the exporter's uid and
@@ -183,9 +181,9 @@ this scenario runs on each pull request.
 
 ### The scenarios, and running one alone
 
-The cases are shared out between five scenarios, each its own shard in CI, because
+The cases are shared out between seven scenarios, each its own shard in CI, because
 all of them in one verify took about twenty minutes. One verify.yml serves
-all five; the part of the cases it runs is the name Molecule gives the scenario
+all seven; the part of the cases it runs is the name Molecule gives the scenario
 (`MOLECULE_SCENARIO_NAME`), and `molecule/default/tasks/assert_parts.yml` fails the
 run when a part has no scenario directory with a `molecule.yml` and a `verify.yml`
 that does not leave the verify step out. So a case cannot be dropped by deleting a
@@ -359,8 +357,7 @@ a limit.
   not to call it, and `website_app1` made the same decision for the same reason.
   The role checks the one digest that is pinned inline instead: the exporter's.
 - The exporter image is `prom/mysqld-exporter:v0.20.0@sha256:abed8dac117b4ae5b70757f988e44795935b9a72c3b58d720c67ba688f8cb79e`.
-  That is the line `db/stack/compose.yml` in `ghost-platform` carries on
-  `origin/main` at commit `5e52f78`, read on 21 October. Nothing else writes it.
+  That is the line `db/stack/compose.yml` in `ghost-platform` carries. Nothing else writes it.
 - The mysql healthcheck and the exporter healthcheck are the ones the source file
   has. The exporter's gate is `grep -qx "mysql_up 1"`, not a process check and not
   an HTTP 200: an exporter that cannot authenticate serves `/metrics` and reports
@@ -446,23 +443,14 @@ Two things change because of this, and the database's runbook must say them:
   `db1_stack_exporter_password`, which the caller supplies. Rotating the exporter
   password is therefore a change to this role's input, not to `db.env`.
 
-### Two homes until cutover
+### The copies in ghost-platform
 
-The compose file and the configuration exist in two places until the owner's live
-cutover: here, as templates, and in `ghost-platform` (`db/stack/compose.yml`,
-`db/stack/conf.d/branchleft.cnf`, `db/systemd/db.override.conf`, the two contract
-tests and `db/RUNBOOK-db.md`). The `ghost-platform` copies are not deleted by this
-change. The drop-in there is the live writer until cutover. This role removes
-`/etc/systemd/system/branchleft-compose@db.service.d/override.conf` on every run
-that finds it, so a hand copy of that drop-in is removed again on the next run
-and is not left in place. The owner's cutover must stop reinstalling it.
-
-The divergence was checked against `ghost-platform` commit `5e52f78` (its
-`origin/main` on 21 October). In the rendered output, every non-comment line of
-the compose file and of the configuration is the same as the source. The only
-differences are comments. The commit is recorded here, not in the templates. The
-follow-up that removes the `ghost-platform` copies is filed
-after cutover, and it runs the same comparison again before it deletes anything.
+The compose file and the configuration also exist in `ghost-platform`
+(`db/stack/compose.yml`, `db/stack/conf.d/branchleft.cnf`,
+`db/systemd/db.override.conf`, the two contract tests and `db/RUNBOOK-db.md`). This
+role removes `/etc/systemd/system/branchleft-compose@db.service.d/override.conf` on
+every run that finds it, so a hand copy of that drop-in is removed again on the next
+run and is not left in place.
 
 ## What the test proves
 
@@ -726,10 +714,8 @@ bot sees it.
   the log, which shows a skipped task's name. Nothing runs `docker compose`, so the healthcheck,
   the start order and the cnf change are asserted in the rendered text and are not
   exercised.
-- The compose file and the MySQL configuration are the same as `ghost-platform`'s
-  except for comments, as checked at commit `5e52f78`. A later change to either
-  side is caught only when someone runs the comparison again. The follow-up that
-  removes the `ghost-platform` copies runs it before it deletes anything.
+- No check compares the compose file and the MySQL configuration with the copies in
+  `ghost-platform`.
 - The exporter account is in runbook section 4, outside this role, and the exporter's
   healthcheck needs it. On a rebuilt database host the role still converges, but the
   exporter cannot report `mysql_up 1` until section 4 is run by hand, so the stack's
@@ -770,7 +756,7 @@ bot sees it.
   `/etc/systemd/system/branchleft-compose@.service.d/` (it applies to every instance,
   `db` included), the per-instance drop-in directory
   `/etc/systemd/system/branchleft-compose@db.service.d/` (the role removes only
-  `override.conf` there, and the owner reinstalls that drop-in until cutover), other
+  `override.conf` there), other
   drop-in directories systemd searches for this unit, such as
   `branchleft-.service.d/` and drop-ins under `/run/systemd/system`, and a replaced
   unit file. The environment sources can set `COMPOSE_FILE`, `COMPOSE_PROJECT_NAME`

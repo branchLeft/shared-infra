@@ -145,8 +145,7 @@ Notes a reviewer needs:
   proven on another operating system or toolchain, so the check that matters is the pin: the files in this role are
   what the pins say, whoever built them.
 - Nothing rebuilds the files in CI. The control on a bump is the pins, the review class for
-  `ansible/roles/*/files/ghost-platform/**` (the reviewer raises to the strongest model, and re-runs the commands
-  above), and the owner's merge. A CI job that reproduces `dist` from the pinned commit would close this; it needs a
+  `ansible/roles/*/files/ghost-platform/**`, and the owner's merge. A CI job that reproduces `dist` from the pinned commit would close this; it needs a
   GitHub Packages login for `@branchleft/tsconfig` and is filed as its own piece of work.
 
 **To bump the bundler**, in one change: rebuild at the new commit with the commands above, replace everything under
@@ -183,8 +182,7 @@ must print `700 root:root` for each, `cat /root/export-bundler/COMMIT` must prin
 ## Not built here: the gateway's keys
 
 The runbook for the storage gateway's credentials has host steps this role does not cover: the gateway's
-configuration directory, its master secret and the controller key. They are separate roles, not built yet, because
-the gateway host does not exist yet (its host, private network, TLS, delivery path and monitoring are open work).
+configuration directory, its master secret and the controller key. They are separate roles, not part of this one.
 The master secret stays made once by the owner, as that runbook says. This role neither depends on them nor is
 depended on.
 

@@ -1,0 +1,11 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# Every play of converge.yml after the first is a case that is skipped in check mode (a
+# plan makes no change, so there is nothing to refuse), so the steps that run a check would
+# prove nothing here. They are the default scenario's. The cases are not idempotent by
+# design: each breaks the host, applies the role and puts the host right again.
+check-fresh
+check-configured
+molecule-check
+idempotence

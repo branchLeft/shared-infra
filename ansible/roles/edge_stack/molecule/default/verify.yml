@@ -9,6 +9,55 @@
   hosts: all
   gather_facts: false
   vars:
+    # The scenario this run is: its name, which Molecule gives the process. The cases are
+    # shared out between the scenarios, each its own shard, so that no shard takes more
+    # than about twelve minutes. The other scenarios' verify.yml import this file, and each
+    # case block runs where edge_stack_verify_homes puts it. A case has one home, because a
+    # mapping holds a key once; tasks/assert_parts.yml fails the run when a home is not a
+    # scenario that runs verify. The checks outside the case blocks (the repository's
+    # hashes, the baseline) and the log scan (p25) run in every scenario, over its own run.
+    #
+    #   default    the converged host, one change at a time, the stamps and the plan; the
+    #              only scenario that plans, applies twice and checks the configured host
+    #   adoption   a host with no stamp, a run that dies, and the read-back
+    #   refusals   a candidate, a file, a pin or a secrets file the role refuses, the lock
+    #   services   the unit, CrowdSec, the containers, the drop-in and the validated file
+    edge_stack_verify_part: "{{ lookup('ansible.builtin.env', 'MOLECULE_SCENARIO_NAME') }}"
+    edge_stack_verify_homes:
+      p0: default
+      p1: default
+      p2: default
+      p3: default
+      p4: default
+      p5: default
+      p6: default
+      p7: default
+      p8: default
+      p9: adoption
+      p9b: adoption
+      p10: adoption
+      p11: adoption
+      p11c: adoption
+      p11d: adoption
+      p12: adoption
+      p20c: adoption
+      p24: adoption
+      p13: refusals
+      p14: refusals
+      p15: refusals
+      p16: refusals
+      p17: refusals
+      p18: refusals
+      p19: refusals
+      p26: refusals
+      p20: services
+      p21: services
+      p22: services
+      p23: services
+      p27: services
+      p28: services
+      p29: services
+      p30: services
     edge_stack_verify_real_stack: '{{ playbook_dir }}/../../files/stack'
     edge_stack_verify_dir: /opt/branchleft/edge
     # Read directly from the repository, not through the role's link, as the stack is.
@@ -16,6 +65,13 @@
     edge_stack_verify_pin_good: IMAGE=ghcr.io/branchleft/edge-caddy@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
     edge_stack_verify_hex64: '^[0-9a-f]{64}$'
   tasks:
+    - name: Check that every case has a scenario that runs it
+      ansible.builtin.include_tasks:
+        file: tasks/assert_parts.yml
+        apply:
+          tags: [always]
+      tags: [always]
+
     - name: Make a directory for the variants of the stack, on the machine that runs the test
       ansible.builtin.tempfile:
         state: directory
@@ -70,6 +126,7 @@
     # ----- p0: the converged host is what the repository says, in the modes the containers need -----
     - name: Case p0, the files, directories and stamps of the converged host
       tags: [p0]
+      when: edge_stack_verify_homes.p0 == edge_stack_verify_part
       block:
         - name: Name the files and the directories that must be there
           ansible.builtin.set_fact:
@@ -155,6 +212,7 @@
     # ----- p1: nothing changed, nothing done -----
     - name: Case p1, a run with nothing changed calls nothing and moves no stamp
       tags: [p1]
+      when: edge_stack_verify_homes.p1 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -177,6 +235,7 @@
     # ----- p2: a Caddyfile-only change is validated, written in place and reloaded, never restarted -----
     - name: Case p2, a change to the Caddyfile alone
       tags: [p2]
+      when: edge_stack_verify_homes.p2 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -216,6 +275,7 @@
     # ----- p3: a CrowdSec-only change restarts the container once; the prune stops at the acquisition directory -----
     - name: Case p3, a change to the CrowdSec files alone, a stale acquisition file and a stray file
       tags: [p3]
+      when: edge_stack_verify_homes.p3 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -271,6 +331,7 @@
     # ----- p4: a Compose-only change restarts the unit, and the unit is the only path that runs up -----
     - name: Case p4, a change to the Compose file alone
       tags: [p4]
+      when: edge_stack_verify_homes.p4 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -307,6 +368,7 @@
     # ----- p5: a rotated key reaches the containers by restarting the unit -----
     - name: Case p5, a rotated key in the secrets file
       tags: [p5]
+      when: edge_stack_verify_homes.p5 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -341,6 +403,7 @@
     # ----- p6: a change in all three classes, placed before any action, acted on in order -----
     - name: Case p6, a change to every class
       tags: [p6]
+      when: edge_stack_verify_homes.p6 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -383,6 +446,7 @@
     # ----- p7: a file changed on the host, with the stamp unchanged, is put back and acted on -----
     - name: Case p7, a hand edit and a torn Caddyfile on the host
       tags: [p7]
+      when: edge_stack_verify_homes.p7 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -431,6 +495,7 @@
     # ----- p8: check mode names what a real run would do, and does none of it -----
     - name: Case p8, a plan with every class changed and a Caddyfile torn on the host
       tags: [p8]
+      when: edge_stack_verify_homes.p8 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -465,7 +530,7 @@
               - '{{ inventory_dir }}'
               - --extra-vars
               - 'edge_stack_source_dir={{ edge_stack_verify_variants.p8.path }}'
-              - '{{ playbook_dir }}/plan.yml'
+              - '{{ playbook_dir }}/../default/plan.yml'
           delegate_to: localhost
           register: edge_stack_verify_p8_plan
           changed_when: false
@@ -508,6 +573,7 @@
     # ----- p9, p10, p11: the first run on a host that was delivered by hand -----
     - name: Case p9, no stamps and every file already the repository's
       tags: [p9]
+      when: edge_stack_verify_homes.p9 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -544,6 +610,7 @@
     # class, replace the link with a stamp and succeed.
     - name: Case p9b, a stamp that is there and cannot be read
       tags: [p9b]
+      when: edge_stack_verify_homes.p9b == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -587,6 +654,7 @@
 
     - name: Case p10, no stamps and one class differs
       tags: [p10]
+      when: edge_stack_verify_homes.p10 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -627,6 +695,7 @@
 
     - name: Case p11, a first action that fails is not taken for an adopted host
       tags: [p11]
+      when: edge_stack_verify_homes.p11 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -698,6 +767,7 @@
     # never restart the unit or CrowdSec.
     - name: Case p11c, a run that dies after the Compose file is placed
       tags: [p11c]
+      when: edge_stack_verify_homes.p11c == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -748,6 +818,7 @@
 
     - name: Case p11d, a run that dies after a CrowdSec file is placed
       tags: [p11d]
+      when: edge_stack_verify_homes.p11d == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -799,6 +870,7 @@
     # ----- p12: the read-back is what lets a stamp be written -----
     - name: Case p12, the container still shows the old Caddyfile after a reload
       tags: [p12]
+      when: edge_stack_verify_homes.p12 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -852,6 +924,7 @@
     # ----- p13, p14: a refused candidate stops the run before any file is placed -----
     - name: Case p13, a Caddyfile that Caddy refuses, with a Compose change beside it
       tags: [p13]
+      when: edge_stack_verify_homes.p13 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -887,6 +960,7 @@
 
     - name: Case p14, a Compose file that Compose refuses, with a Caddyfile change beside it
       tags: [p14]
+      when: edge_stack_verify_homes.p14 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -923,6 +997,7 @@
     # ----- p15: a file in no class is refused, and so is a link -----
     - name: Case p15, a file in no class, a file nested in the acquisition directory, and a link
       tags: [p15]
+      when: edge_stack_verify_homes.p15 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -977,6 +1052,7 @@
     # ----- p16: the pin must be exactly one IMAGE line holding a digest -----
     - name: Case p16, pins the role refuses, and a pin that changes while the role waits for the lock
       tags: [p16]
+      when: edge_stack_verify_homes.p16 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1053,6 +1129,7 @@
     # ----- p17: the secrets file the owner places must be root's, mode 0600, a plain file -----
     - name: Case p17, a secrets file that is too open, not root's, or a link
       tags: [p17]
+      when: edge_stack_verify_homes.p17 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1121,6 +1198,7 @@
     # ----- p18: the lock -----
     - name: Case p18, the deploy lock is held while the role validates
       tags: [p18]
+      when: edge_stack_verify_homes.p18 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1233,6 +1311,7 @@
 
     - name: Case p19, the deploy lock is held while the role applies a class that needs no validation
       tags: [p19]
+      when: edge_stack_verify_homes.p19 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1285,6 +1364,7 @@
     # ----- p20, p21: the unit's state -----
     - name: Case p20, the unit is not enabled
       tags: [p20]
+      when: edge_stack_verify_homes.p20 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1344,6 +1424,7 @@
     # adopted, and would stamp a fingerprint the running containers never got.
     - name: Case p20c, no stamps, the unit is not enabled, and the unit is enabled without being started
       tags: [p20c]
+      when: edge_stack_verify_homes.p20c == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1406,6 +1487,7 @@
 
     - name: Case p21, the unit is failed and its restart fails again, then works on a corrected file
       tags: [p21]
+      when: edge_stack_verify_homes.p21 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1465,6 +1547,7 @@
     # ----- p22: CrowdSec's API does not answer after the restart -----
     - name: Case p22, CrowdSec does not come back, with the unit restarted in the same run
       tags: [p22]
+      when: edge_stack_verify_homes.p22 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1528,6 +1611,7 @@
     # ----- p23: the containers are not running -----
     - name: Case p23, a change to the Caddyfile and CrowdSec while neither container runs
       tags: [p23]
+      when: edge_stack_verify_homes.p23 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1586,6 +1670,7 @@
     # ----- p24: a host with no stack directory at all -----
     - name: Case p24, the first delivery to a host that has nothing
       tags: [p24]
+      when: edge_stack_verify_homes.p24 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1638,6 +1723,7 @@
     # run, which validates in the new digest, acts.
     - name: Case p26, a pin that moves between the validation and the apply
       tags: [p26]
+      when: edge_stack_verify_homes.p26 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1706,6 +1792,7 @@
     # place. The second run is the control, with nothing added: the three are one file.
     - name: Case p27, the Compose file placed is the candidate that was validated
       tags: [p27]
+      when: edge_stack_verify_homes.p27 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1777,6 +1864,7 @@
     # effect through the reload, and the unit is restarted only for the Compose class.
     - name: Case p28, a host with no drop-in gets it, root's and mode 0644, and systemd reads it
       tags: [p28]
+      when: edge_stack_verify_homes.p28 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1839,6 +1927,7 @@
 
     - name: Case p29, a changed drop-in is put back and read by systemd, and the unit is not restarted
       tags: [p29]
+      when: edge_stack_verify_homes.p29 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1885,6 +1974,7 @@
     # the file on disk is newer than what it holds can bring the reload back.
     - name: Case p30, a reload that a run which died did not make is made by the next run
       tags: [p30]
+      when: edge_stack_verify_homes.p30 == edge_stack_verify_part
       block:
         - name: Return to the converged host
           ansible.builtin.include_tasks: tasks/reset.yml
@@ -1953,6 +2043,7 @@
               without a restart of the unit (the rerun called {{ edge_stack_verify_runs.p30.kinds }}).
 
     # ----- p25: the restore, and the log -----
+    # Runs in every scenario, with no home, because each scenario has its own log to scan.
     - name: Case p25, put the host back, and scan the log for the values
       tags: [p25]
       block:

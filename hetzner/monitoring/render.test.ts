@@ -831,6 +831,7 @@ describe('the owner_action="true" label', () => {
       'MySQLConnectionsHigh',
       'TLSCertificateExpiringSoon',
       'MailCertificateExpiringSoon',
+      'NtfyPagerDisabled',
       'SNDSAccessLinkExpiringSoon',
     ]);
   });

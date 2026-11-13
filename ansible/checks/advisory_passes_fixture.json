@@ -1,0 +1,84 @@
+{
+  "runs": [
+    {
+      "conclusion": "success",
+      "created_at": "2026-11-09T11:50:55Z",
+      "event": "schedule",
+      "head_branch": "main",
+      "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/42612239123",
+      "id": 42612239123,
+      "status": "completed"
+    },
+    {
+      "conclusion": "success",
+      "created_at": "2026-11-02T11:27:42Z",
+      "event": "schedule",
+      "head_branch": "main",
+      "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/41437016897",
+      "id": 41437016897,
+      "status": "completed"
+    }
+  ],
+  "jobs": {
+    "42612239123": [
+      {
+        "conclusion": "success",
+        "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/42612239123/job/129143296889",
+        "id": 129143296889,
+        "name": "Discover the Ansible shards",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/42612239123/job/129143588917",
+        "id": 129143588917,
+        "name": "Harness: ansible/roles/ci_jump (refusals)",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/42612239123/job/129143588920",
+        "id": 129143588920,
+        "name": "Harness: ansible/roles/ci_jump",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/42612239123/job/129143589136",
+        "id": 129143589136,
+        "name": "Harness: ansible/roles/edge_stack",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/42612239123/job/129143589154",
+        "id": 129143589154,
+        "name": "Harness: ansible/roles/host_baseline",
+        "status": "completed"
+      }
+    ],
+    "41437016897": [
+      {
+        "conclusion": "success",
+        "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/41437016897/job/125249233241",
+        "id": 125249233241,
+        "name": "Discover the Ansible shards",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/41437016897/job/125253079992",
+        "id": 125253079992,
+        "name": "Harness: ansible/roles/edge_stack",
+        "status": "completed"
+      },
+      {
+        "conclusion": "success",
+        "html_url": "https://github.com/branchLeft/shared-infra/actions/runs/41437016897/job/125253080002",
+        "id": 125253080002,
+        "name": "Harness: ansible/roles/host_baseline",
+        "status": "completed"
+      }
+    ]
+  }
+}

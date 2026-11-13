@@ -39,6 +39,20 @@ WORKFLOW_ERE = (
 # role's hidden list, once the apply that rewrites the text is live. Nothing is added here for a
 # line that can be reworded in the checkout.
 RETIRED_MATCHES: dict[str, str] = {}
+# The scan's named allowances: a repository path and the one whole line the scan does not read in
+# that file. This is a copy of the `allowances` array of the ssh-check-hosts action in
+# github-workflows, which the code owners approve; a new entry is a reviewed change to both. A line
+# is let through only when its text, trimmed, is exactly the entry's and its file is the entry's.
+SCAN_ALLOWANCES: tuple[tuple[str, str], ...] = (
+    ("hetzner/provision/branchleft-verify-image", "export GH_TOKEN=placeholder-not-a-credential"),
+)
+# An assignment whose name is an expanded variable (`export "$NAME=$VALUE"`): the name and the value
+# are on the line as two variables, so the line-by-line scan reads neither as a credential. It is
+# the shape that held a name apart from its value; the allowance above replaces it.
+HELD_APART = re.compile(
+    r"\b(export|declare|typeset|readonly|local|eval|env)\s+(-\S+\s+)*[\"']?\$\{?[A-Za-z_]\w*\}?=",
+    re.ASCII,
+)
 COPIERS = frozenset(("copy", "template"))
 INCLUDERS = frozenset(("include_tasks", "import_tasks"))
 SEARCH = {
@@ -54,13 +68,29 @@ Env = dict[str, object]
 Finding = tuple[str, str, str]
 
 
-def matching_lines(text: str) -> list[int]:
+def allowed(path: str | None, line: str) -> bool:
+    """Return whether the scan passes ``line`` of the file at repository ``path`` by name."""
+    return path is not None and (path, line.strip()) in SCAN_ALLOWANCES
+
+
+def matching_lines(text: str, path: str | None = None) -> list[int]:
     """Return the 1-based number of each line of ``text`` the scan matches.
 
     grep splits its input on the newline alone, so this does too: str.splitlines also splits on
-    form feeds and other separators, which would move a match to another line.
+    form feeds and other separators, which would move a match to another line. ``path`` is the
+    repository path of the file the text is from; a line named by SCAN_ALLOWANCES for it is not
+    a match.
     """
-    return [n for n, line in enumerate(text.split("\n"), 1) if CREDENTIAL_ASSIGNMENT.search(line)]
+    return [
+        n
+        for n, line in enumerate(text.split("\n"), 1)
+        if CREDENTIAL_ASSIGNMENT.search(line) and not allowed(path, line)
+    ]
+
+
+def held_apart_lines(text: str) -> list[int]:
+    """Return the 1-based number of each line of ``text`` that assigns through an expanded name."""
+    return [n for n, line in enumerate(text.split("\n"), 1) if HELD_APART.search(line)]
 
 
 def _evaluate(expression: re.Match[str], env: Env, depth: int) -> object:
@@ -313,7 +343,16 @@ def findings_for(
                     for source in sources:
                         shown = source.relative_to(root) if source.is_relative_to(root) else source
                         scanned.append(f"{name}:{shown}")
-                        lines = matching_lines(source.read_text(encoding="utf-8", errors="replace"))
+                        text_of = source.read_text(encoding="utf-8", errors="replace")
+                        lines = matching_lines(text_of, shown.as_posix())
+                        apart = held_apart_lines(text_of)
+                        if apart and not diff_is_off:
+                            message = (
+                                f"copies {shown}, whose line {apart[0]} assigns through an "
+                                "expanded name, so the plan's scan reads the name and the "
+                                "value apart: write the assignment on one line"
+                            )
+                            findings.add((*where, message))
                         old_text = shown.as_posix() in retired
                         if old_text and not diff_is_off:
                             message = (
@@ -388,6 +427,54 @@ class RegexCase(unittest.TestCase):
                     [],
                     f"{path}: the checkout still has a matching line, so it is not retired text",
                 )
+
+    def test_the_named_allowance_passes_its_line_in_its_file_and_nothing_else(self) -> None:
+        """The allowed line passes only as the whole line, in the file the entry names."""
+        path, line = SCAN_ALLOWANCES[0]
+        self.assertTrue(CREDENTIAL_ASSIGNMENT.search(line), "the entry is not needed")
+        for text in (line, f"    {line}", f"{line}\r"):
+            self.assertEqual(matching_lines(text + "\n", path), [])
+        refused = {
+            "another file": (line, "ansible/roles/x/files/other"),
+            "a file named alike": (line, path + ".bak"),
+            "another value": ("export GH_TOKEN=another-value", path),
+            "another name": ("export GITHUB_TOKEN=placeholder-not-a-credential", path),
+            "a value after it": (line + " realvalue", path),
+            "a second assignment": (line + "; db_password=Zx9Qm2LpVt7R", path),
+            # opv-disable-next-line OPV004 synthetic placeholder fixture, not a credential
+            "quoted": ('export GH_TOKEN="placeholder-not-a-credential"', path),
+            "another case": (line.lower(), path),
+            "no path": (line, None),
+        }
+        for name, (text, where) in refused.items():
+            with self.subTest(case=name):
+                self.assertEqual(matching_lines(text + "\n", where), [1])
+
+    def test_each_allowance_is_one_whole_line_of_its_file(self) -> None:
+        """An entry names a line the file holds whole, once: a split or a stale entry fails here."""
+        for path, line in SCAN_ALLOWANCES:
+            with self.subTest(path=path):
+                text = (ROOT / path).read_text(encoding="utf-8")
+                held = [row for row in text.split("\n") if row.strip() == line]
+                self.assertEqual(
+                    len(held), 1, f"{path}: the allowed line is not on one line of the file"
+                )
+                self.assertEqual(matching_lines(text, path), [])
+                self.assertNotEqual(matching_lines(text), [], f"{path}: the entry is not needed")
+
+    def test_an_assignment_through_an_expanded_name_is_found(self) -> None:
+        """The split shape (a name held in one variable, its value in another) is a finding."""
+        for line in (
+            'export "$AUTH_VAR=$AUTH_GATE"',
+            "  export $NAME=$VALUE",
+            'declare -x "${NAME}=${VALUE}"',
+            'eval export "$A=$B"',
+        ):
+            with self.subTest(line=line):
+                self.assertEqual(held_apart_lines(line + "\n"), [1])
+        for line in ("export GH_TOKEN=placeholder", 'echo "$A=$B"', "export PATH=$PATH:/x"):
+            with self.subTest(line=line):
+                self.assertEqual(held_apart_lines(line + "\n"), [])
 
     def test_lines_are_split_on_newline_only(self) -> None:
         """A form feed is not a line break to grep, so it does not move a match to a later line."""
@@ -518,6 +605,26 @@ class TreeCase(unittest.TestCase):
         )
         self.assertEqual(len(found), 1)
         self.assertIn("hetzner/provision/p.py", found[0])
+
+    def test_the_allowed_line_in_its_file_needs_no_diff_false_and_elsewhere_does(self) -> None:
+        """A copy of the allowed file passes shown; the same text under another name is found."""
+        path, line = SCAN_ALLOWANCES[0]
+        copy = (
+            "- name: a\n  ansible.builtin.copy:\n    src: '{{ role_path }}/files/%s'\n"
+            "    dest: /x\n"
+        )
+        self.put(self.root / path, f"#!/bin/sh\n{line}\n")
+        self.put(self.role / "files" / "other", f"#!/bin/sh\n{line}\n")
+        self.assertEqual(self.tasks(copy % ("../../../../" + path)), [])
+        found = self.tasks(copy % "other")
+        self.assertEqual(len(found), 1)
+        self.assertIn("files/other", found[0])
+        # The sabotage: the allowed file with its name and value held apart is found.
+        apart = '#!/bin/sh\nN="GH_TOKEN"\nV="placeholder-not-a-credential"\nexport "$N=$V"\n'
+        self.put(self.root / path, apart)
+        found = self.tasks(copy % ("../../../../" + path))
+        self.assertEqual(len(found), 1)
+        self.assertIn("expanded name", found[0])
 
     def test_a_directory_source_is_read_whole(self) -> None:
         """A source that is a directory is judged by every file in it."""
@@ -658,8 +765,9 @@ class RealTreeCase(unittest.TestCase):
     def test_every_copied_file_that_reads_as_secret_has_diff_false(self) -> None:
         """No task copies a file with a line the plan's scan matches without diff: false.
 
-        There is no list of exceptions: a file that reads as secret is reworded, or, when it is a
-        variable reference that cannot change, its task sets diff: false.
+        There is no list of exceptions in the roles: a file that reads as secret is reworded, or,
+        when it is a variable reference that cannot change, its task sets diff: false. The scan's
+        own named allowances (SCAN_ALLOWANCES) are the only line it passes by name.
         """
         findings, scanned = findings_for(ROOT)
         found = [f"{f}: task {n!r} {m}" for f, n, m in findings]
@@ -670,6 +778,9 @@ class RealTreeCase(unittest.TestCase):
         for path in RETIRED_MATCHES:
             self.assertTrue(any(s.endswith(path) for s in scanned), path)
         self.assertTrue(any(s.endswith("website_app1/files/compose.yml") for s in scanned))
+        # Every named allowance is for a file the walk reaches, or the entry guards nothing.
+        for path, _line in SCAN_ALLOWANCES:
+            self.assertTrue(any(s.endswith(path) for s in scanned), path)
         # The loops that are made while a role runs, or split into a hidden task and a visible
         # one, must be resolved to their files, or the files they copy were never read.
         for tail in (

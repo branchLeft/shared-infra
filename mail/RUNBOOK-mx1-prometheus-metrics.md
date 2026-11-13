@@ -1,10 +1,8 @@
 # Runbook — enable Stalwart's Prometheus exporter on mx1
 
-Delivers the `mx1` half of [branchLeft/shared-infra#42](https://github.com/branchLeft/shared-infra/issues/42),
-which is the last unmet acceptance criterion of
-[branchLeft/workspace#222](https://github.com/branchLeft/workspace/issues/222).
+Enables Stalwart's authenticated Prometheus exporter on `mx1`, for `edge1`'s Prometheus to scrape.
 
-The `mx1_stack` role (`ansible/roles/mx1_stack`, not wired into a playbook yet) creates the
+The `mx1_stack` role (`ansible/roles/mx1_stack`, which `ansible/playbooks/mx1.yml` does not apply) creates the
 `STALWART_PROMETHEUS_SECRET` line in `/opt/stalwart/.env` on its own first apply and never prints
 or rotates it; the Prometheus scrape-side steps below stay owner steps and are not part of the role.
 
@@ -14,10 +12,9 @@ Ghost's members magic-link endpoint is an unauthenticated trigger that makes the
 platform send email. The edge now throttles it on a hostname-routed path,
 but doc 12 §1 is explicit that a flood which stays under the rate limit, or
 arrives from rotating sources, moves **reputation** rather than request rate.
-Reputation is bounce and rejection behaviour, and none of it currently reaches
-the monitoring stack: `mx1` is scraped by nothing, and its only monitoring is
-four blackbox liveness probes that stay green through a deliverability
-collapse.
+Reputation is bounce and rejection behaviour, and without the exporter none of
+it reaches the monitoring stack: the four blackbox liveness probes stay green
+through a deliverability collapse.
 
 Stalwart does export the counters — `delivery.double-bounce`,
 `delivery.dsn-perm-fail`, `delivery.rcpt-to-rejected`, `queue.count` and the
@@ -42,10 +39,7 @@ rest — on a Prometheus endpoint that is simply switched off.
 
 ## Before you start
 
-1. **[branchLeft/shared-infra#129](https://github.com/branchLeft/shared-infra/pull/129) is merged**, and `main` is pulled locally. Without it the compose
-   file has no `STALWART_PROMETHEUS_SECRET` and the reconciler has no
-   `x:Metrics` step, so nothing here applies.
-2. **You have a generated secret.** Generate it now, on your Mac, and paste it
+1. **You have a generated secret.** Generate it now, on your Mac, and paste it
    into ProtonPass as `mx1 Stalwart Prometheus exporter` before going further —
    it is written to two hosts and read back from neither:
 
@@ -57,7 +51,7 @@ rest — on a Prometheus endpoint that is simply switched off.
    on `mx1` and a `KEY=value` env file on `edge1`, and a `$` or a quote in
    either is a silent truncation rather than an error.
 
-3. `~/.ssh/id_ed25519_hetzner` present. Every `ssh`/`rsync` below needs `-i`
+2. `~/.ssh/id_ed25519_hetzner` present. Every `ssh`/`rsync` below needs `-i`
    with it.
 
 Throughout: **never paste the secret into an issue, a PR, a commit or a chat
@@ -307,26 +301,14 @@ There is no faster lever. Stalwart has no config file to edit and no CLI flag
 for this; the API is the only interface, and the reconciler is how this
 platform drives it.
 
-## After it succeeds
-
-Comment on [branchLeft/shared-infra#42](https://github.com/branchLeft/shared-infra/issues/42)
-citing V1's status code and metric count, V2's `421`, and V3's `421` — **never
-the secret**. Leave the issue **open**: the scrape target and the alert rules
-are a separate PR, and the issue is not done until an alert exists that can
-fire.
-
-Then `branchLeft/workspace#222` criterion 3 is unblocked but not met; it is met
-when that second PR is merged and deployed.
-
 ## What this deliberately does not do
 
-- **Alerting now exists.** Alert rules for Stalwart's own metrics are in the
+- **No alert rules.** Alert rules for Stalwart's own metrics are in the
   `mail-delivery` group of `hetzner/monitoring/stack/prometheus/alerts.yml`, and
   the certificate mx1 presents is covered by `MailCertificateExpiringSoon` on the
   `blackbox_mail` job, which warns 14 days before it expires (the series comes
   from ports 465 and 993 only).
 - **No complaint-rate signal.** Feedback loops are reported out of band by
-  receiving providers; no self-hosted MTA produces them. `#222`'s criterion 3
-  asks for something Stalwart cannot give, and the honest substitute is a
-  rejection/DSN **ratio**, decided when the rules are written.
+  receiving providers; no self-hosted MTA produces them. The honest substitute
+  is a rejection/DSN **ratio**.
 - **No firewall change.** 443 was already open.

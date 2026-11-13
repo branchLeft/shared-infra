@@ -462,8 +462,7 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after 
 approval of its protected environment. A plan job shows each host's diff in check
 mode first; after the approval the host pulls that exact commit of `main` and applies
 it, and a second run must report zero changes. Nothing is applied from a laptop. This
-pattern is not applied to any host: it exists to be copied, and the trigger and the
-reusable workflow are separate work.
+pattern is not applied to any host: it exists to be copied.
 
 The plan job's diff is the reason `diff: false` is in the recipe: a job summary is
 read by everyone who can see the run.

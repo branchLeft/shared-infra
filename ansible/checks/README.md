@@ -72,21 +72,21 @@ It catches a protected key (`pull_trigger_signers`, `pull_trigger_remote_url`,
 file that owns it, and a loader it cannot read.
 
 It does not judge what a role does. The roles run as root, so a change to `roles/` can
-change what a host does with its signers, and this check does not see that. The reusable
-gated apply exists in `branchLeft/github-workflows`, but nothing in this repo calls it, so
-a role edit is not gated by anything here. The control on a role edit is the owner's
-deploy approval of the gated apply, which is not yet wired. Which files the reviewer App
-may merge alone is not yet decided by the owner.
+change what a host does with its signers, and this check does not see that.
+`.github/workflows/ansible-delivery.yml` calls the reusable gated apply in
+`branchLeft/github-workflows`, and the control on a role edit is the owner's deploy
+approval of that gated apply.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
-host in `HOST_PLAY_VARS` in `check_enrolment.py` (today three rows: edge1's `deploy_tooling_host_class`
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (five rows: edge1's `deploy_tooling_host_class`
 with `egress_nat_gateway_enabled: true`, the one switch that makes a host a NAT gateway; edget's
 `egress_nat_gateway_enabled: true` alone (edget is the server edge-t, the tenants network's gateway:
 a network does not span hcloud projects, so there is one gateway per network, edge1 for the estate's
 and edget for the tenants', and `test_egress_nat_single_gateway.py` refuses a second on either; the
-logical name has no hyphen because `HOST_NAME` allows `[a-z][a-z0-9]*`); and app1's
+logical name has no hyphen because `HOST_NAME` allows `[a-z][a-z0-9]*`); app1's
 `deploy_tooling_host_class` with `deploy_tooling_policy_variant`,
-which the role takes with no default for the class and which a host of class app must name; no other variable: a
+which the role takes with no default for the class and which a host of class app must name; dbt1's
+`deploy_tooling_host_class: internal`; and mx1's `host_baseline_fail2ban_ignoreip_none: true`; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
@@ -117,10 +117,10 @@ for it, because a fail-closed rule would refuse real Markdown READMEs.
 What stops such a README from running is not this check. The controls are: the pull runs
 only the derived `HOST.yml` path (R3), so a README under `playbooks/` or `trust/` is never
 the file it runs; the gated workflows; and the owner's deploy approval of the gated apply.
-The last two are not yet wired in this repo, as the roles paragraph above says. Ownership
-differs by file. `trust/README.md` is under the owner's merge (`/ansible/trust/` in
-CODEOWNERS). `playbooks/README.md` has no CODEOWNERS line, so the reviewer App may merge an
-edit to it alone until the owner decides which files the reviewer App may merge alone.
+Ownership is the same for both. CODEOWNERS releases every Markdown file except `CLAUDE.md` and
+the files under `.github/`, which stay the owner's, so the reviewer App
+may merge an edit to `trust/README.md` or to `playbooks/README.md` alone. The trust files beside
+`trust/README.md` stay the owner's merge (`/ansible/trust/` in CODEOWNERS).
 
 Out of scope: a case-insensitive filesystem. On macOS Ansible can find
 `group_vars/all.YML` under the name `all.yml`, and R6 reads only the exact suffix. This is
@@ -195,11 +195,12 @@ is not loaded there.
   in its module. For ops1 the two keys are `pull_trigger_steps`,
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text, and
   `control_plane_db_apps_image`, the applications image the steps run, which must be text.
-  The `ring_controller_host` role adds five more, all text and all allowed on ops1 only:
-  `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url`,
-  `ring_controller_host_ledger_url`, `ring_controller_host_ledger_push_remote` and
-  `ring_controller_host_push_known_hosts`. Each may be the empty string, which is how the role
-  starts inert; what a value may look like is the role's rule alone.
+  The `ring_controller_host` role adds three more, all text and all allowed on ops1 only:
+  `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url` and
+  `ring_controller_host_ledger_url`. Each may be the empty string, which is how the role
+  starts inert; what a value may look like is the role's rule alone. The push remote and the
+  known-hosts line it used to take are no longer allowed, so an owner file that still sets one is
+  refused here (Ansible's own spec check does not read an owner file's values).
   R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
   digest pattern, read by name from the role's constants. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
   word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
@@ -285,12 +286,25 @@ does not see edge-t's public address, which is in no file of the repository, nor
 address is the right one. Each pin runs red on a sabotaged copy of its files and green on the copy
 left alone.
 
+## test_mail_collector_paths_agree.py: one credentials file and one drain list for the collector
+
+The `mail_collector` role installs the unit that reads the owner's credentials file and the
+descriptor directory, and the `mail_collector_inputs` role reads the same two paths to refuse a bad
+file before the unit can start on it. A role may not load another (ANS-12), so each keeps its own
+copy and the test holds every copy that is in the tree to one literal each:
+`/etc/branchleft/mail-collector/credentials.env` and `/etc/branchleft/mail-collector/descriptors`,
+and the collector's unit to the same two. It requires that at least one of the two roles is in the
+tree, so it cannot pass on nothing. The two land in separate changes, so each check on the other
+role runs once that role is there. When both are applied on `ops1` the input check must come before
+the collector, so a refusal stops the play before a descriptor is written or the unit is started.
+A rename of the file in either role alone runs red.
+
 ## ci_select.py: which shards a run executes
 
 `ci_select.py` narrows the shard list from `ansible/harness/list_shards.py` to the shards a
 run needs, from the event and the files it changed. The rules, in the order they apply:
 
-- the weekly scheduled run and a manual run execute every shard, whatever changed: they are
+- the daily scheduled run and a manual run execute every shard, whatever changed: they are
   what finds drift in an external image or collection, which no diff shows;
 - a push to `main` executes none, and runs no lint: the pushed tree is the tree the merge
   queue tested, and the delivery workflow runs its own checks before it applies anything;
@@ -341,24 +355,73 @@ run needs, from the event and the files it changed. The rules, in the order they
 A shard that is wrongly left out is a gate that passes without running, so every rule
 above errs towards running more.
 
+## blocking_shards.json: which container tests fail the required check
+
+Every container test (harness shard) runs on every pull request and stays visible. Only the
+shards named in `blocking_shards.json` fail the required check, `Lint and test the Ansible
+roles`; every other shard is advisory. An advisory shard that fails shows red on its own
+check line, the required check does not wait for it, and the `report` job lists it in the
+step summary. A scheduled or manual run treats every shard as blocking, so the daily run
+catches what an advisory shard hides. The merge queue runs no shard, as before.
+
+The file is one JSON object with the single key `blocking`: a list of shard ids, sorted,
+each once, each one a shard that exists in the tree. A shard id is the name `list_shards.py`
+gives it: `ansible/roles/ci_jump`, or `ansible/roles/ci_jump (refusals)` for a second
+scenario. `blocking_shards.py validate` and `test_blocking_shards.py` hold those rules; the
+discover job runs the same checks before it splits the shards, and fails when the list is
+bad, which fails the required check.
+
+The rules for the list:
+
+- It starts with the shards of the lock-out roles, the ones whose break can cut the operator
+  or the pipeline off a host: `pull_trigger`, `ci_jump`, `breakglass_mint_host`,
+  `host_baseline`, `tunnel_account`, `edge_firewall`, `egress_nat` and `deploy_tooling`.
+  They stay. A test fails when one of their shards is not listed, and takes any new scenario
+  of one of those roles in too. Taking one off needs an owner-approved edit to
+  `LOCKOUT_PATHS` in `test_blocking_shards.py` as well as to the list. `edge_firewall` is
+  named in the test before its role is merged; its shards must be listed in the pull request
+  that adds the role.
+- A shard goes on the list by a reviewed pull request that cites the failing run that
+  tripped it.
+- A shard comes off the list by a pull request that cites five passes in a row of the daily
+  run: `advisory_passes.py <shard id> --n 5` prints `PASS-STREAK=<k>` and the run URLs, and
+  exits 0 only when k is at least n. It reads the newest completed scheduled runs of the
+  workflow on `main`; a run in which the shard did not pass, or had no job, ends the streak.
+  It reads only, with the token in `GH_TOKEN` or `GITHUB_TOKEN`; `--fixture FILE` runs it
+  offline on recorded answers (`advisory_passes_fixture.json`).
+- The approver records every red advisory shard of the pull request, from the `report` job's
+  table, on the pull request.
+- A red daily run opens one issue (`daily_red_issue.py`), titled with the date, with the run
+  link and the failed shard ids and the one label `ci-red-daily`, or comments on the one still
+  open. Nothing there mentions, assigns or prompts anyone or anything.
+
+Two things to know. A new role or scenario starts advisory: it is on no list until a pull
+request puts it there. And the delivery workflow (`ansible-delivery.yml`) runs the harness
+over every role before it applies anything; this list does not change that run.
+
 ## test_ci_gate_order.py: the workflow order and gate
 
 These tests hold the CI workflows to what `ci_select.py` assumes:
 
 - the shard job waits for the quick lint gate (yamllint and `test_ci_select.py`) and not for
   the full lint, so a malformed file starts no container and the shards start sooner;
-- the shard job runs only when discover chose shards, and refuses the entry that stands
-  for none;
+- the blocking shard job and the advisory shard job each run only when discover chose shards
+  of their kind, and refuse the entry that stands for none; the advisory job runs the same
+  steps as the blocking job (compared step for step), and both are named
+  `Harness: <id>` and `Advisory harness: <id>`, which `shard_results.py` reads;
 - the gate job (the check the ruleset requires) fails unless the quick gate and the full lint
-  both passed, and fails when shards were chosen and did not all pass. The one exception is
+  both passed, and fails when blocking shards were chosen and did not all pass. It needs the
+  blocking shard job and not the advisory one. The one exception is
   the merge queue, where the shard job is skipped by a condition on `github.event_name`
   and the gate accepts the skip for that event alone; a skipped, failed or cancelled shard job
   fails it on every other event. The gate's own script is run under bash against a table of
   outcomes, with a control that cuts the full-lint refusal out and one that widens the queue
   skip to every event, and shows the table sees each go;
+- only the issue job has a write permission, it runs for a red scheduled run alone, and no step
+  in the workflow starts, wakes or prompts an agent or dispatches another workflow;
 - the quick gate builds its tool environment with the same steps as the full lint, and the
   full lint keeps every step it had;
-- the merge queue still triggers the workflow, and the weekly sweep is scheduled;
+- the merge queue still triggers the workflow, and the daily sweep is scheduled;
 - the lint and every shard restore the tool environment from a SHA-pinned `actions/cache`
   keyed on the lock files, and install only on a miss;
 - the CrowdSec pin check opens a pull request on a stale pin and still fails when it cannot
@@ -485,9 +548,22 @@ variable reference, withholds the plan of the host: nothing can be approved.
 
 The control is a task keyword, `diff: false`, set on the copy or template task whose file is not
 secret but reads as secret-like text. The scan is a backstop, never loosened to fit a file (ANS-16).
-There is no list of exceptions (owner ruling of 2 Nov 2026). A line that is prose is reworded so it no
-longer matches. `diff: false` is set only on the task of a file whose matching line is a variable
-reference or a name that cannot change, and each such task carries a comment citing ANS-16.
+There is no list of exceptions in the roles (owner ruling of 2 Nov 2026). A line that is prose is
+reworded so it no longer matches. `diff: false` is set only on the task of a file whose matching line
+is a variable reference or a name that cannot change, and each such task carries a comment citing
+ANS-16.
+
+The one exception is a named allowance in the scan itself (owner ruling of 10 Nov 2026): a file path
+and one whole line, in the `allowances` array of the `ssh-check-hosts` action in `github-workflows`,
+which the code owners approve, so a new entry is a reviewed change there. The scan passes that line
+only in that file and only as the whole line; the diff of the file is still shown to the approver in
+full. `SCAN_ALLOWANCES` in the test is a copy of the array, so the test passes the same line. Today it
+holds one entry, the `GH_TOKEN` placeholder line of `hetzner/provision/branchleft-verify-image`, so
+that file needs no `diff: false`. An entry is added in both places in one change. The test fails an
+entry whose line is not on one line of its file, so a name held apart from its value cannot stand in
+for it, and fails a shown file that assigns through an expanded name (`export "$NAME=$VALUE"`), the
+shape that was used to hold a name apart. That second test reads one shape and is not a proof that no
+other split exists: the scan reads a line at a time, and the review of a copied file is the rest.
 
 What the test enforces, over every `copy` and `template` task of the roles the playbooks list:
 

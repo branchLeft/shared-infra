@@ -43,8 +43,7 @@ unit template (the host baseline does that). It does not rotate a secret.
 - Sections 7 to 9 of the runbook (the first-run app configuration, the four `occ`
   warnings of section 8, and the major-version upgrade of section 9 with its backup
   steps) and the "Rolling back" section are not in this role. They are the platform
-  owner's to run by hand, and the runbook keeps them. See the PR body for the decision
-  this leaves open.
+  owner's to run by hand, and the runbook keeps them.
 
 ## Interface
 
@@ -128,7 +127,7 @@ host, and the first live apply is their proof (ANS-17).
 
 - **Docker, Compose and the real unit template are not exercised.** The test never runs
   the stack. The first live apply on `ops1`, through the gated workflow, is the proof of
-  the healthy containers, and it waits on the enrolment of the host.
+  the healthy containers.
 - **The unit template is a placeholder in the test.** `ExecStart`, `EnvironmentFile` and
   `AssertPathExists` of the drop-in are not exercised; `MemoryMax` and `CPUWeight` are.
 - **Secrets are generated on the host by `openssl`.** The values are not checked for

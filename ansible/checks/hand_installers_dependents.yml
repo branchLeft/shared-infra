@@ -1,12 +1,8 @@
 # Each file that names a pending-role script in hand_installers.yml, with the sorted list
 # of those scripts it names. Frozen by test_no_new_script_dependents.py; it only shrinks.
 # Edit it by hand in the change that moves a caller; nothing regenerates it.
-.github/CODEOWNERS:
-  - hetzner/provision/30-install-deploy-tooling.sh
 ansible/checks/ci_select.py:
   - mail/provision/65-install-local-resolver.sh
-ansible/checks/test_codeowners.py:
-  - hetzner/provision/30-install-deploy-tooling.sh
 ansible/checks/test_deploy_tooling_links.py:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/app-host-isolation.sh
@@ -226,6 +222,9 @@ hetzner/provision/test_20_install_docker.py:
   - mail/provision/20-install-docker.sh
 hetzner/provision/test_45_install_db_tunnel.py:
   - hetzner/provision/45-install-db-tunnel.sh
+hetzner/provision/test_app_host_isolation.py:
+  - hetzner/provision/app-host-isolation.sh
+  - hetzner/provision/branchleft_docker_user_policy.sh
 hetzner/provision/test_branchleft_docker_user_policy.py:
   - hetzner/provision/app-host-isolation.sh
   - hetzner/provision/branchleft_docker_user_policy.sh

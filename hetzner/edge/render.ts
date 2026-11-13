@@ -11,7 +11,6 @@ import {
   TLS_PROTOCOLS,
   type EdgePosture,
 } from './posture';
-import { PUBLICPRESS_HOLDING_HTML } from './publicpressHolding';
 
 // Why: renders config from sites.ts & posture.ts; pure strings, committed to
 // stack/, hand-copied. Registry is the only hostname list. See render.md
@@ -321,9 +320,7 @@ const STATIC_SITE_CONTENT_TYPE = 'text/html; charset=utf-8';
  * and addressing) and content stay in separate files, the same split the
  * rest of `sites.ts` draws.
  */
-const STATIC_SITE_CONTENT: Record<string, string> = {
-  'publicpress-holding': PUBLICPRESS_HOLDING_HTML,
-};
+const STATIC_SITE_CONTENT: Record<string, string> = {};
 
 function staticSiteContent(site: StaticSite): string {
   const html = STATIC_SITE_CONTENT[site.name];
