@@ -898,17 +898,25 @@ def ensure_private_dir(path: Path) -> None:
 def write_private_file(path: Path, text: str) -> None:
     """Replace ``path`` with ``text`` atomically, at mode 0600.
 
+    The text goes to a uniquely named file beside ``path`` (made at mode 0600, never
+    following a link), so two writers that start together cannot share a temporary
+    file. Each renames its own, and the last rename wins whole.
+
     Args:
         path: The file, in a private directory.
         text: What to write.
     """
-    pending = path.with_name(path.name + ".new")
-    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    pending.replace(path)
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".new")
+    pending = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        pending.replace(path)
+    except BaseException:
+        pending.unlink(missing_ok=True)
+        raise
 
 
 @contextlib.contextmanager
