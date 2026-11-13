@@ -1374,6 +1374,24 @@ const TOKEN_NAME_PATTERN =
 const TOKEN_LOG_FILTER = `regexp "(?i)([?&]${TOKEN_NAME_PATTERN})[^&#]*" "$1=REDACTED"`;
 const TOKEN_STRIP_MATCHER = `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*${TOKEN_NAME_PATTERN}(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`;
 
+/** The uploaded-file refusal exactly as the Ghost-backed blog's route carries it. */
+const UPLOAD_GUARD_ROUTE_LINES = `
+		@uploads_by_path {
+			path /content/files/* /content/images/* /content/media/*
+		}
+		route @uploads_by_path {
+			@active_upload_by_path {
+				path *.js *.mjs *.cjs *.html *.htm *.shtml *.xhtml *.xht *.xml *.xsl *.xslt *.css *.svg *.svgz *.kml *.gpx
+			}
+			header @active_upload_by_path X-Content-Type-Options "nosniff"
+			respond @active_upload_by_path 403
+		}
+		@active_upload_by_pattern {
+			path_regexp (?i)^/+content/+(?:files|images|media)/.*\\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$
+		}
+		header @active_upload_by_pattern X-Content-Type-Options "nosniff"
+		respond @active_upload_by_pattern 403`;
+
 /** The blog's site block exactly as it was served before the portal hostnames existed. */
 const BLOG_BLOCK = `
 	log {
@@ -1425,9 +1443,104 @@ const BLOG_BLOCK = `
 		}
 		crowdsec
 		appsec @inspected
-		respond @ghost_setup 403
+		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
 	}`;
+
+describe('the uploaded-file refusal', () => {
+  const ghost = site({ ghostUploads: true });
+  const guarded = (): string => blockOf(render(ENFORCING, [ghost]), 'example.test');
+
+  /** The `path_regexp` line the renderer emitted, as a JS RegExp (`(?i)` is the flag). */
+  const patternOf = (block: string): RegExp => {
+    const line = block.split('\n').find((entry) => entry.trim().startsWith('path_regexp '));
+    if (line === undefined) {
+      throw new Error('no path_regexp line in the block');
+    }
+    return new RegExp(line.trim().slice('path_regexp (?i)'.length), 'i');
+  };
+
+  /** What a reviewer would check: both refusals are present, with nosniff. */
+  const refusesUploads = (block: string): boolean =>
+    block.includes('respond @active_upload_by_path 403') &&
+    block.includes('respond @active_upload_by_pattern 403') &&
+    block.includes('header @active_upload_by_path X-Content-Type-Options "nosniff"') &&
+    block.includes('header @active_upload_by_pattern X-Content-Type-Options "nosniff"');
+
+  it('answers 403 with nosniff for a Ghost site, after the protection chain and before the proxy', () => {
+    const block = guarded();
+    expect(refusesUploads(block)).toBe(true);
+    expect(block.indexOf('appsec')).toBeLessThan(block.indexOf('@uploads_by_path'));
+    expect(block.indexOf('respond @ghost_setup 403')).toBeLessThan(
+      block.indexOf('@uploads_by_path')
+    );
+    expect(block.indexOf('respond @active_upload_by_pattern 403')).toBeLessThan(
+      block.indexOf('reverse_proxy')
+    );
+  });
+
+  it('covers the three upload prefixes and every active extension in the glob matcher', () => {
+    const block = guarded();
+    expect(block).toContain('path /content/files/* /content/images/* /content/media/*');
+    for (const extension of ['js', 'mjs', 'html', 'htm', 'css', 'svg', 'xml']) {
+      expect(block).toContain(`*.${extension}`);
+    }
+  });
+
+  it('matches an active file at any depth, case or slash run, and nothing Ghost needs', () => {
+    const pattern = patternOf(guarded());
+    for (const path of [
+      '/content/files/x.js',
+      '/content/files/2026/11/x.JS',
+      '/content/images/size/w600/a.svg',
+      '/content/images/a.SVG/',
+      '/content/media/a.html',
+      '//content//files//a.htm',
+      '/content/files/a.css',
+      '/content/files/a.mjs',
+      '/content/files/a.xml',
+    ]) {
+      expect(pattern.test(path), path).toBe(true);
+    }
+    for (const path of [
+      '/content/public/ghost.min.js',
+      '/content/public/cards.min.css',
+      '/content/themes/casper/assets/built/screen.css',
+      '/assets/built/screen.css',
+      '/ghost/assets/admin.js',
+      '/content/images/a.jpg',
+      '/content/images/a.js.png',
+      '/content/files/report.pdf',
+      '/content/files/js',
+    ]) {
+      expect(pattern.test(path), path).toBe(false);
+    }
+  });
+
+  it('is absent from a site without the flag, so a non-Ghost block does not change', () => {
+    const block = blockOf(render(ENFORCING, [site()]), 'example.test');
+    expect(block).not.toContain('content/');
+    expect(block).not.toContain('nosniff');
+    // Sabotage: with the rule removed the same check goes red.
+    expect(refusesUploads(block)).toBe(false);
+  });
+
+  it('is on every Ghost-backed site in the registry, and only there', () => {
+    const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
+    for (const entry of sites) {
+      const block = blockOf(rendered, entry.hostnames[0] ?? '');
+      expect(block, entry.name).not.toBe('');
+      expect(refusesUploads(block), entry.name).toBe(entry.ghostUploads === true);
+      if (entry.injectionWafPreviewOnly === true) {
+        expect(entry.ghostUploads, `${entry.name} has an authoring surface`).toBe(true);
+      }
+    }
+    expect(sites.find((entry) => entry.name === 'blog')?.ghostUploads).toBe(true);
+    for (const entry of staticSites) {
+      expect(blockOf(rendered, entry.hostname)).not.toContain('content/');
+    }
+  });
+});
 
 describe('the owner console and tenant portal routes', () => {
   const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
@@ -1499,7 +1612,7 @@ describe('the owner console and tenant portal routes', () => {
   });
 
   describe('the blog is untouched (its admin, sign-in, members sign-up and magic link)', () => {
-    it('renders the blog block byte for byte as it was before these routes existed', () => {
+    it('renders the blog block byte for byte as it was before these routes existed, plus the uploaded-file refusal', () => {
       expect(blockOf(rendered, 'blog.branchleft.co.uk')).toBe(BLOG_BLOCK);
     });
 

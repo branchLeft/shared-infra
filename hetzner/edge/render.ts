@@ -55,6 +55,42 @@ const GHOST_SETUP_METHODS = ['POST', 'PUT'];
 
 const GHOST_SETUP_REFUSAL_STATUS = 403;
 
+/**
+ * Ghost serves what a tenant uploads from the tenant's own origin, under these
+ * three prefixes, so an uploaded `.js` satisfies `script-src 'self'` and an
+ * uploaded `.html` or `.svg` is a document that runs script. The edge refuses
+ * the request for any file of an active type below them. Why, and why a
+ * refusal and not a download: `render.md`.
+ */
+const UPLOAD_PATH_PREFIXES = ['/content/files/', '/content/images/', '/content/media/'];
+const ACTIVE_CONTENT_EXTENSIONS = [
+  'js',
+  'mjs',
+  'cjs',
+  'html',
+  'htm',
+  'shtml',
+  'xhtml',
+  'xht',
+  'xml',
+  'xsl',
+  'xslt',
+  'css',
+  'svg',
+  'svgz',
+  'kml',
+  'gpx',
+];
+
+/**
+ * Over the path as received: any depth below a prefix, any case, any run of
+ * slashes. The glob matchers cover what Caddy cleans (dot segments, escapes)
+ * that this one does not.
+ */
+const UPLOAD_ACTIVE_PATH_REGEXP = `(?i)^/+content/+(?:files|images|media)/.*\\.(?:${ACTIVE_CONTENT_EXTENSIONS.join('|')})/*$`;
+
+const UPLOAD_REFUSAL_STATUS = 403;
+
 // Why: zone name re-declared per-site for shared counter via mholt/caddy-ratelimit's
 // LoadOrStore. See render.md §"MEMBERS_MAGIC_LINK_ZONE".
 const MEMBERS_MAGIC_LINK_ZONE = 'members_magic_link_per_ip';
@@ -375,6 +411,37 @@ function ghostSetupRefusal(): string {
   return `respond @ghost_setup ${GHOST_SETUP_REFUSAL_STATUS}`;
 }
 
+/**
+ * The refusal of an uploaded file a browser would run, as lines for a Ghost
+ * site's `route`. Two overlapping matchers, each followed by a 403 with
+ * `nosniff`: Caddy's cleaning, case-insensitive `path` (a nested `route` makes
+ * the prefix and the extension an AND, since two `path` lines in one matcher
+ * are an OR), and a `path_regexp` over the path as received. Every method is
+ * refused. Placed after the protection chain, so a client probing for an
+ * upload is throttled and CrowdSec still sees it.
+ */
+function uploadGuard(): string[] {
+  const prefixes = UPLOAD_PATH_PREFIXES.map((prefix) => `${prefix}*`).join(' ');
+  const extensions = ACTIVE_CONTENT_EXTENSIONS.map((extension) => `*.${extension}`).join(' ');
+  return [
+    '@uploads_by_path {',
+    `\tpath ${prefixes}`,
+    '}',
+    'route @uploads_by_path {',
+    '\t@active_upload_by_path {',
+    `\t\tpath ${extensions}`,
+    '\t}',
+    '\theader @active_upload_by_path X-Content-Type-Options "nosniff"',
+    `\trespond @active_upload_by_path ${UPLOAD_REFUSAL_STATUS}`,
+    '}',
+    '@active_upload_by_pattern {',
+    `\tpath_regexp ${UPLOAD_ACTIVE_PATH_REGEXP}`,
+    '}',
+    'header @active_upload_by_pattern X-Content-Type-Options "nosniff"',
+    `respond @active_upload_by_pattern ${UPLOAD_REFUSAL_STATUS}`,
+  ];
+}
+
 // Why: the token is read only on /ghost/, so anywhere else it is stripped before
 // any other handler. The gate reads the raw request target (Caddy's path matcher
 // decodes and cleans, Express does not). See render.md §"logDirective: break-glass
@@ -542,6 +609,7 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
       beforeAppsec: site.discardRoute === undefined ? [] : discardRouteResponses(),
     }).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,
+    ...(site.ghostUploads === true ? uploadGuard().map((line) => `\t${line}`) : []),
     `\treverse_proxy ${resolvePrivateAddress(upstream.host, upstream.port)}`,
     '}'
   );

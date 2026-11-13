@@ -208,6 +208,28 @@ the `*` version segment.
 After the protection chain, before `reverse_proxy`: a client probing for an open setup is
 throttled and seen by CrowdSec rather than answered for free.
 
+## `siteBlock`: uploaded-file refusal
+
+Ghost accepts `.js`, `.html` and `.css` as uploads and serves everything a tenant uploads
+from the tenant's own origin, under `/content/files/`, `/content/images/` and
+`/content/media/`. An uploaded `x.js` therefore satisfies `script-src 'self'`, and an
+uploaded `.html` or `.svg` is a document a browser runs. The shared-domain limit is that no
+tenant script runs there, so the edge answers 403, with `X-Content-Type-Options: nosniff`,
+to any request below those prefixes for a file of an active type (`ACTIVE_CONTENT_EXTENSIONS`:
+script, HTML, XML, stylesheet and SVG families). It is a refusal, not a download: a forced
+download would still put the bytes on the tenant's origin, and nothing legitimate uploads an
+active file for a visitor to run. Every method is refused.
+
+Emitted only for a site with `ghostUploads`, so a non-Ghost site's block does not change.
+`/content/public/` (Ghost's own shipped scripts), theme assets and the admin are outside the
+prefixes and are untouched. Copied from the demo edge's `render_upload_guard`.
+
+Two matchers, because Caddy's `path` lowercases, cleans dot segments and decodes escapes but
+a regexp over the path as received also catches a run of slashes. The glob matcher needs a
+nested `route`: two `path` lines in one matcher are an OR, so the prefix and the extension
+are an AND only across the two matchers. After the protection chain, before `reverse_proxy`,
+for the same reason as the setup refusal.
+
 ## `logDirective`: retention and rotation
 
 Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of

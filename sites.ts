@@ -40,6 +40,8 @@ export const sites: EdgeSite[] = [
     // trips the injection signatures. Every Ghost tenant added here needs this
     // until there is enough admin-API traffic to prove otherwise.
     injectionWafPreviewOnly: true,
+    // Ghost-backed: uploaded scripts, documents and stylesheets are refused.
+    ghostUploads: true,
   },
 
   {

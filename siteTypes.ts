@@ -47,6 +47,14 @@ export interface EdgeSite {
    */
   injectionWafPreviewOnly?: boolean;
   /**
+   * Set for every Ghost-backed tenant: the edge then answers 403 to a request
+   * for an uploaded file of an active type (script, document, stylesheet, SVG)
+   * under Ghost's upload paths, so a tenant can never serve its own script from
+   * its own origin. Why, and what it leaves alone: `sites.md` section "The
+   * uploaded-file refusal".
+   */
+  ghostUploads?: boolean;
+  /**
    * Maximum request body the edge accepts, as a Caddy size string in binary
    * units (`MiB`, never `MB`). Required for every site served. Why and where
    * the value comes from: `sites.md` section "The request body ceiling".

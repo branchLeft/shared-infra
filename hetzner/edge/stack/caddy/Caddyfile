@@ -155,6 +155,21 @@ blog.branchleft.co.uk {
 		crowdsec
 		appsec @inspected
 		respond @ghost_setup 403
+		@uploads_by_path {
+			path /content/files/* /content/images/* /content/media/*
+		}
+		route @uploads_by_path {
+			@active_upload_by_path {
+				path *.js *.mjs *.cjs *.html *.htm *.shtml *.xhtml *.xht *.xml *.xsl *.xslt *.css *.svg *.svgz *.kml *.gpx
+			}
+			header @active_upload_by_path X-Content-Type-Options "nosniff"
+			respond @active_upload_by_path 403
+		}
+		@active_upload_by_pattern {
+			path_regexp (?i)^/+content/+(?:files|images|media)/.*\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$
+		}
+		header @active_upload_by_pattern X-Content-Type-Options "nosniff"
+		respond @active_upload_by_pattern 403
 		reverse_proxy 10.20.1.100:8101
 	}
 }
