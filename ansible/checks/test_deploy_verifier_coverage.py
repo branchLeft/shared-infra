@@ -42,6 +42,7 @@ WRAPPER_ROLES = frozenset(
         "website_app1",
         "publicpress_website_app1",
         "db_t1",
+        "tenant_compose",
     }
 )
 

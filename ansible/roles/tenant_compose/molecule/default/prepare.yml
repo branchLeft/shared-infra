@@ -55,6 +55,44 @@
         group: root
         mode: '0755'
 
+    # The real deploy wrapper, from its one home in hetzner/provision, at the path the deploy
+    # tooling role installs it to: the role's tests run the wrapper the host runs, so its
+    # attestation check, its lock and its pin are the real ones. Only the verifier it calls
+    # is a stand-in.
+    - name: Put the real deploy wrapper in place
+      ansible.builtin.copy:
+        src: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY') }}/../../../hetzner/provision/branchleft_deploy.py"
+        dest: '{{ tenant_compose_deploy_program }}'
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Put the image verifier stand-in in place, where the wrapper runs the verifier
+      ansible.builtin.copy:
+        src: standin-verify-image.py
+        dest: /usr/local/sbin/branchleft-verify-image
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Make the stand-ins' state directory
+      ansible.builtin.file:
+        path: /var/lib/standin
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    # The one image the verifier stand-in finds an attestation for: the scenario's tenant
+    # image. Every other digest of the same name is refused, as an unsigned one would be.
+    - name: Record the scenario's tenant image as the only attested one
+      ansible.builtin.copy:
+        content: "{{ scenario_image }}\n"
+        dest: /var/lib/standin/attested
+        owner: root
+        group: root
+        mode: '0644'
+
     # The same properties of the real template unit the role depends on: it asserts the
     # pin file, reads the pin and the secrets as its environment, is a oneshot that stays
     # active, and runs one command that fails when the stack does not come up.

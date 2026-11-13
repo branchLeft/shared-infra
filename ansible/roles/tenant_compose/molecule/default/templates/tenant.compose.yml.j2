@@ -6,6 +6,9 @@ services:
     restart: 'unless-stopped'
     user: '{{ item.uid }}:{{ item.uid }}'
     mem_limit: '{{ item.memory | default("640m") }}'
+    # The deploy wrapper refuses a service with no health signal, as the renderer's stacks have one.
+    healthcheck:
+      test: ['CMD', 'true']
     ports:
       - '{{ item.publish | default("10.20.2.30") }}:{{ item.port }}:2368'
     environment:
