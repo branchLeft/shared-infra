@@ -171,6 +171,15 @@ export const BLACKBOX_MODULE_OBJECT_STORAGE = 'http_object_storage';
 const MX1_HOSTNAME = 'mx1.branchleft.co.uk';
 
 /**
+ * The mailgun shim's Caddy TLS listener on mx1 (bulk mail from the sending
+ * application and the collector drain). It is open to the whole internet
+ * (`mail/firewall.ts`), so a probe from edge1 reaches it like any client.
+ * Probed with `tls_connect` alongside 465 and 993: a completed handshake with
+ * a verified certificate, not a plain TCP connect.
+ */
+export const MX1_SHIM_TLS_PORT = 8443;
+
+/**
  * The Stalwart exporter is reached by **address, not by name**: mx1's IPv6
  * (AAAA) half is not admitted by Stalwart's access-control rule, and naming
  * the address removes a Go dialer's own family choice rather than relying
@@ -329,7 +338,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '    metrics_path: /probe',
     '    static_configs:',
     mailProbeStaticConfig([25, 587], BLACKBOX_MODULE_SMTP_BANNER),
-    mailProbeStaticConfig([465, 993], BLACKBOX_MODULE_TLS_CONNECT),
+    mailProbeStaticConfig([465, 993, MX1_SHIM_TLS_PORT], BLACKBOX_MODULE_TLS_CONNECT),
     '    relabel_configs:',
     '      - source_labels: [__address__]',
     '        target_label: __param_target',
@@ -929,12 +938,12 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        annotations:',
     '          summary: "{{ $labels.instance }}\'s mail TLS certificate expires in under 14 days."',
     '          description: >-',
-    '            Stalwart renews the certificate automatically, so a failed renewal',
-    '            shows only when the certificate reaches hard expiry and mail',
-    "            clients' TLS fails. This fires earlier, while there is still time",
-    '            to fix the renewal. The series comes from the implicit-TLS ports',
-    '            465 and 993 only: ports 25 and 587 use smtp_banner, which does no',
-    '            TLS handshake.',
+    '            Stalwart (ports 465 and 993) and Caddy (the mailgun shim, port 8443)',
+    '            renew their certificates automatically, so a failed renewal shows',
+    "            only when the certificate reaches hard expiry and clients' TLS",
+    '            fails. This fires earlier, while there is still time to fix the',
+    '            renewal. The series comes from the TLS ports 465, 993 and 8443',
+    '            only: ports 25 and 587 use smtp_banner, which does no TLS handshake.',
     '',
     '      - alert: MailHostDown',
     '        expr: probe_success{job="blackbox_mail"} == 0',

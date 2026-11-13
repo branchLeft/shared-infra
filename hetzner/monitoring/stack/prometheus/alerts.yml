@@ -485,12 +485,12 @@ groups:
         annotations:
           summary: "{{ $labels.instance }}'s mail TLS certificate expires in under 14 days."
           description: >-
-            Stalwart renews the certificate automatically, so a failed renewal
-            shows only when the certificate reaches hard expiry and mail
-            clients' TLS fails. This fires earlier, while there is still time
-            to fix the renewal. The series comes from the implicit-TLS ports
-            465 and 993 only: ports 25 and 587 use smtp_banner, which does no
-            TLS handshake.
+            Stalwart (ports 465 and 993) and Caddy (the mailgun shim, port 8443)
+            renew their certificates automatically, so a failed renewal shows
+            only when the certificate reaches hard expiry and clients' TLS
+            fails. This fires earlier, while there is still time to fix the
+            renewal. The series comes from the TLS ports 465, 993 and 8443
+            only: ports 25 and 587 use smtp_banner, which does no TLS handshake.
 
       - alert: MailHostDown
         expr: probe_success{job="blackbox_mail"} == 0
