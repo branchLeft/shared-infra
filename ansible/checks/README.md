@@ -595,7 +595,7 @@ text differs from its source is judged by its source.
 
 The pattern is the `credential-assignment` entry of the backstop in the step "Judge the answers,
 scan the diff and write the result" of the `ssh-check-hosts` action in branchLeft/github-workflows,
-at the tag `ansible-gated-apply.yml` pins (v1.0.19 when this was written). The workflow runs it as
+at the tag `ansible-gated-apply.yml` pins. The workflow runs it as
 `grep -Eiq` on the diff, line by line, in the C locale. The test translates it: `re.I` for `-i`,
 `re.A` so that `\s` is the ASCII set the C locale gives the POSIX space class, `\s` for
 `[[:space:]]`, and a split on the newline alone (not `str.splitlines`, which also splits on form
