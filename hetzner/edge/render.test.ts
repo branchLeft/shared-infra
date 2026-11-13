@@ -1383,13 +1383,11 @@ const UPLOAD_GUARD_ROUTE_LINES = `
 			@active_upload_by_path {
 				path *.js *.mjs *.cjs *.html *.htm *.shtml *.xhtml *.xht *.xml *.xsl *.xslt *.css *.svg *.svgz *.kml *.gpx
 			}
-			header @active_upload_by_path X-Content-Type-Options "nosniff"
 			respond @active_upload_by_path 403
 		}
 		@active_upload_by_pattern {
 			path_regexp (?i)^/+content/+(?:files|images|media)/.*\\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$
 		}
-		header @active_upload_by_pattern X-Content-Type-Options "nosniff"
 		respond @active_upload_by_pattern 403`;
 
 /** The blog's site block exactly as it was served before the portal hostnames existed. */
@@ -1423,6 +1421,7 @@ const BLOG_BLOCK = `
 	@break_glass_strip expression \`${TOKEN_STRIP_MATCHER}\`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header >X-Content-Type-Options "nosniff"
 		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 64MiB
@@ -1445,11 +1444,15 @@ const BLOG_BLOCK = `
 		appsec @inspected
 		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
+	}
+	handle_errors {
+		header >X-Content-Type-Options "nosniff"
 	}`;
 
-describe('the uploaded-file refusal', () => {
-  const ghost = site({ ghostUploads: true });
+describe('the uploaded-file refusal and nosniff on a Ghost site', () => {
+  const ghost = site({ backend: 'ghost' });
   const guarded = (): string => blockOf(render(ENFORCING, [ghost]), 'example.test');
+  const NOSNIFF = 'header >X-Content-Type-Options "nosniff"';
 
   /** The `path_regexp` line the renderer emitted, as a JS RegExp (`(?i)` is the flag). */
   const patternOf = (block: string): RegExp => {
@@ -1460,14 +1463,29 @@ describe('the uploaded-file refusal', () => {
     return new RegExp(line.trim().slice('path_regexp (?i)'.length), 'i');
   };
 
-  /** What a reviewer would check: both refusals are present, with nosniff. */
+  /** Both refusals are present. */
   const refusesUploads = (block: string): boolean =>
     block.includes('respond @active_upload_by_path 403') &&
-    block.includes('respond @active_upload_by_pattern 403') &&
-    block.includes('header @active_upload_by_path X-Content-Type-Options "nosniff"') &&
-    block.includes('header @active_upload_by_pattern X-Content-Type-Options "nosniff"');
+    block.includes('respond @active_upload_by_pattern 403');
 
-  it('answers 403 with nosniff for a Ghost site, after the protection chain and before the proxy', () => {
+  /**
+   * An unlisted upload type (`.txt`, `.json`, ...) is proxied, so it has to
+   * carry nosniff: an unconditional header in the route, ahead of the proxy,
+   * and one on the errors Caddy writes itself, outside the route.
+   */
+  const sniffSafe = (block: string): boolean => {
+    const routeStart = block.indexOf('\troute {');
+    const route = block.slice(routeStart, block.indexOf('\n\t}\n', routeStart) + 3);
+    const header = route.indexOf(`\t\t${NOSNIFF}\n`);
+    return (
+      routeStart > -1 &&
+      header > -1 &&
+      header < route.indexOf('reverse_proxy') &&
+      block.includes(`\thandle_errors {\n\t\t${NOSNIFF}\n\t}`)
+    );
+  };
+
+  it('answers 403 for a Ghost site, after the protection chain and before the proxy', () => {
     const block = guarded();
     expect(refusesUploads(block)).toBe(true);
     expect(block.indexOf('appsec')).toBeLessThan(block.indexOf('@uploads_by_path'));
@@ -1477,6 +1495,28 @@ describe('the uploaded-file refusal', () => {
     expect(block.indexOf('respond @active_upload_by_pattern 403')).toBeLessThan(
       block.indexOf('reverse_proxy')
     );
+  });
+
+  it('sets nosniff on every response, so an upload the refusal lets through is not sniffed into script', () => {
+    const block = guarded();
+    expect(sniffSafe(block)).toBe(true);
+    // The types the refusal lets through are proxied, and still carry the header.
+    const pattern = patternOf(block);
+    for (const path of [
+      '/content/files/x.txt',
+      '/content/files/x.md',
+      '/content/files/x.json',
+      '/content/files/x.pdf',
+      '/content/files/x.zip',
+      '/content/files/x.py',
+    ]) {
+      expect(pattern.test(path), path).toBe(false);
+    }
+    // The deferred form, so it replaces Ghost's own copy rather than doubling it.
+    expect(block.match(/X-Content-Type-Options/g)).toHaveLength(2);
+    // Sabotage: with either half removed the same check goes red.
+    expect(sniffSafe(block.replace(`\t\t${NOSNIFF}\n`, ''))).toBe(false);
+    expect(sniffSafe(block.replace(/\thandle_errors \{[^}]*\}\n?/, ''))).toBe(false);
   });
 
   it('covers the three upload prefixes and every active extension in the glob matcher', () => {
@@ -1517,25 +1557,30 @@ describe('the uploaded-file refusal', () => {
     }
   });
 
-  it('is absent from a site without the flag, so a non-Ghost block does not change', () => {
-    const block = blockOf(render(ENFORCING, [site()]), 'example.test');
-    expect(block).not.toContain('content/');
-    expect(block).not.toContain('nosniff');
-    // Sabotage: with the rule removed the same check goes red.
-    expect(refusesUploads(block)).toBe(false);
+  it('is absent from a site that is not Ghost, so its block does not change', () => {
+    for (const backend of [undefined, 'other'] as const) {
+      const block = blockOf(render(ENFORCING, [site({ backend })]), 'example.test');
+      expect(block).not.toContain('content/');
+      expect(block).not.toContain('nosniff');
+      expect(block).not.toContain('handle_errors');
+      // Sabotage: with the rules removed the same checks go red.
+      expect(refusesUploads(block)).toBe(false);
+      expect(sniffSafe(block)).toBe(false);
+    }
   });
 
-  it('is on every Ghost-backed site in the registry, and only there', () => {
+  it('every served site in the registry declares what it runs, and only a Ghost site gets the rules', () => {
     const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
-    for (const entry of sites) {
+    for (const entry of sites.filter((candidate) => candidate.privateUpstream !== undefined)) {
+      expect(['ghost', 'other'], `site ${entry.name} must declare backend`).toContain(
+        entry.backend
+      );
       const block = blockOf(rendered, entry.hostnames[0] ?? '');
       expect(block, entry.name).not.toBe('');
-      expect(refusesUploads(block), entry.name).toBe(entry.ghostUploads === true);
-      if (entry.injectionWafPreviewOnly === true) {
-        expect(entry.ghostUploads, `${entry.name} has an authoring surface`).toBe(true);
-      }
+      expect(refusesUploads(block), entry.name).toBe(entry.backend === 'ghost');
+      expect(sniffSafe(block), entry.name).toBe(entry.backend === 'ghost');
     }
-    expect(sites.find((entry) => entry.name === 'blog')?.ghostUploads).toBe(true);
+    expect(sites.find((entry) => entry.name === 'blog')?.backend).toBe('ghost');
     for (const entry of staticSites) {
       expect(blockOf(rendered, entry.hostname)).not.toContain('content/');
     }
@@ -1612,7 +1657,7 @@ describe('the owner console and tenant portal routes', () => {
   });
 
   describe('the blog is untouched (its admin, sign-in, members sign-up and magic link)', () => {
-    it('renders the blog block byte for byte as it was before these routes existed, plus the uploaded-file refusal', () => {
+    it('renders the blog block byte for byte as it was before these routes existed, plus the uploaded-file refusal and nosniff', () => {
       expect(blockOf(rendered, 'blog.branchleft.co.uk')).toBe(BLOG_BLOCK);
     });
 

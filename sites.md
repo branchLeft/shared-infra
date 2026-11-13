@@ -92,15 +92,25 @@ Hostname and addressing only, same rule as the rest of this registry: the page
 content itself lives in a file under `hetzner/edge/`, keyed by `name`, so that
 changing the words on the page never touches this file.
 
-## The uploaded-file refusal
+## What the site runs
 
-`ghostUploads` is set on every Ghost-backed tenant. Ghost accepts `.js`,
-`.html` and `.css` as uploads and serves them from the tenant's own origin
-under `/content/files/`, `/content/images/` and `/content/media/`, so an
-uploaded script satisfies `script-src 'self'` and an uploaded `.html` or
-`.svg` is a document that can run script. For a site with the flag the edge
-answers 403 with `X-Content-Type-Options: nosniff` to any request for a file
-of an active type under those prefixes, whatever the method. Theme assets,
-the admin and `/content/public/` are untouched, as is every site without the
-flag. Leaving it off a Ghost tenant leaves the hole open: the registry test
-fails for any site that sets `injectionWafPreviewOnly` without it.
+`backend` is `ghost` for a Ghost tenant and `other` for everything else, and
+every entry with a `privateUpstream` must declare one: a registry test fails
+for an entry that does not, so a new Ghost tenant cannot silently miss the
+rules below.
+
+Ghost accepts `.js`, `.html` and `.css` as uploads, and also `.txt`, `.md`,
+`.json`, `.pdf`, `.zip` and `.py`, and serves them all from the tenant's own
+origin under `/content/files/`, `/content/images/` and `/content/media/`. So an
+uploaded script satisfies `script-src 'self'`. For `ghost` the edge therefore
+does two things:
+
+- answers 403 to any request under those prefixes for a file of an active type
+  (script, HTML, XML, stylesheet, SVG), whatever the method;
+- sets `X-Content-Type-Options: nosniff` on every response, error responses
+  included, because the extension list cannot name every type: a browser runs
+  a same-origin `<script src>` of a response typed `text/plain` or
+  `application/json` unless `nosniff` is set.
+
+Theme assets, the admin and `/content/public/` are untouched. An `other` site
+changes in no way.

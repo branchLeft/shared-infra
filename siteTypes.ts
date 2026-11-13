@@ -47,13 +47,15 @@ export interface EdgeSite {
    */
   injectionWafPreviewOnly?: boolean;
   /**
-   * Set for every Ghost-backed tenant: the edge then answers 403 to a request
-   * for an uploaded file of an active type (script, document, stylesheet, SVG)
-   * under Ghost's upload paths, so a tenant can never serve its own script from
-   * its own origin. Why, and what it leaves alone: `sites.md` section "The
-   * uploaded-file refusal".
+   * What the site runs, declared by every entry that has a `privateUpstream`
+   * (a registry test fails for one that does not). `ghost` is a Ghost tenant:
+   * the edge refuses an uploaded script, document or stylesheet under Ghost's
+   * upload paths and sets `nosniff` on every response, because Ghost serves a
+   * tenant's uploads from the tenant's own origin. `other` is anything else and
+   * gets neither. Why, and what it leaves alone: `sites.md` section "What the
+   * site runs".
    */
-  ghostUploads?: boolean;
+  backend?: 'ghost' | 'other';
   /**
    * Maximum request body the edge accepts, as a Caddy size string in binary
    * units (`MiB`, never `MB`). Required for every site served. Why and where

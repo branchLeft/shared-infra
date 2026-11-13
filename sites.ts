@@ -15,6 +15,7 @@ export const sites: EdgeSite[] = [
     // Port matches deploy/compose.yml's `website` service in
     // branchLeft/website -- the two must move together, and each states so.
     privateUpstream: { host: 'app1', port: 8080 },
+    backend: 'other',
     // Not derived from a tenant stack -- this site has none. An SSR marketing
     // site whose only request bodies are contact-form posts; 1MiB is orders of
     // magnitude above anything legitimate and replaces no ceiling at all,
@@ -40,8 +41,9 @@ export const sites: EdgeSite[] = [
     // trips the injection signatures. Every Ghost tenant added here needs this
     // until there is enough admin-API traffic to prove otherwise.
     injectionWafPreviewOnly: true,
-    // Ghost-backed: uploaded scripts, documents and stylesheets are refused.
-    ghostUploads: true,
+    // Ghost serves its uploads from its own origin: see `sites.md`, "What the
+    // site runs".
+    backend: 'ghost',
   },
 
   {
@@ -68,6 +70,7 @@ export const sites: EdgeSite[] = [
     // Nextcloud itself picks -- the two must move together, same convention
     // as the blog entry above.
     privateUpstream: { host: 'ops1', port: 11000 },
+    backend: 'other',
     // Calendar/Talk attachments and avatars, not general file sync. Raise
     // deliberately if a real bulk-upload use case shows up.
     requestBodyMaxSize: '100MiB',
@@ -83,6 +86,7 @@ export const sites: EdgeSite[] = [
     // together. The application defaults to 8080, which both portal apps
     // would share, so each is given its own number there.
     privateUpstream: { host: 'ops1', port: 8301 },
+    backend: 'other',
     // Form posts at sign-in and sign-out only; no upload surface exists.
     requestBodyMaxSize: '1MiB',
   },
@@ -94,6 +98,7 @@ export const sites: EdgeSite[] = [
     hostnames: ['console.branchleft.co.uk'],
     // The owner console's `PORT` on ops1; see the tenant-portal entry.
     privateUpstream: { host: 'ops1', port: 8302 },
+    backend: 'other',
     requestBodyMaxSize: '1MiB',
     // The reviewer GitHub App's webhook target: GitHub requires an active
     // URL before the App may subscribe to the deployment-protection event,
@@ -110,6 +115,7 @@ export const sites: EdgeSite[] = [
     name: 'identity',
     hostnames: ['id.publicpress.co.uk'],
     privateUpstream: { host: 'ops1', port: 8300 },
+    backend: 'other',
     // Login form posts and token requests only; no upload surface exists.
     requestBodyMaxSize: '1MiB',
   },
@@ -122,6 +128,7 @@ export const sites: EdgeSite[] = [
     name: 'ntfy',
     hostnames: ['ntfy.branchleft.co.uk'],
     privateUpstream: { host: 'edge1', port: 2586 },
+    backend: 'other',
     // A page and a subscription request are a few hundred bytes.
     requestBodyMaxSize: '64KiB',
   },
@@ -136,6 +143,7 @@ export const sites: EdgeSite[] = [
     // repository, which publishes it on app1's private address; the two must
     // move together, and each states so. 8080 is the branchLeft website's.
     privateUpstream: { host: 'app1', port: 8081 },
+    backend: 'other',
     // The register form posts a few short fields; 64KiB is orders of magnitude
     // above that. Raise it deliberately if an upload surface is ever added.
     // The app sets its own per-request CSP and response headers: the edge adds
