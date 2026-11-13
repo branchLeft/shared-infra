@@ -20,9 +20,13 @@
       - lookup('ansible.builtin.fileglob', edge_stack_verify_scenarios_dir ~ '/' ~ item ~ '/verify.yml', wantlist=true) | length == 1
       - >-
         not (lookup('ansible.builtin.file', edge_stack_verify_scenarios_dir ~ '/' ~ item ~ '/skip-steps.txt', errors='ignore')
-        | default('', true) | string | regex_search('(?m)^verify\s*$'))
+        | default('', true) | string | regex_search(edge_stack_verify_skip_pattern))
     fail_msg: 'The home {{ item }} has no molecule/{{ item }}/molecule.yml or verify.yml, or that scenario leaves the verify step out.'
     quiet: true
   loop: '{{ edge_stack_verify_homes.values() | unique | list }}'
   vars:
     edge_stack_verify_scenarios_dir: '{{ playbook_dir }}/..'
+    # The one guard every role copies (checks/test_verify_guard_copies.py holds the copies equal). It reads
+    # the file as the harness does, with str.splitlines(): a verify line may be padded, and may follow any
+    # break that splits a line besides LF (CR, VT, FF, FS, GS, RS, NEL, LS, PS), which ^ and $ cannot see.
+    edge_stack_verify_skip_pattern: '(?:\A|(?<=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]))\s*verify\s*(?=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]|\Z)'

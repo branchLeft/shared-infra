@@ -21,9 +21,13 @@
       - lookup('ansible.builtin.fileglob', db1_grants_verify_scenarios_dir ~ '/' ~ item ~ '/verify.yml', wantlist=true) | length == 1
       - >-
         not (lookup('ansible.builtin.file', db1_grants_verify_scenarios_dir ~ '/' ~ item ~ '/skip-steps.txt', errors='ignore')
-        | default('', true) | string | regex_search('(?m)^\s*verify\s*$'))
+        | default('', true) | string | regex_search(db1_grants_verify_skip_pattern))
     fail_msg: 'The part {{ item }} has no molecule/{{ item }}/verify.yml, or that scenario leaves the verify step out.'
     quiet: true
   loop: '{{ db1_grants_verify_parts }}'
   vars:
     db1_grants_verify_scenarios_dir: '{{ playbook_dir }}/..'
+    # The one guard every role copies (checks/test_verify_guard_copies.py holds the copies equal). It reads
+    # the file as the harness does, with str.splitlines(): a verify line may be padded, and may follow any
+    # break that splits a line besides LF (CR, VT, FF, FS, GS, RS, NEL, LS, PS), which ^ and $ cannot see.
+    db1_grants_verify_skip_pattern: '(?:\A|(?<=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]))\s*verify\s*(?=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]|\Z)'
