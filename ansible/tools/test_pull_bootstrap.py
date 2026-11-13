@@ -651,6 +651,26 @@ class ConfigRefusalTest(unittest.TestCase):
             "takes bundles, and this tool bootstraps a host that pulls", variables=variables
         )
 
+    def test_a_task_level_variable_the_tool_does_not_read_is_refused(self) -> None:
+        # Ansible gives a task's own vars precedence over the variable files, so an
+        # enrolled_host or a bundle list set here would change the file the host is given
+        # while the tool, which reads neither, rendered the record without it.
+        for name, value in (
+            ("enrolled_host", "demo1"),
+            ("pull_trigger_bundle_hosts", "[edge1]"),
+            ("pull_trigger_signers", "[]"),
+            ("some_other_name", "x"),
+        ):
+            with self.subTest(name=name):
+                tasks = ConfigTexts.tasks.replace(
+                    "  vars:\n    pull_trigger_config_source:",
+                    f"  vars:\n    {name}: {value}\n    pull_trigger_config_source:",
+                )
+                self.assertNotEqual(tasks, ConfigTexts.tasks)
+                self.refuses(
+                    f"the task's vars set {name}, which this tool does not read", tasks=tasks
+                )
+
     def test_a_task_that_leaves_out_a_required_key_is_refused_by_name(self) -> None:
         for key in sorted(tool.REQUIRED_CONFIG_KEYS):
             with self.subTest(key=key):
