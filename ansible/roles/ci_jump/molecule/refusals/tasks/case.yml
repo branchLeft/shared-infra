@@ -5,17 +5,38 @@
 # accepted: true is a control: the same step on the host as prepared must not refuse, so a step
 # that refused everything would not pass every case.
 #
-# Everything the case changed is put back in every outcome: the files from a copy taken first, a
-# file the host did not have removed, and the commands the case gives. A plan makes no change, so a
-# check run skips the case.
+# Everything the case changed is put back in every outcome: the files from a copy taken first
+# (the case's files and edits, and keep, a file the step itself may change), a file the host did
+# not have removed, and the commands the case gives. A plan makes no change, so a check run skips
+# the case.
+#
+# A case with outcome set is a write-step case, and what the step's rescue left behind is asserted
+# before anything is put back: outcome.reloads, how many times sshd was reloaded between the start
+# of the step and the end of its rescue, outcome.marker, whether the reload-owed marker is still
+# there, and outcome.key_file, kept when the key file must be the very bytes it was before the step
+# and changed when the rescue must have left the new one. The drop-in must always be as it was.
 - name: Prove the step refuses the state, or accepts it for a control
   when: not ansible_check_mode
   vars:
     case_accepted: '{{ converge_case.accepted | default(false) | bool }}'
     case_paths: >-
-      {{ ((converge_case.files | default([])) + (converge_case.edits | default([])))
+      {{ ((converge_case.files | default([])) + (converge_case.edits | default([]))
+      + (converge_case.keep | default([])))
       | map(attribute='path') | unique | list }}
+    case_outcome_paths:
+      - '{{ case_key_file }}'
+      - '{{ case_dropin }}'
+      - '{{ case_marker }}'
   block:
+    # Registers outlive the task that made them: emptied first, so an outcome is only ever checked
+    # against its own case's before and after.
+    - name: Empty what an earlier case recorded, so this case is checked against its own
+      ansible.builtin.set_fact:
+        ci_jump_case_before: {}
+        ci_jump_case_after: {}
+        ci_jump_case_reloads_before: {}
+        ci_jump_case_reloads_after: {}
+
     - name: Look at the files the case changes
       ansible.builtin.stat:
         path: '{{ item }}'
@@ -63,6 +84,32 @@
         label: '{{ item | join(" ") }}'
       changed_when: true
 
+    # The write step reads the plan the guards made (ci_jump_plan.pending: a write is owed) to decide
+    # whether to leave the marker. Run alone it would read the plan of the first play, which was
+    # made for a host that was finished and says nothing is owed. The destinations of a write-step
+    # case differ from the delivered ones, so a write is owed, as the guards would have said.
+    - name: Say that a write is owed, as the guards' plan would for this case's inputs
+      ansible.builtin.set_fact:
+        ci_jump_plan: { pending: true }
+      when: converge_case.outcome is defined
+
+    - name: Look at the key file, the drop-in and the reload marker before the step
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop: '{{ case_outcome_paths }}'
+      register: ci_jump_case_before
+      when: converge_case.outcome is defined
+      no_log: true
+
+    - name: Count the reloads of sshd before the step
+      ansible.builtin.slurp:
+        src: '{{ case_reload_record }}'
+      register: ci_jump_case_reloads_before
+      when: converge_case.outcome is defined
+      no_log: true
+
     # The step is the role's own internal tasks file, run alone with the inputs the case gives in
     # place of the delivered ones. The flag is on, as it is when the step is reached in a run.
     - name: Run the step the case is for
@@ -92,6 +139,45 @@
       vars:
         expect_phrase: '{{ converge_case.expect }}'
       when: not case_accepted | bool
+
+    # Before the always section puts anything back: this is what the step's own rescue left.
+    - name: Look at the key file, the drop-in and the reload marker after the rescue
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop: '{{ case_outcome_paths }}'
+      register: ci_jump_case_after
+      when: converge_case.outcome is defined and not case_accepted | bool
+      no_log: true
+
+    - name: Count the reloads of sshd after the rescue
+      ansible.builtin.slurp:
+        src: '{{ case_reload_record }}'
+      register: ci_jump_case_reloads_after
+      when: converge_case.outcome is defined and not case_accepted | bool
+      no_log: true
+
+    - name: Assert the rescue left the host as this case says, and reloaded sshd as often as it says
+      ansible.builtin.assert:
+        that:
+          - >-
+            (ci_jump_case_reloads_after.content | b64decode).splitlines() | length
+            - (ci_jump_case_reloads_before.content | b64decode).splitlines() | length
+            == converge_case.outcome.reloads | int
+          - ci_jump_case_after.results[2].stat.exists == (converge_case.outcome.marker | bool)
+          - ci_jump_case_after.results[1].stat.exists
+          - ci_jump_case_after.results[1].stat.checksum == ci_jump_case_before.results[1].stat.checksum
+          - ci_jump_case_after.results[0].stat.exists
+          - >-
+            (ci_jump_case_after.results[0].stat.checksum == ci_jump_case_before.results[0].stat.checksum)
+            == (converge_case.outcome.key_file == 'kept')
+        quiet: true
+        fail_msg: >-
+          The rescue of the write step did not leave what the case expects: reloads
+          {{ converge_case.outcome.reloads }}, reload marker present {{ converge_case.outcome.marker }},
+          key file {{ converge_case.outcome.key_file }}, drop-in as it was.
+      when: converge_case.outcome is defined and not case_accepted | bool
   always:
     - name: Put the files back, with the owners and modes they had
       ansible.builtin.copy:
