@@ -110,7 +110,7 @@ context is the wrong project: stop.
 
 ## 1. Read the ids
 
-The ids are recorded nowhere. Read each from the Console and paste it. In the
+The ids are not repeated in this runbook. Read each from the Console and paste it (`app-t1`'s is also in the stack file: see its section). In the
 Console (the `tenants` project), open **Servers**, then each server: the numeric id
 is the number after `/servers/` in the page address and under **Overview**. Primary
 IPs are under **Networking**, **Primary IPs**; open `edge-t`'s IPv4 and IPv6 and
@@ -712,18 +712,171 @@ the token and the passphrase salt never do (`CLAUDE.md`). Reverting a working-co
 not set, so a merge of that change plans and creates nothing. Its register address is
 `10.20.1.201` (`TENANTS_HOST_IPS.appT1`), its type is CX23 and its location is `nbg1`, as for the
 other two. It is adopted the same way as `db-t1`, with the same `adopt` argument on the same
-`Host`, and its console state is one of the two cases above. Its steps are step 2 (the case),
-step 9 (network attach at `10.20.1.201`, bootstrap, leftover address removal, confirming it is
-private-only), and the converge update, in that order and with the same stops.
+`Host`.
 
-The owner's change that brings it under the stack sets `appt1Enabled: "true"`,
-`appt1DeployPublicKey` (the public half of the key generated at step 8, for app-t1) and
-`appt1Adopt` (`serverId`, `stage: converge`) in `Pulumi.production.yaml`, and nothing else. Before
-the apply, the preview must show an import of the server and updates in place, and no create:
-a create in the preview means `appt1Adopt` is missing or misspelled, and is not applied. The
-plan then goes through `assert-no-hetzner-deletes.py` as for `db-t1`.
+### Its console state is case B
 
-As for `db-t1` (step 10), `hold-no-inbound` is not detached from it, and the stack attaches no
+The owner read it in the Console on 13 Nov 2026 at 21:58Z: no IPv4 address, one public IPv6 address
+and nothing else public, and attached to no network. That is **case B**. Its Hetzner server id is
+recorded where `db-t1`'s is, in `Pulumi.production.yaml` as `appt1Adopt.serverId`, at
+`stage: import`. It is inert while `appt1Enabled` is absent. Where the steps below read
+`APPT1_SERVER_ID`, paste that value.
+
+What is code and what is the owner's:
+
+- **Code, in the change that carries this section.** The register address, the `Host` declaration
+  with its network at `10.20.1.201` declared on the server (`hetzner-host/host.ts` attaches a
+  private-only host's network inline), the `app-t1` firewall, the adopt id and the `appt1` playbook,
+  trust file and enrolment rows. At `stage: converge` the stack compares the live network
+  attachment with that declaration, so a hand attachment at any other address plans an update.
+- **The owner's.** Every command below. The import stage ignores `networks` on a private-only host
+  (`hetzner-host/README.md`, "Two stages"), and the bootstrap needs the private path, so the first
+  attachment is a hand step, as in step 9. Nothing here is run by an agent.
+
+### The steps, in this order
+
+Run step 0 first, for the `tenants` context. The stops are those of steps 2 and 5: any answer other
+than the one expected is a stop.
+
+1. **Check the case.** Paste the id, and read what the server is:
+
+   ```bash
+   read -r APPT1_SERVER_ID
+   ```
+
+   ```bash
+   hcloud server describe "${APPT1_SERVER_ID}" -o format='{{.Name}} {{.ServerType.Name}} {{.Datacenter.Location.Name}} {{len .PrivateNet}}{{"\n"}}'
+   ```
+
+   Good is `app-t1 cx23 nbg1 0`. A `1` means case A: skip step 2. Then the firewall must be
+   `hold-no-inbound` alone, and `app-t1`'s id must be on its list:
+
+   ```bash
+   hcloud firewall describe hold-no-inbound -o format='{{range .AppliedTo}}{{.Server.ID}}{{"\n"}}{{end}}'
+   ```
+
+2. **Attach it to the network at the register address.** Works on a running server:
+
+   ```bash
+   hcloud server attach-to-network "${APPT1_SERVER_ID}" --network tenants --ip 10.20.1.201
+   ```
+
+   ```bash
+   hcloud server describe "${APPT1_SERVER_ID}" -o format='{{range .PrivateNet}}{{.IP}}{{"\n"}}{{end}}'
+   ```
+
+   Good is exactly `10.20.1.201`. Any other address is a stop: detach it in the Console and ask again.
+
+3. **Generate the deploy key**, on the workstation. The private half stays there; the public half is
+   set in step 4:
+
+   ```bash
+   ssh-keygen -t ed25519 -N '' -C 'deploy@app-t1' -f ~/.ssh/id_ed25519_deploy_app-t1
+   ```
+
+4. **First apply, at `stage: import`.** In the working copy, as for `db-t1` (step 8), and recorded in
+   git afterwards the way the other two were:
+
+   ```bash
+   cd ~/branchLeft/shared-infra/hetzner/tenants
+   ```
+
+   ```bash
+   pulumi config set appt1Enabled true
+   ```
+
+   ```bash
+   pulumi config set appt1DeployPublicKey "$(cat ~/.ssh/id_ed25519_deploy_app-t1.pub)"
+   ```
+
+   ```bash
+   pulumi preview --diff
+   ```
+
+   Good is: `import` of the `app-t1` server, `create` of the `app-t1` firewall (declared, never
+   attached), and nothing else. A `create` of a server, any `replace` or `delete`, any primary IP,
+   any attachment, or an import warning is a stop and is not applied. Then the guard and the apply,
+   as in step 8:
+
+   ```bash
+   pulumi preview --json > ~/tenants-adopt-plan.json
+   ```
+
+   ```bash
+   python3 ~/branchLeft/shared-infra/scripts/assert-no-hetzner-deletes.py ~/tenants-adopt-plan.json
+   ```
+
+   ```bash
+   pulumi up
+   ```
+
+5. **Bootstrap it through `edge-t`.** Step 9's "Case A and B: bootstrap db-t1" block, with three
+   substitutions and no others: the address `10.20.1.201` for `10.20.1.200`, `HOST_NAME=app-t1` for
+   `HOST_NAME=db-t1`, and `~/.ssh/id_ed25519_deploy_app-t1.pub` for the `db-t1` key. If step 11 has
+   already removed `bootstrap-ssh-edge-t` (`hcloud firewall list`), the workstation cannot reach
+   `edge-t`: repeat step 3's firewall create and apply for the owner's address, and its step 11
+   removal after step 7 here. Good is `bootstrap ok`, with the `apt-get` lines having succeeded
+   through the gateway.
+
+6. **Provision it and bring it under the pull.** `RUNBOOK-provision-host.md`, section 5 (with
+   `10.20.1.201` as the host address) and section 6 (the tenant containers' confinement, since
+   `app-t1` is an app host), then the first gated run of the `appt1` playbook by the bootstrap route
+   that `ansible/inventories/README.md` describes. Good is the permanent default-route unit
+   installed, and the host's own pull run reporting no failed task.
+
+7. **Remove the leftover public IPv6 address**, only after steps 5 and 6 prove the private path. It
+   is the host's only primary IP, and its id is read from the server:
+
+   ```bash
+   APPT1_LEFTOVER_IPV6_ID=$(hcloud server describe "${APPT1_SERVER_ID}" -o format='{{.PublicNet.IPv6.ID}}')
+   ```
+
+   ```bash
+   hcloud primary-ip describe "${APPT1_LEFTOVER_IPV6_ID}" -o format='{{.Type}} {{.AssigneeID}}{{"\n"}}'
+   ```
+
+   Good is `ipv6` and `${APPT1_SERVER_ID}`; anything else is a stop. Then, as for `db-t1` in step 9
+   (it holds no data yet): shut down, check `off`, unassign, delete, power on.
+
+   ```bash
+   hcloud server shutdown "${APPT1_SERVER_ID}"
+   ```
+
+   ```bash
+   hcloud server describe "${APPT1_SERVER_ID}" -o format='{{.Status}}{{"\n"}}'
+   ```
+
+   ```bash
+   hcloud primary-ip unassign "${APPT1_LEFTOVER_IPV6_ID}"
+   ```
+
+   ```bash
+   hcloud primary-ip delete "${APPT1_LEFTOVER_IPV6_ID}"
+   ```
+
+   ```bash
+   hcloud server poweron "${APPT1_SERVER_ID}"
+   ```
+
+   Good is `off` before the unassign, then `0 0` from this, with the private path from step 5
+   still answering:
+
+   ```bash
+   hcloud server describe "${APPT1_SERVER_ID}" -o format='{{.PublicNet.IPv4.ID}} {{.PublicNet.IPv6.ID}}{{"\n"}}'
+   ```
+
+8. **Converge.** Set `stage: converge` under `appt1Adopt` in the working copy
+   (`pulumi config set --path appt1Adopt.stage converge`), then `pulumi preview --diff`. Good is
+   updates in place to protection and labels on `app-t1` only: nothing for the network or the public
+   interface, no replace, no delete, nothing on `edge-t` or `db-t1`. The guard and the apply are
+   as in step 10.
+
+9. **Prove nothing is left to change**, as step 11 does: `pulumi preview --diff` and the refresh
+   preview both report no changes. Then record `appt1Enabled: "true"`, `appt1DeployPublicKey` and
+   `appt1Adopt` at `stage: converge` in `Pulumi.production.yaml` in a signed pull request, with no
+   encryption salt, token or passphrase in it.
+
+As for `db-t1` (step 10), `hold-no-inbound` is not detached from `app-t1`, and the stack attaches no
 firewall to it. The final delete of `hold-no-inbound` is not part of this series.
 
 ## If something goes wrong
