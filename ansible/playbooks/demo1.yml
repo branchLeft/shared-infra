@@ -4,8 +4,8 @@
 # the host's egress policy with the mail spool. The host never fetches: its commit arrives
 # by push, a git bundle that CI sends through edge1 and the trigger checks against this
 # host's trust file (pull_trigger_bundle_hosts in roles/pull_trigger/vars/main.yml is the one
-# place that says so). That sending arrives with shared-infra#511, not yet merged: until it
-# lands no bundle reaches the host, and a pull-mode check against demo1 fails the run. The
+# place that says so). That sending is not yet merged: until it lands no bundle reaches the
+# host, and a pull-mode check against demo1 fails the run. The
 # two demo1 roles carry the files they pin (their files/ghost-platform) and set the spool's
 # Compose service never to pull, so no role reaches GitHub or a container registry;
 # ansible/checks/test_demo1_no_github_fetch.py holds that. The broker's own install (the
