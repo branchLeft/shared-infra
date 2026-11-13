@@ -44,7 +44,16 @@
           vars:
             ring_controller_host_bundle_sha256: "{{ ring_controller_host_refusals_case.digest | default('') }}"
             ring_controller_host_bundle_url: "{{ ring_controller_host_refusals_case.url | default('') }}"
-            ring_controller_host_ledger_url: "{{ ring_controller_host_refusals_case.ledger | default('') }}"
+          when: ring_controller_host_refusals_case.retired_ledger is not defined
+
+        # The retired input is refused when it is defined at all, an empty text included, so it
+        # cannot be a default of the task above: it is set only by the cases that name it.
+        - name: Apply the role with the retired ledger URL input set
+          ansible.builtin.include_role:
+            name: branchleft.ring_controller_host
+          vars:
+            ring_controller_host_ledger_url: '{{ ring_controller_host_refusals_case.retired_ledger }}'
+          when: ring_controller_host_refusals_case.retired_ledger is defined
 
         - name: Note that the role accepted
           ansible.builtin.set_fact:
