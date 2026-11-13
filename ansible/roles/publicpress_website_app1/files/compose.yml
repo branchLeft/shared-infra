@@ -1,0 +1,45 @@
+# The publicpress.co.uk website Compose stack, deployed as `publicpress-website`
+# under /opt/branchleft/publicpress-website on app1. The service's image is
+# `${IMAGE}`, written by /usr/local/sbin/branchleft-deploy after CI builds and
+# pushes to GHCR (see hetzner/provision/branchleft_deploy.py in shared-infra), and
+# is always a digest, never a tag.
+#
+# One service, one port: this is a React Router app with no metrics listener of
+# its own. Unlike the branchleft.co.uk stack it has no second container.
+name: publicpress-website
+
+services:
+  publicpress-website:
+    image: ${IMAGE}
+    restart: unless-stopped
+    environment:
+      PORT: '8081'
+      PUBLICPRESS_SMTP_HOST: ${PUBLICPRESS_SMTP_HOST:?set PUBLICPRESS_SMTP_HOST in /etc/branchleft/publicpress-website.env}
+      PUBLICPRESS_SMTP_PORT: ${PUBLICPRESS_SMTP_PORT:?set PUBLICPRESS_SMTP_PORT in /etc/branchleft/publicpress-website.env}
+      PUBLICPRESS_SMTP_USER: ${PUBLICPRESS_SMTP_USER:?set PUBLICPRESS_SMTP_USER in /etc/branchleft/publicpress-website.env}
+      PUBLICPRESS_SMTP_PASSWORD: ${PUBLICPRESS_SMTP_PASSWORD:?set PUBLICPRESS_SMTP_PASSWORD in /etc/branchleft/publicpress-website.env}
+    ports:
+      # Private address only. app1's Hetzner firewall opens no inbound port but
+      # SSH -- edge1's Caddy is the only thing that will ever reach this, over
+      # the private network, once the edge points a hostname at it.
+      - '10.20.1.100:8081:8081'
+    # A node program is in every image of this app, so the probe uses it and does
+    # not rely on wget being present. Without a healthcheck the deploy program
+    # refuses the stack (health_signal_gaps in branchleft_deploy.py).
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://127.0.0.1:8081/').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    # Real containment, as for the branchleft.co.uk stack: the compose unit is
+    # Type=oneshot, so a systemd limit on it never reaches the container, and
+    # Docker's own per-container limits do.
+    mem_limit: 512m
+    cpu_shares: 512

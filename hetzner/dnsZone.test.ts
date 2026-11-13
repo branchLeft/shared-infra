@@ -262,6 +262,7 @@ const PUBLICPRESS_CARRIED: RrsetSpec[] = [
   { name: 'portal', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
   { name: 's1-ionos._domainkey', type: 'CNAME', ttl: 3600, values: ['s1.dkim.ionos.com.'] },
   { name: 's2-ionos._domainkey', type: 'CNAME', ttl: 3600, values: ['s2.dkim.ionos.com.'] },
+  { name: 'sites', type: 'A', ttl: 3600, values: ['46.225.95.167'] },
 ];
 
 describe('the publicpress.co.uk zone holds exactly the records IONOS holds', () => {

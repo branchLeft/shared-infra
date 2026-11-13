@@ -53,7 +53,9 @@ pin proves the bytes did not change since it was chosen, not that CI built them.
 
 No release is carried yet: `broker_deploy_release_version` is empty and
 `broker_deploy_release_pins` is empty, and the role refuses before it writes anything. The
-step that carries the first release sets the version, the pins and the files in one change.
+step that carries the first release sets the version, the pins and the files in one change. That
+step is made by `ansible/tools/carry_broker_release.py` (see `ansible/tools/README.md`) from the
+tarball the owner has verified, so the files and pins are not typed by hand.
 
 A version is delivered into its own directory under `releases/` and the `current` link is
 swapped to it, so the old directory stays for a rollback by pinning the old version. A byte

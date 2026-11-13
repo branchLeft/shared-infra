@@ -116,9 +116,10 @@ for it, because a fail-closed rule would refuse real Markdown READMEs.
 What stops such a README from running is not this check. The controls are: the pull runs
 only the derived `HOST.yml` path (R3), so a README under `playbooks/` or `trust/` is never
 the file it runs; the gated workflows; and the owner's deploy approval of the gated apply.
-Ownership differs by file. `trust/README.md` is under the owner's merge (`/ansible/trust/` in
-CODEOWNERS). `playbooks/README.md` has no CODEOWNERS line, so the reviewer App may merge an
-edit to it alone.
+Ownership is the same for both. CODEOWNERS releases every Markdown file except `CLAUDE.md` and
+the files under `.github/`, which stay the owner's, so the reviewer App
+may merge an edit to `trust/README.md` or to `playbooks/README.md` alone. The trust files beside
+`trust/README.md` stay the owner's merge (`/ansible/trust/` in CODEOWNERS).
 
 Out of scope: a case-insensitive filesystem. On macOS Ansible can find
 `group_vars/all.YML` under the name `all.yml`, and R6 reads only the exact suffix. This is
@@ -283,6 +284,19 @@ them. It fails when the address plan cannot be read, so an empty parse cannot le
 does not see edge-t's public address, which is in no file of the repository, nor whether a listed
 address is the right one. Each pin runs red on a sabotaged copy of its files and green on the copy
 left alone.
+
+## test_mail_collector_paths_agree.py: one credentials file and one drain list for the collector
+
+The `mail_collector` role installs the unit that reads the owner's credentials file and the
+descriptor directory, and the `mail_collector_inputs` role reads the same two paths to refuse a bad
+file before the unit can start on it. A role may not load another (ANS-12), so each keeps its own
+copy and the test holds every copy that is in the tree to one literal each:
+`/etc/branchleft/mail-collector/credentials.env` and `/etc/branchleft/mail-collector/descriptors`,
+and the collector's unit to the same two. It requires that at least one of the two roles is in the
+tree, so it cannot pass on nothing. The two land in separate changes, so each check on the other
+role runs once that role is there. When both are applied on `ops1` the input check must come before
+the collector, so a refusal stops the play before a descriptor is written or the unit is started.
+A rename of the file in either role alone runs red.
 
 ## ci_select.py: which shards a run executes
 

@@ -54,7 +54,7 @@ The harness prints one line per step, with the reason beneath each failed step. 
 
 CHANGE_ROLE_INTRO_TEXT
 
-These paths are owner-only in `.github/CODEOWNERS`: `ansible/checks/`, `ansible/harness/`, `ansible/trust/`, `ansible/roles/pull_trigger/`, `ansible/roles/ansible_runtime/`, `.ansible-lint`, `ansible/pyproject.toml`, `ansible/requirements.in`, `ansible/requirements.txt` and `ansible/requirements.yml`. The Ansible loader directories are owner-only as well, at each level Ansible loads from: `library/`, `module_utils/`, `filter_plugins/` and the other loader names, at the top of `ansible/`, beside a playbook in `ansible/playbooks/`, in an imported playbook's directory, and in each role under `ansible/roles/`.
+These paths are owner-only in `.github/CODEOWNERS`: `ansible/checks/`, `ansible/harness/`, `ansible/trust/`, `ansible/roles/pull_trigger/`, `ansible/roles/ansible_runtime/`, `.ansible-lint` and `ansible/pyproject.toml`. The hash-locked pins `ansible/requirements.in`, `ansible/requirements.txt` and `ansible/requirements.yml` are not owner-only (the pin check, `ansible/checks/check_pins.py`, holds them), and neither are Markdown files (other than `CLAUDE.md` and those under `.github/`) or the agreement tests and read-only checkers in `ansible/checks/` that CODEOWNERS releases. The Ansible loader directories are owner-only as well, at each level Ansible loads from: `library/`, `module_utils/`, `filter_plugins/` and the other loader names, at the top of `ansible/`, beside a playbook in `ansible/playbooks/`, in an imported playbook's directory, and in each role under `ansible/roles/`.
 
 ## The gate
 
@@ -153,6 +153,7 @@ WHITEBOARD_INTRO_TEXT
 | `monitoring_stack`         | [README](../ansible/roles/monitoring_stack/README.md)         |
 | `nextcloud_stack`          | [README](../ansible/roles/nextcloud_stack/README.md)          |
 | `ntfy_pager`               | [README](../ansible/roles/ntfy_pager/README.md)               |
+| `publicpress_website_app1` | [README](../ansible/roles/publicpress_website_app1/README.md) |
 | `pull_trigger`             | [README](../ansible/roles/pull_trigger/README.md)             |
 | `tunnel_account`           | [README](../ansible/roles/tunnel_account/README.md)           |
 | `website_app1`             | [README](../ansible/roles/website_app1/README.md)             |
