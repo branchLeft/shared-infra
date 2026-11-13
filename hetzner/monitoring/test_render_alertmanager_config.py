@@ -12,6 +12,7 @@ import importlib.util
 import io
 import os
 import pathlib
+import re
 import stat
 import tempfile
 import unittest
@@ -471,6 +472,83 @@ class PrometheusPasswordTests(unittest.TestCase):
         prometheus_yml = (stack / "prometheus" / "prometheus.yml").read_text(encoding="utf-8")
 
         self.assertNotIn("password:", prometheus_yml.replace("password_file:", ""))
+
+
+TEMPLATE_PATH = (
+    pathlib.Path(__file__).resolve().parent / "stack" / "alertmanager" / "alertmanager.yml.tmpl"
+)
+HEARTBEAT_FIXTURE_URL = "https://example.invalid/ping/fixture-heartbeat"
+MAX_HEARTBEAT_REPEAT_SECONDS = 300
+DURATION_UNITS = {"s": 1, "m": 60, "h": 3600}
+
+
+def _duration_seconds(text: str) -> int:
+    match = re.fullmatch(r"(\d+)([smh])", text)
+    assert match is not None, f"unparseable duration: {text!r}"
+    return int(match.group(1)) * DURATION_UNITS[match.group(2)]
+
+
+def _child_routes(template: str) -> list[str]:
+    """Each direct child of the root `routes:` list as one text block."""
+    route = template[template.index("\nroute:\n") : template.index("\ninhibit_rules:")]
+    blocks: list[str] = []
+    for line in route.splitlines():
+        if line.startswith("    - "):
+            blocks.append(line + "\n")
+        elif blocks and line.startswith("      "):
+            blocks[-1] += line + "\n"
+    return blocks
+
+
+def _receiver_block(text: str, name: str) -> str:
+    receivers = text[text.index("\nreceivers:\n") :]
+    for part in receivers.split("\n  - name: "):
+        if part.startswith(name + "\n"):
+            return part
+    raise AssertionError(f"no receiver named {name!r}")
+
+
+class HeartbeatRouteTests(unittest.TestCase):
+    """The Watchdog heartbeat is the only signal that survives a silent stack
+    (RUNBOOK-monitoring.md section 11). Asserted against the real template."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.template = TEMPLATE_PATH.read_text(encoding="utf-8")
+        cls.routes = _child_routes(cls.template)
+        cls.watchdog = [block for block in cls.routes if 'alertname = "Watchdog"' in block]
+
+    def test_watchdog_is_routed_to_heartbeat_and_nowhere_else(self) -> None:
+        self.assertEqual(len(self.watchdog), 1)
+        self.assertIn('alertname = "Watchdog"', self.routes[0])
+        self.assertIn("      receiver: heartbeat\n", self.watchdog[0])
+        for block in self.routes:
+            if block is not self.watchdog[0]:
+                self.assertNotIn("receiver: heartbeat", block)
+
+    def test_heartbeat_repeat_interval_is_at_most_five_minutes(self) -> None:
+        match = re.search(r"^      repeat_interval: (\S+)$", self.watchdog[0], re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertLessEqual(_duration_seconds(match.group(1)), MAX_HEARTBEAT_REPEAT_SECONDS)
+
+    def test_heartbeat_receiver_posts_the_secret_input_and_no_literal_url(self) -> None:
+        receiver = _receiver_block(self.template, "heartbeat")
+        self.assertIn("      - url: '__HEALTHCHECKS_PING_URL__'\n", receiver)
+        self.assertNotIn("http", receiver)
+
+        env = dict(
+            FULL_ENV,
+            HEALTHCHECKS_PING_URL=HEARTBEAT_FIXTURE_URL,
+            MAILHOST_PING_URL="https://example.invalid/ping/fixture-mailhost",
+        )
+        rendered = render(self.template, env)
+        self.assertIn(
+            f"      - url: '{HEARTBEAT_FIXTURE_URL}'",
+            _receiver_block(rendered, "heartbeat"),
+        )
+        self.assertEqual(rendered.count(HEARTBEAT_FIXTURE_URL), 1)
+        self.assertNotIn("hc-ping.com", self.template)
+        self.assertNotIn("hc-ping.com", rendered)
 
 
 if __name__ == "__main__":

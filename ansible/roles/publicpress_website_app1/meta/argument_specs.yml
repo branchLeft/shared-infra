@@ -1,0 +1,64 @@
+---
+argument_specs:
+  main:
+    short_description: Deliver the publicpress website stack to app1, enable its unit, deploy the pinned image and smoke test it
+    description: >-
+      Writes the SMTP environment file the stack's unit loads, copies the stack's
+      compose file into its project directory, enables the unit, and, when an
+      image is given, runs the host's deploy program with that digest and smoke
+      tests the app over the private address. The deploy runs only when the
+      image or the compose file differs from the content last deployed. The four
+      SMTP values are the website role's, by the owner's ruling that the app
+      reuses the branchleft.co.uk SMTP login.
+    author: branchLeft
+    options:
+      publicpress_website_app1_project_dir:
+        type: str
+        description: Absolute path of the stack's project directory on the host.
+        default: /opt/branchleft/publicpress-website
+      publicpress_website_app1_env_file:
+        type: str
+        description: Absolute path of the environment file the unit loads for the stack's secrets.
+        default: /etc/branchleft/publicpress-website.env
+      publicpress_website_app1_env_dir:
+        type: str
+        description: Directory that holds the environment file. Created with mode 0755, root-owned.
+        default: /etc/branchleft
+      publicpress_website_app1_private_address:
+        type: str
+        description: The private address the app port is bound to, for the smoke test.
+        default: 10.20.1.100
+      publicpress_website_app1_image:
+        type: str
+        description: >-
+          The publicpress website image pinned by digest, as
+          ghcr.io/branchleft/publicpress-website@sha256: and 64 lower-case hex digits.
+          Empty means no deploy and no smoke test.
+        default: ''
+      publicpress_website_app1_smoke_paths:
+        type: list
+        elements: str
+        description: Paths the smoke test requests from the app after a deploy.
+        default:
+          - /
+      publicpress_website_app1_smtp_host:
+        type: str
+        required: true
+        description: >-
+          SMTP host. Not a value to pass: vars/main.yml sets it from the website role's
+          website_app1_smtp_host, which the host_inputs loader sets from the host's inputs file.
+      publicpress_website_app1_smtp_port:
+        type: str
+        required: true
+        description: SMTP port. Set from website_app1_smtp_port in vars/main.yml, as the host.
+      publicpress_website_app1_smtp_user:
+        type: str
+        required: true
+        description: SMTP user. Set from website_app1_smtp_user in vars/main.yml, as the host.
+      publicpress_website_app1_smtp_password:
+        type: str
+        required: true
+        no_log: true
+        description: >-
+          SMTP password. A secret, set from website_app1_smtp_password in vars/main.yml, never a
+          default and never passed to the role.

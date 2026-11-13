@@ -573,6 +573,7 @@ is installed on every host role by the base provisioning sequence, and `branchle
 | `branchleft-compose@status`, which is not an instance      | nowhere: the project directory of the `status_page` role's plain `docker compose` Gatus page             | no                |
 | `branchleft-compose@dbt1`                                  | nowhere: rendered from a template by the `db_t1` role of `branchLeft/shared-infra`                       | no                |
 | `branchleft-compose@sweego-receiver`                       | nowhere: rendered from a template by the `sweego_receiver` role of `branchLeft/shared-infra`             | no                |
+| `branchleft-compose@publicpress-website`                   | the `publicpress_website_app1` role of `branchLeft/shared-infra`, not under `*/stack/`                   | no                |
 
 **No means unread, not failed.** Nothing in this repository has an opinion
 about whether those stacks declare a health signal, so a service in one that
