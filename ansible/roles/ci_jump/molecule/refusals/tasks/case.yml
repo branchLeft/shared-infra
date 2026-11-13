@@ -5,16 +5,26 @@
 # accepted: true is a control: the same step on the host as prepared must not refuse, so a step
 # that refused everything would not pass every case.
 #
-# Everything the case changed is put back in every outcome: the files from a copy taken first, a
-# file the host did not have removed, and the commands the case gives. A plan makes no change, so a
-# check run skips the case.
+# Everything the case changed is put back in every outcome: the files from a copy taken first (the
+# paths in files, edits and keep), a file the host did not have removed, and the commands the case
+# gives. A plan makes no change, so a check run skips the case.
+#
+# A write-step case also says what the step's rescue must have left, by expect_reloads (how many
+# times sshd was reloaded between the start of the step and the end of its rescue), expect_marker
+# (present or absent: the file that says a reload is still owed) and expect_key_file (kept: the
+# key file as it was before the step; changed: the file the step wrote, which the rescue leaves
+# when sshd cannot take the previous files either). These are read from the reload record of the
+# scenario's hook (default/prepare.yml) before the case's own commands undo the state.
 - name: Prove the step refuses the state, or accepts it for a control
   when: not ansible_check_mode
   vars:
     case_accepted: '{{ converge_case.accepted | default(false) | bool }}'
     case_paths: >-
-      {{ ((converge_case.files | default([])) + (converge_case.edits | default([])))
+      {{ ((converge_case.files | default([])) + (converge_case.edits | default([]))
+      + (converge_case.keep | default([])))
       | map(attribute='path') | unique | list }}
+    case_outcome: '{{ converge_case.expect_reloads is defined }}'
+    case_reload_record: '{{ scenario_record_dir }}/reloads'
   block:
     - name: Look at the files the case changes
       ansible.builtin.stat:
@@ -63,6 +73,47 @@
         label: '{{ item | join(" ") }}'
       changed_when: true
 
+    # The outcome of a rescue is read from three places the step leaves: the reload record, the
+    # reload marker and the key file. Each register is emptied first, because a register outlives
+    # the case that made it. The record is made empty if no reload has been made yet, and never
+    # truncated. The step is given the plan a host that is owed a write gets from the module (the
+    # case writes a list the host does not have), not the last one an earlier case registered.
+    - name: Empty what an earlier case measured
+      ansible.builtin.set_fact:
+        ci_jump_case_reloads_before: {}
+        ci_jump_case_key_before: {}
+        ci_jump_case_after: {}
+        ci_jump_case_reloads_after: {}
+        ci_jump_plan:
+          pending: true
+      when: case_outcome | bool
+
+    - name: Make the reload record when no reload has been made yet
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ case_reload_record }}'
+        owner: root
+        group: root
+        mode: '0644'
+        force: false
+      when: case_outcome | bool
+
+    - name: Count the reloads before the step
+      ansible.builtin.slurp:
+        src: '{{ case_reload_record }}'
+      register: ci_jump_case_reloads_before
+      when: case_outcome | bool
+      no_log: true
+
+    - name: Look at the key file before the step, with its checksum
+      ansible.builtin.stat:
+        path: '{{ case_key_file }}'
+        follow: false
+        checksum_algorithm: sha256
+      register: ci_jump_case_key_before
+      when: case_outcome | bool
+      no_log: true
+
     # The step is the role's own internal tasks file, run alone with the inputs the case gives in
     # place of the delivered ones. The flag is on, as it is when the step is reached in a run.
     - name: Run the step the case is for
@@ -92,6 +143,60 @@
       vars:
         expect_phrase: '{{ converge_case.expect }}'
       when: not case_accepted | bool
+
+    # Read before the always section undoes the case, and before any reload the case's own restore
+    # commands make. A failed result is not printed: the checks are on counts and flags.
+    - name: Count the reloads after the rescue
+      ansible.builtin.slurp:
+        src: '{{ case_reload_record }}'
+      register: ci_jump_case_reloads_after
+      when: case_outcome | bool
+      no_log: true
+
+    - name: Look at the key file and the marker after the rescue
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+        checksum_algorithm: sha256
+      loop:
+        - '{{ case_key_file }}'
+        - '{{ case_marker }}'
+      register: ci_jump_case_after
+      when: case_outcome | bool
+      no_log: true
+
+    - name: Assert the rescue reloaded sshd as often as this case says
+      ansible.builtin.assert:
+        that:
+          - (ci_jump_case_reloads_after.content | b64decode).splitlines() | length
+            == (ci_jump_case_reloads_before.content | b64decode).splitlines() | length
+            + (converge_case.expect_reloads | int)
+        quiet: true
+        fail_msg: >-
+          The write step reloaded sshd a number of times other than the {{ converge_case.expect_reloads }}
+          this case expects: {{ converge_case.name }}.
+      when: case_outcome | bool
+
+    - name: Assert the rescue left the reload marker as this case says
+      ansible.builtin.assert:
+        that:
+          - ci_jump_case_after.results[1].stat.exists == (converge_case.expect_marker == 'present')
+        quiet: true
+        fail_msg: >-
+          The write step left the reload marker other than {{ converge_case.expect_marker }}:
+          {{ converge_case.name }}.
+      when: case_outcome | bool
+
+    - name: Assert the rescue left the key file as this case says
+      ansible.builtin.assert:
+        that:
+          - (ci_jump_case_after.results[0].stat.checksum == ci_jump_case_key_before.stat.checksum)
+            == (converge_case.expect_key_file == 'kept')
+        quiet: true
+        fail_msg: >-
+          The write step left the key file other than {{ converge_case.expect_key_file }}:
+          {{ converge_case.name }}.
+      when: case_outcome | bool
   always:
     - name: Put the files back, with the owners and modes they had
       ansible.builtin.copy:

@@ -3,7 +3,10 @@
 # read back; then the files of the earlier hand-made layout are removed, the whole configuration is
 # checked again, sshd is reloaded again and the read-back is repeated with those files required
 # gone. A failed check or read-back at any point puts every file back as it was (the new ones and
-# the old ones) and reloads sshd again. The same shape as the tunnel_account role's replica half.
+# the old ones), checks sshd again, and only when that check passes reloads sshd again, takes the
+# reload marker away and puts the previous key file back; when it does not, nothing is reloaded and
+# the new key file and the marker stay (see the rescue). The same shape as the tunnel_account role's
+# replica half.
 # Runs under --check: the files are compared and nothing changes; the whole-configuration check,
 # the reload and the read-backs are skipped there because nothing was written (ANS-10: the reason is
 # that sshd -t and sshd -T read the files on disk, which a plan has not changed).
@@ -272,12 +275,6 @@
       changed_when: false
       when: not ansible_check_mode
       no_log: true
-
-    - name: Reload sshd with the previous files back
-      ansible.builtin.systemd_service:
-        name: '{{ ci_jump_sshd_service }}'
-        state: reloaded
-      when: not ansible_check_mode and ci_jump_rescue_check.rc | default(1) == 0
 
     - name: Note that no reload of sshd is owed, the previous files being back
       ansible.builtin.file:

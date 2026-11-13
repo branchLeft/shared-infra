@@ -4,7 +4,9 @@
 # migration_block_ahead (a drop-in that sorts first and loosens the account's forwarding, so the
 # first read-back of the new files fails), migration_arm (the reload hook puts a file of the old
 # layout back once the role removed it, so the last read-back fails) and migration_inode_kept
-# (whether the old files must be the very files that were there, not copies of them).
+# (whether the old files must be the very files that were there, not copies of them), and, for a case
+# that must fail, migration_reloads_made (how many times sshd was reloaded from the start of the step
+# to the end of its rescue: the reloads of the writes that were made, then the rescue's own).
 #
 # The account's name is in the old paths, so every task that handles one hides its result.
 - name: Put the host in the state the prepare made, the hand-made files and none of the role's own
@@ -114,9 +116,13 @@
 
     # The refusal code is checked against this case's own read-back, not against a result that an
     # earlier case or the scenario left behind (the register outlives its task).
+    # The plan too: the step is run alone here, without the guards that make it, and a host with the
+    # hand-made layout is owed a write, which is what the module's plan says of it.
     - name: Empty the read-back of any earlier case, so this case is checked against its own
       ansible.builtin.set_fact:
         ci_jump_readback: {}
+        ci_jump_plan:
+          pending: true
 
     - name: Run the role's step with the scenario's values
       block:
@@ -161,6 +167,7 @@
         - '/etc/ssh/{{ scenario_jump_user }}'
         - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
         - /etc/ssh/authorized_keys.d/branchleft-jump
+        - '{{ migration_marker }}'
       register: ci_jump_migration_after
       no_log: true
 
@@ -172,6 +179,11 @@
 
     # A failed step leaves the hand-made files as they were, and the new files as they were before
     # (none). A step that succeeds leaves the new files and none of the hand-made ones.
+    #
+    # The rescue puts the files back and then reloads sshd, so that the daemon reads what is back and
+    # not the files the step wrote, and takes the marker away, because nothing is owed any more. The
+    # reload is counted: a rescue that put the files back and did not reload leaves every file check
+    # below green.
     - name: Assert a failed step left the hand-made files as they were and the new files absent
       ansible.builtin.assert:
         that:
@@ -184,6 +196,10 @@
           - ci_jump_migration_after.results[1].stat.checksum == ci_jump_migration_old.results[1].stat.checksum
           - not ci_jump_migration_after.results[3].stat.exists
           - not ci_jump_migration_after.results[4].stat.exists
+          - not ci_jump_migration_after.results[5].stat.exists
+          - (ci_jump_migration_reloads_after.content | b64decode).splitlines() | length
+            == (ci_jump_migration_reloads_before.content | b64decode).splitlines() | length
+            + (migration_reloads_made | int)
           - >-
             not (migration_inode_kept | bool) or
             (ci_jump_migration_after.results[0].stat.inode == ci_jump_migration_old.results[0].stat.inode
@@ -191,7 +207,8 @@
         quiet: true
         fail_msg: >-
           A step that failed did not leave the hand-made files as they were (the account's name is
-          not shown), or left a file of its own.
+          not shown), left a file of its own or the reload marker, or did not reload sshd
+          {{ migration_reloads_made }} times, the last one after the files were put back.
       when: migration_expect | length > 0
 
     - name: Assert a step that succeeded removed the hand-made layout and wrote the new files

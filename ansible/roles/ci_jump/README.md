@@ -64,7 +64,8 @@ one host.
      (`E-LEGACY-PRESENT`).
   6. Take the marker away.
      A failure anywhere puts every file back as it was (the new files as they were, the old files and
-     their directory byte for byte), reloads sshd and fails the run. A second run finds the host
+     their directory byte for byte), then runs `sshd -t` and, only if it passes, reloads sshd, takes the
+     marker away and fails the run (below, for when it does not pass). A second run finds the host
      finished and changes nothing. A host that never had the hand-made layout skips steps 4 and 5.
 - **A pull that dies after the write still reloads sshd.** Before the first write the role leaves
   `/run/branchleft-jump-reload-owed` whenever the module's plan says a write is owed (a managed file
@@ -75,8 +76,13 @@ one host.
 - **Check, reload, read back.** After the write the whole sshd configuration is checked with
   `sshd -t`, sshd is reloaded when either file changed, and the module reads both files back and asks
   `sshd -T -C user=ACCOUNT,host=x,addr=OWN_ADDRESS` what sshd applies to the account. A failed check
-  or read-back puts the previous files back, reloads sshd again and fails the run (the same shape as
-  the `tunnel_account` replica half).
+  or read-back puts the previous files back, checks sshd again and, only when `sshd -t` passes with them
+  back, reloads sshd again, takes the marker away and puts the previous key file back before it fails
+  the run (the same shape as the `tunnel_account` replica half). When that check fails too, sshd
+  cannot take the previous files either: nothing is reloaded, the new key file stays (the running
+  sshd still serves from it), the marker stays so that the next run reloads, and the run fails naming
+  the step. `molecule/refusals` asserts both outcomes, by the reload count, the marker and the key
+  file.
 - **Remote forwarding is refused.** A key line with `port-forwarding` also lets its holder open a
   listening port on the jump host (`ssh -R`) unless sshd says `AllowTcpForwarding local` for the
   account. The read-back requires exactly that, and refuses any other value (`E-SSHD-FORWARDING`),
