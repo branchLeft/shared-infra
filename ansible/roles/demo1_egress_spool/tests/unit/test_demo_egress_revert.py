@@ -11,6 +11,7 @@ from __future__ import annotations
 import contextlib
 import io
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -296,6 +297,52 @@ class RevertTest(unittest.TestCase):
         self.assertIn("-A DOCKER-USER -s 192.0.2.1 -j DROP", self.host.lines["iptables"])
         for line in DOCKER_OWN:
             self.assertIn(line, self.host.lines["iptables"])
+
+    # --- the lock -------------------------------------------------------------------------
+
+    def test_a_revert_waits_for_a_confirm_that_is_running(self) -> None:
+        """A confirm and a revert never run at once: the later one waits for the lock.
+
+        The confirm is held inside its lock by a host whose first read blocks. A revert started
+        meanwhile must not finish until the confirm is let go. Without the shared lock the
+        revert runs at once, and the table it restores is read while the confirm is half done.
+        """
+
+        class BlockingHost(FakeHost):
+            def __init__(self) -> None:
+                """Hold the first read of the table until the test lets it go."""
+                super().__init__()
+                self.inside = threading.Event()
+                self.release = threading.Event()
+
+            def save(self, family: str) -> str:
+                """Report that the confirm is inside its lock, then wait to be released."""
+                self.inside.set()
+                self.release.wait(timeout=10)
+                return super().save(family)
+
+        blocking = BlockingHost()
+        reverted = threading.Event()
+
+        def confirm_slowly() -> None:
+            revert.main(["confirm"], host=blocking, store=self.store)
+
+        def revert_meanwhile() -> None:
+            revert.main(["revert"], host=FakeHost(), store=self.store)
+            reverted.set()
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            first = threading.Thread(target=confirm_slowly)
+            second = threading.Thread(target=revert_meanwhile)
+            first.start()
+            self.assertTrue(blocking.inside.wait(timeout=10))
+            second.start()
+            waited_while_held = not reverted.wait(timeout=0.5)
+            blocking.release.set()
+            first.join(timeout=10)
+            second.join(timeout=10)
+        self.assertTrue(waited_while_held, "the revert ran while the confirm held the lock")
+        self.assertTrue(reverted.is_set())
 
     # --- the record and the timer --------------------------------------------------------
 

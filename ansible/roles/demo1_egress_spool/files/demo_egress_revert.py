@@ -110,9 +110,9 @@ class Table:
 
 def jump_target(rule: str) -> str:
     """Return the own chain a rule jumps to, or an empty string when it jumps elsewhere."""
-    tokens = rule.split()
-    if len(tokens) >= 4 and tokens[-2] == "-j" and tokens[-1] in OWN_CHAINS:
-        return tokens[-1] if tokens[1] == JUMP_FROM[tokens[-1]] else ""
+    words = rule.split()
+    if len(words) >= 4 and words[-2] == "-j" and words[-1] in OWN_CHAINS:
+        return words[-1] if words[1] == JUMP_FROM[words[-1]] else ""
     return ""
 
 
@@ -131,8 +131,8 @@ def parse_table(saved: str) -> Table:
             if name in OWN_CHAINS:
                 declarations[name] = f":{name} - [0:0]"
         elif line.startswith("-A "):
-            tokens = line.split()
-            if tokens[1] in OWN_CHAINS:
+            words = line.split()
+            if words[1] in OWN_CHAINS:
                 rules.append(line)
             elif jump_target(line):
                 jumps.append(line)
@@ -197,13 +197,13 @@ class SystemHost:
 
     def jump_present(self, family: str, rule: str) -> bool:
         """Return whether the jump rule is already in its chain."""
-        tokens = shlex.split(rule)
-        return run([family, "-t", "filter", "-C", *tokens[1:]]).returncode == 0
+        words = shlex.split(rule)
+        return run([family, "-t", "filter", "-C", *words[1:]]).returncode == 0
 
     def insert_jump(self, family: str, rule: str) -> None:
         """Put the jump rule first in its chain."""
-        tokens = shlex.split(rule)
-        run_ok([family, "-t", "filter", "-I", tokens[1], "1", *tokens[2:]])
+        words = shlex.split(rule)
+        run_ok([family, "-t", "filter", "-I", words[1], "1", *words[2:]])
 
     def timer_active(self) -> bool:
         """Return whether the revert timer is waiting."""
