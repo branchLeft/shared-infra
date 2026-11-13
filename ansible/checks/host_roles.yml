@@ -50,6 +50,7 @@ app1:
   - deploy_tooling
   - deploy_slot_keys
   - export_bundler
+  - tenant_onboarding
   - deploy_verifier
   - website_app1
   - publicpress_website_app1

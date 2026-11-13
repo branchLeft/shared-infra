@@ -4,7 +4,8 @@
 # of the host's private inputs (host_inputs), the host baseline (which installs Docker),
 # the break-glass grant (breakglass_grant_host), then the website stack (website_app1) and
 # the publicpress website stack (publicpress_website_app1), then the deploy tooling and the
-# deploy slot keys, and last the export bundler.
+# deploy slot keys, then the tenant onboarding role (which installs the volume program the
+# tenant compose role calls), and last the export bundler.
 # The loader reads the one root-only file the owner places on the host and sets the four
 # SMTP values the website role requires and the list of deploy slots; it stops the run if
 # that file is missing or unsafe, or holds no slot, and it runs first so every later role
@@ -19,8 +20,14 @@
 # the Docker firewall or on SSH keys, cannot hold the website back. The export bundler
 # follows: it copies pinned files into root-only directories and runs nothing, so a
 # failure in it, which is a refusal of a changed file, holds back none of the others.
+# The tenant onboarding role fetches its program and register from the network. If a fetch
+# fails or a fetched file does not match its pinned digest, the role fails closed: the run
+# ends there and the roles after it (the export bundler and the tenant stacks) do not run, but
+# the roles before it, the website among them, have already been applied, so it does not hold
+# the website back.
 # The tenant stacks (tenant_compose) are last of all: the role restarts the tenants' live
-# stacks and takes its stacks from the loader's input tenant_compose_stacks.
+# stacks, takes its stacks from the loader's input tenant_compose_stacks, and calls the
+# program the tenant onboarding role installs, so it must follow that role.
 # Only this host's name
 # and its deploy class are set here; the remote, the playbook allowlist and the
 # signer list come from the shared includes and the one trust file, all loaded through
@@ -58,6 +65,7 @@
     - role: ../roles/publicpress_website_app1 # noqa: role-name[path]
     - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/deploy_slot_keys # noqa: role-name[path]
+    - role: ../roles/tenant_onboarding # noqa: role-name[path]
     - role: ../roles/export_bundler # noqa: role-name[path]
     # Last: it restarts the tenants' live stacks, so a failure here must not hold the website
     # back, and it needs the deploy tooling's directories and unit to be in place first.

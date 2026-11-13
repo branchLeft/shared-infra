@@ -68,9 +68,10 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
-# order: the slot keys need the wrapper the tooling installs), app1's export_bundler, and app1's
-# tenant_compose (last of all: it restarts the tenants' live stacks, so a failure there must not
-# hold the website back), db1's
+# order: the slot keys need the wrapper the tooling installs), app1's tenant_onboarding, app1's
+# export_bundler, and app1's tenant_compose (last of all: it restarts the tenants' live stacks and
+# calls the program tenant_onboarding installs, so it follows that role, and a failure there must
+# not hold the website back), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
@@ -120,6 +121,7 @@ APPLIED_ON_MAIN = {
         "publicpress_website_app1",
         "deploy_tooling",
         "deploy_slot_keys",
+        "tenant_onboarding",
         "export_bundler",
         "tenant_compose",
     ],
@@ -454,6 +456,7 @@ class HostRoleLists(unittest.TestCase):
                 "publicpress_website_app1",
                 "deploy_tooling",
                 "deploy_slot_keys",
+                "tenant_onboarding",
                 "export_bundler",
                 "tenant_compose",
             ],

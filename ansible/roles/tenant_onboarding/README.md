@@ -11,9 +11,10 @@ standard sets for a role README (ANS-14).
 ## What the role does, and what it does not
 
 1. A plain apply fetches the tenant volume program and its register from the
-   ghost-platform repository at one pinned commit, and installs both root-owned with
-   mode 0644 in `/usr/local/lib/branchleft/provision`. Each fetch is checked against its pinned
-   sha256, so a file whose bytes differ fails the apply. A plain apply runs no tenant step.
+   ghost-platform repository at one pinned commit, and installs them in
+   `/root/platform-provision`, the path the `tenant_compose` role calls the program at: the
+   program root-owned with mode 0755 (it is run directly), the register root-owned with mode 0644. Each fetch is checked against its pinned sha256, so a file whose bytes differ fails
+   the apply. A plain apply runs no tenant step.
 2. `PROVISION_TENANT_VOLUMES` runs the program with `--uid N`, once for one tenant. The
    program creates the tenant's three volumes (content, adapters and metrics), claims the
    UID in a root-owned register, and sets each volume's owner and mode. The program is the
@@ -25,7 +26,7 @@ role's task where that role is applied. It does not create a database account, a
 media bucket or a credential, and it writes no secret. It does not write the tenant's
 environment file, `compose.yml`, the deploy slot keys, the edge site block or the
 `pull_trigger` step list; those are owner steps or other roles, named in the owner steps.
-It does not wire itself into any host playbook.
+The application host's playbook applies it; the role adds itself to no playbook.
 
 ## Interface
 
@@ -56,11 +57,11 @@ changed path would install a program the rest of the host does not run.
 
 ## What it changes on a host
 
-- `/usr/local/lib/branchleft/provision`: created root-owned, mode 0755.
-- `/usr/local/lib/branchleft/provision/provision_tenant_volume.py`: the program, root-owned, mode
-  0644, its bytes the pinned ghost-platform file.
-- `/usr/local/lib/branchleft/provision/tenant-names.json`: the register the program reads beside
-  itself, root-owned, mode 0644, its bytes the pinned file.
+- `/root/platform-provision`: created root-owned, mode 0755.
+- `/root/platform-provision/provision_tenant_volume.py`: the program, root-owned, mode 0755,
+  its bytes the pinned ghost-platform file.
+- `/root/platform-provision/tenant-names.json`: the register the program reads beside itself,
+  root-owned, mode 0644, its bytes the pinned file.
 - With `PROVISION_TENANT_VOLUMES`, through the program: three Docker volumes named for the
   tenant, the claim directory `/etc/branchleft/tenant-uids` (root, 0700) and the tenant's
   claim file in it (root, 0600), and the owners and modes the program sets on each volume.
@@ -103,9 +104,9 @@ UID appear in no log the scenario writes, and it names refusals only with placeh
 
 Nothing applies this role to a host from a laptop. ANS-17 describes the only approved path: a
 gated workflow run against `main`, which applies the role with a plan job before the approval
-and a second run that must report zero changes. This role is not wired into any host playbook.
-Wiring it needs two things the role does not supply: an entry in the host's playbook, and a
-`host_inputs` row for the tenant list.
+and a second run that must report zero changes. The role is applied to app1 by app1's playbook,
+in the position the checks in `ansible/checks/` pin. It needs no `host_inputs` row: its guarded
+step reads its confirmation, slug and UID at run time, and nothing is stored on the host.
 
 ## How it runs its test
 
@@ -135,7 +136,7 @@ run them and writes no marker for them. Each is written with placeholders in cap
 1. **Choose a free UID.** Run, on the application host as root:
 
    ```text
-   /usr/bin/python3 /usr/local/lib/branchleft/provision/provision_tenant_volume.py --list-claims
+   /usr/bin/python3 /root/platform-provision/provision_tenant_volume.py --list-claims
    ```
 
    Each line is `slug=uid`. A UID in the tenant range that no line names is free. The role
@@ -205,8 +206,10 @@ run them and writes no marker for them. Each is written with placeholders in cap
   program's message, which names the holder. That message reaches the log by design.
 - **The step cannot be requested through the gated route yet.** `pull_trigger` takes a closed
   list of step ids for the control plane database, and a guarded step of this role is not on it.
-  Until the owner-held `pull_trigger` change and the `host_inputs` row for the tenant list land,
-  no step of this role runs on any host.
+  Until the owner-held `pull_trigger` change lands, no step of this role runs on any host.
+- **The fetches of the program and register are skipped in check mode.** Check mode writes no
+  file, so a plan shows the directory only. The pinned digests check the bytes on a real run, and
+  the second run's zero-change report is the evidence that the files are in place.
 - **The program's own refusal messages are checked by their text.** A changed program message
   fails the scenario and is updated with the register bump.
 - **The code owner of `ansible/` merges.** The change is reviewed and merged by the code owner
