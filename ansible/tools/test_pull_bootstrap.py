@@ -651,6 +651,50 @@ class ConfigRefusalTest(unittest.TestCase):
             "takes bundles, and this tool bootstraps a host that pulls", variables=variables
         )
 
+    def test_a_task_that_leaves_out_a_required_key_is_refused_by_name(self) -> None:
+        for key in sorted(tool.REQUIRED_CONFIG_KEYS):
+            with self.subTest(key=key):
+                tasks = re.sub(rf"^      {key}: .*\n", "", ConfigTexts.tasks, flags=re.MULTILINE)
+                self.assertNotEqual(tasks, ConfigTexts.tasks)
+                self.refuses(f"the configuration has no {key}$", tasks=tasks)
+
+    def test_a_configuration_with_several_keys_missing_names_them_all_in_order(self) -> None:
+        config = json.loads(render())
+        for key in ("steps", "keep_runs", "signers"):
+            del config[key]
+        with self.assertRaisesRegex(
+            tool.BootstrapError, "the configuration has no keep_runs, signers"
+        ):
+            tool.check_config(config)
+
+    def test_a_configuration_checked_directly_is_refused_for_a_missing_key(self) -> None:
+        tool.check_config(json.loads(render()))
+        for key in sorted(tool.REQUIRED_CONFIG_KEYS):
+            with self.subTest(key=key):
+                config = json.loads(render())
+                del config[key]
+                with self.assertRaisesRegex(
+                    tool.BootstrapError, f"the configuration has no {key}$"
+                ):
+                    tool.check_config(config)
+
+    def test_a_source_key_in_a_configuration_checked_directly_is_refused(self) -> None:
+        config = json.loads(render())
+        config["source"] = "bundle"
+        with self.assertRaisesRegex(
+            tool.BootstrapError, "takes bundles, and this tool bootstraps a host that pulls"
+        ):
+            tool.check_config(config)
+
+    def test_a_source_key_written_into_the_task_itself_is_refused(self) -> None:
+        tasks = ConfigTexts.tasks.replace(
+            "      remote_url: '{{ pull_trigger_remote_url }}'\n",
+            "      remote_url: '{{ pull_trigger_remote_url }}'\n"
+            "      source: '{{ pull_trigger_remote_url }}'\n",
+        )
+        self.assertNotEqual(tasks, ConfigTexts.tasks)
+        self.refuses("takes bundles, and this tool bootstraps a host that pulls", tasks=tasks)
+
     def test_a_task_key_that_is_not_a_plain_variable_is_refused(self) -> None:
         tasks = ConfigTexts.tasks.replace(
             "remote_url: '{{ pull_trigger_remote_url }}'",
