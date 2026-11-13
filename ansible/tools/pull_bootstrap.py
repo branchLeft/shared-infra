@@ -124,6 +124,10 @@ SOURCE_CONTENT: Final = (
     " | ansible.builtin.to_nice_json }}\n"
 )
 SOURCE_VARIABLE: Final = "pull_trigger_config_source"
+# The only names the task's own vars may set. Ansible gives a task's vars precedence over the
+# variable files, so any other name there (``enrolled_host``, the bundle list) could change what
+# the host is given without this tool seeing it; it is refused instead.
+TASK_VARS_READ: Final = frozenset({CONFIG_VARIABLE, SOURCE_VARIABLE})
 SOURCE_EXPRESSION: Final = (
     "{{ {'source': 'bundle'} if (enrolled_host | default('')) in pull_trigger_bundle_hosts"
     " else {} }}"
@@ -248,6 +252,10 @@ def render_config(
         message = "the configuration task no longer writes to_nice_json of one variable"
         raise BootstrapError(message)
     task_vars = mapping(task.get("vars"), "the task's vars")
+    unread = sorted(set(task_vars) - TASK_VARS_READ)
+    if unread:
+        message = f"the task's vars set {', '.join(unread)}, which this tool does not read"
+        raise BootstrapError(message)
     declared = mapping(task_vars.get(CONFIG_VARIABLE), CONFIG_VARIABLE)
     variables = merge_variables(
         (DEFAULTS_PATH, mapping(parse_yaml(defaults_text, DEFAULTS_PATH), DEFAULTS_PATH)),
