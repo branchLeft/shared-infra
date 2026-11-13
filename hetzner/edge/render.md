@@ -208,6 +208,38 @@ the `*` version segment.
 After the protection chain, before `reverse_proxy`: a client probing for an open setup is
 throttled and seen by CrowdSec rather than answered for free.
 
+## `siteBlock`: uploaded-file refusal and `nosniff`
+
+Ghost accepts `.js`, `.html` and `.css` as uploads, and also `.txt`, `.md`, `.json`, `.pdf`,
+`.zip` and `.py`, and serves everything a tenant uploads from the tenant's own origin, under
+`/content/files/`, `/content/images/` and `/content/media/`. An uploaded `x.js` therefore
+satisfies `script-src 'self'`, and an uploaded `.html` or `.svg` is a document a browser
+runs. The shared-domain limit is that no tenant script runs there, so for a site with
+`backend: 'ghost'` the edge does two things. Both are copied from the demo edge.
+
+- **Refusal.** 403 to any request below those prefixes for a file of an active type
+  (`ACTIVE_CONTENT_EXTENSIONS`: script, HTML, XML, stylesheet and SVG families), any method.
+  A refusal, not a download: a forced download would still put the bytes on the tenant's
+  origin, and a `<script src>` ignores `Content-Disposition`.
+- **`nosniff` on every response.** The list above cannot name every type Ghost accepts, and a
+  browser runs a same-origin `<script src>` of a response typed anything but image, audio,
+  video or `text/csv` unless `X-Content-Type-Options: nosniff` is set, so an uploaded `x.txt`
+  or `x.json` would still run. The header is deferred (`>`) so it replaces Ghost's own copy
+  rather than doubling it, and it sits in the route after HSTS. An error Caddy writes itself
+  (a 502 with no healthy upstream) never reaches the route's `header`, so the site also has a
+  `handle_errors` block with the same header; it is at the site level because Caddy refuses it
+  inside a `route`.
+
+`/content/public/` (Ghost's own shipped scripts), theme assets and the admin are outside the
+prefixes and are untouched, and `nosniff` does not stop them: they are served typed as
+script. A site with `backend: 'other'` has none of this, so its block does not change.
+
+The refusal is two matchers, because Caddy's `path` lowercases, cleans dot segments and
+decodes escapes but a regexp over the path as received also catches a run of slashes. The
+glob matcher needs a nested `route`: two `path` lines in one matcher are an OR, so the prefix
+and the extension are an AND only across the two matchers. After the protection chain, before
+`reverse_proxy`, for the same reason as the setup refusal.
+
 ## `logDirective`: retention and rotation
 
 Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of

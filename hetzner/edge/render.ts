@@ -55,6 +55,42 @@ const GHOST_SETUP_METHODS = ['POST', 'PUT'];
 
 const GHOST_SETUP_REFUSAL_STATUS = 403;
 
+/**
+ * Ghost serves what a tenant uploads from the tenant's own origin, under these
+ * three prefixes, so an uploaded `.js` satisfies `script-src 'self'` and an
+ * uploaded `.html` or `.svg` is a document that runs script. The edge refuses
+ * the request for any file of an active type below them. Why, and why a
+ * refusal and not a download: `render.md`.
+ */
+const UPLOAD_PATH_PREFIXES = ['/content/files/', '/content/images/', '/content/media/'];
+const ACTIVE_CONTENT_EXTENSIONS = [
+  'js',
+  'mjs',
+  'cjs',
+  'html',
+  'htm',
+  'shtml',
+  'xhtml',
+  'xht',
+  'xml',
+  'xsl',
+  'xslt',
+  'css',
+  'svg',
+  'svgz',
+  'kml',
+  'gpx',
+];
+
+/**
+ * Over the path as received: any depth below a prefix, any case, any run of
+ * slashes. The glob matchers cover what Caddy cleans (dot segments, escapes)
+ * that this one does not.
+ */
+const UPLOAD_ACTIVE_PATH_REGEXP = `(?i)^/+content/+(?:files|images|media)/.*\\.(?:${ACTIVE_CONTENT_EXTENSIONS.join('|')})/*$`;
+
+const UPLOAD_REFUSAL_STATUS = 403;
+
 // Why: zone name re-declared per-site for shared counter via mholt/caddy-ratelimit's
 // LoadOrStore. See render.md §"MEMBERS_MAGIC_LINK_ZONE".
 const MEMBERS_MAGIC_LINK_ZONE = 'members_magic_link_per_ip';
@@ -375,6 +411,56 @@ function ghostSetupRefusal(): string {
   return `respond @ghost_setup ${GHOST_SETUP_REFUSAL_STATUS}`;
 }
 
+/**
+ * The refusal of an uploaded file a browser would run, as lines for a Ghost
+ * site's `route`. Two overlapping matchers, each followed by a 403: Caddy's
+ * cleaning, case-insensitive `path` (a nested `route` makes the prefix and the
+ * extension an AND, since two `path` lines in one matcher are an OR), and a
+ * `path_regexp` over the path as received. Every method is refused. Placed
+ * after the protection chain, so a client probing for an upload is throttled
+ * and CrowdSec still sees it. The refusal names active types only; `nosniff`
+ * (below) is what covers every other type Ghost lets a tenant upload.
+ */
+function uploadGuard(): string[] {
+  const prefixes = UPLOAD_PATH_PREFIXES.map((prefix) => `${prefix}*`).join(' ');
+  const extensions = ACTIVE_CONTENT_EXTENSIONS.map((extension) => `*.${extension}`).join(' ');
+  return [
+    '@uploads_by_path {',
+    `\tpath ${prefixes}`,
+    '}',
+    'route @uploads_by_path {',
+    '\t@active_upload_by_path {',
+    `\t\tpath ${extensions}`,
+    '\t}',
+    `\trespond @active_upload_by_path ${UPLOAD_REFUSAL_STATUS}`,
+    '}',
+    '@active_upload_by_pattern {',
+    `\tpath_regexp ${UPLOAD_ACTIVE_PATH_REGEXP}`,
+    '}',
+    `respond @active_upload_by_pattern ${UPLOAD_REFUSAL_STATUS}`,
+  ];
+}
+
+/**
+ * `nosniff` on every response of a Ghost-backed site, deferred (`>`) so it
+ * replaces Ghost's own copy instead of doubling it. The extension refusal
+ * cannot list every type Ghost accepts (`.txt`, `.md`, `.json`, `.pdf`, `.zip`,
+ * `.py` too), and a browser runs a same-origin `<script src>` of any response
+ * not typed image, audio, video or text/csv unless this header is set.
+ */
+function nosniffDirective(): string[] {
+  return ['header >X-Content-Type-Options "nosniff"'];
+}
+
+/**
+ * The same header on an error Caddy writes itself (502, no healthy upstream),
+ * which the route's `header` never reaches. Site level: Caddy refuses a
+ * `handle_errors` inside a `route`.
+ */
+function nosniffErrorBlock(): string[] {
+  return ['handle_errors {', '\theader >X-Content-Type-Options "nosniff"', '}'];
+}
+
 // Why: the token is read only on /ghost/, so anywhere else it is stripped before
 // any other handler. The gate reads the raw request target (Caddy's path matcher
 // decodes and cleans, Express does not). See render.md §"logDirective: break-glass
@@ -526,11 +612,13 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   // posture, so no posture setting may switch it off.
   body.push(...ghostSetupMatcher());
   body.push(...breakGlassStripMatcher());
+  const isGhost = site.backend === 'ghost';
   body.push(
     'route {',
     // Ahead of everything else, including request_body -- see hstsDirective's
     // own comment for why its position is load-bearing rather than tidiness.
     ...hstsDirective().map((line) => `\t${line}`),
+    ...(isGhost ? nosniffDirective().map((line) => `\t${line}`) : []),
     // Before the body cap and the protection chain, so the WAF hop never carries it.
     `\t${breakGlassStrip()}`,
     // Why: does not terminate handler chain; ordering buys tidiness only. AppSec
@@ -542,9 +630,13 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
       beforeAppsec: site.discardRoute === undefined ? [] : discardRouteResponses(),
     }).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,
+    ...(isGhost ? uploadGuard().map((line) => `\t${line}`) : []),
     `\treverse_proxy ${resolvePrivateAddress(upstream.host, upstream.port)}`,
     '}'
   );
+  if (isGhost) {
+    body.push(...nosniffErrorBlock());
+  }
 
   return { addresses: hostnames, body };
 }

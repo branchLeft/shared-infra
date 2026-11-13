@@ -134,6 +134,7 @@ blog.branchleft.co.uk {
 	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
 	route {
 		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header >X-Content-Type-Options "nosniff"
 		uri @break_glass_strip query -bl_break_glass
 		request_body {
 			max_size 64MiB
@@ -155,7 +156,23 @@ blog.branchleft.co.uk {
 		crowdsec
 		appsec @inspected
 		respond @ghost_setup 403
+		@uploads_by_path {
+			path /content/files/* /content/images/* /content/media/*
+		}
+		route @uploads_by_path {
+			@active_upload_by_path {
+				path *.js *.mjs *.cjs *.html *.htm *.shtml *.xhtml *.xht *.xml *.xsl *.xslt *.css *.svg *.svgz *.kml *.gpx
+			}
+			respond @active_upload_by_path 403
+		}
+		@active_upload_by_pattern {
+			path_regexp (?i)^/+content/+(?:files|images|media)/.*\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$
+		}
+		respond @active_upload_by_pattern 403
 		reverse_proxy 10.20.1.100:8101
+	}
+	handle_errors {
+		header >X-Content-Type-Options "nosniff"
 	}
 }
 

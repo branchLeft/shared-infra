@@ -91,3 +91,26 @@ opposite: always rendered, never proxied.
 Hostname and addressing only, same rule as the rest of this registry: the page
 content itself lives in a file under `hetzner/edge/`, keyed by `name`, so that
 changing the words on the page never touches this file.
+
+## What the site runs
+
+`backend` is `ghost` for a Ghost tenant and `other` for everything else, and
+every entry with a `privateUpstream` must declare one: a registry test fails
+for an entry that does not, so a new Ghost tenant cannot silently miss the
+rules below.
+
+Ghost accepts `.js`, `.html` and `.css` as uploads, and also `.txt`, `.md`,
+`.json`, `.pdf`, `.zip` and `.py`, and serves them all from the tenant's own
+origin under `/content/files/`, `/content/images/` and `/content/media/`. So an
+uploaded script satisfies `script-src 'self'`. For `ghost` the edge therefore
+does two things:
+
+- answers 403 to any request under those prefixes for a file of an active type
+  (script, HTML, XML, stylesheet, SVG), whatever the method;
+- sets `X-Content-Type-Options: nosniff` on every response, error responses
+  included, because the extension list cannot name every type: a browser runs
+  a same-origin `<script src>` of a response typed `text/plain` or
+  `application/json` unless `nosniff` is set.
+
+Theme assets, the admin and `/content/public/` are untouched. An `other` site
+changes in no way.

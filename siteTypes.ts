@@ -47,6 +47,16 @@ export interface EdgeSite {
    */
   injectionWafPreviewOnly?: boolean;
   /**
+   * What the site runs, declared by every entry that has a `privateUpstream`
+   * (a registry test fails for one that does not). `ghost` is a Ghost tenant:
+   * the edge refuses an uploaded script, document or stylesheet under Ghost's
+   * upload paths and sets `nosniff` on every response, because Ghost serves a
+   * tenant's uploads from the tenant's own origin. `other` is anything else and
+   * gets neither. Why, and what it leaves alone: `sites.md` section "What the
+   * site runs".
+   */
+  backend?: 'ghost' | 'other';
+  /**
    * Maximum request body the edge accepts, as a Caddy size string in binary
    * units (`MiB`, never `MB`). Required for every site served. Why and where
    * the value comes from: `sites.md` section "The request body ceiling".
