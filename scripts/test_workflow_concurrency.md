@@ -108,3 +108,20 @@ Every check fails closed: a file that does not parse, whose top level is not a
 mapping, whose trigger block is missing or unreadable, or whose concurrency
 value is not a mapping with only the keys `group` and `cancel-in-progress`, and
 whose `name:`, when present, is not a string or is empty, is a violation.
+
+## The delivery workflow
+
+`ansible-delivery.yml` runs on a push to `main` and nothing else, and the delivery
+must never be skipped or dropped. The reusable workflow it calls already serialises
+the work: its plan job and its apply job each sit in a group of their own that never
+cancels, so a queued plan replaces an older queued plan, a running plan finishes, and
+an apply waiting for approval is never replaced. A newer push cancels only the lint
+and Molecule legs of an older run that has not reached a host.
+
+A group at the top of the caller would do the opposite of that. It would queue every
+newer run behind a run that waits for approval, so the checks of a new commit would
+not start until the older one was approved, and GitHub keeps one queued run per group,
+so a third run would drop the second. `DeliveryWorkflowTests` therefore pins the
+caller as it is: a push to `main` with no `paths` or `paths-ignore`, no other
+trigger, no top-level group, no job group of its own, and a call to the gated apply.
+The run-keyed rule above also refuses a literal group on a push-only workflow.
