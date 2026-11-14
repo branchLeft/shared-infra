@@ -635,7 +635,8 @@ class ServerLoadedRulesTests(unittest.TestCase):
 
     def test_a_container_without_its_own_credential_is_refused(self) -> None:
         done = _ask_the_server(loaded=2000, credential="")
-        self.assertEqual(done.returncode, 1)
+        # A shell that meets an unset ${VAR:?} exits non-zero, and dash makes it 2 where bash makes it 1.
+        self.assertNotEqual(done.returncode, 0)
         self.assertIn("POSTGRES_PASSWORD", done.stderr)
 
     def test_the_credential_is_never_printed(self) -> None:
