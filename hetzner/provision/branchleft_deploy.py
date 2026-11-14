@@ -75,6 +75,7 @@ ATTESTED_REPO = "branchLeft/ghost-platform"
 ATTESTED_IMAGES: dict[str, str] = {
     "ghcr.io/branchleft/ghost-tenant": f"{ATTESTED_REPO}/.github/workflows/registry-push.yml",
     "ghcr.io/branchleft/portal-apps": f"{ATTESTED_REPO}/.github/workflows/portal-apps-image.yml",
+    "ghcr.io/branchleft/percona-server": f"{ATTESTED_REPO}/.github/workflows/percona-image.yml",
 }
 
 
