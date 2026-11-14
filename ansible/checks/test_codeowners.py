@@ -378,6 +378,14 @@ BACKUP_PATHS = [
 # the owner's to review. It arrives with the edge-caddy image change, so it need not exist yet.
 IMAGE_SCAN_PATHS = [".image-scan-exemptions.json"]
 
+# branchleft_promote.py runs as root on a tenant host and decides which signed image the
+# wrapper is handed, so it and the tests that hold its refusals are the owner's alone.
+HOST_APPLIER_PATHS = [
+    "hetzner/provision/branchleft_promote.py",
+    "hetzner/provision/test_branchleft_promote.py",
+    "hetzner/provision/test_branchleft_promote_wrapper_contract.py",
+]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -546,6 +554,9 @@ class CodeownersTests(unittest.TestCase):
     def test_the_pull_roles_and_sudoers_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(PULL_ROLE_PATHS)
 
+    def test_the_host_applier_and_its_tests_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(HOST_APPLIER_PATHS)
+
     def test_the_host_inputs_loader_is_owned_by_the_owner(self) -> None:
         self.assert_owned(HOST_INPUTS_PATHS)
 
@@ -685,6 +696,7 @@ class CodeownersTests(unittest.TestCase):
             + RELEASED_PIN_PATHS
             + RELEASED_CHECK_PATHS
             + [sample.path for sample in SAMPLES]
+            + HOST_APPLIER_PATHS
         )
         for path in listed:
             if path in STANDS_FOR_MORE or path in PENDING:
