@@ -332,6 +332,93 @@ class NatGatewayTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(all("ens3" in call for call in self.inserted()))
 
+    # An address line the program cannot parse is ignored, never read as a permission. It is not
+    # refused outright, because at boot a refusal is the end of the matter: the rules live only in
+    # the kernel, branchleft-nat.service is a oneshot with no Restart=, so one garbled line beside
+    # a well-formed public uplink would leave edge1, the estate's only gateway, with no NAT until
+    # someone ran the unit by hand. The decision then rests on the well-formed lines alone, and
+    # the existing refusals still stop a host those lines do not qualify.
+    MALFORMED_LINES = {
+        "too few fields": "4: wg0",
+        "no address field": "4: wg0    inet",
+        "address is not an address": "4: wg0    inet not-an-address/32 scope global wg0",
+        "empty address": "4: wg0    inet /32 scope global wg0",
+        "octet out of range": "4: wg0    inet 999.1.1.1/32 scope global wg0",
+        "no prefix length": "4: wg0    inet 198.51.100.7 scope global wg0",
+        "prefix length out of range": "4: wg0    inet 198.51.100.7/40 scope global wg0",
+        "peer line, address in the wrong field": "4: ppp0    inet 198.51.100.7 peer 198.51.100.8/32 scope global ppp0",
+        "not an inet line": "4: wg0    inet6 2001:db8::1/64 scope global wg0",
+    }
+
+    def test_ignores_a_malformed_line_and_still_installs_from_the_well_formed_ones(self):
+        # The boot case: a garbled line beside the real uplink must not cost edge1 its NAT.
+        for name, line in self.MALFORMED_LINES.items():
+            with self.subTest(name):
+                self.setUp()
+                result = self.run_script(addresses=EDGE_ADDRESSES + "\n" + line)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(len(self.inserted()), 3)
+                self.assertIn("ignoring an address line it cannot parse", result.stderr)
+                self.assertIn(line, result.stderr)
+
+    def test_a_malformed_line_ahead_of_the_real_uplink_changes_nothing(self):
+        result = self.run_script(addresses="4: wg0    inet\n" + EDGE_ADDRESSES)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            self.inserted(),
+            [
+                "-t nat -I POSTROUTING 1 -s 10.20.1.0/24 -o eth0 -j MASQUERADE",
+                "-t filter -I DOCKER-USER 1 -s 10.20.1.0/24 -o eth0 -j ACCEPT",
+                "-t filter -I DOCKER-USER 1 -d 10.20.1.0/24 -i eth0 "
+                "-m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+            ],
+        )
+
+    def test_a_malformed_line_on_a_private_only_uplink_is_not_read_as_a_public_address(self):
+        # The fail-open this pins: the unparseable line was kept as (interface, ""), and "" is not
+        # private, so a private-only host was taken for a gateway and told to masquerade into the
+        # network it came from. Nothing well formed on the uplink is public, so the host is refused
+        # with nothing touched: no rule inserted, none checked or removed, forwarding left alone.
+        for name, line in self.MALFORMED_LINES.items():
+            with self.subTest(name):
+                self.setUp()
+                result = self.run_script(
+                    route="default via 10.20.1.1 dev enp7s0 proto dhcp metric 100",
+                    addresses="3: enp7s0    inet 10.20.1.20/32 brd 10.20.1.20 scope global dynamic enp7s0\n"
+                    + line.replace("wg0", "enp7s0").replace("ppp0", "enp7s0"),
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("holds no public address", result.stderr)
+                self.assertIn("ignoring an address line it cannot parse", result.stderr)
+                self.assertEqual(self.iptables_calls(), [])
+                self.assertFalse(os.path.exists(self.sysctl_conf))
+
+    def test_a_malformed_line_alone_is_not_a_public_uplink(self):
+        result = self.run_script(addresses="2: eth0    inet\n3: enp7s0    inet 10.20.1.10/32 scope global enp7s0")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("holds no public address", result.stderr)
+        self.assertEqual(self.iptables_calls(), [])
+
+    def test_a_malformed_line_is_not_a_member_of_the_private_subnet(self):
+        # Only the malformed line could place the host in the subnet here, and it does not count.
+        result = self.run_script(
+            addresses="2: eth0    inet 203.0.113.10/32 scope global eth0\n3: enp7s0    inet 10.20.1.10 scope global enp7s0"
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("holds no address in 10.20.1.0/24", result.stderr)
+        self.assertEqual(self.iptables_calls(), [])
+
+    def test_a_malformed_line_does_not_stop_the_second_run_from_changing_nothing(self):
+        result = self.run_script(addresses=EDGE_ADDRESSES + "\n4: wg0    inet", rule_present=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.inserted(), [])
+        self.assertEqual([c for c in self.iptables_calls() if " -D " in c or " -F " in c], [])
+
+    def test_a_blank_line_is_skipped_without_a_warning(self):
+        result = self.run_script(addresses=EDGE_ADDRESSES + "\n\n")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("cannot parse", result.stderr)
+
 
 class UnitFileTests(unittest.TestCase):
     """branchleft-nat.service is installed verbatim by nat-gateway.sh, so its

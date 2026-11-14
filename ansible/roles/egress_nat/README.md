@@ -93,6 +93,13 @@ The role leaves facts after a failed guard, which a caller or a test reads:
   On the gateway host, the reconciler also needs the host to hold a public address on
   the interface of its default route and an address in the estate's private subnet; it
   exits with a message when it does not.
+  An `ip -o addr` line it cannot parse is named on stderr and ignored: the decision rests
+  on the well-formed lines alone, so such a line is never read as a public address or a
+  subnet member. It is not a refusal, because the rules live only in the kernel and the
+  unit runs once per boot (a oneshot with no `Restart=`): refusing over a garbled line
+  beside a well-formed public uplink would leave the estate's only gateway without NAT
+  until the unit was run by hand. When the well-formed lines do not qualify the host,
+  the refusals above stop it, with nothing inserted, checked or removed.
 
 ## What it changes on a host
 
