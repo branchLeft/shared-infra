@@ -83,9 +83,19 @@ hand step:
    password is read from the container's own environment, so the role holds no secret and
    no value is in an argument. A file that does not parse fails the apply and the server
    keeps the rules it holds.
+4. The access-rules delivery and the steps after it (the bring-up, the deploy wrapper, the
+   unit check and the reload) form one block. Before the copy the rules on disk are kept at
+   `/opt/branchleft/control-plane/pg_hba.conf.previous`, beside the stack and outside the
+   mounted directory. If any step of the block fails, the rescue puts the kept file back,
+   reloads the database on it and then fails the apply. So the file on disk is the one the
+   server holds, and the next start of the database reads a file that loads. A first deploy
+   has no kept file; nothing is put back there, and the apply still fails.
 
 The reload runs on every apply, not only when the file changed, so a run interrupted after
-the copy is finished by the next one.
+the copy is finished by the next one. A run killed inside the block leaves its own file on
+disk and never reaches the rescue. The next run keeps whatever is on disk as the file to put
+back, so a file that was never loaded can be kept too. The rescue cannot undo that case; the
+reload then fails the next apply, as it did before this change.
 
 **The first apply after the directory mount ships** is the one that recreates the `db`
 container: the compose file's mount line changed, so Compose recreates it once, on the new
