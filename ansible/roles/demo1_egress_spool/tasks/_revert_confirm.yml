@@ -1,0 +1,17 @@
+---
+# Internal to the role. The last step of the role: the apply has loaded its table, installed
+# the spool and read both back, so the table is confirmed. The program saves the loaded table
+# as the last known-good one, stops the revert timer and clears the record of an unconfirmed
+# apply. It refuses an open or empty table, and a table the timer has already reverted during
+# this run; either fails the role, and the timer or the revert stands. Reported as changed
+# only when it stopped a timer, cleared a record or saved a different table, so that a run
+# that changed nothing reports nothing (ANS-11). A command is not run in check mode, so a plan
+# confirms nothing.
+- name: Confirm the loaded egress table as the last known-good one
+  ansible.builtin.command:
+    argv:
+      - '{{ demo1_egress_spool_revert_dest }}'
+      - confirm
+  register: demo1_egress_spool_revert_confirm
+  changed_when: "'confirm: changed' in demo1_egress_spool_revert_confirm.stdout"
+  when: not ansible_check_mode

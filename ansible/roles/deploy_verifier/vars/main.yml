@@ -36,3 +36,16 @@ deploy_verifier_programs_dir: '{{ role_path }}/../../../hetzner/provision'
 deploy_verifier_registry_docker_dir: /etc/branchleft/registry/docker
 deploy_verifier_registry_config: /etc/branchleft/registry/docker/config.json
 deploy_verifier_registry_host: ghcr.io
+
+# ----- Offline verification (applied only where deploy_verifier_offline is true) -----
+
+# The trusted root the host verifies a delivered bundle against, a reviewed file in this role. It is
+# never delivered with an image: a bundle and a root from one carrier would prove nothing about it.
+# The pin is its sha256. Refresh it with `gh attestation trusted-root`, in one change with the pin.
+# branchleft_deploy.py names the first path in OFFLINE_TRUSTED_ROOT and the second in
+# OFFLINE_STAGING_DIR; the coverage test reads both files and fails when they disagree.
+deploy_verifier_trusted_root_src: '{{ role_path }}/files/trusted_root.jsonl'
+deploy_verifier_trusted_root_sha256: '65ca537f6ed8a47fd0e560c421baa1f6c1efb8b25fc200d8c5c02c0e92eb2b9c'
+deploy_verifier_trusted_root_dir: /etc/branchleft/attestation
+deploy_verifier_trusted_root_path: /etc/branchleft/attestation/trusted_root.jsonl
+deploy_verifier_staging_dir: /var/lib/branchleft/attestations
