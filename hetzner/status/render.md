@@ -12,7 +12,7 @@ comments leave out.
 | `stack/config.yaml` | the `gatus` service  | one probe per registry hostname, the TEST probe, sqlite       |
 | `stack/target.yaml` | `status-test-target` | one probe of itself, because Gatus refuses to start with none |
 
-Regenerate with `npm run render` in `hetzner/`. `render.test.ts` fails if a committed file
+Regenerate with `pnpm run render` in `hetzner/`. `render.test.ts` fails if a committed file
 differs from the renderer's output, and also if Prettier would rewrite it, so the files need
 no entry in `.prettierignore`.
 

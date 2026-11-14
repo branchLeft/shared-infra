@@ -263,6 +263,19 @@
         quiet: true
         fail_msg: The role made the volume more than once, restarted the spool when nothing it owns had changed, or took it down.
 
+    # The image reached the stand-in host the way the signed image push leaves it: held by
+    # its digest alone, with no name. The first apply gave it the pin's name once, and the
+    # second apply, which finds it by that name, did not tag again. No pull was made.
+    - name: Assert the unnamed image was tagged once and nothing was pulled
+      ansible.builtin.assert:
+        that:
+          - >-
+            (demo1_egress_spool_verify_calls.content | b64decode).splitlines()
+            | select('match', '^docker tag sha256:[0-9a-f]{64} [a-z0-9./-]+:carried$') | list | length == 1
+          - (demo1_egress_spool_verify_calls.content | b64decode).splitlines() | select('match', '^docker (image )?pull') | list | length == 0
+        quiet: true
+        fail_msg: The role did not give the unnamed image its name exactly once, or pulled an image.
+
     # The role ran with GitHub and its registry unreachable (molecule.yml): the files came
     # from the role's own copies, and the shared unit's `compose pull`, which the stand-in
     # docker fails unless the override says pull_policy never, did not stop the start.

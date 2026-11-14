@@ -100,6 +100,7 @@ scrape_configs:
       - targets:
           - mx1.branchleft.co.uk:465
           - mx1.branchleft.co.uk:993
+          - mx1.branchleft.co.uk:8443
         labels: {host: mx1, expected_up: 'true', __param_module: tls_connect}
     relabel_configs:
       - source_labels: [__address__]

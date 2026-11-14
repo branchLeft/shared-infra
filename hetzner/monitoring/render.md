@@ -66,14 +66,15 @@ forever. The membership below is reviewed, not derived, for that reason.
 
 `mx1` is watched two ways, and the pair is deliberate.
 
-**Liveness, from outside.** `mail/firewall.ts` opens 25, 465, 587 and 993
-to the whole internet, so a blackbox probe from edge1 reaches them the way
+**Liveness, from outside.** `mail/firewall.ts` opens 25, 465, 587, 993 and
+8443 to the whole internet, so a blackbox probe from edge1 reaches them the way
 any other client on the internet does, with no new firewall rule. It
 cannot be a plain TCP-connect probe: a scan-banned or dead-backend
 connection still completes the handshake and then EOFs, so every one of
 those ports can read as healthy while Stalwart serves nothing behind them.
 `smtp_banner` (25, 587) reads the `220` greeting and sends `QUIT`;
-`tls_connect` (465, 993, both implicit-TLS) requires a completed
+`tls_connect` (465 and 993, both implicit-TLS, and 8443, the mailgun shim's
+Caddy endpoint, which `mail/firewall.ts` also opens) requires a completed
 handshake. See `mailProbeStaticConfig()` and the `blackbox_mail` job below.
 
 **Delivery outcomes, from inside.** A liveness probe cannot distinguish a

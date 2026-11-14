@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Edge-t gateway proof: `gateway` (+ `--sabotage`, owner-run) on edge-t, `ssh` from any machine; fails closed.
-Commands, expected output and the safety rules: hetzner/tenants/RUNBOOK-edget-gateway-proof.md
+"""NAT gateway proof: `gateway` on edge-t or edge1 (`--sabotage` on edge-t only, owner-run), `ssh` for edge-t from any machine; fails closed.
+Commands, expected output and the safety rules: hetzner/tenants/RUNBOOK-edget-gateway-proof.md (edge-t),
+hetzner/RUNBOOK-edge1-gateway-proof.md (edge1)
 """
 
 from __future__ import annotations
@@ -23,7 +24,32 @@ from dataclasses import dataclass
 SUBNET = "10.20.1.0/24"
 EDGET_HOSTNAME = "edge-t"
 EDGET_PRIVATE = "10.20.1.210"
+EDGE1_HOSTNAME = "edge1"
 EDGE1_PRIVATE = "10.20.1.10"
+
+
+@dataclass(frozen=True)
+class HostProfile:
+    """What one gateway host must look like before the probe builds anything on it.
+
+    The uplink is not a field: no register names it, so it is read from the host's single
+    default route and printed in the header.
+    """
+
+    hostname: str
+    private_address: str
+    subnet: str
+    sabotage_allowed: bool
+
+
+# The only hosts the probe runs on, keyed by the name `hostname` prints. A host not in this
+# table is refused; there is no flag that adds one. The two networks reuse one address range
+# (they are separate Hetzner networks), so each profile also forbids every other profile's
+# private address. edge1 carries every private host of the estate: no sabotage there.
+PROFILES = {
+    EDGET_HOSTNAME: HostProfile(EDGET_HOSTNAME, EDGET_PRIVATE, SUBNET, sabotage_allowed=True),
+    EDGE1_HOSTNAME: HostProfile(EDGE1_HOSTNAME, EDGE1_PRIVATE, SUBNET, sabotage_allowed=False),
+}
 
 UNIT = "branchleft-nat.service"
 DEFAULT_TARGET = "9.9.9.9:53"  # Quad9 (Swiss, non-profit) resolver, answering TCP on 53; any reply counts
@@ -224,6 +250,11 @@ class Context:
     chain: str
     host: str
     port: int
+    profile: HostProfile
+
+    @property
+    def subnet(self) -> str:
+        return self.profile.subnet
 
 
 @dataclass(frozen=True)
@@ -270,25 +301,25 @@ def read_counters(ctx: Context) -> Counters:
     masquerade = [
         r
         for r in nat
-        if r[2] == "MASQUERADE" and r[5] == "*" and r[6] == up and r[7] == SUBNET and r[8] == "0.0.0.0/0"
+        if r[2] == "MASQUERADE" and r[5] == "*" and r[6] == up and r[7] == ctx.subnet and r[8] == "0.0.0.0/0"
     ]
     flt = rule_rows("filter", ctx.chain)
     outbound = [
         r
         for r in flt
-        if r[2] == "ACCEPT" and r[5] == "*" and r[6] == up and r[7] == SUBNET
+        if r[2] == "ACCEPT" and r[5] == "*" and r[6] == up and r[7] == ctx.subnet
         and r[8] == "0.0.0.0/0" and len(r) == 9
     ]
     returning = [
         r
         for r in flt
         if r[2] == "ACCEPT" and r[5] == up and r[6] == "*" and r[7] == "0.0.0.0/0"
-        and r[8] == SUBNET and re.search(r"ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED)$", " ".join(r[9:]))
+        and r[8] == ctx.subnet and re.search(r"ctstate (RELATED,ESTABLISHED|ESTABLISHED,RELATED)$", " ".join(r[9:]))
     ]
     return Counters(
-        one_counter(masquerade, f"the MASQUERADE rule for {SUBNET} out of {up}"),
-        one_counter(outbound, f"the {ctx.chain} accept for {SUBNET} out of {up}"),
-        one_counter(returning, f"the {ctx.chain} return accept for {SUBNET} in from {up}"),
+        one_counter(masquerade, f"the MASQUERADE rule for {ctx.subnet} out of {up}"),
+        one_counter(outbound, f"the {ctx.chain} accept for {ctx.subnet} out of {up}"),
+        one_counter(returning, f"the {ctx.chain} return accept for {ctx.subnet} in from {up}"),
     )
 
 
@@ -318,7 +349,7 @@ def settle(ctx: Context) -> Counters:
 # ------------------------------------------------------------------------- preflight
 
 
-def preflight(target: str) -> Context:
+def preflight(target: str, sabotage: bool = False) -> Context:
     if not is_root():
         raise Refused("run as root: it creates network namespaces")
     for tool in REQUIRED_TOOLS:
@@ -326,17 +357,23 @@ def preflight(target: str) -> Context:
             raise Refused(f"{tool} is not installed; a proof that cannot read its evidence proves nothing")
     code, out, _ = run(["hostname"])
     name = out.strip()
-    if code != 0 or name != EDGET_HOSTNAME:
-        raise Refused(f"this host is {name or '?'}, not {EDGET_HOSTNAME}; this probe only runs on {EDGET_HOSTNAME}")
+    profile = PROFILES.get(name) if code == 0 else None
+    if profile is None:
+        raise Refused(f"this host is {name or '?'}, which has no profile; this probe only runs on {', '.join(PROFILES)}")
+    if sabotage and not profile.sabotage_allowed:
+        raise Refused(f"--sabotage is refused on {profile.hostname}: it would cut the egress of every host behind it")
     addresses = local_addresses()
-    if EDGET_PRIVATE not in addresses:
-        raise Refused(f"this host holds no {EDGET_PRIVATE}, which is edge-t's private address; refusing")
-    if EDGE1_PRIVATE in addresses:
-        raise Refused(f"this host holds {EDGE1_PRIVATE}, which is edge1's address; refusing")
+    if profile.private_address not in addresses:
+        raise Refused(
+            f"this host holds no {profile.private_address}, which is {profile.hostname}'s private address; refusing"
+        )
+    for other in PROFILES.values():
+        if other is not profile and other.private_address in addresses:
+            raise Refused(f"this host holds {other.private_address}, which is {other.hostname}'s address; refusing")
     for source in (INSIDE, OUTSIDE):
-        inside = ipaddress.ip_address(source.address) in ipaddress.ip_network(SUBNET)
+        inside = ipaddress.ip_address(source.address) in ipaddress.ip_network(profile.subnet)
         if inside != (source is INSIDE):
-            raise Refused(f"the {source.key} source {source.address} is on the wrong side of {SUBNET}")
+            raise Refused(f"the {source.key} source {source.address} is on the wrong side of {profile.subnet}")
         if source.address in addresses or source.host_address in addresses:
             raise Refused(f"{source.address} or {source.host_address} is already on this host")
     host, port = split_target(target)
@@ -352,7 +389,7 @@ def preflight(target: str) -> Context:
                 "Docker is not enforcing through iptables here, and FORWARD is not a safe stand-in"
             )
         chain = "FORWARD"
-    return Context(uplink, chain, host, port)
+    return Context(uplink, chain, host, port, profile)
 
 
 def gateway_problems(ctx: Context) -> list[str]:
@@ -450,9 +487,9 @@ def control_inside(ctx: Context, lab: Lab, state: str = "live") -> Verdict:
     if reply is not True:
         fails.append(f"no reply from {ctx.host}:{ctx.port} ({seen})")
     for name, b, a in (
-        (f"the nat/POSTROUTING MASQUERADE for {SUBNET}", before.masquerade, after.masquerade),
-        (f"the {ctx.chain} accept for {SUBNET} out of {ctx.uplink}", before.out_accept, after.out_accept),
-        (f"the {ctx.chain} return accept for {SUBNET} in from {ctx.uplink}", before.return_accept, after.return_accept),
+        (f"the nat/POSTROUTING MASQUERADE for {ctx.subnet}", before.masquerade, after.masquerade),
+        (f"the {ctx.chain} accept for {ctx.subnet} out of {ctx.uplink}", before.out_accept, after.out_accept),
+        (f"the {ctx.chain} return accept for {ctx.subnet} in from {ctx.uplink}", before.return_accept, after.return_accept),
     ):
         moved = delta(b, a)
         if moved is None:
@@ -526,7 +563,7 @@ def control_outside(ctx: Context, lab: Lab, inside_ok: bool) -> Verdict:
 
 
 def masquerade_argv(ctx: Context, verb: str) -> list[str]:
-    return ["iptables", "-w", "-t", "nat", verb, "POSTROUTING", "-s", SUBNET, "-o", ctx.uplink, "-j", "MASQUERADE"]
+    return ["iptables", "-w", "-t", "nat", verb, "POSTROUTING", "-s", ctx.subnet, "-o", ctx.uplink, "-j", "MASQUERADE"]
 
 
 def masquerade_present(ctx: Context) -> bool:
@@ -569,8 +606,8 @@ class Sabotage:
             self.restored = True
             return True
         self.failure = (
-            f"RESTORE FAILED (restart exit {code}, rule back: {back}). edge-t has NO internet gateway "
-            f"until this is run as root on edge-t: systemctl restart {UNIT}"
+            f"RESTORE FAILED (restart exit {code}, rule back: {back}). {self.ctx.profile.hostname} has NO internet gateway "
+            f"until this is run as root on {self.ctx.profile.hostname}: systemctl restart {UNIT}"
         )
         say(self.failure)
         return False
@@ -580,7 +617,7 @@ def sabotage_sequence(ctx: Context, lab: Lab, state: Sabotage) -> None:
     """Delete the masquerade, show red, restore, show green. Restores on any exit."""
     # Quiet first: deleting the masquerade now would cut any other source's new flows.
     settle(ctx)
-    say(f"sabotage: deleting the MASQUERADE rule for {SUBNET}; if this process is killed, run as root: systemctl restart {UNIT}")
+    say(f"sabotage: deleting the MASQUERADE rule for {ctx.subnet}; if this process is killed, run as root: systemctl restart {UNIT}")
     state.began = True
     code, _, err = run(masquerade_argv(ctx, "-D"))
     if code != 0:
@@ -595,7 +632,7 @@ def sabotage_sequence(ctx: Context, lab: Lab, state: Sabotage) -> None:
             "masquerade rule deleted",
             False,
             f"source {lab.source.address} got NO reply from {ctx.host}:{ctx.port} ({seen}) with the "
-            f"nat/POSTROUTING MASQUERADE rule for {SUBNET} deleted (iptables -C finds it absent): "
+            f"nat/POSTROUTING MASQUERADE rule for {ctx.subnet} deleted (iptables -C finds it absent): "
             "a private source address cannot be answered by the internet, so the masquerade is the "
             "mechanism that carries the traffic",
         )
@@ -622,8 +659,8 @@ def sabotage_sequence(ctx: Context, lab: Lab, state: Sabotage) -> None:
 
 
 def run_gateway(args: argparse.Namespace) -> int:
-    ctx = preflight(args.target)
-    say(f"probe-edget-gateway: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} on {EDGET_HOSTNAME}, "
+    ctx = preflight(args.target, args.sabotage)
+    say(f"probe-edget-gateway: {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} on {ctx.profile.hostname}, "
         f"uplink {ctx.uplink}, forwarding chain {ctx.chain}, target {ctx.host}:{ctx.port}")
     problems: list[str] = []
     verdicts: list[Verdict] = []
@@ -720,12 +757,12 @@ def run_ssh(args: argparse.Namespace) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="probe-edget-gateway", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
-    gateway = sub.add_parser("gateway", help="prove the gateway from namespaces on edge-t (run on edge-t, as root)")
+    gateway = sub.add_parser("gateway", help="prove the gateway from namespaces on edge-t or edge1 (run on that host, as root)")
     gateway.add_argument("--target", default=DEFAULT_TARGET, help=f"IPV4:PORT to connect to (default {DEFAULT_TARGET})")
     gateway.add_argument(
         "--sabotage",
         action="store_true",
-        help="owner-run only: delete the masquerade rule, show RED, restore it, show GREEN",
+        help="owner-run on edge-t only (refused on edge1): delete the masquerade rule, show RED, restore it, show GREEN",
     )
     ssh = sub.add_parser("ssh", help="probe SSH to edge-t's public address from this machine")
     ssh.add_argument("--target", required=True, help="edge-t's public IPv4 (or IPv6) address")

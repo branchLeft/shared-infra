@@ -86,7 +86,7 @@ rule that never enforced (it was `preview: true`), so it is a number no
 traffic has been measured against, and the key `{http.request.remote.host}`
 could collapse real clients onto a Docker bridge address (for example
 `172.18.0.1` behind the docker-proxy), in which case every collapsed client
-shares one budget per site. The `RateLimitDecliningRealClients` alert excludes
+shares one budget per site. The `RateLimitDeclinesSustained` alert excludes
 `172.16.0.0/12` keys, so a bridge collapse would not alert on its own; the
 tripwire is the blackbox probes seeing a 429. Traffic that may legitimately
 exceed 200 requests per 60 seconds from one address includes Nextcloud sync
