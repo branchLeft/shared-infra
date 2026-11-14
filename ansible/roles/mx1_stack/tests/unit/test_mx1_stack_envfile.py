@@ -53,7 +53,7 @@ SMTP_ENV = (
 )
 DRAIN_ENV = (
     "PORT=8080\nSHIM_DB_PATH=/data/shim.db\nSHIM_THROTTLE_PATH=/data/throttle.json\n"
-    f"SHIM_DRAIN_TOKEN={TOKEN}\n"
+    f"SHIM_DRAIN_OUTCOMES=true\nSHIM_DRAIN_TOKEN={TOKEN}\n"
 )
 
 
