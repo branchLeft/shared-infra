@@ -11,18 +11,18 @@
 # the files and every checksum in one change (README, "Vendored files"): a copy
 # that does not match its pin stops the role before it writes. This role is the
 # only pin of the egress program and its unit in this repository.
-demo1_egress_spool_source_sha: 19622ee9c88bf918949f675a85897cfb64c65a24
+demo1_egress_spool_source_sha: dafeadd6b82f6b32b7ab274677db42a1bda902bc
 
 # The three files, one path from the repository root and one sha256 each. The
 # Compose file is the committed golden of the renderer: the image digest, the
 # networks and the one published port are in it, and nowhere else.
 demo1_egress_spool_files:
-  - path: demo-host/provision/branchleft_demo_egress.sh
-    sha256: 6a03d476d2bdc9978f4772e9b6b14f96c1ba4e57215f2abefd974b404ad2235f
+  - path: demo-host/provision/branchleft_demo_egress.py
+    sha256: 8ca161119363b52757357d6947926e0663798380b278405dfe1f0abe70ae6170
   - path: demo-host/provision/branchleft-demo-egress.service
     sha256: 7b25d4d7ce17ee65149260368e1271370c00a3860cd1de2f99178467c6185ded
   - path: render-core/test/golden/mail-spool-compose.demo1.yml
-    sha256: a08170c428eb9ce3cef5fe1a514bfd36053d8f8e3bc1c92ef7ee11b96f5cce4b
+    sha256: 1b26cadeecc85c15232926a748d6676824360a07762a7099593c7ee2bcb3d0e7
 
 # The host port the spool's drain endpoint is published on, on 127.0.0.1 only.
 # The pinned Compose file publishes this port; the role refuses a file that

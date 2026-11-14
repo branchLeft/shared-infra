@@ -2,11 +2,11 @@
 # What the role carries. These are constants of the two reconcilers, not
 # inputs, so they live here and not in defaults/: a caller cannot override them.
 # Each source is read in place by the copy tasks (tasks/_reconciler.yml), so there is one
-# copy of every file: the host egress pair is in hetzner/provision, the NAT program and its
-# unit are in this role's files/.
+# copy of every file: both reconcilers and the NAT unit are in this role's files/, and the
+# host egress unit and timer are in hetzner/provision.
 egress_nat_host_egress:
   label: the private-host egress reconciler
-  reconciler_src: '{{ role_path }}/../../../hetzner/provision/branchleft_host_egress.sh'
+  reconciler_src: '{{ role_path }}/files/branchleft_host_egress.py'
   reconciler_dest: /usr/local/sbin/branchleft-host-egress
   unit_src: '{{ role_path }}/../../../hetzner/provision/branchleft-host-egress.service'
   unit_name: branchleft-host-egress.service

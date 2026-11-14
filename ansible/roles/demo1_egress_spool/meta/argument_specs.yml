@@ -29,7 +29,7 @@ argument_specs:
           The full 40-character ghost-platform commit the role's copies of the
           three files were taken from. Bump it together with the files under
           files/ghost-platform and every checksum in demo1_egress_spool_files.
-        default: 19622ee9c88bf918949f675a85897cfb64c65a24
+        default: dafeadd6b82f6b32b7ab274677db42a1bda902bc
       demo1_egress_spool_files:
         type: list
         elements: dict
@@ -49,12 +49,12 @@ argument_specs:
             required: true
             description: The 64-character lower-case sha256 of the file under files/ghost-platform, which is the file at the pinned commit.
         default:
-          - path: demo-host/provision/branchleft_demo_egress.sh
-            sha256: 6a03d476d2bdc9978f4772e9b6b14f96c1ba4e57215f2abefd974b404ad2235f
+          - path: demo-host/provision/branchleft_demo_egress.py
+            sha256: 8ca161119363b52757357d6947926e0663798380b278405dfe1f0abe70ae6170
           - path: demo-host/provision/branchleft-demo-egress.service
             sha256: 7b25d4d7ce17ee65149260368e1271370c00a3860cd1de2f99178467c6185ded
           - path: render-core/test/golden/mail-spool-compose.demo1.yml
-            sha256: a08170c428eb9ce3cef5fe1a514bfd36053d8f8e3bc1c92ef7ee11b96f5cce4b
+            sha256: 1b26cadeecc85c15232926a748d6676824360a07762a7099593c7ee2bcb3d0e7
       demo1_egress_spool_drain_port:
         type: int
         description: >-

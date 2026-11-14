@@ -4,28 +4,9 @@ DKIM signing key, then prints the DNS records that key needs published.
 
     python3 provision_sending_domain.py <domain> [--selector bl] [--dkim-only] [--json]
 
-The same call serves the demo sending domain and a tenant's domain -- only
-the name differs. `--dkim-only` is for a domain whose MX and SPF belong to
-someone else (a tenant's), so only the DKIM record is ours to publish.
-
-**It never touches a key that already exists.** A domain that already has
-the selector's key is a no-op; a domain with any *other* key, or one whose
-keys Stalwart manages itself, is refused before any write -- adding a key
-there would make Stalwart sign production mail under a selector nobody has
-published. See "Sending domains" in mail/RUNBOOK-mx1-provision.md.
-
-**The key is fixed, not rotated.** A created domain gets
-`dkimManagement: Manual`. Stalwart's default is `Automatic`, which carries
-a rotation schedule and date-stamped selectors; its rotation needs
-Stalwart-managed DNS, which this estate does not use, and a key rotated
-under a hand-published record fails DKIM for every message after it. Manual
-means Stalwart never generates, retires or deletes a key on this domain on
-its own.
-
-Stalwart will not generate a key for a Manual domain, so this script does:
-`openssl genpkey` on the mail host itself, piped straight into the loopback
-API call. The private key is never written to disk, printed or logged, and
-never leaves the host. Stalwart redacts it on every read.
+It never touches a key that already exists, and the key is fixed, not rotated.
+The private key is never written to disk, printed or logged. See
+provision_sending_domain.md.
 """
 from __future__ import annotations
 
@@ -57,10 +38,12 @@ RSA_BITS = 2048
 
 DKIM_KEY_TAGS = {"Dkim1RsaSha256": "rsa", "Dkim1Ed25519Sha256": "ed25519"}
 
-# p=none: the domain is new and warming, and aggregate reports need a
-# receiving mailbox this domain does not have. Alignment is strict because
-# every message from it is signed by us.
-DMARC_VALUE = "v=DMARC1; p=none; adkim=s; aspf=s"
+# p=none: the domain is new and warming. Alignment is strict because every
+# message from it is signed by us. rua asks receivers for aggregate reports,
+# sent to the address the apex record already publishes. A report address on
+# another domain is only honoured once that domain publishes an authorisation
+# record (RFC 7489 section 7.1), which is a separate platform-side change.
+DMARC_VALUE = "v=DMARC1; p=none; rua=mailto:rob@branchleft.co.uk; adkim=s; aspf=s"
 
 _LABEL = r"(?!-)[a-z0-9-]{1,63}(?<!-)"
 _DOMAIN_RE = re.compile(rf"^(?:{_LABEL}\.)+[a-z]{{2,63}}$")

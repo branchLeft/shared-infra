@@ -10,6 +10,7 @@ environment to an exact allow-list of names and a fixed PATH, which needs no den
 strings below that look like a deny-list entry are the sabotage inputs of the tests themselves.
 """
 
+import ast
 import re
 import unittest
 from collections.abc import Mapping
@@ -29,11 +30,14 @@ DIGEST = "a" * 64
 # The names the environment file may hold, exactly. They avoid the words the plan-diff scan reads
 # as a credential, and they are the proposed contract with the controller's entrypoint.
 ENV_ALLOW_LIST = [
-    "RING_CONTROLLER_LEDGER_URL",
     "RING_CONTROLLER_RECORD_SIGNING_KEY_NAME",
     "RING_CONTROLLER_RECORD_PUBLIC_KEY_FILE",
     "RING_CONTROLLER_STATE_DIR",
 ]
+# The one input the role used to take that nothing read. The old name is refused, never ignored.
+RETIRED_INPUT = "ring_controller_host_ledger_url"
+RETIRED_INPUT_ENV_NAME = "RING_CONTROLLER_LEDGER_URL"
+CHECKS = ROLE.parents[1] / "checks"
 # What the role no longer has: a push key, a push remote, a pinned host key, an OpenSSH key, and
 # the program that made them. A word of one of these in a shipped file is a leftover.
 RETIRED_WORDS = (
@@ -338,12 +342,7 @@ class EnvironmentFileTests(unittest.TestCase):
         self.template = ENV_TEMPLATE.read_text(encoding="utf-8")
 
     def sample(self, text: str) -> str:
-        return render(
-            text,
-            {
-                "ring_controller_host_ledger_url": "https://example.test/ledger",
-            },
-        )
+        return render(text)
 
     def test_the_rendered_names_equal_the_allow_list_exactly(self) -> None:
         self.assertEqual(env_names(self.sample(self.template)), ENV_ALLOW_LIST)
@@ -370,10 +369,13 @@ class EnvironmentFileTests(unittest.TestCase):
                     self.assertTrue(name.startswith("ring_controller_host_"), name)
         self.assertNotRegex(self.template, r"lookup|query|slurp|ansible_facts|hostvars|vault")
 
-    def test_an_empty_input_renders_an_empty_value_not_a_missing_name(self) -> None:
-        text = render(self.template)
-        self.assertIn("RING_CONTROLLER_LEDGER_URL=\n", text)
-        self.assertEqual(env_names(text), ENV_ALLOW_LIST)
+    def test_the_retired_ledger_name_is_not_in_the_file_whatever_the_input_holds(self) -> None:
+        for text in (
+            render(self.template),
+            render(self.template, {RETIRED_INPUT: "https://x.test"}),
+        ):
+            self.assertNotIn(RETIRED_INPUT_ENV_NAME, text)
+            self.assertEqual(env_names(text), ENV_ALLOW_LIST)
 
 
 class TaskTests(unittest.TestCase):
@@ -490,7 +492,7 @@ class TaskTests(unittest.TestCase):
         }  # fmt: skip
         first_change = next(i for i, t in enumerate(tasks()) if module_of(t) in changing)
         before = tasks()[:first_change]
-        self.assertGreaterEqual(len([t for t in before if module_of(t) == "assert"]), 5)
+        self.assertGreaterEqual(len([t for t in before if module_of(t) == "assert"]), 4)
         # And every input is read by an assert before the group is made.
         text = "\n".join(str(t) for t in before)
         for name in role_defaults():
@@ -620,10 +622,7 @@ class InterfaceTests(unittest.TestCase):
             self.assertIsNone(pattern.match(bad), bad)
 
     def test_a_url_carries_no_credential_query_or_fragment_and_is_https(self) -> None:
-        for name in (
-            "ring_controller_host_bundle_url_pattern",
-            "ring_controller_host_ledger_url_pattern",
-        ):
+        for name in ("ring_controller_host_bundle_url_pattern",):
             pattern = self.pattern(name)
             for good in (
                 "https://example.test/a/b.tar.gz",
@@ -645,7 +644,7 @@ class InterfaceTests(unittest.TestCase):
             ):
                 self.assertIsNone(pattern.match(bad), bad)
 
-    def test_the_role_takes_exactly_three_inputs_and_none_of_them_is_a_push_input(self) -> None:
+    def test_the_role_takes_exactly_two_inputs_and_none_of_them_is_a_push_input(self) -> None:
         spec = cast(
             "dict[str, dict[str, dict[str, dict[str, dict[str, object]]]]]",
             load(ROLE / "meta" / "argument_specs.yml"),
@@ -655,8 +654,46 @@ class InterfaceTests(unittest.TestCase):
             [
                 "ring_controller_host_bundle_sha256",
                 "ring_controller_host_bundle_url",
-                "ring_controller_host_ledger_url",
             ],
+        )
+
+    def test_the_retired_ledger_input_is_in_no_spec_default_pattern_or_template(self) -> None:
+        """The removal control: put the input back into any of these and this goes red."""
+        spec = cast(
+            "dict[str, dict[str, dict[str, dict[str, dict[str, object]]]]]",
+            load(ROLE / "meta" / "argument_specs.yml"),
+        )["argument_specs"]["main"]["options"]
+        self.assertNotIn(RETIRED_INPUT, spec)
+        self.assertNotIn(RETIRED_INPUT, role_defaults())
+        self.assertFalse([name for name in role_vars() if name.startswith(RETIRED_INPUT)])
+        self.assertNotIn(RETIRED_INPUT, ENV_TEMPLATE.read_text(encoding="utf-8"))
+
+    def test_the_retired_ledger_input_is_refused_by_name_before_anything_changes(self) -> None:
+        """The refusal control: drop the task, or let it run late, and this goes red."""
+        first = tasks()[0]
+        self.assertEqual(module_of(first), "assert")
+        self.assertEqual(args_of(first)["that"], [f"{RETIRED_INPUT} is not defined"])
+        self.assertIn(RETIRED_INPUT, str(args_of(first)["fail_msg"]))
+        self.assertNotRegex(str(args_of(first)["fail_msg"]), r"https?:|\{\{")
+
+    def test_the_enrolment_check_keeps_the_retired_ledger_input_out_of_the_allowed_keys(
+        self,
+    ) -> None:
+        """Read from the check's own source: a later edit cannot bring the input back unseen."""
+        tree = ast.parse((CHECKS / "check_enrolment.py").read_text(encoding="utf-8"))
+        names: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == "RING_CONTROLLER_TEXT_KEYS"
+                for target in node.targets
+            ):
+                names = {
+                    sub.value
+                    for sub in ast.walk(node.value)
+                    if isinstance(sub, ast.Constant) and isinstance(sub.value, str)
+                }
+        self.assertEqual(
+            names, {"ring_controller_host_bundle_sha256", "ring_controller_host_bundle_url"}
         )
 
     def test_an_old_push_input_is_refused_by_the_argument_spec_as_ansible_reads_it(self) -> None:

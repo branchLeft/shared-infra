@@ -22,7 +22,10 @@ REVERSED_TARGET = "7.100.51.198"
 from unittest import mock
 
 from check_dnsbl_blocklist import (
+    DEFAULT_SENDING_DOMAINS,
     DNSBLS,
+    DOMAIN_DBL_ZONE,
+    DOMAIN_SENTINEL,
     QUERY_ERROR_PREFIX,
     RESOLVER_ADDRESS,
     RESOLVER_PORT,
@@ -35,16 +38,20 @@ from check_dnsbl_blocklist import (
     _encode_name,
     _syslog_socket_reachable,
     build_alert,
+    build_domain_query_name,
     build_query,
     build_query_name,
     classify_outcome,
+    domain_dnsbl_spec,
     evaluate_dnsbl,
     parse_response,
     resolve_a_records,
+    resolve_sending_domains,
     resolve_target_address,
     resolver_socket_family,
     reverse_ipv4,
     run_checks,
+    run_domain_checks,
 )
 
 SPEC = DnsblSpec("example", "Example List", "example.invalid", "https://example.invalid/delist")
@@ -245,6 +252,147 @@ class RunChecksTests(unittest.TestCase):
         self.assertEqual(results[0].verdict, Verdict.ZONE_UNRESPONSIVE)
         self.assertEqual(len(alerts), 1)
         self.assertIn("CHECK INCONCLUSIVE", alerts[0])
+
+
+class DomainBlocklistTests(unittest.TestCase):
+    """The domain-level check: Spamhaus DBL is queried by domain name, with
+    its documented test point as the self-test sentinel."""
+
+    def test_builds_the_dbl_query_name_for_a_domain(self):
+        self.assertEqual(build_domain_query_name("example.co.uk"), f"example.co.uk.{DOMAIN_DBL_ZONE}")
+
+    def test_refuses_anything_that_is_not_a_plain_domain(self):
+        for bad in ("", "Bad_Domain.example", "has space.example", "example.com.", "-lead.example", "nodot"):
+            with self.subTest(domain=bad), self.assertRaises(ValueError):
+                build_domain_query_name(bad)
+
+    def test_sentinel_is_the_documented_dbl_test_point(self):
+        self.assertEqual(DOMAIN_SENTINEL, "dbltest.com")
+
+    def test_unset_configuration_uses_the_default_sending_domains(self):
+        self.assertEqual(resolve_sending_domains(None), DEFAULT_SENDING_DOMAINS)
+        self.assertEqual(resolve_sending_domains("   "), DEFAULT_SENDING_DOMAINS)
+
+    def test_configured_domains_are_split_trimmed_and_lowercased(self):
+        self.assertEqual(
+            resolve_sending_domains(" A.example , b.example ,"),
+            ("a.example", "b.example"),
+        )
+
+    def test_a_malformed_configured_domain_raises_rather_than_being_skipped(self):
+        with self.assertRaises(ValueError):
+            build_domain_query_name(resolve_sending_domains("ok.example, bad_one.example")[1])
+
+    def test_domain_sentinel_listed_and_target_clean_is_not_listed(self):
+        spec = domain_dnsbl_spec("example.co.uk")
+        result = evaluate_dnsbl(
+            spec,
+            ResolutionOutcome(ok=True, addresses=("127.0.1.2",)),
+            NOT_LISTED,
+            sentinel_label=DOMAIN_SENTINEL,
+        )
+        self.assertEqual(result.verdict, Verdict.NOT_LISTED)
+
+    def test_domain_sentinel_not_listed_makes_the_target_inconclusive(self):
+        spec = domain_dnsbl_spec("example.co.uk")
+        result = evaluate_dnsbl(
+            spec,
+            NOT_LISTED,
+            ResolutionOutcome(ok=True, addresses=("127.0.1.2",)),
+            sentinel_label=DOMAIN_SENTINEL,
+        )
+        self.assertEqual(result.verdict, Verdict.ZONE_UNRESPONSIVE)
+        self.assertIn(DOMAIN_SENTINEL, result.detail)
+
+    def test_run_domain_checks_queries_sentinel_then_each_domain(self):
+        calls: list[str] = []
+
+        def fake_resolver(hostname: str, timeout: int) -> ResolutionOutcome:
+            calls.append(hostname)
+            if hostname == f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}":
+                return ResolutionOutcome(ok=True, addresses=("127.0.1.2",))
+            if hostname == f"listed.example.{DOMAIN_DBL_ZONE}":
+                return ResolutionOutcome(ok=True, addresses=("127.0.1.3",))
+            if hostname == f"errored.example.{DOMAIN_DBL_ZONE}":
+                return ResolutionOutcome(ok=True, addresses=("127.255.255.254",))
+            return ResolutionOutcome(ok=True, addresses=())
+
+        new_state, alerts, results = run_domain_checks(
+            ("listed.example", "clean.example", "errored.example"), fake_resolver, {}
+        )
+
+        self.assertIn(f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}", calls)
+        self.assertIn(f"clean.example.{DOMAIN_DBL_ZONE}", calls)
+        verdicts = {r.spec.key: r.verdict for r in results}
+        self.assertEqual(verdicts["dbl:listed.example"], Verdict.LISTED)
+        self.assertEqual(verdicts["dbl:clean.example"], Verdict.NOT_LISTED)
+        self.assertEqual(verdicts["dbl:errored.example"], Verdict.QUERY_ERROR)
+        self.assertEqual(new_state["dbl:listed.example"], "listed")
+        self.assertTrue(any("NEW LISTING" in a and "listed.example" in a for a in alerts))
+        self.assertFalse(any("clean.example" in a for a in alerts))
+
+    def test_a_list_that_is_only_separators_fails_loudly_rather_than_checking_nothing(self):
+        for empty in (",", " , ,", ",,,"):
+            with self.subTest(configured=empty), self.assertRaises(ValueError):
+                resolve_sending_domains(empty)
+
+    def test_a_sentinel_answer_other_than_exactly_127_0_1_2_is_no_self_test(self):
+        def wrong_sentinel_answer(hostname: str, timeout: int) -> ResolutionOutcome:
+            if hostname == f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}":
+                return ResolutionOutcome(ok=True, addresses=("127.0.1.3",))
+            return ResolutionOutcome(ok=True, addresses=())
+
+        _, _, results = run_domain_checks(("clean.example",), wrong_sentinel_answer, {})
+        self.assertEqual(results[0].verdict, Verdict.ZONE_UNRESPONSIVE)
+
+    def test_the_sentinel_is_queried_once_per_run_not_once_per_domain(self):
+        calls: list[str] = []
+
+        def fake_resolver(hostname: str, timeout: int) -> ResolutionOutcome:
+            calls.append(hostname)
+            if hostname == f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}":
+                return ResolutionOutcome(ok=True, addresses=("127.0.1.2",))
+            return ResolutionOutcome(ok=True, addresses=())
+
+        run_domain_checks(("a.example", "b.example", "c.example"), fake_resolver, {})
+        sentinel_name = f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}"
+        self.assertEqual(calls.count(sentinel_name), 1)
+
+    def test_a_clean_run_over_the_default_domains_produces_no_alerts(self):
+        def fake_resolver(hostname: str, timeout: int) -> ResolutionOutcome:
+            if hostname == f"{DOMAIN_SENTINEL}.{DOMAIN_DBL_ZONE}":
+                return ResolutionOutcome(ok=True, addresses=("127.0.1.2",))
+            return ResolutionOutcome(ok=True, addresses=())
+
+        _, alerts, results = run_domain_checks(DEFAULT_SENDING_DOMAINS, fake_resolver, {})
+        self.assertEqual(alerts, [])
+        self.assertEqual(len(results), len(DEFAULT_SENDING_DOMAINS))
+
+
+# Each default sending domain, with the repo file and the exact text that shows
+# mail is sent from or signed with it. A domain is in the default list only if
+# it is here, and each entry must still be found in its file.
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+SENDING_DOMAIN_PROOFS = {
+    "branchleft.co.uk": ("hetzner/dns/zone.json", "v=spf1 ip4:167.233.252.240"),
+    "blog.branchleft.co.uk": ("mail/RUNBOOK-mx1-provision.md", "register blog.branchleft.co.uk"),
+    "publicpress.co.uk": ("hetzner/dns/publicpress.co.uk.json", "bl._domainkey"),
+    "trypublicpress.co.uk": (
+        "mail/provision/provision_collector_submission_credential.py",
+        'COLLECTOR_SENDING_DOMAINS: tuple[str, ...] = ("trypublicpress.co.uk",)',
+    ),
+}
+
+
+class DefaultSendingDomainProofTests(unittest.TestCase):
+    def test_every_default_domain_has_a_repo_proof_and_no_other_domain_is_listed(self):
+        self.assertEqual(set(DEFAULT_SENDING_DOMAINS), set(SENDING_DOMAIN_PROOFS))
+        self.assertEqual(len(DEFAULT_SENDING_DOMAINS), len(set(DEFAULT_SENDING_DOMAINS)))
+
+    def test_each_proof_text_is_found_in_its_repo_file(self):
+        for domain, (path, needle) in SENDING_DOMAIN_PROOFS.items():
+            with self.subTest(domain=domain), open(os.path.join(REPO_ROOT, path), encoding="utf-8") as handle:
+                self.assertIn(needle, handle.read())
 
 
 class DnsblConfigTests(unittest.TestCase):

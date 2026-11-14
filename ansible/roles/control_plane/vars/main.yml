@@ -92,6 +92,12 @@ control_plane_stack_dirs:
 # file once the stack runs on the new mount, so nobody edits a copy that governs nothing.
 control_plane_legacy_hba_file: '{{ control_plane_project_dir }}/pg_hba.conf'
 
+# The access rules the database reads, as delivered, and the copy of the rules that were on
+# disk before this run delivered. The copy sits beside the stack, outside the mounted
+# directory, so the container never sees it. It is what a failed delivery is put back from.
+control_plane_hba_live: '{{ control_plane_project_dir }}/postgres/pg_hba.conf'
+control_plane_hba_previous: '{{ control_plane_project_dir }}/pg_hba.conf.previous'
+
 # The database container, as Compose names it: the project, the service and the replica
 # number. A unit test pins it to the project name in compose.yml. The role reloads the
 # server in it after every deploy.

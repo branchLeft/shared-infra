@@ -195,10 +195,11 @@ is not loaded there.
   in its module. For ops1 the two keys are `pull_trigger_steps`,
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text, and
   `control_plane_db_apps_image`, the applications image the steps run, which must be text.
-  The `ring_controller_host` role adds three more, all text and all allowed on ops1 only:
-  `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url` and
-  `ring_controller_host_ledger_url`. Each may be the empty string, which is how the role
-  starts inert; what a value may look like is the role's rule alone. The push remote and the
+  The `ring_controller_host` role adds two more, both text and both allowed on ops1 only:
+  `ring_controller_host_bundle_sha256` and `ring_controller_host_bundle_url`. Each may be the
+  empty string, which is how the role starts inert; what a value may look like is the role's
+  rule alone. The role's old `ring_controller_host_ledger_url` is no longer allowed: an owner
+  file that still sets it is refused here, and the role refuses the name too. The push remote and the
   known-hosts line it used to take are no longer allowed, so an owner file that still sets one is
   refused here (Ansible's own spec check does not read an owner file's values).
   R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
@@ -696,6 +697,12 @@ Rules:
   `tasks/`, `handlers/`, `vars/`, `defaults/` or `meta/` that the check does not read is an
   `R4 <file>: ... does not read` finding naming the file (see "The role's files"). A role with no
   secret is not read, so R4 never fires there.
+- **R5, the baseline.** `secret_no_log_baseline.yml` lists, by file and task name, the R1
+  findings the tree has today (a task that names a tainted variable and lacks `no_log`, or
+  `diff: false`). A finding it does not list fails the check, and an entry that no longer fires
+  fails it too, so the list only shrinks: remove an entry in the change that fixes its task.
+  Adding an entry is not a fix, and the baseline is a control, so a new entry needs the owner's
+  review.
 
 Sub-option secrets. An option such as `tenant_compose_stacks` holds a secret only in an
 attribute of its items (`secrets_env_text`). The option is then a seed for that attribute only:
@@ -780,9 +787,11 @@ What it does not see:
 - Only options and sub-options that declare `no_log: true` seed the taint (and the loader's two
   variables). An option that holds a credential without the flag is invisible to R1. Which
   options are secrets is the owner's classification, so that list is a ticket of its own.
-- Taint is by variable name, within one role (ANS-12). It does not follow `set_fact`,
-  `register`, or a value passed through a playbook, a `trust/` file or another role. The
-  loader's facts are seeded by the role that consumes them, as options of that role.
+- Taint is by variable name, within one role (ANS-12). A `set_fact` argument is followed as a
+  variable of its name, and a `register`ed result is followed when its task names a tainted
+  variable, so a secret printed through either needs `no_log` on the task that prints it. It does
+  not follow a value passed through a playbook, a `trust/` file or another role. The loader's
+  facts are seeded by the role that consumes them, as options of that role.
 - Playbooks and `trust/` files are not scanned, and neither is a `molecule/` directory.
 - `control_plane_masterkey_secret` is not tainted. Its value is a file-attributes record (path,
   owner, group, mode) and holds no secret. The master key is guarded by the write task that
@@ -803,10 +812,13 @@ What it does not see:
   quiet change in what is followed (a test removes each in turn). The check does not run Ansible: it knows what parsing and plugin
   resolution can say, and nothing that depends on a variable's value at run time.
 - A loop variable is followed only when the loop names it (`loop_control.loop_var`), or the
-  loop has no include. A `set_fact` or `register` that copies an attribute into another
-  variable is not followed. A value that comes in through `lookup('template', ...)` is not
-  read, and neither is a subscript the parser cannot see as constant (`x[name]`, which counts
-  as a read of the whole option and so asks for more `no_log`).
+  loop has no include. A `set_fact` or `register` copy of a secret attribute is followed as that
+  attribute; a copy of a declared non-secret attribute is not, as for any read. Still open, and
+  not followed: a value that comes in through `lookup('template', ...)` is not read (item 3 of
+  ISSUE branchLeft/workspace#3140), and a `collections:` list set at play or role level is not in
+  scope, so a short name only that list resolves is an R4 finding (item 4 of the same issue). A
+  subscript the parser cannot see as constant (`x[name]`) is not read either; it counts as a read
+  of the whole option and so asks for more `no_log`.
 - R3 checks the table's rows, not what the consuming role does with a value.
 
 Sabotage, each one a copy of the real files with one control broken, and the baseline copy

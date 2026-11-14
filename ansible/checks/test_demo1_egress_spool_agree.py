@@ -280,7 +280,7 @@ class SpoolAgreeTest(unittest.TestCase):
 
     def test_an_egress_pin_in_demo1_build_is_named(self) -> None:
         base = facts()
-        for marker in ("branchleft_demo_egress.sh", "branchleft-demo-egress.service"):
+        for marker in ("branchleft_demo_egress.py", "branchleft-demo-egress.service"):
             with self.subTest(marker=marker):
                 others = dict(cast("dict[str, str]", base["others"]))
                 others[BUILD] += f"\n  - path: demo-host/provision/{marker}\n"

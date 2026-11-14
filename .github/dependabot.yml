@@ -75,6 +75,19 @@ updates:
     labels:
       - 'dependencies'
 
+  # Watches only hetzner/monitoring/stack/compose.yml's pinned node-exporter image.
+  # The role that installs the same release by URL (ansible/roles/node_exporter)
+  # must move with it: ansible/checks/test_node_exporter_pin_agrees.py fails until it does.
+  - package-ecosystem: 'docker-compose'
+    directory: '/hetzner/monitoring/stack'
+    schedule:
+      interval: 'monthly'
+    open-pull-requests-limit: 1
+    allow:
+      - dependency-name: 'prom/node-exporter'
+    labels:
+      - 'dependencies'
+
   # The Ansible toolchain lock (ANS-4): ansible/requirements.txt is `uv pip
   # compile` output of ansible/requirements.in, with every package's hashes. The
   # `uv` ecosystem reruns that command from the header the file keeps, so a bump

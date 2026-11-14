@@ -103,11 +103,24 @@ def refused_port() -> int:
         return probe.getsockname()[1]
 
 
+def _answers_domain_blocklist(hostname: str) -> dnsbl.ResolutionOutcome:
+    """Sending-domain names: the DBL test point answers its documented listed
+    address, and every sending domain is clean. These fixtures exercise the IP
+    lists; the domain lines are asserted by the domain tests."""
+    if hostname == f"{dnsbl.DOMAIN_SENTINEL}.{dnsbl.DOMAIN_DBL_ZONE}":
+        return dnsbl.ResolutionOutcome(ok=True, addresses=(dnsbl.DOMAIN_SENTINEL_ANSWER,))
+    return dnsbl.ResolutionOutcome(ok=True, addresses=())
+
+
 def resolver_listing_everything(hostname: str, timeout: int) -> dnsbl.ResolutionOutcome:
+    if hostname.endswith(f".{dnsbl.DOMAIN_DBL_ZONE}"):
+        return _answers_domain_blocklist(hostname)
     return dnsbl.ResolutionOutcome(ok=True, addresses=("127.0.0.2",))
 
 
 def resolver_listing_nothing(hostname: str, timeout: int) -> dnsbl.ResolutionOutcome:
+    if hostname.endswith(f".{dnsbl.DOMAIN_DBL_ZONE}"):
+        return _answers_domain_blocklist(hostname)
     if hostname.startswith("2.0.0.127."):
         return dnsbl.ResolutionOutcome(ok=True, addresses=("127.0.0.2",))
     return dnsbl.ResolutionOutcome(ok=True, addresses=())
@@ -213,7 +226,8 @@ class ControlCaseTests(MainRunTestCase):
         self.assertEqual(request.method, "POST")
         self.assertEqual(request.content_type, "text/plain; charset=utf-8")
         self.assertIn("NEW LISTING: Spamhaus ZEN (zen.spamhaus.org)", request.body)
-        self.assertIn(f"dnsbl check for {TARGET}: 5 of 5 list(s) need attention", request.body)
+        # 5 IP lists listed, plus the 4 default sending domains checked clean: 9 in all.
+        self.assertIn(f"dnsbl check for {TARGET}: 5 of 9 list(s) need attention", request.body)
         self.assert_url_not_leaked(outcome, server)
 
     def test_a_clean_run_pings_the_bare_url_and_never_fail(self) -> None:
