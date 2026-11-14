@@ -443,7 +443,7 @@ RELEASED_CHECK_PATHS = [
     "hetzner/scripts/check-address-plan-drift.py",
     "hetzner/scripts/test_check_address_plan_drift.py",
     "scripts/assert-min-python-version.py",
-    "scripts/nvmrc-node-exec.sh",
+    "scripts/nvmrc-node-exec.py",
     "ansible/checks/offline_render.py",
     "ansible/checks/test_offline_render.py",
     "ansible/checks/test_edge_single_home.py",
