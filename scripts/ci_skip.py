@@ -29,7 +29,11 @@ import sys
 # quietly.
 UNITS: dict[str, tuple[str, ...]] = {
     "mail-typecheck": ("mail/",),
-    "mail-provision-checks": ("mail/",),
+    "mail-provision-checks": (
+        "mail/",
+        "hetzner/dns/zone.json",
+        "hetzner/dns/publicpress.co.uk.json",
+    ),
     "edge-config-validate": ("hetzner/edge/",),
     "monitoring-config-validate": ("hetzner/monitoring/", "hetzner/RUNBOOK-monitoring.md"),
     "nextcloud1-config-validate": ("hetzner/nextcloud1/",),
