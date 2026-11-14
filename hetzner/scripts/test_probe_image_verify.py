@@ -88,10 +88,12 @@ class CorrectHostTests(unittest.TestCase):
         fake = FakeVerifier("correct")
         probe.run_probe(wrapper, REAL, run=fake)
         signers = {call[3] for call in fake.calls}
+        right = wrapper.ATTESTED_IMAGES["ghcr.io/branchleft/ghost-tenant"]
+        other = sorted(set(wrapper.ATTESTED_IMAGES.values()) - {right})[0]
         self.assertEqual(
             signers,
-            set(wrapper.ATTESTED_IMAGES.values()),
-            "the probe asks with the right signer and with the other registered one",
+            {right, other},
+            "the probe asks with the right signer and with another registered one",
         )
 
     def test_a_tagged_spelling_is_probed_as_the_register_name(self):
