@@ -10,7 +10,7 @@ It runs nothing on any host. The lab is a privileged `docker:dind` container on 
 
 The design asked for host networking if both pass. Both did, so the decision is host networking.
 
-## Results (2026-11-12)
+## Results
 
 Host: Docker Desktop engine 29.9.2, linux/arm64, kernel 7.0.14-linuxkit. Lab engine (`docker:dind` pinned by digest in `run_spike.py`): 29.9.3. Stalwart: the image digest pinned in `mail/provision/docker-compose.yml` (v0.16.17). Lab addresses: IP1 `10.77.0.2`, IP2 `10.77.0.3`, sink `10.77.0.50:2525`.
 
@@ -50,7 +50,7 @@ Evidence lines from the recorded run (sink log, one per message):
 
 ## What the spike does NOT prove
 
-- That a PTR record can be set on a Floating IP. The Hetzner page on persistent configuration for a Floating IP (read 2026-11-12) does not mention reverse DNS at all.
+- That a PTR record can be set on a Floating IP. The Hetzner page on persistent configuration for a Floating IP, as read when the spike ran, does not mention reverse DNS at all.
 - That port 25 is unblocked for the Floating IP. Hetzner enforces the port 25 rule per account, so it is likely, but nothing here shows it.
 - How Gmail scores IP2 beside IP1. The 25 September deferral named the netblock, so a second address in the same range may not isolate reputation.
 - How Hetzner routes a Floating IP configured as a secondary address on the server.
