@@ -20,7 +20,7 @@ export interface PageRegisterEntry {
    */
   readonly alertName: string | null;
   /**
-   * How this entry's page actually reaches a phone. Four entries route
+   * How this entry's page actually reaches a phone. Five entries route
    * through this stack's own Alertmanager; the drain worker's dead-man's
    * switch pages through its own Healthchecks.io check directly, so this
    * entry renders no Alertmanager route at all -- it is listed here only so
@@ -29,7 +29,8 @@ export interface PageRegisterEntry {
   readonly deliveryPath: PageRegisterDeliveryPath;
   /**
    * True while this entry has no target set and so must render no route --
-   * appeal latency, until a target exists. Flipped by a reviewed change,
+   * appeal latency, until a target exists; the stopped demo reaper, until the
+   * reaper and its alert rule exist. Flipped by a reviewed change,
    * the same discipline `render.ts`'s `MonitoredHost.expectedUp` uses for
    * the same reason: a hand edit here is a claim about the present, not a
    * permanent property.
@@ -92,6 +93,19 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     alertName: null,
     deliveryPath: 'healthchecks',
     dormant: false,
+    tenantScoped: false,
+  },
+  {
+    id: 'stopped-demo-reaper',
+    name: 'A stopped demo reaper',
+    reason:
+      'Dormant: the demo reaper that ends a demo at the close of its lease does not ' +
+      'exist yet, and neither does the threshold for how long it may stay silent. A ' +
+      'silently stopped reaper leaves demos running past their lease. Flip `dormant` to ' +
+      'false in the same change that builds the reaper and the alert rule that raises it.',
+    alertName: 'StoppedDemoReaper',
+    deliveryPath: 'alertmanager',
+    dormant: true,
     tenantScoped: false,
   },
 ] as const;
