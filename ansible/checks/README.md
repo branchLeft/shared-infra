@@ -143,7 +143,7 @@ is not loaded there.
   include and `../trust/HOST.yml`, then `../owner_vars/HOST.yml` if and only if that file
   exists (the playbook and the file must agree both ways), `roles` the runtime entry then the bare trigger as the
   first two entries and nothing attached to either, then only plain entries from that
-  host's list in `host_roles.yml` (R9), and `pre_tasks` exactly the refusal include then
+  host's list in `host_roles/HOST.yml` (R9), and `pre_tasks` exactly the refusal include then
   the signer include, each a task of only its name and include. A plain entry is a mapping
   of one key, `role: ../roles/NAME`: no `vars`, `tags`, `when` or other key. A role is
   applied once, may be on its own host's list only, and is refused on any other host. A
@@ -168,10 +168,13 @@ is not loaded there.
   not literals. Zero writers, or two, is a failure. A config path spelled as a literal
   is not seen.
 
-- **R9** `host_roles.yml` exists and maps each host name to a list of distinct role names
-  (`[a-z][a-z0-9_]*`), never `ansible_runtime` or `pull_trigger`. A host whose entry is
-  malformed gets no listed roles, so its playbook may apply the two pull roles only. The
-  file is in `ansible/checks/`, which CODEOWNERS gives to the owner, so adding a role to a
+- **R9** `host_roles/` exists and holds one `HOST.yml` per host, each a list of distinct role names
+  (`[a-z][a-z0-9_]*`), never `ansible_runtime` or `pull_trigger`. A file that is not `HOST.yml`
+  for a valid host name, or whose list is malformed, is a finding and gives that host no listed
+  roles, so its playbook may apply the two pull roles only; a host with no file has none either.
+  One file per host, not one list, so a pull request that gives one host a role does not meet
+  another host's on a line. The directory is in `ansible/checks/`, which CODEOWNERS gives to the
+  owner whole, so a new host's file is owned without a new CODEOWNERS line, and adding a role to a
   host is the owner's merge. The check reads names, not directories: a role may be listed
   before its directory merges, and until then it runs nothing. Order after the pull roles
   is free, except for the loader (R11), and a listed role need not be applied.
@@ -189,8 +192,8 @@ is not loaded there.
   destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
   `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
   list of `{key}` entries with nothing else (a destination list per key is refused: the role
-  takes one list for every key). `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose row in
-  `checks/host_roles.yml` lists `ci_jump`: a host cannot gain the role without its keys, nor
+  takes one list for every key). `JUMP_HOSTS` (edge1 and edget) must equal the hosts whose
+  `checks/host_roles/HOST.yml` lists `ci_jump`: a host cannot gain the role without its keys, nor
   the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
   the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the
   role through the host's `host_inputs` row. What a destination or a key may look like is the role's rule alone,
@@ -219,7 +222,7 @@ is not loaded there.
   (owner ruling, option A), it is the first role after the two
   pull roles, so no role runs before the inputs are loaded or refused. A host that does not
   apply it is unaffected. `test_host_inputs_registry.py` holds the loader's row table, the
-  literal keys of its input task, `host_roles.yml`, the playbook and the role argument specs
+  literal keys of its input task, `host_roles/`, the playbook and the role argument specs
   in agreement, and the structure of the loader's tasks.
 
 The refusal's host test is not a host control. Under the trigger `inventory_hostname` is
@@ -525,7 +528,7 @@ Each one is listed in `hand_installers.yml` with a reason: `stays-as-code`, or `
 naming the role that will replace it. The test walks the tree and fails on a script that is not
 listed, and on an entry whose script is gone. The list is the baseline as it stood when the guard
 was added, so a new installer needs a reviewed entry, which is an owner merge under CODEOWNERS.
-The test reads the role name and does not check that the role exists, as `host_roles.yml` does.
+The test reads the role name and does not check that the role exists, as `host_roles/` does.
 
 ## test_no_new_script_dependents.py: no new caller of a pending-role script
 
@@ -702,7 +705,7 @@ Rules:
   `until` or the `that` of an assert: those print their expression, and the refusal asserts
   need their coded messages to reach the log. A secret named in an assert's `fail_msg` counts.
 - **R2, the loader's names.** Each row of `host_inputs_required_by_host` must be a non-empty
-  list of names for a host that `checks/host_roles.yml` lists. Each name must resolve to
+  list of names for a host that `checks/host_roles/` lists. Each name must resolve to
   exactly one declared option of a role on that host's list. An unreadable file, row or host
   list is a finding, so an unreadable file never means that no loader secret exists.
 - **R3, agreement.** The table "The secret options of the roles" in the pattern README must

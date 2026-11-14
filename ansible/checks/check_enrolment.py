@@ -59,7 +59,7 @@ JUMP_VARS = frozenset(
     )
 )
 # The hosts that apply ci_jump, one entry each. check() requires this to equal the hosts whose
-# row in host_roles.yml lists the role, so a host cannot gain the role without its owner_vars
+# file in host_roles/ lists the role, so a host cannot gain the role without its owner_vars
 # keys, nor the keys without the role.
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
@@ -188,7 +188,9 @@ HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
     "mx1": {"host_baseline_fail2ban_ignoreip_none": True},
 }
 PLAY_KEYS = frozenset(("name", "hosts", "gather_facts", "vars", "vars_files", "pre_tasks", "roles"))
-HOST_ROLES_FILE = "checks/host_roles.yml"
+# One file per host, HOST.yml, each a list of role names: a pull request that gives one host a
+# role touches that host's file and no other, so two such pull requests do not meet on a line.
+HOST_ROLES_DIR = "checks/host_roles"
 ROLE_PATH = "../roles/"
 ROLE_NAME = re.compile(r"[a-z][a-z0-9_]*")
 HOST_NAME = re.compile(r"[a-z][a-z0-9]*")
@@ -330,7 +332,9 @@ def _check_roles(label: str, stem: str, roles: object, listed: list[str], out: l
                 f"{label}: a role entry after the pull roles must be only `role: ../roles/NAME`"
             )
         elif name not in listed:
-            out.append(f"{label}: role {name} is not on {stem}'s list in {HOST_ROLES_FILE}")
+            out.append(
+                f"{label}: role {name} is not on {stem}'s list in {HOST_ROLES_DIR}/{stem}.yml"
+            )
         elif name in seen:
             out.append(f"{label}: role {name} is applied twice")
         else:
@@ -380,33 +384,47 @@ def _check_enrolled(
         findings.append(f"{label}: pre_tasks must be exactly {REFUSE_TASKS}, then {SIGNER_TASKS}")
 
 
+def read_host_roles_raw(ansible: Path) -> dict[str, object]:
+    """Each host's list as parsed from checks/host_roles/HOST.yml, unjudged, for the tests that
+    hold the list against something else. A missing directory gives no hosts."""
+    directory = ansible / HOST_ROLES_DIR
+    if not directory.is_dir():
+        return {}
+    return {
+        path.stem: yaml.safe_load(path.read_text(encoding="utf-8"))
+        for path in sorted(directory.glob("*.yml"))
+    }
+
+
 def _read_host_roles(ansible: Path, findings: list[str]) -> dict[str, list[str]]:
-    """R9: the owner's list of roles per host. A missing or unreadable file, or a host whose
-    entry is not a clean list of role names, gives that host no roles beyond the pull roles."""
-    label = f"R9 {HOST_ROLES_FILE}"
-    path = ansible / HOST_ROLES_FILE
-    if not path.is_file():
+    """R9: the owner's list of roles per host, one file per host. A missing directory, or a host
+    whose file is not a clean list of role names, gives that host no roles beyond the pull
+    roles. A host with no file has none either."""
+    label = f"R9 {HOST_ROLES_DIR}"
+    directory = ansible / HOST_ROLES_DIR
+    if not directory.is_dir():
         findings.append(f"{label}: is missing")
         return {}
-    doc = _load(path, findings, label)
-    if not isinstance(doc, dict):
-        findings.append(f"{label}: must be a mapping of host to a list of role names")
-        return {}
     lists: dict[str, list[str]] = {}
-    for host, roles in doc.items():
+    for path in sorted(directory.iterdir()):
+        if not path.is_file() or path.suffix != ".yml":
+            findings.append(f"{label}: {path.name} is not a HOST.yml file")
+            continue
+        host = path.stem
+        roles = _load(path, findings, f"{label}/{path.name}")
+        names = list(roles) if isinstance(roles, list) else []
         clean = (
-            isinstance(host, str)
-            and HOST_NAME.fullmatch(host) is not None
+            HOST_NAME.fullmatch(host) is not None
             and isinstance(roles, list)
-            and all(isinstance(role, str) and ROLE_NAME.fullmatch(role) for role in roles)
-            and not PULL_ROLES.intersection(roles)
-            and len(set(roles)) == len(roles)
+            and all(isinstance(role, str) and ROLE_NAME.fullmatch(role) for role in names)
+            and not PULL_ROLES.intersection(names)
+            and len(set(names)) == len(names)
         )
         if clean:
-            lists[host] = list(roles)
+            lists[host] = [str(role) for role in names]
         else:
             findings.append(
-                f"{label}: {host!r} must be a host name with a list of distinct role names, "
+                f"{label}/{path.name}: must be a host name with a list of distinct role names, "
                 f"without {sorted(PULL_ROLES)}"
             )
     return lists
@@ -842,11 +860,11 @@ def _check_jump_hosts(host_roles: dict[str, list[str]], findings: list[str]) -> 
     account, address, destinations and keys, so the rule is the same for every one of them."""
     applying = {host for host, roles in host_roles.items() if JUMP_ROLE in roles}
     findings.extend(
-        f"R10 {HOST_ROLES_FILE}: {host} lists {JUMP_ROLE} but is not in JUMP_HOSTS"
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} lists {JUMP_ROLE} but is not in JUMP_HOSTS"
         for host in sorted(applying - JUMP_HOSTS)
     )
     findings.extend(
-        f"R10 {HOST_ROLES_FILE}: {host} is in JUMP_HOSTS but does not list {JUMP_ROLE}"
+        f"R10 {HOST_ROLES_DIR}/{host}.yml: {host} is in JUMP_HOSTS but does not list {JUMP_ROLE}"
         for host in sorted(JUMP_HOSTS - applying)
     )
 

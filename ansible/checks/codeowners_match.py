@@ -83,7 +83,7 @@ SAMPLES: tuple[Sample, ...] = (
     Sample(".docs-lint.mode", "rule: the docs-lint setting", True),
     Sample("ansible/checks/check_delivery.py", "gate: a CI gate check", True),
     Sample("ansible/checks/check_enrolment.py", "gate: the host-role check", True),
-    Sample("ansible/checks/host_roles.yml", "gate: the host-role list", True),
+    Sample("ansible/checks/host_roles/edge1.yml", "gate: a host's role list", True),
     Sample("ansible/checks/test_check_delivery.py", "gate: a kept gate's test", True),
     Sample("scripts/assert-no-hetzner-deletes.py", "gate: a script a secret job runs", True),
     Sample("hetzner/provision/branchleft_deploy.py", "gate: the deploy account command", True),

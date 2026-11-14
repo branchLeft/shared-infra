@@ -1,7 +1,7 @@
 """Tests that the host_inputs loader, its per-host rows and the host role lists agree.
 
 The rows in the role's vars/main.yml, the literal keys of its one set_fact task and the
-host's list in checks/host_roles.yml must say the same thing. A name in a row must be a
+host's list in checks/host_roles/HOST.yml must say the same thing. A name in a row must be a
 required argument, with no default (ANS-16), of a role on that host's list, and a host with
 a row must apply the loader. The role's tasks are held to structure too: nothing skippable,
 content-touching tasks hidden, every check before the first input is set. Each mutation
@@ -16,7 +16,13 @@ import unittest
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import HOST_ROLES_FILE, PROTECTED_KEYS, PULL_ROLES, ROOT
+from check_enrolment import (
+    HOST_ROLES_DIR,
+    PROTECTED_KEYS,
+    PULL_ROLES,
+    ROOT,
+    read_host_roles_raw,
+)
 
 LOADER = "host_inputs"
 ROW_VAR = "host_inputs_required_by_host"
@@ -156,14 +162,16 @@ def _check_rows(
     optional: dict[str, list[str]],
     findings: list[str],
 ) -> None:
-    host_roles = _mapping(_read(ansible / HOST_ROLES_FILE))
+    host_roles = read_host_roles_raw(ansible)
     for host, names in sorted(rows.items()):
         label = f"row {host}"
         if not names or len(set(names)) != len(names):
             findings.append(f"{label}: must be a non-empty list of distinct names")
         listed = _names(host_roles.get(host))
         if LOADER not in listed:
-            findings.append(f"{label}: {LOADER} is not on {host}'s list in {HOST_ROLES_FILE}")
+            findings.append(
+                f"{label}: {LOADER} is not on {host}'s list in {HOST_ROLES_DIR}/{host}.yml"
+            )
         for name in names:
             if name in PROTECTED_KEYS or name.startswith(INTERNAL_PREFIX):
                 findings.append(f"{label}: {name} is a protected or internal name")
@@ -386,7 +394,7 @@ class Mutations(unittest.TestCase):
         ):
             shutil.copytree(real / "roles" / role, self.ansible / "roles" / role, ignore=leave_out)
         (self.ansible / "checks").mkdir()
-        shutil.copy(real / HOST_ROLES_FILE, self.ansible / HOST_ROLES_FILE)
+        shutil.copytree(real / HOST_ROLES_DIR, self.ansible / HOST_ROLES_DIR)
         (self.ansible / "playbooks").mkdir()
         for host in ("db1", "app1", "edge1", "edget", "ops1"):
             shutil.copy(
@@ -493,11 +501,11 @@ class Mutations(unittest.TestCase):
         self._expect("pull_trigger_signers is a protected or internal name")
 
     def test_a_host_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
-        self._edit("checks/host_roles.yml", "db1:\n  - host_inputs\n", "db1:\n")
+        self._edit("checks/host_roles/db1.yml", "- host_inputs\n", "")
         self._expect("host_inputs is not on db1's list")
 
     def test_app1_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
-        self._edit("checks/host_roles.yml", "app1:\n  - host_inputs\n", "app1:\n")
+        self._edit("checks/host_roles/app1.yml", "- host_inputs\n", "")
         self._expect("host_inputs is not on app1's list")
 
     def test_an_app1_row_name_that_is_no_roles_required_argument_is_found(self) -> None:
@@ -582,7 +590,7 @@ class Mutations(unittest.TestCase):
         self._expect("role monitoring_stack gives monitoring_stack_smtp_password a default")
 
     def test_ops1_with_a_row_but_no_loader_on_its_list_is_found(self) -> None:
-        self._edit("checks/host_roles.yml", "ops1:\n  - host_inputs\n", "ops1:\n")
+        self._edit("checks/host_roles/ops1.yml", "- host_inputs\n", "")
         self._expect("host_inputs is not on ops1's list")
 
     def test_a_backup_role_applied_before_the_loader_on_ops1_is_found(self) -> None:

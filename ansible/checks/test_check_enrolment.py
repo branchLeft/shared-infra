@@ -276,7 +276,7 @@ class Sabotage(unittest.TestCase):
         )
         self._assert_rule("R2 db1.yml")
 
-    # R2: db1 may apply only the roles on its own list in host_roles.yml.
+    # R2: db1 may apply only the roles on its own list in host_roles/db1.yml.
     def test_r2_db1_applies_a_role_not_on_its_list(self) -> None:
         self._edit(
             "playbooks/db1.yml",
@@ -1185,12 +1185,16 @@ class Sabotage(unittest.TestCase):
                 self.assertFalse(JUMP_VARS & keys, host)
 
     def test_r10_a_host_that_lists_ci_jump_is_a_jump_host(self) -> None:
-        self._edit("checks/host_roles.yml", "ops1:\n", "ops1:\n  - ci_jump\n")
-        self._assert_one("R10 checks/host_roles.yml: ops1 lists ci_jump but is not in JUMP_HOSTS")
+        self._edit("checks/host_roles/ops1.yml", "- host_inputs\n", "- host_inputs\n- ci_jump\n")
+        self._assert_one(
+            "R10 checks/host_roles/ops1.yml: ops1 lists ci_jump but is not in JUMP_HOSTS"
+        )
 
     def test_r10_a_jump_host_that_does_not_list_ci_jump(self) -> None:
-        self._edit("checks/host_roles.yml", "  - ci_login\n  - ci_jump\n", "  - ci_login\n")
-        self._assert_one("R10 checks/host_roles.yml: edge1 is in JUMP_HOSTS but does not list")
+        self._edit("checks/host_roles/edge1.yml", "- ci_login\n- ci_jump\n", "- ci_login\n")
+        self._assert_one(
+            "R10 checks/host_roles/edge1.yml: edge1 is in JUMP_HOSTS but does not list"
+        )
 
     def test_r10_a_second_jump_host_has_the_same_rule(self) -> None:
         # ops1 stands for a second jump host: its table row gains the jump keys, its file holds
@@ -1201,7 +1205,9 @@ class Sabotage(unittest.TestCase):
             ),
             mock.patch("check_enrolment.JUMP_HOSTS", frozenset((*JUMP_HOSTS, "ops1"))),
         ):
-            self._edit("checks/host_roles.yml", "ops1:\n", "ops1:\n  - ci_jump\n")
+            self._edit(
+                "checks/host_roles/ops1.yml", "- host_inputs\n", "- host_inputs\n- ci_jump\n"
+            )
             ops1 = self.ansible / "owner_vars" / "ops1.yml"
             text = ops1.read_text(encoding="utf-8")
             ops1.write_text(
@@ -1423,9 +1429,9 @@ class Sabotage(unittest.TestCase):
     # W2: control_plane_db is applied on ops1 only while ops1's list names it.
     def test_r2_control_plane_db_off_ops1_list(self) -> None:
         self._edit(
-            "checks/host_roles.yml",
-            "  - backup_restore\n  - control_plane_db\n",
-            "  - backup_restore\n",
+            "checks/host_roles/ops1.yml",
+            "- backup_restore\n- control_plane_db\n",
+            "- backup_restore\n",
         )
         self._assert_one("R2 ops1.yml: role control_plane_db is not on ops1's list")
 
@@ -1544,9 +1550,9 @@ class Sabotage(unittest.TestCase):
     # R9 through R2: the role is applied only while it is on edge1's list (sabotage e).
     def test_r2_deploy_tooling_off_the_list(self) -> None:
         self._edit(
-            "checks/host_roles.yml",
-            "  - ci_jump\n  - deploy_verifier\n  - deploy_tooling\n",
-            "  - ci_jump\n  - deploy_verifier\n",
+            "checks/host_roles/edge1.yml",
+            "- ci_jump\n- deploy_verifier\n- deploy_tooling\n",
+            "- ci_jump\n- deploy_verifier\n",
         )
         self._assert_one("R2 edge1.yml: role deploy_tooling is not on edge1's list")
 

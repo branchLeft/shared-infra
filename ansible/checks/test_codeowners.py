@@ -697,7 +697,7 @@ class CodeownersTests(unittest.TestCase):
         # The list decides which roles a pulled playbook may run as root, so only the owner
         # merges an edit to it, to the check that reads it, or to the tests that hold the check.
         for path in (
-            "ansible/checks/host_roles.yml",
+            "ansible/checks/host_roles/edge1.yml",
             "ansible/checks/check_enrolment.py",
             "ansible/checks/test_check_host_roles.py",
         ):
@@ -729,6 +729,7 @@ class CodeownersTests(unittest.TestCase):
                 "hetzner/scripts/a_new_ci_script.py",
                 # A new test module's count file is the owner's before any line names it.
                 "hetzner/provision/test_counts/test_a_new_module.txt",
+                "ansible/checks/host_roles/a_new_host.yml",
                 "ansible/trust/newhost.yml",
                 "ansible/owner_vars/newhost.yml",
                 "ansible/roles/mail_reconcilers/tasks/new.yml",

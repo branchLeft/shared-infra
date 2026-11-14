@@ -1,0 +1,7 @@
+alertmanager
+blackbox-exporter
+cadvisor
+grafana
+node-exporter
+ntfy
+prometheus

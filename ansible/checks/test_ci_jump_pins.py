@@ -31,6 +31,7 @@ from pathlib import Path
 import jinja2
 import jinja2.meta
 import yaml  # type: ignore[import-untyped]
+from check_enrolment import read_host_roles_raw
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = "ansible/roles/ci_jump"
@@ -38,7 +39,7 @@ MODULE = f"{ROLE}/library/ci_jump_authorized_keys.py"
 HOMES = (
     "ansible/roles/ci_login/vars/main.yml",
     "ansible/roles/tunnel_account/vars/main.yml",
-    "ansible/checks/host_roles.yml",
+    "ansible/checks/host_roles",
     "ansible/roles/host_inputs/vars/main.yml",
 )
 OWNER_VARS = "ansible/owner_vars"
@@ -433,7 +434,7 @@ def _interface_findings(root: Path, role: Path) -> list[str]:
             )
     # Every host that lists the role has its own owner's file with the variables, and the account's
     # name in the host's private inputs row, so the loader sets it before the role runs.
-    host_roles = _variables(root / HOMES[2])
+    host_roles = read_host_roles_raw(root / "ansible")
     loader_vars = _variables(root / HOMES[3])
     rows = loader_vars.get("host_inputs_required_by_host")
     optional = loader_vars.get("host_inputs_optional_by_host")
@@ -722,7 +723,10 @@ class Sabotage(unittest.TestCase):
         shutil.copytree(ROOT / ROLE, self.root / ROLE, ignore=shutil.ignore_patterns("molecule"))
         for home in HOMES:
             (self.root / home).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy(ROOT / home, self.root / home)
+            if (ROOT / home).is_dir():
+                shutil.copytree(ROOT / home, self.root / home)
+            else:
+                shutil.copy(ROOT / home, self.root / home)
         shutil.copytree(ROOT / OWNER_VARS, self.root / OWNER_VARS)
 
     def _red_then_green(
@@ -1047,10 +1051,10 @@ class Sabotage(unittest.TestCase):
 
     def test_a_host_that_lists_the_role_without_its_variables_is_red(self) -> None:
         self._red_then_green(
-            HOMES[2],
-            "\nops1:\n",
-            "\nedge-t:\n  - ci_jump\nops1:\n",
-            "edge-t lists ci_jump but owner_vars/edge-t.yml carries no ci_jump variable",
+            f"{HOMES[2]}/dbt1.yml",
+            "- host_baseline\n",
+            "- host_baseline\n- ci_jump\n",
+            "dbt1 lists ci_jump but owner_vars/dbt1.yml carries no ci_jump variable",
         )
 
     def test_a_module_call_that_shows_its_result_is_red(self) -> None:

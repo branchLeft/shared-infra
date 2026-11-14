@@ -1,8 +1,9 @@
 """Tests that an enrolled host playbook runs the pull roles, then only its own approved roles.
 
 check_enrolment holds each enrolled playbook to ansible_runtime then pull_trigger, then only
-plain `role: ../roles/NAME` entries from that host's list in ansible/checks/host_roles.yml. Each
-test edits a copy of the real ansible/ tree. A positive case runs first for every host, so a
+plain `role: ../roles/NAME` entries from that host's list in
+ansible/checks/host_roles/HOST.yml. Each test edits a copy of the real ansible/ tree. A positive
+case runs first for every host, so a
 check that refused everything would not pass for a working one. A sabotage that matches nothing
 fails the test.
 """
@@ -16,7 +17,14 @@ from pathlib import Path
 from unittest import mock
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import HOST_PLAY_VARS, HOST_ROLES_FILE, PLAY_KEYS, ROOT, check
+from check_enrolment import (
+    HOST_PLAY_VARS,
+    HOST_ROLES_DIR,
+    PLAY_KEYS,
+    ROOT,
+    check,
+    read_host_roles_raw,
+)
 
 ENROLLED = ("edge1", "ops1", "app1", "db1", "demo1")
 SECOND_PLAY = "- name: Second play\n  hosts: all\n  roles:\n    - role: ../roles/host_baseline\n"
@@ -219,9 +227,11 @@ class HostRoleLists(unittest.TestCase):
             for host in ENROLLED
         }
         cls.original = {host: _pull_roles_only(text) for host, text in cls.real.items()}
-        cls.listed = yaml.safe_load(
-            (ROOT / "ansible" / HOST_ROLES_FILE).read_text(encoding="utf-8")
-        )
+        cls.listed = {
+            host: [str(role) for role in roles]
+            for host, roles in read_host_roles_raw(ROOT / "ansible").items()
+            if isinstance(roles, list)
+        }
 
     def setUp(self) -> None:
         temp = tempfile.TemporaryDirectory()
@@ -248,8 +258,8 @@ class HostRoleLists(unittest.TestCase):
         self.assertIn(old, text, f"the sabotage matched nothing in {host}.yml")
         path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
-    def _list_file(self, text: str) -> None:
-        (self.ansible / HOST_ROLES_FILE).write_text(text, encoding="utf-8")
+    def _list_file(self, host: str, text: str) -> None:
+        (self.ansible / HOST_ROLES_DIR / f"{host}.yml").write_text(text, encoding="utf-8")
 
     def _findings(self, label: str, everything: list[str] | None = None) -> list[str]:
         """The findings that start with label. A caller that already holds the findings for
@@ -289,11 +299,11 @@ class HostRoleLists(unittest.TestCase):
     # Safety class: the page is published by a role the owner lists. Take it off ops1's list and the
     # playbook that applies it is refused. Red with the line removed from the list, green with it.
     def test_the_status_page_needs_its_place_on_ops1_list(self) -> None:
-        path = self.ansible / HOST_ROLES_FILE
+        path = self.ansible / HOST_ROLES_DIR / "ops1.yml"
         text = path.read_text(encoding="utf-8")
-        self.assertIn("  - status_page\n", text, "the sabotage matched nothing")
+        self.assertIn("- status_page\n", text, "the sabotage matched nothing")
         self.assertEqual(self._findings("R2 ops1.yml"), [])
-        self._list_file(text.replace("  - status_page\n", "", 1))
+        self._list_file("ops1", text.replace("- status_page\n", "", 1))
         self._assert_refused("ops1", "role status_page is not on ops1's list")
 
     # Safety class: ring_controller_host generates a signing key on a host that holds the owner's
@@ -313,10 +323,10 @@ class HostRoleLists(unittest.TestCase):
                 self._assert_refused(host, f"role ring_controller_host is not on {host}'s list")
 
     def test_ring_controller_host_dropped_from_ops1_list_is_refused(self) -> None:
-        path = self.ansible / HOST_ROLES_FILE
+        path = self.ansible / HOST_ROLES_DIR / "ops1.yml"
         text = path.read_text(encoding="utf-8")
-        self.assertIn("  - ring_controller_host\n", text, "the sabotage matched nothing")
-        self._list_file(text.replace("  - ring_controller_host\n", "", 1))
+        self.assertIn("- ring_controller_host\n", text, "the sabotage matched nothing")
+        self._list_file("ops1", text.replace("- ring_controller_host\n", "", 1))
         self._assert_refused("ops1", "role ring_controller_host is not on ops1's list")
 
     # Safety class: db1 is the production database host. It applies the two pull roles, the loader
@@ -492,9 +502,9 @@ class HostRoleLists(unittest.TestCase):
             self._assert_refused("app1", "vars must be exactly")
 
     # Safety class: demo1 is held off host_baseline, egress_nat and broker_deploy by its own
-    # list in host_roles.yml. Green first: the real playbook applies exactly the pull roles then
-    # its two build roles and the real tree passes. Red: each of the three roles added to the real
-    # playbook is refused by name, and with demo1's line deleted from the list both build roles are.
+    # list in host_roles/demo1.yml. Green first: the real playbook applies exactly the pull roles
+    # then its two build roles and the real tree passes. Red: each of the three roles added to the
+    # real playbook is refused by name, and with demo1's list file deleted both build roles are.
     def test_demo1_applies_only_its_build_roles(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "demo1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
@@ -509,11 +519,9 @@ class HostRoleLists(unittest.TestCase):
                 path.write_text(self.real["demo1"] + _entry(name), encoding="utf-8")
                 self._assert_refused("demo1", f"role {name} is not on demo1's list")
         (self.ansible / "playbooks" / "demo1.yml").write_text(self.real["demo1"], encoding="utf-8")
-        path = self.ansible / HOST_ROLES_FILE
-        listed = path.read_text(encoding="utf-8")
-        line = "demo1:\n  - demo1_build\n  - demo1_egress_spool\n"
-        self.assertIn(line, listed, "the sabotage matched nothing")
-        self._list_file(listed.replace(line, "", 1))
+        path = self.ansible / HOST_ROLES_DIR / "demo1.yml"
+        self.assertTrue(path.is_file(), "the sabotage matched nothing")
+        path.unlink()
         for name in ("demo1_build", "demo1_egress_spool"):
             with self.subTest(role=name, list="deleted"):
                 self._assert_refused("demo1", f"role {name} is not on demo1's list")
@@ -778,39 +786,54 @@ class HostRoleLists(unittest.TestCase):
                 found = self._findings("R2 mx9.yml")
                 self.assertEqual(found == [], passes, found)
 
-    # R9: the list file must exist and be well formed, or no host gets a role beyond the pull roles.
-    def test_a_missing_list_file_refuses_every_extra_role(self) -> None:
-        (self.ansible / HOST_ROLES_FILE).unlink()
+    # R9: the list directory must exist and each host's file be well formed, or that host gets no
+    # role beyond the pull roles.
+    def test_a_missing_list_directory_refuses_every_extra_role(self) -> None:
+        shutil.rmtree(self.ansible / HOST_ROLES_DIR)
         self._playbook("edge1", _entry("host_baseline"))
         everything = check(self.root)
         self.assertTrue(any(f.startswith("R9") for f in everything), everything)
         self._assert_refused("edge1", "role host_baseline is not on edge1's list", everything)
 
+    def test_a_host_with_no_list_file_gets_no_extra_role(self) -> None:
+        (self.ansible / HOST_ROLES_DIR / "edge1.yml").unlink()
+        self._playbook("edge1", _entry("host_baseline"))
+        self._assert_refused("edge1", "role host_baseline is not on edge1's list")
+
     def test_a_malformed_list_file_is_refused(self) -> None:
         bad_files = (
-            "- edge1\n- ops1\n",
+            "host_baseline\n",
             "edge1: host_baseline\n",
-            "edge1: [pull_trigger]\n",
-            "edge1: [ansible_runtime, host_baseline]\n",
-            "edge1: [host_baseline, host_baseline]\n",
-            "edge1: ['../roles/host_baseline']\n",
-            "edge1: [Host_Baseline]\n",
-            "edge1: [1]\n",
-            "Edge1: [host_baseline]\n",
-            "edge1: [host_baseline\n",
+            "[pull_trigger]\n",
+            "[ansible_runtime, host_baseline]\n",
+            "[host_baseline, host_baseline]\n",
+            "['../roles/host_baseline']\n",
+            "[Host_Baseline]\n",
+            "[1]\n",
+            "[host_baseline\n",
             "",
         )
         for text in bad_files:
             with self.subTest(text=text):
-                self._list_file(text)
+                self._list_file("edge1", text)
                 self._playbook("edge1", _entry("host_baseline"))
                 findings = check(self.root)
                 self.assertTrue(any(f.startswith("R9") for f in findings), findings)
                 self._assert_refused("edge1", "role host_baseline is not on edge1's list", findings)
 
+    def test_a_list_file_with_a_bad_host_name_or_a_stray_file_is_refused(self) -> None:
+        for name in ("Edgex.yml", "edge-1.yml", "edge1.yaml", "notes.txt"):
+            with self.subTest(name=name):
+                (self.ansible / HOST_ROLES_DIR / name).write_text(
+                    "- host_baseline\n", encoding="utf-8"
+                )
+                self.assertTrue(any(f.startswith("R9") for f in check(self.root)))
+                (self.ansible / HOST_ROLES_DIR / name).unlink()
+
     # Control: one bad host in the list does not take the others' lists with it.
     def test_one_bad_entry_does_not_refuse_another_hosts_roles(self) -> None:
-        self._list_file("edge1: [pull_trigger]\nops1: [control_plane]\n")
+        self._list_file("edge1", "[pull_trigger]\n")
+        self._list_file("ops1", "[control_plane]\n")
         self._playbook("ops1", _entry("control_plane"))
         everything = check(self.root)
         self.assertEqual(self._findings("R2 ops1.yml", everything), [])

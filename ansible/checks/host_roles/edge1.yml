@@ -1,0 +1,14 @@
+---
+- host_inputs
+- host_baseline
+- egress_nat
+- ci_login
+- ci_jump
+- deploy_verifier
+- deploy_tooling
+- edge_stack
+- node_exporter
+- exporters_and_collectors
+- ntfy_pager
+- monitoring_stack
+- sweego_receiver

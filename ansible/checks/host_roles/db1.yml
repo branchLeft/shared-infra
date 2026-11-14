@@ -1,0 +1,10 @@
+---
+- host_inputs
+- deploy_verifier
+- deploy_tooling
+- db1_stack
+- db1_backup_timers
+- db1_grants
+- tunnel_account
+- host_baseline
+- node_exporter

@@ -3,7 +3,7 @@
 The role takes `deploy_tooling_host_class` with no default (ANS-7). The playbook sets it in
 the play's vars and the enrolment checker pins it per host in `HOST_PLAY_VARS` (R2), so the
 value is stated twice by design. This test holds the playbook, the table and the host's list
-in `host_roles.yml` to each other, so a change to one alone fails here. Other hosts may name
+in `host_roles/` to each other, so a change to one alone fails here. Other hosts may name
 their own class; none may name gateway. app1 is class app with the standard policy variant,
 and the same three are held to each other for it.
 """
@@ -13,7 +13,7 @@ from __future__ import annotations
 import unittest
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import HOST_PLAY_VARS, ROOT
+from check_enrolment import HOST_PLAY_VARS, ROOT, read_host_roles_raw
 
 ANSIBLE = ROOT / "ansible"
 CLASS_KEY = "deploy_tooling_host_class"
@@ -95,17 +95,11 @@ class Edge1Class(unittest.TestCase):
         self.assertIn({"role": f"../roles/{ROLE}"}, roles if isinstance(roles, list) else [])
 
     def test_the_role_is_on_app1s_list(self) -> None:
-        listed: object = yaml.safe_load(
-            (ANSIBLE / "checks" / "host_roles.yml").read_text(encoding="utf-8")
-        )
-        app1_roles = _mapping(listed)[APP_HOST]
+        app1_roles = read_host_roles_raw(ANSIBLE)[APP_HOST]
         self.assertIn(ROLE, app1_roles if isinstance(app1_roles, list) else [])
 
     def test_the_role_is_on_edge1s_list(self) -> None:
-        listed: object = yaml.safe_load(
-            (ANSIBLE / "checks" / "host_roles.yml").read_text(encoding="utf-8")
-        )
-        edge1_roles = _mapping(listed)[GATEWAY_HOST]
+        edge1_roles = read_host_roles_raw(ANSIBLE)[GATEWAY_HOST]
         self.assertIn(ROLE, edge1_roles if isinstance(edge1_roles, list) else [])
 
 

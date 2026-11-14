@@ -61,25 +61,30 @@ ANY_ASSERT_SET = re.compile(r"\AAssert[A-Za-z]*=\s*\S")
 # needing no secrets.
 COMPOSE_VARIABLE = re.compile(r"\$\{(?!IMAGE[}:])([A-Za-z_][A-Za-z0-9_]*)")
 
+EXPECTED_SERVICES_DIRECTORY = pathlib.Path(__file__).resolve().parent / "expected_services"
+
+
+def read_expected_services() -> dict[str, set[str]]:
+    """Every service the parser must find, per stack, from expected_services/STACK.txt.
+
+    One file per stack, one service name per line, so two pull requests that add a stack or a
+    service to different stacks touch different files and do not meet on a line. The files are read
+    together here: a stack with a compose file and no file, or a file with no compose file, fails
+    the exact comparison in `WaitSignalContractTests`.
+    """
+    expected: dict[str, set[str]] = {}
+    for path in sorted(EXPECTED_SERVICES_DIRECTORY.glob("*.txt")):
+        lines = path.read_text(encoding="utf-8").splitlines()
+        expected[path.stem] = {line.strip() for line in lines if line.strip()}
+    return expected
+
+
 # Every service the parser must find, per stack. An exact set rather than a
 # sample: a parser that quietly skipped one would otherwise leave that service
 # unasserted, which is the failure mode this whole module is about. Adding a
-# service means adding it here, which is the point at which its health signal
-# has to be decided.
-EXPECTED_SERVICES: dict[str, set[str]] = {
-    "edge": {"caddy", "crowdsec"},
-    "monitoring": {
-        "prometheus",
-        "alertmanager",
-        "grafana",
-        "node-exporter",
-        "blackbox-exporter",
-        "cadvisor",
-        "ntfy",
-    },
-    "nextcloud1": {"app", "db", "redis"},
-    "control-plane": {"db", "zitadel", "portal", "console"},
-}
+# service means adding it to its stack's file in expected_services/, which is
+# the point at which its health signal has to be decided.
+EXPECTED_SERVICES: dict[str, set[str]] = read_expected_services()
 
 # The stacks every assertion above is about: exactly the ones whose Compose file
 # this repository commits, which is what `stack_compose_files()` globs and what
@@ -903,8 +908,8 @@ class WaitSignalContractTests(unittest.TestCase):
         self.assertEqual(
             found,
             EXPECTED_SERVICES,
-            "the committed stacks and EXPECTED_SERVICES disagree. Add a new stack or "
-            "service there, deciding its health signal as you do -- do not relax this "
+            "the committed stacks and expected_services/ disagree. Add a new stack or "
+            "service there (one file per stack), deciding its health signal as you do -- do not relax this "
             "assertion, it is what stops a parser miss from passing silently.",
         )
 

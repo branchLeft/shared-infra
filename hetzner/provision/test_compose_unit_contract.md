@@ -54,6 +54,12 @@ for a stack this repository commits. `CONTRACT_COVERS` and
 `CONTRACT_DOES_NOT_REACH` name both sides, and the scan below refuses to let
 this repository write down a stack that is in neither.
 
+The services each covered stack must have are kept one file per stack, in
+`expected_services/STACK.txt` (one service name per line), and read together
+into `EXPECTED_SERVICES`: two pull requests that touch different stacks touch
+different files. A stack with a Compose file and no file there fails the exact
+comparison, and so does a file with no Compose file.
+
 Everything here reads the `[Service]` section only, and matches whole stripped
 lines. systemd ignores assignments before a section header, so a directive
 found anywhere in the file is not a directive systemd applies.

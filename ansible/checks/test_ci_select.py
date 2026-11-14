@@ -212,11 +212,11 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(own, self.queue_entry(path))
 
     def test_host_roles_and_playbooks_keep_their_pinned_behaviour(self) -> None:
-        # host_roles.yml is read by the lint job's tests, not by a shard, so it selects none.
+        # host_roles/ is read by the lint job's tests, not by a shard, so it selects none.
         # It selected every shard before, only because it sat under ansible/checks/. A playbook
         # selects none, as it did before.
         for path in (
-            "ansible/checks/host_roles.yml",
+            "ansible/checks/host_roles/edge1.yml",
             "ansible/playbooks/app1.yml",
             "ansible/playbooks/edge1.yml",
         ):
@@ -224,7 +224,7 @@ class SelectionTest(unittest.TestCase):
                 self.assertEqual([], self.pull_request(path))
         own = [shard for shard in self.shards if shard["path"] == "ansible/roles/egress_nat"]
         chosen = self.pull_request(
-            "ansible/roles/egress_nat/tasks/main.yml", "ansible/checks/host_roles.yml"
+            "ansible/roles/egress_nat/tasks/main.yml", "ansible/checks/host_roles/edge1.yml"
         )
         self.assertEqual(own, chosen)
 

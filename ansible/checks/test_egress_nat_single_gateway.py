@@ -6,7 +6,7 @@ is a routing loop that takes that network's egress (`hetzner/provision/branchlef
 the switch is set in one place per network: the gateway's own play vars, pinned by
 `HOST_PLAY_VARS` in the owner-only checks (R2). A network does not span hcloud projects, so the
 estate's network (gateway edge1) and the tenants network (gateway edget, the server edge-t) each
-have one. This test holds each playbook, the table, the host's list in `host_roles.yml` and
+have one. This test holds each playbook, the table, the host's list in `host_roles/` and
 every other file under `ansible/` to that one home per network. A change to one alone fails
 here, a host that names the switch without being a listed gateway is refused by name whichever
 file it is written in, and a second gateway for a network that already has one is refused.
@@ -22,7 +22,7 @@ import unittest
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import HOST_PLAY_VARS, ROOT
+from check_enrolment import HOST_PLAY_VARS, ROOT, read_host_roles_raw
 
 ANSIBLE = ROOT / "ansible"
 SWITCH = "egress_nat_gateway_enabled"
@@ -78,7 +78,7 @@ def _role_names(host: str) -> list[str]:
 
 
 def _listed_roles() -> dict[str, list[str]]:
-    listed = _mapping(yaml.safe_load((CHECKS_DIR / "host_roles.yml").read_text(encoding="utf-8")))
+    listed = read_host_roles_raw(ANSIBLE)
     return {
         host: [str(name) for name in (names if isinstance(names, list) else [])]
         for host, names in listed.items()

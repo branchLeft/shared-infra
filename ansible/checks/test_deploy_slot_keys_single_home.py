@@ -18,7 +18,7 @@ from pathlib import Path
 from types import ModuleType
 
 import deploy_tooling_vars as tooling_vars
-from check_pins import load_yaml
+from check_enrolment import read_host_roles_raw
 
 ROOT = Path(__file__).resolve().parents[2]
 ROLE = ROOT / "ansible" / "roles" / "deploy_slot_keys"
@@ -179,10 +179,8 @@ class SlotProgramSingleHome(unittest.TestCase):
 
     def test_app1_lists_the_role_after_deploy_tooling(self) -> None:
         # The wrapper the forced commands run is installed by deploy_tooling, so it is listed first.
-        document, problem = load_yaml(ROOT / "ansible" / "checks" / "host_roles.yml")
-        self.assertIsNone(problem)
-        self.assertIsInstance(document, dict)
-        roles = document["app1"] if isinstance(document, dict) else []
+        listed = read_host_roles_raw(ROOT / "ansible")["app1"]
+        roles = [str(role) for role in listed] if isinstance(listed, list) else []
         self.assertIn("deploy_slot_keys", roles)
         self.assertLess(roles.index("deploy_tooling"), roles.index("deploy_slot_keys"))
 
