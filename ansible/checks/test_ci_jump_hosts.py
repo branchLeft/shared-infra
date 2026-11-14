@@ -12,12 +12,11 @@ pipeline's route rests on (the 2 Nov ruling, ws#2894):
   destinations is a tenants address whose host has an enrolled playbook (the logical name is the
   TENANTS_HOST_IPS name in lower case: dbT1 is dbt1, edgeT is edget).
 
-It holds one more rule, for the hosts the gated run pushes to: a host that takes its
-commit as a pushed bundle (pull_trigger_bundle_hosts, demo1 today) is a leaf of the route, never a
-hop. It is never in JUMP_HOSTS and its playbook does not apply ci_jump, so the runner goes through
-edge1 to reach it and nothing goes through it. The list is read from the pull_trigger role's
-vars, its one home, and never copied here. A last pin holds the README's secret names to the
-workflow that passes them, so a rename there cannot leave the owner's page naming a secret gone.
+It holds one more rule, for the hosts the gated run pushes to: a host that takes its commit as a
+pushed bundle (pull_trigger_bundle_hosts, demo1 today) is a leaf of the route, never a hop. It is
+never in JUMP_HOSTS and its playbook does not apply ci_jump, so the runner goes through edge1 to
+reach it. The list is read from the pull_trigger role's vars, its one home. A last pin holds the
+README's secret names to the workflow that passes them, so a rename cannot leave the page stale.
 
 The tenants addresses are read from hetzner-host/addressPlan.ts (TENANTS_HOST_IPS), their one home,
 and never copied here. Each pin is shown red on a sabotaged copy of the files it reads, and green
