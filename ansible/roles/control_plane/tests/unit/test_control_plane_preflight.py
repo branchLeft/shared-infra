@@ -141,13 +141,17 @@ class FakeDocker:
             return 1, "", "boom"
         if verb == "info --format":
             return 0, f"{ROOT_DIR}\n", ""
-        if verb == "ps --all":
+        if words[1] == "ps":
             project = words[-1].rsplit("=", 1)[1]
-            return (
-                0,
-                "".join(f"{c['id']}\n" for c in self.containers if c["project"] == project),
-                "",
-            )
+            statuses = [word.split("=", 1)[1] for word in words if word.startswith("status=")]
+            listed = [
+                c
+                for c in self.containers
+                if c["project"] == project
+                and (not statuses or c["status"] in statuses)
+                and ("--all" in words or c["status"] == "running")
+            ]
+            return 0, "".join(f"{c['id']}\n" for c in listed), ""
         if verb == "inspect --format":
             if words[3] != preflight.CONTAINER_FORMAT:
                 raise AssertionError(words[3])
@@ -357,12 +361,42 @@ class FloorTests(unittest.TestCase):
         low = refusal_of(lambda: snapshot(FakeDocker(), available=999, stack=running))
         self.assertEqual(low.code, "memory-low")
 
+    def test_a_stopped_stack_container_is_not_a_running_stack(self) -> None:
+        """Sabotage: count every container of the stack, stopped ones too, and the stopped case
+        takes the running floor, so 2000 MiB passes and this goes red."""
+        stopped = [container("control-plane-db-1", STACK_PROJECT, status="exited")]
+        self.assertEqual(snapshot(FakeDocker(), stack=stopped)["stack"]["containers"], 0)
+        error = refusal_of(lambda: snapshot(FakeDocker(), available=2000, stack=stopped))
+        self.assertEqual(error.code, "memory-low")
+        mixed = [*stopped, container("control-plane-app-1", STACK_PROJECT)]
+        self.assertEqual(snapshot(FakeDocker(), stack=mixed)["stack"]["containers"], 1)
+
     def test_disk_below_the_floor_on_either_file_system_is_refused(self) -> None:
         """Sabotage: check only `/` (or only Docker's root) and one of these goes red."""
         for free in ({"/": 5119, ROOT_DIR: 27316}, {"/": 27316, ROOT_DIR: 5119}):
             error = refusal_of(partial(snapshot, FakeDocker(), free=free))
             self.assertEqual(error.code, "disk-low", free)
         snapshot(FakeDocker(), free={"/": 5120, ROOT_DIR: 5120})
+
+    def test_a_disk_that_cannot_be_read_is_refused_not_passed(self) -> None:
+        """Sabotage: make free_mib return a figure instead of raising on OSError and this goes red.
+
+        Either file system failing must refuse the record; neither may be read as room.
+        """
+        for failing in ("/", ROOT_DIR):
+
+            def statvfs(path: str, failing: str = failing) -> os.statvfs_result:
+                if path == failing:
+                    raise OSError(5, "unreadable", path)
+                return statvfs_for({"/": 27316, ROOT_DIR: 27316})(path)
+
+            with proc_with(3000) as proc:
+                error = refusal_of(
+                    lambda statvfs=statvfs, proc=proc: preflight.host_record(
+                        FakeDocker(), "docker", STACK_PROJECT, proc, statvfs
+                    )
+                )
+            self.assertEqual(error.code, "disk-unreadable", failing)
 
     def test_a_host_that_cannot_be_read_is_refused_not_passed(self) -> None:
         """An unreadable figure is a refusal: a check that cannot see must not say yes."""
@@ -473,7 +507,14 @@ class RecordTests(unittest.TestCase):
         """Nextcloud's containers hold credentials in their environment: no command asks for it."""
         docker = FakeDocker()
         self.compare(snapshot(docker), docker)
-        allowed = {"info --format", "ps --all", "inspect --format", "volume ls", "volume inspect"}
+        allowed = {
+            "info --format",
+            "ps --all",
+            "ps --filter",
+            "inspect --format",
+            "volume ls",
+            "volume inspect",
+        }
         for call in docker.calls:
             self.assertIn(" ".join(call[1:3]), allowed, call)
         for text in (preflight.CONTAINER_FORMAT, preflight.VOLUME_FORMAT):

@@ -301,15 +301,18 @@ def docker_lines(run: Runner, argv: Sequence[str], what: str) -> list[str]:
     return [line for line in stdout.splitlines() if line.strip()]
 
 
-def project_container_ids(run: Runner, docker: str, project: str) -> list[str]:
-    """Return the ids of every container, running or not, that belongs to a Compose project."""
+def project_container_ids(
+    run: Runner, docker: str, project: str, *, running: bool = False
+) -> list[str]:
+    """Return the ids of a Compose project's containers: every one, or only the running ones."""
+    state = ["--filter", "status=running"] if running else ["--all"]
     return sorted(
         docker_lines(
             run,
             [
                 docker,
                 "ps",
-                "--all",
+                *state,
                 "--no-trunc",
                 "--quiet",
                 "--filter",
@@ -418,7 +421,7 @@ def host_record(
         "disk_free_mib": disk,
         "stack": {
             "project": stack_project,
-            "containers": len(project_container_ids(run, docker, stack_project)),
+            "containers": len(project_container_ids(run, docker, stack_project, running=True)),
         },
         "nextcloud": nextcloud_record(run, docker),
     }
