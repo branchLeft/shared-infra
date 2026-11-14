@@ -20,6 +20,7 @@ from check_enrolment import (
     _PARSED,
     JUMP_HOSTS,
     JUMP_VARS,
+    OPTIONAL_OWNER_KEYS,
     OWNER_VARS_KEYS,
     RING_CONTROLLER_TEXT_KEYS,
     ROOT,
@@ -31,6 +32,11 @@ from check_enrolment import (
 
 # A playbook that applies the pull on edge1: it is refused in any name the pull cannot read.
 EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
+# An ops1 owner_vars line that sets the control plane's image pin to a digest.
+PIN_LINE = (
+    "ring_controller_host_ledger_url: ''\n"
+    "control_plane_app_image: 'ghcr.io/branchleft/portal-apps@sha256:" + "a" * 64 + "'\n"
+)
 # The loader's entry in db1's playbook, as it stands on main.
 LOADER_LINE = "    - role: ../roles/host_inputs # noqa: role-name[path]\n"
 # The stack's entry in db1's playbook, after the loader, as it stands on main.
@@ -1282,6 +1288,45 @@ class Sabotage(unittest.TestCase):
             "ci_login_keys: []\ncontrol_plane_db_apps_image: x\n",
         )
         self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+
+    # The control plane's image pin is the one value that moves the running image. It is
+    # optional: a file without it leaves the host on the image its deploy wrapper last pinned, so
+    # allowing the key changes nothing until the owner sets it. The positive controls come first:
+    # the real file passes without the key, and passes with it, so a check that refused the key
+    # would not pass for a strict one.
+    def test_r10_ops1_control_plane_pin_is_optional_and_ops1s_alone(self) -> None:
+        self.assertEqual(check(self.root), [])
+        self.assertEqual(
+            {"ops1": frozenset(("control_plane_app_image",))}, dict(OPTIONAL_OWNER_KEYS)
+        )
+        self.assertNotIn("control_plane_app_image", self._ops1_keys())
+        self._edit("owner_vars/ops1.yml", "ring_controller_host_ledger_url: ''\n", PIN_LINE)
+        self.assertEqual(check(self.root), [])
+
+    def test_r10_ops1_control_plane_pin_must_be_text(self) -> None:
+        self._edit("owner_vars/ops1.yml", "ring_controller_host_ledger_url: ''\n", "")
+        self._edit(
+            "owner_vars/ops1.yml",
+            "ring_controller_host_bundle_url: ''\n",
+            "ring_controller_host_bundle_url: ''\n"
+            "ring_controller_host_ledger_url: ''\ncontrol_plane_app_image: 7\n",
+        )
+        self._assert_one("R10 owner_vars/ops1.yml: control_plane_app_image must be text")
+
+    def test_r10_the_control_plane_pin_is_not_allowed_on_another_host(self) -> None:
+        for host in ("edge1", "edget"):
+            with self.subTest(host=host):
+                self._reset()
+                path = self.ansible / "owner_vars" / f"{host}.yml"
+                path.write_text(
+                    path.read_text(encoding="utf-8") + "control_plane_app_image: x\n",
+                    encoding="utf-8",
+                )
+                self._assert_one(f"R10 owner_vars/{host}.yml: must hold")
+
+    def test_r10_a_required_ops1_key_is_still_required_beside_the_optional_pin(self) -> None:
+        self._write("owner_vars/ops1.yml", "---\ncontrol_plane_app_image: x\n")
+        self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
 
     def _ops1_keys(self) -> list[str]:
         doc = _load(self.ansible / "owner_vars" / "ops1.yml", [], "ops1.yml")
