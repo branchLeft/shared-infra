@@ -18,18 +18,19 @@ import {
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
 
 describe('PAGE_REGISTER', () => {
-  it('has exactly five entries -- four Alertmanager and the drain worker outside it', () => {
-    expect(PAGE_REGISTER).toHaveLength(5);
+  it('has exactly six entries -- five Alertmanager and the drain worker outside it', () => {
+    expect(PAGE_REGISTER).toHaveLength(6);
     expect(PAGE_REGISTER.map((entry) => entry.id)).toEqual([
       'tier2-safety-match',
       'tenant-failed-unsafe',
       'appeal-latency-breach',
       'readers-cannot-read',
       'drain-worker-stopped',
+      'stopped-demo-reaper',
     ]);
   });
 
-  it('routes four entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
+  it('routes five entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
     const byPath = (path: PageRegisterEntry['deliveryPath']) =>
       PAGE_REGISTER.filter((entry) => entry.deliveryPath === path).map((entry) => entry.id);
     expect(byPath('alertmanager')).toEqual([
@@ -37,6 +38,7 @@ describe('PAGE_REGISTER', () => {
       'tenant-failed-unsafe',
       'appeal-latency-breach',
       'readers-cannot-read',
+      'stopped-demo-reaper',
     ]);
     expect(byPath('healthchecks')).toEqual(['drain-worker-stopped']);
   });
@@ -46,9 +48,65 @@ describe('PAGE_REGISTER', () => {
     expect(drainWorker?.alertName).toBeNull();
   });
 
-  it('marks exactly appeal-latency-breach dormant', () => {
+  it('marks exactly appeal-latency-breach and stopped-demo-reaper dormant', () => {
     const dormant = PAGE_REGISTER.filter((entry) => entry.dormant).map((entry) => entry.id);
-    expect(dormant).toEqual(['appeal-latency-breach']);
+    expect(dormant).toEqual(['appeal-latency-breach', 'stopped-demo-reaper']);
+  });
+});
+
+/**
+ * The stopped demo reaper is registered before the reaper exists, so its
+ * entry must be dormant: a live entry would put its alertname in the page
+ * route while no rule can ever raise it. These tests prove a dormant entry
+ * does not page, and that dormancy alone is what keeps it off the route.
+ */
+describe('the stopped-demo-reaper entry', () => {
+  const reaper = PAGE_REGISTER.find((entry) => entry.id === 'stopped-demo-reaper');
+
+  it('is registered through Alertmanager, not tenant-scoped, and dormant', () => {
+    expect(reaper).toBeDefined();
+    expect(reaper?.alertName).toBe('StoppedDemoReaper');
+    expect(reaper?.deliveryPath).toBe('alertmanager');
+    expect(reaper?.tenantScoped).toBe(false);
+    expect(reaper?.dormant).toBe(true);
+  });
+
+  it('is left out of the alertnames the page route matches', () => {
+    expect(pageAlertNames(PAGE_REGISTER)).not.toContain('StoppedDemoReaper');
+  });
+
+  it('does not appear in the rendered page route or the rendered Alertmanager config', () => {
+    expect(renderPageRoute(PAGE_REGISTER)).not.toContain('StoppedDemoReaper');
+    expect(renderAlertmanagerTemplate()).not.toContain('StoppedDemoReaper');
+  });
+
+  it('would page if it were switched on -- dormancy alone is what keeps it off the route', () => {
+    const live = PAGE_REGISTER.map((entry) =>
+      entry.id === 'stopped-demo-reaper' ? { ...entry, dormant: false } : entry
+    );
+    expect(pageAlertNames(live)).toContain('StoppedDemoReaper');
+    expect(renderPageRoute(live)).toContain('StoppedDemoReaper');
+    expect(renderAlertmanagerTemplate(live)).toContain('StoppedDemoReaper');
+  });
+
+  it('refuses a severity: page rule under its alertname while it is dormant', () => {
+    // A rule that raised this page today would reach no phone, so the
+    // register's own check reports it rather than letting it ship.
+    const rules = [
+      'groups:',
+      '  - name: g',
+      '    rules:',
+      '      - alert: StoppedDemoReaper',
+      '        expr: vector(1)',
+      '        labels:',
+      '          severity: page',
+      '',
+    ].join('\n');
+    expect(findUnregisteredPageSeverityAlerts(rules, PAGE_REGISTER)).toEqual(['StoppedDemoReaper']);
+  });
+
+  it('carries no work-item reference in its shipped text', () => {
+    expect(`${reaper?.name} ${reaper?.reason}`).not.toMatch(/#\d|workspace/i);
   });
 });
 

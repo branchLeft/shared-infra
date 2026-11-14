@@ -17,6 +17,28 @@ entry with no tenant of its own (the estate-wide ones) still has a
 `tenant` label of the empty string, which groups those alerts with each
 other the same way.
 
+## Dormant entries
+
+An entry marked `dormant` renders no route and is left out of
+`pageAlertNames`, so it cannot page. Two entries are dormant today:
+appeal latency, until a target is set for how long an appeal may wait, and
+the stopped demo reaper (`stopped-demo-reaper`, alertname
+`StoppedDemoReaper`), until the reaper that ends a demo at the close of its
+lease exists and the threshold for how long it may stay silent is set. The
+reaper entry is not tenant-scoped: a stopped reaper is an estate-wide
+condition, so its page carries no `tenant` label of its own and groups with
+the other estate-wide alerts.
+
+Registering the reaper first is deliberate -- the register is the reviewed
+list of what may page, so the owner's decision that a stopped reaper pages
+the phone is recorded in code before the reaper exists. The alert rule that
+raises `StoppedDemoReaper` arrives with the reaper, in the same change that
+flips `dormant` to false; until then `findUnregisteredPageSeverityAlerts`
+reports any rule that carries `severity: page` under that alertname, because
+a dormant entry reaches no phone. `pageRegister.test.ts` proves both halves:
+the dormant entry is absent from the rendered route, and switching it on is
+the only thing that puts it there.
+
 ## The metric-crosscheck discipline applied to severity
 
 The metric-crosscheck discipline applied to severity, not to a metric
