@@ -63,7 +63,6 @@ provisioner:
         scenario_timer: /etc/systemd/system/ring-controller.timer
         # The exact names the unit's environment file may hold.
         scenario_env_names:
-          - RING_CONTROLLER_LEDGER_URL
           - RING_CONTROLLER_RECORD_PUBLIC_KEY_FILE
           - RING_CONTROLLER_RECORD_SIGNING_KEY_NAME
           - RING_CONTROLLER_STATE_DIR

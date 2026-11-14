@@ -64,14 +64,13 @@ JUMP_VARS = frozenset(
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
 APPS_IMAGE_KEY = "control_plane_db_apps_image"
-# The three inputs of the ring_controller_host role. Each is public text that is empty until the
+# The two inputs of the ring_controller_host role. Each is public text that is empty until the
 # owner sets it, and an empty digest keeps the controller's timer off. The role holds the shapes
 # (its vars/main.yml patterns), so only the type is read here, as for APPS_IMAGE_KEY.
 RING_CONTROLLER_TEXT_KEYS = frozenset(
     (
         "ring_controller_host_bundle_sha256",
         "ring_controller_host_bundle_url",
-        "ring_controller_host_ledger_url",
     )
 )
 _BASE_OWNER_KEYS = {
