@@ -23,6 +23,7 @@ import unittest
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from functools import partial
 from pathlib import Path
+from typing import cast
 
 import control_plane_preflight as preflight
 from ansible.module_utils.testing import patch_module_args
@@ -242,6 +243,11 @@ def snapshot(
     return record
 
 
+def stack_containers(record: preflight.Record) -> object:
+    """The count of running stack containers a record carries."""
+    return cast(dict[str, object], record["stack"])["containers"]
+
+
 def refusal_of(call: Callable[[], object]) -> preflight.PreflightError:
     """Run a call that must refuse and return the refusal.
 
@@ -365,11 +371,11 @@ class FloorTests(unittest.TestCase):
         """Sabotage: count every container of the stack, stopped ones too, and the stopped case
         takes the running floor, so 2000 MiB passes and this goes red."""
         stopped = [container("control-plane-db-1", STACK_PROJECT, status="exited")]
-        self.assertEqual(snapshot(FakeDocker(), stack=stopped)["stack"]["containers"], 0)
+        self.assertEqual(stack_containers(snapshot(FakeDocker(), stack=stopped)), 0)
         error = refusal_of(lambda: snapshot(FakeDocker(), available=2000, stack=stopped))
         self.assertEqual(error.code, "memory-low")
         mixed = [*stopped, container("control-plane-app-1", STACK_PROJECT)]
-        self.assertEqual(snapshot(FakeDocker(), stack=mixed)["stack"]["containers"], 1)
+        self.assertEqual(stack_containers(snapshot(FakeDocker(), stack=mixed)), 1)
 
     def test_disk_below_the_floor_on_either_file_system_is_refused(self) -> None:
         """Sabotage: check only `/` (or only Docker's root) and one of these goes red."""
@@ -392,8 +398,8 @@ class FloorTests(unittest.TestCase):
 
             with proc_with(3000) as proc:
                 error = refusal_of(
-                    lambda statvfs=statvfs, proc=proc: preflight.host_record(
-                        FakeDocker(), "docker", STACK_PROJECT, proc, statvfs
+                    partial(
+                        preflight.host_record, FakeDocker(), "docker", STACK_PROJECT, proc, statvfs
                     )
                 )
             self.assertEqual(error.code, "disk-unreadable", failing)
