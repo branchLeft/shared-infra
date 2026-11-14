@@ -20,6 +20,11 @@ ROLE = Path(__file__).resolve().parents[2]
 SHARDS = ROLE / "molecule" / "default"
 VERSION = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+\Z")
 DIGEST = re.compile(r"^[0-9a-f]{64}\Z")
+# The zone paying tenants render under: D10, render-core's demo-tenant descriptor and goldens,
+# and ghost-platform's services/broker/systemd/broker.env.example, which has its own test that
+# the example's zone is render-core's. Another repo, so the copy stays and this holds the
+# template to it.
+TENANT_PLATFORM_ZONE = "sites.publicpress.co.uk"
 PLAIN_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 # Modules that only read, decide or refuse: a task of any other module is a write to the host.
 READ_ONLY_MODULES = frozenset(
@@ -150,6 +155,15 @@ class Agreements(unittest.TestCase):
         template = (ROLE / "templates" / "broker.env.j2").read_text(encoding="utf-8")
         ports = re.findall(r"^PORT=([0-9]+)$", template, re.MULTILINE)
         self.assertEqual(ports, [str(constants["broker_deploy_port"])])
+
+    def test_the_platform_zone_is_the_tenant_zone_and_inside_an_owned_domain(self) -> None:
+        template = (ROLE / "templates" / "broker.env.j2").read_text(encoding="utf-8")
+        zones = re.findall(r"^BROKER_PLATFORM_ZONE=(\S+)$", template, re.MULTILINE)
+        self.assertEqual(zones, [TENANT_PLATFORM_ZONE])
+        owned = re.findall(r"^BROKER_OWNED_DOMAINS=(\S+)$", template, re.MULTILINE)
+        self.assertEqual(len(owned), 1)
+        domains = owned[0].split(",")
+        self.assertTrue(any(zones[0] == d or zones[0].endswith("." + d) for d in domains))
 
     def test_the_unit_name_is_the_units_file_name(self) -> None:
         constants = mapping(ROLE / "vars" / "main.yml")
