@@ -1,5 +1,81 @@
+import { isIPv4 } from 'node:net';
 import * as hcloud from '@pulumi/hcloud';
+import * as pulumi from '@pulumi/pulumi';
 import { mx1 } from './server';
+
+/**
+ * The estate stack's outputs. A DIY (non-Pulumi-Cloud) backend fixes the
+ * organisation segment to the literal `organization`, as `hetzner/tenants.ts`
+ * does for the same stack. The stack is in this program's own backend, so the
+ * reference resolves; a stack that has not been applied, or an output that is
+ * missing, fails the preview instead of planning a rule.
+ */
+const estateStack = new pulumi.StackReference('organization/branchleft-hetzner-estate/production');
+
+/**
+ * Ranges that are never the public source of a caller on the internet:
+ * this-network, private, shared (CGNAT), loopback, link-local, IETF protocol,
+ * benchmarking, multicast and reserved space. A rule naming one matches
+ * nothing that can reach mx1, which would silently stop the blog's mail.
+ * Documentation ranges (TEST-NET) are allowed: they match nothing on the
+ * internet, so they cannot widen access.
+ */
+const NEVER_A_PUBLIC_SOURCE: readonly (readonly [string, number])[] = [
+  ['0.0.0.0', 8],
+  ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
+  ['127.0.0.0', 8],
+  ['169.254.0.0', 16],
+  ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
+  ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['224.0.0.0', 4],
+  ['240.0.0.0', 4],
+];
+
+const ipv4ToNumber = (address: string): number =>
+  address.split('.').reduce((accumulator, octet) => accumulator * 256 + Number(octet), 0);
+
+/**
+ * The one source the bulk-mail rule accepts, as a /32. A dotted-quad IPv4
+ * address only (`isIPv4` refuses leading zeros, which different parsers read
+ * as octal or decimal), then not private, shared, loopback, link-local,
+ * multicast or reserved. Anything else throws, which fails the preview and
+ * leaves the live rule as it is.
+ */
+export function bulkMailSourceCidr(address: string): string {
+  if (!isIPv4(address)) {
+    throw new Error(
+      `bulk-mail source "${address}" is not a dotted-quad IPv4 address; give one public address, not a CIDR, an IPv6 address or a hostname`
+    );
+  }
+  const numeric = ipv4ToNumber(address);
+  const refused = NEVER_A_PUBLIC_SOURCE.find(([base, bits]) => {
+    const start = ipv4ToNumber(base);
+    return numeric >= start && numeric < start + 2 ** (32 - bits);
+  });
+  if (refused !== undefined) {
+    throw new Error(
+      `bulk-mail source ${address} is inside ${refused[0]}/${refused[1]}, which is not a public address`
+    );
+  }
+  return `${address}/32`;
+}
+
+/**
+ * The estate's one public egress address, as a /32. Every private-only host in
+ * the estate (app1, ops1, db1, mon1) leaves through edge1: the network's
+ * default route is via edge1 (`hetzner/network.ts`) and edge1 source-NATs it
+ * out of its public interface (`ansible/roles/egress_nat`). mx1 is in another
+ * hcloud project, so the hop to it is on the public internet and mx1 sees
+ * edge1's public IPv4. Read from the estate stack's `edge1PublicIpv4` output,
+ * never typed: a rebuilt edge1 comes back on a different address
+ * (`hetzner/RUNBOOK-estate-project-move.md`, step 7).
+ */
+const estateEgressSource = estateStack
+  .requireOutput('edge1PublicIpv4')
+  .apply((address) => bulkMailSourceCidr(String(address)));
 
 /**
  * The mail delivery host's firewall. Hand-created alongside the server and
@@ -86,14 +162,18 @@ export const mailFirewall = new hcloud.Firewall(
         sourceIps: ['0.0.0.0/0', '::/0'],
       },
       // The sending application -> the mailgun-shim's bulk-mail API,
-      // terminated by Caddy. A serverless caller's egress addresses
-      // aren't enumerable, so this can't be narrowed by source; the
-      // endpoint itself is API-key-authenticated and rate-limited.
+      // terminated by Caddy. The caller is the blog on app1, a private-only
+      // host, so its traffic arrives from the estate's NAT address
+      // (`estateEgressSource` above) and from nowhere else. IPv4 only: the
+      // estate network carries no IPv6 range, so no caller has a v6 source to
+      // allow. The endpoint itself stays API-key-authenticated and
+      // rate-limited. This stays narrowed until the shim is retired and the
+      // port closed.
       {
         direction: 'in',
         protocol: 'tcp',
         port: '8443',
-        sourceIps: ['0.0.0.0/0', '::/0'],
+        sourceIps: [estateEgressSource],
       },
     ],
     applyTos: [

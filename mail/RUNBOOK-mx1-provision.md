@@ -704,6 +704,17 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
   drain image's digest is added to the table — see "Handing the drain token to
   the collector" below.
 
+### Who can reach 8443
+
+`mail/firewall.ts` accepts tcp/8443 from one source only: edge1's public IPv4,
+read from the estate stack's `edge1PublicIpv4` output and never typed. The
+callers (the blog on app1, and later the ops1 collector) are private-only
+estate hosts, and every one leaves through edge1's NAT, so mx1 sees that one
+address. IPv4 only, because the estate network has no IPv6 range. Port 80 stays
+open to all for ACME HTTP-01. A rebuilt edge1 changes the address: re-apply the
+mail stack afterwards (`hetzner/RUNBOOK-estate-project-move.md`, step 7.2), or
+the blog's bulk mail is refused until it is.
+
 ### ACME coexistence
 
 Stalwart's ACME is TLS-ALPN-01 and owns port 443; Caddy's ACME is HTTP-01

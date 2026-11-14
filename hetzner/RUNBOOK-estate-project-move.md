@@ -295,6 +295,21 @@ firewall must show the tcp/22 source as the new `edge1PublicIpv4` recorded above
 with `/32`. `46.225.95.167/32` must not appear in it. If the old address is still
 there, the apply did not run: stop, and do not go on to step 8.
 
+### 7.2 Re-apply the mail stack
+
+The mail stack's firewall also reads `edge1PublicIpv4` from this stack through a
+`StackReference`: the mailgun-shim's port 8443 on mx1 accepts only that address,
+because every private estate host leaves through edge1's NAT. A rebuilt edge1
+has a new address and the mail stack does not follow it until it is applied, so
+until then the blog's bulk mail is refused at mx1's firewall. The mail stack
+applies through its own CI plan and apply (environment `production-mail`), and
+only when a push to `main` changes `mail/*.ts` or its stack files. Either land
+such a change, or the owner re-runs the last mail workflow run from the Actions
+page, which reads the new address live; the owner approves `production-mail`
+either way. Check the rule afterwards with the mail project's token: `hcloud firewall
+describe firewall-1` must show tcp/8443 with the new `edge1PublicIpv4` as its
+one source, with `/32`.
+
 ## 8. Re-provision the host
 
 `edge1` is a bare Debian image again. Everything that was ever installed on it
