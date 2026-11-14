@@ -80,9 +80,10 @@ control_plane_db_network: control-plane_default
 # delivers the file into the `postgres` subdirectory of the stack directory; the stack's
 # compose file mounts that directory into the db container, so the container sees a
 # delivered file at once, and the control_plane role reloads the server after every
-# deploy. The rules the server runs on are the container's copy, which is read here and
-# not assumed: it must equal the delivered one, byte for byte. A unit test pins the three
-# constants below to the control_plane role and to the compose file.
+# deploy. The container's copy is read here and must equal the delivered one, byte for byte;
+# that shows the container sees the file, not that the server loaded it. The server is then
+# asked what it loaded (files/server_loaded_hba.sh). A unit test pins the three constants
+# below to the control_plane role and to the compose file.
 control_plane_db_hba_file: /opt/branchleft/control-plane/postgres/pg_hba.conf
 control_plane_db_hba_container: control-plane-db-1
 control_plane_db_hba_container_file: /etc/postgresql-hba/pg_hba.conf

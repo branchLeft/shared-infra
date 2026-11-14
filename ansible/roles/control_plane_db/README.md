@@ -34,14 +34,25 @@ Before `provision` reads any input it checks the database's access rules (`tasks
 It reads the `pg_hba.conf` the `control_plane` role delivered and requires an accepting rule
 for each of the four portal logins in it. It then reads the file the running `db` container
 actually holds, with `docker exec ... cat`, and requires it to equal the delivered file byte
-for byte. The program connects as the provisioner login and as the migration login after its
+for byte. It then asks the server what it has loaded (`files/server_loaded_hba.sh`, run inside
+the `db` container with the container's own `POSTGRES_PASSWORD`, which the role never holds):
+the server's `hba_file` setting must be that file, `pg_hba_file_rules` must show no error, and
+`pg_conf_load_time()` must be later, in whole seconds, than the file's last modification and
+change times. The program connects as the provisioner login and as the migration login after its
 transaction commits, so a database without either rule would create the roles and then be
 refused its own proof, leaving no marker. The stack mounts the file's directory
 (`postgres/`) into the container, and the `control_plane` role reloads the server after
-every deploy, so a delivered file is the one in force without a hand step. The comparison
-stays, because it is what makes the delivered file prove something about the server. The
-refusal names the cause and says to ask for the `control_plane` apply, not to recreate the
-`db` container by hand. Neither read involves a secret.
+every deploy, so a delivered file is the one in force without a hand step. The two reads
+prove different things. The byte comparison proves the container sees the delivered file, and
+refuses a container still on the old single-file mount. It does not prove the server loaded
+it: the container sees a delivered file at once, whether or not the reload ran. The server
+read proves that, and refuses by name the case where an apply delivered a changed file and
+failed before its reload. `pg_hba_file_rules` alone could not show it, because that view reads
+the file on disk each time it is queried, not the copy the server loaded; so the proof is the
+load time against the file's times, with the view only to show the file parses. A reload in the
+same second as the delivery is refused, not guessed at, which fails closed. Each refusal names
+the cause and says to ask for the `control_plane` apply, not to reload or recreate the `db`
+container by hand. Neither read involves a secret the role holds.
 
 It does not generate or choose a secret, create the sign-in service's token, restart a
 service, write the deploy wrapper's pin, apply itself to a host, or wire itself into a
@@ -185,7 +196,7 @@ those edits.
 | C18 the service account token is the sign-in service's, regular, 0600           | accept 0644, or a link                                                                          | `identity_refusals`                                                |
 | C19 a working directory this run did not make is not removed                    | remove it unconditionally                                                                       | `identity_refusals`                                                |
 | C20 a check-mode request starts no container and writes no marker               | not shown to fail: the container tasks are skipped in check mode                                | `check_mode` section (asserts the outcome only)                    |
-| C21 the running database holds the delivered rules, byte for byte               | drop the comparison in `_hba.yml`                                                               | `provision_hba` section, unit test                                 |
+| C21 the running server has loaded the delivered rules                           | drop the byte comparison, or the load-time comparison in `server_loaded_hba.sh`, or the ask     | `provision_hba` section (not-reloaded case), unit test             |
 | C22 the delivered rules admit each of the four portal logins                    | drop the per-login rule check in `_hba.yml`, or the migrator from `control_plane_db_hba_logins` | `provision_hba` section, unit test                                 |
 | C23 the rules are checked before any secret file is looked at or read           | move the import after the input check in `_provision.yml`                                       | unit test (task order)                                             |
 | C24 migrate is given the migrator's URL file and never the administrator's      | put the administrator's mount or `PORTAL_ADMIN_URL_FILE` back into `_migrate.yml`               | `migrate` section (exact argument and environment list), unit test |
@@ -201,8 +212,8 @@ password manager.
 0. Nothing, for a changed `pg_hba.conf`. The `control_plane` role delivers the file into the
    `postgres/` directory that the `db` container mounts, and reloads the server after every
    deploy (`SELECT pg_reload_conf()`, which drops no connection). `provision` still refuses
-   by name until the running file equals the delivered one, and the refusal tells the owner
-   to ask for the `control_plane` apply. The first apply after the directory mount shipped
+   by name until the running file equals the delivered one and the server has reloaded since
+   it was delivered, and the refusal tells the owner to ask for the `control_plane` apply. The first apply after the directory mount shipped
    recreates the `db` container once, on the new mount, with its volume kept.
 
 1. Place the administrator URL before `provision` (only `provision` reads it now). It is

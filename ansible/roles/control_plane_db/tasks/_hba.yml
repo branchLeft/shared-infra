@@ -8,14 +8,20 @@
 # Two things are read, and neither is a secret (the file holds no password):
 #   1. the pg_hba.conf the control_plane role delivered to the host, which must hold an
 #      accepting rule for each of the four logins; and
-#   2. the pg_hba.conf the running db container actually holds, which must equal the
-#      delivered one byte for byte. The stack mounts the file's directory into the
-#      container, so a delivered file is visible there at once, and the control_plane
-#      role reloads the server after every deploy. The comparison is what makes the
-#      delivered file prove something about the container, and a container that cannot
-#      see the file, or a deploy that has not run yet, is refused by name.
+#   2. the rules the running database enforces, which are two reads of the container:
+#      a. the pg_hba.conf the container holds must equal the delivered one, byte for byte.
+#         The stack mounts the file's directory into the container, so a delivered file is
+#         visible there at once. This proves the container sees the delivered file (and
+#         refuses a container still on the old single-file mount); it proves nothing about
+#         the server, which reads a file only when it is reloaded.
+#      b. the server is asked what it has loaded (files/server_loaded_hba.sh, run inside
+#         the container): it must read that file, the file must parse, and the server's
+#         last configuration load must be later than the file's last change. A file
+#         delivered by an apply that failed before its reload is on disk and in the
+#         container, and is refused here by name. pg_hba_file_rules alone cannot show this,
+#         because it reads the file on disk each time, not the postmaster's loaded copy.
 # The importing file runs this before it reads any secret file. A command is skipped in
-# check mode, so the comparison with the running container is not made in one.
+# check mode, so neither read of the running container is made in one.
 
 - name: Look at the pg_hba.conf the stack delivered
   ansible.builtin.stat:
@@ -80,4 +86,34 @@
       apply that delivers the stack has not run on this host yet, or the container still has the old single-file
       mount from before the directory mount. Ask for the control_plane apply (it recreates the db container once
       on the new mount and reloads the server); do not restart or recreate the container by hand.
+  when: not ansible_check_mode
+
+- name: Ask the running server whether it has loaded the delivered rules
+  ansible.builtin.command:
+    argv:
+      - docker
+      - exec
+      - -i
+      - '{{ control_plane_db_hba_container }}'
+      - sh
+      - -s
+      - --
+      - '{{ control_plane_db_hba_container_file }}'
+    stdin: "{{ lookup('ansible.builtin.file', 'server_loaded_hba.sh') }}"
+  register: control_plane_db_hba_loaded
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Refuse a server that has not loaded the delivered rules
+  ansible.builtin.assert:
+    that:
+      - control_plane_db_hba_loaded.rc == 0
+    quiet: true
+    fail_msg: >-
+      REFUSED: the control-plane database ({{ control_plane_db_hba_container }}) has not loaded the rules
+      delivered to {{ control_plane_db_hba_file }}: {{ control_plane_db_hba_loaded.stderr | default('') | trim }}
+      The container sees the delivered file, but the server enforces what it last reloaded, so a
+      provision now could create the logins and then be refused its own proof. Ask for the
+      control_plane apply, which reloads the server; do not reload or restart it by hand.
   when: not ansible_check_mode
