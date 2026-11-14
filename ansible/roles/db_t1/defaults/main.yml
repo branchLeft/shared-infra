@@ -1,7 +1,9 @@
 ---
 # The one input of the role, and not a secret (ANS-16). Empty means the role
-# prepares the stack and deploys nothing. A value is a digest of the attested
-# Percona Server image, written here in the same change that registers the digest
-# with the deploy program, so a reviewer sees both together. The role deploys it
+# prepares the stack and deploys nothing. The value is the digest of the attested
+# Percona Server image that ghost-platform's Percona image workflow pushed, scanned
+# and signed, and its name is in the deploy program's register, so the host
+# verifies the signature before it pins. The register entry and this digest change
+# in the same pull request, so a reviewer sees both together. The role deploys it
 # once, on an empty host; it never replaces a running database's image.
-db_t1_image: ''
+db_t1_image: 'ghcr.io/branchleft/percona-server@sha256:20e400e5558480067f8d72610b27064efa97d260d51f9e86af60afb69fd93696'
