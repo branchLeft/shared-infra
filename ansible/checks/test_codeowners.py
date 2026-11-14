@@ -157,6 +157,9 @@ GATE_PATHS = [
     "hetzner/tenants.guard.test.ts",
     "hetzner/provision/branchleft_deploy.py",
     "hetzner/provision/test_branchleft_deploy.py",
+    "hetzner/provision/test_branchleft_deploy_offline.py",
+    "hetzner/provision/fixtures/offline-attestation/manifest.json",
+    "hetzner/provision/fixtures/offline-attestation/bundle.jsonl",
     "hetzner/provision/provision_deploy_slot.py",
     "hetzner/provision/test_provision_deploy_slot.py",
     "hetzner/provision/test_suite_size.py",
@@ -317,6 +320,9 @@ ACCESS_PATHS = [
     "ansible/playbooks/includes/pull_trigger_common.yml",
     # What the deploy verifier runs: the pinned gh binary, and the test that holds the pin.
     "ansible/roles/deploy_verifier/vars/main.yml",
+    # The trust anchor the host verifies a delivered bundle against, and the task that installs it.
+    "ansible/roles/deploy_verifier/files/trusted_root.jsonl",
+    "ansible/roles/deploy_verifier/tasks/_offline.yml",
     "ansible/checks/test_deploy_verifier_coverage.py",
 ]
 

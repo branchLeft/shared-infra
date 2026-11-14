@@ -182,6 +182,15 @@ class EgressNatSingleGateway(unittest.TestCase):
         self.assertNotIn(SWITCH, _play_vars("dbt1"))
         self.assertNotIn(SWITCH, HOST_PLAY_VARS.get("dbt1", {}))
 
+    # The same positive case for app-t1: the host egress half and no gateway half.
+    def test_appt1_applies_the_role_once_bare_and_sets_no_switch(self) -> None:
+        self.assertEqual(_role_names("appt1").count(ROLE), 1)
+        roles = _play("appt1").get("roles")
+        role_list = roles if isinstance(roles, list) else []
+        self.assertIn({"role": f"../roles/{ROLE}"}, role_list)
+        self.assertNotIn(SWITCH, _play_vars("appt1"))
+        self.assertNotIn(SWITCH, HOST_PLAY_VARS.get("appt1", {}))
+
     def test_the_role_entry_is_bare_so_the_switch_cannot_hide_in_it(self) -> None:
         for host in GATEWAYS:
             with self.subTest(host=host):

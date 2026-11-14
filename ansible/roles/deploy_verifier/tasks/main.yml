@@ -263,3 +263,11 @@
 # Checked last and never written: the owner places the key. See _registry_key.yml.
 - name: Check the registry read key the owner places
   ansible.builtin.import_tasks: _registry_key.yml
+
+# ----- Offline verification (opt in, for a host with no outbound access) -----
+
+# Placed last. Where a trusted root exists, the wrapper verifies offline and never reads the registry,
+# so a host takes this only when its images are delivered with their bundles. See _offline.yml.
+- name: Install the trusted root and the staging directory for offline verification
+  ansible.builtin.import_tasks: _offline.yml
+  when: deploy_verifier_offline | bool

@@ -77,6 +77,15 @@ dbt1:
   - deploy_verifier
   - deploy_tooling
   - db_t1
+# appt1, the tenant app host app-t1. The roles of dbt1 without its database stack, and no
+# host_inputs (the host has no private inputs). egress_nat is applied bare with its gateway
+# switch unset: this host is no gateway. deploy_tooling (class internal) installs the deploy
+# wrapper the tenant stack role will use, so it follows deploy_verifier.
+appt1:
+  - host_baseline
+  - egress_nat
+  - deploy_verifier
+  - deploy_tooling
 demo1:
   - demo1_build
   - demo1_egress_spool
