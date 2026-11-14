@@ -64,7 +64,10 @@ export function extractQueriedMetrics(expr: string): NamedSeries[] {
   // metric name with no label constraint of its own.
   for (const match of text.matchAll(/[a-zA-Z_:][a-zA-Z0-9_:]*/g)) {
     const name = match[0];
-    const isCall = text[match.index + name.length] === '(';
+    // An aggregation may name its grouping before its argument (`avg by (x)
+    // (...)`), so a name followed by `by` or `without` is an operator too.
+    const after = text.slice(match.index + name.length);
+    const isCall = /^\s*\(/.test(after) || /^\s+(by|without)\b/.test(after);
     if (isCall || PROMQL_BARE_KEYWORDS.has(name)) continue;
     if (!byName.has(name)) byName.set(name, new Set());
   }
@@ -239,6 +242,8 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
   node_memory_MemTotal_bytes: 'node_exporter',
   node_filesystem_avail_bytes: 'node_exporter',
   node_filesystem_size_bytes: 'node_exporter',
+  node_cpu_seconds_total:
+    'node_exporter (cpu collector, on by default; the role sets no collector flags)',
   mysql_global_status_threads_connected: 'mysqld_exporter, on db1',
   mysql_global_variables_max_connections: 'mysqld_exporter, on db1',
   mysql_up: 'mysqld_exporter, on db1',
