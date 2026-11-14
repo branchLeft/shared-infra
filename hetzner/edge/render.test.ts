@@ -2026,3 +2026,33 @@ describe('the break-glass token in the rendered Caddyfile', () => {
     expect(logLine, 'the log filter must accept either hex case').toContain(spelled);
   });
 });
+
+// Why: render.md, "Verified sessions". The behaviour is proved against a real
+// Caddy and a real CrowdSec by test_trusted_session_replay.py, which loads the
+// harness snapshot rendered here; these pin what the renderer is responsible for.
+describe('verified sessions', () => {
+  const verifiedGhost = (overrides: Partial<EdgeSite> = {}): EdgeSite =>
+    site({
+      name: 'tenant-one',
+      hostnames: ['tenant-one.test'],
+      backend: 'ghost',
+      injectionWafPreviewOnly: true,
+      trustedSession: 'ghost-staff',
+      ...overrides,
+    });
+  // The second tenant runs AppSec on every path, as a non-authoring site does.
+  const harnessSites = [
+    verifiedGhost(),
+    verifiedGhost({
+      name: 'tenant-two',
+      hostnames: ['tenant-two.test'],
+      injectionWafPreviewOnly: false,
+      privateUpstream: { host: 'app1', port: 2369 },
+    }),
+  ];
+  const rendered = renderCaddyfile(harnessSites, [], ENFORCING);
+
+  it('renders the configuration the live harness loads', async () => {
+    await expect(rendered).toMatchFileSnapshot('./validation/Caddyfile.trusted-session');
+  });
+});
