@@ -21,6 +21,7 @@ stops rather than go on without it.
 from __future__ import annotations
 
 import contextlib
+import ipaddress
 import os
 import shutil
 import subprocess
@@ -136,8 +137,31 @@ def default_uplink() -> str:
     return ""
 
 
+def parse_global_address(line: str) -> tuple[str, str] | None:
+    """One `ip -o addr` line as (interface, address), or None when it is not well formed.
+
+    A well-formed line reads `<index>: <interface> inet <address>/<length> ...`. Anything
+    else, a point-to-point line included, whose address does not sit in the fourth field,
+    is not one this program can place, so it is not parsed.
+    """
+    fields = line.split()
+    if len(fields) < 4 or fields[2] != "inet" or "/" not in fields[3]:
+        return None
+    try:
+        address = ipaddress.IPv4Interface(fields[3]).ip
+    except ValueError:
+        return None
+    return fields[1], str(address)
+
+
 def global_addresses() -> list[tuple[str, str]]:
-    """Each IPv4 address with global scope, as (interface, address).
+    """Each well-formed IPv4 address with global scope, as (interface, address).
+
+    A line that cannot be parsed is named on stderr and left out, so it is never read as
+    a public address and never counts toward a subnet. It does not stop the program:
+    nothing but this program's one run per boot installs the rules, so refusing over a
+    line that is not the uplink's would leave the estate's only gateway without NAT. The
+    refusals in main() still stop a host that the well-formed lines do not qualify.
 
     A command that cannot run yields no addresses, which the caller refuses.
     """
@@ -146,10 +170,16 @@ def global_addresses() -> list[tuple[str, str]]:
         return []
     found: list[tuple[str, str]] = []
     for line in result.stdout.splitlines():
-        fields = line.split()
-        ifname = fields[1] if len(fields) > 1 else ""
-        address = fields[3].split("/")[0] if len(fields) > 3 else ""
-        found.append((ifname, address))
+        if not line.strip():
+            continue
+        parsed = parse_global_address(line)
+        if parsed is None:
+            print(
+                f"branchleft-nat: ignoring an address line it cannot parse: {line}",
+                file=sys.stderr,
+            )
+            continue
+        found.append(parsed)
     return found
 
 
