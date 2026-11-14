@@ -1,0 +1,16 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+name: branchleft/ghost-admin-previews
+description: Ghost admin design and announcement previews on our Ghost hostnames
+pre_eval:
+  - filter: >-
+      IsOutBand == true &&
+      req.Host in ['blog.branchleft.co.uk'] &&
+      req.Method == 'POST' &&
+      req.URL.Path == '/' &&
+      req.ContentLength == 0 &&
+      req.Header.Get('Content-Type') == 'text/html;charset=utf-8' &&
+      req.Header.Get('X-Ghost-Preview') != ''
+    apply:
+      - RemoveOutBandRuleByID(920420)
+      - RemoveOutBandRuleByID(920180)

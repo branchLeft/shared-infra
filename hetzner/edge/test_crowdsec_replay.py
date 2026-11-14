@@ -451,15 +451,22 @@ class Stack:
             events = detail.get("events") if isinstance(detail, dict) else None
             rules = sorted(
                 {
-                    f"{meta.get('key')}={meta.get('value')}"
+                    f"{meta.get('key')}={str(meta.get('value'))[:160]}"
                     for event in events or []
                     for meta in event.get("meta") or []
-                    if meta.get("key")
-                    in ("rule_name", "message", "matched_zones", "uri", "http_path")
+                    if meta.get("key") not in ("source_ip", "target_fqdn", "service", "log_type")
                 }
             )
             described.append(f"{alert.get('scenario')}: {alert.get('message')} {rules}")
         return described
+
+    def every_alert(self) -> list[str]:
+        """One line per alert of any kind: scenario, source and message, for a failure's evidence."""
+        alerts = self.cscli_json("alerts", "list", "--limit", "0", "--all")
+        return [
+            f"{alert.get('scenario')} {(alert.get('source') or {}).get('value')} {alert.get('message')}"
+            for alert in (alerts if isinstance(alerts, list) else [])
+        ]
 
 
 @unittest.skipUnless(
@@ -525,7 +532,10 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
 
     def test_the_owners_previews_raise_no_waf_alert_at_all(self) -> None:
         case = CASES[0]
-        self.assertEqual(self.stack.alerts_for(case.ip), [], self._explain(case))
+        every = "\n  ".join(self.stack.every_alert())
+        self.assertEqual(
+            self.stack.alerts_for(case.ip), [], f"{self._explain(case)}\nevery alert:\n  {every}"
+        )
 
     def test_every_probe_is_still_banned(self) -> None:
         for case in CASES:

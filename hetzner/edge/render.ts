@@ -172,6 +172,29 @@ const APPSEC_CONFIG_INBAND = 'crowdsecurity/appsec-default';
 const APPSEC_CONFIG_OUT_OF_BAND = 'crowdsecurity/crs';
 
 /**
+ * Our own AppSec configuration: hooks only, no rules. It narrows two Core Rule
+ * Set rules on one Ghost admin request shape and nothing else. Named first in
+ * the acquisition, because CrowdSec merges the named configurations in order
+ * and the last one's options (`default_remediation`) win; the hub's stay last.
+ * Why, and what it narrows: `render.md`, "Ghost admin preview exclusion".
+ */
+const APPSEC_CONFIG_GHOST_ADMIN = 'branchleft/ghost-admin-previews';
+
+/**
+ * The Core Rule Set rules Ghost admin's design and announcement-bar previews
+ * trip, found by replaying the request in CI (`test_crowdsec_replay.py`):
+ * 920420 (request content type not allowed: `text/html`) and 920180 (a POST
+ * with no Content-Length, which is how the bouncer forwards a bodiless POST).
+ */
+const GHOST_PREVIEW_CRS_RULE_IDS = [920420, 920180] as const;
+
+/** Ghost's admin API prefix, as Caddy's access log writes the request URI. */
+const GHOST_ADMIN_API_PREFIX = '/ghost/api/admin/';
+
+/** The hub scenario that reads a 403 or 404 on any path containing `/admin` as a probe. */
+const ADMIN_PROBING_SCENARIO = 'crowdsecurity/http-admin-interface-probing';
+
+/**
  * A hostname is written straight into a Caddyfile site address, where a space
  * or a brace would start a new address or a new block. The registry is
  * reviewed, so this is not the control that stops a hostile entry — it is what
@@ -924,8 +947,8 @@ export function renderCaddyfile(
 export function renderAppsecAcquisition(posture: EdgePosture): string {
   const configs =
     posture.crowdsec !== 'detect-only'
-      ? [APPSEC_CONFIG_INBAND, APPSEC_CONFIG_OUT_OF_BAND]
-      : [APPSEC_CONFIG_OUT_OF_BAND];
+      ? [APPSEC_CONFIG_GHOST_ADMIN, APPSEC_CONFIG_INBAND, APPSEC_CONFIG_OUT_OF_BAND]
+      : [APPSEC_CONFIG_GHOST_ADMIN, APPSEC_CONFIG_OUT_OF_BAND];
 
   return `${[
     ...GENERATED_BANNER,
@@ -950,5 +973,81 @@ export function renderCaddyLogAcquisition(): string {
     `  - ${ACCESS_LOG}`,
     'labels:',
     '  type: caddy',
+  ].join('\n')}\n`;
+}
+
+/**
+ * The hostnames of every Ghost tenant, for the two CrowdSec files below. Each
+ * is checked against `HOSTNAME`, which admits no quote, so it can be written
+ * into an expression as a quoted literal.
+ */
+function ghostHostnames(entries: EdgeSite[]): string[] {
+  const hostnames = entries
+    .filter((site) => site.backend === 'ghost')
+    .flatMap((site) => site.hostnames);
+  for (const host of hostnames) {
+    if (!HOSTNAME.test(host)) {
+      throw new Error(`Ghost hostname ${host} is not a plain lower-case hostname`);
+    }
+  }
+  return hostnames;
+}
+
+const quotedList = (values: readonly string[]): string =>
+  `[${values.map((value) => `'${value}'`).join(', ')}]`;
+
+/**
+ * The AppSec configuration that lets Ghost admin's previews through the Core
+ * Rule Set without a ban (`APPSEC_CONFIG_GHOST_ADMIN`). Every condition narrows:
+ * out-of-band only, a Ghost hostname, a bodiless POST to the site root with
+ * exactly the preview's content type and the preview header. Any other request,
+ * including the same one with a body, is evaluated by every rule. Why:
+ * `render.md`, "Ghost admin preview exclusion".
+ */
+export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
+  const hosts = ghostHostnames(entries);
+  return `${[
+    ...GENERATED_BANNER,
+    `name: ${APPSEC_CONFIG_GHOST_ADMIN}`,
+    'description: Ghost admin design and announcement previews on our Ghost hostnames',
+    'pre_eval:',
+    '  - filter: >-',
+    '      IsOutBand == true &&',
+    `      req.Host in ${quotedList(hosts)} &&`,
+    "      req.Method == 'POST' &&",
+    "      req.URL.Path == '/' &&",
+    '      req.ContentLength == 0 &&',
+    "      req.Header.Get('Content-Type') == 'text/html;charset=utf-8' &&",
+    "      req.Header.Get('X-Ghost-Preview') != ''",
+    '    apply:',
+    ...GHOST_PREVIEW_CRS_RULE_IDS.map((id) => `      - RemoveOutBandRuleByID(${id})`),
+  ].join('\n')}\n`;
+}
+
+/**
+ * The post-overflow whitelist that stops `ADMIN_PROBING_SCENARIO` banning for
+ * Ghost's own admin API on our Ghost hostnames. It drops an overflow of that
+ * one scenario only when every event in it is a request to the admin API
+ * prefix on a Ghost hostname, with no dot segment, encoded or not. Why, and
+ * the limit it carries: `render.md`, "Ghost admin API and admin-interface
+ * probing".
+ */
+export function renderGhostAdminPostoverflow(entries: EdgeSite[]): string {
+  const hosts = ghostHostnames(entries);
+  return `${[
+    ...GENERATED_BANNER,
+    'name: branchleft/ghost-admin-api-is-not-admin-probing',
+    'description: Ghost admin API answers on our Ghost hostnames are not admin-interface probing',
+    'whitelist:',
+    '  reason: Ghost admin API on a Ghost hostname',
+    '  expression:',
+    '    - >-',
+    `      evt.Overflow.Alert.GetScenario() == '${ADMIN_PROBING_SCENARIO}' &&`,
+    '      len(evt.Overflow.Alert.Events) > 0 &&',
+    '      all(evt.Overflow.Alert.Events, {',
+    `        .GetMeta('target_fqdn') in ${quotedList(hosts)} &&`,
+    `        .GetMeta('http_path') startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
+    "        not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')",
+    '      })',
   ].join('\n')}\n`;
 }

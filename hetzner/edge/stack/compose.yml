@@ -120,6 +120,15 @@ services:
       # populates /etc/crowdsec when config.yaml is absent, so supplying that
       # file directly would leave the rest of the directory unwritten.
       - ./crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro
+      # Two rendered files that narrow what bans the owner for using our own
+      # Ghost admin (hetzner/edge/render.md, "Ghost admin preview exclusion" and
+      # "Ghost admin API and admin-interface probing"). Each is mounted where the
+      # hub keeps items of its kind, so CrowdSec loads it as a local item beside
+      # the hub's; a directory mount there would hide the hub's own. The
+      # appsec-config is named in acquis.d/appsec.yaml; the postoverflow loads
+      # because it is in its stage directory.
+      - ./crowdsec/ghost-admin-previews.yaml:/etc/crowdsec/appsec-configs/branchleft-ghost-admin-previews.yaml:ro
+      - ./crowdsec/ghost-admin-api-postoverflow.yaml:/etc/crowdsec/postoverflows/s01-whitelist/branchleft-ghost-admin-api.yaml:ro
       - crowdsec-data:/var/lib/crowdsec/data
       - caddy-logs:/var/log/caddy:ro
     # Without one, `--wait` waits only for *running*, which a crash-looping
