@@ -1,0 +1,15 @@
+---
+# The state every case below starts from: the role applied to a host of class app with
+# the standard variant, and the host read back as the role leaves it. Phase i of the
+# default scenario and the verify play of each scenario that runs a share of the cases
+# (retry, sudoers, chains_parents) start here, so the start has this one home.
+- name: Apply the role to a host of class app, standard variant
+  ansible.builtin.include_tasks: run_role.yml
+  vars:
+    run_class: app
+    run_variant: standard
+
+- name: Assert the host is as the role leaves it
+  ansible.builtin.include_tasks: assert_applied.yml
+  vars:
+    chain_variant: standard
