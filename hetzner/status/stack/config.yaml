@@ -86,6 +86,14 @@ endpoints:
       timeout: 10s
     conditions:
       - '[STATUS] < 300'
+  - name: status.branchleft.co.uk
+    group: sites
+    url: https://status.branchleft.co.uk
+    interval: 60s
+    client:
+      timeout: 10s
+    conditions:
+      - '[STATUS] < 300'
   - name: TEST
     group: TEST
     url: http://status-test-target:8080/health

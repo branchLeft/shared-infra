@@ -131,6 +131,24 @@ describe('the compose file of the role', () => {
   });
 });
 
+describe('the role binds the private address edge1 proxies to', () => {
+  const ROLE = path.join(__dirname, '..', '..', 'ansible', 'roles', 'status_page');
+  const defaults = readFileSync(path.join(ROLE, 'defaults', 'main.yml'), 'utf8');
+  const vars = readFileSync(path.join(ROLE, 'vars', 'main.yml'), 'utf8');
+
+  it('defaults the listen address to ops1 private address, which the registry upstream targets', () => {
+    expect(defaults).toMatch(/^status_page_listen_address: 10\.20\.1\.50$/m);
+    const upstream = sites.find((site) => site.name === 'status')?.privateUpstream;
+    expect(upstream).toEqual({ host: 'ops1', port: 8303 });
+  });
+
+  it('allows exactly loopback and that private address, never a public one', () => {
+    expect(vars).toContain(
+      'status_page_allowed_listen_addresses:\n  - 127.0.0.1\n  - 10.20.1.50\n'
+    );
+  });
+});
+
 describe('committed output', () => {
   const prettierOptions = async (file: string) => ({
     ...(await prettier.resolveConfig(path.join(__dirname, file))),

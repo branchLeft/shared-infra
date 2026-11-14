@@ -2,8 +2,10 @@
 
 This role delivers the status page of the estate: a Gatus container that probes every
 hostname in the site registry once a minute and shows the result, with a history that
-survives a restart. The page is served on loopback only. It is reached through an SSH
-tunnel; a public route is not this role's work.
+survives a restart. The page is published on one of two addresses: ops1's private address,
+which the edge proxies to over the private network (the default), or loopback, reached
+through an SSH tunnel. No public address is allowed, and the public route is the edge's work,
+not this role's.
 
 ## What it does, and what it does not
 
@@ -24,7 +26,7 @@ open and close from probe state alone, which is the rule in
 result, so no alert threshold is set.
 
 It does not install Docker or the Compose plugin, publish the page on any address but
-loopback, route a public hostname to it, send an alert, hold a secret, or remove a
+a public address, route a public hostname to it, send an alert, hold a secret, or remove a
 volume. It runs no `down`, removes no orphan container and renews no anonymous volume. The
 existing Prometheus and Alertmanager path stays the pager.
 
@@ -33,10 +35,11 @@ existing Prometheus and Alertmanager path stays the pager.
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the variables and
 [`defaults/main.yml`](defaults/main.yml) holds their defaults. There are two, and no secret:
 
-- `status_page_listen_address`: `127.0.0.1` is the only value the specification allows. The
-  role asserts it again, and also reads the Compose file as rendered and refuses any
-  published port that does not start with `127.0.0.1:`, so the check holds if the
-  specification is ever switched off.
+- `status_page_listen_address`: `10.20.1.50`, ops1's private address (the default, so edge1 can
+  reach the page), or `127.0.0.1` for a tunnel only. Any other value is refused by the specification.
+  The Molecule scenario sets loopback, because its container holds no ops1 address. The role asserts it again against `status_page_allowed_listen_addresses`
+  in `vars/main.yml`, and reads the Compose file as rendered and refuses any published port that
+  does not start with the listen address, so the check holds if the specification is ever switched off.
 - `status_page_wait_timeout`: seconds the stack may take to become healthy, used for the
   Compose wait and for the health check.
 
@@ -121,10 +124,30 @@ The renderer has its own test, run from `hetzner/` with `npm test`.
 ## How it is delivered
 
 The role is listed in the playbook of the control-plane host, after the roles that bring
-that host under the gated pull, and in `ansible/checks/host_roles.yml`. A merge to `main`
+that host under the gated pull and after `control_plane`, and in `ansible/checks/host_roles.yml`.
+The order is the control: the page is published on the private address, and the DOCKER-USER
+drop that confines that port to the gateway is installed by the last tasks of `control_plane`,
+so a run that stops in `control_plane` never reaches the bind. `tests/unit/test_status_page_order.py`
+fails if the page is moved before it.
+
+The order alone is not enough, because `control_plane` restarts the firewall policy only when the
+policy script or its unit changed. After a restart that failed, the next run sees no change, passes
+`control_plane`, and would bind with the drop not loaded. So, when the listen address is the private
+one, the role first reads the live chain with `iptables -w 10 -t filter -C DOCKER-USER` for the exact
+rule the host's isolation policy inserts for the page's port (TCP, conntrack original destination, every source
+but the gateway dropped) and stops the play, before it writes anything, if the rule is absent. The
+read changes nothing and reports no change. In a plan the refusal cannot fire (the first plan runs
+before `control_plane` has loaded the rule), so a plan prints that the apply would refuse instead
+(ANS-10). Loopback needs no drop and skips the check. To see it red, remove the refusal task:
+`tests/unit/test_status_page_drop_guard.py` fails, and it also fails if the rule the role looks for
+changes: the test pins it as a literal. The policy that loads the rule is owned elsewhere: the
+current bash installer does not carry the page's port, and the program that replaces it must insert
+exactly the pinned rule. Until it does, the guard stops a private bind on ops1 and the route is
+unreachable; that is the guard working, not a fault. A merge to `main`
 queues the gated apply, which waits for the owner's approval. After the apply, the page is
-reached through an SSH tunnel to the loopback port, and the TEST target is stopped and
-started once to see an incident open and resolve.
+reached at its public hostname through edge1 (the private bind on ops1 is what edge1 uses),
+and still through an SSH tunnel to the loopback port. The TEST target is stopped and started
+once to see an incident open and resolve.
 
 ## How to change it safely
 
@@ -133,7 +156,7 @@ started once to see an incident open and resolve.
 - A new Gatus version is a new digest in `vars/main.yml`. Read the release notes for the
   configuration keys first, and read the first apply's result: Gatus rejecting the
   configuration shows up there and nowhere earlier.
-- Do not add a published port, a bind other than loopback, a volume that is a host path,
+- Do not add a published port, a bind other than the two allowed addresses, a volume that is a host path,
   or an alerting block without changing the argument specification, the assert and the
   scenario together.
 - Publishing the page on a public hostname is a separate change: it needs a registry entry,

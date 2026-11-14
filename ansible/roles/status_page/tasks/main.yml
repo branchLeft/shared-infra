@@ -13,27 +13,97 @@
 # This role is a copy of the compose_stack pattern's recipe (ANS-12: a role does not
 # apply another role), with the status page's own names, its own template and its
 # two configuration files. The first refusal of an address that would expose ops1.
-# The argument specification has already refused any value but 127.0.0.1; this holds
-# if that validation is ever switched off, and it also reads the compose file as
-# rendered, so a published port that does not start with the loopback address is
-# refused whatever put it there. It runs before anything is written to the host.
-- name: Refuse a published port that is not on loopback
+# The argument specification has already refused any value but the two allowed ones;
+# this holds if that validation is ever switched off, and it also reads the compose
+# file as rendered, so a published port that does not start with the listen address
+# is refused whatever put it there. It runs before anything is written to the host.
+- name: Refuse a published port that is not on an allowed listen address
   ansible.builtin.assert:
     that:
-      - status_page_listen_address == '127.0.0.1'
+      - status_page_listen_address in status_page_allowed_listen_addresses
       - status_page_rendered.services is ansible.builtin.mapping
-      - status_page_published | ansible.builtin.reject('ansible.builtin.match', '^127\.0\.0\.1:') | ansible.builtin.list | ansible.builtin.length == 0
+      - >-
+        status_page_published
+        | ansible.builtin.reject('ansible.builtin.match', '^' ~ (status_page_listen_address | ansible.builtin.regex_escape) ~ ':')
+        | ansible.builtin.list | ansible.builtin.length == 0
       - status_page_published | ansible.builtin.length == 1
     quiet: true
     fail_msg: >-
-      The status page is published on loopback only. Its listen address must be
-      127.0.0.1 and the only published port of the compose file must start with
-      that address; found {{ status_page_listen_address }} and {{ status_page_published }}.
+      The status page is published on an address the role allows only. Its listen address
+      must be one of {{ status_page_allowed_listen_addresses }} and the only published port
+      of the compose file must start with that address; found {{ status_page_listen_address }}
+      and {{ status_page_published }}.
   vars:
     status_page_rendered: '{{ status_page_compose_text | ansible.builtin.from_yaml }}'
     status_page_published: >-
       {{ status_page_rendered.services.values() | ansible.builtin.map(attribute='ports', default=[])
       | ansible.builtin.flatten | ansible.builtin.list }}
+
+# The private address is reachable from every host on the private network until the
+# DOCKER-USER chain carries the drop for the page's port. The playbook runs this role
+# after control_plane, which installs that drop, but control_plane restarts the policy
+# only when its files changed, so a run that follows a failed restart finds nothing to
+# do and arrives here with the drop not loaded. The live chain is therefore read for the
+# exact rule the policy script inserts, and the play stops before anything is written
+# when it is absent. The read changes nothing (-C), so it also runs in a plan. Loopback
+# needs no drop.
+- name: Read the live DOCKER-USER chain for the rule that confines the page's port
+  ansible.builtin.command:
+    argv:
+      - '{{ status_page_iptables }}'
+      - -w
+      - '{{ status_page_firewall_wait }}'
+      - -t
+      - filter
+      - -C
+      - DOCKER-USER
+      - -p
+      - tcp
+      - -m
+      - conntrack
+      - --ctorigdst
+      - '{{ status_page_listen_address }}'
+      - --ctorigdstport
+      - '{{ status_page_port }}'
+      - '!'
+      - -s
+      - '{{ status_page_gateway_address }}'
+      - -j
+      - DROP
+  register: status_page_drop
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: status_page_listen_address != '127.0.0.1'
+
+# Skipped in a plan, and the next task reports instead (ANS-10): the first plan after
+# this change runs before control_plane has loaded the rule, and must not fail.
+- name: Refuse to bind the private address while its DOCKER-USER drop is not loaded
+  ansible.builtin.assert:
+    that:
+      - status_page_drop.rc | ansible.builtin.default(-1) == 0
+    quiet: true
+    fail_msg: >-
+      The status page was not bound on {{ status_page_listen_address }}:{{ status_page_port }}
+      because the DOCKER-USER chain does not carry the rule that drops every source but
+      {{ status_page_gateway_address }} on that port (iptables -C exit status
+      {{ status_page_drop.rc | ansible.builtin.default('none') }}). Nothing was written. Load the
+      isolation policy (restart branchleft-docker-user-policy.service) and run again, or set
+      status_page_listen_address to 127.0.0.1.
+  when:
+    - status_page_listen_address != '127.0.0.1'
+    - not ansible_check_mode
+
+- name: Report in a plan that the private bind would be refused
+  ansible.builtin.debug:
+    msg: >-
+      The DOCKER-USER rule that drops every source but {{ status_page_gateway_address }} on
+      {{ status_page_listen_address }}:{{ status_page_port }} is not loaded on this host now. An
+      apply refuses to bind the page unless control_plane has loaded it earlier in the same run.
+  when:
+    - status_page_listen_address != '127.0.0.1'
+    - ansible_check_mode
+    - status_page_drop.rc | ansible.builtin.default(-1) != 0
 
 - name: Refuse a compose file whose images are not all pinned by digest
   ansible.builtin.assert:

@@ -72,11 +72,13 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # export_bundler (last of all), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
-# (first), control_plane after the status page, then nextcloud_stack, backup_worker and
+# (first), control_plane, then the status page (it binds the private address, so it follows the
+# role that installs the drop for its port), then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it
 # only reads), and ring_controller_host last of all so its failure holds nothing else back, and
-# demo1's two build roles.
+# demo1's two build roles. ops1 and db1 also apply deploy_tooling (class internal) straight after
+# deploy_verifier, before the roles that run the deploy wrapper.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -99,9 +101,10 @@ APPLIED_ON_MAIN = {
         "breakglass_mint_host",
         "safety_service",
         "safety_channel_key",
-        "status_page",
         "deploy_verifier",
+        "deploy_tooling",
         "control_plane",
+        "status_page",
         "nextcloud_stack",
         "backup_worker",
         "backup_restore",
@@ -126,6 +129,7 @@ APPLIED_ON_MAIN = {
         "host_inputs",
         "host_baseline",
         "deploy_verifier",
+        "deploy_tooling",
         "db1_stack",
         "db1_backup_timers",
         "node_exporter",
@@ -137,6 +141,8 @@ APPLIED_ON_MAIN = {
 PINNED_PLAY_VARS = {
     "edge1": "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n",
     "app1": "    deploy_tooling_host_class: app\n    deploy_tooling_policy_variant: standard\n",
+    "ops1": "    deploy_tooling_host_class: internal\n",
+    "db1": "    deploy_tooling_host_class: internal\n",
 }
 
 
@@ -329,6 +335,7 @@ class HostRoleLists(unittest.TestCase):
                 "host_inputs",
                 "host_baseline",
                 "deploy_verifier",
+                "deploy_tooling",
                 "db1_stack",
                 "db1_backup_timers",
                 "node_exporter",
@@ -379,13 +386,13 @@ class HostRoleLists(unittest.TestCase):
         self.assertLess(names.index("egress_nat"), names.index("edge_stack"))
         self.assertEqual(check(ROOT), [])
 
-    # ops1 applies the loader first (R11), the roles it had before (control_plane keeps its place
-    # after the status page, #530), then the roles that take the loader's inputs or adopt a hand
-    # copy, last, so their failure holds nothing else back. The restore reads the worker's
-    # variables in the same play, so it follows the worker. The database role is last: it
-    # asserts the directory control_plane makes and holds nothing else back. Red when any role
-    # moves or is dropped, green with the twelve named in this order. The node exporter is last, so
-    # its disk check cannot hold any other role back.
+    # ops1 applies the loader first (R11), the roles it had before (the status page follows
+    # control_plane, which installs the drop for its port), then the roles that take the loader's
+    # inputs or adopt a hand copy, last, so their failure holds nothing else back. The restore
+    # reads the worker's variables in the same play, so it follows the worker. The database role
+    # is last: it asserts the directory control_plane makes and holds nothing else back. Red when
+    # any role moves or is dropped, green with the twelve named in this order. The node exporter
+    # is last, so its disk check cannot hold any other role back.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,
     ) -> None:
@@ -401,9 +408,10 @@ class HostRoleLists(unittest.TestCase):
                 "breakglass_mint_host",
                 "safety_service",
                 "safety_channel_key",
-                "status_page",
                 "deploy_verifier",
+                "deploy_tooling",
                 "control_plane",
+                "status_page",
                 "nextcloud_stack",
                 "backup_worker",
                 "backup_restore",
@@ -707,7 +715,7 @@ class HostRoleLists(unittest.TestCase):
         cases = (
             ("edge1", "db1_stack"),
             ("edge1", "tunnel_account"),
-            ("ops1", "deploy_tooling"),
+            ("ops1", "deploy_slot_keys"),
             ("ops1", "monitoring_stack"),
             ("app1", "breakglass_mint_host"),
             ("app1", "control_plane"),
