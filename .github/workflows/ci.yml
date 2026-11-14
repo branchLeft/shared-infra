@@ -163,6 +163,10 @@ jobs:
         if: steps.skip.outputs.run != 'false'
         run: python3 scripts/trace_reads.py --unit mail-provision-checks -- -m unittest discover -s mail/provision -p 'test_*.py' -v
 
+      - name: Python unit tests (mail/mta-sts)
+        if: steps.skip.outputs.run != 'false'
+        run: python3 -m unittest discover -s mail/mta-sts -p 'test_*.py' -v
+
   shim-image-starts:
     name: Shim image starts (mail/provision)
     runs-on: ubuntu-latest

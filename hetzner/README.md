@@ -421,7 +421,8 @@ Hetzner console and rescue system, not a password.
 
 ## Deploys
 
-A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`) is
+A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/portal-apps`,
+`ghcr.io/branchleft/percona-server`) is
 verified before the wrapper pins it. The verifier runs with no GitHub credential, and the design is
 fail-closed: a host with no credential refuses every registered deploy. The verifier and its pinned
 gh come from the `deploy_verifier` role, applied on `edge1`, `app1`, `ops1` and `db1`. See

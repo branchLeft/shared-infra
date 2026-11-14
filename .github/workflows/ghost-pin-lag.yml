@@ -1,0 +1,52 @@
+name: ghost-pin-lag
+
+# Goes red when a host role's pinned ghost-platform files differ from ghost-platform main.
+# A role here fetches programs from ghost-platform at one pinned commit, so a fix merged
+# there reaches a host only when the pin is bumped. This run is the report that a bump
+# is waiting. The rules and the registry are in scripts/check_ghost_pin_lag.md.
+#
+# Scheduled, not a pull-request gate: the trigger is a merge in another repository, which
+# no pull request here can depend on, and a gate here must never wait on GitHub's raw file
+# service. By exit status of the script:
+#   0  every pinned file is the same at main: green;
+#   1  a pinned file differs from main, or is gone from it: red, with the files named in the
+#      step summary, and GitHub emails the account that owns the schedule;
+#   2  the check could not read a pin or a file: red, and the log says so.
+# It is not a required check and cannot block a merge. It reads public files and writes
+# nothing, to no repository and no host.
+
+on:
+  schedule:
+    # Daily, off the top of the hour where GitHub's own scheduling guidance says queued
+    # jobs are most congested, and after the hub-pin check at 06:17.
+    - cron: '41 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  check-ghost-pin-lag:
+    name: Compare each pinned ghost-platform file with main
+    runs-on: ubuntu-latest
+    # No run yet to observe: about 80 small file reads, which is seconds. The limit stops a
+    # hung connection from holding a runner.
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      # The YAML parser that reads each role's variables file, installed into the managed
+      # Python above and pinned as ci.yml pins it.
+      - name: Install the YAML parser
+        run: python3 -m pip install --quiet pyyaml==6.0.3
+
+      - name: Compare the pinned files with main
+        run: python3 scripts/check_ghost_pin_lag.py --summary "$GITHUB_STEP_SUMMARY"

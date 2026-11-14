@@ -1,6 +1,6 @@
 """Read the container test results of an Ansible workflow run from the Actions API.
 
-Three programs share this: the report job (the step summary of every run), the daily issue
+Three programs share this: the report job (the step summary of every run), the daily summary
 job and advisory_passes.py. All of them only read; the token comes from the environment.
 A shard's job is named ``Harness: <shard id>`` when the required check waits for it and
 ``Advisory harness: <shard id>`` when it does not, so a result carries its kind with it.

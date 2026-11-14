@@ -82,6 +82,9 @@ mail_reconcilers_not_installed:
   # (read_sending_state.md); never placed on a host.
   run_by_hand:
     - read_sending_state.py
+  # Run by the operator from their own checkout against a saved message; never placed on a host.
+  operator_local:
+    - check_dkim_signature_scope.py
   other_roles:
     - 00-harden-ssh.sh
     - 10-harden-updates-fail2ban.sh
