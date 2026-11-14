@@ -300,6 +300,7 @@ SCANNED_SUFFIXES = frozenset(
         ".md",
         ".mjs",
         ".mode",
+        ".netdev",
         ".py",
         ".service",
         ".sh",
