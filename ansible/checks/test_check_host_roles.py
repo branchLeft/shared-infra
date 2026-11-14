@@ -70,19 +70,17 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's tenant_onboarding, and app1's
-# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else
-# back), db1's
-# host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
-# db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
+# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back),
+# db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
+# first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane, then the status page (it binds the private address, so it follows the
 # role that installs the drop for its port), then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
-# (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it
-# only reads), mail_collector, then spool_paths (it reads the descriptors mail_collector writes,
-# so it follows), and ring_controller_host last of all so its failure holds nothing else back,
-# and demo1's two build roles and the spool_path_account role after them. ops1 and db1 also apply
-# deploy_tooling (class internal) straight after deploy_verifier, before the roles that run the
-# deploy wrapper.
+# (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
+# reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host
+# last of all so its failure holds nothing else back, and demo1's two build roles and
+# spool_path_account after them. ops1 and db1 also apply deploy_tooling (class internal) straight
+# after deploy_verifier, before the roles that run the deploy wrapper.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
