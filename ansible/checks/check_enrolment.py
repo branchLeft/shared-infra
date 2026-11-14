@@ -167,6 +167,7 @@ HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
     "edget": {"egress_nat_gateway_enabled": True},
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
     "dbt1": {"deploy_tooling_host_class": "internal"},
+    "appt1": {"deploy_tooling_host_class": "internal"},
     # mx1's jail has no ignoreip line (the opt-out of host_baseline). The pin is here, and the
     # playbook must carry the same value (R2 holds it exactly).
     "mx1": {"host_baseline_fail2ban_ignoreip_none": True},

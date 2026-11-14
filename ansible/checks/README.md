@@ -99,7 +99,8 @@ gated here. A playbook is a place a literal can hide as well as a role.
 dbt1 (db-t1) has a `HOST_PLAY_VARS` row, `deploy_tooling_host_class: internal`, and no gateway
 switch. It lists `egress_nat` bare, as a non-gateway, and its play sets no switch:
 `test_egress_nat_single_gateway.py` pins the switch to edge1 and edget alone, and requires any
-non-gateway that applies the role to apply it bare.
+non-gateway that applies the role to apply it bare. appt1 (app-t1) is the same: the same
+`HOST_PLAY_VARS` row and the same bare `egress_nat`.
 
 Limits of the loader rule. It reads literal mapping keys. It names the loaders listed in
 `ROLE_LOADERS`, `TASK_FILE_LOADERS` and `INCLUDE_VARS`, in their bare, `ansible.builtin.`
