@@ -1,5 +1,5 @@
 ---
-# Offline attestation verification, for a host with no outbound access (branchLeft/workspace#3133).
+# Offline attestation verification, for a host with no outbound access.
 # Imported only when deploy_verifier_offline is true, so a host that reads attestations from the
 # registry is not touched by this file.
 #

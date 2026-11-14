@@ -320,7 +320,7 @@ until the first check.
 ### Offline attestation verification
 
 A host with no outbound access cannot read an attestation from the registry or fetch the Sigstore
-trust root, so `--bundle-from-oci` cannot work there (branchLeft/workspace#3133). On such a host the
+trust root, so `--bundle-from-oci` cannot work there. On such a host the
 bundle travels with the delivery and nothing is fetched.
 
 **The mode is the host's, not the caller's.** `verify_attestation` verifies offline when

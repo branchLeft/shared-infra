@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline attestation verification in branchleft_deploy (branchLeft/workspace#3133).
+"""Offline attestation verification in branchleft_deploy.
 
 A host with no outbound access cannot read an attestation from the registry. On such a host
 the image's attestation bundle and manifest travel with the delivery, are staged under
