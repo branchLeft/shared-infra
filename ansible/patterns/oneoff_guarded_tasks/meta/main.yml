@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Runs a one-off step on a host only when its tag and its confirmation are both given, and records that it ran.
   license: LICENSE_ID
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

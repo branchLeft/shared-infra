@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers the control-plane Compose stack, brings it up in the runbook's order and installs the app-host DOCKER-USER isolation policy.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

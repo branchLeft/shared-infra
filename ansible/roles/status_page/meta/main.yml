@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers the Gatus status page's Compose stack to a host and brings it up on loopback.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

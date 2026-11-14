@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Installs the pinned ansible-core from the hash-locked requirements into a root-owned virtual environment.
   license: LICENSE_ID
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

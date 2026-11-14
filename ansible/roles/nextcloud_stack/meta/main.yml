@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers, enables and starts the nextcloud1 Compose stack on a host.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

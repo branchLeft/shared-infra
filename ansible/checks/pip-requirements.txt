@@ -2,6 +2,6 @@
 # refuses any other pip version. CI installs this file with --require-hashes before
 # ansible/requirements.txt. Dependabot's pip entry for /ansible/checks watches it, and
 # check_pins.py refuses a file that is not one pip==X.Y.Z line with one sha256.
-# Source of the hash (the wheel's): https://pypi.org/pypi/pip/26.2.2/json
-pip==26.2.2 \
-    --hash=sha256:fd7f4dfa8190e014013b9f08f3e973f4e4c26ffd179a204895533a7254813a70
+# Source of the hash (the wheel's): https://pypi.org/pypi/pip/26.3/json
+pip==26.3 \
+    --hash=sha256:f3b60b20ffaadd4415ed7957212a38ac63fa4c5fa375bd0f4a797777940fad13

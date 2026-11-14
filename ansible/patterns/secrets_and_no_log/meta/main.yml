@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers secrets to a host as root-only files and an optional environment file, with none of their values in a log.
   license: LICENSE_ID
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

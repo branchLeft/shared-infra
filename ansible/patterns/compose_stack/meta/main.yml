@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers a compose file, its configuration and secret files, brings the stack up when they change, and checks it is healthy.
   license: LICENSE_ID
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

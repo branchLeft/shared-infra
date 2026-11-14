@@ -946,8 +946,8 @@ class Sabotage(unittest.TestCase):
     def test_r6_role_dependency_names_molecule(self) -> None:
         self._edit(
             "roles/pull_trigger/meta/main.yml",
-            "  min_ansible_version: '2.21.5'\n",
-            "  min_ansible_version: '2.21.5'\ndependencies:\n  - molecule/default\n",
+            "  min_ansible_version: '2.21.6'\n",
+            "  min_ansible_version: '2.21.6'\ndependencies:\n  - molecule/default\n",
         )
         self._assert_rule("R6 ansible/roles/pull_trigger/meta/main.yml")
 
@@ -963,8 +963,8 @@ class Sabotage(unittest.TestCase):
     def test_r6_meta_main_beside_argument_specs_is_read(self) -> None:
         self._edit(
             "roles/pull_trigger/meta/main.yml",
-            "  min_ansible_version: '2.21.5'\n",
-            "  min_ansible_version: '2.21.5'\npull_trigger_signers: []\n",
+            "  min_ansible_version: '2.21.6'\n",
+            "  min_ansible_version: '2.21.6'\npull_trigger_signers: []\n",
         )
         self._assert_rule("R6 ansible/roles/pull_trigger/meta/main.yml")
 
