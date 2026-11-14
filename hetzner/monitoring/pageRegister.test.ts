@@ -9,6 +9,7 @@ import {
   NTFY_PAGER_TOKEN_PLACEHOLDER,
   PAGE_REGISTER,
   PAGE_RECEIVER_NAME,
+  findLiveEntriesWithoutPageRule,
   findUnregisteredPageSeverityAlerts,
   pageAlertNames,
   renderPageReceiverBlock,
@@ -413,5 +414,108 @@ describe('findUnregisteredPageSeverityAlerts', () => {
     // is a true negative against production, not an assertion that the
     // checker was never run for real.
     expect(findUnregisteredPageSeverityAlerts(renderAlertRules(), PAGE_REGISTER)).toEqual([]);
+  });
+});
+
+/**
+ * The opposite direction to the block above: a live Alertmanager entry whose
+ * alertname no `severity: page` rule raises would register a route for a page
+ * that never fires. Each live entry must carry such a rule in the rendered
+ * rules, or a named exemption saying who raises it instead.
+ */
+describe('findLiveEntriesWithoutPageRule', () => {
+  const rulesRaising = (alertName: string) =>
+    [
+      'groups:',
+      '  - name: g',
+      '    rules:',
+      `      - alert: ${alertName}`,
+      '        expr: vector(1)',
+      '        labels:',
+      '          severity: page',
+      '',
+    ].join('\n');
+  const live = (overrides: Partial<PageRegisterEntry> = {}): PageRegisterEntry => ({
+    id: 'fixture-only',
+    name: 'fixture only',
+    reason: 'exists only to prove the rule check',
+    alertName: 'FixtureOnlyPageAlert',
+    deliveryPath: 'alertmanager',
+    dormant: false,
+    tenantScoped: true,
+    ...overrides,
+  });
+
+  it('refuses a live Alertmanager entry no severity: page rule raises and that names no exemption', () => {
+    expect(findLiveEntriesWithoutPageRule(rulesRaising('SomethingElse'), [live()])).toEqual([
+      'FixtureOnlyPageAlert',
+    ]);
+  });
+
+  it('accepts a live entry whose alertname a severity: page rule raises', () => {
+    expect(findLiveEntriesWithoutPageRule(rulesRaising('FixtureOnlyPageAlert'), [live()])).toEqual(
+      []
+    );
+  });
+
+  it('does not accept a rule at another severity as the page rule', () => {
+    const warning = rulesRaising('FixtureOnlyPageAlert').replace(
+      'severity: page',
+      'severity: warning'
+    );
+    expect(findLiveEntriesWithoutPageRule(warning, [live()])).toEqual(['FixtureOnlyPageAlert']);
+  });
+
+  it('accepts a live entry with a named exemption and no rule', () => {
+    const exempt = live({ ruleExemption: 'Raised by an external sender, not a Prometheus rule.' });
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', [exempt])).toEqual([]);
+  });
+
+  it('does not accept a blank exemption as a reason', () => {
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', [live({ ruleExemption: '  ' })])).toEqual(
+      ['FixtureOnlyPageAlert']
+    );
+  });
+
+  it('leaves a dormant entry and a Healthchecks-delivered entry alone', () => {
+    const register = [
+      live({ id: 'a', alertName: 'DormantOne', dormant: true }),
+      live({ id: 'b', alertName: null, deliveryPath: 'healthchecks' }),
+    ];
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', register)).toEqual([]);
+  });
+
+  it('reports every offender, in register order', () => {
+    const register = [
+      live({ id: 'a', alertName: 'First' }),
+      live({ id: 'b', alertName: 'Second', ruleExemption: 'Raised elsewhere.' }),
+      live({ id: 'c', alertName: 'Third' }),
+    ];
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', register)).toEqual(['First', 'Third']);
+  });
+
+  it('goes red when the dormant reaper entry is flipped live with no rule and no exemption', () => {
+    // The sabotage the register's own text asks for: `dormant: false` in the
+    // same change that adds no rule.
+    const flipped = PAGE_REGISTER.map((entry) =>
+      entry.id === 'stopped-demo-reaper' ? { ...entry, dormant: false } : entry
+    );
+    expect(findLiveEntriesWithoutPageRule(renderAlertRules(), flipped)).toEqual([
+      'StoppedDemoReaper',
+    ]);
+  });
+
+  it('holds for the register as it stands, against the actual rendered alert rules', () => {
+    expect(findLiveEntriesWithoutPageRule(renderAlertRules(), PAGE_REGISTER)).toEqual([]);
+  });
+
+  it('gives each of the three live Alertmanager entries a named exemption today, since no rule raises them', () => {
+    const exempt = PAGE_REGISTER.filter((entry) => entry.ruleExemption !== undefined).map(
+      (entry) => entry.alertName
+    );
+    expect(exempt).toEqual(['TierTwoSafetyMatch', 'TenantFailedUnsafe', 'ReadersCannotRead']);
+    for (const entry of PAGE_REGISTER) {
+      expect(entry.ruleExemption ?? 'none').not.toMatch(/#\d|workspace/i);
+    }
   });
 });
