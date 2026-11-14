@@ -379,7 +379,7 @@ class PublishEdgeCaddyPinTests(unittest.TestCase):
 
 TRIGGER_HEAD = "on:\n  workflow_dispatch:\n    inputs:"
 CHECKOUT_PIN = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
-LOGIN_PIN = "docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6"
+LOGIN_PIN = "docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550"
 
 # name -> (text to replace, replacement, a fragment the reported problems must contain)
 MUTATIONS = {
@@ -409,10 +409,10 @@ MUTATIONS = {
         "job permissions",
     ),
     "c-checkout-pinned-by-tag": (CHECKOUT_PIN, "actions/checkout@v7", "not pinned"),
-    "c-login-pinned-by-short-sha": (LOGIN_PIN, "docker/login-action@81c6f93", "not pinned"),
+    "c-login-pinned-by-short-sha": (LOGIN_PIN, "docker/login-action@8aa5831", "not pinned"),
     "c-version-comment-removed": (CHECKOUT_PIN + " # v7.0.1", CHECKOUT_PIN, "no '# vX.Y.Z' comment"),
     "c-qemu-action-used": (
-        LOGIN_PIN + " # v4.7.0",
+        LOGIN_PIN + " # v4.8.0",
         "docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0",
         "actions used",
     ),

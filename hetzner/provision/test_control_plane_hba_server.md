@@ -58,6 +58,12 @@ reimplements the reload, and a unit test in the role pins the role's task to the
   delivered: the script exits non-zero, saying the file does not parse, and the server keeps
   the old rules. Deleting the script's parse check turns this red.
 
+Three of these tests (the one that reads the delivered file in the container, the one that
+checks the answers after the reload, and the one that delivers a file that does not parse)
+are skipped when the engine is Docker Desktop 4.98.0:
+it serves a file that grew after it was shared at its old length, so the container reads
+the delivered file truncated. A Linux engine (CI) shows it whole and runs both.
+
 Deleting the reload from the script (so it sends none) turns the green case red. Deleting
 the role's reload task, or reverting the compose file to the single-file mount, turns the
 role's unit test and the static test red.

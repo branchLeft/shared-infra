@@ -358,8 +358,37 @@ runner  --ssh -F config -o ProxyJump=jump_hop-->  edge1 (the jump account's key 
   The list is read from the pull_trigger role's vars, its one home.
 - **Nothing in this role changes for it.** The destination list, the key lines and the sshd block
   are the same for every host behind the jump. The workflow side is shipped in github-workflows
-  (the jump pair, the push list and the push playbook), and the receiver on the host is the
-  pull_trigger role's bundle mode.
+  (the jump pair, the push list, the push playbook, the per-host key maps and, for the tenants
+  hosts, the second hop), and the receiver on the host is the pull_trigger role's bundle mode.
+- **Where each piece of the demo1 route lives.**
+  - Applied by push: `pull_trigger_bundle_hosts` (`roles/pull_trigger/vars/main.yml`),
+    `playbooks/demo1.yml` and `trust/demo1.yml`, enrolled by `check_enrolment.py`.
+  - No inventory entry, by design: an inventory entry does not enrol a host
+    (`inventories/README.md`), and a pushed host is named by the secret host list.
+  - The jump lock allowing it: one line in `ci_jump_destinations` of `owner_vars/edge1.yml`, demo1's
+    public address. That address is the owner's data and an agent never writes it.
+  - The workflow reaching it: the pin in `.github/workflows/ansible-delivery.yml` and
+    `ansible-drift-check.yml`, held at or above the floor `MIN_RELEASE` by `check_delivery.py`.
+  - The host lists, the push list and the keys: secrets the owner sets (shapes next).
+- **The secrets of the route, and their shapes.** A GitHub secret cannot be read back, so each is
+  set whole, and its shape is what the workflow's own checks read before any host is contacted.
+  - `ANSIBLE_HOSTS` (repository): one `user@host` per line, every host the run asks, pushed hosts
+    included.
+  - `ANSIBLE_PUSH_HOSTS` (repository): one `user@host` per line, each also a line of
+    `ANSIBLE_HOSTS`. Empty leaves every host on the pull route.
+  - `ANSIBLE_HOST_CHECK_KEYS` (repository; the drift caller passes it too): one JSON object,
+    `{"user@host": "PRIVATE_KEY_TEXT"}`, each name an exact line of `ANSIBLE_HOSTS`.
+  - `SSH_HOST_APPLY_KEYS` (the `ansible-hosts` environment, never the repository): the same shape,
+    for the apply keys.
+
+  A host with an entry in a map is reached with that key and no other. A host with no entry keeps
+  the shared key (`ANSIBLE_CHECK_KEY`, `SSH_APPLY_KEY`). Within a map no key repeats, and none
+  equals the shared key or a jump key, or the run stops before it contacts a host. A key's text is
+  the whole private key, header and footer lines included, with its line breaks kept. Setting a map
+  again replaces all of it, so the owner resubmits the entries already there. demo1's own CI key is
+  one entry in each map, named by the same `ansible-ci@ADDRESS` line the host lists carry. The
+  matching public keys are demo1's two forced-command lines on its CI account, which no role writes
+  (demo1 takes no owner keys: rule R10).
 
 What is proven where:
 

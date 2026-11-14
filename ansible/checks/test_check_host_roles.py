@@ -65,18 +65,22 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # it only reports until the owner enables it), deploy_tooling and
 # edge_stack (which needs Docker from host_baseline and the compose unit and deploy wrapper that
 # the deploy tooling installs), then edge1's three monitoring roles after the edge stack
-# (exporters_and_collectors, ntfy_pager, then monitoring_stack, last), app1's host_inputs,
+# (exporters_and_collectors, ntfy_pager, then monitoring_stack), then sweego_receiver (last of
+# all: it refuses to run until its secret files exist), app1's host_inputs,
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's tenant_onboarding, and app1's
-# export_bundler (last of all), db1's
+# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else
+# back), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
-# (first), control_plane after the status page, then nextcloud_stack, backup_worker and
+# (first), control_plane, then the status page (it binds the private address, so it follows the
+# role that installs the drop for its port), then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it
 # only reads), and ring_controller_host last of all so its failure holds nothing else back, and
-# demo1's two build roles.
+# demo1's two build roles. ops1 and db1 also apply deploy_tooling (class internal) straight after
+# deploy_verifier, before the roles that run the deploy wrapper.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -92,6 +96,7 @@ APPLIED_ON_MAIN = {
         "exporters_and_collectors",
         "ntfy_pager",
         "monitoring_stack",
+        "sweego_receiver",
     ],
     "ops1": [
         "host_inputs",
@@ -99,9 +104,10 @@ APPLIED_ON_MAIN = {
         "breakglass_mint_host",
         "safety_service",
         "safety_channel_key",
-        "status_page",
         "deploy_verifier",
+        "deploy_tooling",
         "control_plane",
+        "status_page",
         "nextcloud_stack",
         "backup_worker",
         "backup_restore",
@@ -121,11 +127,13 @@ APPLIED_ON_MAIN = {
         "deploy_slot_keys",
         "tenant_onboarding",
         "export_bundler",
+        "node_exporter",
     ],
     "db1": [
         "host_inputs",
         "host_baseline",
         "deploy_verifier",
+        "deploy_tooling",
         "db1_stack",
         "db1_backup_timers",
         "node_exporter",
@@ -137,6 +145,8 @@ APPLIED_ON_MAIN = {
 PINNED_PLAY_VARS = {
     "edge1": "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n",
     "app1": "    deploy_tooling_host_class: app\n    deploy_tooling_policy_variant: standard\n",
+    "ops1": "    deploy_tooling_host_class: internal\n",
+    "db1": "    deploy_tooling_host_class: internal\n",
 }
 
 
@@ -329,6 +339,7 @@ class HostRoleLists(unittest.TestCase):
                 "host_inputs",
                 "host_baseline",
                 "deploy_verifier",
+                "deploy_tooling",
                 "db1_stack",
                 "db1_backup_timers",
                 "node_exporter",
@@ -343,9 +354,11 @@ class HostRoleLists(unittest.TestCase):
     # whose Docker and iptables its reconciler needs, then the edge stack after the CI login
     # and the deploy tooling, which installs the compose unit and deploy wrapper the stack uses,
     # then the three monitoring roles: the collectors, the pager, and the monitoring stack last
-    # (it hashes the pager's files and decides the one restart of its unit). The edge stack is
+    # (it hashes the pager's files and decides the one restart of its unit), then the Sweego
+    # receiver after all of them, because it refuses to run until the owner has placed its secret
+    # files and that refusal must not hold the roles before it back. The edge stack is
     # ahead of the monitoring roles so that a monitoring failure cannot hold the edge delivery.
-    # Red when any role moves or is dropped, green with the twelve named in this order.
+    # Red when any role moves or is dropped, green with the roles named in this order.
     def test_edge1_applies_the_edge_stack_then_the_pager_before_the_monitoring_stack(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "edge1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
@@ -366,11 +379,12 @@ class HostRoleLists(unittest.TestCase):
                 "exporters_and_collectors",
                 "ntfy_pager",
                 "monitoring_stack",
+                "sweego_receiver",
             ],
         )
         self.assertEqual(names.index("ci_jump"), names.index("ci_login") + 1)
         self.assertLess(names.index("ntfy_pager"), names.index("monitoring_stack"))
-        self.assertEqual(names[-1], "monitoring_stack")
+        self.assertEqual(names[-2:], ["monitoring_stack", "sweego_receiver"])
         for monitoring in ("exporters_and_collectors", "ntfy_pager", "monitoring_stack"):
             self.assertLess(names.index("edge_stack"), names.index(monitoring))
         self.assertEqual(names.count("egress_nat"), 1)
@@ -379,13 +393,13 @@ class HostRoleLists(unittest.TestCase):
         self.assertLess(names.index("egress_nat"), names.index("edge_stack"))
         self.assertEqual(check(ROOT), [])
 
-    # ops1 applies the loader first (R11), the roles it had before (control_plane keeps its place
-    # after the status page, #530), then the roles that take the loader's inputs or adopt a hand
-    # copy, last, so their failure holds nothing else back. The restore reads the worker's
-    # variables in the same play, so it follows the worker. The database role is last: it
-    # asserts the directory control_plane makes and holds nothing else back. Red when any role
-    # moves or is dropped, green with the twelve named in this order. The node exporter is last, so
-    # its disk check cannot hold any other role back.
+    # ops1 applies the loader first (R11), the roles it had before (the status page follows
+    # control_plane, which installs the drop for its port), then the roles that take the loader's
+    # inputs or adopt a hand copy, last, so their failure holds nothing else back. The restore
+    # reads the worker's variables in the same play, so it follows the worker. The database role
+    # is last: it asserts the directory control_plane makes and holds nothing else back. Red when
+    # any role moves or is dropped, green with the twelve named in this order. The node exporter
+    # is last, so its disk check cannot hold any other role back.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,
     ) -> None:
@@ -401,9 +415,10 @@ class HostRoleLists(unittest.TestCase):
                 "breakglass_mint_host",
                 "safety_service",
                 "safety_channel_key",
-                "status_page",
                 "deploy_verifier",
+                "deploy_tooling",
                 "control_plane",
+                "status_page",
                 "nextcloud_stack",
                 "backup_worker",
                 "backup_restore",
@@ -423,7 +438,8 @@ class HostRoleLists(unittest.TestCase):
     # Safety class: app1 applies the deploy tooling, which installs the sudo-run deploy wrapper and
     # the Docker firewall policy, then the deploy slot keys, which grant SSH keys to the deploy
     # account. Both come after the website, tooling first, so a failure in either cannot hold the
-    # website back and the slot program finds its wrapper; the export bundler follows them, last.
+    # website back and the slot program finds its wrapper; the export bundler follows them, then the
+    # node exporter, last of all, so its disk refusal holds nothing back.
     # The play states class app and variant standard, and
     # the checker's table (HOST_PLAY_VARS) says the same; the slots come from the loader's row, not
     # from the play. Red when the table's app1 row is deleted (R2), when the slots leave the
@@ -450,6 +466,7 @@ class HostRoleLists(unittest.TestCase):
                 "deploy_slot_keys",
                 "tenant_onboarding",
                 "export_bundler",
+                "node_exporter",
             ],
         )
         self.assertEqual(
@@ -707,7 +724,7 @@ class HostRoleLists(unittest.TestCase):
         cases = (
             ("edge1", "db1_stack"),
             ("edge1", "tunnel_account"),
-            ("ops1", "deploy_tooling"),
+            ("ops1", "deploy_slot_keys"),
             ("ops1", "monitoring_stack"),
             ("app1", "breakglass_mint_host"),
             ("app1", "control_plane"),

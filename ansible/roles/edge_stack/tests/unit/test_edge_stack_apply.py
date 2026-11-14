@@ -1,7 +1,7 @@
 """Unit tests for edge_stack_apply: one lock across both phases, the exit-code contract, check mode.
 
 Run from the role's directory with library/ on PYTHONPATH, the way
-``ansible/checks/run_role_unit_tests.sh`` does. The module runs against a temporary tree.
+``ansible/checks/run_role_unit_tests.py`` does. The module runs against a temporary tree.
 ``docker`` and ``systemctl`` are stand-ins on PATH: each logs its call and whether the deploy
 lock was held by another process at that moment, so the lock is observed from outside, by a
 second process, and not read from the module's own state.
@@ -167,6 +167,8 @@ if rest[:3] == ["exec", "-T", "crowdsec"]:
                 "appsec-configs/ghost-admin-previews.yaml",
             "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/ghost-admin-api-postoverflow.yaml":
                 "postoverflows/ghost-admin-api-postoverflow.yaml",
+            "/etc/crowdsec/parsers/s02-enrich/branchleft/edge-trusted-session.yaml":
+                "parsers/edge-trusted-session.yaml",
         }
         if inside in single:
             source = project + "/crowdsec/" + single[inside]
@@ -307,6 +309,7 @@ class Tree:
         for name, text in (
             ("appsec-configs/ghost-admin-previews.yaml", b"name: a\n"),
             ("postoverflows/ghost-admin-api-postoverflow.yaml", b"name: b\n"),
+            ("parsers/edge-trusted-session.yaml", b"name: c\n"),
         ):
             (self.project / "crowdsec" / name).parent.mkdir(exist_ok=True)
             (self.project / "crowdsec" / name).write_bytes(text)
@@ -511,7 +514,9 @@ class LockHeldAcrossBothPhases(TreeCase):
                 "ps",
                 "restart-crowdsec",
                 "lapi",
-                # config.yaml.local, the two Ghost admin files, then a.yaml in acquis.d.
+                # config.yaml.local, the two Ghost admin files, the verified-session
+                # whitelist, then a.yaml in acquis.d.
+                "sha-crowdsec",
                 "sha-crowdsec",
                 "sha-crowdsec",
                 "sha-crowdsec",

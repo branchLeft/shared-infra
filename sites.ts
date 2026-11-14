@@ -1,5 +1,12 @@
 import type { EdgeSite, HostRedirect, StaticSite } from './siteTypes';
 
+// Placeholders until the owner names them. While either is unset the webhook
+// entry below claims no hostname and has no upstream, so the renderer skips it
+// and the edge asks for no certificate. Setting both is a deliberate step: see
+// the "Inbound webhook sites" section of `sites.md`.
+const WEBHOOK_HOSTNAME: string | undefined = undefined;
+const WEBHOOK_PORT: number | undefined = undefined;
+
 /**
  * The site registry: everything the Hetzner edge serves. Hostnames and service
  * addressing only; nothing else about a site belongs in this file.
@@ -44,6 +51,10 @@ export const sites: EdgeSite[] = [
     // Ghost serves its uploads from its own origin: see `sites.md`, "What the
     // site runs".
     backend: 'ghost',
+    // A signed-in Ghost staff session, verified with this Ghost, is never
+    // refused by a CrowdSec ban or AppSec: hetzner/edge/render.md, "Verified
+    // sessions".
+    trustedSession: 'ghost-staff',
   },
 
   {
@@ -149,6 +160,39 @@ export const sites: EdgeSite[] = [
     // The app sets its own per-request CSP and response headers: the edge adds
     // only HSTS to a proxied site and leaves every other response header alone.
     requestBodyMaxSize: '64KiB',
+  },
+
+  {
+    // The public status page, served by the Gatus stack on ops1 (the
+    // status_page role). Port 8303 must match that role's status_page_port
+    // and the DOCKER-USER protected ports of ops1's isolation policy (the drop
+    // that confines the port to the gateway): the three move together.
+    // The DNS record for this hostname must be live before this entry is
+    // applied: Caddy requests a certificate as soon as the block renders, and
+    // a failed HTTP-01 validation costs the account's failure budget.
+    name: 'status',
+    hostnames: ['status.branchleft.co.uk'],
+    privateUpstream: { host: 'ops1', port: 8303 },
+    backend: 'other',
+    // The page answers GET requests only; no upload surface exists.
+    requestBodyMaxSize: '64KiB',
+  },
+
+  {
+    // Receives the mail provider's signed complaint callbacks, nothing else.
+    // The receiver is a container on edge1; its public listener is the only
+    // port named here, and its private drain listener is never routed.
+    name: 'sweego-webhook',
+    hostnames: WEBHOOK_HOSTNAME === undefined ? [] : [WEBHOOK_HOSTNAME],
+    privateUpstream:
+      WEBHOOK_HOSTNAME === undefined || WEBHOOK_PORT === undefined
+        ? undefined
+        : { host: 'edge1', port: WEBHOOK_PORT },
+    // A complaint callback is a few hundred bytes of JSON; the receiver refuses
+    // anything over 16 KiB itself, and the edge refuses it first.
+    requestBodyMaxSize: '16KiB',
+    // The receiver's one public route (its README names it).
+    inboundWebhookPath: '/webhook',
   },
 ];
 

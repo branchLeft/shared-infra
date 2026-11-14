@@ -70,6 +70,7 @@ names them. None of the variables is a secret.
   `ansible/playbooks/db1.yml`. A disk refusal here also holds back a grants change.
   That is fail-safe: the grants then stay as they were.
 - `edge1`, before `exporters_and_collectors`, in `ansible/playbooks/edge1.yml`.
+- `app1`, last, in `ansible/playbooks/app1.yml`, so a disk refusal holds nothing back.
 
 On `ops1`, the last role, a disk refusal holds nothing else back.
 

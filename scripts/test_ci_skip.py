@@ -47,6 +47,8 @@ RULED_ALWAYS_RUN = {"scripts-tests", "pulumi-inventory-audit"}
 READERS = {
     "mail/index.ts": {"mail-typecheck", "mail-provision-checks"},
     "mail/provision/check_shim_image_starts.py": {"mail-typecheck", "mail-provision-checks", "shim-image-starts"},
+    "hetzner/dns/zone.json": {"mail-provision-checks"},
+    "hetzner/dns/publicpress.co.uk.json": {"mail-provision-checks"},
     "hetzner/edge/render.ts": {"edge-config-validate"},
     "hetzner/edge/stack/Caddyfile": {"edge-config-validate"},
     "hetzner/monitoring/render.ts": {"monitoring-config-validate"},
@@ -61,7 +63,7 @@ READERS = {
 READ_BY_NONE = [
     "ansible/roles/base/tasks/main.yml",
     "ansible/checks/ci_select.py",
-    "hetzner/dns/zone.json",
+    "hetzner/dns/zonecheck.py",
     "hetzner/provision/branchleft_deploy.py",
     "hetzner/estate.ts",
     "hetzner-host/host.ts",
@@ -69,6 +71,7 @@ READ_BY_NONE = [
     ".github/workflows/ansible.yml",
     ".github/CODEOWNERS",
     ".claude/settings.json",
+    "docs/ansible-handbook.md",
 ]
 UNIVERSAL_PATHS = [
     ".github/workflows/ci.yml",
@@ -77,7 +80,7 @@ UNIVERSAL_PATHS = [
     "scripts/trace_reads.py",
 ]
 # Outside every zone: the map has never heard of them, so every job runs.
-UNMAPPED = ["README.md", "package.json", "sites.ts", ".nvmrc", "docs/x.md", "newdir/x.txt", "ansible"]
+UNMAPPED = ["README.md", "package.json", "sites.ts", ".nvmrc", "newdir/x.txt", "ansible"]
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 
@@ -291,6 +294,9 @@ class MutantTests(unittest.TestCase):
 
     def test_a_if_an_unmapped_path_no_longer_fails_open(self):
         self.assert_decisions_catch("not in_any(path, ZONES)", "False")
+
+    def test_q_a_docs_only_change_runs_every_skippable_job_again(self):
+        self.assert_decisions_catch('    "scripts/",\n    "docs/",\n', '    "scripts/",\n')
 
     def test_b_an_empty_diff_skips(self):
         self.assert_decisions_catch('return True, "the diff is empty"', 'return False, "the diff is empty"')

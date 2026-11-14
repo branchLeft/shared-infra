@@ -9,14 +9,14 @@ importers:
   .:
     devDependencies:
       '@branchleft/prettier-config':
-        specifier: ^0.3.1
-        version: 0.3.1
+        specifier: ^0.8.8
+        version: 0.8.8
       '@branchleft/tsconfig':
-        specifier: ^0.3.1
-        version: 0.3.1
+        specifier: ^0.8.8
+        version: 0.8.8
       '@types/node':
         specifier: ^26
-        version: 26.6.5
+        version: 26.6.6
       prettier:
         specifier: ^3.9.10
         version: 3.9.10
@@ -26,14 +26,14 @@ importers:
 
 packages:
 
-  '@branchleft/prettier-config@0.3.1':
-    resolution: {integrity: sha512-hbcpVMSNnnBdwwpjQtIlCqOYam0lihlGJ4et7flmDJCRb/DmndvQgF8dWosXoA2xrVHb14bzJ3GE8NvzpN9RJA==, tarball: https://npm.pkg.github.com/download/@branchleft/prettier-config/0.3.1/b60e80d1edecfd4ca143afa464f60e88ac9461d3}
+  '@branchleft/prettier-config@0.8.8':
+    resolution: {integrity: sha512-m5jpoP/JIfsFrQLKrRwmPXUJ45ooRJuCBGEBMmeqUbb1fNXzGDlUBjO/fJgLtSFMl69+o4b+HMeb9EW1H/g0EA==, tarball: https://npm.pkg.github.com/download/@branchleft/prettier-config/0.8.8/d81021a85db0fe698e05240812439a83a57072b7}
 
-  '@branchleft/tsconfig@0.3.1':
-    resolution: {integrity: sha512-yWAPpeDbHiyHc/aA7eFdAqR3ZqeI3IF2gzcGzf5vvTPmEDFUtXM50tnfaEeDYlrdC/oY/6uHMTyRKnSdAJNo7A==, tarball: https://npm.pkg.github.com/download/@branchleft/tsconfig/0.3.1/2e0d24028d28b8d2b476b77093f11e9816843cd0}
+  '@branchleft/tsconfig@0.8.8':
+    resolution: {integrity: sha512-8WSqebp1YDYaSW/4OCpRF2Lqj38Wkqs9xxEQH7ZIC7QHGvo4Bs6IZLH2Swt6swPXWTaIfiZ9vboyKEyo+KCEtg==, tarball: https://npm.pkg.github.com/download/@branchleft/tsconfig/0.8.8/1b611ebcfe69f5a0b5ccdd51b04ec084fa1800b9}
 
-  '@types/node@26.6.5':
-    resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
+  '@types/node@26.6.6':
+    resolution: {integrity: sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==}
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
@@ -170,11 +170,11 @@ packages:
 
 snapshots:
 
-  '@branchleft/prettier-config@0.3.1': {}
+  '@branchleft/prettier-config@0.8.8': {}
 
-  '@branchleft/tsconfig@0.3.1': {}
+  '@branchleft/tsconfig@0.8.8': {}
 
-  '@types/node@26.6.5':
+  '@types/node@26.6.6':
     dependencies:
       undici-types: 8.9.0
 

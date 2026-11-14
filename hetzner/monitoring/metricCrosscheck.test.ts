@@ -42,6 +42,12 @@ describe('extractQueriedMetrics', () => {
     expect(names).toEqual(['delivery_completed']);
   });
 
+  it('does not mistake an aggregation with a by-clause, or its grouping keyword, for a metric', () => {
+    const result = extractQueriedMetrics('avg by (instance) (rate(cpu_seconds_total[5m])) > 0.85');
+    const names = result.map((r) => r.name);
+    expect(names).toEqual(['cpu_seconds_total']);
+  });
+
   it('does not mistake a vector-matching modifier argument for a metric', () => {
     // The real shape this guards: `unless on(ip) snds_message_volume` --
     // without stripping `on(ip)` first, `ip` would be misread as a second

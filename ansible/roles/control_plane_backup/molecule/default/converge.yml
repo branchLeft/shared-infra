@@ -1,0 +1,100 @@
+---
+- name: Converge
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Apply the role with the defaults
+      ansible.builtin.include_role:
+        name: branchleft.control_plane_backup
+
+    # The control case for the timer's precondition: with the timer asked for and
+    # the state-copy environment file absent, the role must refuse and say why. The
+    # refusal comes before the timer task, so nothing changes and the second
+    # converge still reports zero changes. The assertion names the file so that a
+    # failure of any other kind does not pass for this one.
+    - name: Prove the timer is refused while the destination file is absent
+      when: not ansible_check_mode
+      block:
+        - name: Apply the role with the timer asked for and no destination file
+          ansible.builtin.include_role:
+            name: branchleft.control_plane_backup
+          vars:
+            control_plane_backup_timer_enabled: true
+        - name: Fail if the timer was accepted
+          ansible.builtin.fail:
+            msg: The role enabled the timer with no state-copy environment file on the host.
+      rescue:
+        - name: Assert the failure was the missing destination file
+          ansible.builtin.assert:
+            that:
+              - "'state-copy environment' in (ansible_failed_result | string)"
+            quiet: true
+            fail_msg: The role failed on the missing destination file for a reason other than that file.
+
+    # The enable and the disable are test setup, not role tasks, so they report no
+    # change; the idempotence step measures the role. Check mode skips this block:
+    # nothing is enabled there. The placeholder holds no value and is removed.
+    - name: Prove the defaults leave an enabled timer on, and the timer path runs
+      when: not ansible_check_mode
+      block:
+        - name: Enable the timer before the defaults are applied
+          ansible.builtin.systemd_service:
+            name: branchleft-control-plane-backup.timer
+            enabled: true
+            state: started
+          changed_when: false
+
+        - name: Apply the role with the defaults
+          ansible.builtin.include_role:
+            name: branchleft.control_plane_backup
+
+        - name: Read the timer after the defaults are applied
+          ansible.builtin.systemd_service:
+            name: branchleft-control-plane-backup.timer
+          register: control_plane_backup_converge_timer
+          changed_when: false
+
+        - name: Assert the defaults left the enabled timer enabled
+          ansible.builtin.assert:
+            that:
+              - control_plane_backup_converge_timer.status.UnitFileState == 'enabled'
+            quiet: true
+            fail_msg: The default apply changed a timer that was enabled; the timer task must be gated on control_plane_backup_timer_may_disable.
+
+        - name: Make the directory of the stand-in, as the host baseline does
+          ansible.builtin.file:
+            path: /etc/branchleft
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+          changed_when: false
+
+        - name: Place an empty stand-in for the state-copy environment file
+          ansible.builtin.copy:
+            content: ''
+            dest: /etc/branchleft/state-copy.env
+            owner: root
+            group: root
+            mode: '0600'
+            force: false
+          changed_when: false
+
+        - name: Apply the role with the timer asked for
+          ansible.builtin.include_role:
+            name: branchleft.control_plane_backup
+          vars:
+            control_plane_backup_timer_enabled: true
+
+        - name: Remove the stand-in
+          ansible.builtin.file:
+            path: /etc/branchleft/state-copy.env
+            state: absent
+          changed_when: false
+
+        - name: Disable the timer again for the later steps
+          ansible.builtin.systemd_service:
+            name: branchleft-control-plane-backup.timer
+            enabled: false
+            state: stopped
+          changed_when: false

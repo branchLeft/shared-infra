@@ -18,11 +18,26 @@ Wants=network-online.target
 # for the Docker-less host. PartOf only propagates stop/restart, never start,
 # so boot ordering is unaffected.
 PartOf=docker.service
+# The retry below stops here. Every start counts, `systemctl restart` and a Docker
+# restart's propagated restart included. Five starts in a quarter of an hour is one try and
+# four retries, which with the pause below is about two minutes of retrying. Then the unit
+# ends `failed` and stays so until `systemctl reset-failed` or the window passes: the next
+# converge reports it. systemd's own default is five starts in ten seconds, which a 30
+# second pause can never reach, so without these two lines the retry would never end.
+StartLimitIntervalSec=900
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/sbin/branchleft-nat
+# A refused run (the reconciler exits nonzero on a probe it cannot answer, for example
+# Docker not yet answering at boot) is retried after a pause, not left until the next
+# converge with the gateway holding no NAT rules. A rerun is safe: the reconciler checks
+# each rule before it inserts it. Restart= on a oneshot needs systemd 244 or later; Debian
+# 11 ships 247, Debian 12 252. Only on-failure: always and on-success are refused for a oneshot.
+Restart=on-failure
+RestartSec=30s
 
 [Install]
 WantedBy=multi-user.target

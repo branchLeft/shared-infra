@@ -1,0 +1,84 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    control_plane_backup_vf: '{{ playbook_dir }}/../../files'
+  tasks:
+    - name: Read the installed program and the two units
+      ansible.builtin.slurp:
+        src: '{{ item }}'
+      loop:
+        - /opt/branchleft/control-plane-backup/branchleft_control_plane_backup.py
+        - /etc/systemd/system/branchleft-control-plane-backup.service
+        - /etc/systemd/system/branchleft-control-plane-backup.timer
+      register: control_plane_backup_vi
+
+    - name: Assert the three files are the role's own, byte for byte
+      ansible.builtin.assert:
+        that:
+          - >-
+            (control_plane_backup_vi.results[0].content | b64decode)
+            == lookup('ansible.builtin.file', control_plane_backup_vf + '/branchleft_control_plane_backup.py', rstrip=False)
+          - >-
+            (control_plane_backup_vi.results[1].content | b64decode)
+            == lookup('ansible.builtin.file', control_plane_backup_vf + '/branchleft-control-plane-backup.service', rstrip=False)
+          - >-
+            (control_plane_backup_vi.results[2].content | b64decode)
+            == lookup('ansible.builtin.file', control_plane_backup_vf + '/branchleft-control-plane-backup.timer', rstrip=False)
+        quiet: true
+        fail_msg: An installed file differs from the file in the role.
+
+    - name: Read the modes of the installed paths
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - /opt/branchleft/control-plane-backup
+        - /opt/branchleft/control-plane-backup/branchleft_control_plane_backup.py
+        - /var/backups/branchleft/control-plane
+        - /etc/systemd/system/branchleft-control-plane-backup.service
+        - /etc/systemd/system/branchleft-control-plane-backup.timer
+      register: control_plane_backup_verify_stats
+
+    - name: Assert each path is root's with the mode asked for
+      ansible.builtin.assert:
+        that:
+          - control_plane_backup_verify_stats.results | map(attribute='stat.pw_name') | unique | list == ['root']
+          - control_plane_backup_verify_stats.results | map(attribute='stat.gr_name') | unique | list == ['root']
+          - control_plane_backup_verify_stats.results | map(attribute='stat.mode') | list == ['0755', '0755', '0700', '0644', '0644']
+        quiet: true
+        fail_msg: A path is not root's or its mode is wrong; the backup directory must be 0700.
+
+    - name: Read the timer's enabled state
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, branchleft-control-plane-backup.timer]
+      register: control_plane_backup_verify_enabled
+      changed_when: false
+      failed_when: false
+
+    - name: Read the timer's active state
+      ansible.builtin.command:
+        argv: [systemctl, is-active, branchleft-control-plane-backup.timer]
+      register: control_plane_backup_verify_active
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the timer is off by default
+      ansible.builtin.assert:
+        that:
+          - control_plane_backup_verify_enabled.stdout == 'disabled'
+          - control_plane_backup_verify_active.stdout == 'inactive'
+        quiet: true
+        fail_msg: The timer is not disabled and inactive after a run with the defaults.
+
+    - name: Run the installed program's own check
+      ansible.builtin.command:
+        argv:
+          [
+            /usr/bin/python3,
+            -I,
+            /opt/branchleft/control-plane-backup/branchleft_control_plane_backup.py,
+            --check,
+          ]
+      changed_when: false

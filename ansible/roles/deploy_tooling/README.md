@@ -21,7 +21,7 @@ what it is is not guessed.
 - **Class `internal`** (a host that carries no policy program, and is not the gateway):
   exactly the gateway's set, the two directories, the deploy wrapper, the compose template
   unit and the sudoers check. It gets no policy program, no policy unit, no firewall read-back
-  and no variant. Nothing is applied to a host by this class until a playbook names it.
+  and no variant. A host whose own role installs its firewall policy uses this class too.
 - **Class `app`** (a host that runs tenants' containers): everything above, and the
   policy program, its unit enabled at boot, the program applied, and the firewall chains
   read back and compared with what the program builds. An app host also names its
@@ -153,6 +153,23 @@ It never touches a host. The role's module and the checks that bind it to the re
 the repository have unit tests: from `ansible/roles/deploy_tooling` run
 `PYTHONPATH=library python -m unittest discover -s tests/unit`, and from the repository
 root run `python -m unittest discover -s ansible/checks`. CI runs all of them.
+
+The test is four scenarios, each its own parallel CI shard, so that none takes more than
+a few minutes of the 25-minute limit (`ansible/README.md`, "Sharing steps between
+scenarios"). `default` runs every step and the cases that are quick; the other three apply
+the role once and run only `verify`, each with its own share of the cases, and leave out
+the steps that plan and the second apply, which `default` runs:
+
+| Scenario         | Cases (task files under `molecule/default/tasks/`)                                   |
+| ---------------- | ------------------------------------------------------------------------------------ |
+| `retry`          | `case_compose_retry.yml`, which waits on the compose unit's own timers (about 310 s) |
+| `sudoers`        | `case_sudoers.yml` and `case_sudoers_content.yml`                                    |
+| `chains_parents` | `case_parent_directories.yml` and `case_chain.yml`                                   |
+| `default`        | the rest of phase i and phases ii to viii (`phase_standard.yml` and the phase files) |
+
+Add a case to exactly one scenario's verify play: `ansible/checks/test_deploy_tooling_cases_covered.py`
+fails on a case file that no scenario runs, on one that two run, and on a scenario that skips
+`verify`. Run one scenario with `--scenario <name>` on the harness command above.
 
 Only `ip` is a stand-in in the container: the policy program picks its variant from the
 output of `ip -4 -o addr show scope global`, so the test's `ip` prints a chosen address

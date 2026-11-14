@@ -45,6 +45,5 @@ provisioner:
         # Well-formed values for the inputs, and a digest of nothing that exists.
         scenario_digest: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
         scenario_bundle_url: https://bundle.example.test/ring-controller.tar.gz
-        scenario_ledger_url: https://ledger.example.test/ledger
 verifier:
   name: ansible

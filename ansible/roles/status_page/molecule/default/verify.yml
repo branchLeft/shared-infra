@@ -3,6 +3,12 @@
   hosts: all
   gather_facts: false
   vars:
+    # Every application of the role below is on loopback, as the converge is: the role's
+    # default is ops1's private address, where the role first requires the port's
+    # DOCKER-USER drop, which the container does not have. Without this, each case would stop
+    # at that guard and never reach the check it names, and the stamp would not match the
+    # converge's. The cases that name another address set it themselves, as a task variable.
+    status_page_listen_address: 127.0.0.1
     verify_dir: /opt/branchleft/status
     verify_state: /var/lib/status_page_standin
     verify_role_dir: "{{ lookup('ansible.builtin.env', 'MOLECULE_PROJECT_DIRECTORY', default='') }}"
@@ -178,10 +184,10 @@
         status_code: 200
       changed_when: false
 
-    # The safety-class cases. A listen address that is not loopback is refused
-    # twice: by the argument specification (choices), and, with that validation
-    # switched off, by the role's own assert. Each refusal must leave the
-    # compose file as it was.
+    # The safety-class cases. A listen address outside the two the role allows
+    # (loopback and ops1's private address) is refused twice: by the argument
+    # specification (choices), and, with that validation switched off, by the
+    # role's own assert. Each refusal must leave the compose file as it was.
     - name: Refuse a wide listen address at the argument specification
       ansible.builtin.include_tasks: tasks/refuse_wide_bind.yml
       vars:
@@ -194,7 +200,15 @@
       vars:
         refuse_title: Role assert with the specification off
         refuse_validate: false
-        refuse_expect: published on loopback only
+        refuse_expect: published on an address the role allows only
+
+    - name: Refuse a private address that is not ops1's at the role's own assert
+      ansible.builtin.include_tasks: tasks/refuse_wide_bind.yml
+      vars:
+        refuse_title: Role assert, another private address, specification off
+        refuse_validate: false
+        refuse_address: 10.20.1.99
+        refuse_expect: published on an address the role allows only
 
     - name: Refuse each image reference that is not pinned by digest
       ansible.builtin.include_tasks: tasks/refuse_image.yml

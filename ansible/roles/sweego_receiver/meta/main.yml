@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers the Sweego complaint receiver's compose project to edge1 and limits its drain port to one source.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

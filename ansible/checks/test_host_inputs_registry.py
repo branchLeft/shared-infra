@@ -335,7 +335,7 @@ class RealTree(unittest.TestCase):
         # two pull roles (check_enrolment R11). The host baseline installs Docker, which the
         # website role needs, so it too sits before the role. The deploy tooling goes before the
         # slot keys: the slot program needs the wrapper the tooling installs. The export bundler
-        # is last.
+        # follows, then the node exporter, last of all.
         playbook = _mapping_list(_read(ROOT / "ansible" / "playbooks" / "app1.yml"))
         applied = [Path(str(entry.get("role", entry))).name for entry in playbook]
         self.assertEqual(
@@ -353,6 +353,7 @@ class RealTree(unittest.TestCase):
                 "deploy_slot_keys",
                 "tenant_onboarding",
                 "export_bundler",
+                "node_exporter",
             ],
         )
 

@@ -19,6 +19,7 @@ edge1:
   - exporters_and_collectors
   - ntfy_pager
   - monitoring_stack
+  - sweego_receiver
 # edge-t, the tenants project's base host. The name has no hyphen because HOST_NAME allows
 # [a-z][a-z0-9]*. egress_nat makes it the gateway of the tenants network (one gateway per
 # network, test_egress_nat_single_gateway.py). ci_jump is the jump account's key options, the
@@ -37,6 +38,7 @@ ops1:
   - breakglass_mint_host
   - status_page
   - deploy_verifier
+  - deploy_tooling
   - control_plane
   - nextcloud_stack
   - backup_worker
@@ -56,9 +58,11 @@ app1:
   - publicpress_website_app1
   - breakglass_grant_host
   - host_baseline
+  - node_exporter
 db1:
   - host_inputs
   - deploy_verifier
+  - deploy_tooling
   - db1_stack
   - db1_backup_timers
   - db1_grants

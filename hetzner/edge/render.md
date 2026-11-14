@@ -362,6 +362,64 @@ path, and GitHub's JSON payloads are not exposed to rules built for form posts. 
 answers ahead of the `appsec` line, rather than editing that line, keeps the rendered change
 additions-only. The renderer accepts only a plain literal path.
 
+## `siteBlock`: inbound webhook
+
+`EdgeSite.inboundWebhookPath` marks a site that exists only to receive signed callbacks
+from one outside sender, and renders through `webhookSiteBlock` instead of the Ghost-shaped
+`siteBlock` body. The sender authenticates each delivery with a signature the receiver
+checks; the edge's job is to bound what can reach the receiver at all.
+
+What the block lets through, and nothing else:
+
+- `POST` on the one literal path, with a body of at most the site's `requestBodyMaxSize`
+  (16 KiB for the shipped entry), from a client under the dedicated throttle, the general
+  throttle, CrowdSec and AppSec, to the one upstream the entry names.
+- Every other method on that path gets 405 with `Allow: POST`, from the edge.
+- Every other request on the hostname gets 404, from the edge. The final `respond 404` is
+  matcher-less and last, so a case the lines above forgot fails closed.
+- The receiver's private drain listener is a different port and is never named here: the
+  block contains exactly one upstream address.
+
+Why a separate block rather than a path matcher added to the Ghost one: the Ghost block
+defines the members magic-link matcher and its shared zone on every site, inertly. A
+webhook block that carried them would name a zone and a matcher of the login-mail route.
+It carries none of the Ghost matchers, so it shares no zone, matcher, upstream or process
+with that route; the test file asserts each.
+
+The dedicated zone (`<site>_inbound_per_ip`, keyed on the direct peer like the others)
+applies to the matched `POST` only and sits after the general throttle, which is the
+unchanged one every site has. It is not keyed on posture: a posture setting that could
+switch it off would leave a public route with only the general budget. The budget is
+`WEBHOOK_RATE_LIMIT_EVENTS` per `WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` (`posture.md`).
+
+Path matching is Caddy's: case-insensitive, dot segments cleaned, escapes decoded, `*` not
+used. A request for `/Webhook` is proxied as sent and the receiver, which compares the path
+exactly, answers its own 404.
+
+Not proven here: Caddy's behaviour against a real sender (the 413 a sender sees for an
+oversize body, the 429 it sees past the budget, the 404 and 405) was not run; the rendered
+file is only parsed by `caddy validate` in CI. Whether AppSec's rules flag a real callback
+payload is unknown, and a 403 would be retried by the sender. Caddy's read timeouts are
+server-wide in the global block, so slow-sender protection for this route is whatever the
+global block says, and changing it affects every site.
+
+`edge1` as the upstream host: `resolvePrivateAddress` refuses `edge1` on every port but
+those in `EDGE_HOST_ALLOWED_PORTS`, so the entry cannot render once its port is named
+until that set gains the receiver's port. That is one deliberate line in this file, made
+when the port is known and reviewed as a widening of what the edge proxies to.
+
+### Naming the hostname
+
+Naming the hostname is one change with three parts, and `webhookDns.test.ts` goes red
+until all three are there: the `WEBHOOK_HOSTNAME` constant in `sites.ts`; one `A` record
+for it in the matching zone file under `hetzner/dns/`, at the address the edge's other
+hostnames use, with its owner name added to that file's `probe_names`; and the port in
+`EDGE_HOST_ALLOWED_PORTS`. The record is not committed ahead of the name: a placeholder
+in a zone file would be applied to production DNS, and a name the registry does not claim
+would answer for a host that serves nothing. The same test refuses a hostname that is
+not a real lowercase DNS name, so an ALL_CAPS placeholder cannot reach a rendered
+configuration. The record's apply, like every DNS apply, is the owner's.
+
 ## `siteBlock`: `request_body` ordering
 
 Ahead of everything else, including request_body -- see hstsDirective's own comment for
@@ -541,3 +599,74 @@ one scenario for that address for a minute. The other HTTP scenarios are not
 muted. The alternatives were worse: a parser whitelist would hide these
 requests from every scenario, and replacing the hub scenario with a copy would
 taint the `crowdsecurity/caddy` collection and stop its hub upgrades.
+
+## Verified sessions
+
+`EdgeSite.trustedSession`, `sessionVerification`, `sessionVerificationMatchers`
+and `renderTrustedSessionWhitelist`. A request whose signed-in session the site
+itself confirms is never refused by a CrowdSec IP decision or an AppSec verdict,
+and adds nothing to a CrowdSec bucket. A request with no session, or one the
+site refuses, is handled exactly as on a site without the field. Only `ghost-staff`
+exists: the Ghost staff cookie `ghost-admin-api-session` on `/ghost/*`, on a Ghost
+site. Ghost members are never trusted. The portal and console need an endpoint in
+the shell that answers 204 or 401 for a session, which does not exist yet.
+
+**The check.** The edge asks the site's own Ghost `GET /ghost/api/admin/users/me/`
+with the browser's cookie, Origin and Referer, the query emptied and any
+`Authorization` header dropped (an Admin API key would also authenticate). Ghost
+answers 2xx JSON only for a signed-in, origin-matching, verified (2FA) staff
+session. Only that answer sets the Caddy variable `edge_trusted` to `1`; any other
+status, a 2xx that is not JSON, a timeout or an error does not. It is written as
+`reverse_proxy` with two `handle_response` blocks, not `forward_auth`:
+`forward_auth` sends a non-2xx answer to the browser, which would break Ghost's
+own sign-in page for an expired cookie. `method GET` drops the body from the
+check only, so an upload reaches Ghost whole. There is no cache, so signing out,
+a password change or suspending the user takes effect on the next request.
+
+**Handler order.** HSTS, the break-glass strip and the body cap, then both
+throttles (still applied to everyone, and they cap how many checks one address
+can cause), then `vars edge_trusted 0`, `log_append` and the check, then
+`crowdsec @edge_untrusted` and AppSec on unverified requests only (on an
+authoring site `@inspected` gains `not vars edge_trusted 1`), then the setup
+refusal, the upload refusals and the upstream proxy, for everyone.
+
+**Keeping verified traffic out of every bucket.** A request that skips AppSec
+raises no AppSec event, but the log scenarios read every access-log line. Caddy
+writes the variable as a top-level `edge_trusted` field of the JSON log line,
+and the `s02-enrich` whitelist `branchleft/edge-trusted-session` drops a Caddy
+line whose top-level field is `1` before any scenario reads it. A client cannot
+forge it: everything a client sends (headers, path, query, cookies) is escaped
+into the line under `request`, never at the top level, and only the check's 2xx
+JSON answer sets the variable.
+
+**What still protects a stolen session.** Revocation, on the next request. The
+pass covers one site's `/ghost/*` and only that site's session: a tenant's staff
+session gives nothing on another tenant, the public pages or the portal. The
+per-address throttle, the body cap, the setup refusal and the upload refusals
+still apply. Ghost's staff history records what was done, and the access log
+marks every verified request. Ghost's own brute-force limits protect sign-in and
+password reset. What is left: while the session is valid, its holder cannot be
+banned by address and AppSec does not inspect their admin requests. An
+Administrator already controls the site; the answer is to revoke the session.
+Ghost staff sessions last months.
+
+**Cost.** A request without the staff cookie on `/ghost/*` costs a header match.
+A staff request costs one bodiless request to its own Ghost over the private
+network: a session and user lookup in MySQL, a few milliseconds, roughly doubling
+Ghost's load from admin use. A forged cookie costs one failed lookup, inside the
+throttle.
+
+**Failure.** Any answer other than 2xx JSON is the normal path, so the edge never
+fails open. If Ghost cannot be reached the check's error ends the request with a
+502 or 504; that request could not have been served by that Ghost anyway. The
+dial timeout is 3 seconds and the answer timeout 10 seconds.
+
+**Limits.** A request with neither Origin nor Referer is not verified, because
+Ghost refuses a session from no origin. The one such request in normal use is
+opening the admin app from a typed URL or a bookmark: on a banned address that
+page load is still refused. Every request the admin app then makes carries its
+origin and is verified. Supplying the site's own origin when the browser sends
+none would close this, at the cost of the edge vouching for an origin Ghost's
+CSRF check did not see; that is not done.
+`test_trusted_session_replay.py` proves each claim above against the real Caddy
+image and CrowdSec, and `render.test.ts` pins the rendered lines.

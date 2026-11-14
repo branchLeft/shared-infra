@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -106,7 +106,7 @@ jobs:
 
       - name: Setup pnpm
         if: steps.skip.outputs.run != 'false'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         if: steps.skip.outputs.run != 'false'
@@ -162,6 +162,10 @@ jobs:
       - name: Python unit tests
         if: steps.skip.outputs.run != 'false'
         run: python3 scripts/trace_reads.py --unit mail-provision-checks -- -m unittest discover -s mail/provision -p 'test_*.py' -v
+
+      - name: Python unit tests (mail/mta-sts)
+        if: steps.skip.outputs.run != 'false'
+        run: python3 -m unittest discover -s mail/mta-sts -p 'test_*.py' -v
 
   shim-image-starts:
     name: Shim image starts (mail/provision)
@@ -226,7 +230,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -296,7 +300,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -350,7 +354,7 @@ jobs:
 
       - name: Setup pnpm
         if: steps.skip.outputs.run != 'false'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         if: steps.skip.outputs.run != 'false'
@@ -429,25 +433,19 @@ jobs:
       - name: Python unit tests
         run: python3 -m unittest discover -s hetzner/provision -p 'test_*.py' -v
 
-      - name: Shellcheck the spool bridge egress proof
-        run: shellcheck hetzner/scripts/test-spool-bridge-egress.sh
-
       # Runs the reconciler against a real dockerd in a privileged
       # Docker-in-Docker stand-in, with a container on a bridge named like the
       # spool's, so the drain-bridge rules are shown to bite, not just to be
       # written.
       - name: Spool bridge egress proof
-        run: ./hetzner/scripts/test-spool-bridge-egress.sh
-
-      - name: Shellcheck the control-plane port policy proof
-        run: shellcheck hetzner/scripts/test-control-plane-port-policy.sh
+        run: python3 hetzner/scripts/prove_spool_bridge_egress.py
 
       # Runs the reconciler against a real dockerd in a privileged
       # Docker-in-Docker stand-in for ops1, with outside containers standing
       # in for edge1 and db1, so the 8301/8302 refusal is shown to bite on a
       # published port, and to stop biting when its rule is removed.
       - name: Control-plane port policy proof
-        run: ./hetzner/scripts/test-control-plane-port-policy.sh
+        run: python3 hetzner/scripts/prove_control_plane_port_policy.py
 
       # probe-object-storage.py signs its own requests, and a wrong signature
       # is an opaque 403 against this endpoint -- indistinguishable from a
@@ -573,8 +571,12 @@ jobs:
       # Starts the edge's own CrowdSec from compose.yml and replays at it the
       # Ghost admin traffic that once banned the owner, plus admin and WAF
       # probes: the admin use must raise no ban and every probe must still
-      # raise one (hetzner/edge/test_crowdsec_replay.py). A workstation here
-      # cannot start containers, so this job is the only place it runs.
+      # raise one (hetzner/edge/test_crowdsec_replay.py). It also starts the
+      # image built above in front of that CrowdSec, with a Ghost stand-in, and
+      # proves a verified staff session passes a ban and AppSec while a forged
+      # one does not (hetzner/edge/test_trusted_session_replay.py). A
+      # workstation here cannot start containers, so this job is the only place
+      # it runs.
       - name: Replay Ghost admin traffic and probes against the edge's CrowdSec
         if: steps.skip.outputs.run != 'false'
         env:
@@ -749,6 +751,7 @@ jobs:
           # reaches both mailboxes: the off-host one the owner reads, and mx1's.
           route email,email-on-host alertname=SNDSAccessLinkExpiringSoon severity=warning notify=on-host owner_action=true
           route email,email-on-host alertname=HostMemoryPressure severity=warning owner_action=true
+          route email,email-on-host alertname=HostCPUSaturated severity=warning owner_action=true
           route email,email-on-host alertname=HostDiskSpaceLow severity=warning owner_action=true
           route email,email-on-host alertname=MySQLConnectionsHigh severity=warning owner_action=true
           # Without the label the same alertname stays on mx1 alone.
@@ -1228,7 +1231,7 @@ jobs:
           done
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1244,7 +1247,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
 
       # Fail closed on every secret this job depends on, before any of them is
       # used: each produces its own opaque failure downstream (Pulumi reports
@@ -1383,7 +1386,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1399,7 +1402,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
 
       - name: Verify the deploy secrets are present
         run: |
@@ -1548,7 +1551,7 @@ jobs:
           done
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1564,7 +1567,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
 
       - name: Verify the deploy secrets are present
         run: |
@@ -1758,7 +1761,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1774,7 +1777,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
 
       - name: Verify the deploy secrets are present
         run: |
@@ -1963,7 +1966,7 @@ jobs:
           done
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -1983,7 +1986,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
 
       - name: Verify the deploy secrets are present
         run: |
@@ -2165,7 +2168,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2182,7 +2185,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
 
       - name: Verify the deploy secrets are present
         run: |
@@ -2359,7 +2362,7 @@ jobs:
           done
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2379,7 +2382,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
 
       - name: Verify the deploy secrets are present
         run: |
@@ -2508,7 +2511,7 @@ jobs:
           persist-credentials: false
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
 
       - name: Setup Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -2525,7 +2528,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install Pulumi CLI
-        uses: pulumi/actions@8e5e406f4007fca908480587cb9893c07090f58d # v7.0.0
+        uses: pulumi/actions@96c7761824268174e0d2a4e8c7d75671eebd24a7 # v7.1.0
 
       - name: Verify the deploy secrets are present
         run: |

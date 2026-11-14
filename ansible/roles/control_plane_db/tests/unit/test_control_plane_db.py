@@ -9,6 +9,8 @@ reads changes, so a sabotaged copy of the role goes red here as well.
 """
 
 import re
+import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 from typing import cast
@@ -392,7 +394,7 @@ class DatabaseRulesTests(unittest.TestCase):
     def test_the_running_rules_are_read_from_the_container_and_compared_byte_for_byte(self) -> None:
         tasks = _tasks(ROLE / "tasks" / "_hba.yml")
         reads = [t for t in tasks if _module(t) == "command"]
-        self.assertEqual(len(reads), 1)
+        self.assertEqual(len(reads), 2)
         command = cast(dict[str, object], reads[0]["ansible.builtin.command"])
         self.assertEqual(
             command["argv"],
@@ -479,12 +481,177 @@ class DatabaseRulesTests(unittest.TestCase):
         ):
             self.assertNotRegex(bad, pattern)
 
+    def test_the_server_is_asked_what_it_loaded_after_the_container_is_shown_to_hold_the_file(self) -> None:
+        tasks = _tasks(ROLE / "tasks" / "_hba.yml")
+        names = [str(t["name"]) for t in tasks]
+        asks = [t for t in tasks if _module(t) == "command" and "sh" in str(t["ansible.builtin.command"])]
+        self.assertEqual(len(asks), 1)
+        command = cast(dict[str, object], asks[0]["ansible.builtin.command"])
+        self.assertEqual(
+            command["argv"],
+            [
+                "docker",
+                "exec",
+                "-i",
+                "{{ control_plane_db_hba_container }}",
+                "sh",
+                "-s",
+                "--",
+                "{{ control_plane_db_hba_container_file }}",
+            ],
+        )
+        self.assertEqual(command["stdin"], "{{ lookup('ansible.builtin.file', 'server_loaded_hba.sh') }}")
+        self.assertIs(asks[0]["changed_when"], False)
+        self.assertEqual(asks[0]["when"], "not ansible_check_mode")
+        verdict = next(t for t in tasks if _module(t) == "assert" and "loaded the delivered rules" in str(t["name"]))
+        body = cast(dict[str, object], verdict["ansible.builtin.assert"])
+        self.assertIn("control_plane_db_hba_loaded.rc == 0", cast(list[str], body["that"]))
+        self.assertIn("control_plane_db_hba_loaded.stderr", str(body["fail_msg"]))
+        self.assertTrue(str(body["fail_msg"]).startswith("REFUSED:"))
+        self.assertEqual(verdict["when"], "not ansible_check_mode")
+        self.assertLess(names.index(str(asks[0]["name"])), names.index(str(verdict["name"])))
+        self.assertLess(
+            names.index("Refuse a database that is not running or holds other rules than the delivered file"),
+            names.index(str(asks[0]["name"])),
+        )
+
+    def test_the_server_read_uses_the_containers_own_credential_and_the_task_names_none(self) -> None:
+        script = (ROLE / "files" / "server_loaded_hba.sh").read_text(encoding="utf-8")
+        self.assertIn("${POSTGRES_PASSWORD:?", script)
+        self.assertNotRegex(script, r"(?m)^\s*set -[a-z]*x|set -o xtrace")
+        self.assertNotIn("POSTGRES_PASSWORD", _text("_hba.yml"))
+
     def test_the_check_names_a_refusal_for_each_way_it_can_stop(self) -> None:
         asserts = [t for t in _tasks(ROLE / "tasks" / "_hba.yml") if _module(t) == "assert"]
-        self.assertEqual(len(asserts), 3)
+        self.assertEqual(len(asserts), 4)
         for task in asserts:
             body = cast(dict[str, object], task["ansible.builtin.assert"])
             self.assertTrue(str(body["fail_msg"]).startswith("REFUSED:"), task["name"])
+
+
+FAKE_PSQL = """#!/bin/sh
+# Answers the three questions the check asks, from the environment, as a server would.
+for argument in "$@"; do
+    case "$argument" in
+        --command=*) text="${argument#--command=}" ;;
+    esac
+done
+case "$text" in
+    *pg_hba_file_rules*) printf '%s\\n' "$FAKE_ERRORS" ;;
+    *pg_conf_load_time*) printf '%s\\n' "$FAKE_LOADED" ;;
+    *hba_file*) printf '%s\\n' "$FAKE_HBA_FILE" ;;
+    *) echo "fake psql: unexpected query: $text" >&2; exit 2 ;;
+esac
+"""
+FAKE_STAT = """#!/bin/sh
+# The container's stat, for the two times the check reads: modification and change.
+case "$2" in
+    %Y) printf '%s\\n' "$FAKE_MTIME" ;;
+    %Z) printf '%s\\n' "$FAKE_CTIME" ;;
+    *) echo "fake stat: unexpected format: $2" >&2; exit 2 ;;
+esac
+"""
+CONTAINER_HBA = "/etc/postgresql-hba/pg_hba.conf"
+STAND_IN_CREDENTIAL = "stand-in-credential-for-the-test"
+
+
+def _run_the_check(environment: dict[str, str], arguments: list[str], programs: Path) -> "subprocess.CompletedProcess[str]":
+    """Run the check the way the role does: `sh -s -- <file>`, the script on standard input."""
+    for name, body in (("psql", FAKE_PSQL), ("stat", FAKE_STAT)):
+        program = programs / name
+        program.write_text(body, encoding="utf-8")
+        program.chmod(0o755)
+    script = (ROLE / "files" / "server_loaded_hba.sh").read_text(encoding="utf-8")
+    return subprocess.run(  # noqa: S603 - a fixed shell and stand-in programs, in a temporary directory
+        ["/bin/sh", "-s", "--", *arguments],
+        input=script,
+        capture_output=True,
+        text=True,
+        env={"PATH": f"{programs}:/usr/bin:/bin", **environment},
+        check=False,
+        timeout=30,
+    )
+
+
+def _ask_the_server(
+    *,
+    loaded: int,
+    mtime: int = 900,
+    ctime: int = 950,
+    errors: int = 0,
+    hba_file: str = CONTAINER_HBA,
+    credential: str = STAND_IN_CREDENTIAL,
+) -> "subprocess.CompletedProcess[str]":
+    """Ask the check about a stand-in server that reloaded at `loaded`, for a file changed at mtime and ctime."""
+    environment = {
+        "FAKE_HBA_FILE": hba_file,
+        "FAKE_ERRORS": str(errors),
+        "FAKE_LOADED": str(loaded),
+        "FAKE_MTIME": str(mtime),
+        "FAKE_CTIME": str(ctime),
+    }
+    if credential:
+        environment["POSTGRES_PASSWORD"] = credential
+    with tempfile.TemporaryDirectory() as directory:
+        return _run_the_check(environment, [CONTAINER_HBA], Path(directory))
+
+
+class ServerLoadedRulesTests(unittest.TestCase):
+    def test_a_server_that_reloaded_after_the_file_last_changed_is_accepted(self) -> None:
+        done = _ask_the_server(loaded=1000, mtime=900, ctime=950)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("loaded", done.stdout)
+
+    def test_a_file_delivered_and_not_yet_reloaded_is_refused_by_name(self) -> None:
+        # The sabotage case of the issue: deliver, skip the reload.
+        done = _ask_the_server(loaded=1000, mtime=1100, ctime=1100)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("has not reloaded", done.stderr)
+
+    def test_a_file_whose_inode_changed_after_the_reload_is_refused(self) -> None:
+        done = _ask_the_server(loaded=1000, mtime=900, ctime=1100)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("has not reloaded", done.stderr)
+
+    def test_a_file_modified_after_the_reload_is_refused_though_its_inode_is_old(self) -> None:
+        done = _ask_the_server(loaded=1000, mtime=1100, ctime=950)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("has not reloaded", done.stderr)
+
+    def test_a_reload_in_the_same_second_as_the_change_is_refused_not_guessed(self) -> None:
+        done = _ask_the_server(loaded=1100, mtime=1100, ctime=1100)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("has not reloaded", done.stderr)
+
+    def test_a_file_the_server_cannot_parse_is_refused_though_the_reload_is_late_enough(self) -> None:
+        done = _ask_the_server(loaded=2000, errors=2)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("does not parse", done.stderr)
+
+    def test_a_server_reading_another_file_than_the_delivered_one_is_refused(self) -> None:
+        done = _ask_the_server(loaded=2000, hba_file="/var/lib/postgresql/data/pg_hba.conf")
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("reads another file", done.stderr)
+
+    def test_a_container_without_its_own_credential_is_refused(self) -> None:
+        done = _ask_the_server(loaded=2000, credential="")
+        # A shell that meets an unset ${VAR:?} exits non-zero, and dash makes it 2 where bash makes it 1.
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("POSTGRES_PASSWORD", done.stderr)
+
+    def test_the_credential_is_never_printed(self) -> None:
+        for case in (
+            _ask_the_server(loaded=2000),
+            _ask_the_server(loaded=1000, mtime=1100, ctime=1100),
+            _ask_the_server(loaded=2000, errors=1),
+        ):
+            self.assertNotIn(STAND_IN_CREDENTIAL, case.stdout + case.stderr)
+
+    def test_a_call_with_no_file_path_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            done = _run_the_check({"POSTGRES_PASSWORD": STAND_IN_CREDENTIAL}, [], Path(directory))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertIn("path of the rules file", done.stderr)
 
 
 def _step_task(step: str, name: str) -> Task:

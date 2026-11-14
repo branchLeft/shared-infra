@@ -33,20 +33,27 @@ It does not:
   are other roles and other steps.
 - open any port. The server listens on loopback only and the compose file publishes
   nothing (see "What it changes on a host").
-- register the image with the deploy program. The deploy program refuses an image that
-  is not in its attested register, so with no registered digest the role deploys
-  nothing even when given one.
+- register the image with the deploy program. The register is by image name, in
+  `hetzner/provision/branchleft_deploy.py`: the deploy program verifies the attestation
+  of a registered name against its workflow, and pins a name that is not registered
+  without verifying it. The name `ghcr.io/branchleft/percona-server` is registered, so a
+  digest of it that the Percona image workflow did not sign is refused. A test holds the
+  name in the register.
 
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the one input,
-`db_t1_image`, and [`defaults/main.yml`](defaults/main.yml) gives it the empty default.
-Empty prepares the stack and deploys nothing, which is how the role ships. No variable is
-a secret (ANS-16). Everything else is fixed in [`vars/main.yml`](vars/main.yml) with the
-reason beside it, and an inventory value does not move it.
+`db_t1_image`, and [`defaults/main.yml`](defaults/main.yml) gives it the digest of the
+image to deploy. Empty prepares the stack and deploys nothing, and is accepted. No
+variable is a secret (ANS-16). Everything else is fixed in [`vars/main.yml`](vars/main.yml)
+with the reason beside it, and an inventory value does not move it.
 
-The digest is written in `defaults/main.yml` in the same change that registers it with
-the deploy program, so a reviewer reads both together.
+The default is `ghcr.io/branchleft/percona-server@sha256:20e400e5...3696`: the digest that
+ghost-platform's Percona image workflow pushed on `main` at commit `1289eb507b95` (run
+`43331723453`), scanned with no blocking finding (the exemptions in that repository's
+`.image-scan-exemptions.json` lapse on 10 and 12 December 2026) and attested. The contract
+test holds the full value. A new digest is a new image: change the register entry's tests
+and this value in one pull request, so a reviewer reads both together.
 
 ## Requirements
 
@@ -156,11 +163,14 @@ adding the role to this host's play makes the host depend on that grant, and who
 the `deploy` account's key on db-t1 can run `sudo branchleft-deploy dbt1 <image>` at any
 time, outside this role's never-replace guard. The wrapper accepts only an image in its
 attested register, and a failed health check on a replaced image rolls the pin back, so the
-cost of misuse is downtime, not data. Only two images are registered today.
+cost of misuse is downtime, not data. Three images are registered today
+(`ghost-tenant`, `portal-apps` and `percona-server`).
 
 The order of the first deploy: the owner places the root file; the image is built, scanned
-and registered with the deploy program; a change then sets `db_t1_image`; the apply deploys
-it. The owner steps are in the change that introduced the role.
+and registered with the deploy program; the same change sets `db_t1_image`; the apply
+deploys it. Until the root file is in place the plan fails, which is intended: the pull
+that carries the digest does not apply on a host without it. The owner steps are in the
+change that introduced the role.
 
 ## How to change it safely
 
