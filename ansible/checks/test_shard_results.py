@@ -249,6 +249,16 @@ class DailyIssueTest(unittest.TestCase):
             ["ansible/roles/a", "ansible/roles/b"], daily_red_issue.failed_shards(results)
         )
 
+    def test_the_summary_has_the_date_the_link_and_the_ids_and_names_no_one(self) -> None:
+        body = daily_red_issue.summary(self.RUN, ["ansible/roles/a", "ansible/roles/@b"], TODAY)
+        self.assertIn("2026-11-10", body)
+        self.assertIn(self.RUN, body)
+        self.assertIn("`ansible/roles/a`", body)
+        self.assertNotIn("@", body)
+
+    def test_a_summary_with_no_failed_shard_says_a_job_that_is_not_a_test_failed(self) -> None:
+        self.assertIn(daily_red_issue.NO_FAILED_SHARD, daily_red_issue.summary(self.RUN, [], TODAY))
+
     def test_the_label_is_the_one_plain_label(self) -> None:
         self.assertEqual("ci-red-daily", daily_red_issue.LABEL)
 
