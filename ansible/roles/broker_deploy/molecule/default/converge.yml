@@ -18,7 +18,6 @@
     broker_deploy_release_dir: '{{ playbook_dir }}/files/release'
     # A stand-in for the owner's public key. Not a real key.
     broker_deploy_verify_key_src: '{{ playbook_dir }}/files/verify-key-stand-in.bin'
-    broker_deploy_verify_key_sha256: '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925'
   tasks:
     - name: Apply the role
       ansible.builtin.include_role:
