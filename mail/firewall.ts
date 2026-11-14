@@ -4,13 +4,17 @@ import * as pulumi from '@pulumi/pulumi';
 import { mx1 } from './server';
 
 /**
- * The estate stack's outputs. A DIY (non-Pulumi-Cloud) backend fixes the
- * organisation segment to the literal `organization`, as `hetzner/tenants.ts`
- * does for the same stack. The stack is in this program's own backend, so the
- * reference resolves; a stack that has not been applied, or an output that is
- * missing, fails the preview instead of planning a rule.
+ * The application hosts stack's outputs (branchLeft/ghost-platform,
+ * `infra/hosts`, which creates app1). A DIY (non-Pulumi-Cloud) backend fixes
+ * the organisation segment to the literal `organization`, as
+ * `hetzner/tenants.ts` does for the estate stack. The stack lives in this
+ * program's own backend, so the reference resolves; a stack that has not been
+ * applied, or an output that is missing, fails the preview instead of planning
+ * a rule.
  */
-const estateStack = new pulumi.StackReference('organization/branchleft-hetzner-estate/production');
+const hostsStack = new pulumi.StackReference(
+  'organization/branchleft-ghost-platform-hosts/production'
+);
 
 /**
  * Ranges that are never the public source of a caller on the internet:
@@ -64,17 +68,17 @@ export function bulkMailSourceCidr(address: string): string {
 }
 
 /**
- * The estate's one public egress address, as a /32. Every private-only host in
- * the estate (app1, ops1, db1, mon1) leaves through edge1: the network's
- * default route is via edge1 (`hetzner/network.ts`) and edge1 source-NATs it
- * out of its public interface (`ansible/roles/egress_nat`). mx1 is in another
- * hcloud project, so the hop to it is on the public internet and mx1 sees
- * edge1's public IPv4. Read from the estate stack's `edge1PublicIpv4` output,
- * never typed: a rebuilt edge1 comes back on a different address
- * (`hetzner/RUNBOOK-estate-project-move.md`, step 7).
+ * app1's own public IPv4, as a /32. app1 is created with public networking
+ * (`infra/hosts/index.ts` in ghost-platform: its deploy path is SSH from
+ * GitHub-hosted runners), so it has its own public interface and reaches mx1
+ * from that address, not through edge1's NAT: the NAT carries only hosts with
+ * no public address (`ansible/roles/egress_nat`). Ghost runs in Docker on
+ * app1, and Docker masquerades container traffic to the host's public IPv4.
+ * Read from the hosts stack's `app1PublicIpv4` output (app1's primary IP),
+ * never typed, so the rule follows the address if the primary IP ever changes.
  */
-const estateEgressSource = estateStack
-  .requireOutput('edge1PublicIpv4')
+const app1EgressSource = hostsStack
+  .requireOutput('app1PublicIpv4')
   .apply((address) => bulkMailSourceCidr(String(address)));
 
 /**
@@ -162,18 +166,18 @@ export const mailFirewall = new hcloud.Firewall(
         sourceIps: ['0.0.0.0/0', '::/0'],
       },
       // The sending application -> the mailgun-shim's bulk-mail API,
-      // terminated by Caddy. The caller is the blog on app1, a private-only
-      // host, so its traffic arrives from the estate's NAT address
-      // (`estateEgressSource` above) and from nowhere else. IPv4 only: the
-      // estate network carries no IPv6 range, so no caller has a v6 source to
-      // allow. The endpoint itself stays API-key-authenticated and
+      // terminated by Caddy. The only caller is the blog's Ghost on app1, so
+      // the one source is app1's own public IPv4 (`app1EgressSource` above).
+      // IPv4 only: Ghost runs in a container on Docker's IPv4 networks, so its
+      // traffic leaves app1 as IPv4; an IPv6 source is deliberately not
+      // allowed. The endpoint itself stays API-key-authenticated and
       // rate-limited. This stays narrowed until the shim is retired and the
       // port closed.
       {
         direction: 'in',
         protocol: 'tcp',
         port: '8443',
-        sourceIps: [estateEgressSource],
+        sourceIps: [app1EgressSource],
       },
     ],
     applyTos: [

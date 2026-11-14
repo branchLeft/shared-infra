@@ -706,14 +706,16 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
 
 ### Who can reach 8443
 
-`mail/firewall.ts` accepts tcp/8443 from one source only: edge1's public IPv4,
-read from the estate stack's `edge1PublicIpv4` output and never typed. The
-callers (the blog on app1, and later the ops1 collector) are private-only
-estate hosts, and every one leaves through edge1's NAT, so mx1 sees that one
-address. IPv4 only, because the estate network has no IPv6 range. Port 80 stays
-open to all for ACME HTTP-01. A rebuilt edge1 changes the address: re-apply the
-mail stack afterwards (`hetzner/RUNBOOK-estate-project-move.md`, step 7.2), or
-the blog's bulk mail is refused until it is.
+`mail/firewall.ts` accepts tcp/8443 from one source only: app1's own public
+IPv4, read from the application hosts stack's `app1PublicIpv4` output
+(`branchLeft/ghost-platform`, `infra/hosts`) and never typed. The caller is the
+blog's Ghost on app1, which has its own public interface and so reaches mx1
+from its own address, not through edge1's NAT. IPv4 only: Ghost runs in Docker
+on IPv4 networks. Port 80 stays open to all for ACME HTTP-01. The ops1
+collector, which will call `GET /drain`, is private-only and leaves through
+edge1's NAT, so it needs `edge1PublicIpv4` from the estate stack added to this
+rule before it is pointed at mx1:8443. If app1's primary IP ever changes,
+re-apply the mail stack, or the blog's bulk mail is refused until it is.
 
 ### ACME coexistence
 
