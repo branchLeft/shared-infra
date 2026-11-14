@@ -97,7 +97,7 @@ because the unit files fix the paths they run.
 The fetches are skipped in check mode, because a check-mode run creates no
 directory to write into. A plan of a fresh db1 therefore shows no program, and the
 `db1_grants` plan refuses with `program-missing` until a real apply of this role has
-run. That is ISSUE branchLeft/workspace#2861, filed on its own and not fixed here. The
+run. That fix is a separate work item and is not made here. The
 live db1 gets `provision_tenant_db.py` from the first gated apply, as `db1_grants`
 Live blockers 1 and 6 say.
 

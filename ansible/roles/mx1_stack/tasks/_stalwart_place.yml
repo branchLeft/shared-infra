@@ -8,6 +8,5 @@
     group: root
     mode: '0644'
   # ANS-16: line 25 of this file is a ${VAR} reference to the Prometheus secret, which the
-  # plan-diff scan matches as a credential assignment. The diff is hidden by decision (choice A):
-  # https://github.com/branchLeft/workspace/issues/2348#issuecomment-6579030323
+  # plan-diff scan matches as a credential assignment. The diff is hidden by decision (choice A, the owner's ruling).
   diff: false
