@@ -79,10 +79,7 @@ dbt1:
   - deploy_verifier
   - deploy_tooling
   - db_t1
-# demo1, the demo host. broker_deploy first: demo1_build reads what it leaves behind. It refuses
-# until a release and a verify key are carried in the role. host_baseline and egress_nat stay off.
 demo1:
-  - broker_deploy
   - demo1_build
   - demo1_egress_spool
 # mx1, the mail host. One role after the pull roles: the host baseline only. It has no

@@ -34,9 +34,6 @@ ROLES = "ansible/roles"
 DRIVER = "ansible/checks/offline_render.py"
 DATA = "ansible/checks/offline"
 SUDOERS = f"{ROLES}/broker_deploy/templates/branchleft-slot.sudoers.j2"
-# The host whose playbook applies broker_deploy: the sudoers template is rendered there, not as
-# one of the roles no playbook applies.
-SUDOERS_HOST = "demo1"
 
 
 class Tree:
@@ -153,11 +150,11 @@ class Scenario:
 
 SCENARIOS: dict[str, Scenario] = {
     "clean": Scenario(),
-    "planted": Scenario((plant_s1_to_s6_and_s9,), ("unwired", "demo1", "db1", "app1", "edge1")),
-    "sentinel": Scenario((plant_sentinel,), (SUDOERS_HOST,)),
-    "sentinel-no-log": Scenario((plant_sentinel, NO_LOG_OFF), (SUDOERS_HOST,)),
-    "sentinel-stdio": Scenario((plant_sentinel, DISCARD_OFF), (SUDOERS_HOST,)),
-    "sentinel-both": Scenario((plant_sentinel, NO_LOG_OFF, DISCARD_OFF), (SUDOERS_HOST,)),
+    "planted": Scenario((plant_s1_to_s6_and_s9,), ("unwired", "db1", "app1", "edge1")),
+    "sentinel": Scenario((plant_sentinel,), ("unwired",)),
+    "sentinel-no-log": Scenario((plant_sentinel, NO_LOG_OFF), ("unwired",)),
+    "sentinel-stdio": Scenario((plant_sentinel, DISCARD_OFF), ("unwired",)),
+    "sentinel-both": Scenario((plant_sentinel, NO_LOG_OFF, DISCARD_OFF), ("unwired",)),
     "probe": Scenario((plant_env_probe,), ("unwired",), ENV_SENTINELS),
     "probe-unscrubbed": Scenario((plant_env_probe, UNSCRUBBED), ("unwired",), ENV_SENTINELS),
 }
@@ -217,7 +214,7 @@ class PlantedDefects(unittest.TestCase):
         self.assertEqual(1, runs()["planted"].returncode, runs()["planted"].stdout)
 
     def test_s1_sudoers_refused_by_visudo(self) -> None:
-        line = red_line("planted", SUDOERS_HOST, "broker_deploy", "branchleft-slot.sudoers.j2")
+        line = red_line("planted", "unwired", "broker_deploy", "branchleft-slot.sudoers.j2")
         self.assertIn("validate", line)
 
     def test_s2_compose_refused_by_docker(self) -> None:

@@ -18,12 +18,6 @@ broker_deploy_release_version: ''
 broker_deploy_release_pins: {}
 # Where the releases are, on the machine that runs the role. Nothing is fetched.
 broker_deploy_release_dir: '{{ role_path }}/files/releases'
-# The public half of the request-signing key: a 32-byte file carried in the role, held to the
-# sha256 below. A playbook entry cannot pass a variable, so the file's place is a default.
-# It is the owner's key: a test holds the file to the key's hex and to this digest, so a later
-# edit of either cannot change the key unnoticed.
-broker_deploy_verify_key_src: '{{ role_path }}/files/broker-verify-key.bin'
-broker_deploy_verify_key_sha256: 'a001696bc4047c5a43ae774025e35352214a03a9b264e9d4382832777b6fad17'
 broker_deploy_base_dir: /opt/branchleft/broker
 broker_deploy_releases_dir: /opt/branchleft/broker/releases
 broker_deploy_current_link: /opt/branchleft/broker/current

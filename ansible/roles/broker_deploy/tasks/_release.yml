@@ -13,9 +13,6 @@
 
 # A directory copy keeps the directory as the pins describe it, and puts back a byte that
 # changed on the host. A file on the host that is not in the release is left alone.
-# The plan's diff is hidden (ANS-16): the release is a built program that the plan-diff scan
-# cannot read from a pinned directory until one is carried, so it cannot be shown clear of a
-# line the scan would withhold. The pinned digests, not the diff, say what is delivered.
 - name: Deliver the pinned release files
   ansible.builtin.copy:
     src: '{{ broker_deploy_release_dir }}/{{ broker_deploy_release_version }}/'
@@ -24,7 +21,6 @@
     group: '{{ broker_deploy_release_group }}'
     mode: 'u=rwX,go=rX'
     directory_mode: 'u=rwX,go=rX'
-  diff: false
   register: broker_deploy_release_copy
 
 - name: Point the current link at the release
