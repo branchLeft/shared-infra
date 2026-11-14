@@ -3,7 +3,8 @@
 The guard refuses a scenario whose skip-steps.txt leaves out the verify step. The harness
 strips each line before it reads it, so the guard must match a verify line that is indented
 too. This test reads the regex from the task file itself and checks it against lines a
-harness could see. It needs no network.
+harness could see. It needs no network. The same pattern is held equal across roles, and
+checked against the harness's own line splitting, by ansible/checks/test_verify_guard_copies.py.
 
 Red then green: before the fix the indented "  verify" case fails, because the pattern
 anchors at column zero. After the fix every case passes.
@@ -19,7 +20,7 @@ ASSERT_PARTS = ROLE / "molecule" / "default" / "tasks" / "assert_parts.yml"
 
 def guard_pattern() -> str:
     text = ASSERT_PARTS.read_text(encoding="utf-8")
-    found = re.findall(r"regex_search\('(\(\?m\)[^']*)'\)", text)
+    found = re.findall(r"^\s+db1_grants_verify_skip_pattern: '([^']*)'$", text, re.MULTILINE)
     if len(found) != 1:
         raise AssertionError(f"expected one verify-skip regex in {ASSERT_PARTS}, found {len(found)}")
     return found[0]
