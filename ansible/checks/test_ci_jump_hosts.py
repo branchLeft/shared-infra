@@ -26,11 +26,12 @@ again on the copy left alone, which is also the real tree.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml  # type: ignore[import-untyped]
 from check_enrolment import JUMP_HOSTS, ROOT
@@ -106,17 +107,62 @@ def _is_jump_entry(entry: object) -> bool:
     return isinstance(name, str) and name == ROLE_ENTRY
 
 
+# The task forms that apply a role from a task list, and the task keys that hold a nested list.
+TASK_FORMS = (
+    "include_role",
+    "import_role",
+    "ansible.builtin.include_role",
+    "ansible.builtin.import_role",
+)
+TASK_LISTS = ("block", "rescue", "always")
+TASK_SECTIONS = ("pre_tasks", "tasks", "post_tasks")
+
+
+def _applications_in(tasks: object, section: str) -> list[str]:
+    """One `<form> in <section>` for each task in the list, nested lists included, that applies
+    the role. The role is matched by its name's last part, so a path to it counts as well."""
+    found: list[str] = []
+    for item in tasks if isinstance(tasks, list) else []:
+        task = _mapping(item)
+        for form in TASK_FORMS:
+            name = _mapping(task.get(form)).get("name")
+            if isinstance(name, str) and PurePosixPath(name).name == ROLE_NAME:
+                found.append(f"{form} in {section}")
+        for nested in TASK_LISTS:
+            found.extend(_applications_in(task.get(nested), section))
+    return found
+
+
+def _task_applications(root: Path, host: str) -> list[str]:
+    """The applications of the role by a task, in the task lists of the one play of a host."""
+    document = _document(root / PLAYBOOKS / f"{host}.yml")
+    play = _mapping(document[0]) if isinstance(document, list) and document else {}
+    return [
+        application
+        for section in TASK_SECTIONS
+        for application in _applications_in(play.get(section), section)
+    ]
+
+
 def _playbook_findings(root: Path, host: str) -> list[str]:
     """The host applies the role once, as a plain role entry that no condition or variable
-    reaches."""
+    reaches. An include_role or import_role of it counts as an application, and is not plain."""
     entries = [entry for entry in _role_entries(root, host) if _is_jump_entry(entry)]
-    if len(entries) != 1:
-        return [f"playbooks/{host}.yml applies {ROLE_NAME} {len(entries)} times, want once"]
-    entry = entries[0]
+    by_task = _task_applications(root, host)
+    total = len(entries) + len(by_task)
+    found = [
+        f"playbooks/{host}.yml applies {ROLE_NAME} by {application}, want a plain role entry"
+        for application in by_task
+    ]
+    if total != 1:
+        found.insert(0, f"playbooks/{host}.yml applies {ROLE_NAME} {total} times, want once")
+    entry = entries[0] if total == 1 and entries else None
     extra = sorted(set(entry) - {"role"}) if isinstance(entry, dict) else []
     if extra:
-        return [f"playbooks/{host}.yml: the {ROLE_NAME} entry carries {extra}, want a plain entry"]
-    return []
+        found.append(
+            f"playbooks/{host}.yml: the {ROLE_NAME} entry carries {extra}, want a plain entry"
+        )
+    return found
 
 
 def _role_findings(root: Path) -> list[str]:
@@ -151,6 +197,13 @@ def _data_findings(root: Path) -> list[str]:
 
     edge1 = _owner_values(root, "edge1")
     for address in _text_list(edge1.get(DESTINATIONS)):
+        try:
+            ipaddress.IPv4Address(address)
+        except ValueError:
+            found.append(
+                f"owner_vars/edge1.yml: {DESTINATIONS} holds {address}, not an IPv4 address"
+            )
+            continue
         if address in private:
             found.append(
                 f"owner_vars/edge1.yml: {DESTINATIONS} holds {address}, a tenants private "
@@ -357,6 +410,42 @@ class Sabotage(unittest.TestCase):
             f"    - role: {ROLE_ENTRY} # noqa: role-name[path]\n      when: false\n",
         )
         self._expect("the ci_jump entry carries ['when']")
+
+    def test_a_host_name_in_edge1s_list_is_red(self) -> None:
+        self._edit(
+            f"{OWNER_VARS}/edge1.yml", f"{DESTINATIONS}:\n", f"{DESTINATIONS}:\n  - 'db-t1'\n"
+        )
+        self._expect("not an IPv4 address")
+
+    def test_an_include_role_of_the_role_in_pre_tasks_is_red(self) -> None:
+        self._edit(
+            f"{PLAYBOOKS}/edget.yml",
+            "  pre_tasks:\n",
+            f"  pre_tasks:\n    - ansible.builtin.include_role:\n        name: {ROLE_ENTRY}\n"
+            "      when: false\n",
+        )
+        self._expect("applies ci_jump 2 times, want once")
+
+    def test_an_import_role_of_the_role_inside_a_block_in_tasks_is_red(self) -> None:
+        last_role = f"    - role: {ROLE_ENTRY} # noqa: role-name[path]\n"
+        self._edit(
+            f"{PLAYBOOKS}/edget.yml",
+            last_role,
+            last_role + "  tasks:\n    - block:\n        - ansible.builtin.import_role:\n"
+            f"            name: {ROLE_ENTRY}\n",
+        )
+        self._expect("applies ci_jump 2 times, want once")
+
+    def test_an_include_role_as_the_only_application_is_red(self) -> None:
+        self._edit(
+            f"{PLAYBOOKS}/edget.yml", f"    - role: {ROLE_ENTRY} # noqa: role-name[path]\n", ""
+        )
+        self._edit(
+            f"{PLAYBOOKS}/edget.yml",
+            "  pre_tasks:\n",
+            f"  pre_tasks:\n    - ansible.builtin.include_role:\n        name: {ROLE_ENTRY}\n",
+        )
+        self._expect("want a plain role entry")
 
     def test_a_host_branch_in_the_role_is_red(self) -> None:
         path = self.root / ROLE_DIR / "tasks" / "main.yml"
