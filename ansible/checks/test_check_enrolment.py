@@ -1447,9 +1447,19 @@ class Sabotage(unittest.TestCase):
     # R2: a host with no row in the table keeps the exact pin (sabotage c).
     def test_r2_pinned_play_var_on_a_host_with_no_row(self) -> None:
         self._edit(
+            "playbooks/demo1.yml",
+            "    enrolled_host: demo1\n",
+            "    enrolled_host: demo1\n    deploy_tooling_host_class: gateway\n",
+        )
+        self._assert_one("R2 demo1.yml: vars must be exactly")
+
+    # R2: the class of a host with a row is exact too, so ops1 cannot be moved to another class
+    # in its playbook (sabotage c2).
+    def test_r2_internal_class_with_another_class(self) -> None:
+        self._edit(
             "playbooks/ops1.yml",
-            "    enrolled_host: ops1\n",
-            "    enrolled_host: ops1\n    deploy_tooling_host_class: gateway\n",
+            "deploy_tooling_host_class: internal",
+            "deploy_tooling_host_class: gateway",
         )
         self._assert_one("R2 ops1.yml: vars must be exactly")
 

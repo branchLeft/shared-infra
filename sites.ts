@@ -150,6 +150,22 @@ export const sites: EdgeSite[] = [
     // only HSTS to a proxied site and leaves every other response header alone.
     requestBodyMaxSize: '64KiB',
   },
+
+  {
+    // The public status page, served by the Gatus stack on ops1 (the
+    // status_page role). Port 8303 must match that role's status_page_port
+    // and the DOCKER-USER protected ports of ops1's isolation policy (the drop
+    // that confines the port to the gateway): the three move together.
+    // The DNS record for this hostname must be live before this entry is
+    // applied: Caddy requests a certificate as soon as the block renders, and
+    // a failed HTTP-01 validation costs the account's failure budget.
+    name: 'status',
+    hostnames: ['status.branchleft.co.uk'],
+    privateUpstream: { host: 'ops1', port: 8303 },
+    backend: 'other',
+    // The page answers GET requests only; no upload surface exists.
+    requestBodyMaxSize: '64KiB',
+  },
 ];
 
 /**

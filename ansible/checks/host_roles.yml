@@ -37,6 +37,7 @@ ops1:
   - breakglass_mint_host
   - status_page
   - deploy_verifier
+  - deploy_tooling
   - control_plane
   - nextcloud_stack
   - backup_worker
@@ -59,6 +60,7 @@ app1:
 db1:
   - host_inputs
   - deploy_verifier
+  - deploy_tooling
   - db1_stack
   - db1_backup_timers
   - db1_grants
@@ -86,7 +88,10 @@ appt1:
   - egress_nat
   - deploy_verifier
   - deploy_tooling
+# demo1, the demo host. broker_deploy first: demo1_build reads what it leaves behind. It refuses
+# until a release and a verify key are carried in the role. host_baseline and egress_nat stay off.
 demo1:
+  - broker_deploy
   - demo1_build
   - demo1_egress_spool
 # mx1, the mail host. One role after the pull roles: the host baseline only. It has no

@@ -28,6 +28,7 @@ from pathlib import Path
 
 ROLE = Path(__file__).resolve().parents[2]
 SCENARIO_RELEASE = ROLE / "molecule" / "default" / "files" / "release"
+SCENARIO_KEY = ROLE / "molecule" / "default" / "files" / "verify-key-stand-in.bin"
 VERSION = "0.0.1"
 REFUSED = "are not exactly the files pinned"
 
@@ -87,6 +88,9 @@ class Lab(unittest.TestCase):
         self.releases = self.root / "opt" / "releases"
         self.current = self.root / "opt" / "current"
         self.pins = {VERSION: pins_of(self.carried)}
+        self.key = self.root / "verify-key.bin"
+        shutil.copyfile(SCENARIO_KEY, self.key)
+        self.key_sha256 = sha256(self.key)
         self.play = self.root / "play.yml"
         self.play.write_text(
             "- hosts: localhost\n"
@@ -107,12 +111,17 @@ class Lab(unittest.TestCase):
         *,
         check: bool = False,
         pins: dict[str, dict[str, str]] | None = None,
+        key_sha256: str | None = None,
     ) -> Outcome:
         """Run the pin check and the release tasks once."""
         variables: dict[str, object] = {
             "broker_deploy_release_version": version,
             "broker_deploy_release_pins": self.pins if pins is None else pins,
             "broker_deploy_release_dir": str(self.release_dir),
+            "broker_deploy_verify_key_src": str(self.key),
+            "broker_deploy_verify_key_sha256": (
+                self.key_sha256 if key_sha256 is None else key_sha256
+            ),
             "broker_deploy_releases_dir": str(self.releases),
             "broker_deploy_current_link": str(self.current),
             "broker_deploy_release_owner": pwd.getpwuid(os.getuid()).pw_name,
@@ -269,6 +278,33 @@ class Refusals(Lab):
                     self.run_role(pins={VERSION: pins}),
                     "A pinned path must be a plain relative path",
                 )
+
+    def test_a_verify_key_with_no_pin_is_refused(self) -> None:
+        for digest in ("", "0" * 63, self.key_sha256.upper(), "sha256:" + self.key_sha256):
+            with self.subTest(digest=digest):
+                self.refused(self.run_role(key_sha256=digest), "No verify key is pinned")
+
+    def test_a_verify_key_that_is_not_the_pinned_one_is_refused(self) -> None:
+        self.key.write_bytes(b"\x01" * 32)
+        self.refused(self.run_role(), "is not a plain 32-byte file with its pinned sha256")
+
+    def test_a_verify_key_of_the_wrong_length_is_refused_even_with_its_own_pin(self) -> None:
+        self.key.write_bytes(b"\x00" * 31)
+        self.refused(
+            self.run_role(key_sha256=sha256(self.key)),
+            "is not a plain 32-byte file with its pinned sha256",
+        )
+
+    def test_a_verify_key_that_is_missing_or_a_link_is_refused(self) -> None:
+        real = self.root / "elsewhere.bin"
+        real.write_bytes(self.key.read_bytes())
+        self.key.unlink()
+        self.refused(self.run_role(), "is not a plain 32-byte file with its pinned sha256")
+        self.key.symlink_to(real)
+        self.refused(self.run_role(), "is not a plain 32-byte file with its pinned sha256")
+
+    def test_a_check_mode_run_refuses_an_unpinned_key_too(self) -> None:
+        self.refused(self.run_role(check=True, key_sha256=""), "No verify key is pinned")
 
 
 if __name__ == "__main__":

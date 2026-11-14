@@ -1,6 +1,7 @@
 """demo1's roles reach neither GitHub nor its container registry, and hold their vendored files.
 
-demo1's egress allowlist holds the package mirrors only. Its files arrive in the signed commit
+demo1's egress allowlist holds the package mirrors, and one more host: nodejs.org, for the
+broker's Node runtime, pinned by its sha256. Its files arrive in the signed commit
 the host checks out, so a role that applies to it must fetch nothing from
 raw.githubusercontent.com or ghcr.io, and must not pull an image. Three properties, each read
 from the tree:
@@ -8,14 +9,17 @@ from the tree:
 * no task, handler, default, variable, argument spec or template of a role the demo1 playbook
   applies names either host, or uses a module or command that fetches (get_url, a uri to an
   address that is not the host's own, git, a Docker image or login module, docker pull,
-  compose pull, docker login);
+  compose pull, docker login), except the one download below;
 * every file under files/ghost-platform of demo1_build and demo1_egress_spool is listed in the
   role's pins, every pin has its file, and each file has its pinned sha256;
 * each of the two roles checks its vendored files right after its inputs, before any other step.
 
+The one download is broker_deploy's Node runtime (see download_problems). Any other get_url is
+still a finding.
+
 Not covered, and named: the vendored files themselves are not scanned (they are upstream's text,
-held to their pins, and the host runs them), and nothing here compares them with
-branchLeft/ghost-platform. The README of each role says so.
+held to their pins, and the host runs them), nothing here compares them with
+branchLeft/ghost-platform, and the host's own firewall is not read. The README of each role says so.
 """
 
 from __future__ import annotations
@@ -25,10 +29,14 @@ import re
 import shutil
 import tempfile
 import unittest
+from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, cast
 
 from check_pins import load_yaml
+from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
+from ruamel.yaml.error import YAMLError
 
 ROOT = Path(__file__).resolve().parents[2]
 PLAYBOOK = Path("ansible/playbooks/demo1.yml")
@@ -69,6 +77,23 @@ MODULE_LINE = re.compile(r"^(?P<indent>\s*)(?:-\s+)?(?P<name>[A-Za-z_][\w.]*)\s*
 COMMENT = re.compile(r"(^|\s)#.*$")
 INCLUDE = "ansible.builtin.include_tasks"
 LABEL = "ansible/roles/demo1_build/tasks/_release.yml"
+
+# The one host a role on demo1 may download from, and only for the broker runtime, which the
+# role holds to a sha256 pin. https, the default port, no other host and no suffix of it.
+ALLOWED_DOWNLOAD_BASE = "https://nodejs.org/dist"
+DOWNLOAD_ROLE = "broker_deploy"
+DOWNLOAD_TASKS = ROLES / DOWNLOAD_ROLE / "tasks" / "main.yml"
+DOWNLOAD_DEFAULTS = ROLES / DOWNLOAD_ROLE / "defaults" / "main.yml"
+DOWNLOAD_MODULES = ("get_url", "ansible.builtin.get_url")
+DOWNLOAD_URL = (
+    "{{ broker_deploy_node_base_url }}/{{ broker_deploy_node_version }}"
+    "/node-{{ broker_deploy_node_version }}-linux-{{ broker_deploy_node_arch }}.tar.xz"
+)
+DOWNLOAD_CHECKSUM = "{{ broker_deploy_node_checksums[broker_deploy_node_arch] }}"
+DOWNLOAD_ARGUMENTS = frozenset({"url", "dest", "checksum", "owner", "group", "mode"})
+SHA256_PIN = re.compile(r"sha256:[0-9a-f]{64}")
+BASE_URL_VARIABLE = "broker_deploy_node_base_url"
+FETCH_FINDING = "{label}:{line}: uses the get_url module, which fetches"
 
 
 class DemoFetchError(Exception):
@@ -145,6 +170,94 @@ def file_findings(path: Path, label: str) -> list[str]:
     return findings
 
 
+def mappings_in(node: object) -> Iterator[dict[str, object]]:
+    """Yield every mapping inside a parsed YAML value, blocks and their sections included."""
+    if isinstance(node, dict):
+        yield cast("dict[str, object]", node)
+        for value in node.values():
+            yield from mappings_in(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from mappings_in(item)
+
+
+def download_problems(root: Path, arguments: dict[str, object]) -> list[str]:
+    """Return one line for each way the broker's Node download is not the one permitted.
+
+    The download is permitted only when its arguments are the url, dest, checksum, owner, group
+    and mode and no others, its url is the exact shape under the role's base url, its checksum
+    is the role's table of pins, the role's default base url is exactly ALLOWED_DOWNLOAD_BASE,
+    every pin in the table is a sha256, and no file of the role other than its defaults sets
+    the base url. An empty list means permitted.
+    """
+    found = [
+        f"the download has an argument that is not allowed: {name}"
+        for name in sorted(arguments.keys() - DOWNLOAD_ARGUMENTS)
+    ]
+    if arguments.get("url") != DOWNLOAD_URL:
+        found.append("the download url is not the pinned shape under the role's base url")
+    if arguments.get("checksum") != DOWNLOAD_CHECKSUM:
+        found.append("the download does not carry the role's table of sha256 pins as its checksum")
+    defaults, problem = load_yaml(root / DOWNLOAD_DEFAULTS)
+    if problem is not None or not isinstance(defaults, dict):
+        return [*found, "the role's defaults cannot be read"]
+    if defaults.get(BASE_URL_VARIABLE) != ALLOWED_DOWNLOAD_BASE:
+        found.append(f"the role's base url is not exactly {ALLOWED_DOWNLOAD_BASE}")
+    pins = defaults.get("broker_deploy_node_checksums")
+    if not isinstance(pins, dict) or not pins:
+        found.append("the role has no table of sha256 pins")
+    elif not all(isinstance(pin, str) and SHA256_PIN.fullmatch(pin) for pin in pins.values()):
+        found.append("a pin in the role's table is not a sha256")
+    found.extend(f"{name} sets the base url" for name in base_url_setters(root))
+    return found
+
+
+def base_url_setters(root: Path) -> list[str]:
+    """Return the files of the role, other than its defaults, that name the base url.
+
+    A use of the variable as a template, with nothing around it, is not a setting.
+    """
+    base = root / ROLES / DOWNLOAD_ROLE
+    use = "{{ " + BASE_URL_VARIABLE + " }}"
+    names: list[str] = []
+    for area in AREAS:
+        directory = base / area
+        for path in sorted(directory.rglob("*")) if directory.is_dir() else []:
+            if path.is_file() and path != root / DOWNLOAD_DEFAULTS:
+                text = path.read_text(encoding="utf-8")
+                if BASE_URL_VARIABLE in text.replace(use, ""):
+                    names.append(path.relative_to(root).as_posix())
+    return names
+
+
+def permitted_download_lines(root: Path, path: Path) -> set[int]:
+    """Return the line of the one download a file may make, empty when none is permitted.
+
+    Only broker_deploy's tasks/main.yml is looked at, and only when it holds exactly one
+    get_url (of any collection) and that one is permitted by download_problems.
+    """
+    if path.relative_to(root) != DOWNLOAD_TASKS:
+        return set()
+    try:
+        document = YAML(typ="rt").load(path.read_text(encoding="utf-8"))
+    except (OSError, YAMLError):
+        return set()
+    fetches = [
+        (task, key)
+        for task in mappings_in(document)
+        for key in task
+        if short_name(str(key)) == "get_url" and isinstance(task[key], dict)
+    ]
+    if len(fetches) != 1:
+        return set()
+    task, key = fetches[0]
+    arguments = cast("dict[str, object]", task[key])
+    if key not in DOWNLOAD_MODULES or download_problems(root, arguments):
+        return set()
+    lines = cast("CommentedMap", task).lc.data
+    return {int(lines[key][0]) + 1}
+
+
 def role_findings(root: Path, role: str) -> list[str]:
     """Return every fetch the areas of a role make, each as 'path:line: what'."""
     base = root / ROLES / role
@@ -154,7 +267,14 @@ def role_findings(root: Path, role: str) -> list[str]:
         paths = sorted(directory.rglob("*")) if directory.is_dir() else []
         for path in paths:
             if path.is_file() and path.suffix in (".yml", ".yaml", ".j2"):
-                findings.extend(file_findings(path, path.relative_to(root).as_posix()))
+                label = path.relative_to(root).as_posix()
+                permitted = {
+                    FETCH_FINDING.format(label=label, line=line)
+                    for line in permitted_download_lines(root, path)
+                }
+                findings.extend(
+                    finding for finding in file_findings(path, label) if finding not in permitted
+                )
     return findings
 
 
@@ -262,13 +382,137 @@ def copy_role(tree: Path, role: str) -> Path:
     return target
 
 
+def node_task_text() -> str:
+    """Return the text of broker_deploy's Node download task, from its name to the next task."""
+    text = (ROOT / DOWNLOAD_TASKS).read_text(encoding="utf-8")
+    start = text.index("- name: Download the Node tarball")
+    return text[start : text.index("\n\n", start)] + "\n"
+
+
+def replacing(old: str, new: str) -> Callable[[str], str]:
+    """Return an edit that puts a new text for the first occurrence of an old one."""
+
+    def edit(text: str) -> str:
+        return text.replace(old, new, 1)
+
+    return edit
+
+
+def get_url_findings_after(relative: str, edit: Callable[[str], str]) -> list[str]:
+    """Edit one file of a copy of broker_deploy and return the get_url findings that result.
+
+    Raises:
+        DemoFetchError: when the edit changes nothing, so the case would prove nothing.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = Path(tmp)
+        path = copy_role(tree, DOWNLOAD_ROLE) / relative
+        before = path.read_text(encoding="utf-8") if path.exists() else ""
+        after = edit(before)
+        if after == before:
+            refuse(f"the edit changed nothing in {relative}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(after, encoding="utf-8")
+        return [line for line in role_findings(tree, DOWNLOAD_ROLE) if "get_url" in line]
+
+
 class NoGithubFetchTest(unittest.TestCase):
     def test_the_real_tree_fetches_nothing(self) -> None:
         self.assertEqual([], fetch_findings(ROOT))
 
-    def test_the_playbook_applies_the_four_roles_the_check_reads(self) -> None:
+    def test_the_one_node_download_is_what_is_let_through(self) -> None:
+        self.assertEqual(1, len(permitted_download_lines(ROOT, ROOT / DOWNLOAD_TASKS)))
+        text = node_task_text()
+        self.assertIn("ansible.builtin.get_url:", text)
+        self.assertIn("checksum:", text)
+
+    def test_a_download_with_no_checksum_or_the_wrong_one_is_named(self) -> None:
+        pins = "{{ broker_deploy_node_checksums[broker_deploy_node_arch] }}"
+        cases = {
+            "no checksum": lambda text: text.replace(f"    checksum: '{pins}'\n", "", 1),
+            "a checksum of its own": lambda text: text.replace(pins, "sha256:{{ sha }}", 1),
+            "validation off": lambda text: text.replace(
+                "    mode: '0644'\n  when: broker_deploy_node_needed\n\n# Skipped",
+                "    mode: '0644'\n    validate_certs: false\n  when: broker_deploy_node_needed"
+                "\n\n# Skipped",
+                1,
+            ),
+            "another url": lambda text: text.replace(
+                "url: '{{ broker_deploy_node_base_url }}/", "url: 'https://nodejs.org/x/", 1
+            ),
+        }
+        for name, edit in cases.items():
+            with self.subTest(name=name):
+                self.assertTrue(get_url_findings_after("tasks/main.yml", edit), name)
+
+    def test_a_download_from_any_other_host_is_named(self) -> None:
+        hosts = (
+            "https://github.com/nodejs/node/releases/download",
+            "https://raw.githubusercontent.com/nodejs/node/main",
+            "https://example.org/dist",
+            "https://nodejs.org.example.org/dist",
+            "https://evilnodejs.org/dist",
+            "https://www.nodejs.org/dist",
+            "https://nodejs.org:8443/dist",
+            "http://nodejs.org/dist",
+            "https://nodejs.org/dist/",
+            "",
+        )
+        old = f"{BASE_URL_VARIABLE}: {ALLOWED_DOWNLOAD_BASE}"
+        for host in hosts:
+            with self.subTest(host=host):
+                found = get_url_findings_after(
+                    "defaults/main.yml", replacing(old, f"{BASE_URL_VARIABLE}: '{host}'")
+                )
+                self.assertTrue(found, host)
+
+    def test_a_pin_that_is_not_a_sha256_is_named(self) -> None:
+        arm = "036df0b49662ebb350eb56f1cac603699b1e9ed1e2603ee129fefda473479030"
+        for name, new in {
+            "a short digest": "sha256:036df0b49662",
+            "another algorithm": f"sha1:{arm[:40]}",
+            "an empty pin": "",
+            "upper case": f"sha256:{arm.upper()}",
+        }.items():
+            with self.subTest(name=name):
+                found = get_url_findings_after("defaults/main.yml", replacing(f"sha256:{arm}", new))
+                self.assertTrue(found, name)
+
+    def test_a_second_download_is_named_and_so_is_the_first(self) -> None:
+        found = get_url_findings_after(
+            "tasks/main.yml", lambda text: text + "\n" + node_task_text()
+        )
+        self.assertEqual(2, len(found), found)
+
+    def test_the_same_download_in_another_file_of_the_role_is_named(self) -> None:
+        found = get_url_findings_after("tasks/_other.yml", lambda _: node_task_text())
+        self.assertEqual(1, len(found), found)
+
+    def test_the_same_download_in_another_role_is_named(self) -> None:
+        for role in ("demo1_build", "demo1_egress_spool", "pull_trigger", "ansible_runtime"):
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as tmp:
+                tree = Path(tmp)
+                copy_role(tree, DOWNLOAD_ROLE)
+                tasks = tree / ROLES / role / "tasks"
+                tasks.mkdir(parents=True)
+                (tasks / "main.yml").write_text(node_task_text(), encoding="utf-8")
+                found = [line for line in role_findings(tree, role) if "get_url" in line]
+                self.assertEqual(1, len(found), found)
+
+    def test_a_second_place_that_sets_the_base_url_is_named(self) -> None:
+        text = doc(f"{BASE_URL_VARIABLE}: https://example.org/dist")
+        found = get_url_findings_after("vars/main.yml", lambda _: text)
+        self.assertEqual(1, len(found), found)
+
+    def test_the_playbook_applies_the_five_roles_the_check_reads(self) -> None:
         self.assertEqual(
-            ["ansible_runtime", "pull_trigger", "demo1_build", "demo1_egress_spool"],
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "broker_deploy",
+                "demo1_build",
+                "demo1_egress_spool",
+            ],
             playbook_roles(ROOT),
         )
 

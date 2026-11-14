@@ -20,11 +20,11 @@
         name: branchleft.status_page
         rolespec_validate: '{{ refuse_validate }}'
       vars:
-        status_page_listen_address: 0.0.0.0
+        status_page_listen_address: '{{ refuse_address | ansible.builtin.default("0.0.0.0") }}'
 
     - name: Fail because the role accepted the address
       ansible.builtin.fail:
-        msg: The role accepted a listen address that is not loopback.
+        msg: The role accepted a listen address the role does not allow.
   rescue:
     - name: Assert the expected check refused the address
       ansible.builtin.assert:

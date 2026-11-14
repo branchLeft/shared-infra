@@ -3,10 +3,13 @@
   hosts: all
   gather_facts: false
   tasks:
-    # No variable is set: the role runs with its defaults, which is how the
-    # ops1 playbook applies it.
+    # The listen address is loopback here: the container holds no ops1 private
+    # address, so the role's default (ops1's, which the ops1 playbook applies)
+    # could not bind. Every other value is the role's own.
     - name: Apply the role
       ansible.builtin.include_role:
         # Molecule links the role under its namespace and name, the namespace
         # from galaxy_info in meta/main.yml.
         name: branchleft.status_page
+      vars:
+        status_page_listen_address: 127.0.0.1

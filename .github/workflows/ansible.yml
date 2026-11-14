@@ -182,6 +182,7 @@ jobs:
             hetzner-host/cloudInit.ts
             hetzner-host/pullBootstrapFixed.json
             mail/
+            scripts/
           )
           git diff --name-only -z --no-renames "$base" "$head" > "$RUNNER_TEMP/changed-files.z"
           echo "changed=$RUNNER_TEMP/changed-files.z" >> "$GITHUB_OUTPUT"

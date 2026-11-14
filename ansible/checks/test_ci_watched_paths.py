@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github" / "workflows" / "ansible.yml"
 FILTER = re.compile(r"watched=\(\n(.*?)\n\s*\)", re.DOTALL)
 # The directories watched whole, whatever they hold now or later.
-WHOLE = ("ansible/", "hetzner/", "mail/")
+WHOLE = ("ansible/", "hetzner/", "mail/", "scripts/")
 # The hand-step ratchet register: every runbook it counts must be a path the filter watches.
 REGISTER = Path(__file__).resolve().parent / "hand_runbook_steps.yml"
 

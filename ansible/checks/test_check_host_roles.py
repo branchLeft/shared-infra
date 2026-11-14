@@ -72,11 +72,14 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # export_bundler (last of all), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
-# (first), control_plane after the status page, then nextcloud_stack, backup_worker and
+# (first), control_plane, then the status page (it binds the private address, so it follows the
+# role that installs the drop for its port), then nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it
 # only reads), and ring_controller_host last of all so its failure holds nothing else back, and
-# demo1's two build roles.
+# demo1's broker_deploy (first, because demo1_build reads what it leaves behind) and its two build
+# roles. ops1 and db1 also apply deploy_tooling (class internal) straight after deploy_verifier,
+# before the roles that run the deploy wrapper.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -99,9 +102,10 @@ APPLIED_ON_MAIN = {
         "breakglass_mint_host",
         "safety_service",
         "safety_channel_key",
-        "status_page",
         "deploy_verifier",
+        "deploy_tooling",
         "control_plane",
+        "status_page",
         "nextcloud_stack",
         "backup_worker",
         "backup_restore",
@@ -126,17 +130,20 @@ APPLIED_ON_MAIN = {
         "host_inputs",
         "host_baseline",
         "deploy_verifier",
+        "deploy_tooling",
         "db1_stack",
         "db1_backup_timers",
         "node_exporter",
         "db1_grants",
     ],
-    "demo1": ["demo1_build", "demo1_egress_spool"],
+    "demo1": ["broker_deploy", "demo1_build", "demo1_egress_spool"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {
     "edge1": "    deploy_tooling_host_class: gateway\n    egress_nat_gateway_enabled: true\n",
     "app1": "    deploy_tooling_host_class: app\n    deploy_tooling_policy_variant: standard\n",
+    "ops1": "    deploy_tooling_host_class: internal\n",
+    "db1": "    deploy_tooling_host_class: internal\n",
 }
 
 
@@ -329,6 +336,7 @@ class HostRoleLists(unittest.TestCase):
                 "host_inputs",
                 "host_baseline",
                 "deploy_verifier",
+                "deploy_tooling",
                 "db1_stack",
                 "db1_backup_timers",
                 "node_exporter",
@@ -379,13 +387,13 @@ class HostRoleLists(unittest.TestCase):
         self.assertLess(names.index("egress_nat"), names.index("edge_stack"))
         self.assertEqual(check(ROOT), [])
 
-    # ops1 applies the loader first (R11), the roles it had before (control_plane keeps its place
-    # after the status page, #530), then the roles that take the loader's inputs or adopt a hand
-    # copy, last, so their failure holds nothing else back. The restore reads the worker's
-    # variables in the same play, so it follows the worker. The database role is last: it
-    # asserts the directory control_plane makes and holds nothing else back. Red when any role
-    # moves or is dropped, green with the twelve named in this order. The node exporter is last, so
-    # its disk check cannot hold any other role back.
+    # ops1 applies the loader first (R11), the roles it had before (the status page follows
+    # control_plane, which installs the drop for its port), then the roles that take the loader's
+    # inputs or adopt a hand copy, last, so their failure holds nothing else back. The restore
+    # reads the worker's variables in the same play, so it follows the worker. The database role
+    # is last: it asserts the directory control_plane makes and holds nothing else back. Red when
+    # any role moves or is dropped, green with the twelve named in this order. The node exporter
+    # is last, so its disk check cannot hold any other role back.
     def test_ops1_applies_the_loader_first_and_the_backup_restore_after_the_backup_worker(
         self,
     ) -> None:
@@ -401,9 +409,10 @@ class HostRoleLists(unittest.TestCase):
                 "breakglass_mint_host",
                 "safety_service",
                 "safety_channel_key",
-                "status_page",
                 "deploy_verifier",
+                "deploy_tooling",
                 "control_plane",
+                "status_page",
                 "nextcloud_stack",
                 "backup_worker",
                 "backup_restore",
@@ -474,18 +483,27 @@ class HostRoleLists(unittest.TestCase):
             del HOST_PLAY_VARS["app1"]
             self._assert_refused("app1", "vars must be exactly")
 
-    # Safety class: demo1 is held off host_baseline, egress_nat and broker_deploy by its own
-    # list in host_roles.yml. Green first: the real playbook applies exactly the pull roles then
-    # its two build roles and the real tree passes. Red: each of the three roles added to the real
-    # playbook is refused by name, and with demo1's line deleted from the list both build roles are.
+    # Safety class: demo1 is held off host_baseline and egress_nat by its own list in
+    # host_roles.yml. Green first: the real playbook applies exactly the pull roles then
+    # broker_deploy and its two build roles, and the real tree passes. Red: each of the two roles
+    # added to the real playbook is refused by name, and with demo1's line deleted from the list
+    # the three applied roles are. The last case is the register sabotage: broker_deploy's row
+    # removed from demo1's list alone turns the real playbook red.
     def test_demo1_applies_only_its_build_roles(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "demo1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
         self.assertEqual(
-            names, ["ansible_runtime", "pull_trigger", "demo1_build", "demo1_egress_spool"]
+            names,
+            [
+                "ansible_runtime",
+                "pull_trigger",
+                "broker_deploy",
+                "demo1_build",
+                "demo1_egress_spool",
+            ],
         )
         self.assertEqual(check(ROOT), [])
-        for name in ("host_baseline", "egress_nat", "broker_deploy"):
+        for name in ("host_baseline", "egress_nat"):
             with self.subTest(role=name):
                 self.assertNotIn(name, self.listed["demo1"], "the case is a role on demo1's list")
                 path = self.ansible / "playbooks" / "demo1.yml"
@@ -494,12 +512,16 @@ class HostRoleLists(unittest.TestCase):
         (self.ansible / "playbooks" / "demo1.yml").write_text(self.real["demo1"], encoding="utf-8")
         path = self.ansible / HOST_ROLES_FILE
         listed = path.read_text(encoding="utf-8")
-        line = "demo1:\n  - demo1_build\n  - demo1_egress_spool\n"
+        line = "demo1:\n  - broker_deploy\n  - demo1_build\n  - demo1_egress_spool\n"
         self.assertIn(line, listed, "the sabotage matched nothing")
         self._list_file(listed.replace(line, "", 1))
-        for name in ("demo1_build", "demo1_egress_spool"):
+        for name in ("broker_deploy", "demo1_build", "demo1_egress_spool"):
             with self.subTest(role=name, list="deleted"):
                 self._assert_refused("demo1", f"role {name} is not on demo1's list")
+        row = "  - broker_deploy\n"
+        self.assertIn(row, listed, "the sabotage matched nothing")
+        self._list_file(listed.replace(row, "", 1))
+        self._assert_refused("demo1", "role broker_deploy is not on demo1's list")
 
     # Positive control: every role on a host's list, in the list's order and in reverse, passes.
     # Most of these roles have no directory on main, so a name with no role behind it passes too.
@@ -707,7 +729,7 @@ class HostRoleLists(unittest.TestCase):
         cases = (
             ("edge1", "db1_stack"),
             ("edge1", "tunnel_account"),
-            ("ops1", "deploy_tooling"),
+            ("ops1", "deploy_slot_keys"),
             ("ops1", "monitoring_stack"),
             ("app1", "breakglass_mint_host"),
             ("app1", "control_plane"),
