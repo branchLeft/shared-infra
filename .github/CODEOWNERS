@@ -108,6 +108,9 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/safety_channel_key/                           @branchLeft/branchleft-admin
 /ansible/roles/ring_controller_host/                         @branchLeft/branchleft-admin
 /ansible/roles/safety_service/                               @branchLeft/branchleft-admin
+/ansible/roles/mail_collector/                                @branchLeft/branchleft-admin
+/ansible/roles/spool_paths/                                   @branchLeft/branchleft-admin
+/ansible/roles/spool_path_account/                            @branchLeft/branchleft-admin
 /ansible/roles/db1_grants/                                   @branchLeft/branchleft-admin
 /ansible/roles/breakglass_grant_host/                        @branchLeft/branchleft-admin
 /ansible/roles/breakglass_mint_host/                         @branchLeft/branchleft-admin

@@ -1,0 +1,15 @@
+# Written by the spool_path_account role. Change the role's inputs, not this file.
+Match User {{ spool_path_account_user }}
+    AuthorizedKeysFile {{ spool_path_account_authorized_keys_file }}
+    AuthenticationMethods publickey
+    AllowTcpForwarding local
+    PermitOpen {{ spool_path_account_loopback }}:{{ spool_path_account_spool_port }}
+    GatewayPorts no
+    AllowAgentForwarding no
+    AllowStreamLocalForwarding no
+    X11Forwarding no
+    PermitTTY no
+    PermitTunnel no
+    PermitUserRC no
+    ForceCommand {{ spool_path_account_nologin }}
+Match all

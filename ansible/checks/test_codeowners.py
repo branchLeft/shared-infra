@@ -275,7 +275,10 @@ BOOTSTRAP_GUARD_PATHS = [
 # whole role is the owner's, its module, units, environment template and the tests that hold them
 # included. The ring controller role also installs the unit that hands its root-only key to a
 # service account, and safety_service installs the unit that mounts the channel key and the
-# hash-source credential.
+# hash-source credential. mail_collector installs the unit that passes the owner's credentials
+# file to the collector, spool_paths installs the unit that holds the ssh key to every spool and
+# writes its client configuration, and spool_path_account makes the far-host account and the key
+# line that bounds what that key may open.
 KEY_ROLE_PATHS = [
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
@@ -297,6 +300,29 @@ KEY_ROLE_PATHS = [
     "ansible/roles/safety_service/templates/config.json.j2",
     "ansible/roles/safety_service/tests/unit/test_safety_service.py",
     "ansible/roles/safety_service/molecule/default/verify.yml",
+    "ansible/roles/mail_collector/tasks/main.yml",
+    "ansible/roles/mail_collector/vars/main.yml",
+    "ansible/roles/mail_collector/meta/argument_specs.yml",
+    "ansible/roles/mail_collector/files/mail-collector.service",
+    "ansible/roles/mail_collector/templates/unit.env.j2",
+    "ansible/roles/mail_collector/templates/collector.env.j2",
+    "ansible/roles/mail_collector/tests/unit/test_mail_collector.py",
+    "ansible/roles/mail_collector/molecule/default/verify.yml",
+    "ansible/roles/spool_paths/tasks/main.yml",
+    "ansible/roles/spool_paths/vars/main.yml",
+    "ansible/roles/spool_paths/meta/argument_specs.yml",
+    "ansible/roles/spool_paths/library/spool_paths_plan.py",
+    "ansible/roles/spool_paths/files/branchleft-spool-path@.service",
+    "ansible/roles/spool_paths/templates/path.conf.j2",
+    "ansible/roles/spool_paths/templates/known_hosts.j2",
+    "ansible/roles/spool_paths/tests/unit/test_spool_paths_forward.py",
+    "ansible/roles/spool_path_account/tasks/main.yml",
+    "ansible/roles/spool_path_account/vars/main.yml",
+    "ansible/roles/spool_path_account/meta/argument_specs.yml",
+    "ansible/roles/spool_path_account/library/spool_path_listener_check.py",
+    "ansible/roles/spool_path_account/templates/authorized_keys.j2",
+    "ansible/roles/spool_path_account/templates/sshd-drop-in.conf.j2",
+    "ansible/roles/spool_path_account/tests/unit/test_spool_path_account.py",
 ]
 
 # Roles that write sshd, sudoers, authorized_keys, login accounts, database grants, a break-glass

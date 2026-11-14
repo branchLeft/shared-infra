@@ -1,0 +1,8 @@
+---
+# Skipped in check mode with a stated reason (ANS-10): check mode writes no file, so there is
+# nothing for sshd to reload.
+- name: Reload sshd
+  ansible.builtin.systemd_service:
+    name: '{{ spool_path_account_sshd_service }}'
+    state: reloaded
+  when: not ansible_check_mode
