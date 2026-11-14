@@ -487,7 +487,7 @@ jobs:
       # keeps this the only copy, run in the "Test the checks" step above and in
       # scripts/test_merge_group_triggers.py.
       - name: Run every role's unit tests
-        run: 'PYTHON="$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/run_role_unit_tests.sh ansible'
+        run: 'PYTHON="$RUNNER_TEMP/ansible-venv/bin/python" python3 ansible/checks/run_role_unit_tests.py ansible'
 
   # The blocking shards: the ones named in ansible/checks/blocking_shards.json, and every
   # shard on a scheduled or manual run. The gate job waits for this job and fails with it.
