@@ -163,10 +163,10 @@ if rest[:3] == ["exec", "-T", "crowdsec"]:
         inside = tail[1]
         single = {
             "/etc/crowdsec/config.yaml.local": "config.yaml.local",
-            "/etc/crowdsec/appsec-configs/branchleft-ghost-admin-previews.yaml":
-                "ghost-admin-previews.yaml",
-            "/etc/crowdsec/postoverflows/s01-whitelist/branchleft-ghost-admin-api.yaml":
-                "ghost-admin-api-postoverflow.yaml",
+            "/etc/crowdsec/appsec-configs/branchleft/ghost-admin-previews.yaml":
+                "appsec-configs/ghost-admin-previews.yaml",
+            "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/ghost-admin-api-postoverflow.yaml":
+                "postoverflows/ghost-admin-api-postoverflow.yaml",
         }
         if inside in single:
             source = project + "/crowdsec/" + single[inside]
@@ -304,8 +304,12 @@ class Tree:
         (self.project / "caddy" / "Caddyfile").write_bytes(b"old\n")
         (self.project / "compose.yml").write_bytes(b"old\n")
         (self.project / "crowdsec" / "config.yaml.local").write_bytes(CONFIG)
-        (self.project / "crowdsec" / "ghost-admin-previews.yaml").write_bytes(b"name: a\n")
-        (self.project / "crowdsec" / "ghost-admin-api-postoverflow.yaml").write_bytes(b"name: b\n")
+        for name, text in (
+            ("appsec-configs/ghost-admin-previews.yaml", b"name: a\n"),
+            ("postoverflows/ghost-admin-api-postoverflow.yaml", b"name: b\n"),
+        ):
+            (self.project / "crowdsec" / name).parent.mkdir(exist_ok=True)
+            (self.project / "crowdsec" / name).write_bytes(text)
         (self.project / "crowdsec" / "acquis.d" / "a.yaml").write_bytes(ACQUIS)
         self.image_env.write_text(PIN + "\n")
         self.env_file.write_text("KEY=throwaway\n")

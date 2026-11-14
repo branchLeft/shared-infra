@@ -1009,7 +1009,8 @@ export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
   return `${[
     ...GENERATED_BANNER,
     `name: ${APPSEC_CONFIG_GHOST_ADMIN}`,
-    'description: Ghost admin design and announcement previews on our Ghost hostnames',
+    // No `description:`: CrowdSec reads an appsec-config strictly and has no such field.
+    '# Ghost admin design and announcement previews, on our Ghost hostnames only.',
     'pre_eval:',
     '  - filter: >-',
     '      IsOutBand == true &&',

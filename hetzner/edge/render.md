@@ -478,7 +478,7 @@ from the registries.
 
 ## Ghost admin preview exclusion
 
-`renderGhostAdminAppsecConfig` writes `stack/crowdsec/ghost-admin-previews.yaml`,
+`renderGhostAdminAppsecConfig` writes `stack/crowdsec/appsec-configs/ghost-admin-previews.yaml`,
 the AppSec configuration `branchleft/ghost-admin-previews`. It holds one
 `pre_eval` hook and no rules.
 
@@ -517,7 +517,7 @@ the header.
 ## Ghost admin API and admin-interface probing
 
 `renderGhostAdminPostoverflow` writes
-`stack/crowdsec/ghost-admin-api-postoverflow.yaml`, a post-overflow whitelist.
+`stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml`, a post-overflow whitelist.
 
 What it is for. The hub scenario `crowdsecurity/http-admin-interface-probing`
 reads a 403 or 404 on any path containing one of its entries as a probe, and

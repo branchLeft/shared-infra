@@ -1735,10 +1735,10 @@ describe('the committed stack directory', () => {
       './stack/crowdsec/acquis.d/caddy.yaml'
     );
     await expect(renderGhostAdminAppsecConfig(sites)).toMatchFileSnapshot(
-      './stack/crowdsec/ghost-admin-previews.yaml'
+      './stack/crowdsec/appsec-configs/ghost-admin-previews.yaml'
     );
     await expect(renderGhostAdminPostoverflow(sites)).toMatchFileSnapshot(
-      './stack/crowdsec/ghost-admin-api-postoverflow.yaml'
+      './stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml'
     );
   });
 });
@@ -1768,6 +1768,14 @@ describe('the Ghost admin CrowdSec exclusions', () => {
     ]);
     expect(appsec).toContain('IsOutBand == true &&');
     expect(appsec).not.toMatch(/RemoveInBand|ByTag|ByName/);
+  });
+
+  it('carry only the fields an appsec-config has, because CrowdSec reads it strictly', () => {
+    const keys = appsec
+      .split('\n')
+      .filter((line) => /^[a-z_]+:/.test(line))
+      .map((line) => line.split(':')[0]);
+    expect(keys).toEqual(['name', 'pre_eval']);
   });
 
   it('match only a bodiless POST to the root carrying the preview header', () => {

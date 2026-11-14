@@ -89,9 +89,6 @@ case $1 in
       restart)
         [ -e /run/standin.fail.crowdsec ] && exit 1
         ln -f "$project/crowdsec/config.yaml.local" "$view/config.yaml.local"
-        for single in ghost-admin-previews.yaml ghost-admin-api-postoverflow.yaml; do
-          [ -e "$project/crowdsec/$single" ] && ln -f "$project/crowdsec/$single" "$view/$single"
-        done
         echo "RESTART-CROWDSEC config=$(short_sha "$project/crowdsec/config.yaml.local")" >> /var/log/docker-standin.calls
         exit 0
         ;;
@@ -111,8 +108,8 @@ case $1 in
           crowdsec:sha256sum)
             case $2 in
               /etc/crowdsec/config.yaml.local) source=$view/config.yaml.local ;;
-              /etc/crowdsec/appsec-configs/branchleft-ghost-admin-previews.yaml) source=$view/ghost-admin-previews.yaml ;;
-              /etc/crowdsec/postoverflows/s01-whitelist/branchleft-ghost-admin-api.yaml) source=$view/ghost-admin-api-postoverflow.yaml ;;
+              /etc/crowdsec/appsec-configs/branchleft/*) source=$project/crowdsec/appsec-configs/${2#/etc/crowdsec/appsec-configs/branchleft/} ;;
+              /etc/crowdsec/postoverflows/s01-whitelist/branchleft/*) source=$project/crowdsec/postoverflows/${2#/etc/crowdsec/postoverflows/s01-whitelist/branchleft/} ;;
               /etc/crowdsec-acquis.d/*) source=$project/crowdsec/acquis.d/${2#/etc/crowdsec-acquis.d/} ;;
               *) exit 1 ;;
             esac

@@ -23,8 +23,8 @@ hetzner/monitoring/stack/alertmanager/alertmanager.yml.tmpl
 hetzner/edge/stack/caddy/Caddyfile
 hetzner/edge/stack/crowdsec/acquis.d/appsec.yaml
 hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml
-hetzner/edge/stack/crowdsec/ghost-admin-previews.yaml
-hetzner/edge/stack/crowdsec/ghost-admin-api-postoverflow.yaml
+hetzner/edge/stack/crowdsec/appsec-configs/ghost-admin-previews.yaml
+hetzner/edge/stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml
 hetzner/edge/validation/Caddyfile.enforcing
 hetzner/edge/validation/Caddyfile.authoring
 

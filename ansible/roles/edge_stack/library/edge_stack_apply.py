@@ -289,15 +289,15 @@ PHASE_APPLY = "apply"
 LOCK_POLL_INTERVAL = 0.2
 DETAIL_LIMIT = 2000
 CADDYFILE_INSIDE = "/etc/caddy/Caddyfile"
-# Each CrowdSec file Compose mounts on its own, by its name in the stack's crowdsec/
+# Each CrowdSec file the restart reads back, by its path under the stack's crowdsec/
 # directory, and where the container sees it (hetzner/edge/stack/compose.yml).
 CROWDSEC_FILES_INSIDE = {
     "config.yaml.local": "/etc/crowdsec/config.yaml.local",
-    "ghost-admin-previews.yaml": (
-        "/etc/crowdsec/appsec-configs/branchleft-ghost-admin-previews.yaml"
+    "appsec-configs/ghost-admin-previews.yaml": (
+        "/etc/crowdsec/appsec-configs/branchleft/ghost-admin-previews.yaml"
     ),
-    "ghost-admin-api-postoverflow.yaml": (
-        "/etc/crowdsec/postoverflows/s01-whitelist/branchleft-ghost-admin-api.yaml"
+    "postoverflows/ghost-admin-api-postoverflow.yaml": (
+        "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/ghost-admin-api-postoverflow.yaml"
     ),
 }
 CROWDSEC_ACQUIS_INSIDE = "/etc/crowdsec-acquis.d"

@@ -122,13 +122,17 @@ services:
       - ./crowdsec/config.yaml.local:/etc/crowdsec/config.yaml.local:ro
       # Two rendered files that narrow what bans the owner for using our own
       # Ghost admin (hetzner/edge/render.md, "Ghost admin preview exclusion" and
-      # "Ghost admin API and admin-interface probing"). Each is mounted where the
-      # hub keeps items of its kind, so CrowdSec loads it as a local item beside
-      # the hub's; a directory mount there would hide the hub's own. The
-      # appsec-config is named in acquis.d/appsec.yaml; the postoverflow loads
-      # because it is in its stage directory.
-      - ./crowdsec/ghost-admin-previews.yaml:/etc/crowdsec/appsec-configs/branchleft-ghost-admin-previews.yaml:ro
-      - ./crowdsec/ghost-admin-api-postoverflow.yaml:/etc/crowdsec/postoverflows/s01-whitelist/branchleft-ghost-admin-api.yaml:ro
+      # "Ghost admin API and admin-interface probing"). Each directory is
+      # mounted as a `branchleft/` subdirectory of the place the hub keeps
+      # items of its kind: CrowdSec reads a file there as a local item, by the
+      # `name:` inside it, and the hub's own items beside it stay visible. A
+      # directory, not the file, for the reason the Caddy mount above gives. No
+      # image path is under either target, so the cold-volume populate rsync
+      # that rules out a `:ro` acquis.d under /etc/crowdsec never enters them.
+      # The appsec-config is named in acquis.d/appsec.yaml; the postoverflow
+      # loads because it is under its stage directory.
+      - ./crowdsec/appsec-configs:/etc/crowdsec/appsec-configs/branchleft:ro
+      - ./crowdsec/postoverflows:/etc/crowdsec/postoverflows/s01-whitelist/branchleft:ro
       - crowdsec-data:/var/lib/crowdsec/data
       - caddy-logs:/var/log/caddy:ro
     # Without one, `--wait` waits only for *running*, which a crash-looping

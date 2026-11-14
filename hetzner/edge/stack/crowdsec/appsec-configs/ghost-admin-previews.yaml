@@ -1,7 +1,7 @@
 # Generated from sites.ts and hetzner/edge/posture.ts.
 # Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
 name: branchleft/ghost-admin-previews
-description: Ghost admin design and announcement previews on our Ghost hostnames
+# Ghost admin design and announcement previews, on our Ghost hostnames only.
 pre_eval:
   - filter: >-
       IsOutBand == true &&
