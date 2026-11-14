@@ -15,7 +15,7 @@ argument_specs:
     options:
       breakglass_grant_host_source_commit:
         type: str
-        default: 5e52f78427cab104438057164e4baa16b329875c
+        default: e9851d16a4422b4a99f834a3ca6c43aea05699c7
         description: >-
           The full 40-character commit of the ghost-platform repository the files
           are fetched at. Each download is held to the sha256 in the role, so a
