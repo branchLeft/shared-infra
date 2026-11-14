@@ -27,6 +27,11 @@ proves the proof.
 - **The script around the rules.** `changed_files` against a scripted runner and
   against a real shallow clone that must fetch its base; `main` printing exactly
   two lines, never a path, and `run=true` on a crash.
+- **The commit a pull request is compared with.** `merge_first_parent` takes the
+  first parent of the test merge only for a two-parent commit whose second parent
+  is the pull request head, against a scripted runner and a real depth-1 clone of a
+  test merge made after the base branch moved; every other shape, a failed fetch
+  and a merge queue entry keep the event's base.
 
 ## How the proof is proved
 

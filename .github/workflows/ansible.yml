@@ -29,7 +29,8 @@ name: Ansible
 # summary (`daily-summary`).
 #
 # What runs, by event:
-#   - a pull request: lint, and the shards of the roles and patterns it changed (and of
+#   - a pull request, diffed against the commit its test merge was made on, not the event's
+#     base sha, which goes stale as main moves: lint, and the shards of the roles and patterns it changed (and of
 #     those that name them, and of those that read a changed file outside ansible/). A
 #     change to the harness, the lock, the lint config or this file runs every shard, and so
 #     does a change to one of the three checks files the shards read (ci_select.py,
@@ -149,6 +150,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           PULL_REQUEST_BASE: ${{ github.event.pull_request.base.sha }}
+          PULL_REQUEST_HEAD: ${{ github.event.pull_request.head.sha }}
           MERGE_GROUP_BASE: ${{ github.event.merge_group.base_sha }}
           MERGE_GROUP_HEAD: ${{ github.event.merge_group.head_sha }}
         run: |
@@ -166,6 +168,19 @@ jobs:
             pull_request)
               base="$PULL_REQUEST_BASE"
               head=HEAD
+              # The checkout is the test merge of the pull request into the base branch as it
+              # stands now. The event's base sha is where the branch stood earlier, so a diff
+              # against it lists the files of every pull request merged since, and selects
+              # their shards too. When HEAD is a two-parent merge whose second parent is this
+              # pull request's head, its first parent is the commit it merges into: compare
+              # with that. Any other shape keeps the event's base, which lists more, never less.
+              read -r _ first_parent second_parent extra_parent <<< "$(git rev-list --parents -n 1 HEAD 2>/dev/null || true)"
+              if [ -n "${first_parent:-}" ] && [ -n "${second_parent:-}" ] && [ -z "${extra_parent:-}" ] && [ "$second_parent" = "$PULL_REQUEST_HEAD" ]; then
+                echo "The checkout is the test merge of this pull request into $first_parent, so the diff is taken from there."
+                base="$first_parent"
+              else
+                echo "The checkout is not the test merge of this pull request's head, so the diff is taken from the event's base."
+              fi
               ;;
             merge_group)
               base="$MERGE_GROUP_BASE"

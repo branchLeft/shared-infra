@@ -518,6 +518,172 @@ class RealGitTests(unittest.TestCase):
         self.assertTrue(ci_skip.decide("edge-config-validate", "pull_request", changed)[0])
 
 
+SHA_C = "c" * 40
+SHA_D = "d" * 40
+
+
+def commit_object(*parents: str) -> subprocess.CompletedProcess:
+    """What `git cat-file commit` prints: headers, a blank line, the message."""
+    lines = ["tree " + "e" * 40, *(f"parent {p}" for p in parents), "author t <t@example.invalid> 1 +0000", "", "msg"]
+    return done(0, "\n".join(lines).encode())
+
+
+def pull_request_runner(commit, diff=b"ansible/a.yml\0", present=(SHA_A, SHA_B, SHA_C, SHA_D)):
+    """A runner for a merge commit SHA_B: its commit object is `commit`, and `present` are known."""
+
+    def cat_file(command):
+        if command[2] == "commit":
+            return commit
+        return done(0 if command[3].split("^")[0] in present else 1)
+
+    return Scripted({"cat-file": cat_file, "fetch": done(0), "diff": done(0, diff)})
+
+
+def diff_arguments(runner):
+    return [call[-2:] for call in runner.calls if call[0] == "diff"]
+
+
+class MergeFirstParentTests(unittest.TestCase):
+    """A pull request is compared with the commit it merges into, never with the stale event base."""
+
+    def test_the_first_parent_of_the_test_merge_is_read_from_the_commit_object(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        self.assertEqual(SHA_C, ci_skip.merge_first_parent(SHA_B, SHA_D, runner))
+        self.assertEqual([["cat-file", "commit", SHA_B]], runner.calls)
+
+    def test_anything_but_a_two_parent_merge_of_the_pull_request_head_is_not_a_test_merge(self):
+        cases = {
+            "no parent": commit_object(),
+            "one parent": commit_object(SHA_C),
+            "three parents": commit_object(SHA_C, SHA_D, SHA_A),
+            "second parent is another commit": commit_object(SHA_C, SHA_A),
+            "the pull request head is the first parent": commit_object(SHA_D, SHA_C),
+            "a parent that is not a sha": commit_object("HEAD", SHA_D),
+            "the read fails": done(128),
+        }
+        for name, commit in cases.items():
+            with self.subTest(name):
+                self.assertIsNone(ci_skip.merge_first_parent(SHA_B, SHA_D, pull_request_runner(commit)))
+
+    def test_a_missing_or_malformed_pull_request_head_or_commit_is_not_a_test_merge(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        for head, pr_head in [(SHA_B, None), (SHA_B, ""), (SHA_B, "HEAD"), (None, SHA_D), ("HEAD", SHA_D)]:
+            with self.subTest(head=head, pr_head=pr_head):
+                self.assertIsNone(ci_skip.merge_first_parent(head, pr_head, runner))
+        self.assertEqual([], runner.calls, "no git command may run for a value that is not a sha")
+
+    def test_a_runner_that_raises_is_not_a_test_merge(self):
+        runner = Scripted({"cat-file": OSError("no git")})
+        self.assertIsNone(ci_skip.merge_first_parent(SHA_B, SHA_D, runner))
+
+    def test_a_pull_request_diffs_the_first_parent_not_the_event_base(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        self.assertEqual(["ansible/a.yml"], ci_skip.changed_for("pull_request", SHA_A, SHA_B, SHA_D, runner))
+        self.assertEqual([[SHA_C, SHA_B]], diff_arguments(runner))
+
+    def test_the_first_parent_is_fetched_when_the_shallow_checkout_lacks_it(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        present = iter([done(0), done(1), done(0)])
+        runner.answers["cat-file"] = lambda c: commit_object(SHA_C, SHA_D) if c[2] == "commit" else next(present)
+        ci_skip.changed_for("pull_request", SHA_A, SHA_B, SHA_D, runner)
+        fetch = [c for c in runner.calls if c[0] == "fetch"]
+        self.assertEqual([["fetch", "--no-tags", "--depth=1", "--quiet", "origin", SHA_C]], fetch)
+
+    def test_a_pull_request_that_is_not_a_test_merge_diffs_the_event_base(self):
+        runner = pull_request_runner(commit_object(SHA_C))
+        ci_skip.changed_for("pull_request", SHA_A, SHA_B, SHA_D, runner)
+        self.assertEqual([[SHA_A, SHA_B]], diff_arguments(runner))
+
+    def test_a_first_parent_that_cannot_be_fetched_falls_back_to_the_event_base(self):
+        # Absent, and the fetch fails: the event base is tried, exactly as before.
+        def cat_file(command):
+            if command[2] == "commit":
+                return commit_object(SHA_C, SHA_D)
+            return done(0 if command[3].split("^")[0] in (SHA_A, SHA_B) else 1)
+
+        runner = Scripted({"cat-file": cat_file, "fetch": done(128), "diff": done(0, b"mail/a\0")})
+        self.assertEqual(["mail/a"], ci_skip.changed_for("pull_request", SHA_A, SHA_B, SHA_D, runner))
+        self.assertEqual([[SHA_A, SHA_B]], diff_arguments(runner))
+
+    def test_a_merge_queue_entry_never_reads_the_commit_object(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        ci_skip.changed_for("merge_group", SHA_A, SHA_B, SHA_D, runner)
+        self.assertEqual([[SHA_A, SHA_B]], diff_arguments(runner))
+        self.assertNotIn(["cat-file", "commit", SHA_B], runner.calls)
+
+    def test_main_passes_the_pull_request_head_through(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        env = {"EVENT_NAME": "pull_request", "BASE_SHA": SHA_A, "HEAD_SHA": SHA_B, "PR_HEAD_SHA": SHA_D}
+        import contextlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            ci_skip.main(["--unit", "edge-config-validate"], environ=env, runner=runner)
+        self.assertEqual([[SHA_C, SHA_B]], diff_arguments(runner))
+
+    def test_the_action_hands_the_script_the_pull_request_head(self):
+        action = (ROOT / ".github" / "actions" / "ci-skip" / "action.yml").read_text(encoding="utf-8")
+        self.assertRegex(action, r"(?m)^        PR_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}$")
+
+
+class RealTestMergeTests(unittest.TestCase):
+    """A real test-merge commit, as `refs/pull/N/merge` makes one, in a depth-1 clone."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = pathlib.Path(self.tmp.name)
+        self.origin = str(base / "origin")
+        os.mkdir(self.origin)
+        git_in(self.origin, "init", "--quiet", "-b", "main")
+        for key, value in (
+            ("user.email", "t@example.invalid"),
+            ("user.name", "t"),
+            ("commit.gpgsign", "false"),
+            ("uploadpack.allowAnySHA1InWant", "true"),
+        ):
+            git_in(self.origin, "config", key, value)
+        self.commit("start", {"ansible/a.yml": "1", "README.md": "1"})
+        self.event_base = git_in(self.origin, "rev-parse", "HEAD")
+        git_in(self.origin, "checkout", "--quiet", "-b", "feature")
+        self.commit("the pull request", {"ansible/pr.yml": "1"})
+        self.pr_head = git_in(self.origin, "rev-parse", "HEAD")
+        git_in(self.origin, "checkout", "--quiet", "main")
+        # Main moves on after the pull request was opened: the event base is now stale.
+        self.commit("another pull request", {"mail/other.ts": "1", "hetzner/edge/render.ts": "1"})
+        self.tip = git_in(self.origin, "rev-parse", "HEAD")
+        git_in(self.origin, "merge", "--quiet", "--no-ff", "-m", "test merge", self.pr_head)
+        self.merge = git_in(self.origin, "rev-parse", "HEAD")
+        self.clone = str(base / "clone")
+        git_in(self.tmp.name, "clone", "--quiet", "--depth=1", f"file://{self.origin}", self.clone)
+
+    def commit(self, message, files):
+        for path, content in files.items():
+            full = pathlib.Path(self.origin, path)
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content)
+        git_in(self.origin, "add", ".")
+        git_in(self.origin, "commit", "--quiet", "-m", message)
+
+    def test_the_stale_event_base_lists_other_pull_requests_files(self):
+        changed = ci_skip.changed_files(self.event_base, self.merge, real_runner, cwd=self.clone)
+        self.assertEqual(["ansible/pr.yml", "hetzner/edge/render.ts", "mail/other.ts"], sorted(changed))
+
+    def test_the_first_parent_lists_only_the_pull_requests_own_files(self):
+        self.assertEqual(self.tip, ci_skip.merge_first_parent(self.merge, self.pr_head, real_runner, cwd=self.clone))
+        changed = ci_skip.changed_for("pull_request", self.event_base, self.merge, self.pr_head, real_runner, cwd=self.clone)
+        self.assertEqual(["ansible/pr.yml"], changed)
+        self.assertEqual(
+            (False, "no changed path is one this job reads"),
+            ci_skip.decide("edge-config-validate", "pull_request", changed),
+        )
+
+    def test_a_pull_request_head_that_is_not_the_second_parent_keeps_the_event_base(self):
+        changed = ci_skip.changed_for("pull_request", self.event_base, self.merge, SHA_C, real_runner, cwd=self.clone)
+        self.assertEqual(["ansible/pr.yml", "hetzner/edge/render.ts", "mail/other.ts"], sorted(changed))
+        self.assertTrue(ci_skip.decide("edge-config-validate", "pull_request", changed)[0])
+
+
 class MainTests(unittest.TestCase):
     def run_main(self, unit, environ, runner=None):
         import contextlib

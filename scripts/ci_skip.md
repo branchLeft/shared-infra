@@ -8,7 +8,7 @@ composite action `.github/actions/ci-skip` runs it, `trace_reads.py` and
 ## Interface
 
 ```sh
-EVENT_NAME=pull_request BASE_SHA=<sha> HEAD_SHA=<sha> \
+EVENT_NAME=pull_request BASE_SHA=<sha> HEAD_SHA=<sha> PR_HEAD_SHA=<sha> \
   python3 scripts/ci_skip.py --unit monitoring-config-validate
 ```
 
@@ -18,6 +18,15 @@ Standard library only, because it runs right after Checkout, before a job has se
 up a Python of its own. The base commit is fetched with one anonymous depth-1
 `git fetch` of that sha when the shallow checkout lacks it; the diff is two-point
 (`git diff --name-only -z --no-renames base head`). No credential is involved.
+
+On `pull_request` the checkout is the test merge of the pull request into the base
+branch as it stands. `BASE_SHA` is where that branch stood earlier, so it goes
+stale and a diff against it lists the files of every pull request merged since.
+When `HEAD_SHA` is a commit with exactly two parents whose second parent is
+`PR_HEAD_SHA`, the script reads the first parent from the commit object itself and
+diffs from that, fetching it as it would a missing base. In every other case, or if
+that fetch fails, it uses `BASE_SHA` as before, which can only list more paths. A
+merge queue entry always uses its own `BASE_SHA`.
 
 ## Which jobs may skip
 

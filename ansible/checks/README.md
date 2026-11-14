@@ -316,6 +316,11 @@ run needs, from the event and the files it changed. The rules, in the order they
 - a push to `main` executes none, and runs no lint: the pushed tree is the tree the merge
   queue tested, and the delivery workflow runs its own checks before it applies anything
   (`delivery_select.py` picks its shards, with these same rules, below);
+- a pull request is compared with the commit it would merge into, not with the base sha
+  of the event, which goes stale as the branch moves and then lists other pull requests'
+  files. The checkout is the test merge: when HEAD has exactly two parents and the second
+  is the pull request's head, the diff is taken from the first parent. In any other case
+  the event's base is used, which lists more files, never fewer;
 - a pull request or a merge-queue entry whose base commit is unknown, or whose changed
   files are not listed, executes every shard. The queue entry's changed files are the diff
   from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
