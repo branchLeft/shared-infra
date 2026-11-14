@@ -854,7 +854,7 @@
             that:
               - control_plane_db_ask_result.rc == 0
               - control_plane_db_ask_result.stdout is search('changed=0 ')
-              - control_plane_db_verify_calls | length == 5
+              - control_plane_db_verify_calls | length == 6
             quiet: true
             fail_msg: A second provision changed something or started a container.
 
@@ -897,7 +897,7 @@
             ask_tags: control_plane_db_provision
             ask_extra: { control_plane_db_step: provision }
             refused_text: 'REFUSED: a password file does not hold 24 or more of letters'
-            refused_calls: 1
+            refused_calls: 2
 
         - name: Start from a clean slate for the rotation case
           ansible.builtin.import_tasks: tasks/reset.yml
@@ -927,7 +927,7 @@
             ask_tags: control_plane_db_provision
             ask_extra: { control_plane_db_step: provision }
             refused_text: 'REFUSED: a connection URL file already exists and is not the one these passwords make'
-            refused_calls: 1
+            refused_calls: 2
 
         - name: Read the URL file the refusal had to leave alone
           ansible.builtin.slurp:
@@ -1064,7 +1064,7 @@
             ask_tags: control_plane_db_provision
             ask_extra: { control_plane_db_step: provision }
             refused_text: 'REFUSED: the image does not carry PORTAL_MIGRATOR_PASSWORD_FILE'
-            refused_calls: 4
+            refused_calls: 5
 
     # 9b. provision refuses a database that is not running on rules that admit the four
     # portal logins, before it reads any input.
@@ -1092,9 +1092,10 @@
             that:
               - control_plane_db_ask_result.rc == 0
               - control_plane_db_verify_calls[0].argv == ['exec', 'control-plane-db-1', 'cat', '/etc/postgresql-hba/pg_hba.conf']
+              - control_plane_db_verify_calls[1].argv == ['exec', '-i', 'control-plane-db-1', 'sh', '-s', '--', '/etc/postgresql-hba/pg_hba.conf']
               - control_plane_db_verify_calls | selectattr('argv', 'contains', 'dist/provision/provisionMain.js') | list | length == 1
             quiet: true
-            fail_msg: provision did not read the running database's access rules before it acted.
+            fail_msg: provision did not read the running database's access rules, and ask the server what it loaded, before it acted.
 
         - name: Start from a clean slate for the stale case
           ansible.builtin.import_tasks: tasks/reset.yml
@@ -1136,6 +1137,47 @@
               - not control_plane_db_verify_stale_stats.results[2].stat.exists
             quiet: true
             fail_msg: A provision refused for stale rules wrote a marker or a URL file, or left the administrator URL file.
+
+        - name: Start from a clean slate for the not-reloaded case
+          ansible.builtin.import_tasks: tasks/reset.yml
+
+        - name: Make the server report that it has not reloaded since the file was delivered
+          ansible.builtin.copy:
+            content: "not-reloaded\n"
+            dest: /var/tmp/fake-docker/mode
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Place the five inputs for the not-reloaded case
+          ansible.builtin.import_tasks: tasks/place_inputs.yml
+
+        - name: Refuse a database whose container holds the delivered file and whose server has not loaded it
+          ansible.builtin.include_tasks: tasks/refuse.yml
+          vars:
+            ask_name: a delivered file the server has not reloaded
+            ask_tags: control_plane_db_provision
+            ask_extra: { control_plane_db_step: provision }
+            refused_text: 'has not loaded the rules'
+            refused_calls: 2
+
+        - name: Look at what the not-reloaded refusal left
+          ansible.builtin.stat:
+            path: '{{ item }}'
+          loop:
+            - '{{ verify_state }}/provision-migrator'
+            - '{{ verify_input_dir }}/admin-url'
+            - '{{ verify_config }}/portal-database-url'
+          register: control_plane_db_verify_not_reloaded_stats
+
+        - name: Assert that refusal wrote nothing, created no login, and took the administrator URL file off the disk
+          ansible.builtin.assert:
+            that:
+              - not control_plane_db_verify_not_reloaded_stats.results[0].stat.exists
+              - not control_plane_db_verify_not_reloaded_stats.results[1].stat.exists
+              - not control_plane_db_verify_not_reloaded_stats.results[2].stat.exists
+            quiet: true
+            fail_msg: A provision refused for a server that had not reloaded wrote a marker or a URL file, or left the administrator URL file.
 
         - name: Start from a clean slate for the missing-container case
           ansible.builtin.import_tasks: tasks/reset.yml
