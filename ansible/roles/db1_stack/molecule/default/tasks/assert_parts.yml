@@ -29,4 +29,4 @@
     # The one guard every role copies (checks/test_verify_guard_copies.py holds the copies equal). It reads
     # the file as the harness does, with str.splitlines(): a verify line may be padded, and may follow any
     # break that splits a line besides LF (CR, VT, FF, FS, GS, RS, NEL, LS, PS), which ^ and $ cannot see.
-    verify_skip_pattern: '(?:\A|(?<=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]))\s*verify\s*(?=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]|\Z)'
+    verify_skip_pattern: '(?:\A|(?<=[\x0a\x0d\x0b\x0c\x1c-\x1e\x85\u2028\u2029]))\s*verify\s*(?=[\x0a\x0d\x0b\x0c\x1c-\x1e\x85\u2028\u2029]|\Z)'

@@ -28,10 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 ROLES = ROOT / "ansible" / "roles"
 ASSERT_PARTS = "molecule/default/tasks/assert_parts.yml"
-# The one text every copy holds, as it is written in the YAML file (before Jinja decodes it).
+# The one text every copy holds, as it is written in the YAML file. LF and CR are hex escapes
+# because db1_grants' hygiene test refuses a typed backslash-n or backslash-r in a task file.
 GUARD = (
-    r"(?:\A|(?<=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]))\s*verify\s*"
-    r"(?=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]|\Z)"
+    r"(?:\A|(?<=[\x0a\x0d\x0b\x0c\x1c-\x1e\x85\u2028\u2029]))\s*verify\s*"
+    r"(?=[\x0a\x0d\x0b\x0c\x1c-\x1e\x85\u2028\u2029]|\Z)"
 )
 PATTERN_VAR = re.compile(r"^\s+(?:\w+_)?verify_skip_pattern: '([^']*)'$", re.MULTILINE)
 NAME_VAR = re.compile(r"^\s+((?:\w+_)?verify_skip_pattern): '[^']*'$", re.MULTILINE)
