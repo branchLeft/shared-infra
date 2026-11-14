@@ -1025,8 +1025,8 @@ class PullRouteUnchangedTests(unittest.TestCase):
                 verdict = trigger.Verdict(trigger.Exit.REFUSED, reason, None)
                 line = trigger.summary(verdict, "apply", self.commit, PLAY)
                 match = reader.match(line)
-                self.assertIsNotNone(match, line)
-                assert match is not None
+                if match is None:
+                    self.fail(line)
                 self.assertEqual("0", match.group("changed"))
                 self.assertEqual("20", match.group("exit"))
 
