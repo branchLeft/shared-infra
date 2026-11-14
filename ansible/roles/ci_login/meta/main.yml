@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Keeps a host's pipeline account, its sudoers file and its two forced-command key lines.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

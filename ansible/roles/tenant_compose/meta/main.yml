@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers each tenant's rendered compose stack and the host's mail spool, and restarts a stack only when it must.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

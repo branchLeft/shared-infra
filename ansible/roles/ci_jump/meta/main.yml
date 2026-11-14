@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Owns the authorized_keys options of the CI jump account, so the hosts it may reach are a reviewed list.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Installs the database host prerequisites and renders the metrics exporter credentials file.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

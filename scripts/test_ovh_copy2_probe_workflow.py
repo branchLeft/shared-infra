@@ -390,10 +390,30 @@ class ProbeFilesTests(unittest.TestCase):
             if line.strip() and not line.startswith("#")
         ]
         pinned = [line for line in lines if "==" in line]
-        hashed = [line for line in lines if "--hash=sha256:" in line]
         self.assertTrue(pinned)
-        self.assertEqual(len(pinned), len(hashed))
         self.assertTrue(all(re.search(r"==\d", line) for line in pinned))
+        # A pin may carry several hashes (one per artefact pip may fetch), so
+        # every pin needs at least one hash and no hash may stand alone.
+        entries: list[list[str]] = []
+        for line in lines:
+            if "==" in line:
+                entries.append([line])
+            else:
+                self.assertTrue(entries, line)
+                entries[-1].append(line)
+        self.assertEqual(len(pinned), len(entries))
+        for entry in entries:
+            with self.subTest(pin=entry[0].strip()):
+                self.assertTrue(
+                    any("--hash=sha256:" in part for part in entry),
+                )
+                self.assertTrue(
+                    all(
+                        "--hash=sha256:" in part
+                        for part in entry
+                        if "==" not in part
+                    ),
+                )
 
     def test_the_workflow_installs_that_lock_with_hashes_required(self) -> None:
         install = [

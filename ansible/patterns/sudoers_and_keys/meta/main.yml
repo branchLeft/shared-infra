@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers one validated sudoers fragment and the exclusive authorised keys, forced commands included, of one account.
   license: LICENSE_ID
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Installs the state-copy and restore-drill units and their environment files on a control host and keeps both timers off until told otherwise.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'
