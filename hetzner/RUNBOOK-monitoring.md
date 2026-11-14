@@ -1433,9 +1433,10 @@ is the gauge that now contradicts the panel within the hour.
 - **It does not run on its own host.** Doc 14 §3.1's `mon1` split is gated on
   TENANT_1, not on this story; everything here is sized on the assumption
   that it shares `edge1`'s 4 GB with the edge stack.
-- **It does not alert on `app1` node metrics.** The host carries
-  `expected_up: "false"` in `render.ts` -- see that file's
-  `MONITORED_NODE_HOSTS` docstring.
+- **It does not alert on a host whose node exporter is not provisioned.** Such
+  a host carries `expected_up: "false"` in `render.ts` -- see that file's
+  `MONITORED_NODE_HOSTS` docstring. None does today: `app1` flipped to `true`
+  with the `node_exporter` role joining its playbook.
 - **It does not send application-level alerts** (contact-form failures,
   per-tenant p95 latency, shim queue drain time). Doc 14 §9.2 and §4 name
   these as later, separately-scoped additions; this story covers the host

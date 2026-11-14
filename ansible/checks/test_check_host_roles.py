@@ -69,7 +69,7 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's tenant_onboarding, and app1's
-# export_bundler (last of all), db1's
+# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
@@ -121,6 +121,7 @@ APPLIED_ON_MAIN = {
         "deploy_slot_keys",
         "tenant_onboarding",
         "export_bundler",
+        "node_exporter",
     ],
     "db1": [
         "host_inputs",
@@ -423,7 +424,8 @@ class HostRoleLists(unittest.TestCase):
     # Safety class: app1 applies the deploy tooling, which installs the sudo-run deploy wrapper and
     # the Docker firewall policy, then the deploy slot keys, which grant SSH keys to the deploy
     # account. Both come after the website, tooling first, so a failure in either cannot hold the
-    # website back and the slot program finds its wrapper; the export bundler follows them, last.
+    # website back and the slot program finds its wrapper; the export bundler follows them, then the
+    # node exporter, last of all, so its disk refusal holds nothing back.
     # The play states class app and variant standard, and
     # the checker's table (HOST_PLAY_VARS) says the same; the slots come from the loader's row, not
     # from the play. Red when the table's app1 row is deleted (R2), when the slots leave the
@@ -450,6 +452,7 @@ class HostRoleLists(unittest.TestCase):
                 "deploy_slot_keys",
                 "tenant_onboarding",
                 "export_bundler",
+                "node_exporter",
             ],
         )
         self.assertEqual(

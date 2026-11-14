@@ -43,7 +43,7 @@ scrape_configs:
       - targets: ['node-exporter:9100']
         labels: {host: edge1, expected_up: 'true'}
       - targets: ['10.20.1.100:9100']
-        labels: {host: app1, expected_up: 'false'}
+        labels: {host: app1, expected_up: 'true'}
       - targets: ['10.20.1.20:9100']
         labels: {host: db1, expected_up: 'true'}
       - targets: ['10.20.1.50:9100']

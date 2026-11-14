@@ -231,7 +231,8 @@ tests:
         exp_samples: []
 
   # The same continuous outage, but on an expected_up="false" target
-  # (app1's node_exporter, not provisioned yet). The mute is a real
+  # (a host whose node_exporter is not provisioned yet; app1's was, until
+  # ws#885). The mute is a real
   # selector match failure, not a rule that happens never to have been
   # exercised down this path.
   - interval: 30s
@@ -811,7 +812,7 @@ tests:
             exp_annotations:
               summary: 'stalwart on mx1 has been unreachable for 5 minutes.'
               description: >-
-                Scoped to expected_up="true" targets only -- app1 carries expected_up="false" until its node exporter is provisioned, so targets without exporters do not page anyone.
+                Scoped to expected_up="true" targets only -- a host carries expected_up="false" until its node exporter is provisioned, so targets without exporters do not page anyone.
 
   # The mirror of the case above, and not redundant with it: either counter
   # can be the one that has never fired, and a numerator defaulted on only one
