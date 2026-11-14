@@ -157,7 +157,7 @@ node target carries, and are warnings on the same route as the rest of the group
 | `DbBinlogShipStale`         | the last fully shipped run is over 3600s (1h) old    | none   |
 | `DbBinlogShipMetricAbsent`  | no binlog shipping success time is published for db1 | 1h     |
 
-The thresholds follow the two timers. The dump fires at 03:10 UTC with up to 5
+The thresholds follow the two timers. The dump fires at 03:00 UTC with up to 5
 minutes of random delay and its unit stops at 30 minutes, so two healthy
 successes are at most 24h35m (88500s) apart and 30h leaves 5h25m of margin. The
 shipper fires every 15 minutes and its unit stops at 10, so a healthy run

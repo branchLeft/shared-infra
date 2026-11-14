@@ -21,7 +21,7 @@ the order the standard sets for a role README (ANS-14).
    until then.
 2. It copies the six unit files under `files/units/` to `/etc/systemd/system`, and
    reloads systemd when one changed.
-3. It enables and starts the three timers: `branchleft-db-dump.timer` (03:10 UTC,
+3. It enables and starts the three timers: `branchleft-db-dump.timer` (03:00 UTC,
    random delay of up to five minutes), `branchleft-db-prune.timer` (03:45 UTC) and
    `branchleft-db-binlog-ship.timer` (five minutes after boot, then every 15 minutes).
 
