@@ -106,7 +106,7 @@ const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
  */
 const DB_BACKUP_HOST = 'db1';
 const DB1_SERIES = `host="${DB_BACKUP_HOST}"`;
-/** 24h35m is the longest healthy gap between two dumps (timer 03:10 plus 5m of random delay, 30m unit timeout); 30h leaves 5h25m. */
+/** 24h35m is the longest healthy gap between two dumps (timer 03:00 plus 5m of random delay, 30m unit timeout); 30h leaves 5h25m. */
 export const DB_DUMP_STALE_SECONDS = 108000;
 /** The stale threshold in hours: one run is always due inside it, so a rule deployed before its metric exists stays quiet. */
 export const DB_DUMP_ABSENT_FOR = '30h';
@@ -738,9 +738,9 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            db_nightly_dump_last_success_timestamp_seconds is written by',
     "            db1's own dump_nightly.py once the encrypted dump has uploaded,",
     '            so this reads the source, not the copy TenantBackupAgeHigh reads',
-    '            on the control host. The timer fires at 03:10 UTC with up to 5',
+    '            on the control host. The timer fires at 03:00 UTC with up to 5',
     '            minutes of random delay and the unit is stopped at 30 minutes,',
-    '            so a healthy run is finished by about 03:45 and two successes',
+    '            so a healthy run is finished by about 03:35 and two successes',
     '            are never more than about 24h35m (88500s) apart. 108000s (30h)',
     '            leaves about 5h25m of margin, so this fires about 6 hours after',
     '            the first missed run was due, well before the 36h copy alert. Warning,',
