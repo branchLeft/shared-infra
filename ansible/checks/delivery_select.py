@@ -12,7 +12,8 @@ Two rules keep a narrow run honest, and both err towards running more.
 The base is not simply the commit before the push. A delivery run is cancelled when the next
 push arrives, so the commit before may never have had its shards run: its changes would then
 reach the host untested by the push that follows. The base is the nearest first-parent ancestor
-of the previous tip whose delivery run finished its lint and every shard green (``tested_base``).
+of the previous tip whose delivery run finished its lint and every shard green (``tested_base``),
+or, with the lint and shards skipped, whose discover job's merge-queue confirm step succeeded.
 
 Any failure of any step prints the full selection: every role and pattern. The shell step that
 runs this program does the same when the program itself cannot run. Nothing here may print an
@@ -58,6 +59,9 @@ DIRECTORY = re.compile(r"(?:roles|patterns)/[A-Za-z0-9._-]+", re.ASCII)
 DISCOVER_JOB = "Discover the Ansible checks"
 LINT_JOB = "Lint the Ansible inputs"
 SHARD_JOB_PREFIX = "Molecule: "
+# The discover job's step that fails the job unless the merge queue passed the commit. It runs
+# only when the caller skips the lint and the shards, so on that path it is the proof.
+CONFIRM_STEP = "Confirm the merge queue passed this commit"
 JOB_SEPARATOR = " / "
 PAGE_SIZE = 100
 MAX_PAGES = 10
@@ -139,17 +143,39 @@ def job_name(job: dict[str, object]) -> str:
     return name.split(JOB_SEPARATOR, 1)[1] if JOB_SEPARATOR in name else name
 
 
+def confirm_succeeded(job: dict[str, object]) -> bool:
+    """Return whether the job lists its merge-queue confirm step exactly once, and it succeeded.
+
+    A job with no step list, a step that is not a mapping, a missing step or a repeated one is
+    not a proof: the answer is False, never a guess.
+    """
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        return False
+    results: list[object] = []
+    for entry in steps:
+        step = as_mapping(entry)
+        if step is None:
+            return False
+        if step.get("name") == CONFIRM_STEP:
+            results.append(step.get("conclusion"))
+    return results == ["success"]
+
+
 def checks_passed(jobs: Sequence[object]) -> bool:
     """Return whether the jobs of one delivery run show its lint and shards finished green.
 
     The discover job must have succeeded. The lint job must have succeeded, and then at least
     one shard must exist and every shard must have succeeded; or the lint job was skipped, which
-    is how a run that the merge queue vouched for shows, and then no shard may be anything but
-    skipped or succeeded. A job that is cancelled, failed, still running or missing is not a pass,
-    so a run that the next push cancelled is never taken as the base.
+    is how a run that the merge queue vouched for shows. Then no shard may be anything but
+    skipped or succeeded, and the discover job's confirm step must have concluded success: that
+    step is the only proof the queue passed the commit, and it is skipped on a run that tested
+    its own tree. A job that is cancelled, failed, still running or missing is not a pass, so a
+    run that the next push cancelled is never taken as the base.
     """
     named: dict[str, list[str | None]] = {}
     shard_results: list[str | None] = []
+    confirmed = False
     for entry in jobs:
         job = as_mapping(entry)
         if job is None:
@@ -161,13 +187,15 @@ def checks_passed(jobs: Sequence[object]) -> bool:
             shard_results.append(result)
         elif name in (DISCOVER_JOB, LINT_JOB):
             named.setdefault(name, []).append(result)
+            if name == DISCOVER_JOB:
+                confirmed = confirm_succeeded(job)
     if named.get(DISCOVER_JOB) != ["success"]:
         return False
     lint = named.get(LINT_JOB)
     if lint == ["success"]:
         return bool(shard_results) and all(result == "success" for result in shard_results)
     if lint == ["skipped"]:
-        return all(result in ("success", "skipped") for result in shard_results)
+        return confirmed and all(result in ("success", "skipped") for result in shard_results)
     return False
 
 

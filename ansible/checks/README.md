@@ -417,8 +417,11 @@ it), so a change to it alone selects none.
   base is the nearest first-parent ancestor of the previous tip (at most 40 back) whose
   delivery run has a successful `Discover` job, and a successful `Lint` job with every
   `Molecule:` job successful, or a skipped `Lint` with no shard anything but skipped or
-  successful (the queue-vouched, no-shard run). A cancelled, failed, running or missing job
-  is no pass. No such commit within reach selects every shard.
+  successful and the `Discover` job's step "Confirm the merge queue passed this commit"
+  successful (the queue-vouched, no-shard run: that step is its only proof, and it is skipped
+  on a run that tested its own tree). A cancelled, failed, running or missing job, or a
+  confirm step that is skipped, failed, missing or unreadable on a skipped-lint run, is no
+  pass. No such commit within reach selects every shard.
 - **A failure selects every shard, never none.** Any error in the program (git, GitHub, the
   shard list, the rules, a bad argument) prints every role and pattern and exits 0. If the
   program cannot run at all, or prints anything but a verdict and a directory list, the
