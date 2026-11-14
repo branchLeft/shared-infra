@@ -541,3 +541,56 @@ one scenario for that address for a minute. The other HTTP scenarios are not
 muted. The alternatives were worse: a parser whitelist would hide these
 requests from every scenario, and replacing the hub scenario with a copy would
 taint the `crowdsecurity/caddy` collection and stop its hub upgrades.
+
+## Ghost admin brute force
+
+`renderGhostBruteForceScenario` writes
+`stack/crowdsec/scenarios/ghost-admin-login-bruteforce.yaml`, the scenario
+`branchleft/ghost-admin-login-bruteforce`. No hub scenario counts failed Ghost
+sign-ins, and the post-overflow above drops the hub's admin-probing overflows
+on Ghost admin API paths, so before this nothing at the edge banned an address
+for guessing a password or an Admin API key.
+
+What Ghost already does, read from its source (v6.55): `POST
+/ghost/api/admin/session/` runs `brute.globalBlock` (per route per address,
+99 free retries, one-hour lock) and `brute.userLogin` (key `user_login`, per
+address, 4 free retries, so five tries, then a 10 minute lock that grows to a
+week; a good sign-in resets it). Both key on `req.ip`; Ghost enables `trust
+proxy` (`usingLoopbackReverseProxy` defaults false) and Caddy sets
+`X-Forwarded-For` to the client address without trusting a client-supplied one,
+so Ghost sees the real client and a client cannot choose it. That limiter is
+per tenant, because each tenant has its own database, and it does not cover
+the Admin API key: a bad or unknown key is answered 401 with no limit at all.
+The scenario covers those two gaps and holds one address across every Ghost
+hostname.
+
+What it counts, on a Ghost hostname only, from Caddy's access log:
+
+- `POST` to the session path (`/ghost/api/admin/session/`, with or without a
+  version segment) answered 422 (wrong password), 404 (unknown email), 401 (no
+  credentials, or a locked account) or 429 (Ghost's own lockout, so a client
+  that keeps going after Ghost says stop keeps counting).
+- Any request to `/ghost/api/admin/` answered 401: a bad, expired or unknown
+  Admin API key, a malformed `Authorization` header, and a wrong sign-in
+  verification code (`PUT /session/verify`, which Ghost answers 401).
+
+What it does not count. 403: a correct password from a new device is answered
+403 (`2FA_NEW_DEVICE_DETECTED`), and so is every admin call with no session,
+which is what the owner's expired session and the bouncer's answer to a banned
+address look like. 404 on any path but the session. Successes.
+
+The numbers. A leaky bucket per source address, `capacity: 9`, `leakspeed:
+30s`: the tenth failure inside the bucket bans, and one failure drains every 30
+seconds. Ghost's own limiter locks a sign-in after five tries, so a person who
+mistypes a password a few times, or one who tries a few more times against the
+lock, stays under ten; a script's burst does not, and a script that keeps
+sending 429s is banned though Ghost is already refusing it. Sustained guessing
+slower than two failures a minute is not banned by this scenario; Ghost's
+lock covers the sign-in and nothing covers the key, which is the limit it
+carries. The ban is the default profile's, four hours.
+
+Why it is a separate scenario: the post-overflow above matches one scenario by
+name, so this one is never dropped by it. The replay in
+`test_crowdsec_replay.py` proves a burst of sign-in failures and of key
+failures is banned, and that the owner's mistyped passwords, new-device
+sign-in and admin use are not.

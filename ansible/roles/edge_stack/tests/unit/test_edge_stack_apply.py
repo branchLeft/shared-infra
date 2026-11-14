@@ -167,6 +167,8 @@ if rest[:3] == ["exec", "-T", "crowdsec"]:
                 "appsec-configs/ghost-admin-previews.yaml",
             "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/ghost-admin-api-postoverflow.yaml":
                 "postoverflows/ghost-admin-api-postoverflow.yaml",
+            "/etc/crowdsec/scenarios/branchleft/ghost-admin-login-bruteforce.yaml":
+                "scenarios/ghost-admin-login-bruteforce.yaml",
         }
         if inside in single:
             source = project + "/crowdsec/" + single[inside]
@@ -307,6 +309,7 @@ class Tree:
         for name, text in (
             ("appsec-configs/ghost-admin-previews.yaml", b"name: a\n"),
             ("postoverflows/ghost-admin-api-postoverflow.yaml", b"name: b\n"),
+            ("scenarios/ghost-admin-login-bruteforce.yaml", b"name: c\n"),
         ):
             (self.project / "crowdsec" / name).parent.mkdir(exist_ok=True)
             (self.project / "crowdsec" / name).write_bytes(text)

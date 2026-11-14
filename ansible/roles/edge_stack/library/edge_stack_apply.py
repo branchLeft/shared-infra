@@ -299,6 +299,9 @@ CROWDSEC_FILES_INSIDE = {
     "postoverflows/ghost-admin-api-postoverflow.yaml": (
         "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/ghost-admin-api-postoverflow.yaml"
     ),
+    "scenarios/ghost-admin-login-bruteforce.yaml": (
+        "/etc/crowdsec/scenarios/branchleft/ghost-admin-login-bruteforce.yaml"
+    ),
 }
 CROWDSEC_ACQUIS_INSIDE = "/etc/crowdsec-acquis.d"
 MODE_PATTERN = re.compile(r"0?[0-7]{3,4}\Z")
