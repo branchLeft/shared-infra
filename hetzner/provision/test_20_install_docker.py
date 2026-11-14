@@ -74,6 +74,10 @@ class DockerSigningKeyTests(unittest.TestCase):
         os.mkdir(self.stub_bin)
         self.call_log = os.path.join(root, "calls.log")
         open(self.call_log, "w").close()
+        # Every path the script writes lives in the throwaway tree, never /etc/apt.
+        self.keyring = os.path.join(root, "keyrings", "docker.asc")
+        self.apt_list = os.path.join(root, "sources.list.d", "docker.list")
+        os.mkdir(os.path.dirname(self.apt_list))
 
         gnupg = os.path.join(root, "gnupg")
         os.mkdir(gnupg, 0o700)
@@ -116,6 +120,8 @@ class DockerSigningKeyTests(unittest.TestCase):
             "FAKE_KEY_PATH": key,
             "FAKE_CALL_LOG": self.call_log,
             "HOME": self.tmp.name,
+            "DOCKER_KEYRING_PATH": self.keyring,
+            "DOCKER_APT_LIST_PATH": self.apt_list,
         }
         if listing is not None:
             env["PATH"] = self.stub_bin + os.pathsep + env["PATH"]
