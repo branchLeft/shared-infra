@@ -52,3 +52,22 @@ page that reaches a phone by some other, unaudited route.
 A small hand-rolled reader over the rendered YAML text, matching
 `metricCrosscheck.ts`'s own reasoning for not taking a YAML dependency:
 the shape read here is exactly the shape `renderAlertRules` produces.
+
+## The opposite direction: a live entry needs a rule or a named exemption
+
+`findUnregisteredPageSeverityAlerts` catches a rule with no entry. The other
+gap is an entry with no rule: a live Alertmanager entry whose alertname no
+`severity: page` rule raises registers a route for a page that silently never
+fires. `findLiveEntriesWithoutPageRule` reports every live Alertmanager entry
+that is neither raised by a `severity: page` rule in the rendered rules nor
+carries a `ruleExemption`, the reason it is raised some other way. Dormant and
+Healthchecks-delivered entries are not checked. `pageRegister.test.ts` runs it
+against the real register and the real rendered rules, and against the reaper
+entry flipped to live with no rule, which must report it.
+
+Today the rendered rules carry no `severity: page` rule at all, so each of the
+three live Alertmanager entries carries a `ruleExemption`: the tier-two safety
+match and the failed-unsafe tenant are raised by the platform itself, and the
+reader-facing probe's page is per tenant, which this stack's instance-labelled
+blackbox probes cannot express. When a rule that raises one of them lands, drop
+that entry's exemption in the same change.
