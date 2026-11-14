@@ -547,5 +547,184 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
                 self.assertIn(case.ip, self.bans, explanation)
 
 
+# --- Failed Ghost admin sign-ins and admin API key failures (workspace#3754) ---
+
+BRUTE_FORCE_SCENARIO = "branchleft/ghost-admin-login-bruteforce"
+SESSION_PATH = "/ghost/api/admin/session/"
+VERIFY_PATH = "/ghost/api/admin/session/verify/"
+POSTS_PATH = "/ghost/api/admin/posts/?limit=15"
+
+# The bucket holds nine: the tenth failure bans.
+BUCKET_CAPACITY = 9
+
+
+def attempts(
+    count: int, status: int, path: str = SESSION_PATH, method: str = "POST", host: str = GHOST_HOST
+) -> tuple[LogLine, ...]:
+    return tuple(LogLine(host, path, status, method) for _ in range(count))
+
+
+# Ghost answers a wrong password 422, an unknown email 404, no credentials or a
+# locked account 401, its own lockout 429, a bad Admin API key 401, and a right
+# password from a new device 403 (2FA_NEW_DEVICE_DETECTED), which is no failure.
+BRUTE_FORCE_CASES: tuple[Case, ...] = (
+    # --- Must ban, and by this scenario. ---
+    Case(
+        "burst: wrong passwords (422)",
+        "203.0.113.40",
+        banned=True,
+        log=attempts(REPEATS, 422),
+    ),
+    Case(
+        "burst: unknown email addresses (404)",
+        "203.0.113.41",
+        banned=True,
+        log=attempts(REPEATS, 404),
+    ),
+    Case(
+        "burst: a script that keeps going after Ghost's own lockout (429)",
+        "203.0.113.42",
+        banned=True,
+        log=(*attempts(5, 422), *attempts(REPEATS, 429)),
+    ),
+    Case(
+        "burst: wrong passwords on a versioned, differently cased session path",
+        "203.0.113.43",
+        banned=True,
+        log=attempts(REPEATS, 422, "/GHOST/api/v5.0/admin/session/"),
+    ),
+    Case(
+        "burst: Admin API key guessing (401 on admin API paths, which Ghost does not limit)",
+        "203.0.113.44",
+        banned=True,
+        log=(
+            *attempts(REPEATS // 2, 401, POSTS_PATH, "GET"),
+            *attempts(REPEATS // 2, 401, "/ghost/api/admin/users/", "GET"),
+        ),
+    ),
+    Case(
+        "burst: sign-in failures and key failures together",
+        "203.0.113.45",
+        banned=True,
+        log=(*attempts(5, 422), *attempts(5, 401, POSTS_PATH, "GET")),
+    ),
+    Case(
+        "burst: exactly ten failed sign-ins, the tenth being the first to ban",
+        "203.0.113.46",
+        banned=True,
+        log=attempts(BUCKET_CAPACITY + 1, 422),
+    ),
+    # --- Must not ban. ---
+    Case(
+        "owner: mistypes the password five times, then meets Ghost's lockout three times",
+        "198.51.100.40",
+        banned=False,
+        log=(*attempts(5, 422), *attempts(3, 429)),
+    ),
+    Case(
+        "owner: nine failed sign-ins, the most the bucket holds",
+        "198.51.100.41",
+        banned=False,
+        log=attempts(BUCKET_CAPACITY, 422),
+    ),
+    Case(
+        "owner: a typo, a new device, a mistyped code twice, then sign-in and a day of admin use",
+        "198.51.100.42",
+        banned=False,
+        log=(
+            *attempts(1, 422),
+            *attempts(1, 403),
+            *attempts(2, 401, VERIFY_PATH, "PUT"),
+            *attempts(1, 200, VERIFY_PATH, "PUT"),
+            *attempts(1, 201),
+            *attempts(20, 200, POSTS_PATH, "GET"),
+            *attempts(10, 200, "/ghost/api/admin/posts/6735a1c2e4b0f2001b3c4d5e/", "PUT"),
+            *attempts(10, 201, "/ghost/api/admin/images/upload/", "POST"),
+        ),
+    ),
+    Case(
+        "owner: an expired session, every admin call answered 403, and a sign-in that needs a code",
+        "198.51.100.43",
+        banned=False,
+        log=(*attempts(30, 403, POSTS_PATH, "GET"), *attempts(12, 403)),
+    ),
+    Case(
+        "not a Ghost site: the same burst of 422s on a host that is not a Ghost hostname",
+        "198.51.100.44",
+        banned=False,
+        log=attempts(REPEATS, 422, host=OTHER_HOST),
+    ),
+)
+
+
+@unittest.skipUnless(
+    ENABLED, "needs a Docker engine that can start containers; CI sets BRANCHLEFT_CROWDSEC_REPLAY=1"
+)
+class FailedGhostSignInsAreBannedAndTheOwnersAreNot(unittest.TestCase):
+    stack: Stack
+    workdir: pathlib.Path
+    bans: dict[str, list[str]]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if shutil.which("docker") is None:
+            fail("BRANCHLEFT_CROWDSEC_REPLAY=1 but there is no docker on PATH")
+        cls.workdir = pathlib.Path(tempfile.mkdtemp(prefix="crowdsec-replay-"))
+        cls.workdir.chmod(0o755)
+        cls.stack = Stack(cls.workdir)
+        try:
+            cls.stack.start()
+            for case in BRUTE_FORCE_CASES:
+                cls.stack.write_log([caddy_log_line(case.ip, line) for line in case.log])
+            cls.bans = cls._await_verdicts()
+        except BaseException:
+            cls.stack.stop()
+            shutil.rmtree(cls.workdir, ignore_errors=True)
+            raise
+
+    @classmethod
+    def _await_verdicts(cls) -> dict[str, list[str]]:
+        expected = {case.ip for case in BRUTE_FORCE_CASES if case.banned}
+        deadline = time.monotonic() + VERDICT_TIMEOUT_S
+        bans = cls.stack.banned()
+        while not expected <= bans.keys() and time.monotonic() < deadline:
+            time.sleep(3)
+            bans = cls.stack.banned()
+        time.sleep(SETTLE_S)
+        return cls.stack.banned()
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.stack.stop()
+        shutil.rmtree(cls.workdir, ignore_errors=True)
+
+    def _explain(self, case: Case) -> str:
+        alerts = self.stack.alerts_for(case.ip)
+        every = "\n  ".join(self.stack.every_alert())
+        return (
+            f"{case.name} ({case.ip}): bans {self.bans.get(case.ip, [])}; alerts:\n  "
+            + "\n  ".join(alerts)
+            + f"\nevery alert:\n  {every}"
+        )
+
+    def test_a_burst_of_failed_sign_ins_or_key_failures_is_banned_by_the_scenario(self) -> None:
+        for case in BRUTE_FORCE_CASES:
+            if not case.banned:
+                continue
+            with self.subTest(case.name):
+                explanation = self._explain(case)
+                print(explanation)
+                self.assertIn(BRUTE_FORCE_SCENARIO, self.bans.get(case.ip, []), explanation)
+
+    def test_the_owners_sign_in_and_admin_use_is_not_banned(self) -> None:
+        for case in BRUTE_FORCE_CASES:
+            if case.banned:
+                continue
+            with self.subTest(case.name):
+                explanation = self._explain(case)
+                print(explanation)
+                self.assertNotIn(case.ip, self.bans, explanation)
+
+
 if __name__ == "__main__":
     unittest.main()
