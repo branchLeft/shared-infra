@@ -34,9 +34,22 @@ GUARD = (
     r"(?=[\n\r\x0b\x0c\x1c-\x1e\x85\u2028\u2029]|\Z)"
 )
 PATTERN_VAR = re.compile(r"^\s+(?:\w+_)?verify_skip_pattern: '([^']*)'$", re.MULTILINE)
+NAME_VAR = re.compile(r"^\s+((?:\w+_)?verify_skip_pattern): '[^']*'$", re.MULTILINE)
 SEARCH_CALL = re.compile(r"regex_search\(([^)]*)\)")
 # Every character str.splitlines() breaks a line on, as the harness reads skip-steps.txt.
-LINE_BREAKS = ("\n", "\r", "\r\n", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029")
+LINE_BREAKS = (
+    "\n",
+    "\r",
+    "\r\n",
+    "\x0b",
+    "\x0c",
+    "\x1c",
+    "\x1d",
+    "\x1e",
+    "\x85",
+    "\u2028",
+    "\u2029",
+)
 
 
 def copies() -> dict[str, list[str]]:
@@ -47,8 +60,16 @@ def copies() -> dict[str, list[str]]:
     return found
 
 
+def pattern_names() -> dict[str, list[str]]:
+    """Return the name each role's assert_parts.yml gives the pattern variable it defines."""
+    return {
+        str(path.relative_to(ROOT)): NAME_VAR.findall(path.read_text(encoding="utf-8"))
+        for path in sorted(ROLES.glob(f"*/{ASSERT_PARTS}"))
+    }
+
+
 def search_calls() -> dict[str, list[str]]:
-    """Return what each role's assert_parts.yml hands to regex_search: it must be the pattern variable, never a literal."""
+    """Return what each role's assert_parts.yml hands to regex_search: a name, not a literal."""
     return {
         str(path.relative_to(ROOT)): SEARCH_CALL.findall(path.read_text(encoding="utf-8"))
         for path in sorted(ROLES.glob(f"*/{ASSERT_PARTS}"))
@@ -68,12 +89,18 @@ def harness_skips_verify(skip_file_text: str) -> bool:
 
 class VerifyGuardCopies(unittest.TestCase):
     def test_some_role_has_the_guard(self) -> None:
-        self.assertGreaterEqual(len(copies()), 3, "db1_grants, db1_stack and edge_stack carry the guard")
+        self.assertGreaterEqual(
+            len(copies()), 3, "db1_grants, db1_stack and edge_stack carry the guard"
+        )
 
     def test_every_copy_is_the_one_guard(self) -> None:
         for path, found in copies().items():
             with self.subTest(path=path):
-                self.assertEqual(found, [GUARD], f"{path} holds {len(found)} verify-skip pattern(s); expected the shared one")
+                self.assertEqual(
+                    found,
+                    [GUARD],
+                    f"{path} holds {len(found)} verify-skip pattern(s); expected the shared one",
+                )
 
 
 class VerifyGuardIsWhatTheTaskRuns(unittest.TestCase):
@@ -81,18 +108,34 @@ class VerifyGuardIsWhatTheTaskRuns(unittest.TestCase):
         for path, calls in search_calls().items():
             with self.subTest(path=path):
                 self.assertEqual(len(calls), 1, f"{path} must call regex_search once")
-                self.assertRegex(calls[0], r"^\w*verify_skip_pattern$", f"{path} must pass the pattern variable, not a literal")
+                self.assertEqual(
+                    calls,
+                    pattern_names()[path],
+                    f"{path} must search with the variable that holds its pattern",
+                )
 
 
 class VerifyGuardReadsLikeTheHarness(unittest.TestCase):
     def test_a_verify_line_is_refused_however_it_is_padded(self) -> None:
-        for text in ("verify\n", "  verify\n", "\tverify\n", " \t verify \t\n", "verify", "verify\r\n", "idempotence\n   verify   \n"):
+        for text in (
+            "verify\n",
+            "  verify\n",
+            "\tverify\n",
+            " \t verify \t\n",
+            "verify",
+            "verify\r\n",
+            "idempotence\n   verify   \n",
+        ):
             with self.subTest(text=text):
                 self.assertTrue(guard_refuses(text))
 
     def test_a_verify_line_is_refused_after_any_line_break_the_harness_splits_on(self) -> None:
         for sep in LINE_BREAKS:
-            for text in (f"idempotence{sep}verify", f"verify{sep}idempotence", f"idempotence{sep}  verify  {sep}check-fresh"):
+            for text in (
+                f"idempotence{sep}verify",
+                f"verify{sep}idempotence",
+                f"idempotence{sep}  verify  {sep}check-fresh",
+            ):
                 with self.subTest(sep=repr(sep), text=text):
                     self.assertTrue(guard_refuses(text))
 
@@ -127,8 +170,12 @@ class VerifyGuardReadsLikeTheHarness(unittest.TestCase):
 
     def test_the_narrow_pattern_is_caught(self) -> None:
         narrow = r"(?m)^verify\s*$"
-        self.assertFalse(guard_refuses("  verify\n", narrow), "the narrow pattern misses an indented verify")
-        self.assertFalse(guard_refuses("idempotence\rverify\n", narrow), "the narrow pattern misses a bare CR")
+        self.assertFalse(
+            guard_refuses("  verify\n", narrow), "the narrow pattern misses an indented verify"
+        )
+        self.assertFalse(
+            guard_refuses("idempotence\rverify\n", narrow), "the narrow pattern misses a bare CR"
+        )
         self.assertTrue(harness_skips_verify("  verify\n"))
         self.assertTrue(harness_skips_verify("idempotence\rverify\n"))
 
