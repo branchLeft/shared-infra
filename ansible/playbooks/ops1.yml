@@ -5,8 +5,10 @@
 # root-only file the owner places on the host and stops the run if it is missing or
 # unsafe, then the host baseline, the break-glass mint, then the deploy tooling (class
 # internal: the control plane installs this host's firewall policy, so the policy half is not
-# applied here), then the control plane. The control plane needs no input from the owner: it takes the image
-# the running stack already uses and leaves the live env file and master key alone.
+# applied here), then the control plane. The control plane needs no input from the owner: unless
+# owner_vars/ops1.yml sets control_plane_app_image, it takes the image the running stack already
+# uses, and it leaves the live env file and master key alone. Setting that one key is how the
+# image is moved.
 # The status page follows it and never precedes it: the page binds this host's private
 # address, and the DOCKER-USER drop that confines that port to the gateway is installed
 # by the last tasks of the control plane, so the bind comes after the drop. A run that
