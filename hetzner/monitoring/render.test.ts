@@ -341,26 +341,27 @@ describe('the rendered Prometheus config', () => {
   });
 
   describe('the mx1 mail liveness probe', () => {
-    it('probes mx1 by hostname, on the four ports the mail firewall opens', () => {
+    it("probes mx1 by hostname, on the four mail ports and the shim's TLS port the mail firewall opens", () => {
       const rendered = renderPrometheusConfig(sites);
       expect(rendered).toContain('job_name: blackbox_mail');
       expect(rendered).toContain('- mx1.branchleft.co.uk:25');
       expect(rendered).toContain('- mx1.branchleft.co.uk:587');
       expect(rendered).toContain('- mx1.branchleft.co.uk:465');
       expect(rendered).toContain('- mx1.branchleft.co.uk:993');
+      expect(rendered).toContain('- mx1.branchleft.co.uk:8443');
       // No IP literal for mx1 anywhere in this repo -- it is outside the
       // estate address plan projectGuard.ts polices.
       expect(rendered).not.toMatch(/\d+\.\d+\.\d+\.\d+.*mx1/);
     });
 
-    it('reads the SMTP banner on 25 and 587, and only completes a TLS handshake on 465 and 993', () => {
+    it('reads the SMTP banner on 25 and 587, and only completes a TLS handshake on 465, 993 and 8443', () => {
       const rendered = renderPrometheusConfig(sites);
       const mailSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_mail'));
       expect(mailSection).toContain(
         "targets:\n          - mx1.branchleft.co.uk:25\n          - mx1.branchleft.co.uk:587\n        labels: {host: mx1, expected_up: 'true', __param_module: smtp_banner}"
       );
       expect(mailSection).toContain(
-        "targets:\n          - mx1.branchleft.co.uk:465\n          - mx1.branchleft.co.uk:993\n        labels: {host: mx1, expected_up: 'true', __param_module: tls_connect}"
+        "targets:\n          - mx1.branchleft.co.uk:465\n          - mx1.branchleft.co.uk:993\n          - mx1.branchleft.co.uk:8443\n        labels: {host: mx1, expected_up: 'true', __param_module: tls_connect}"
       );
     });
 

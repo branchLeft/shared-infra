@@ -590,8 +590,9 @@ itself is up, with no such delay, so do not apply the same caution there.
 
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `cadvisor`, `blackbox_http` (nine targets, one per `sites.ts` hostname),
-`blackbox_mail` (four targets on `mx1.branchleft.co.uk`: 25 and 587 read the
-SMTP banner, 465 and 993 complete a TLS handshake), `stalwart` (Stalwart's own
+`blackbox_mail` (five targets on `mx1.branchleft.co.uk`: 25 and 587 read the
+SMTP banner; 465, 993 and 8443, the mailgun shim's Caddy endpoint, complete a
+TLS handshake), `stalwart` (Stalwart's own
 Prometheus exporter on `mx1`, over HTTPS on 443), the `node` target for
 `edge1`, `db1` and `ops1`, and the `mysqld` target for `db1` all `up`. All of those carry
 `expected_up: 'true'` -- a sustained `down` on any of them pages within 5
