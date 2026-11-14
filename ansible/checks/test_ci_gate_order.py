@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -261,7 +262,7 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
                 "shard-advisory",
                 "roles",
                 "report",
-                "daily-issue",
+                "daily-summary",
             },
             keys(get(self.workflow, "jobs")),
         )
@@ -522,10 +523,14 @@ class AnsibleWorkflowOrderTest(unittest.TestCase):
         self.assertIn('echo "ansible=false"', push[: push.index(";;")])
 
 
-ISSUE_PERMISSIONS = {"contents": "read", "actions": "read", "issues": "write"}
-ISSUE_CONDITION = "always() && github.event_name == 'schedule' && needs.roles.result == 'failure'"
+SUMMARY_PERMISSIONS = {"contents": "read", "actions": "read"}
+SUMMARY_CONDITION = "always() && github.event_name == 'schedule' && needs.roles.result == 'failure'"
+# The only workflow file that may still grant issues: write. It calls a reusable workflow whose
+# alert job opens the drift issue; moving that off this repository needs a change in
+# branchLeft/github-workflows and a new tag, so it is the next slice, not this one.
+ISSUE_WRITE_ALLOWLIST = frozenset({"ansible-drift-check.yml"})
 # What a step of this workflow must never contain: nothing here starts, wakes or prompts an
-# agent, or dispatches another workflow. The issue the daily run opens is read by a person.
+# agent, or dispatches another workflow. The summary of a red daily run is read by a person.
 FORBIDDEN_IN_STEPS = (
     "claude",
     "anthropic",
@@ -538,16 +543,37 @@ FORBIDDEN_IN_STEPS = (
 TRIGGERS = {"pull_request", "push", "merge_group", "schedule", "workflow_dispatch"}
 
 
-def issue_job_problems(job: object) -> list[str]:
-    """Return what is wrong with the job that may open an issue; empty when it is as intended."""
+def summary_job_problems(job: object) -> list[str]:
+    """Return what is wrong with the daily summary job; empty when it is as intended."""
     found = []
     condition = " ".join(str(get(job, "if")).split())
-    if condition != ISSUE_CONDITION:
+    if condition != SUMMARY_CONDITION:
         found.append("it is not limited to the scheduled run with a red required check")
     if needs(job) != {"roles"}:
         found.append("it does not need exactly the gate job")
-    if get(job, "permissions") != ISSUE_PERMISSIONS:
-        found.append("its permissions are not read-only plus issues: write")
+    if get(job, "permissions") != SUMMARY_PERMISSIONS:
+        found.append("its permissions are not exactly read-only contents and actions")
+    return found
+
+
+def grants_issue_write(permissions: object) -> bool:
+    """Return whether a permissions block grants write on issues (write-all does too)."""
+    if permissions == "write-all":
+        return True
+    return isinstance(permissions, dict) and permissions.get("issues") == "write"
+
+
+def issue_writers(workflows: Path) -> list[str]:
+    """Return 'file:place' for every workflow file place that grants issues: write."""
+    found = []
+    for path in sorted(workflows.glob("*.yml")):
+        document = load(path)
+        if grants_issue_write(get(document, "permissions")):
+            found.append(f"{path.name}:workflow")
+        jobs = get(document, "jobs")
+        for name, job in jobs.items() if isinstance(jobs, dict) else []:
+            if grants_issue_write(get(job, "permissions")):
+                found.append(f"{path.name}:{name}")
     return found
 
 
@@ -557,32 +583,63 @@ class AnsibleIssueAndReportJobsTest(unittest.TestCase):
     def job(self, name: str) -> object:
         return get(self.workflow, "jobs", name)
 
-    def test_only_the_issue_job_can_write_and_it_runs_for_the_scheduled_red_run_alone(self) -> None:
+    def test_no_job_of_the_ansible_workflow_can_write_and_the_summary_job_is_scheduled_red_only(
+        self,
+    ) -> None:
         self.assertEqual({"contents": "read"}, get(self.workflow, "permissions"))
-        self.assertEqual([], issue_job_problems(self.job("daily-issue")))
+        self.assertEqual([], summary_job_problems(self.job("daily-summary")))
         jobs = get(self.workflow, "jobs")
         for name in jobs if isinstance(jobs, dict) else []:
-            if name != "daily-issue":
-                with self.subTest(job=name):
-                    permissions = get(self.job(str(name)), "permissions")
-                    granted = permissions.values() if isinstance(permissions, dict) else []
-                    self.assertNotIn("write", set(granted))
+            with self.subTest(job=name):
+                permissions = get(self.job(str(name)), "permissions")
+                granted = permissions.values() if isinstance(permissions, dict) else []
+                self.assertNotIn("write", set(granted))
 
-    def test_the_issue_job_check_sees_it_run_on_a_pull_request(self) -> None:
+    def test_the_summary_job_check_sees_it_run_on_a_pull_request(self) -> None:
         # The control of the test above: the same job with its condition widened to a pull
         # request, or with a wider permission, is found.
-        job = self.job("daily-issue")
+        job = self.job("daily-summary")
         widened = dict(job) if isinstance(job, dict) else {}
         widened["if"] = "always() && github.event_name == 'pull_request'"
         self.assertIn(
             "it is not limited to the scheduled run with a red required check",
-            issue_job_problems(widened),
+            summary_job_problems(widened),
         )
         wider = dict(job) if isinstance(job, dict) else {}
-        wider["permissions"] = {**ISSUE_PERMISSIONS, "pull-requests": "write"}
+        wider["permissions"] = {**SUMMARY_PERMISSIONS, "issues": "write"}
         self.assertIn(
-            "its permissions are not read-only plus issues: write", issue_job_problems(wider)
+            "its permissions are not exactly read-only contents and actions",
+            summary_job_problems(wider),
         )
+
+    def test_no_workflow_grants_issues_write_except_the_allowlisted_drift_caller(self) -> None:
+        # A workflow's own token files an issue in this repository, outside the one place issues
+        # live. The one allowlisted caller is moved by a change in github-workflows first.
+        writers = issue_writers(WORKFLOWS)
+        self.assertEqual(
+            [],
+            [entry for entry in writers if entry.split(":")[0] not in ISSUE_WRITE_ALLOWLIST],
+        )
+        self.assertIn("ansible-drift-check.yml:workflow", writers, "a control: the scan sees it")
+
+    def test_the_issue_write_scan_sees_a_job_a_workflow_and_write_all(self) -> None:
+        # The control of the test above, on files made here: each way of granting the write is found
+        # and a read-only workflow is not.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "job.yml").write_text(
+                "jobs:\n  a:\n    permissions:\n      issues: write\n", encoding="utf-8"
+            )
+            (root / "top.yml").write_text("permissions:\n  issues: write\njobs: {}\n", "utf-8")
+            (root / "all.yml").write_text("permissions: write-all\njobs: {}\n", "utf-8")
+            (root / "read.yml").write_text(
+                "permissions:\n  issues: read\njobs:\n  a:\n"
+                "    permissions:\n      contents: read\n",
+                "utf-8",
+            )
+            self.assertEqual(
+                ["all.yml:workflow", "job.yml:a", "top.yml:workflow"], issue_writers(root)
+            )
 
     def test_the_report_job_only_reads_and_never_fails_the_run_for_a_red_shard(self) -> None:
         report = self.job("report")
@@ -605,12 +662,17 @@ class AnsibleIssueAndReportJobsTest(unittest.TestCase):
                     with self.subTest(job=name, step=get(step, "name"), word=word):
                         self.assertNotIn(word.lower(), text)
 
-    def test_the_issue_is_written_by_the_one_program_and_it_names_no_one(self) -> None:
-        text = script(self.job("daily-issue"))
+    def test_the_summary_is_written_by_the_one_program_to_the_step_summary_and_files_no_issue(
+        self,
+    ) -> None:
+        text = script(self.job("daily-summary"))
         self.assertEqual(1, text.count("daily_red_issue.py"))
+        self.assertIn("--summary", text)
+        self.assertIn('>> "$GITHUB_STEP_SUMMARY"', text)
+        self.assertNotIn("gh issue", text)
         self.assertNotIn("@", text)
         self.assertEqual(
-            "${{ github.token }}", get(self.job("daily-issue"), "steps", 1, "env", "GITHUB_TOKEN")
+            "${{ github.token }}", get(self.job("daily-summary"), "steps", 1, "env", "GITHUB_TOKEN")
         )
 
 

@@ -1,11 +1,13 @@
-"""Open one plain GitHub issue when the daily full run of the container tests is red.
+"""Say what failed when the daily full run of the container tests is red.
 
-Mechanical on purpose: a title with the date, a body with the run link and the failed shard
-ids, one plain label, no mention, no assignee. It starts, wakes or asks nobody; a person
-reads the issue list. While an issue with the title prefix is still open it adds a comment
-there and opens no second one. It writes issues, so the workflow gives it `issues: write`
-and nothing else beyond read.
+Mechanical on purpose: the run link and the failed shard ids, no mention, no assignee. It
+starts, wakes or asks nobody. The workflow runs it with `--summary`, which prints the text
+for the run's step summary and writes nothing to any repository, so the job holds read
+permissions only. Without `--summary` it opens one plain issue (or comments on the open one)
+with the workflow's own token; no workflow runs it that way now, and the issue code
+(`report`, `LiveIssues`) is kept with its tests until it is removed on purpose.
 
+    daily_red_issue.py --summary --run-id N
     daily_red_issue.py --run-id N
 """
 
@@ -63,6 +65,11 @@ def text(run_url: str, failed: Sequence[str]) -> str:
     """Return the issue or comment body: the run link and the failed shard ids."""
     listed = "\n".join(f"- `{shard}`" for shard in failed) or NO_FAILED_SHARD
     return f"Run: {run_url}\n\nFailed shard ids:\n\n{listed}\n".replace("@", "")
+
+
+def summary(run_url: str, failed: Sequence[str], today: datetime.date) -> str:
+    """Return the step summary of a red daily run: the date, the run link, the failed ids."""
+    return f"## Daily container tests red: {today.isoformat()}\n\n{text(run_url, failed)}"
 
 
 def report(
@@ -148,9 +155,10 @@ class LiveIssues:
 
 
 def main(argv: Sequence[str]) -> int:
-    """Open or extend the day's issue for one run."""
+    """Print the summary of one red run, or open or extend the day's issue for it."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", maxsplit=1)[0])
     parser.add_argument("--run-id", type=int, required=True)
+    parser.add_argument("--summary", action="store_true", help="print the summary, write nothing")
     args = parser.parse_args(argv)
     try:
         source = live_source_from_environment()
@@ -158,6 +166,9 @@ def main(argv: Sequence[str]) -> int:
         server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
         run_url = f"{server}/{source.repository}/actions/runs/{args.run_id}"
         today = datetime.datetime.now(datetime.UTC).date()
+        if args.summary:
+            print(summary(run_url, failed, today))
+            return 0
         done, number = report(LiveIssues(source), run_url, failed, today)
     except (ApiError, OSError, ValueError) as error:
         print(error, file=sys.stderr)
