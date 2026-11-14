@@ -17,7 +17,8 @@ in `checks/check_enrolment.py`), then
 until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
 `roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
-`roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
+`roles/control_plane`, then `roles/status_page` (after it, because the control plane installs the
+DOCKER-USER drop for the page's port), then `roles/nextcloud_stack`, then
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
 reads), then `roles/control_plane_db` last (it asserts the directory `roles/control_plane` makes; a
 plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
