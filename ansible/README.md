@@ -207,8 +207,10 @@ What runs, by event:
 | push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything, over the roles `delivery_select.py` names (every role unless the diff since the last tested delivery says fewer)                                                                 |
 | schedule       | yes  | every shard, each blocking for the run's own result, once a day and on a manual run; a red scheduled run opens one issue                                                                                                                                  |
 
-Every container test (shard) the table names runs on every pull request, and each is
-either blocking or advisory. The one list of blocking shards is
+Every container test (shard) the table names runs on every pull request, except that when
+a pull request changed a file that makes every shard run, only the blocking shards and the
+shards its own role or pattern files select run, and the step summary names the advisory
+shards left to the daily run. Each shard is either blocking or advisory. The one list of blocking shards is
 `ansible/checks/blocking_shards.json`; every shard not on it is advisory. A blocking shard
 fails the required check. An advisory shard runs, shows red on its own check line when it
 fails, and the required check neither waits for it nor reads it. The `report` job writes the

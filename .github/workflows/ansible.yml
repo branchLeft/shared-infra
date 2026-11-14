@@ -30,12 +30,15 @@ name: Ansible
 #
 # What runs, by event:
 #   - a pull request, diffed against the commit its test merge was made on, not the event's
-#     base sha, which goes stale as main moves: lint, and the shards of the roles and patterns it changed (and of
-#     those that name them, and of those that read a changed file outside ansible/). A
+#     base sha, which goes stale as main moves: lint, and the shards of the roles and
+#     patterns it changed (and of those that name them, and of those that read a changed
+#     file outside ansible/). A
 #     change to the harness, the lock, the lint config or this file runs every shard, and so
 #     does a change to one of the three checks files the shards read (ci_select.py,
 #     check_pins.py, pip-requirements.txt). Any other file under ansible/checks/ runs the
-#     lint job only;
+#     lint job only. Where such a shared file is what runs every shard, the blocking shards
+#     run, and so does any shard the pull request's own role or pattern files select; the
+#     other advisory shards are left to the daily sweep, and the step summary names them;
 #   - the merge queue: the cheap checks only, made from the queue entry's own diff
 #     (base_sha..head_sha of the merge_group event): the lint, with the unit tests of the
 #     roles and the checks. The container shards do not run there: the pull request ran
@@ -253,7 +256,9 @@ jobs:
           cat "$RUNNER_TEMP/selection.txt" >> "$GITHUB_OUTPUT"
 
       # The kept shards, split by the one list of blocking shards. A scheduled or manual run
-      # makes every shard blocking. A list that names an unknown shard, repeats one, or is
+      # makes every shard blocking. On a pull request that changed a run-everything file, the
+      # advisory shards its own role and pattern files do not select are left to the nightly
+      # run, and the step summary names them. A list that names an unknown shard, repeats one, or is
       # out of order fails this step, and so the gate (the discover result is required).
       - name: Split the shards into blocking and advisory
         id: split
@@ -263,7 +268,8 @@ jobs:
           python3 ansible/checks/blocking_shards.py split
           --event "$EVENT_NAME"
           --all-file "$RUNNER_TEMP/all-shards.json"
-          --selection-file "$RUNNER_TEMP/selection.txt" >> "$GITHUB_OUTPUT"
+          --selection-file "$RUNNER_TEMP/selection.txt"
+          --summary-file "$GITHUB_STEP_SUMMARY" >> "$GITHUB_OUTPUT"
 
   # The quick gate: the two checks that are cheap and that a malformed change breaks first,
   # yamllint over ansible/ and the tests of the shard selection. The shards wait for this job
@@ -647,7 +653,8 @@ jobs:
         if: matrix.kind == 'skeleton'
         run: '"$RUNNER_TEMP/ansible-venv/bin/python" ansible/harness/run_harness.py "$RUNNER_TEMP/skeleton-probe/skeleton_probe"'
 
-  # The advisory shards: every kept shard that is not on the list. The same steps as `shard`
+  # The advisory shards: every kept shard that is not on the list, less the ones a pull request
+  # that changed a run-everything file leaves to the daily sweep. The same steps as `shard`
   # (ansible/checks/test_ci_gate_order.py holds the two equal), under another name. The
   # gate job does not need this job and nothing reads its result: a red advisory shard shows
   # red on its own check line, and `report` lists it. It never runs on a scheduled or manual run,

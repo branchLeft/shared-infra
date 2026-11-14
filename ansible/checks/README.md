@@ -377,6 +377,16 @@ check line, the required check does not wait for it, and the `report` job lists 
 step summary. A scheduled or manual run treats every shard as blocking, so the daily run
 catches what an advisory shard hides. The merge queue runs no shard, as before.
 
+One exception, on a pull request only. When a changed file is one that makes every shard run
+(`EVERY_SHARD` in `ci_select.py`: the harness, the lint config, the lock, the three checks files,
+the workflow), `ci_select.py` also prints `direct=`, the shards the pull request's own role and
+pattern files select, and `run_everything_files=`. `blocking_shards.py split` then runs the
+blocking shards and those `direct` shards, and leaves every other advisory shard to the daily
+run, where it is blocking. The step summary and the log of the split step name each shard left
+out and the file that caused it. If the pull request's own files cannot narrow the choice (an
+unrecognised file under `ansible/`, a role reference the scan cannot map), `direct` is every
+shard and nothing is left out. A missing or unreadable `direct=` line leaves nothing out too.
+
 The file is one JSON object with the single key `blocking`: a list of shard ids, sorted,
 each once, each one a shard that exists in the tree. A shard id is the name `list_shards.py`
 gives it: `ansible/roles/ci_jump`, or `ansible/roles/ci_jump (refusals)` for a second

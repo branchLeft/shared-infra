@@ -753,6 +753,34 @@ def select(
     return [shard for shard in shards if shard["path"] in wanted]
 
 
+def run_everything_files(changed: Sequence[str]) -> list[str]:
+    """Return the changed files that make every shard run (the ``EVERY_SHARD`` entries)."""
+    return [path for path in changed if inside(path, EVERY_SHARD)]
+
+
+def direct_selection(
+    event: str, changed: Sequence[str] | None, shards: list[dict[str, str]], root: Path
+) -> list[dict[str, str]] | None:
+    """Return the shards a pull request's own role and pattern files select, or None.
+
+    None means the question does not arise: the event is not a pull request, the changed
+    files are unknown, or none of them is a run-everything file. Otherwise every shard
+    runs because a shared file changed, and this is the part of that choice the pull
+    request itself asks for: the shards of the roles and patterns it changed, those that
+    name them, and those that read a changed file outside ``ansible/``, found from the
+    changed files with the run-everything ones left out. If those files cannot narrow
+    the choice (an unrecognised file under ``ansible/``, a role reference the scan cannot
+    map), the answer is every shard.
+    """
+    if event != PULL_REQUEST or changed is None or not run_everything_files(changed):
+        return None
+    own = [path for path in changed if not inside(path, EVERY_SHARD)]
+    wanted = needed_units(own, root)
+    if wanted is None:
+        return shards
+    return [shard for shard in shards if shard["path"] in wanted]
+
+
 def parse_matrix(text: str) -> list[dict[str, str]] | None:
     """Return the shards of the matrix list_shards.py prints, or None when it is malformed."""
     try:
@@ -813,6 +841,14 @@ def main(argv: Sequence[str]) -> int:
         print(f"  {shard['name']}", file=sys.stderr)
     print(f"shards={'true' if chosen else 'false'}")
     print("matrix=" + json.dumps({"include": chosen or [NO_SHARD]}, separators=(",", ":")))
+    direct = direct_selection(args.event, changed, every, args.root)
+    if direct is not None and changed is not None:
+        # Printed only when a run-everything file made every shard run on a pull request:
+        # blocking_shards.py leaves the advisory shards not named here to the nightly run.
+        names = [shard["name"] for shard in direct]
+        print("direct=" + json.dumps(names, separators=(",", ":")))
+        triggers = run_everything_files(changed)
+        print("run_everything_files=" + json.dumps(triggers, separators=(",", ":")))
     return 0
 
 
