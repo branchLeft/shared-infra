@@ -7,7 +7,8 @@ estate, gate, access and mail files, the pull-role paths, the pin gate's install
 (check_pins.py loads the lock reader from it and keeps no copy), that every Ansible loader
 directory, and a bare file or symlink of its name, is the owner's at each level it can sit in, that
 a new file of a kept kind is the owner's before it is listed, and that documents, lockfiles, host
-configuration and the tests of no gate are not.
+configuration and the tests of no gate are not. A release is a kind of path or one file named in
+full, and the rows of a block are in order, so adding a row for one more file edits no list here.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from codeowners_match import (
     ROOT,
     SAMPLES,
     mismatches,
+    owner_changes,
     owners_of,
     parse_rules,
 )
@@ -399,65 +401,24 @@ UNOWNED_PATHS = [
     "ansible/roles/monitoring_stack/tasks/main.yml",
 ]
 
-# Released documents: every markdown file, the owner's directories' included. CLAUDE.md is the
-# one markdown file that is owned again, and the files under /.github/ are the standards lines'.
-RELEASED_DOCUMENT_PATHS = [
-    "README.md",
-    "mail/RUNBOOK-mx1-provision.md",
-    "ansible/checks/README.md",
-    "ansible/trust/README.md",
-    "ansible/roles/pull_trigger/README.md",
-    "ansible/roles/ansible_runtime/README.md",
-    "ansible/roles/deploy_slot_keys/README.md",
-    "ansible/roles/host_inputs/README.md",
-    "ansible/roles/ci_jump/README.md",
-    "ansible/roles/safety_channel_key/README.md",
-    "ansible/roles/ring_controller_host/README.md",
-    "ansible/roles/safety_service/README.md",
-    "hetzner/scripts/check-address-plan-drift.md",
-    "scripts/assert-no-hetzner-deletes.md",
-]
-
-# Released lockfiles and version pins: every one is hash-locked or an exact pin, and the deep
-# review of a bump belongs to the merge route, not to this file.
-RELEASED_PIN_PATHS = [
-    "pnpm-lock.yaml",
-    "hetzner/pnpm-lock.yaml",
-    "hetzner-host/pnpm-lock.yaml",
-    "mail/pnpm-lock.yaml",
-    "ovh/copy2/pnpm-lock.yaml",
-    "ansible/requirements.in",
-    "ansible/requirements.txt",
-    "ansible/requirements.yml",
-    "ansible/checks/pip-requirements.txt",
-    "ovh/copy2/probe/requirements.txt",
-    ".nvmrc",
-    "hetzner/.nvmrc",
-    "mail/.nvmrc",
-]
-
-# Released tests, checkers and probes: agreement tests of a role and a list that stay owned, Pulumi
-# program tests, and checkers and probes that no job holding a secret runs.
-RELEASED_CHECK_PATHS = [
-    "hetzner/estate.test.ts",
-    "hetzner/tenants.test.ts",
-    "hetzner-host/host.test.ts",
-    "hetzner-host/testdata/cloud-init-public.golden",
-    "hetzner/dns/zonecheck.py",
-    "hetzner/dns/test_zonecheck.py",
-    "hetzner/scripts/probe-object-storage.py",
-    "hetzner/scripts/test_probe_object_storage.py",
-    "hetzner/scripts/check-address-plan-drift.py",
-    "hetzner/scripts/test_check_address_plan_drift.py",
-    "scripts/assert-min-python-version.py",
-    "scripts/nvmrc-node-exec.py",
-    "ansible/checks/offline_render.py",
-    "ansible/checks/test_offline_render.py",
-    "ansible/checks/test_edge_single_home.py",
-    "ansible/checks/test_mx1_stack_agree.py",
-    "ansible/checks/test_deploy_tooling_links.py",
-    "ansible/checks/test_ci_jump_hosts.py",
-]
+# The kinds of path CODEOWNERS may release by a pattern. Everything else it releases is one file,
+# named in full: a release never spreads to a file that is merely named like a released one, so a
+# new gate test called test_x_agree.py or test_x_single_home.py is the owner's until a line names
+# it. A new release of one file needs no edit here; a new kind of release does.
+RELEASE_KINDS: frozenset[str] = frozenset(
+    {
+        "*.md",  # every document; CLAUDE.md and the standards lines own theirs again
+        "pnpm-lock.yaml",  # lockfiles
+        ".nvmrc",  # version pins
+        "/hetzner/*.test.ts",  # Pulumi program tests; guard tests are owned again by name
+        "/hetzner-host/*.test.ts",
+        "/hetzner-host/testdata/",
+        "/hetzner/scripts/probe-*",  # probes that no job holding a secret runs
+        "/hetzner/scripts/test_probe_*",
+        "/scripts/nvmrc-node-exec.*",
+        "/ansible/checks/offline/",
+    }
+)
 
 # Paths named above that the repository does not hold yet: the launch page directory is listed
 # before a file is in it. Samples that stand for a directory or a wildcard are not files on disk.
@@ -632,14 +593,81 @@ class CodeownersTests(unittest.TestCase):
         self.assert_unowned(UNOWNED_PATHS)
 
     def test_documents_are_not_the_owners_but_the_repository_instructions_are(self) -> None:
-        self.assert_unowned(RELEASED_DOCUMENT_PATHS)
+        # Every tracked markdown file, the owner's directories' included, derived from git's own
+        # list so a new document needs no line here. CLAUDE.md and the standards lines' /.github/
+        # are owned again.
+        documents = [
+            f
+            for f in repository_files()
+            if f.endswith(".md") and f != "CLAUDE.md" and not f.startswith(".github/")
+        ]
+        self.assertGreaterEqual(len(documents), 100)
+        self.assert_unowned(documents)
         self.assert_owned(["CLAUDE.md"])
 
     def test_lockfiles_and_version_pins_are_not_the_owners(self) -> None:
-        self.assert_unowned(RELEASED_PIN_PATHS)
+        pin_name = re.compile(r"pnpm-lock\.yaml|\.nvmrc|(pip-)?requirements\.(txt|in|yml)")
+        pins = [f for f in repository_files() if pin_name.fullmatch(os.path.basename(f))]
+        self.assertGreaterEqual(len(pins), 10)
+        self.assert_unowned(pins)
 
-    def test_agreement_tests_program_tests_checkers_and_probes_are_not_the_owners(self) -> None:
-        self.assert_unowned(RELEASED_CHECK_PATHS)
+    def test_a_release_is_a_kind_of_path_or_one_file_named_in_full(self) -> None:
+        # A row with no owner un-owns what it matches. Each is either one of the kinds in
+        # RELEASE_KINDS or the full path of one file, so a release cannot reach a file that is
+        # only named like a released one. Adding the row for one more released file needs no
+        # edit to this test.
+        for pattern, owners in self.rules:
+            if owners:
+                continue
+            with self.subTest(pattern=pattern):
+                if pattern in RELEASE_KINDS:
+                    continue
+                self.assertFalse(set("*?[]!") & set(pattern), "a wildcard outside the kinds")
+                self.assertFalse(pattern.endswith("/"), "a directory outside the kinds")
+                self.assertTrue(pattern.startswith("/"), "a name that matches at any depth")
+
+    def test_every_owner_row_is_in_a_sorted_block(self) -> None:
+        # Rows in one block are in order of their patterns, so two changes that add rows at
+        # different places in a block do not edit the same lines. The order inside a block
+        # changes no answer: its rows all name the owner, or all name none. The last block is
+        # the standards template, whose order SYNC-1 fixes.
+        blocks: list[list[str]] = [[]]
+        for raw in CODEOWNERS.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line:
+                blocks.append([])
+            elif not line.startswith("#"):
+                blocks[-1].append(line.split()[0])
+        blocks = [b for b in blocks if b]
+        self.assertGreaterEqual(len(blocks), 8)
+        for block in blocks[:-1]:
+            with self.subTest(first=block[0]):
+                self.assertEqual(sorted(block), block)
+        self.assertEqual([p for p, _ in STANDARDS_TEMPLATE], blocks[-1])
+
+    def test_a_block_does_not_mix_owned_and_released_rows(self) -> None:
+        # What makes the order inside a block free: no block holds rows with and without an owner.
+        blocks: list[list[bool]] = [[]]
+        for raw in CODEOWNERS.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line:
+                blocks.append([])
+            elif not line.startswith("#"):
+                blocks[-1].append(len(line.split()) > 1)
+        for block in (b for b in blocks if b):
+            self.assertEqual(1, len(set(block)))
+
+    def test_a_change_that_drops_an_owner_is_found(self) -> None:
+        # The comparison the owner reads with `codeowners_match.py --against OLD`: a file that
+        # had an owner and has none is lost, one that had none and has one is gained.
+        old = [("/a/", [OWNER])]
+        files = ["a/x.py", "a/y.py", "b/z.py"]
+        self.assertEqual(([], []), owner_changes(old, old, files))
+        self.assertEqual((["a/x.py"], []), owner_changes(old, old + [("/a/x.py", [])], files))
+        self.assertEqual(([], ["b/z.py"]), owner_changes(old, old + [("/b/", [OWNER])], files))
+        self.assertEqual(
+            ([], []), owner_changes(old, [("/a/x.py", [OWNER]), ("/a/", [OWNER])], files)
+        )
 
     def test_the_tests_of_a_kept_gate_stay_the_owners(self) -> None:
         # A released agreement test is not a gate; the tests that stand over a kept gate are.
@@ -682,9 +710,6 @@ class CodeownersTests(unittest.TestCase):
             + ACCESS_TEST_PATHS
             + BACKUP_PATHS
             + UNOWNED_PATHS
-            + RELEASED_DOCUMENT_PATHS
-            + RELEASED_PIN_PATHS
-            + RELEASED_CHECK_PATHS
             + [sample.path for sample in SAMPLES]
         )
         for path in listed:
@@ -739,43 +764,27 @@ class CodeownersTests(unittest.TestCase):
         )
 
     def test_every_check_script_and_its_test_is_the_owners_but_the_released_ones(self) -> None:
-        # Each file in ansible/checks/ is the owner's unless a line releases it. The released
-        # ones are named here, so a release line that spreads past them is seen.
-        released = {
-            "README.md",
-            "advisory_passes.py",
-            "advisory_passes_fixture.json",
-            "offline_render.py",
-            "sabotage_offline_render.py",
-            "pip-requirements.txt",
-            "test_offline_render.py",
-            "test_broker_paths_agree.py",
-            "test_db1_stack_verify_parts.py",
-            "test_demo1_egress_spool_agree.py",
-            "test_demo1_no_github_fetch.py",
-            "test_deploy_tooling_edge1_class.py",
-            "test_deploy_tooling_internal_class.py",
-            "test_deploy_tooling_links.py",
-            "test_deploy_tooling_probe_name.py",
-            "test_deploy_tooling_single_owner.py",
-            "test_edge_single_home.py",
-            "test_egress_nat_single_gateway.py",
-            "test_host_baseline_matches_scripts.py",
-            "test_monitoring_single_home.py",
-            "test_mx1_stack_agree.py",
-            "test_patterns_typecheck.py",
-            "test_ci_jump_hosts.py",
+        # Each file in ansible/checks/ is the owner's unless a row releases it, and a row releases
+        # a file there only by its full name, or as a document. The released files are not listed
+        # here: a release of one more file is its own row in CODEOWNERS and nothing else.
+        released_by_name = {
+            pattern.lstrip("/")
+            for pattern, owners in self.rules
+            if not owners and "*" not in pattern
         }
         checks = ROOT / "ansible" / "checks"
         top_level = sorted(p.name for p in checks.iterdir() if p.is_file())
         self.assertIn("check_pins.py", top_level)
+        owned = 0
         for name in top_level:
             path = f"ansible/checks/{name}"
             with self.subTest(path=path):
-                if name in released:
-                    self.assertEqual([], owners_of(path, self.rules))
-                else:
+                if owners_of(path, self.rules):
+                    owned += 1
                     self.assertEqual([OWNER], owners_of(path, self.rules))
+                else:
+                    self.assertTrue(name.endswith(".md") or path in released_by_name)
+        self.assertGreaterEqual(owned, 60)
 
     def test_every_pulumi_program_and_stack_file_and_package_manifest_is_the_owners(self) -> None:
         # Every Pulumi program file of hetzner/ and hetzner-host/ that is not a test, every

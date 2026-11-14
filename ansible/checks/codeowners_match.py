@@ -11,6 +11,8 @@ keeps is owned, and every class that merges on the reviewer App's approval is no
     codeowners_match.py --tuple            print the patterns, in file order, as a Python tuple
     codeowners_match.py --tree             count the tracked files the file owns
     codeowners_match.py --path PATH ...    print who owns each path
+    codeowners_match.py --against OLD      list tracked files that lost or gained an owner
+                                           against the CODEOWNERS file OLD (exit 1 on a loss)
 
 The samples run exits 1 when any sample's answer differs, and prints one line per sample.
 """
@@ -213,6 +215,19 @@ def patterns(rules: list[Rule]) -> tuple[str, ...]:
     return tuple(pattern for pattern, _ in rules)
 
 
+def owner_changes(
+    old: list[Rule], new: list[Rule], files: Sequence[str]
+) -> tuple[list[str], list[str]]:
+    """Return the files that lose their owner and the files that gain one going from old to new.
+
+    A file whose owners change from one owner list to another is in neither: only a file that
+    had an owner and has none, and a file that had none and has one, are reported.
+    """
+    lost = [f for f in files if owners_of(f, old) and not owners_of(f, new)]
+    gained = [f for f in files if not owners_of(f, old) and owners_of(f, new)]
+    return lost, gained
+
+
 def tracked_files() -> list[str]:
     """Return every file git tracks in this repository."""
     out = subprocess.run(  # noqa: S603
@@ -231,8 +246,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode.add_argument("--tuple", action="store_true", help="print the patterns as a Python tuple")
     mode.add_argument("--tree", action="store_true", help="count the tracked files that are owned")
     mode.add_argument("--path", nargs="+", metavar="PATH", help="print who owns each path")
+    mode.add_argument(
+        "--against",
+        type=Path,
+        metavar="OLD",
+        help="compare every tracked file's owner with the CODEOWNERS file OLD; exit 1 on a loss",
+    )
     args = parser.parse_args(argv)
     rules = parse_rules(args.file.read_text(encoding="utf-8"))
+    if args.against:
+        old = parse_rules(args.against.read_text(encoding="utf-8"))
+        files = tracked_files()
+        lost, gained = owner_changes(old, rules, files)
+        for path in lost:
+            sys.stdout.write(f"LOST   {path}\n")
+        for path in gained:
+            sys.stdout.write(f"GAINED {path}\n")
+        sys.stdout.write(f"files {len(files)} lost {len(lost)} gained {len(gained)}\n")
+        return 1 if lost else 0
     if args.path:
         for path in args.path:
             sys.stdout.write(f"{' '.join(owners_of(path, rules)) or '(no owner)':32} {path}\n")
