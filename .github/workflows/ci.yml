@@ -573,8 +573,12 @@ jobs:
       # Starts the edge's own CrowdSec from compose.yml and replays at it the
       # Ghost admin traffic that once banned the owner, plus admin and WAF
       # probes: the admin use must raise no ban and every probe must still
-      # raise one (hetzner/edge/test_crowdsec_replay.py). A workstation here
-      # cannot start containers, so this job is the only place it runs.
+      # raise one (hetzner/edge/test_crowdsec_replay.py). It also starts the
+      # image built above in front of that CrowdSec, with a Ghost stand-in, and
+      # proves a verified staff session passes a ban and AppSec while a forged
+      # one does not (hetzner/edge/test_trusted_session_replay.py). A
+      # workstation here cannot start containers, so this job is the only place
+      # it runs.
       - name: Replay Ghost admin traffic and probes against the edge's CrowdSec
         if: steps.skip.outputs.run != 'false'
         env:

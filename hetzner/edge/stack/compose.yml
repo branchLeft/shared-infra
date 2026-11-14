@@ -133,6 +133,11 @@ services:
       # loads because it is under its stage directory.
       - ./crowdsec/appsec-configs:/etc/crowdsec/appsec-configs/branchleft:ro
       - ./crowdsec/postoverflows:/etc/crowdsec/postoverflows/s01-whitelist/branchleft:ro
+      # The whitelist that drops an access-log line for a request whose
+      # signed-in session the edge verified, before any scenario reads it
+      # (hetzner/edge/render.md, "Verified sessions"). Mounted the same way, under
+      # the enrich stage, where the hub's own whitelists sit.
+      - ./crowdsec/parsers:/etc/crowdsec/parsers/s02-enrich/branchleft:ro
       - crowdsec-data:/var/lib/crowdsec/data
       - caddy-logs:/var/log/caddy:ro
     # Without one, `--wait` waits only for *running*, which a crash-looping

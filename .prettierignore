@@ -25,8 +25,10 @@ hetzner/edge/stack/crowdsec/acquis.d/appsec.yaml
 hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml
 hetzner/edge/stack/crowdsec/appsec-configs/ghost-admin-previews.yaml
 hetzner/edge/stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml
+hetzner/edge/stack/crowdsec/parsers/edge-trusted-session.yaml
 hetzner/edge/validation/Caddyfile.enforcing
 hetzner/edge/validation/Caddyfile.authoring
+hetzner/edge/validation/Caddyfile.trusted-session
 
 # Files a role carries byte for byte from branchLeft/ghost-platform and holds to a pinned
 # sha256 (ansible/roles/demo1_build, ansible/roles/demo1_egress_spool). A formatter that

@@ -18,6 +18,7 @@ import {
   renderCaddyLogAcquisition,
   renderGhostAdminAppsecConfig,
   renderGhostAdminPostoverflow,
+  renderTrustedSessionWhitelist,
   EDGE_HOST_ALLOWED_PORTS,
   resolvePrivateAddress,
   servableSites,
@@ -1105,8 +1106,12 @@ describe("the committed posture's IP-decision handler", () => {
   const blocks = blocksOf(rendered);
   const blockAt = (address: string) => blocks.find((block) => block.addresses.includes(address));
 
-  /** The handler only: two tabs deep, bare. The global options block is one tab deep with a brace. */
-  const HANDLER = /^\t\tcrowdsec$/gm;
+  /**
+   * The handler only: two tabs deep, bare or skipping a verified session
+   * (render.md, "Verified sessions"). The global options block is one tab deep
+   * with a brace.
+   */
+  const HANDLER = /^\t\tcrowdsec(?: @edge_untrusted)?$/gm;
   const handlerCount = (text: string): number => (text.match(HANDLER) ?? []).length;
 
   const servable = servableSites(sites);
@@ -1160,9 +1165,12 @@ describe("the committed posture's IP-decision handler", () => {
     const guarded = blocks.filter((entry) => handlerCount(entry.text) === 1);
     expect(guarded.length).toBeGreaterThan(0);
     for (const block of guarded) {
-      const handler = block.text.search(/^\t\tcrowdsec$/m);
+      const handler = block.text.search(/^\t\tcrowdsec(?: @edge_untrusted)?$/m);
       const appsec = block.text.search(/^\t\tappsec\b/m);
-      const proxy = block.text.indexOf('reverse_proxy');
+      // The upstream proxy. The session verification call is the one proxy
+      // that runs ahead of the handler, by design: it decides whether the
+      // handler applies (render.md, "Verified sessions").
+      const proxy = block.text.search(/^\t\treverse_proxy (?!@edge_session_candidate)/m);
       if (appsec !== -1) expect(handler, block.addresses[0]).toBeLessThan(appsec);
       if (proxy !== -1) expect(handler, block.addresses[0]).toBeLessThan(proxy);
     }
@@ -1404,7 +1412,10 @@ const UPLOAD_GUARD_ROUTE_LINES = `
 		}
 		respond @active_upload_by_pattern 403`;
 
-/** The blog's site block exactly as it was served before the portal hostnames existed. */
+/**
+ * The blog's site block exactly as it was served before the portal hostnames
+ * existed, plus the verified staff session (render.md, "Verified sessions").
+ */
 const BLOG_BLOCK = `
 	log {
 		output file /var/log/caddy/access.log {
@@ -1423,7 +1434,15 @@ const BLOG_BLOCK = `
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected not path /ghost/api/*
+	@inspected {
+		not path /ghost/api/*
+		not vars edge_trusted 1
+	}
+	@edge_session_candidate {
+		path /ghost/*
+		header Cookie *ghost-admin-api-session=*
+	}
+	@edge_untrusted not vars edge_trusted 1
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
@@ -1454,7 +1473,28 @@ const BLOG_BLOCK = `
 				events 5
 			}
 		}
-		crowdsec
+		vars edge_trusted 0
+		log_append edge_trusted {http.vars.edge_trusted}
+		reverse_proxy @edge_session_candidate 10.20.1.100:8101 {
+			method GET
+			rewrite /ghost/api/admin/users/me/?
+			header_up -Authorization
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 10s
+			}
+			@edge_session_verified {
+				status 2xx
+				header Content-Type application/json*
+			}
+			handle_response @edge_session_verified {
+				vars edge_trusted 1
+			}
+			handle_response {
+				vars edge_trusted 0
+			}
+		}
+		crowdsec @edge_untrusted
 		appsec @inspected
 		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
@@ -1689,7 +1729,7 @@ describe('the owner console and tenant portal routes', () => {
 
     it('keeps the blog admin API outside AppSec so author-written HTML is not blocked', () => {
       const blog = blockOf(rendered, 'blog.branchleft.co.uk');
-      expect(blog).toContain('@inspected not path /ghost/api/*');
+      expect(blog).toContain('@inspected {\n\t\tnot path /ghost/api/*\n');
       expect(blog).toContain('appsec @inspected');
     });
 
@@ -1739,6 +1779,9 @@ describe('the committed stack directory', () => {
     );
     await expect(renderGhostAdminPostoverflow(sites)).toMatchFileSnapshot(
       './stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml'
+    );
+    await expect(renderTrustedSessionWhitelist()).toMatchFileSnapshot(
+      './stack/crowdsec/parsers/edge-trusted-session.yaml'
     );
   });
 });
@@ -2003,8 +2046,8 @@ describe('the break-glass token in the rendered Caddyfile', () => {
       expect(at(STRIP_RULE), a).toBeGreaterThan(at('Strict-Transport-Security'));
       expect(at('request_body {'), a).toBeGreaterThan(at(STRIP_RULE));
       expect(at('respond @ghost_setup'), a).toBeGreaterThan(at(STRIP_RULE));
-      expect(at('reverse_proxy'), a).toBeGreaterThan(at('respond @ghost_setup'));
-      for (const chain of ['appsec', 'crowdsec', 'rate_limit']) {
+      expect(r.search(/\treverse_proxy (?!@)/), a).toBeGreaterThan(at('respond @ghost_setup'));
+      for (const chain of ['appsec', 'crowdsec', 'rate_limit', 'reverse_proxy @edge_session']) {
         if (at(chain) >= 0) expect(at(chain), `${a} ${chain}`).toBeGreaterThan(at(STRIP_RULE));
       }
     }
@@ -2024,5 +2067,135 @@ describe('the break-glass token in the rendered Caddyfile', () => {
       '(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])';
     expect(matcher, 'the strip gate must accept either hex case').toContain(spelled);
     expect(logLine, 'the log filter must accept either hex case').toContain(spelled);
+  });
+});
+
+// Why: render.md, "Verified sessions". The behaviour is proved against a real
+// Caddy and a real CrowdSec by test_trusted_session_replay.py, which loads the
+// harness snapshot rendered here; these pin what the renderer is responsible for.
+describe('verified sessions', () => {
+  const verifiedGhost = (overrides: Partial<EdgeSite> = {}): EdgeSite =>
+    site({
+      name: 'tenant-one',
+      hostnames: ['tenant-one.test'],
+      backend: 'ghost',
+      injectionWafPreviewOnly: true,
+      trustedSession: 'ghost-staff',
+      ...overrides,
+    });
+  // The second tenant runs AppSec on every path, as a non-authoring site does.
+  const harnessSites = [
+    verifiedGhost(),
+    verifiedGhost({
+      name: 'tenant-two',
+      hostnames: ['tenant-two.test'],
+      injectionWafPreviewOnly: false,
+      privateUpstream: { host: 'app1', port: 2369 },
+    }),
+  ];
+  const rendered = renderCaddyfile(harnessSites, [], ENFORCING);
+  const lines = (hostname: string) =>
+    blockOf(rendered, hostname)
+      .split('\n')
+      .map((line) => line.trim());
+
+  it('renders the configuration the live harness loads', async () => {
+    await expect(rendered).toMatchFileSnapshot('./validation/Caddyfile.trusted-session');
+  });
+
+  it('verifies after both throttles and before the bouncer, AppSec, the refusals and the proxy', () => {
+    const route = lines('tenant-one.test');
+    const at = (text: string) => route.indexOf(text);
+    const order = [
+      'rate_limit {',
+      'rate_limit @members_magic_link {',
+      'vars edge_trusted 0',
+      'log_append edge_trusted {http.vars.edge_trusted}',
+      'reverse_proxy @edge_session_candidate 10.20.1.100:2368 {',
+      'crowdsec @edge_untrusted',
+      'appsec @inspected',
+      'respond @ghost_setup 403',
+      'reverse_proxy 10.20.1.100:2368',
+    ].map(at);
+    expect(
+      order.every((index) => index >= 0),
+      String(order)
+    ).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(route).not.toContain('crowdsec');
+    expect(route).not.toContain('appsec');
+  });
+
+  it('skips AppSec for a verified request on a site that inspects every path', () => {
+    const route = lines('tenant-two.test');
+    expect(route).toContain('appsec @edge_untrusted');
+    expect(route).toContain('crowdsec @edge_untrusted');
+    expect(route).toContain('reverse_proxy @edge_session_candidate 10.20.1.100:2369 {');
+  });
+
+  it('keeps the authoring exemption and adds the verified condition to it', () => {
+    const block = blockOf(rendered, 'tenant-one.test');
+    expect(block).toContain(
+      '@inspected {\n\t\tnot path /ghost/api/*\n\t\tnot vars edge_trusted 1\n\t}'
+    );
+  });
+
+  it('asks only on /ghost/ with the staff cookie, never on a members cookie', () => {
+    const block = blockOf(rendered, 'tenant-one.test');
+    expect(block).toContain(
+      '@edge_session_candidate {\n\t\tpath /ghost/*\n\t\theader Cookie *ghost-admin-api-session=*\n\t}'
+    );
+    expect(block).not.toContain('ghost-members-ssr');
+    expect(block).toContain('@edge_untrusted not vars edge_trusted 1');
+  });
+
+  it('trusts only a 2xx JSON answer to a bodiless GET of who-am-I, without the API key header', () => {
+    const block = blockOf(rendered, 'tenant-one.test');
+    const from = block.indexOf('reverse_proxy @edge_session_candidate');
+    const call = block.slice(
+      from,
+      block.indexOf('\n\t\t}\n', block.indexOf('handle_response {', from))
+    );
+    expect(call).toContain('method GET');
+    expect(call).toContain('rewrite /ghost/api/admin/users/me/?');
+    expect(call).toContain('header_up -Authorization');
+    expect(call).toContain(
+      '@edge_session_verified {\n\t\t\t\tstatus 2xx\n\t\t\t\theader Content-Type application/json*\n\t\t\t}'
+    );
+    expect(call).toContain(
+      'handle_response @edge_session_verified {\n\t\t\t\tvars edge_trusted 1\n\t\t\t}'
+    );
+    expect(call).toContain('handle_response {\n\t\t\t\tvars edge_trusted 0');
+    expect(call).not.toMatch(/copy_response|header_down|request_header/);
+  });
+
+  it('leaves a site without the field exactly as before', () => {
+    const plain = blockOf(
+      renderCaddyfile([verifiedGhost({ trustedSession: undefined })], [], ENFORCING),
+      'tenant-one.test'
+    );
+    expect(plain).not.toContain('edge_');
+    expect(plain).toContain('@inspected not path /ghost/api/*');
+    expect(plain.split('\n').map((line) => line.trim())).toContain('crowdsec');
+  });
+
+  it('refuses the field on a site that is not Ghost', () => {
+    expect(() => renderCaddyfile([verifiedGhost({ backend: 'other' })], [], ENFORCING)).toThrow(
+      /only a Ghost site/
+    );
+  });
+
+  it('is on the blog alone in the registry: the portal and console wait for their endpoint', () => {
+    expect(sites.filter((entry) => entry.trustedSession !== undefined).map((e) => e.name)).toEqual([
+      'blog',
+    ]);
+  });
+
+  it('whitelists a log line only on the top-level field Caddy writes', () => {
+    const whitelist = renderTrustedSessionWhitelist();
+    expect(whitelist).toContain('name: branchleft/edge-trusted-session');
+    expect(whitelist).toContain("filter: evt.Line.Labels.type == 'caddy'");
+    expect(whitelist).toContain("    - JsonExtract(evt.Line.Raw, 'edge_trusted') == '1'");
+    expect(whitelist).not.toMatch(/evt\.Parsed|request\.|header/i);
   });
 });

@@ -1,0 +1,317 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+{
+	email {env.ACME_EMAIL}
+	acme_ca https://acme-v02.api.letsencrypt.org/directory
+	servers {
+		protocols h1 h2
+		metrics
+	}
+	crowdsec {
+		api_url http://crowdsec:8080
+		api_key {env.CROWDSEC_BOUNCER_KEY}
+		ticker_interval 15s
+		appsec_url http://crowdsec:7422
+		appsec_max_body_bytes 65536
+		appsec_timeout 1s
+		appsec_fail_open
+	}
+}
+
+tenant-one.test {
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@inspected {
+		not path /ghost/api/*
+		not vars edge_trusted 1
+	}
+	@edge_session_candidate {
+		path /ghost/*
+		header Cookie *ghost-admin-api-session=*
+	}
+	@edge_untrusted not vars edge_trusted 1
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header >X-Content-Type-Options "nosniff"
+		uri @break_glass_strip query -bl_break_glass
+		request_body {
+			max_size 64MiB
+		}
+		rate_limit {
+			zone tenant-one_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		vars edge_trusted 0
+		log_append edge_trusted {http.vars.edge_trusted}
+		reverse_proxy @edge_session_candidate 10.20.1.100:2368 {
+			method GET
+			rewrite /ghost/api/admin/users/me/?
+			header_up -Authorization
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 10s
+			}
+			@edge_session_verified {
+				status 2xx
+				header Content-Type application/json*
+			}
+			handle_response @edge_session_verified {
+				vars edge_trusted 1
+			}
+			handle_response {
+				vars edge_trusted 0
+			}
+		}
+		crowdsec @edge_untrusted
+		appsec @inspected
+		respond @ghost_setup 403
+		@uploads_by_path {
+			path /content/files/* /content/images/* /content/media/*
+		}
+		route @uploads_by_path {
+			@active_upload_by_path {
+				path *.js *.mjs *.cjs *.html *.htm *.shtml *.xhtml *.xht *.xml *.xsl *.xslt *.css *.svg *.svgz *.kml *.gpx
+			}
+			respond @active_upload_by_path 403
+		}
+		@active_upload_by_pattern {
+			path_regexp (?i)^/+content/+(?:files|images|media)/.*\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$
+		}
+		respond @active_upload_by_pattern 403
+		reverse_proxy 10.20.1.100:2368
+	}
+	handle_errors {
+		header >X-Content-Type-Options "nosniff"
+	}
+}
+
+tenant-two.test {
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@edge_session_candidate {
+		path /ghost/*
+		header Cookie *ghost-admin-api-session=*
+	}
+	@edge_untrusted not vars edge_trusted 1
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		header >X-Content-Type-Options "nosniff"
+		uri @break_glass_strip query -bl_break_glass
+		request_body {
+			max_size 64MiB
+		}
+		rate_limit {
+			zone tenant-two_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		vars edge_trusted 0
+		log_append edge_trusted {http.vars.edge_trusted}
+		reverse_proxy @edge_session_candidate 10.20.1.100:2369 {
+			method GET
+			rewrite /ghost/api/admin/users/me/?
+			header_up -Authorization
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 10s
+			}
+			@edge_session_verified {
+				status 2xx
+				header Content-Type application/json*
+			}
+			handle_response @edge_session_verified {
+				vars edge_trusted 1
+			}
+			handle_response {
+				vars edge_trusted 0
+			}
+		}
+		crowdsec @edge_untrusted
+		appsec @edge_untrusted
+		respond @ghost_setup 403
+		@uploads_by_path {
+			path /content/files/* /content/images/* /content/media/*
+		}
+		route @uploads_by_path {
+			@active_upload_by_path {
+				path *.js *.mjs *.cjs *.html *.htm *.shtml *.xhtml *.xht *.xml *.xsl *.xslt *.css *.svg *.svgz *.kml *.gpx
+			}
+			respond @active_upload_by_path 403
+		}
+		@active_upload_by_pattern {
+			path_regexp (?i)^/+content/+(?:files|images|media)/.*\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$
+		}
+		respond @active_upload_by_pattern 403
+		reverse_proxy 10.20.1.100:2369
+	}
+	handle_errors {
+		header >X-Content-Type-Options "nosniff"
+	}
+}
+
+http://edge-probe.invalid:8080 {
+	log {
+		output file /var/log/caddy/probe.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
+	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
+	route {
+		uri @break_glass_strip query -bl_break_glass
+		rate_limit {
+			zone probe_host_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		crowdsec
+		appsec
+		respond @ghost_setup 403
+		header X-Edge-Probe host-routed
+		respond 204
+	}
+}
+
+:8080 {
+	log {
+		output file /var/log/caddy/probe.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
+	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
+	route {
+		uri @break_glass_strip query -bl_break_glass
+		rate_limit {
+			zone probe_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		crowdsec
+		appsec
+		respond @ghost_setup 403
+		header X-Edge-Probe bare-port
+		respond 204
+	}
+}
+
+:9091 {
+	metrics
+}
