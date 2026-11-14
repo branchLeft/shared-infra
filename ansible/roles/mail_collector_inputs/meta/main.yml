@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Checks the mail collector's owner-placed input file and that its drain list names a host, and changes nothing.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'
