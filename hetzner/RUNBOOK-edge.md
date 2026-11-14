@@ -584,7 +584,7 @@ The number was carried over from the retired edge, whose rule was live at
 `preview: true` and never enforced anything. The key is the direct peer (`{http.request.remote.host}`), which can
 also collapse real clients onto a Docker bridge address such as `172.18.0.1`
 behind the docker-proxy, so that every collapsed client shares one budget per
-site. `RateLimitDecliningRealClients` excludes `172.16.0.0/12` keys, so that
+site. `RateLimitDeclinesSustained` excludes `172.16.0.0/12` keys, so that
 collapse would not alert on its own; the tripwire is the blackbox probes seeing
 `429`.
 
