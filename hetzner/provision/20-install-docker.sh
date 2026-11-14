@@ -20,6 +20,9 @@ export DEBIAN_FRONTEND=noninteractive
 # the one this script is pointed at when `apt-get update` starts failing
 # verification.
 KEYRING=/etc/apt/keyrings/docker.asc
+# Overridable so the tests point the keyring at a throwaway file and never
+# read or write the host's own copy.
+KEYRING="${DOCKER_KEYRING_PATH:-$KEYRING}"
 TMP_KEY="$(mktemp)"
 trap 'rm -f "$TMP_KEY"' EXIT
 
@@ -56,7 +59,7 @@ else
     echo "20-install-docker: wrote $KEYRING"
 fi
 
-LIST=/etc/apt/sources.list.d/docker.list
+LIST="${DOCKER_APT_LIST_PATH:-/etc/apt/sources.list.d/docker.list}"
 # shellcheck source=/dev/null
 codename="$(. /etc/os-release && echo "$VERSION_CODENAME")"
 arch="$(dpkg --print-architecture)"

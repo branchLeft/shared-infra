@@ -47,6 +47,30 @@ def host_key() -> str:
     return "ssh-ed25519 " + base64.b64encode(blob).decode()
 
 
+FAKE_KEY_B64 = host_key().split()[1]
+# Stands in for ssh-keygen, so the tests never need the host's copy: keygen
+# writes a key pair, and -y prints the public half, as the real tool does.
+FAKE_SSH_KEYGEN = """#!/usr/bin/env bash
+keyfile=""
+comment=""
+print_public=0
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -f) keyfile="$2"; shift 2 ;;
+        -C) comment="$2"; shift 2 ;;
+        -y) print_public=1; shift ;;
+        *) shift ;;
+    esac
+done
+if [[ "$print_public" == 1 ]]; then
+    cat "$keyfile.pub"
+    exit 0
+fi
+printf 'stub private key\\n' > "$keyfile"
+printf 'ssh-ed25519 @KEY_B64@ %s\\n' "$comment" > "$keyfile.pub"
+""".replace("@KEY_B64@", FAKE_KEY_B64)
+
+
 def _write_fake(path, content):
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(content)
@@ -62,6 +86,7 @@ class InstallDbTunnelTests(unittest.TestCase):
         os.makedirs(self.bin_dir)
         _write_fake(os.path.join(self.bin_dir, "getent"), FAKE_GETENT)
         _write_fake(os.path.join(self.bin_dir, "ip"), FAKE_IP)
+        _write_fake(os.path.join(self.bin_dir, "ssh-keygen"), FAKE_SSH_KEYGEN)
         for name in ("useradd", "systemctl"):
             _write_fake(os.path.join(self.bin_dir, name), FAKE_LOGGED)
         self.call_log = os.path.join(self.root, "calls.log")
