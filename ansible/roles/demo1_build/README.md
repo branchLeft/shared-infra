@@ -452,13 +452,16 @@ allowlist holds the package mirrors only. To bump them, in one change:
 3. Change `demo1_build_source_sha` and every checksum in `defaults/main.yml`, and
    the same values in `meta/argument_specs.yml`.
 
-Named limit: CI no longer compares the carried bytes with ghost-platform. It holds
-them to the pin in this repository, so a change to a file and its pin together
-passes. The review of such a change is a review of file content, not of a commit
-sha; a CI step that checks out ghost-platform at the pinned commit and diffs is
-filed as follow-up. The vendored files are also not scanned by the no-fetch check,
-which reads the role's own tasks and variables: they are upstream's text, and root
-runs them.
+Named limit: the role's pins hold the carried bytes to the sha256 values in this repository,
+so a change to a file and its pin together passes the role and `test_demo1_no_github_fetch.py`.
+What compares them with ghost-platform is a CI step in `ci.yml`
+(`ansible/checks/check_vendored_ghost_platform.py`): it fetches ghost-platform at
+`demo1_build_source_sha` (and the egress-spool role's own pin, for its files) and fails, naming the
+file, on any carried byte that differs from the commit's. The limit that is left is the commit
+itself: the step proves the files are ghost-platform's at the pinned commit, not that the commit is
+the one to run, so a bump of the sha is still a review of which commit. The vendored files are
+also not scanned by the no-fetch check, which reads the role's own tasks and variables: they are
+upstream's text, and root runs them.
 
 ## Requirements
 

@@ -202,14 +202,66 @@
 # tenants are dumped and the recipients file decides whose key opens whose dump,
 # so only root may write them; the service account reads them (mode 0640, its
 # group). Slugs are private, so these tasks hide them. The public recipients are
-# the only age material the host ever holds.
+# the only age material the host ever holds. Each is written in the steps the
+# environment file below is: created empty at its final owner and mode when absent,
+# its owner, group and mode set back on every run, and only then written, so a file
+# widened by hand is closed again before any slug goes into it. The values come from
+# backup_worker_private_files in vars/main.yml, the one home of those values.
+- name: Create the tenants file empty, closed to everyone but root and the service account
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ backup_worker_tenants_file }}'
+    owner: '{{ backup_worker_tenants_private.owner }}'
+    group: '{{ backup_worker_tenants_private.group }}'
+    mode: '{{ backup_worker_tenants_private.mode }}'
+    force: false
+  no_log: true
+  diff: false
+
+- name: Create the recipients file empty, closed to everyone but root and the service account
+  ansible.builtin.copy:
+    content: ''
+    dest: '{{ backup_worker_recipients_file }}'
+    owner: '{{ backup_worker_recipients_private.owner }}'
+    group: '{{ backup_worker_recipients_private.group }}'
+    mode: '{{ backup_worker_recipients_private.mode }}'
+    force: false
+  no_log: true
+  diff: false
+
+# The attributes are set on every run, and the task changes attributes only, never
+# content (ANS-16). It runs after both create-empty tasks and before both writes: a
+# write goes through the existing file, which keeps the owner and mode it has. The
+# limit: the correction happens on each run, not continuously. The stat comes first
+# because check mode creates nothing, so a file still absent there is skipped.
+- name: Look at the tenants and recipients files before their owner, group and mode are set
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    get_checksum: false
+  loop: '{{ backup_worker_private_files }}'
+  register: backup_worker_private_file_stats
+  loop_control:
+    label: '{{ item.path }}'
+
+- name: Set the owner, group and mode of the tenants and recipients files on every run
+  ansible.builtin.file:
+    path: '{{ item.item.path }}'
+    state: file
+    owner: '{{ item.item.owner }}'
+    group: '{{ item.item.group }}'
+    mode: '{{ item.item.mode }}'
+  loop: '{{ backup_worker_private_file_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: not ansible_check_mode or item.stat.exists
+
 - name: Write the tenants file
   ansible.builtin.template:
     src: backup-worker-tenants.j2
     dest: '{{ backup_worker_tenants_file }}'
-    owner: root
-    group: '{{ backup_worker_account }}'
-    mode: '0640'
+    owner: '{{ backup_worker_tenants_private.owner }}'
+    group: '{{ backup_worker_tenants_private.group }}'
+    mode: '{{ backup_worker_tenants_private.mode }}'
   no_log: true
   diff: false
 
@@ -217,9 +269,9 @@
   ansible.builtin.template:
     src: backup-worker-recipients.j2
     dest: '{{ backup_worker_recipients_file }}'
-    owner: root
-    group: '{{ backup_worker_account }}'
-    mode: '0640'
+    owner: '{{ backup_worker_recipients_private.owner }}'
+    group: '{{ backup_worker_recipients_private.group }}'
+    mode: '{{ backup_worker_recipients_private.mode }}'
   no_log: true
   diff: false
 

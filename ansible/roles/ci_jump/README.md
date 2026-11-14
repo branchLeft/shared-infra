@@ -64,8 +64,10 @@ one host.
      (`E-LEGACY-PRESENT`).
   6. Take the marker away.
      A failure anywhere puts every file back as it was (the new files as they were, the old files and
-     their directory byte for byte), reloads sshd and fails the run. A second run finds the host
-     finished and changes nothing. A host that never had the hand-made layout skips steps 4 and 5.
+     their directory byte for byte), checks the whole configuration with those files back, reloads
+     sshd when that check passes (the item "Check, reload, read back" says what happens when it does
+     not), and fails the run. A second run finds the host finished and changes nothing. A host that
+     never had the hand-made layout skips steps 4 and 5.
 - **A pull that dies after the write still reloads sshd.** Before the first write the role leaves
   `/run/branchleft-jump-reload-owed` whenever the module's plan says a write is owed (a managed file
   not exactly as wanted, or an old file still there). The next run reloads sshd if the marker is
@@ -75,8 +77,14 @@ one host.
 - **Check, reload, read back.** After the write the whole sshd configuration is checked with
   `sshd -t`, sshd is reloaded when either file changed, and the module reads both files back and asks
   `sshd -T -C user=ACCOUNT,host=x,addr=OWN_ADDRESS` what sshd applies to the account. A failed check
-  or read-back puts the previous files back, reloads sshd again and fails the run (the same shape as
-  the `tunnel_account` replica half).
+  or read-back puts the previous files back and checks the whole configuration again. When that check
+  passes the rescue reloads sshd, takes the marker away, puts back the previous key file (or removes
+  the one the host did not have) and fails the run. When it does not pass (for example a file in
+  `sshd_config.d` that the role did not write and that sshd rejects), the rescue reloads nothing,
+  leaves the marker so that the next run reloads, leaves the new key file (the running sshd still
+  serves from it), and fails the run naming the step. The reload is never ignored: one that fails stops
+  the rescue loudly. This is the same shape as the `tunnel_account` replica half, except for that
+  condition.
 - **Remote forwarding is refused.** A key line with `port-forwarding` also lets its holder open a
   listening port on the jump host (`ssh -R`) unless sshd says `AllowTcpForwarding local` for the
   account. The read-back requires exactly that, and refuses any other value (`E-SSHD-FORWARDING`),
@@ -243,12 +251,19 @@ cd ansible/roles/ci_jump && PYTHONPATH=library ../../../.venv/bin/python -m unit
   read-back cases put a `Match` block ahead of the role's, which outranks it, or change a file or its
   owner, mode or directory behind the role's back, and run the read-back step alone. Two cases run
   the write step with a configuration that fails the whole check, and with a read-back sshd refuses,
-  and require the previous files to be back. A last play starts from the hand-made layout and runs:
-  the first read-back failing (the old files are the very files that were there afterwards); the
+  and each asserts what the rescue left. With the whole check failing the rescue's own check fails
+  too, so sshd was not reloaded, the marker is still there and the new key file stays; with the
+  read-back refused the rescue reloaded sshd (twice over the step: after the write and in the
+  rescue), the marker is gone and the key file is the very bytes it was. Both require the rescue's
+  own message, naming the step, and the previous drop-in as it was. A last play starts from the
+  hand-made layout and runs:
+  the first read-back failing (the old files are the very files that were there afterwards, and
+  sshd was reloaded twice, once after the write and once in the rescue); the
   second read-back failing, made to happen by a test-only hook on `ssh.service` that puts the old
   drop-in back after the role removed it (the old files are back with the same checksum and the new
-  files are gone); a success (the old layout and its directory gone, the new files in place, sshd
-  reloaded exactly twice); and a marker left by a dead pull (the next run reloads sshd exactly once,
+  files are gone, and sshd was reloaded three times: after the write, after the removal and in the
+  rescue); in both failures the marker is gone; a success (the old layout and its directory gone,
+  the new files in place, sshd reloaded exactly twice); and a marker left by a dead pull (the next run reloads sshd exactly once,
   the run after it not at all).
 - The unit tests run the module against a fake host: every code above, the parser, the report over
   hostile values with no account name in it, the read-back, and the reader's refusal of a link and a

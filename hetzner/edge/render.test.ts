@@ -16,6 +16,8 @@ import {
   renderAppsecAcquisition,
   renderCaddyfile,
   renderCaddyLogAcquisition,
+  renderGhostAdminAppsecConfig,
+  renderGhostAdminPostoverflow,
   EDGE_HOST_ALLOWED_PORTS,
   resolvePrivateAddress,
   servableSites,
@@ -866,7 +868,11 @@ describe('inband-only', () => {
       .split('\n')
       .filter((line) => line.startsWith('  - '))
       .map((line) => line.slice(4));
-    expect(configs).toEqual(['crowdsecurity/appsec-default', 'crowdsecurity/crs']);
+    expect(configs).toEqual([
+      'branchleft/ghost-admin-previews',
+      'crowdsecurity/appsec-default',
+      'crowdsecurity/crs',
+    ]);
   });
 
   it('leaves the IP-decision handler out of every route', () => {
@@ -907,7 +913,11 @@ describe('detect-only', () => {
       .split('\n')
       .filter((line) => line.startsWith('  - '))
       .map((line) => line.slice(4));
-    expect(configs).toEqual(['crowdsecurity/appsec-default', 'crowdsecurity/crs']);
+    expect(configs).toEqual([
+      'branchleft/ghost-admin-previews',
+      'crowdsecurity/appsec-default',
+      'crowdsecurity/crs',
+    ]);
   });
 
   /**
@@ -1167,7 +1177,11 @@ describe("the committed posture's IP-decision handler", () => {
       .split('\n')
       .filter((line) => line.startsWith('  - '))
       .map((line) => line.slice(4));
-    expect(configs).toEqual(['crowdsecurity/appsec-default', 'crowdsecurity/crs']);
+    expect(configs).toEqual([
+      'branchleft/ghost-admin-previews',
+      'crowdsecurity/appsec-default',
+      'crowdsecurity/crs',
+    ]);
   });
 
   describe('when the checker is slow or down, the request is let through', () => {
@@ -1720,6 +1734,81 @@ describe('the committed stack directory', () => {
     await expect(renderCaddyLogAcquisition()).toMatchFileSnapshot(
       './stack/crowdsec/acquis.d/caddy.yaml'
     );
+    await expect(renderGhostAdminAppsecConfig(sites)).toMatchFileSnapshot(
+      './stack/crowdsec/appsec-configs/ghost-admin-previews.yaml'
+    );
+    await expect(renderGhostAdminPostoverflow(sites)).toMatchFileSnapshot(
+      './stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml'
+    );
+  });
+});
+
+// Why these two files exist, and how they were found: render.md, "Ghost admin
+// preview exclusion" and "Ghost admin API and admin-interface probing". The
+// behaviour itself is proved against a running CrowdSec by
+// test_crowdsec_replay.py; these pin the scoping the renderer is responsible for.
+describe('the Ghost admin CrowdSec exclusions', () => {
+  const ghost = site({ name: 'ghost-one', hostnames: ['ghost-one.test'], backend: 'ghost' });
+  const other = site({ name: 'other-one', hostnames: ['other-one.test'], backend: 'other' });
+  const appsec = renderGhostAdminAppsecConfig([ghost, other]);
+  const postoverflow = renderGhostAdminPostoverflow([ghost, other]);
+
+  it('name only Ghost hostnames, never another site', () => {
+    for (const rendered of [appsec, postoverflow]) {
+      expect(rendered).toContain("['ghost-one.test']");
+      expect(rendered).not.toContain('other-one.test');
+    }
+  });
+
+  it('remove exactly the two preview rules, out-of-band only', () => {
+    const removals = appsec.split('\n').filter((line) => line.includes('Remove'));
+    expect(removals.map((line) => line.trim())).toEqual([
+      '- RemoveOutBandRuleByID(920420)',
+      '- RemoveOutBandRuleByID(920180)',
+    ]);
+    expect(appsec).toContain('IsOutBand == true &&');
+    expect(appsec).not.toMatch(/RemoveInBand|ByTag|ByName/);
+  });
+
+  it('carry only the fields an appsec-config has, because CrowdSec reads it strictly', () => {
+    const keys = appsec
+      .split('\n')
+      .filter((line) => /^[a-z_]+:/.test(line))
+      .map((line) => line.split(':')[0]);
+    expect(keys).toEqual(['name', 'pre_eval']);
+  });
+
+  it('match only a bodiless POST to the root carrying the preview header', () => {
+    expect(appsec).toContain("req.Method == 'POST' &&");
+    expect(appsec).toContain("req.URL.Path == '/' &&");
+    expect(appsec).toContain('req.ContentLength == 0 &&');
+    expect(appsec).toContain("req.Header.Get('Content-Type') == 'text/html;charset=utf-8' &&");
+    expect(appsec).toContain("req.Header.Get('X-Ghost-Preview') != ''");
+  });
+
+  it('whitelist one scenario, only when every event is the Ghost admin API', () => {
+    expect(postoverflow).toContain(
+      "evt.Overflow.Alert.GetScenario() == 'crowdsecurity/http-admin-interface-probing' &&"
+    );
+    expect(postoverflow).toContain('all(evt.Overflow.Alert.Events, {');
+    expect(postoverflow).not.toMatch(/\bany\(/);
+    expect(postoverflow).toContain("startsWith '/ghost/api/admin/'");
+    expect(postoverflow).toContain("not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')");
+  });
+
+  it('refuse a Ghost hostname that could break out of a quoted literal', () => {
+    const hostile = site({ hostnames: ["x.test' || true || '"], backend: 'ghost' });
+    expect(() => renderGhostAdminAppsecConfig([hostile])).toThrow(/plain lower-case hostname/);
+    expect(() => renderGhostAdminPostoverflow([hostile])).toThrow(/plain lower-case hostname/);
+  });
+
+  it('are named in the AppSec acquisition ahead of the hub configurations in every posture', () => {
+    for (const posture of [DETECT_ONLY, IN_BAND_ONLY, ENFORCING, POSTURE]) {
+      const first = renderAppsecAcquisition(posture)
+        .split('\n')
+        .find((line) => line.startsWith('  - '));
+      expect(first).toBe('  - branchleft/ghost-admin-previews');
+    }
   });
 });
 

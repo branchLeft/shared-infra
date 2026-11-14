@@ -1,0 +1,248 @@
+---
+# The dead-man revert, end to end, on the real firewall and the real systemd of the test
+# container: an apply that changes the egress table and does not confirm is put back by the
+# timer, and one that confirms is not. The window is 20 seconds in the case that must stop short
+# (the role's default is 900; the floor is 10) and 60 where the role has to run to its end:
+# the egress restart restarts the spool, and an apply slower than its window is reverted, which
+# is the timer doing its job.
+#
+# Both cases need a known-good table that is not the pinned one, or a revert would be
+# indistinguishable from the apply: the known-good file is edited to carry one more REJECT
+# rule (TCP port 9, written as iptables-save prints it). A revert shows as that rule coming
+# back, and a kept table as it staying gone. A plan makes no change, so a check run skips every play.
+- name: Apply the role once, which confirms the pinned table
+  hosts: all
+  gather_facts: false
+  vars:
+    demo1_egress_spool_revert_seconds: 20
+  tasks:
+    - name: Apply the role
+      ansible.builtin.include_role:
+        name: branchleft.demo1_egress_spool
+      when: not ansible_check_mode
+
+- name: An apply that loads a changed table and never confirms is reverted by the timer
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    demo1_egress_spool_revert_seconds: 20
+  tasks:
+    - name: Run the case
+      when: not ansible_check_mode
+      block:
+        # The role's last confirmed table gains one rule, so that putting it back is visible.
+        - name: Give the known-good table of each family one more rule than the pinned table
+          ansible.builtin.replace:
+            path: '/var/lib/branchleft-demo-egress-revert/last-good.{{ item }}'
+            regexp: '^(-A BRANCHLEFT-DEMO-INPUT -j REJECT.*)$'
+            replace: '-A BRANCHLEFT-DEMO-INPUT -p tcp -m tcp --dport 9 -j REJECT --reject-with tcp-reset\n\1'
+          loop: [iptables, ip6tables]
+
+        # The role copies the egress program over any other bytes, which is a changed table.
+        - name: Change the installed egress program, so that the role loads the table again
+          ansible.builtin.lineinfile:
+            path: /usr/local/sbin/branchleft-demo-egress
+            line: '# changed on the host'
+            insertafter: EOF
+
+        # The spool step comes after the egress step and refuses a token file that is not 0600,
+        # so the role stops after it has loaded the table and before it can confirm.
+        - name: Make the apply fail after the table is loaded
+          ansible.builtin.file:
+            path: /etc/branchleft/mail-spool.env
+            mode: '0644'
+
+        - name: Apply the role, which must stop at the drain token
+          ansible.builtin.include_role:
+            name: branchleft.demo1_egress_spool
+          register: demo1_egress_spool_revert_applied
+      rescue:
+        - name: Check the role stopped where the case made it stop
+          ansible.builtin.assert:
+            that:
+              - ansible_failed_task.name is search('drain token')
+              - "demo1_egress_spool_revert_arm.stdout is search('revert: armed: .* 20s')"
+            quiet: true
+            fail_msg: >-
+              The apply did not stop at the drain token after arming the timer for 20s, so the
+              case did not test what it says.
+
+        - name: Read the timer, which is waiting because the apply was not confirmed
+          ansible.builtin.command:
+            argv: [systemctl, is-active, branchleft-demo-egress-revert.timer]
+          register: demo1_egress_spool_revert_timer
+          changed_when: false
+
+        - name: Assert the timer is armed
+          ansible.builtin.assert:
+            that:
+              - demo1_egress_spool_revert_timer.stdout == 'active'
+            quiet: true
+            fail_msg: The role stopped without confirming and no timer is waiting.
+
+        # The table the role loaded is the pinned one, with no rule for port 9. The timer
+        # puts back the known-good one, which has it.
+        - name: Wait for the timer to put the known-good table back
+          ansible.builtin.command:
+            argv: [iptables-save, -t, filter]
+          register: demo1_egress_spool_revert_wait
+          until: demo1_egress_spool_revert_wait.stdout is search('-A BRANCHLEFT-DEMO-INPUT .*--dport 9 ')
+          retries: 30
+          delay: 2
+          changed_when: false
+      always:
+        - name: Put the token file back
+          ansible.builtin.file:
+            path: /etc/branchleft/mail-spool.env
+            mode: '0600'
+
+- name: After the revert the table is whole, closed, and recorded as reverted
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  tasks:
+    - name: Read the status and the loaded chains
+      when: not ansible_check_mode
+      block:
+        # The revert program writes the record last, after the chains are back.
+        - name: Ask the revert program
+          ansible.builtin.command:
+            argv: [/usr/local/sbin/branchleft-demo-egress-revert, status]
+          register: demo1_egress_spool_revert_status
+          until: demo1_egress_spool_revert_status.stdout is search('state=reverted')
+          retries: 10
+          delay: 1
+          changed_when: false
+
+        - name: Read the loaded table in each family
+          ansible.builtin.command:
+            argv: ['{{ item }}-save', -t, filter]
+          loop: [iptables, ip6tables]
+          register: demo1_egress_spool_revert_tables
+          changed_when: false
+
+        # Both chains, each ending in a REJECT, the rule the known-good table had, the jump
+        # first in DOCKER-USER and one in INPUT, and no accept anywhere in either chain.
+        - name: Assert the table is whole and closed in both families
+          ansible.builtin.assert:
+            that:
+              - item.stdout is search('(?m)^-A BRANCHLEFT-DEMO-INPUT .*--dport 9 ')
+              - item.stdout is search('(?m)^-A BRANCHLEFT-DEMO-INPUT -j REJECT')
+              - item.stdout is search('(?m)^-A BRANCHLEFT-DEMO-EGRESS -i docker0 .*-j REJECT')
+              - item.stdout is search('(?m)^-A BRANCHLEFT-DEMO-EGRESS -i br-\\+ .*-j REJECT')
+              - item.stdout is search('(?m)^-A DOCKER-USER -j BRANCHLEFT-DEMO-EGRESS$')
+              - item.stdout is search('(?m)^-A INPUT -i br-\\+ -j BRANCHLEFT-DEMO-INPUT$')
+              - not (item.stdout is search('(?m)^-A BRANCHLEFT-DEMO-(INPUT|EGRESS) .*-j ACCEPT'))
+            quiet: true
+            fail_msg: The loaded {{ item.item }} table is not the known-good one, or is open.
+          loop: '{{ demo1_egress_spool_revert_tables.results }}'
+          loop_control:
+            label: '{{ item.item }}'
+
+        - name: Assert no timer is left and a known-good table is held
+          ansible.builtin.assert:
+            that:
+              - demo1_egress_spool_revert_status.stdout is search('timer=none')
+              - demo1_egress_spool_revert_status.stdout is search('known_good=held')
+            quiet: true
+            fail_msg: The revert left a timer, or no known-good table.
+
+- name: Applying again after a revert puts the new table in and confirms it
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    demo1_egress_spool_revert_seconds: 60
+  tasks:
+    - name: Run the case
+      when: not ansible_check_mode
+      block:
+        # The files on the host are the new ones while the loaded table is the old one: only
+        # the record of an unconfirmed apply tells the role to load the table again.
+        - name: Apply the role
+          ansible.builtin.include_role:
+            name: branchleft.demo1_egress_spool
+
+        - name: Ask whether the rule only the reverted table has is gone
+          ansible.builtin.command:
+            argv: [iptables-save, -t, filter]
+          register: demo1_egress_spool_revert_probe
+          changed_when: false
+          failed_when: demo1_egress_spool_revert_probe.stdout is search('-A BRANCHLEFT-DEMO-INPUT .*--dport 9 ')
+
+        - name: Ask the revert program
+          ansible.builtin.command:
+            argv: [/usr/local/sbin/branchleft-demo-egress-revert, status]
+          register: demo1_egress_spool_revert_status
+          changed_when: false
+
+        - name: Assert the apply confirmed, with no record and no timer left
+          ansible.builtin.assert:
+            that:
+              - demo1_egress_spool_revert_status.stdout is search('state=confirmed')
+              - demo1_egress_spool_revert_status.stdout is search('timer=none')
+              - demo1_egress_spool_revert_confirm.changed
+            quiet: true
+            fail_msg: The apply after a revert did not load the table again and confirm it.
+
+- name: An apply that loads a changed table and confirms it is not reverted
+  hosts: all
+  gather_facts: false
+  tags: [molecule-idempotence-notest]
+  vars:
+    demo1_egress_spool_revert_seconds: 60
+  tasks:
+    - name: Run the case
+      when: not ansible_check_mode
+      block:
+        - name: Give the known-good table of each family one more rule than the pinned table
+          ansible.builtin.replace:
+            path: '/var/lib/branchleft-demo-egress-revert/last-good.{{ item }}'
+            regexp: '^(-A BRANCHLEFT-DEMO-INPUT -j REJECT.*)$'
+            replace: '-A BRANCHLEFT-DEMO-INPUT -p tcp -m tcp --dport 9 -j REJECT --reject-with tcp-reset\n\1'
+          loop: [iptables, ip6tables]
+
+        - name: Change the installed egress program, so that the role loads the table again
+          ansible.builtin.lineinfile:
+            path: /usr/local/sbin/branchleft-demo-egress
+            line: '# changed on the host'
+            insertafter: EOF
+
+        - name: Apply the role, which confirms
+          ansible.builtin.include_role:
+            name: branchleft.demo1_egress_spool
+
+        - name: Assert the role armed the timer and then confirmed, which stopped it
+          ansible.builtin.assert:
+            that:
+              - "demo1_egress_spool_revert_arm.stdout is search('revert: armed: .* 60s')"
+              - "demo1_egress_spool_revert_confirm.stdout is search('confirm: changed')"
+            quiet: true
+            fail_msg: The apply did not arm the timer and confirm, so the case did not test what it says.
+
+        # Longer than the window, so a timer that had not really stopped would have fired.
+        - name: Wait past the window
+          ansible.builtin.wait_for:
+            timeout: 75
+
+        - name: Ask whether the rule only the old table has came back
+          ansible.builtin.command:
+            argv: [iptables-save, -t, filter]
+          register: demo1_egress_spool_revert_probe
+          changed_when: false
+          failed_when: demo1_egress_spool_revert_probe.stdout is search('-A BRANCHLEFT-DEMO-INPUT .*--dport 9 ')
+
+        - name: Ask the revert program
+          ansible.builtin.command:
+            argv: [/usr/local/sbin/branchleft-demo-egress-revert, status]
+          register: demo1_egress_spool_revert_status
+          changed_when: false
+
+        - name: Assert nothing was reverted
+          ansible.builtin.assert:
+            that:
+              - demo1_egress_spool_revert_status.stdout is search('state=confirmed')
+              - demo1_egress_spool_revert_status.stdout is search('timer=none')
+            quiet: true
+            fail_msg: The timer fired after a confirm, or the confirm left a record behind.

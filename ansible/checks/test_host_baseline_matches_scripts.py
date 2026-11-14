@@ -20,11 +20,13 @@ import jinja2
 import yaml  # type: ignore[import-untyped]
 from ansible.errors import AnsibleUndefinedVariable  # type: ignore[import-untyped]
 from ansible.parsing.dataloader import DataLoader  # type: ignore[import-untyped]
+from ansible.plugins.loader import filter_loader  # type: ignore[import-untyped]
 from ansible.template import Templar, trust_as_template  # type: ignore[import-untyped]
 from check_enrolment import ROOT
 
 PROVISION = ROOT / "hetzner" / "provision"
 ROLE = ROOT / "ansible" / "roles" / "host_baseline"
+filter_loader.add_directory(str(ROLE / "filter_plugins"))
 HEREDOC_OPEN = "cat > \"$TMP\" <<'EOF'"
 HEREDOC_CLOSE = "EOF"
 DOCKER_ARCH = "amd64"
@@ -291,6 +293,18 @@ class Mx1OptOut(unittest.TestCase):
         self.assertFalse(_assert_refuses({JAIL_INPUT: valid}), "opt-out unset")
         self.assertFalse(_assert_refuses({JAIL_INPUT: valid, OPT_OUT_KEY: False}))
         self.assertFalse(_assert_refuses({JAIL_INPUT: valid, OPT_OUT_KEY: True}))
+
+    def test_the_ignore_list_refuses_a_host_name_made_only_of_hex_digits(self) -> None:
+        # A host name of hex letters is inside the character class the assert used to match;
+        # the README promises each token parses as an address or range, so it must be refused.
+        for value in ("cafe", "deadbeef"):
+            with self.subTest(value=value):
+                self.assertTrue(_assert_refuses({JAIL_INPUT: value}), value)
+
+    def test_the_ignore_list_accepts_addresses_and_ranges_that_parse(self) -> None:
+        for value in ("10.0.0.1", "10.0.0.0/8", "::1", "127.0.0.1/8 ::1 10.20.1.10"):
+            with self.subTest(value=value):
+                self.assertFalse(_assert_refuses({JAIL_INPUT: value}), value)
 
     def test_no_playbook_but_the_mx1_one_sets_the_opt_out(self) -> None:
         setters = sorted(

@@ -822,6 +822,17 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 Read the listed decisions first and delete the address the list actually shows —
 the bridge subnet depends on how many Compose networks the host has.
 
+**Our own Ghost admin does not ban.** Two rendered files narrow what used to
+ban the owner for ordinary Ghost admin use (`hetzner/edge/render.md`, "Ghost
+admin preview exclusion" and "Ghost admin API and admin-interface probing"):
+the design and announcement-bar previews no longer trip two Core Rule Set
+rules, and Ghost admin API 403s and 404s on a Ghost hostname no longer count as
+admin-interface probing. CI replays both, and probes that must still ban, on
+every change to `hetzner/edge/`. To confirm it on the host after an apply,
+change and save something in a Ghost site's Settings > Design, then run the
+`cscli decisions list` command above: it must list no new decision for your
+address.
+
 ## 11. Adding a site to the edge
 
 One registry entry, then a re-render. Nothing else.

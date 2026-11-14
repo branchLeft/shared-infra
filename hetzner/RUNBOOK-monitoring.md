@@ -1142,11 +1142,11 @@ change, and `renderAlertmanagerTemplate` renders the page route in
 build if a rule ever carries `severity: page` under an alertname the
 register does not know.
 
-Four entries route through this stack's own Alertmanager, matched on
+Five entries route through this stack's own Alertmanager, matched on
 `severity = "page"` and their `alertname`, and grouped on the `tenant`
 label rather than on `alertname` -- two different entries firing for the
 same tenant collapse into one notification, because it is one incident, not
-two. The fifth -- a stopped drain worker -- pages through its own
+two. The sixth -- a stopped drain worker -- pages through its own
 Healthchecks.io dead-man's switch directly, so it renders no Alertmanager
 route at all; it is listed in the register purely so the register still
 names every path that can reach a phone.
@@ -1187,9 +1187,17 @@ enough: there is deliberately no second route and no failed-delivery alert.
 The phone is Android only, with no relay: `upstream-base-url` stays unset, and
 `pageRegister.test.ts` fails the build if it is set.
 
-An entry marked `dormant` in the register (appeal latency, until a target
-is set) renders no route at all; flip the flag in the same change that sets
-the target.
+An entry marked `dormant` in the register renders no route at all and so
+cannot page; flip the flag in the same change that sets the target. Two are
+dormant today: appeal latency, until a target is set, and the stopped demo
+reaper (`stopped-demo-reaper`, alertname `StoppedDemoReaper`, not
+tenant-scoped), until the reaper that ends a demo at the close of its lease
+exists and its silence threshold is set. The reaper's alert rule arrives with
+the reaper, in the change that flips its flag; a rule carrying
+`severity: page` under that alertname before then fails the build, because a
+dormant entry reaches no phone. Nothing here is applied to the host: this
+section's change is to the committed register, and the rendered Alertmanager
+config is unchanged until the entry is switched on.
 
 ## Responding to the mail-delivery alerts
 

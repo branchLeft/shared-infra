@@ -63,3 +63,14 @@ argument_specs:
           port; the role refuses a file that publishes another, or publishes
           on any other address. An unprivileged port, 1024 to 65535.
         default: 8095
+      demo1_egress_spool_revert_seconds:
+        type: int
+        description: >-
+          How long, in seconds, a changed egress table may stay unconfirmed. An
+          apply that loads a changed table arms a timer for this long, and the
+          role's last task confirms the apply and stops it. A timer that runs out
+          puts the last confirmed table back, never an empty or an open one. The
+          first table the host ever confirms has nothing earlier to go back to, so
+          no timer is armed for it. It must outlast the rest of the apply, the
+          spool's start and read-back included. 10 to 3600.
+        default: 900
