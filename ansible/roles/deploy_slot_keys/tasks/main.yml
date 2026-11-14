@@ -34,10 +34,13 @@
   when: not (ansible_check_mode and deploy_slot_keys_program is changed)
 
 # The module's own message is the rule that broke, never a value, so it is safe to show
-# although the task above is hidden. A run that stops here has changed nothing the module
-# could not undo: it validates before it writes and restores authorized_keys on a failed
-# read-back. failed_when: false makes the result's failed flag false, so a refusal is read
-# from the message: only a failure carries one, and a success has none.
+# although the task above is hidden. A refusal before the write changed nothing: the module
+# validates and plans before it writes. A failed read-back after the write undoes nothing in
+# the register (revokes and grants stay done) and leaves authorized_keys with its unmanaged
+# lines only, no slot line, so a key the apply revoked stays refused. The next run renders
+# the declared slots from the register again. failed_when: false makes the result's failed
+# flag false, so a refusal is read from the message: only a failure carries one, and a
+# success has none.
 - name: Stop if the module refused
   ansible.builtin.assert:
     that:

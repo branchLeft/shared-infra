@@ -239,9 +239,11 @@
 
     # The environment is built whole, checked, and only then written. The text
     # holds secrets, so the tasks that handle it say no_log, and the write says
-    # diff: false (ANS-16). The file is created empty at 0600 first, so there is
-    # no instant at which a value is in a wider file.
-    - name: Write the state-copy environment file
+    # diff: false (ANS-16). A file is created empty at 0600 first when absent, and
+    # one already there has its owner, group and mode set back before the write, so
+    # no value goes into a wider file. The values come from backup_restore_secret_files
+    # in vars/main.yml, the one home of those values.
+    - name: Assemble, check and write the state-copy environment file
       when: backup_restore_state_copy_missing | length == 0
       block:
         - name: Assemble the state-copy environment
@@ -267,20 +269,42 @@
           ansible.builtin.copy:
             content: ''
             dest: '{{ backup_restore_state_copy_env_file }}'
-            owner: root
-            group: root
-            mode: '0600'
+            owner: '{{ backup_restore_state_copy_env_secret.owner }}'
+            group: '{{ backup_restore_state_copy_env_secret.group }}'
+            mode: '{{ backup_restore_state_copy_env_secret.mode }}'
             force: false
           no_log: true
           diff: false
+
+        # The attributes are set on every run, and the task changes attributes only,
+        # never content (ANS-16). It runs after the create-empty task and before the
+        # write: the write goes through the existing file, which keeps the owner and
+        # mode it has, so an attribute left wide until after the write would leave a
+        # value in a wide file. The limit: the correction happens on each run, not
+        # continuously. The stat comes first because check mode creates nothing, so a
+        # file still absent there is skipped.
+        - name: Look at the state-copy environment file before its owner, group and mode are set
+          ansible.builtin.stat:
+            path: '{{ backup_restore_state_copy_env_file }}'
+            get_checksum: false
+          register: backup_restore_state_copy_env_stat
+
+        - name: Set the owner, group and mode of the state-copy environment file on every run
+          ansible.builtin.file:
+            path: '{{ backup_restore_state_copy_env_file }}'
+            state: file
+            owner: '{{ backup_restore_state_copy_env_secret.owner }}'
+            group: '{{ backup_restore_state_copy_env_secret.group }}'
+            mode: '{{ backup_restore_state_copy_env_secret.mode }}'
+          when: not ansible_check_mode or backup_restore_state_copy_env_stat.stat.exists
 
         - name: Write the state-copy environment file
           ansible.builtin.copy:
             content: "{{ backup_restore_state_copy_env_text | trim }}\n"
             dest: '{{ backup_restore_state_copy_env_file }}'
-            owner: root
-            group: root
-            mode: '0600'
+            owner: '{{ backup_restore_state_copy_env_secret.owner }}'
+            group: '{{ backup_restore_state_copy_env_secret.group }}'
+            mode: '{{ backup_restore_state_copy_env_secret.mode }}'
             backup: false
           no_log: true
           diff: false
@@ -290,7 +314,7 @@
             backup_restore_state_copy_env_text: ''
           no_log: true
 
-    - name: Write the restore-drill environment file
+    - name: Assemble, check and write the restore-drill environment file
       when:
         - backup_restore_drill_env_enabled | bool
         - backup_restore_drill_missing | length == 0
@@ -318,20 +342,42 @@
           ansible.builtin.copy:
             content: ''
             dest: '{{ backup_restore_drill_env_file }}'
-            owner: root
-            group: root
-            mode: '0600'
+            owner: '{{ backup_restore_drill_env_secret.owner }}'
+            group: '{{ backup_restore_drill_env_secret.group }}'
+            mode: '{{ backup_restore_drill_env_secret.mode }}'
             force: false
           no_log: true
           diff: false
+
+        # The attributes are set on every run, and the task changes attributes only,
+        # never content (ANS-16). It runs after the create-empty task and before the
+        # write: the write goes through the existing file, which keeps the owner and
+        # mode it has, so an attribute left wide until after the write would leave a
+        # value in a wide file. The limit: the correction happens on each run, not
+        # continuously. The stat comes first because check mode creates nothing, so a
+        # file still absent there is skipped.
+        - name: Look at the restore-drill environment file before its owner, group and mode are set
+          ansible.builtin.stat:
+            path: '{{ backup_restore_drill_env_file }}'
+            get_checksum: false
+          register: backup_restore_drill_env_stat
+
+        - name: Set the owner, group and mode of the restore-drill environment file on every run
+          ansible.builtin.file:
+            path: '{{ backup_restore_drill_env_file }}'
+            state: file
+            owner: '{{ backup_restore_drill_env_secret.owner }}'
+            group: '{{ backup_restore_drill_env_secret.group }}'
+            mode: '{{ backup_restore_drill_env_secret.mode }}'
+          when: not ansible_check_mode or backup_restore_drill_env_stat.stat.exists
 
         - name: Write the restore-drill environment file
           ansible.builtin.copy:
             content: "{{ backup_restore_drill_env_text | trim }}\n"
             dest: '{{ backup_restore_drill_env_file }}'
-            owner: root
-            group: root
-            mode: '0600'
+            owner: '{{ backup_restore_drill_env_secret.owner }}'
+            group: '{{ backup_restore_drill_env_secret.group }}'
+            mode: '{{ backup_restore_drill_env_secret.mode }}'
             backup: false
           no_log: true
           diff: false

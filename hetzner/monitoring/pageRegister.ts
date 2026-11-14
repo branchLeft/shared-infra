@@ -20,7 +20,7 @@ export interface PageRegisterEntry {
    */
   readonly alertName: string | null;
   /**
-   * How this entry's page actually reaches a phone. Four entries route
+   * How this entry's page actually reaches a phone. Five entries route
    * through this stack's own Alertmanager; the drain worker's dead-man's
    * switch pages through its own Healthchecks.io check directly, so this
    * entry renders no Alertmanager route at all -- it is listed here only so
@@ -29,7 +29,8 @@ export interface PageRegisterEntry {
   readonly deliveryPath: PageRegisterDeliveryPath;
   /**
    * True while this entry has no target set and so must render no route --
-   * appeal latency, until a target exists. Flipped by a reviewed change,
+   * appeal latency, until a target exists; the stopped demo reaper, until the
+   * reaper and its alert rule exist. Flipped by a reviewed change,
    * the same discipline `render.ts`'s `MonitoredHost.expectedUp` uses for
    * the same reason: a hand edit here is a claim about the present, not a
    * permanent property.
@@ -41,6 +42,14 @@ export interface PageRegisterEntry {
    * reason -- see this file's own docstring.
    */
   readonly tenantScoped: boolean;
+  /**
+   * Why this live Alertmanager entry has no `severity: page` rule in the
+   * rendered rules: who raises it instead. Absent means the entry claims a
+   * rule exists, and `findLiveEntriesWithoutPageRule` refuses it if none
+   * does. Only a live Alertmanager entry is checked; a dormant or
+   * Healthchecks-delivered one needs none.
+   */
+  readonly ruleExemption?: string;
 }
 
 export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
@@ -52,6 +61,10 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     deliveryPath: 'alertmanager',
     dormant: false,
     tenantScoped: true,
+    ruleExemption:
+      'Raised by the platform when a tier-two safety match is recorded, not by a ' +
+      "Prometheus rule: nothing this stack scrapes measures one, so this stack's " +
+      'rendered rules carry no rule for it and cannot.',
   },
   {
     id: 'tenant-failed-unsafe',
@@ -61,6 +74,10 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     deliveryPath: 'alertmanager',
     dormant: false,
     tenantScoped: true,
+    ruleExemption:
+      'Raised by the platform when a tenant enters failed-unsafe, not by a Prometheus ' +
+      "rule: that state is the platform's own, and this stack scrapes no metric for it, " +
+      'so the rendered rules carry no rule for it.',
   },
   {
     id: 'appeal-latency-breach',
@@ -81,6 +98,11 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     deliveryPath: 'alertmanager',
     dormant: false,
     tenantScoped: true,
+    ruleExemption:
+      'Raised per tenant by the external reader-facing probe, not by a Prometheus rule: ' +
+      "this stack's blackbox probes carry an instance label and no tenant label, so no " +
+      'rule here can raise a tenant-labelled page. A failing probe reaches the phone ' +
+      'meanwhile through BlackboxProbeFailed at critical severity.',
   },
   {
     id: 'drain-worker-stopped',
@@ -92,6 +114,19 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
     alertName: null,
     deliveryPath: 'healthchecks',
     dormant: false,
+    tenantScoped: false,
+  },
+  {
+    id: 'stopped-demo-reaper',
+    name: 'A stopped demo reaper',
+    reason:
+      'Dormant: the demo reaper that ends a demo at the close of its lease does not ' +
+      'exist yet, and neither does the threshold for how long it may stay silent. A ' +
+      'silently stopped reaper leaves demos running past their lease. Flip `dormant` to ' +
+      'false in the same change that builds the reaper and the alert rule that raises it.',
+    alertName: 'StoppedDemoReaper',
+    deliveryPath: 'alertmanager',
+    dormant: true,
     tenantScoped: false,
   },
 ] as const;
@@ -173,8 +208,40 @@ export function findUnregisteredPageSeverityAlerts(
   register: readonly PageRegisterEntry[]
 ): string[] {
   const registered = new Set(pageAlertNames(register));
+  return pageSeverityAlertNames(rulesYamlText).filter((name) => !registered.has(name));
+}
+
+/**
+ * The other direction: every live Alertmanager entry must have a rule that
+ * can raise it, or say why none exists. A live entry whose alertname no
+ * `severity: page` rule raises, and which names no `ruleExemption`, would
+ * register a route for a page that silently never fires -- the failure a
+ * later `dormant: false` flip could otherwise cause with no test going red.
+ * Returns the offending alertnames, in register order.
+ */
+export function findLiveEntriesWithoutPageRule(
+  rulesYamlText: string,
+  register: readonly PageRegisterEntry[]
+): string[] {
+  const raised = new Set(pageSeverityAlertNames(rulesYamlText));
+  return register
+    .filter(
+      (entry) =>
+        entry.deliveryPath === 'alertmanager' &&
+        !entry.dormant &&
+        entry.alertName !== null &&
+        (entry.ruleExemption ?? '').trim() === '' &&
+        !raised.has(entry.alertName)
+    )
+    .map((entry) => entry.alertName)
+    .filter((name): name is string => name !== null);
+}
+
+/** Every alertname in `rulesYamlText` whose `alert:` block carries
+ * `severity: page`, in the order the rules appear. */
+function pageSeverityAlertNames(rulesYamlText: string): string[] {
   const lines = rulesYamlText.split('\n');
-  const unregistered: string[] = [];
+  const names: string[] = [];
   let currentAlert: string | null = null;
   for (const line of lines) {
     const alertMatch = /^\s*-\s*alert:\s*(\S+)/.exec(line);
@@ -185,10 +252,8 @@ export function findUnregisteredPageSeverityAlerts(
     const severityMatch = /^\s*severity:\s*(\S+)/.exec(line);
     if (severityMatch && currentAlert !== null) {
       const severity = severityMatch[1].replace(/^["']|["']$/g, '');
-      if (severity === 'page' && !registered.has(currentAlert)) {
-        unregistered.push(currentAlert);
-      }
+      if (severity === 'page') names.push(currentAlert);
     }
   }
-  return unregistered;
+  return names;
 }

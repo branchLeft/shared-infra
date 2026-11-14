@@ -41,6 +41,15 @@ demo1_egress_spool_firewall_tools:
   - iptables
   - ip6tables
 
+# The dead-man revert. The program keeps the last table an apply confirmed, and a timer puts
+# it back when the next apply that changes the table does not confirm in time. It owns its
+# state directory and the transient timer unit it starts; the egress program and its unit stay
+# the pinned ones. The program's own copy of these constants is held equal by a test.
+demo1_egress_spool_revert_src: demo_egress_revert.py
+demo1_egress_spool_revert_dest: /usr/local/sbin/branchleft-demo-egress-revert
+demo1_egress_spool_revert_state_dir: /var/lib/branchleft-demo-egress-revert
+demo1_egress_spool_revert_record: /var/lib/branchleft-demo-egress-revert/state
+
 # The mail spool. One Compose stack named mail-spool, run by the shared
 # Compose template unit, which this role asserts and never writes.
 demo1_egress_spool_project_dir: /opt/branchleft/mail-spool

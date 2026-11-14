@@ -433,11 +433,17 @@ def _scan_pattern(
     """Tree-relative paths of every scannable file matching `pattern`.
 
     Raises UnreadableFilesError, after the whole walk, naming every scannable
-    file that could not be read, so one bad file cannot hide the rest.
+    file or directory that could not be read, so one bad file cannot hide the
+    rest. os.walk drops a directory it cannot list without a word; onerror
+    records it so that directory's files are not reported clean.
     """
     hits: set[str] = set()
     unreadable: list[str] = []
-    for dirpath, dirnames, filenames in os.walk(tree):
+
+    def _unlistable(err: OSError) -> None:
+        unreadable.append(pathlib.Path(err.filename).relative_to(tree).as_posix() + "/")
+
+    for dirpath, dirnames, filenames in os.walk(tree, onerror=_unlistable):
         dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
         for filename in filenames:
             if not filename.endswith(suffixes):

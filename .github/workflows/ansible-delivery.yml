@@ -3,10 +3,12 @@ name: Ansible delivery
 # Delivers the Ansible roles to the hosts by the gated pull (ANS-17). It calls the
 # reusable workflow of branchLeft/github-workflows, which lints, runs Molecule over
 # every role and pattern, asks each host in check mode what this commit would change,
-# and then waits on the deployment environment below before the apply. The lint and
-# Molecule re-run is never skipped: the merge queue runs the lint and the unit tests only,
-# and the container shards ran on the pull request, so this is the run that tests the
-# merged tree in containers before any host is asked.
+# and then waits on the deployment environment below before the apply. The merge queue runs
+# the lint and the unit tests only, and the container shards ran on the pull request, so this
+# is the run that tests the merged tree in containers before any host is asked. It tests the
+# roles and patterns the changes since the last tested delivery call for (the select job,
+# ansible/checks/delivery_select.py, with the rules of the pull request gate), and every role and
+# pattern whenever it cannot say which: a failed selection never runs fewer.
 #
 # It runs on a push to main and on nothing else. A pull request is gated by
 # ansible.yml, whose required check keeps its name. No pull request, schedule or
@@ -51,9 +53,9 @@ permissions:
 
 jobs:
   # Finds whether the merge queue ran the Ansible workflow, to a green result, on exactly this
-  # commit (ansible/checks/merge_group_proof.py holds the rule). The answer no longer skips
-  # anything: a queue run now passes on the lint alone, so it proves nothing about the
-  # containers, and the delivery below re-tests in full whatever the answer is. The job fails
+  # commit (ansible/checks/merge_group_proof.py holds the rule). A queue run passes on the lint
+  # alone, so it proves nothing about the containers: the delivery below skips its re-test only
+  # when this answer is true and the select job found that no shard is called for. The job fails
   # toward "false": an unreadable answer is "false".
   queue-proof:
     name: Find the merge queue run of this commit
@@ -79,18 +81,53 @@ jobs:
           gh api -X GET "repos/$REPO/actions/workflows/ansible.yml/runs" -f head_sha="$SHA" -f per_page=100 > "$runs" || echo '{}' > "$runs"
           python3 ansible/checks/merge_group_proof.py --runs "$runs" --sha "$SHA" | tee -a "$GITHUB_OUTPUT"
 
+  # Chooses the Molecule shards of this push. The base of the diff is the nearest commit whose
+  # delivery finished its lint and shards green, not the commit before the push, because the next
+  # push cancels a delivery that has not reached a host (ansible/checks/delivery_select.py).
+  # Whatever fails here, the step answers every role and pattern, so a failed selection runs
+  # more and never less. Its two answers feed the call below and nothing else.
+  select:
+    name: Choose the Molecule shards of this push
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      shards: ${{ steps.select.outputs.shards }}
+      directories: ${{ steps.select.outputs.directories }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Choose the shards the changes call for
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BEFORE: ${{ github.event.before }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -uo pipefail
+          answer="$RUNNER_TEMP/delivery-select.txt"
+          if ! python3 ansible/checks/delivery_select.py --before "$BEFORE" --sha "$SHA" > "$answer" \
+            || ! grep -qE '^shards=(true|false)$' "$answer" \
+            || ! grep -qE '^(roles|patterns)/' "$answer"; then
+            echo "::warning::The shard selection failed or printed no answer, so every shard runs."
+            printf '%s\n' 'shards=true' 'directories<<DIRECTORIES_END' 'roles/*' 'patterns/*' 'DIRECTORIES_END' > "$answer"
+          fi
+          cat "$answer" >> "$GITHUB_OUTPUT"
+
   delivery:
-    needs: [queue-proof]
+    needs: [queue-proof, select]
     uses: branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@v1.1.0
     with:
       environment: ansible-hosts
       push-playbook: ansible/playbooks/demo1.yml
-      role-directories: |
-        roles/*
-        patterns/*
+      role-directories: ${{ needs.select.outputs.directories }}
       python-paths: harness checks
       role-test-command: harness/run_harness.py
-      skip-rerun-after-merge-group: false
+      skip-rerun-after-merge-group: ${{ needs.select.outputs.shards == 'false' && needs.queue-proof.outputs.tested == 'true' }}
       merge-group-check-name: Lint and test the Ansible roles
       shard-timeout-minutes: 45 # the edge_stack Molecule shard takes up to 39 minutes
     secrets:
