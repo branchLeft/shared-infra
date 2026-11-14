@@ -221,22 +221,11 @@ ghost-platform's `scripts/verify-image-attestation.sh`, always with
 It fails closed. A missing verifier, an unknown digest, an unsigned image and
 an image signed by another workflow are all refused, and each refusal leaves
 the pin file and the running stack as they were. There is no argument,
-environment variable or stack setting that skips it.
-
-The register holds `ghcr.io/branchleft/ghost-tenant`,
+environment variable or stack setting that skips it. An image name outside the
+register is not verified here, so the other images on this host deploy as
+before. The register holds `ghcr.io/branchleft/ghost-tenant`,
 `ghcr.io/branchleft/portal-apps` and `ghcr.io/branchleft/percona-server` (the
 database image of `db-t1`, signed by the Percona image workflow).
-
-An image name outside the register is refused, not passed unverified, unless
-`UNATTESTED_STACK_IMAGES` names it for that stack. That table is the reviewed
-exemption list: each stack that pins through this wrapper today, with the one
-image name it runs and no workflow attests yet (`website`, `publicpress-website`,
-`edge`, `db`). It is keyed by stack as well as by name, so an exemption
-does not open the other stacks: a tenant slot key cannot pin the edge image, and
-cannot pin `attacker.example/evil@sha256:...`. A registered image deploys on any
-stack. Exempt images skip the verifier; adding an entry is a reviewed diff, and
-the way to remove one is to register the image in `ATTESTED_IMAGES`. A new stack
-or image is refused until one of the two tables names it.
 
 The register is looked up by registry host and path alone (`attested_name`). A
 tag or a registry port on the reference is a spelling, not another image: the
