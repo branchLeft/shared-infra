@@ -30,7 +30,7 @@
         expect: Refuse an input that is not a full commit or an image pinned by digest
         leaves_directories: false
       - case: image named by tag alone
-        image: node:26.5.0-bookworm-slim
+        image: node:26.13.0-alpine
         expect: Refuse an input that is not a full commit or an image pinned by digest
         leaves_directories: false
       - case: no docker command
