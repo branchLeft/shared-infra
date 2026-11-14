@@ -299,172 +299,236 @@
   loop: '{{ control_plane_stack_files | intersect(control_plane_stack_files_hidden) }}'
   diff: false
 
-- name: Deliver the stack's other files
+# The access rules are delivered inside a block. Before the copy, the rules now on disk are
+# kept beside the stack. If any task of the block fails (the delivery, the bring-up, the
+# deploy wrapper or the reload), the rescue puts the kept file back, reloads the database on
+# it and then fails the apply. Without this the delivered file stayed on disk after a failed
+# reload, and the next start of the database read it. A first deploy has no kept file: nothing
+# is put back there, and the apply still fails.
+- name: Look at the access rules now on disk, before the delivery replaces them
+  ansible.builtin.stat:
+    path: '{{ control_plane_hba_live }}'
+    get_checksum: false
+  register: control_plane_hba_live_stat
+
+- name: Keep the access rules now on disk, so a failed delivery can be undone
   ansible.builtin.copy:
-    src: 'stack/{{ item }}'
-    dest: '{{ control_plane_project_dir }}/{{ item }}'
+    src: '{{ control_plane_hba_live }}'
+    dest: '{{ control_plane_hba_previous }}'
     owner: root
     group: root
     mode: '0644'
-  loop: '{{ control_plane_stack_files | difference(control_plane_stack_files_hidden) }}'
-
-# The next four tasks (the database start, the init phase and its stamp, the sign-in
-# service start) are for a host where the stack is not yet deployed: they start the database
-# and the sign-in service before the unit can start the applications. Where the stack
-# already runs they are skipped, and the deploy wrapper below is the only thing that touches
-# the containers. The wrapper restarts the unit, and the unit reads the project with its own
-# environment: the EnvironmentFile pair of branchleft-compose@.service, read by systemd, the
-# project name in compose.yml and the project directory. A direct `docker compose --env-file`
-# here reads the same env file with Compose's own parser, and a value it parses differently
-# (a $, a # or a quote in a password) is a changed config, which Compose answers by recreating
-# the container. On a running stack that would be a database restart for nothing.
-- name: Start the database and wait until it is healthy
-  ansible.builtin.command:
-    argv:
-      - docker
-      - compose
-      - --env-file
-      - '{{ control_plane_env_file }}'
-      - up
-      - -d
-      - --wait
-      - db
-    chdir: '{{ control_plane_project_dir }}'
-  environment:
-    IMAGE: '{{ control_plane_effective_image }}'
-  # Compose itself reports the containers it started or left alone, and --wait
-  # fails the task when the database is not healthy. The task reports no change
-  # so that a second apply of the same commit reports zero changes. no_log: Compose
-  # quotes a line of the environment file when it cannot parse it, and a line can
-  # hold a value.
-  changed_when: false
-  no_log: true
+    remote_src: true
   when:
-    - control_plane_bring_up | ansible.builtin.bool
-    - not (control_plane_deployed | ansible.builtin.bool)
+    - not ansible_check_mode
+    - control_plane_hba_live_stat.stat.exists
 
-- name: Read whether the sign-in service's init phase has run
-  ansible.builtin.stat:
-    path: '{{ control_plane_init_stamp }}'
-  register: control_plane_init_stat
+- name: Deliver the access rules, and undo the delivery if a step after it fails
+  block:
+    - name: Deliver the stack's other files
+      ansible.builtin.copy:
+        src: 'stack/{{ item }}'
+        dest: '{{ control_plane_project_dir }}/{{ item }}'
+        owner: root
+        group: root
+        mode: '0644'
+      loop: '{{ control_plane_stack_files | difference(control_plane_stack_files_hidden) }}'
 
-# The init phase creates the sign-in service's own login and database. It needs
-# the database administrator's credential, which only compose.init.yml carries,
-# so it runs once here and never from the unit. The stamp records that it ran.
-- name: Run the sign-in service's init phase once, on a fresh database
-  ansible.builtin.command:
-    argv:
-      - docker
-      - compose
-      - --env-file
-      - '{{ control_plane_env_file }}'
-      - -f
-      - compose.yml
-      - -f
-      - compose.init.yml
-      - run
-      - --rm
-      - zitadel
-    chdir: '{{ control_plane_project_dir }}'
-  environment:
-    IMAGE: '{{ control_plane_effective_image }}'
-  changed_when: true
-  no_log: true
-  when:
-    - control_plane_bring_up | ansible.builtin.bool
-    - not (control_plane_deployed | ansible.builtin.bool)
-    - not control_plane_init_stat.stat.exists
+    # The next four tasks (the database start, the init phase and its stamp, the sign-in
+    # service start) are for a host where the stack is not yet deployed: they start the database
+    # and the sign-in service before the unit can start the applications. Where the stack
+    # already runs they are skipped, and the deploy wrapper below is the only thing that touches
+    # the containers. The wrapper restarts the unit, and the unit reads the project with its own
+    # environment: the EnvironmentFile pair of branchleft-compose@.service, read by systemd, the
+    # project name in compose.yml and the project directory. A direct `docker compose --env-file`
+    # here reads the same env file with Compose's own parser, and a value it parses differently
+    # (a $, a # or a quote in a password) is a changed config, which Compose answers by recreating
+    # the container. On a running stack that would be a database restart for nothing.
+    - name: Start the database and wait until it is healthy
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --env-file
+          - '{{ control_plane_env_file }}'
+          - up
+          - -d
+          - --wait
+          - db
+        chdir: '{{ control_plane_project_dir }}'
+      environment:
+        IMAGE: '{{ control_plane_effective_image }}'
+      # Compose itself reports the containers it started or left alone, and --wait
+      # fails the task when the database is not healthy. The task reports no change
+      # so that a second apply of the same commit reports zero changes. no_log: Compose
+      # quotes a line of the environment file when it cannot parse it, and a line can
+      # hold a value.
+      changed_when: false
+      no_log: true
+      when:
+        - control_plane_bring_up | ansible.builtin.bool
+        - not (control_plane_deployed | ansible.builtin.bool)
 
-- name: Record that the init phase has completed
-  ansible.builtin.file:
-    path: '{{ control_plane_init_stamp }}'
-    state: touch
-    owner: root
-    group: root
-    mode: '0600'
-  when:
-    - control_plane_bring_up | ansible.builtin.bool
-    - not (control_plane_deployed | ansible.builtin.bool)
-    - not control_plane_init_stat.stat.exists
+    - name: Read whether the sign-in service's init phase has run
+      ansible.builtin.stat:
+        path: '{{ control_plane_init_stamp }}'
+      register: control_plane_init_stat
 
-- name: Start the sign-in service and wait until it is healthy
-  ansible.builtin.command:
-    argv:
-      - docker
-      - compose
-      - --env-file
-      - '{{ control_plane_env_file }}'
-      - up
-      - -d
-      - --wait
-      - zitadel
-    chdir: '{{ control_plane_project_dir }}'
-  environment:
-    IMAGE: '{{ control_plane_effective_image }}'
-  # As for the database: --wait fails the task when the service is not healthy,
-  # and the task reports no change so a second apply reports zero changes.
-  changed_when: false
-  no_log: true
-  when:
-    - control_plane_bring_up | ansible.builtin.bool
-    - not (control_plane_deployed | ansible.builtin.bool)
+    # The init phase creates the sign-in service's own login and database. It needs
+    # the database administrator's credential, which only compose.init.yml carries,
+    # so it runs once here and never from the unit. The stamp records that it ran.
+    - name: Run the sign-in service's init phase once, on a fresh database
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --env-file
+          - '{{ control_plane_env_file }}'
+          - -f
+          - compose.yml
+          - -f
+          - compose.init.yml
+          - run
+          - --rm
+          - zitadel
+        chdir: '{{ control_plane_project_dir }}'
+      environment:
+        IMAGE: '{{ control_plane_effective_image }}'
+      changed_when: true
+      no_log: true
+      when:
+        - control_plane_bring_up | ansible.builtin.bool
+        - not (control_plane_deployed | ansible.builtin.bool)
+        - not control_plane_init_stat.stat.exists
 
-- name: Enable the stack's unit
-  ansible.builtin.systemd_service:
-    name: '{{ control_plane_stack_unit }}'
-    enabled: true
-  when: control_plane_start_units | ansible.builtin.bool
+    - name: Record that the init phase has completed
+      ansible.builtin.file:
+        path: '{{ control_plane_init_stamp }}'
+        state: touch
+        owner: root
+        group: root
+        mode: '0600'
+      when:
+        - control_plane_bring_up | ansible.builtin.bool
+        - not (control_plane_deployed | ansible.builtin.bool)
+        - not control_plane_init_stat.stat.exists
 
-# The wrapper writes the digest pin, starts the four services, waits for each to
-# be healthy and restores the previous pin if the start fails. It reports its own
-# outcome in its exit status, so a failure stops the run here.
-- name: Start the stack through the deploy wrapper with the pinned image
-  ansible.builtin.command:
-    argv:
-      - '{{ control_plane_deploy_wrapper }}'
-      - control-plane
-      - '{{ control_plane_effective_image }}'
-  changed_when: false
-  when: control_plane_start_units | ansible.builtin.bool
+    - name: Start the sign-in service and wait until it is healthy
+      ansible.builtin.command:
+        argv:
+          - docker
+          - compose
+          - --env-file
+          - '{{ control_plane_env_file }}'
+          - up
+          - -d
+          - --wait
+          - zitadel
+        chdir: '{{ control_plane_project_dir }}'
+      environment:
+        IMAGE: '{{ control_plane_effective_image }}'
+      # As for the database: --wait fails the task when the service is not healthy,
+      # and the task reports no change so a second apply reports zero changes.
+      changed_when: false
+      no_log: true
+      when:
+        - control_plane_bring_up | ansible.builtin.bool
+        - not (control_plane_deployed | ansible.builtin.bool)
 
-- name: Read the stack's unit as systemd holds it
-  ansible.builtin.systemd_service:
-    name: '{{ control_plane_stack_unit }}'
-  register: control_plane_stack_unit_state
-  when: control_plane_start_units | ansible.builtin.bool
+    - name: Enable the stack's unit
+      ansible.builtin.systemd_service:
+        name: '{{ control_plane_stack_unit }}'
+        enabled: true
+      when: control_plane_start_units | ansible.builtin.bool
 
-- name: Refuse a stack unit that is not active after the deploy
-  ansible.builtin.assert:
-    that:
-      - control_plane_stack_unit_state.status.ActiveState == 'active'
-    quiet: true
-    fail_msg: 'The stack unit is {{ control_plane_stack_unit_state.status.ActiveState }}, not active, after the deploy wrapper ran.'
-  when: control_plane_start_units | ansible.builtin.bool
+    # The wrapper writes the digest pin, starts the four services, waits for each to
+    # be healthy and restores the previous pin if the start fails. It reports its own
+    # outcome in its exit status, so a failure stops the run here.
+    - name: Start the stack through the deploy wrapper with the pinned image
+      ansible.builtin.command:
+        argv:
+          - '{{ control_plane_deploy_wrapper }}'
+          - control-plane
+          - '{{ control_plane_effective_image }}'
+      changed_when: false
+      when: control_plane_start_units | ansible.builtin.bool
 
-# The database reads pg_hba.conf only when told to. The file reaches the container through
-# a directory mount, so a delivered file is visible at once, but the server still holds the
-# rules it read last. This reload makes the delivered file the rules in force, on EVERY
-# apply and not only when the file changed: a run that was interrupted after the copy would
-# otherwise leave the file delivered and never loaded, and the next run would see no change
-# to act on. A reload drops no connection and restarts nothing, and no volume is touched.
-# The script (the one home of this logic, also run by the real-server test) takes the
-# administrator's password from the container's own environment, so this role holds no
-# secret and no value is in an argument. It fails the apply, with the old rules still in
-# force, when the delivered file does not parse. The task reports no change so that a second
-# apply of one commit reports zero. It is skipped in check mode like every command, and
-# with the units switched off, as the database is then not necessarily running.
-- name: Reload the database so the delivered access rules are the ones in force
-  ansible.builtin.command:
-    argv:
-      - docker
-      - exec
-      - --interactive
-      - '{{ control_plane_db_container }}'
-      - sh
-      - -s
-    stdin: "{{ lookup('ansible.builtin.file', 'reload_hba.sh') }}"
-  changed_when: false
-  when: control_plane_start_units | ansible.builtin.bool
+    - name: Read the stack's unit as systemd holds it
+      ansible.builtin.systemd_service:
+        name: '{{ control_plane_stack_unit }}'
+      register: control_plane_stack_unit_state
+      when: control_plane_start_units | ansible.builtin.bool
+
+    - name: Refuse a stack unit that is not active after the deploy
+      ansible.builtin.assert:
+        that:
+          - control_plane_stack_unit_state.status.ActiveState == 'active'
+        quiet: true
+        fail_msg: 'The stack unit is {{ control_plane_stack_unit_state.status.ActiveState }}, not active, after the deploy wrapper ran.'
+      when: control_plane_start_units | ansible.builtin.bool
+
+    # The database reads pg_hba.conf only when told to. The file reaches the container through
+    # a directory mount, so a delivered file is visible at once, but the server still holds the
+    # rules it read last. This reload makes the delivered file the rules in force, on EVERY
+    # apply and not only when the file changed: a run that was interrupted after the copy would
+    # otherwise leave the file delivered and never loaded, and the next run would see no change
+    # to act on. A reload drops no connection and restarts nothing, and no volume is touched.
+    # The script (the one home of this logic, also run by the real-server test) takes the
+    # administrator's password from the container's own environment, so this role holds no
+    # secret and no value is in an argument. It fails the apply, with the old rules still in
+    # force, when the delivered file does not parse. The task reports no change so that a second
+    # apply of one commit reports zero. It is skipped in check mode like every command, and
+    # with the units switched off, as the database is then not necessarily running.
+    - name: Reload the database so the delivered access rules are the ones in force
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - --interactive
+          - '{{ control_plane_db_container }}'
+          - sh
+          - -s
+        stdin: "{{ lookup('ansible.builtin.file', 'reload_hba.sh') }}"
+      changed_when: false
+      when: control_plane_start_units | ansible.builtin.bool
+  rescue:
+    - name: Look at the kept access rules
+      ansible.builtin.stat:
+        path: '{{ control_plane_hba_previous }}'
+        get_checksum: false
+      register: control_plane_hba_previous_stat
+
+    - name: Put the kept access rules back on disk, where the database reads them
+      ansible.builtin.copy:
+        src: '{{ control_plane_hba_previous }}'
+        dest: '{{ control_plane_hba_live }}'
+        owner: root
+        group: root
+        mode: '0644'
+        remote_src: true
+      when: control_plane_hba_previous_stat.stat.exists
+
+    - name: Reload the database on the kept access rules
+      ansible.builtin.command:
+        argv:
+          - docker
+          - exec
+          - --interactive
+          - '{{ control_plane_db_container }}'
+          - sh
+          - -s
+        stdin: "{{ lookup('ansible.builtin.file', 'reload_hba.sh') }}"
+      changed_when: false
+      when:
+        - control_plane_hba_previous_stat.stat.exists
+        - control_plane_start_units | ansible.builtin.bool
+
+    - name: Refuse the delivery after the kept access rules were put back
+      ansible.builtin.fail:
+        msg: >-
+          control_plane[hba-undone]: the access rules this run delivered did not all load, so the
+          kept rules were put back on disk and reloaded where there were any. Read the failed task
+          above. On a first deploy there were none to put back, and the delivered file stays on disk.
 
 # After the wrapper, never before: until the stack has been brought up on the new mount, a
 # restart of the old container (a rollback, an interrupted run) still needs this file.
