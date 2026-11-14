@@ -475,3 +475,69 @@ loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` ne
 `protectionChain`. Under the committed posture that is one general `rate_limit` directive
 per throttled block, each in its own zone, and `render.test.ts` counts them per kind
 from the registries.
+
+## Ghost admin preview exclusion
+
+`renderGhostAdminAppsecConfig` writes `stack/crowdsec/appsec-configs/ghost-admin-previews.yaml`,
+the AppSec configuration `branchleft/ghost-admin-previews`. It holds one
+`pre_eval` hook and no rules.
+
+What it is for. On 14 November 2026 the owner was banned from every site on the
+edge for saving Settings > Design in the blog's Ghost admin. The admin API itself
+never reaches AppSec on a Ghost site (`AUTHORING_API_PATHS`); the design and
+announcement-bar previews do. Ghost admin fetches each preview by POSTing to the
+site root, `/?admin_toolbar=0`, with no body, `Content-Type: text/html;charset=utf-8`
+and the unsaved settings in an `X-Ghost-Preview` header, once per change. Two
+Core Rule Set rules match that request: 920420 (the content type is not one the
+rule set allows, 5 points) and 920180 (a POST with no Content-Length, 3 points;
+the bouncer forwards a bodiless request without one). That is the "anomaly: 8"
+in the owner's alerts. The out-of-band bucket bans an address at its sixth
+match inside its leak window, so a few design tweaks are a ban.
+
+What it narrows. The two rules, removed for one request, only when every
+condition holds: out-of-band evaluation; the host is a Ghost hostname from the
+registry (`backend: 'ghost'`); a POST to `/`; no body; exactly the preview's
+content type; the `X-Ghost-Preview` header present. Every other rule still
+evaluates that request, and both rules still evaluate everything else, including
+the same request with a body, on another path, on a non-Ghost host, or without
+the header. Sending the header is all a client needs to skip those two protocol
+checks on that one bodiless request, which reaches a Ghost front page that
+reads no body.
+
+Why it is named first in the AppSec acquisition. CrowdSec merges the named
+configurations in order: hooks and rules are appended, but options such as
+`default_remediation` are taken from the last one loaded. With ours first, the
+hub's configurations load after it exactly as before.
+
+The replay in `test_crowdsec_replay.py` (CI's `edge-config-validate`) is what
+found the rules and what proves the narrowing: it fails if the previews raise
+any WAF alert, and if the same shape stops banning off a Ghost host or without
+the header.
+
+## Ghost admin API and admin-interface probing
+
+`renderGhostAdminPostoverflow` writes
+`stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml`, a post-overflow whitelist.
+
+What it is for. The hub scenario `crowdsecurity/http-admin-interface-probing`
+reads a 403 or 404 on any path containing one of its entries as a probe, and
+bans at the third distinct such path in quick succession (capacity 2, leaking one every 10 seconds). One of its
+entries is `/admin`, which every Ghost admin API path contains
+(`/ghost/api/admin/...`). Ghost answers its own admin API 403 for an expired
+session or a device check and 404 for a missing resource, and the bouncer
+answers 403 to an address already banned, which is how the owner's second ban
+followed the first at 00:50:54Z.
+
+What it narrows. An overflow of that one scenario is dropped only when every
+event in it is a request to `/ghost/api/admin/` on a Ghost hostname with no dot
+segment, literal or percent-encoded. A probe for `/wp-admin`, `/phpmyadmin`,
+`/admin` or any other entry still bans on a Ghost host, any mix of those with
+admin API paths still bans, and admin API paths on any other host still ban.
+Every other scenario still reads every one of these requests.
+
+The limit it carries. A whitelisted overflow still arms the scenario's one-minute
+blackhole for that address, so three admin API 403s on a Ghost host mute this
+one scenario for that address for a minute. The other HTTP scenarios are not
+muted. The alternatives were worse: a parser whitelist would hide these
+requests from every scenario, and replacing the hub scenario with a copy would
+taint the `crowdsecurity/caddy` collection and stop its hub upgrades.

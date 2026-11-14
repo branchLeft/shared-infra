@@ -570,6 +570,17 @@ jobs:
           done
           exit "$status"
 
+      # Starts the edge's own CrowdSec from compose.yml and replays at it the
+      # Ghost admin traffic that once banned the owner, plus admin and WAF
+      # probes: the admin use must raise no ban and every probe must still
+      # raise one (hetzner/edge/test_crowdsec_replay.py). A workstation here
+      # cannot start containers, so this job is the only place it runs.
+      - name: Replay Ghost admin traffic and probes against the edge's CrowdSec
+        if: steps.skip.outputs.run != 'false'
+        env:
+          BRANCHLEFT_CROWDSEC_REPLAY: '1'
+        run: python3 scripts/trace_reads.py --unit edge-config-validate -- -m unittest discover -s hetzner/edge -p 'test_*.py' -v
+
   monitoring-config-validate:
     name: Validate (monitoring stack config)
     runs-on: ubuntu-latest
