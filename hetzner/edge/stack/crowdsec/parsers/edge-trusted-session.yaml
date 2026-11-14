@@ -1,0 +1,9 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+name: branchleft/edge-trusted-session
+description: Requests whose signed-in session the edge verified with the site itself
+filter: evt.Line.Labels.type == 'caddy'
+whitelist:
+  reason: a session the edge verified
+  expression:
+    - JsonExtract(evt.Line.Raw, 'edge_trusted') == '1'

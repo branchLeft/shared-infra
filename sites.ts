@@ -44,6 +44,10 @@ export const sites: EdgeSite[] = [
     // Ghost serves its uploads from its own origin: see `sites.md`, "What the
     // site runs".
     backend: 'ghost',
+    // A signed-in Ghost staff session, verified with this Ghost, is never
+    // refused by a CrowdSec ban or AppSec: hetzner/edge/render.md, "Verified
+    // sessions".
+    trustedSession: 'ghost-staff',
   },
 
   {

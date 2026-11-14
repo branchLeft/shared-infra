@@ -57,6 +57,18 @@ export interface EdgeSite {
    */
   backend?: 'ghost' | 'other';
   /**
+   * A signed-in session the edge verifies with the site itself before the
+   * CrowdSec bouncer and AppSec. A request whose session the site confirms is
+   * never refused by an IP ban or an AppSec verdict, and its access-log line is
+   * whitelisted out of every CrowdSec bucket; a request without one, or whose
+   * session the site refuses, is treated as if this field were absent.
+   * `ghost-staff` (a Ghost site only): the staff session cookie on `/ghost/*`,
+   * checked against that site's own Ghost. Ghost members are never trusted.
+   * Why, and what still protects a stolen session: `hetzner/edge/render.md`,
+   * "Verified sessions".
+   */
+  trustedSession?: 'ghost-staff';
+  /**
    * Maximum request body the edge accepts, as a Caddy size string in binary
    * units (`MiB`, never `MB`). Required for every site served. Why and where
    * the value comes from: `sites.md` section "The request body ceiling".

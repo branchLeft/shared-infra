@@ -833,6 +833,28 @@ change and save something in a Ghost site's Settings > Design, then run the
 `cscli decisions list` command above: it must list no new decision for your
 address.
 
+**A verified staff session is never refused.** On the blog, a request whose
+Ghost staff session the edge has checked with Ghost passes an IP ban and AppSec,
+and its log lines reach no CrowdSec bucket (`hetzner/edge/render.md`, "Verified
+sessions"). To confirm it on the host after an apply, open the blog's Ghost admin
+and stay signed in, then ban your own address for five minutes. Your address is
+the one `curl -s https://ifconfig.co` prints on your machine:
+
+```bash
+read -r MY_IP; export MY_IP
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" "
+  CROWDSEC_CTR=\$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
+  docker exec \"\$CROWDSEC_CTR\" cscli decisions add --ip $MY_IP --duration 5m --reason 'verified-session check'"
+```
+
+Wait 15 seconds. Good looks like: the Ghost admin keeps working (open a post,
+save it), `https://blog.branchleft.co.uk/` in a private window answers 403, and
+the `cscli decisions list` command above shows only your five-minute decision.
+Opening the admin from a typed URL or a bookmark is refused while banned (the
+render.md "Limits" paragraph says why). Delete the decision when done, with the
+`cscli decisions delete --ip` command above and your address; it also expires by
+itself after five minutes.
+
 ## 11. Adding a site to the edge
 
 One registry entry, then a re-render. Nothing else.

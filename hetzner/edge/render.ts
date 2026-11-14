@@ -195,6 +195,38 @@ const GHOST_ADMIN_API_PREFIX = '/ghost/api/admin/';
 const ADMIN_PROBING_SCENARIO = 'crowdsecurity/http-admin-interface-probing';
 
 /**
+ * The Caddy variable a verified session sets, and the top-level access-log
+ * field it is written to. Only the verification call's 2xx JSON answer sets it
+ * to `1`. Why it cannot be forged from a request: `render.md`, "Verified
+ * sessions".
+ */
+export const TRUSTED_SESSION_VAR = 'edge_trusted';
+
+/** Ghost's staff session cookie. Scoped by Ghost to `/ghost`. */
+const GHOST_STAFF_SESSION_COOKIE = 'ghost-admin-api-session';
+
+/**
+ * Where a Ghost staff session is checked: Ghost's own "who am I" endpoint,
+ * which answers 2xx JSON only for a signed-in, origin-matching, verified staff
+ * session. The trailing `?` empties the query, so nothing the client sent
+ * reaches Ghost's handler but the headers.
+ */
+const GHOST_STAFF_VERIFY_URI = '/ghost/api/admin/users/me/?';
+
+/** The paths a Ghost staff session is checked on: where its cookie is sent. */
+const GHOST_STAFF_PATHS = ['/ghost/*'];
+
+/**
+ * Bounds of the verification call. Generous, so a slow Ghost is not cut off:
+ * a timeout gives no trust and the request fails as the origin itself would.
+ */
+const TRUSTED_SESSION_DIAL_TIMEOUT = '3s';
+const TRUSTED_SESSION_RESPONSE_TIMEOUT = '10s';
+
+/** Where the whitelist that keeps verified requests out of every bucket sits. */
+const TRUSTED_SESSION_WHITELIST = 'branchleft/edge-trusted-session';
+
+/**
  * A hostname is written straight into a Caddyfile site address, where a space
  * or a brace would start a new address or a new block. The registry is
  * reviewed, so this is not the control that stops a hostile entry — it is what
@@ -528,6 +560,12 @@ function protectionChain(
     appsec: 'none' | 'all' | 'except-authoring';
     membersMagicLink?: boolean;
     beforeAppsec?: string[];
+    /**
+     * The session verification (`sessionVerification`), placed after the
+     * throttles and before the bouncer. When present, the bouncer and AppSec
+     * run only on a request it did not verify.
+     */
+    verification?: string[];
   }
 ): string[] {
   const lines: string[] = [];
@@ -542,16 +580,84 @@ function protectionChain(
   if (posture.membersMagicLinkRateLimit === 'enforcing' && options.membersMagicLink) {
     lines.push(...membersMagicLinkRateLimitDirective());
   }
+  // After the throttles, so they still count every request, verified or not,
+  // and cap how many verification calls one address can cause.
+  const verified = options.verification !== undefined;
+  lines.push(...(options.verification ?? []));
+  const unlessVerified = verified ? ' @edge_untrusted' : '';
   if (posture.crowdsec === 'enforcing') {
-    lines.push('crowdsec');
+    lines.push(`crowdsec${unlessVerified}`);
   }
   lines.push(...(options.beforeAppsec ?? []));
   if (options.appsec === 'all') {
-    lines.push('appsec');
+    lines.push(`appsec${unlessVerified}`);
   } else if (options.appsec === 'except-authoring') {
+    // `@inspected` itself carries the verified-session condition on such a site.
     lines.push('appsec @inspected');
   }
   return lines;
+}
+
+/**
+ * Site-scope matchers for a site whose sessions the edge verifies: which
+ * requests are worth a verification call, and which were not verified. Why:
+ * `render.md`, "Verified sessions".
+ */
+function sessionVerificationMatchers(site: EdgeSite): string[] {
+  if (site.trustedSession !== 'ghost-staff') {
+    return [];
+  }
+  return [
+    '@edge_session_candidate {',
+    `\tpath ${GHOST_STAFF_PATHS.join(' ')}`,
+    `\theader Cookie *${GHOST_STAFF_SESSION_COOKIE}=*`,
+    '}',
+    `@edge_untrusted not vars ${TRUSTED_SESSION_VAR} 1`,
+  ];
+}
+
+/**
+ * The verification call, written out as `reverse_proxy` by hand rather than
+ * `forward_auth`: `forward_auth` sends a non-2xx answer to the browser, which
+ * would break Ghost's own sign-in page for an expired cookie. Here a 2xx JSON
+ * answer sets the variable and any other answer leaves it at 0; either way the
+ * request carries on down the route. `method GET` drops the body from the
+ * verification call only; the request itself keeps it. Why each line:
+ * `render.md`, "Verified sessions".
+ */
+function sessionVerification(site: EdgeSite, upstream: string): string[] | undefined {
+  if (site.trustedSession === undefined) {
+    return undefined;
+  }
+  if (site.backend !== 'ghost') {
+    throw new Error(
+      `site ${site.name} sets trustedSession ${site.trustedSession}, which only a Ghost site (backend 'ghost') can verify`
+    );
+  }
+  return [
+    `vars ${TRUSTED_SESSION_VAR} 0`,
+    `log_append ${TRUSTED_SESSION_VAR} {http.vars.${TRUSTED_SESSION_VAR}}`,
+    `reverse_proxy @edge_session_candidate ${upstream} {`,
+    '\tmethod GET',
+    `\trewrite ${GHOST_STAFF_VERIFY_URI}`,
+    // A Ghost Admin API key authenticates too; only the session cookie may.
+    '\theader_up -Authorization',
+    '\ttransport http {',
+    `\t\tdial_timeout ${TRUSTED_SESSION_DIAL_TIMEOUT}`,
+    `\t\tresponse_header_timeout ${TRUSTED_SESSION_RESPONSE_TIMEOUT}`,
+    '\t}',
+    '\t@edge_session_verified {',
+    '\t\tstatus 2xx',
+    '\t\theader Content-Type application/json*',
+    '\t}',
+    '\thandle_response @edge_session_verified {',
+    `\t\tvars ${TRUSTED_SESSION_VAR} 1`,
+    '\t}',
+    '\thandle_response {',
+    `\t\tvars ${TRUSTED_SESSION_VAR} 0`,
+    '\t}',
+    '}',
+  ];
 }
 
 // Why: powers of two only; MB/GB are powers of ten in Caddy (~4.6% smaller); value
@@ -612,10 +718,20 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
   }
 
+  const address = resolvePrivateAddress(upstream.host, upstream.port);
+  const verification = sessionVerification(site, address);
   const body: string[] = [...logDirective(ACCESS_LOG), ...tlsDirective()];
-  if (site.injectionWafPreviewOnly) {
+  if (site.injectionWafPreviewOnly && verification !== undefined) {
+    body.push(
+      '@inspected {',
+      `\tnot path ${AUTHORING_API_PATHS.join(' ')}`,
+      `\tnot vars ${TRUSTED_SESSION_VAR} 1`,
+      '}'
+    );
+  } else if (site.injectionWafPreviewOnly) {
     body.push(`@inspected not path ${AUTHORING_API_PATHS.join(' ')}`);
   }
+  body.push(...sessionVerificationMatchers(site));
   if (site.discardRoute !== undefined) {
     body.push(...discardRouteMatchers(site.discardRoute));
   }
@@ -651,10 +767,11 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
       appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
       membersMagicLink: true,
       beforeAppsec: site.discardRoute === undefined ? [] : discardRouteResponses(),
+      ...(verification === undefined ? {} : { verification }),
     }).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,
     ...(isGhost ? uploadGuard().map((line) => `\t${line}`) : []),
-    `\treverse_proxy ${resolvePrivateAddress(upstream.host, upstream.port)}`,
+    `\treverse_proxy ${address}`,
     '}'
   );
   if (isGhost) {
@@ -1050,5 +1167,26 @@ export function renderGhostAdminPostoverflow(entries: EdgeSite[]): string {
     `        .GetMeta('http_path') startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
     "        not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')",
     '      })',
+  ].join('\n')}\n`;
+}
+
+/**
+ * The `s02-enrich` whitelist that keeps a verified request out of every
+ * CrowdSec bucket. It drops a Caddy access-log line whose top-level
+ * `TRUSTED_SESSION_VAR` field is `1`, before any scenario reads it. Only Caddy
+ * writes a top-level field: everything a client sends is escaped into the line
+ * under `request`, where `JsonExtract` on a top-level key never looks. Why:
+ * `render.md`, "Verified sessions".
+ */
+export function renderTrustedSessionWhitelist(): string {
+  return `${[
+    ...GENERATED_BANNER,
+    `name: ${TRUSTED_SESSION_WHITELIST}`,
+    'description: Requests whose signed-in session the edge verified with the site itself',
+    "filter: evt.Line.Labels.type == 'caddy'",
+    'whitelist:',
+    '  reason: a session the edge verified',
+    '  expression:',
+    `    - JsonExtract(evt.Line.Raw, '${TRUSTED_SESSION_VAR}') == '1'`,
   ].join('\n')}\n`;
 }
