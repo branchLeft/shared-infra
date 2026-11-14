@@ -749,6 +749,7 @@ jobs:
           # reaches both mailboxes: the off-host one the owner reads, and mx1's.
           route email,email-on-host alertname=SNDSAccessLinkExpiringSoon severity=warning notify=on-host owner_action=true
           route email,email-on-host alertname=HostMemoryPressure severity=warning owner_action=true
+          route email,email-on-host alertname=HostCPUSaturated severity=warning owner_action=true
           route email,email-on-host alertname=HostDiskSpaceLow severity=warning owner_action=true
           route email,email-on-host alertname=MySQLConnectionsHigh severity=warning owner_action=true
           # Without the label the same alertname stays on mx1 alone.
