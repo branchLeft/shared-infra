@@ -30,6 +30,16 @@ fail-closed: nothing in it falls back to an unverified deploy. The why and the o
 The role refuses a host where a gh config or credential file already sits in the verifier's home.
 gh writes none there with the placeholder (only a cache and a device id), so a second apply passes.
 
+## Offline verification (opt in)
+
+`deploy_verifier_offline: true`, for a host with no outbound access, also installs
+`/etc/branchleft/attestation/trusted_root.jsonl` (root, 0644, from `files/trusted_root.jsonl`, pinned by
+sha256 in `vars/main.yml`) and the empty staging directory `/var/lib/branchleft/attestations` (root,
+0700). Where the trusted root exists the wrapper verifies every registered image offline from the
+bundle and manifest its delivery staged, and never reads the registry. The root is deliberately not
+delivered with an image. Refresh it with `gh attestation trusted-root`, in one change with the pin. No host
+sets the variable yet. See `hetzner/provision/branchleft_deploy.md`, "Offline attestation verification".
+
 ## The registry read key (checked, never written)
 
 A private image's attestation is read from the registry, which needs a read key. The owner places
