@@ -2046,3 +2046,57 @@ tests:
                 ExpectedDownTargetAnswering covers the mark going stale in the other
                 direction. A target labelled "true" is also caught here at 24 hours,
                 after HostOrServiceDown has paged it at 5 minutes.
+
+  # HostCPUSaturated: sustained CPU ceiling on any host node_exporter scrapes.
+  # The busy case is 90% busy (idle counter rising 0.1 s/s), the steal case is
+  # 20% stolen with the host otherwise 30% busy, and the quiet case is 50% busy.
+  # Only the first two may fire, and only after the full 30m for: window.
+  - interval: 30s
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="10.20.1.60:9100", job="node", host="app1", cpu="0", mode="idle"}'
+        values: '0+3x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.60:9100", job="node", host="app1", cpu="0", mode="steal"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: HostCPUSaturated
+        exp_alerts: []
+      - eval_time: 45m
+        alertname: HostCPUSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_action: 'true'
+              instance: 10.20.1.60:9100
+            exp_annotations:
+              summary: '10.20.1.60:9100 has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
+              description: 'Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores.'
+
+  - interval: 30s
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="10.20.1.61:9100", job="node", host="app2", cpu="0", mode="idle"}'
+        values: '0+21x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.61:9100", job="node", host="app2", cpu="0", mode="steal"}'
+        values: '0+6x200'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: HostCPUSaturated
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              owner_action: 'true'
+              instance: 10.20.1.61:9100
+            exp_annotations:
+              summary: '10.20.1.61:9100 has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor.'
+              description: 'Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores.'
+
+  - interval: 30s
+    input_series:
+      - series: 'node_cpu_seconds_total{instance="10.20.1.62:9100", job="node", host="app3", cpu="0", mode="idle"}'
+        values: '0+15x200'
+      - series: 'node_cpu_seconds_total{instance="10.20.1.62:9100", job="node", host="app3", cpu="0", mode="steal"}'
+        values: '0x200'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: HostCPUSaturated
+        exp_alerts: []

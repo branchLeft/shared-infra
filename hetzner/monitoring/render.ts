@@ -492,6 +492,19 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '          summary: "{{ $labels.instance }} has used over 75% of memory for 24 hours."',
     '          description: "doc 14 §4 scale-out trigger: app-host memory >75% sustained 24h -> provision the next host."',
     '',
+    // Same routing as HostMemoryPressure (warning, owner_action): the owner
+    // decides the vCPU count, and the rule covers every node_exporter host.
+    // Busy and steal are one alert: either one sustained is the same ceiling.
+    '      - alert: HostCPUSaturated',
+    '        expr: (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 0.85 or avg by (instance) (rate(node_cpu_seconds_total{mode="steal"}[5m])) > 0.10',
+    '        for: 30m',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "{{ $labels.instance }} has been short of CPU for 30 minutes: over 85% busy, or over 10% of time stolen by the hypervisor."',
+    '          description: "Sizing signal for the tenant hosts: a sustained CPU ceiling means the vCPU count needs to go up. Measured as the 5-minute rate of node_cpu_seconds_total, averaged per instance across its cores."',
+    '',
     '      - alert: HostDiskSpaceLow',
     '        expr: >-',
     '          (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} /',

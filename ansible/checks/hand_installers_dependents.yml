@@ -32,20 +32,13 @@ ansible/roles/deploy_verifier/README.md:
   - hetzner/provision/30-install-deploy-tooling.sh
 ansible/roles/egress_nat/README.md:
   - hetzner/provision/05-configure-host-egress.sh
-  - hetzner/provision/branchleft_host_egress.sh
   - hetzner/provision/branchleft_nat.sh
   - hetzner/provision/nat-gateway.sh
-ansible/roles/egress_nat/molecule/default/verify.yml:
-  - hetzner/provision/branchleft_host_egress.sh
 ansible/roles/egress_nat/tasks/_reconciler.yml:
   - hetzner/provision/05-configure-host-egress.sh
   - hetzner/provision/nat-gateway.sh
 ansible/roles/egress_nat/tasks/main.yml:
   - hetzner/provision/05-configure-host-egress.sh
-ansible/roles/egress_nat/tests/unit/test_egress_nat_role.py:
-  - hetzner/provision/branchleft_host_egress.sh
-ansible/roles/egress_nat/vars/main.yml:
-  - hetzner/provision/branchleft_host_egress.sh
 ansible/roles/mail_reconcilers/tests/unit/test_mail_reconcilers.py:
   - hetzner/provision/run-all.sh
   - mail/provision/30-deploy-stalwart.sh
@@ -220,6 +213,8 @@ hetzner/provision/test_00_harden_ssh.py:
 hetzner/provision/test_20_install_docker.py:
   - hetzner/provision/20-install-docker.sh
   - mail/provision/20-install-docker.sh
+hetzner/provision/test_30_install_deploy_tooling.py:
+  - hetzner/provision/30-install-deploy-tooling.sh
 hetzner/provision/test_45_install_db_tunnel.py:
   - hetzner/provision/45-install-db-tunnel.sh
 hetzner/provision/test_app_host_isolation.py:
@@ -244,9 +239,12 @@ hetzner/provision/test_compose_unit_contract.md:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/run-all.sh
   - mail/provision/run-all.sh
-hetzner/scripts/test-control-plane-port-policy.sh:
+hetzner/provision/test_nat_gateway.py:
+  - hetzner/provision/branchleft_nat.sh
+  - hetzner/provision/nat-gateway.sh
+hetzner/scripts/prove_control_plane_port_policy.py:
   - hetzner/provision/branchleft_docker_user_policy.sh
-hetzner/scripts/test-spool-bridge-egress.sh:
+hetzner/scripts/prove_spool_bridge_egress.py:
   - hetzner/provision/branchleft_docker_user_policy.sh
 hetzner/scripts/test_probe_edget_gateway.py:
   - hetzner/provision/branchleft_nat.sh

@@ -293,6 +293,10 @@ class RecordTests(unittest.TestCase):
             ],
         )
 
+    def test_dmarc_requests_aggregate_reports(self):
+        self.assertIn("rua=mailto:rob@branchleft.co.uk", DMARC_VALUE)
+        self.assertTrue(DMARC_VALUE.startswith("v=DMARC1; p=none; "))
+
     def test_dkim_only(self):
         records = dns_records("t.example", "bl", _key("k", "a", "bl"), "mx1.example", dkim_only=True)
         self.assertEqual([r["name"] for r in records], ["bl._domainkey.t.example"])

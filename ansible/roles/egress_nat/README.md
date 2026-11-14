@@ -15,7 +15,7 @@ order the standard sets for a role README (ANS-14).
 It does what two shell scripts did, in the same order:
 
 1. `hetzner/provision/05-configure-host-egress.sh`: installs
-   `branchleft_host_egress.sh` as `/usr/local/sbin/branchleft-host-egress` and
+   `files/branchleft_host_egress.py` as `/usr/local/sbin/branchleft-host-egress` and
    `branchleft-host-egress.service` as its unit, makes systemd read the unit, enables
    it and runs it. This is for every host.
 2. `hetzner/provision/nat-gateway.sh`: the same for the NAT gateway reconciler,
@@ -27,9 +27,10 @@ It does what two shell scripts did, in the same order:
    the role applies would replace the Python program with the bash one, so it must not be run there.
 
 The two reconcilers themselves are programs that stay as code. The role installs them and
-rewrites none. The host egress reconciler, `branchleft_host_egress.sh`, is in
-`hetzner/provision`; the NAT gateway reconciler, `branchleft_nat.py`, and its unit are in
-this role's `files/`. The copy tasks read each one in place (below).
+rewrites none. The host egress reconciler, `branchleft_host_egress.py`, its unit and its timer
+are in this role's `files/` and `hetzner/provision` respectively; the NAT gateway reconciler,
+`branchleft_nat.py`, and its unit are in this role's `files/`. The copy tasks read each one in
+place (below).
 
 It does not:
 
@@ -254,8 +255,9 @@ for a host that no playbook applies this role to yet.
 
 ## How to change it safely
 
-1. To change what a reconciler does, change `hetzner/provision/branchleft_host_egress.sh`
-   or `files/branchleft_nat.py`; the role delivers them as they are, and the NAT program's
+1. To change what a reconciler does, change `files/branchleft_host_egress.py` or
+   `files/branchleft_nat.py`; the role delivers them as they are. The host egress program's
+   tests are in `tests/unit/test_branchleft_host_egress.py`, and the NAT program's
    tests are in `hetzner/provision/test_branchleft_nat.py`. To change a unit, change the
    `.service` file there; for the NAT unit, change both copies so that they stay the same bytes. The role's unit
    test fails if a unit stops running the reconciler at the path the role installs it to.

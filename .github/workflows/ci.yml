@@ -429,25 +429,19 @@ jobs:
       - name: Python unit tests
         run: python3 -m unittest discover -s hetzner/provision -p 'test_*.py' -v
 
-      - name: Shellcheck the spool bridge egress proof
-        run: shellcheck hetzner/scripts/test-spool-bridge-egress.sh
-
       # Runs the reconciler against a real dockerd in a privileged
       # Docker-in-Docker stand-in, with a container on a bridge named like the
       # spool's, so the drain-bridge rules are shown to bite, not just to be
       # written.
       - name: Spool bridge egress proof
-        run: ./hetzner/scripts/test-spool-bridge-egress.sh
-
-      - name: Shellcheck the control-plane port policy proof
-        run: shellcheck hetzner/scripts/test-control-plane-port-policy.sh
+        run: python3 hetzner/scripts/prove_spool_bridge_egress.py
 
       # Runs the reconciler against a real dockerd in a privileged
       # Docker-in-Docker stand-in for ops1, with outside containers standing
       # in for edge1 and db1, so the 8301/8302 refusal is shown to bite on a
       # published port, and to stop biting when its rule is removed.
       - name: Control-plane port policy proof
-        run: ./hetzner/scripts/test-control-plane-port-policy.sh
+        run: python3 hetzner/scripts/prove_control_plane_port_policy.py
 
       # probe-object-storage.py signs its own requests, and a wrong signature
       # is an opaque 403 against this endpoint -- indistinguishable from a
@@ -749,6 +743,7 @@ jobs:
           # reaches both mailboxes: the off-host one the owner reads, and mx1's.
           route email,email-on-host alertname=SNDSAccessLinkExpiringSoon severity=warning notify=on-host owner_action=true
           route email,email-on-host alertname=HostMemoryPressure severity=warning owner_action=true
+          route email,email-on-host alertname=HostCPUSaturated severity=warning owner_action=true
           route email,email-on-host alertname=HostDiskSpaceLow severity=warning owner_action=true
           route email,email-on-host alertname=MySQLConnectionsHigh severity=warning owner_action=true
           # Without the label the same alertname stays on mx1 alone.

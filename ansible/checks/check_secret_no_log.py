@@ -45,6 +45,8 @@ ROLE_GROUPS = ("roles", "patterns")
 LOADER = "host_inputs"
 ROW_KEY = "host_inputs_required_by_host"
 README = Path("patterns/secrets_and_no_log/README.md")
+# The R1 findings the check reports on the tree today, listed by file and task name. Shrink-only.
+BASELINE = Path("ansible/checks/secret_no_log_baseline.yml")
 SOURCE_HEADING = "## The secret options of the roles"
 SOURCE_COLUMNS = ["Role", "Option", "Source on a pulled host"]
 NAMES_HEADING = "## The secret names the services will need"
@@ -61,6 +63,9 @@ TEMPLATE_FQCNS = frozenset(("ansible.builtin.template",))
 # calls evaluate_expression on it. It is the only action of ansible-core 2.21.5 that does besides
 # assert, whose `that` is the expression-only read above (plugins/action/*.py: evaluate_expression).
 DEBUG_FQCNS = frozenset(("ansible.builtin.debug",))
+# set_fact copies each of its arguments into a variable of its own name (`cacheable` is no
+# variable).
+SET_FACT_FQCNS = frozenset(("ansible.builtin.set_fact",))
 VARS_LOOKUP_FQCN = "ansible.builtin.vars"
 LOOKUP_CALLS = frozenset(("lookup", "query", "q"))
 NAMESPACES = frozenset(("vars", "hostvars"))
@@ -702,25 +707,26 @@ def _binds_in(items: list[object], where: _Where, out: list[_Bind]) -> None:
         includes = call is not None and _includes(call)
         followed = call is not None and _unfollowed(call, where) is None
         scopes = [task.get("vars"), call.apply_vars if call is not None else None]
-        for scope in scopes:
-            for key, value in _dict(scope).items():
-                if not isinstance(key, str):
-                    continue
-                trees = [
-                    t for t in (_parse(s, rel, "a vars value", []) for s in _strings(value)) if t
-                ]
-                bare = _bare_name(trees[0]) if isinstance(value, str) and len(trees) == 1 else None
-                out.append(
-                    _Bind(
-                        key,
-                        trees,
-                        bare,
-                        rel,
-                        str(task.get("name", "(unnamed)")),
-                        includes,
-                        followed,
-                    )
+        pairs = [item for scope in scopes for item in _dict(scope).items()]
+        if call is not None and call.fqcn in SET_FACT_FQCNS:
+            # set_fact sets each argument as a variable of that name, which later tasks read.
+            pairs += [(k, v) for k, v in call.args.items() if k != "cacheable"]
+        for key, value in pairs:
+            if not isinstance(key, str):
+                continue
+            trees = [t for t in (_parse(s, rel, "a vars value", []) for s in _strings(value)) if t]
+            bare = _bare_name(trees[0]) if isinstance(value, str) and len(trees) == 1 else None
+            out.append(
+                _Bind(
+                    key,
+                    trees,
+                    bare,
+                    rel,
+                    str(task.get("name", "(unnamed)")),
+                    includes,
+                    followed,
                 )
+            )
         for key in CONTAINER_KEYS & task.keys():
             inner = task[key]
             if isinstance(inner, list):
@@ -737,6 +743,37 @@ def _binds(root: Path, role_dir: Path) -> list[_Bind]:
         doc, problem = load_yaml(where.path)
         if problem is None and isinstance(doc, list):
             _binds_in(doc, where, out)
+    return out
+
+
+class _Reg(NamedTuple):
+    """A task that registers its result under `key`. The result holds what the task printed or
+    wrote, so it is a secret when the task names one (see `_taint`)."""
+
+    key: str
+    task: dict[str, object]
+    call: _Call
+    where: _Where
+
+
+def _regs_in(items: list[object], where: _Where, out: list[_Reg]) -> None:
+    for task in items:
+        if not isinstance(task, dict):
+            continue
+        if not CONTAINER_KEYS & task.keys() and isinstance(task.get("register"), str):
+            out.append(_Reg(str(task["register"]), task, _call(task, where), where))
+        for key in CONTAINER_KEYS & task.keys():
+            inner = task[key]
+            if isinstance(inner, list):
+                _regs_in(inner, where, out)
+
+
+def _registers(root: Path, role_dir: Path) -> list[_Reg]:
+    out: list[_Reg] = []
+    for where in _task_file_wheres(root, role_dir):
+        doc, problem = load_yaml(where.path)
+        if problem is None and isinstance(doc, list):
+            _regs_in(doc, where, out)
     return out
 
 
@@ -779,6 +816,7 @@ def _taint(
                         defs.setdefault(key, []).append(tree)
     loops = _loops(root, role_dir)
     binds = _binds(root, role_dir)
+    regs = _registers(root, role_dir)
     changed = True
     while changed:
         changed = False
@@ -833,6 +871,20 @@ def _taint(
                 if bind.key in partial or not reached <= origin.get(bind.key, set()):
                     partial.pop(bind.key, None)
                     origin[bind.key] = origin.get(bind.key, set()) | reached
+                    changed = True
+        for reg in regs:
+            if reg.key in pinned:
+                continue
+            # The findings of this pass are reported by _walk, so they are not kept here.
+            scratch: list[str] = []
+            refs = _task_refs(reg.task, reg.call, reg.where.rel, reg.key, scratch, partial)
+            refs |= _template_refs(reg.call, reg.where, reg.key, scratch, partial)
+            hits = refs & origin.keys()
+            if hits:
+                reached = set().union(*(origin[hit] for hit in hits))
+                if reg.key in partial or not reached <= origin.get(reg.key, set()):
+                    partial.pop(reg.key, None)
+                    origin[reg.key] = origin.get(reg.key, set()) | reached
                     changed = True
     role_binds = [b for b in binds if b.includes and b.key in origin]
     for bind in role_binds:
@@ -1182,13 +1234,73 @@ def _r3(root: Path, resolved: dict[tuple[str, str], set[str]], findings: list[st
                 )
 
 
+_R1_TASK = re.compile(
+    r"^R1 (?P<rel>[^:]+): task '(?P<name>.*)' (?:refers to|writes) "
+    r".*must set (?P<rule>no_log|diff)\b"
+)
+
+
+def _key(finding: str) -> tuple[str, str, str] | None:
+    """The baseline key of an R1 finding about a task that lacks no_log or diff: file, task name
+    and rule. No line number and no variable chain, so an edit elsewhere does not churn the list."""
+    match = _R1_TASK.match(finding)
+    return None if match is None else (match["rel"], match["name"], match["rule"])
+
+
+def _baseline(root: Path) -> tuple[set[tuple[str, str, str]], list[str]]:
+    """The keys the baseline file lists, and the findings about its shape (R5)."""
+    path = root / BASELINE
+    doc, problem = load_yaml(path)
+    if problem is not None:
+        return set(), [f"R5 {BASELINE}: {problem}"]
+    if doc is None:
+        doc = {}
+    if not isinstance(doc, dict):
+        return set(), [f"R5 {BASELINE}: must map each file to its list of entries"]
+    listed: set[tuple[str, str, str]] = set()
+    problems: list[str] = []
+    for rel, entries in doc.items():
+        if not isinstance(entries, list):
+            problems.append(f"R5 {BASELINE}: the entries of {rel} must be a list")
+            continue
+        for entry in entries:
+            task = entry.get("task") if isinstance(entry, dict) else None
+            rule = entry.get("rule") if isinstance(entry, dict) else None
+            if not isinstance(task, str) or rule not in ("no_log", "diff"):
+                problems.append(f"R5 {BASELINE}: an entry of {rel} needs a task and a rule")
+                continue
+            listed.add((str(rel), task, rule))
+    return listed, problems
+
+
+def _against_baseline(root: Path, findings: list[str]) -> list[str]:
+    """Hold the findings to the baseline, which only shrinks: a finding it does not list is a
+    finding, and a listed entry that no longer fires is a finding too (so a fixed task leaves
+    it)."""
+    listed, problems = _baseline(root)
+    fired: set[tuple[str, str, str]] = set()
+    out = list(problems)
+    for finding in findings:
+        key = _key(finding)
+        if key is not None and key in listed:
+            fired.add(key)
+        else:
+            out.append(finding)
+    for rel, task, rule in sorted(listed - fired):
+        out.append(
+            f"R5 {BASELINE}: {rel}: task '{task}' ({rule}) no longer fires: remove the entry"
+        )
+    return out
+
+
 def check(root: Path = ROOT) -> list[str]:
-    """One finding per broken rule, or an empty list when the tree passes."""
+    """One finding per broken rule that the baseline does not hold, or an empty list when the tree
+    passes. The R1 findings the baseline lists are known and not reported (see BASELINE)."""
     findings: list[str] = []
     _r1(root, findings)
     resolved = _rows(root, findings)
     _r3(root, resolved, findings)
-    return list(dict.fromkeys(findings))
+    return _against_baseline(root, list(dict.fromkeys(findings)))
 
 
 def summary(root: Path = ROOT) -> list[str]:

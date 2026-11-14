@@ -6,7 +6,8 @@ Checks the mail host's public IP against the major DNSBLs (DNS-based
 blocklists) and raises a clear, actionable signal the moment any of them
 lists it. A listed address silently kills deliverability for every sender
 behind this host, which is exactly the kind of failure that must not wait
-for someone to notice complaints.
+for someone to notice complaints. The same run also checks each sending
+domain on a domain blocklist; see "Sending-domain blocklist" below.
 
 Query mechanics (verified against each list's own docs and live DNS, not
 assumed identical -- see mail/RUNBOOK-mx1-provision.md's "DNSBL blocklist
@@ -36,6 +37,49 @@ blocked") to anything reaching it from a high-volume shared resolver, which
 a hosting provider's default resolvers and every public one are. If that local resolver is
 down or broken every lookup fails, the zone self-test below fails with it,
 and the run reports inconclusive -- never a false clean.
+
+## Sending-domain blocklist (Spamhaus DBL)
+
+Each run also looks up every sending domain by name on Spamhaus DBL
+(`<domain>.dbl.spamhaus.org`). A listed domain is reported the same way as a
+listed address, under the key `dbl:<domain>`.
+
+- The self-test is `dbltest.com`, the DBL's documented test point. The
+  sentinel counts only when it answers exactly `127.0.1.2`. Any other answer,
+  a failed lookup, or a 127.255.255.x query error makes every domain
+  inconclusive for that run, never clean. The sentinel is queried once per run.
+- The domain list is `DNSBL_SENDING_DOMAINS` (comma-separated). Unset or blank
+  means the default list in the script. A value with no domain in it (for
+  example `,`) stops the run and pings `/fail`, so an empty list cannot pass as
+  a quiet run. A malformed domain name also stops the run.
+- **The default list is the production list.** The cron line that runs this
+  script (ansible/roles/mx1_stack, `vars/main.yml`) passes no environment, and
+  the env file carries only the ping URL, so `DNSBL_SENDING_DOMAINS` cannot be
+  set in production today. Passing the variable needs a role change to the
+  cron line; that is a separate change.
+
+### Default list and the repo proof for each domain
+
+Each default domain is included only because a repo file shows that mail is
+sent from it or signed with it. The test
+`DefaultSendingDomainProofTests` in `test_check_dnsbl_blocklist.py` pins each
+domain to its proof text and fails if a domain is added without one.
+
+| Domain                  | Proof file                                                    | What it shows                                                                                                                                                             |
+| ----------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `branchleft.co.uk`      | `hetzner/dns/zone.json`                                       | The apex SPF authorises mx1's address `167.233.252.240`, and the MX points at mx1.                                                                                        |
+| `blog.branchleft.co.uk` | `mail/RUNBOOK-mx1-provision.md`                               | The shim's registered sending tenants include the blog ("Register the blog").                                                                                             |
+| `publicpress.co.uk`     | `hetzner/dns/publicpress.co.uk.json`                          | The platform DKIM selector `bl._domainkey` is published for the domain. Zitadel also sends as `noreply@publicpress.co.uk` (`provision_zitadel_submission_credential.py`). |
+| `trypublicpress.co.uk`  | `mail/provision/provision_collector_submission_credential.py` | `COLLECTOR_SENDING_DOMAINS` is the collector's only sending domain.                                                                                                       |
+
+Excluded, with reason: `demo.trypublicpress.co.uk` (no repo file uses it),
+`demo.example` (a placeholder in the runbook), and every tenant domain.
+
+**Tenant sending domains are not checked yet.** The repo has no tenant
+registry file. The shim keeps its registered sending tenants in its own store
+on mx1, which is not readable without the shim's CLI on the host. Feeding that
+list into this check would be a follow-up that reads the shim's own list; it
+adds no dependency here.
 
 Uses only the standard library, consistent with this directory's other
 scripts (see configure_stalwart.py's docstring for why) -- including the

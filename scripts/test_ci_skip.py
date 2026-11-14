@@ -47,6 +47,8 @@ RULED_ALWAYS_RUN = {"scripts-tests", "pulumi-inventory-audit"}
 READERS = {
     "mail/index.ts": {"mail-typecheck", "mail-provision-checks"},
     "mail/provision/check_shim_image_starts.py": {"mail-typecheck", "mail-provision-checks", "shim-image-starts"},
+    "hetzner/dns/zone.json": {"mail-provision-checks"},
+    "hetzner/dns/publicpress.co.uk.json": {"mail-provision-checks"},
     "hetzner/edge/render.ts": {"edge-config-validate"},
     "hetzner/edge/stack/Caddyfile": {"edge-config-validate"},
     "hetzner/monitoring/render.ts": {"monitoring-config-validate"},
@@ -61,7 +63,7 @@ READERS = {
 READ_BY_NONE = [
     "ansible/roles/base/tasks/main.yml",
     "ansible/checks/ci_select.py",
-    "hetzner/dns/zone.json",
+    "hetzner/dns/zonecheck.py",
     "hetzner/provision/branchleft_deploy.py",
     "hetzner/estate.ts",
     "hetzner-host/host.ts",

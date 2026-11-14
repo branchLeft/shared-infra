@@ -12,8 +12,6 @@
 # add a caller to it, first-run bootstrap included; new host paths are Ansible roles.
 # test_no_new_script_dependents.py holds the callers to a baseline that only shrinks.
 # Edit that baseline by hand, in the change that removes a caller.
-ansible/roles/demo1_egress_spool/files/ghost-platform/demo-host/provision/branchleft_demo_egress.sh:
-  reason: stays-as-code
 hetzner/provision/00-harden-ssh.sh:
   reason: pending-role
   role: host_baseline
@@ -50,12 +48,6 @@ hetzner/provision/nat-gateway.sh:
 hetzner/provision/run-all.sh:
   reason: pending-role
   role: host_baseline
-hetzner/scripts/lib/docker-pull.sh:
-  reason: stays-as-code
-hetzner/scripts/test-control-plane-port-policy.sh:
-  reason: stays-as-code
-hetzner/scripts/test-spool-bridge-egress.sh:
-  reason: stays-as-code
 mail/provision/00-harden-ssh.sh:
   reason: pending-role
   role: host_baseline

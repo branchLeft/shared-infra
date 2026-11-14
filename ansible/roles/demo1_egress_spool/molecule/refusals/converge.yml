@@ -644,8 +644,8 @@
       tasks_from: _compose_assert.yml
       edits:
         - path: /opt/branchleft/mail-spool/compose.yml
-          regexp: "(      - 'branchleft-mail-30007')"
-          replace: "\\1\n      - 'bridge'"
+          regexp: "(      branchleft-mail-30007:\n        aliases:\n          - 'mail-spool')"
+          replace: "\\1\n      bridge:\n        aliases:\n          - 'mail-spool'"
       expect: 'networks for the spool are not the drain network'
 
 - name: Refuse a Compose file missing a slot network
@@ -656,7 +656,7 @@
       tasks_from: _compose_assert.yml
       edits:
         - path: /opt/branchleft/mail-spool/compose.yml
-          regexp: "      - 'branchleft-mail-30007'\n"
+          regexp: "      branchleft-mail-30007:\n        aliases:\n          - 'mail-spool'\n"
           replace: ''
       expect: 'networks for the spool are not the drain network'
 
