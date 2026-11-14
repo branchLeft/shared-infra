@@ -41,7 +41,11 @@ MIN_RELEASE = (1, 0, 23)
 # every pushed host (the workflow takes one path), held here once: both callers pass it and the
 # drift caller's test imports it.
 PUSH_PLAYBOOK = "ansible/playbooks/demo1.yml"
+# What the delivery tests when it tests every role and pattern. delivery_select.py prints the same
+# two lines as its full answer, and the shell fallback of the select job writes them (below).
 ROLE_DIRECTORIES = ["roles/*", "patterns/*"]
+# The directories the call tests come from the select job and from nothing else.
+SELECTED_DIRECTORIES = "${{ needs.select.outputs.directories }}"
 # The one expression C4 reads in an environment name, and it reads this shape alone:
 #   ${{ needs.<job>.outputs.<name> == '<A>' && '<A>' || '<B>' }}
 # A and B are plain literals (an ASCII letter or digit first, then letters, digits, dot,
@@ -113,13 +117,39 @@ INPUT_KEYS = frozenset(
         PUSH_PLAYBOOK_INPUT,
     }
 )
-# The delivery never skips its lint and Molecule re-run. The merge queue runs the lint and the
-# unit tests only (the container shards ran on the pull request, not on the tree that is pushed),
-# so a successful queue run of the commit (merge_group_proof.py) says nothing about the
-# containers. The proof job stays, and its answer is no longer passed to the reusable workflow.
+# The delivery skips its lint and Molecule re-run only when both are true: the select job
+# (delivery_select.py) found that no file changed since the last tested delivery is read by any
+# shard, and the proof job found a green merge queue run of this exact commit
+# (merge_group_proof.py).
+# The queue runs the lint and the unit tests, so it vouches for the lint; nothing needs the
+# containers. Anything else, a select job that says anything but the literal false included,
+# re-runs the lint and the shards it selected, or all of them.
 PROOF_JOB = "queue-proof"
 PROOF_STEP = "proof"
-SKIP_VALUE = False
+SELECT_JOB = "select"
+SELECT_STEP = "select"
+DELIVERY_NEEDS = [PROOF_JOB, SELECT_JOB]
+SKIP_EXPRESSION = (
+    "${{ needs.select.outputs.shards == 'false' && needs.queue-proof.outputs.tested == 'true' }}"
+)
+SELECT_OUTPUTS = {
+    "shards": "${{ steps.select.outputs.shards }}",
+    "directories": "${{ steps.select.outputs.directories }}",
+}
+SELECT_SCRIPT = "ansible/checks/delivery_select.py"
+SELECT_JOB_KEYS = frozenset({"name", "runs-on", "timeout-minutes", "outputs", "steps"})
+SELECT_STEP_KEYS = frozenset({"name", "id", "env", "run"})
+# The full history, so the previous tip and the commits before it exist on the runner.
+SELECT_CHECKOUT_WITH = {"persist-credentials": False, "fetch-depth": 0}
+SELECT_ENV = {
+    "GH_TOKEN": "${{ github.token }}",
+    "REPO": "${{ github.repository }}",
+    "BEFORE": "${{ github.event.before }}",
+    "SHA": "${{ github.sha }}",
+}
+# The fallback the step writes when the program cannot run or prints no answer: every role and
+# pattern, and the answer that a shard must run. test_delivery_select.py runs the step's own text.
+SELECT_FALLBACK = ("shards=true", "roles/*", "patterns/*")
 PROOF_OUTPUTS = {"tested": "${{ steps.proof.outputs.tested }}"}
 # The check run the merge queue publishes for the gate: the name of the gate job of ansible.yml
 # (test_check_delivery.py reads it from there). The reusable workflow looks for it by this name.
@@ -204,12 +234,11 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
             f"with.environment {environment} is also an environment of another workflow here, "
             "so one approval could release both an Ansible apply and a Pulumi apply"
         )
-    directories = given.get("role-directories")
-    lines = directories.splitlines() if isinstance(directories, str) else None
-    if lines is None or [line for line in lines if line] != ROLE_DIRECTORIES:
+    if given.get("role-directories") != SELECTED_DIRECTORIES:
         findings.append(
-            f"with.role-directories must be {ROLE_DIRECTORIES} so a delivery covers what "
-            f"the pull request gate covers, got {directories!r}"
+            f"with.role-directories must be {SELECTED_DIRECTORIES!r}, the answer of the select "
+            "job, which names every role and pattern whenever it cannot name fewer, got "
+            f"{given.get('role-directories')!r}"
         )
     if given.get("python-paths") != PYTHON_PATHS:
         findings.append(
@@ -221,10 +250,11 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
             "request gate runs, so a delivery tests a role as the gate does, got "
             f"{given.get('role-test-command')!r}"
         )
-    if given.get(SKIP_INPUT) is not SKIP_VALUE:
+    if given.get(SKIP_INPUT) != SKIP_EXPRESSION:
         findings.append(
-            f"with.{SKIP_INPUT} must be false, so a delivery re-runs the container shards the "
-            f"merge queue does not run, got {given.get(SKIP_INPUT)!r}"
+            f"with.{SKIP_INPUT} must be {SKIP_EXPRESSION!r}, so the re-test is skipped only when "
+            "the select job said no shard is called for and the merge queue passed this commit, "
+            f"got {given.get(SKIP_INPUT)!r}"
         )
     if given.get(CHECK_NAME_INPUT) != GATE_CHECK_NAME:
         findings.append(
@@ -315,22 +345,87 @@ def proof_findings(declared: object) -> list[str]:
     return findings
 
 
+def select_step_findings(steps: object) -> list[str]:
+    """Check the select job is the checkout and the one step that runs the selection."""
+    mappings = [as_mapping(step) for step in steps] if isinstance(steps, list) else []
+    if len(mappings) != 2:
+        return [f"job {SELECT_JOB} must hold exactly two steps (checkout, select), got {steps!r}"]
+    checkout, chosen = mappings
+    if checkout is None or chosen is None:
+        return [f"job {SELECT_JOB} steps must be mappings, got {steps!r}"]
+    findings = unexpected(checkout, CHECKOUT_KEYS, f"the {SELECT_JOB} checkout step")
+    uses = checkout.get("uses")
+    if not isinstance(uses, str) or not uses.startswith("actions/checkout@"):
+        findings.append(f"the {SELECT_JOB} checkout step must use actions/checkout, got {uses!r}")
+    if checkout.get("with") != SELECT_CHECKOUT_WITH:
+        findings.append(
+            f"the {SELECT_JOB} checkout step with must be {SELECT_CHECKOUT_WITH!r}: the whole "
+            f"history, no credentials kept, got {checkout.get('with')!r}"
+        )
+    findings.extend(unexpected(chosen, SELECT_STEP_KEYS, f"step {SELECT_STEP}"))
+    if chosen.get("id") != SELECT_STEP:
+        findings.append(f"step {SELECT_STEP} id must be {SELECT_STEP}, got {chosen.get('id')!r}")
+    if chosen.get("env") != SELECT_ENV:
+        findings.append(
+            f"step {SELECT_STEP} env must be {SELECT_ENV!r}: the previous tip, the pushed commit "
+            f"and the run's own read-only token, got {chosen.get('env')!r}"
+        )
+    run = chosen.get("run")
+    wanted = (f"python3 {SELECT_SCRIPT}", '--before "$BEFORE"', '--sha "$SHA"', "$GITHUB_OUTPUT")
+    # The fallback is part of the control: without it a program that cannot run would leave the
+    # outputs empty. A literal "shards=false" would decide that nothing runs without the evidence.
+    if (
+        not isinstance(run, str)
+        or any(part not in run for part in (*wanted, *SELECT_FALLBACK))
+        or "shards=false" in run
+    ):
+        findings.append(
+            f"step {SELECT_STEP} run must run {SELECT_SCRIPT} on the previous tip and the pushed "
+            "commit, append its answer to $GITHUB_OUTPUT, fall back to "
+            f"{', '.join(SELECT_FALLBACK)} when the program fails or prints no answer, and never "
+            f"write shards=false itself, got {run!r}"
+        )
+    return findings
+
+
+def select_findings(declared: object) -> list[str]:
+    """Check the select job is the one fixed shape that chooses which shards the delivery runs."""
+    job = as_mapping(declared)
+    if job is None:
+        return [f"job {SELECT_JOB} must be a mapping, got {declared!r}"]
+    findings = unexpected(job, SELECT_JOB_KEYS, f"job {SELECT_JOB}")
+    if job.get("outputs") != SELECT_OUTPUTS:
+        findings.append(
+            f"job {SELECT_JOB} outputs must be {SELECT_OUTPUTS!r}, got {job.get('outputs')!r}"
+        )
+    findings.extend(select_step_findings(job.get("steps")))
+    return findings
+
+
 def job_findings(jobs: object, other_environments: frozenset[str]) -> list[str]:
     """Check the proof job is fixed and the call is the reusable workflow at an exact tag."""
     declared = as_mapping(jobs)
-    if declared is None or sorted(declared) != sorted([PROOF_JOB, JOB]):
-        return [f"jobs must hold exactly the two jobs {PROOF_JOB} and {JOB}, got {jobs!r}"]
+    if declared is None or sorted(declared) != sorted([PROOF_JOB, SELECT_JOB, JOB]):
+        return [
+            f"jobs must hold exactly the three jobs {PROOF_JOB}, {SELECT_JOB} and {JOB}, "
+            f"got {jobs!r}"
+        ]
     findings = proof_findings(declared[PROOF_JOB])
+    findings.extend(select_findings(declared[SELECT_JOB]))
     job = as_mapping(declared[JOB])
     if job is None:
         return [*findings, f"job {JOB} must be a mapping, got {declared[JOB]!r}"]
     findings.extend(unexpected(job, JOB_KEYS, f"job {JOB}"))
     if "needs" not in job:
-        findings.append(f"job {JOB} must have needs {[PROOF_JOB]!r}, so it waits for the proof")
-    elif job["needs"] != [PROOF_JOB]:
+        findings.append(
+            f"job {JOB} must have needs {DELIVERY_NEEDS!r}, so it waits for the proof and the "
+            "selection"
+        )
+    elif job["needs"] != DELIVERY_NEEDS:
         findings.append(
             f"job {JOB} has needs {job['needs']!r}, which is not allowed: it must be exactly "
-            f"{[PROOF_JOB]!r}, so it waits for the proof and for nothing that could skip it"
+            f"{DELIVERY_NEEDS!r}, so it waits for the proof and the selection and for nothing "
+            "that could skip it"
         )
     uses = job.get("uses")
     pinned = REUSABLE.fullmatch(uses) if isinstance(uses, str) else None

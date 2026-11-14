@@ -306,7 +306,8 @@ run needs, from the event and the files it changed. The rules, in the order they
 - the daily scheduled run and a manual run execute every shard, whatever changed: they are
   what finds drift in an external image or collection, which no diff shows;
 - a push to `main` executes none, and runs no lint: the pushed tree is the tree the merge
-  queue tested, and the delivery workflow runs its own checks before it applies anything;
+  queue tested, and the delivery workflow runs its own checks before it applies anything
+  (`delivery_select.py` picks its shards, with these same rules, below);
 - a pull request or a merge-queue entry whose base commit is unknown, or whose changed
   files are not listed, executes every shard. The queue entry's changed files are the diff
   from its `base_sha` to its `head_sha`, so a shared file in that diff executes every shard,
@@ -396,7 +397,42 @@ The rules for the list:
 
 Two things to know. A new role or scenario starts advisory: it is on no list until a pull
 request puts it there. And the delivery workflow (`ansible-delivery.yml`) runs the harness
-over every role before it applies anything; this list does not change that run.
+before it applies anything over the roles `delivery_select.py` names, which is every role
+unless the diff says fewer (next section); this list does not change that run.
+
+## delivery_select.py: which shards a delivery runs
+
+The `select` job of `ansible-delivery.yml` runs this program on a push to `main` and passes
+its two answers to the call of the reusable workflow: `shards` (`true` when any shard must
+run) and `directories` (the `role-directories` input, one directory per line). The files it
+asks `ci_select.py` about are those changed since a base commit, with the pull request rules
+(`ci_select.select`, event `pull_request`), so a delivery and the gate read one rulebook.
+On top of them, a change to `ansible-delivery.yml` or to `delivery_select.py` runs every
+shard. The fresh-role skeleton is not a delivery shard (the delivery's globs never matched
+it), so a change to it alone selects none.
+
+- **The base is the last delivery that finished green, not the commit before the push.** A
+  delivery is cancelled when the next push arrives, so the commit before may never have had
+  its shards run, and a diff from it would send that commit's roles to a host untested. The
+  base is the nearest first-parent ancestor of the previous tip (at most 40 back) whose
+  delivery run has a successful `Discover` job, and a successful `Lint` job with every
+  `Molecule:` job successful, or a skipped `Lint` with no shard anything but skipped or
+  successful (the queue-vouched, no-shard run). A cancelled, failed, running or missing job
+  is no pass. No such commit within reach selects every shard.
+- **A failure selects every shard, never none.** Any error in the program (git, GitHub, the
+  shard list, the rules, a bad argument) prints every role and pattern and exits 0. If the
+  program cannot run at all, or prints anything but a verdict and a directory list, the
+  step writes `shards=true` with `roles/*` and `patterns/*` itself. `check_delivery.py` pins
+  that fallback and forbids a literal `shards=false` in the step.
+- **No shard means the lint and the shards are skipped, on two conditions.** The call sets
+  `skip-rerun-after-merge-group` to `needs.select.outputs.shards == 'false'` and
+  `needs.queue-proof.outputs.tested == 'true'`: the select job found no file any shard reads,
+  and the merge queue passed this exact commit (its lint and unit tests). A merge that skipped
+  the queue has no queue run, so with no shard it still runs the lint and every role. The
+  `directories` answer is then the full globs, which the reusable workflow lists and ignores.
+- The job names it reads (`Discover the Ansible checks`, `Lint the Ansible inputs`,
+  `Molecule: ...`) are the reusable workflow's. A rename there reads as no pass, which selects
+  every shard. The daily scheduled run of `ansible.yml` still runs every shard and covers drift.
 
 ## test_ci_gate_order.py: the workflow order and gate
 
@@ -486,10 +522,11 @@ under `mail/` or at the repository root does not start it; `mail/` is owner-gate
 
 ## merge_group_proof.py: whether the merge queue ran the Ansible workflow on a commit
 
-The delivery no longer skips its lint and Molecule re-run for any commit: the merge queue runs
-the lint and the unit tests only, so a queue run proves nothing about the containers, and the
-delivery is the run that tests the merged tree in them. `check_delivery.py` holds the input
-`skip-rerun-after-merge-group` at `false`. The job `queue-proof` of `ansible-delivery.yml` still
+The merge queue runs the lint and the unit tests only, so a queue run proves nothing about the
+containers, and the delivery is the run that tests the merged tree in them. The delivery skips
+its lint and Molecule re-run only when this proof is true and `delivery_select.py` found no
+shard called for; `check_delivery.py` holds the input `skip-rerun-after-merge-group` at that
+exact expression. The job `queue-proof` of `ansible-delivery.yml`
 reads the runs of `ansible.yml` for the pushed commit and `merge_group_proof.py` answers
 `tested=true` only for a run that has all of:
 
@@ -501,11 +538,13 @@ The event is judged here and is never narrowed by the API's own `event` filter, 
 squash queue main carries a green push run of the same commit under the same check name, from a
 job with no diff. A check name, or any success on the commit, is not proof. A merge that skipped
 the queue has no queue run, so it gets `tested=false`. An unreadable, truncated or malformed
-answer is `false` too. The answer is not passed on: the delivery re-tests in full either way.
+answer is `false` too. A false answer means the delivery re-tests, with the lint and the shards
+the selection names, whatever the selection says.
 
 `check_delivery.py` fixes the shape of the proof job and the two inputs the delivery passes
-(`skip-rerun-after-merge-group`, held at `false`, and `merge-group-check-name`, the gate job's
-name in `ansible.yml`, which the reusable workflow ignores while the skip is off).
+(`skip-rerun-after-merge-group`, held at the two-condition expression, and
+`merge-group-check-name`, the gate job's name in `ansible.yml`, which the reusable workflow
+reads only while the skip is on), and of the `select` job, its outputs, its step and its fallback.
 
 `check_delivery.py` also fixes the push route of both callers. The push list is the
 `ANSIBLE_PUSH_HOSTS` repository secret, passed as `ssh_push_hosts` (the owner creates it; an unset
