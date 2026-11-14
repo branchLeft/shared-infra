@@ -191,6 +191,30 @@ const GHOST_PREVIEW_CRS_RULE_IDS = [920420, 920180] as const;
 /** Ghost's admin API prefix, as Caddy's access log writes the request URI. */
 const GHOST_ADMIN_API_PREFIX = '/ghost/api/admin/';
 
+/**
+ * Our own scenario that bans an address for repeated failed Ghost admin
+ * sign-ins and admin API key failures. Its name is deliberately not
+ * `ADMIN_PROBING_SCENARIO`, so the post-overflow above never drops it. Why, and
+ * what each number is: `render.md`, "Ghost admin brute force".
+ */
+const GHOST_BRUTE_FORCE_SCENARIO = 'branchleft/ghost-admin-login-bruteforce';
+
+/**
+ * The tenth failure inside the bucket bans (capacity 9), and one failure drains
+ * every 30 seconds. Ghost's own limiter allows five sign-in attempts per address
+ * and then answers 429, so a person who mistypes does not reach ten; a burst does.
+ */
+const GHOST_BRUTE_FORCE_CAPACITY = 9;
+const GHOST_BRUTE_FORCE_LEAKSPEED = '30s';
+
+/**
+ * The statuses Ghost answers a failed sign-in (`POST /ghost/api/admin/session/`)
+ * with: 422 a wrong password, 404 an unknown email address, 401 no credentials
+ * or a locked account, 429 its own limiter. Not 403: a right password from a new
+ * device is answered 403 (2FA_NEW_DEVICE_DETECTED) and is not a failure.
+ */
+const GHOST_FAILED_SIGNIN_STATUSES = [401, 404, 422, 429] as const;
+
 /** The hub scenario that reads a 403 or 404 on any path containing `/admin` as a probe. */
 const ADMIN_PROBING_SCENARIO = 'crowdsecurity/http-admin-interface-probing';
 
@@ -1050,5 +1074,46 @@ export function renderGhostAdminPostoverflow(entries: EdgeSite[]): string {
     `        .GetMeta('http_path') startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
     "        not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')",
     '      })',
+  ].join('\n')}\n`;
+}
+
+/**
+ * The scenario that bans an address after repeated failed Ghost admin sign-ins
+ * or admin API 401s (a bad or unknown Admin API key, a wrong sign-in
+ * verification code) on our Ghost hostnames. Separate from the hub's admin
+ * probing scenario so the post-overflow above cannot drop it. Why, and the
+ * limits it carries: `render.md`, "Ghost admin brute force".
+ */
+export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {
+  const hosts = ghostHostnames(entries);
+  return `${[
+    ...GENERATED_BANNER,
+    'type: leaky',
+    `name: ${GHOST_BRUTE_FORCE_SCENARIO}`,
+    'description: Repeated failed Ghost admin sign-ins or admin API key failures from one address',
+    'filter: >-',
+    "  evt.Meta.service == 'http' &&",
+    "  evt.Meta.log_type == 'http_access-log' &&",
+    `  evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    '  (',
+    "    (evt.Meta.http_verb == 'POST' &&",
+    "     evt.Meta.http_path matches '(?i)^/ghost/api/(?:[^/?]+/)?admin/session/?(?:[?]|$)' &&",
+    `     evt.Meta.http_status in ${quotedList(GHOST_FAILED_SIGNIN_STATUSES.map(String))}) ||`,
+    "    (evt.Meta.http_status == '401' &&",
+    "     evt.Meta.http_path matches '(?i)^/ghost/api/(?:[^/?]+/)?admin/')",
+    '  )',
+    'groupby: evt.Meta.source_ip',
+    `capacity: ${GHOST_BRUTE_FORCE_CAPACITY}`,
+    `leakspeed: ${GHOST_BRUTE_FORCE_LEAKSPEED}`,
+    'blackhole: 1m',
+    'labels:',
+    '  confidence: 3',
+    '  spoofable: 0',
+    '  classification:',
+    '    - attack.T1110',
+    '  behavior: "http:bruteforce"',
+    '  label: "Ghost admin brute force"',
+    '  service: http',
+    '  remediation: true',
   ].join('\n')}\n`;
 }

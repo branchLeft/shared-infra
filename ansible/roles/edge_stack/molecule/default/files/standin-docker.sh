@@ -110,6 +110,7 @@ case $1 in
               /etc/crowdsec/config.yaml.local) source=$view/config.yaml.local ;;
               /etc/crowdsec/appsec-configs/branchleft/*) source=$project/crowdsec/appsec-configs/${2#/etc/crowdsec/appsec-configs/branchleft/} ;;
               /etc/crowdsec/postoverflows/s01-whitelist/branchleft/*) source=$project/crowdsec/postoverflows/${2#/etc/crowdsec/postoverflows/s01-whitelist/branchleft/} ;;
+              /etc/crowdsec/scenarios/branchleft/*) source=$project/crowdsec/scenarios/${2#/etc/crowdsec/scenarios/branchleft/} ;;
               /etc/crowdsec-acquis.d/*) source=$project/crowdsec/acquis.d/${2#/etc/crowdsec-acquis.d/} ;;
               *) exit 1 ;;
             esac

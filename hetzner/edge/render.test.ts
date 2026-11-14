@@ -18,6 +18,7 @@ import {
   renderCaddyLogAcquisition,
   renderGhostAdminAppsecConfig,
   renderGhostAdminPostoverflow,
+  renderGhostBruteForceScenario,
   EDGE_HOST_ALLOWED_PORTS,
   resolvePrivateAddress,
   servableSites,
@@ -1740,6 +1741,9 @@ describe('the committed stack directory', () => {
     await expect(renderGhostAdminPostoverflow(sites)).toMatchFileSnapshot(
       './stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml'
     );
+    await expect(renderGhostBruteForceScenario(sites)).toMatchFileSnapshot(
+      './stack/crowdsec/scenarios/ghost-admin-login-bruteforce.yaml'
+    );
   });
 });
 
@@ -1809,6 +1813,47 @@ describe('the Ghost admin CrowdSec exclusions', () => {
         .find((line) => line.startsWith('  - '));
       expect(first).toBe('  - branchleft/ghost-admin-previews');
     }
+  });
+});
+
+// Why this scenario exists and what its numbers mean: render.md, "Ghost admin
+// brute force". The ban itself is proved against a running CrowdSec by
+// test_crowdsec_replay.py; these pin what the renderer is responsible for.
+describe('the Ghost admin brute-force scenario', () => {
+  const ghost = site({ name: 'ghost-one', hostnames: ['ghost-one.test'], backend: 'ghost' });
+  const other = site({ name: 'other-one', hostnames: ['other-one.test'], backend: 'other' });
+  const scenario = renderGhostBruteForceScenario([ghost, other]);
+
+  it('names Ghost hostnames only, never another site', () => {
+    expect(scenario).toContain("evt.Meta.target_fqdn in ['ghost-one.test']");
+    expect(scenario).not.toContain('other-one.test');
+  });
+
+  it('is not the scenario the admin-API post-overflow drops', () => {
+    const name = scenario.split('\n').find((line) => line.startsWith('name: '));
+    expect(name).toBe('name: branchleft/ghost-admin-login-bruteforce');
+    expect(renderGhostAdminPostoverflow([ghost])).not.toContain(
+      'branchleft/ghost-admin-login-bruteforce'
+    );
+    expect(scenario).not.toContain('http-admin-interface-probing');
+  });
+
+  it('counts the statuses Ghost answers a failed sign-in with, and not the 2FA 403', () => {
+    expect(scenario).toContain("evt.Meta.http_status in ['401', '404', '422', '429']");
+    expect(scenario).not.toContain("'403'");
+    expect(scenario).toContain("evt.Meta.http_verb == 'POST'");
+  });
+
+  it('bans on the tenth failure from one address, draining one every 30 seconds', () => {
+    expect(scenario).toContain('groupby: evt.Meta.source_ip');
+    expect(scenario).toContain('capacity: 9');
+    expect(scenario).toContain('leakspeed: 30s');
+    expect(scenario).toContain('remediation: true');
+  });
+
+  it('refuse a Ghost hostname that could break out of a quoted literal', () => {
+    const hostile = site({ hostnames: ["x.test' || true || '"], backend: 'ghost' });
+    expect(() => renderGhostBruteForceScenario([hostile])).toThrow(/plain lower-case hostname/);
   });
 });
 
