@@ -25,6 +25,7 @@ hetzner/edge/stack/crowdsec/acquis.d/appsec.yaml
 hetzner/edge/stack/crowdsec/acquis.d/caddy.yaml
 hetzner/edge/stack/crowdsec/appsec-configs/ghost-admin-previews.yaml
 hetzner/edge/stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml
+hetzner/edge/stack/crowdsec/parsers/edge-trusted-session.yaml
 hetzner/edge/validation/Caddyfile.enforcing
 hetzner/edge/validation/Caddyfile.authoring
 hetzner/edge/validation/Caddyfile.trusted-session

@@ -167,6 +167,8 @@ if rest[:3] == ["exec", "-T", "crowdsec"]:
                 "appsec-configs/ghost-admin-previews.yaml",
             "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/ghost-admin-api-postoverflow.yaml":
                 "postoverflows/ghost-admin-api-postoverflow.yaml",
+            "/etc/crowdsec/parsers/s02-enrich/branchleft/edge-trusted-session.yaml":
+                "parsers/edge-trusted-session.yaml",
         }
         if inside in single:
             source = project + "/crowdsec/" + single[inside]
@@ -307,6 +309,7 @@ class Tree:
         for name, text in (
             ("appsec-configs/ghost-admin-previews.yaml", b"name: a\n"),
             ("postoverflows/ghost-admin-api-postoverflow.yaml", b"name: b\n"),
+            ("parsers/edge-trusted-session.yaml", b"name: c\n"),
         ):
             (self.project / "crowdsec" / name).parent.mkdir(exist_ok=True)
             (self.project / "crowdsec" / name).write_bytes(text)
@@ -511,7 +514,9 @@ class LockHeldAcrossBothPhases(TreeCase):
                 "ps",
                 "restart-crowdsec",
                 "lapi",
-                # config.yaml.local, the two Ghost admin files, then a.yaml in acquis.d.
+                # config.yaml.local, the two Ghost admin files, the verified-session
+                # whitelist, then a.yaml in acquis.d.
+                "sha-crowdsec",
                 "sha-crowdsec",
                 "sha-crowdsec",
                 "sha-crowdsec",

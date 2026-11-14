@@ -36,7 +36,15 @@ tenant-one.test {
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected not path /ghost/api/*
+	@inspected {
+		not path /ghost/api/*
+		not vars edge_trusted 1
+	}
+	@edge_session_candidate {
+		path /ghost/*
+		header Cookie *ghost-admin-api-session=*
+	}
+	@edge_untrusted not vars edge_trusted 1
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
@@ -67,7 +75,28 @@ tenant-one.test {
 				events 5
 			}
 		}
-		crowdsec
+		vars edge_trusted 0
+		log_append edge_trusted {http.vars.edge_trusted}
+		reverse_proxy @edge_session_candidate 10.20.1.100:2368 {
+			method GET
+			rewrite /ghost/api/admin/users/me/?
+			header_up -Authorization
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 10s
+			}
+			@edge_session_verified {
+				status 2xx
+				header Content-Type application/json*
+			}
+			handle_response @edge_session_verified {
+				vars edge_trusted 1
+			}
+			handle_response {
+				vars edge_trusted 0
+			}
+		}
+		crowdsec @edge_untrusted
 		appsec @inspected
 		respond @ghost_setup 403
 		@uploads_by_path {
@@ -108,6 +137,11 @@ tenant-two.test {
 	tls {
 		protocols tls1.2 tls1.3
 	}
+	@edge_session_candidate {
+		path /ghost/*
+		header Cookie *ghost-admin-api-session=*
+	}
+	@edge_untrusted not vars edge_trusted 1
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
@@ -138,8 +172,29 @@ tenant-two.test {
 				events 5
 			}
 		}
-		crowdsec
-		appsec
+		vars edge_trusted 0
+		log_append edge_trusted {http.vars.edge_trusted}
+		reverse_proxy @edge_session_candidate 10.20.1.100:2369 {
+			method GET
+			rewrite /ghost/api/admin/users/me/?
+			header_up -Authorization
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 10s
+			}
+			@edge_session_verified {
+				status 2xx
+				header Content-Type application/json*
+			}
+			handle_response @edge_session_verified {
+				vars edge_trusted 1
+			}
+			handle_response {
+				vars edge_trusted 0
+			}
+		}
+		crowdsec @edge_untrusted
+		appsec @edge_untrusted
 		respond @ghost_setup 403
 		@uploads_by_path {
 			path /content/files/* /content/images/* /content/media/*
