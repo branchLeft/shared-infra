@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests for probe-edget-gateway: a model of edge-t under the script, plus copies of it with a check broken.
+"""Tests for probe-edget-gateway: a model of a gateway host (edge-t or edge1) under the script, plus copies of it with a check broken.
 
 A check that cannot fail is not a check, so MutationTests breaks the script and expects red.
 """
@@ -39,14 +39,22 @@ TARGET = "9.9.9.9:53"
 SUBNET = "10.20.1.0/24"
 
 
-class FakeEdgeT:
-    """edge-t as the probe sees it. Knobs are attributes; `calls` records every command."""
+# What each gateway host looks like to the probe: its public address (a documentation
+# address) and its private address from the register.
+HOSTS = {
+    "edge-t": ["203.0.113.10", "10.20.1.210"],
+    "edge1": ["203.0.113.11", "10.20.1.10"],
+}
 
-    def __init__(self, module):
+
+class FakeGateway:
+    """A gateway host as the probe sees it (edge-t unless named). Knobs are attributes; `calls` records every command."""
+
+    def __init__(self, module, host="edge-t"):
         self.m = module
         self.calls: list[list[str]] = []
-        self.hostname = "edge-t"
-        self.addresses = ["203.0.113.10", "10.20.1.210"]
+        self.hostname = host
+        self.addresses = list(HOSTS[host])
         self.default_routes = [{"dst": "default", "gateway": "172.31.1.1", "dev": UPLINK}]
         self.forward = "1"
         self.unit_enabled = "enabled"
@@ -270,8 +278,8 @@ def verdicts(output):
 # cases call them with the real script; MutationTests call them with a broken copy.
 
 
-def scenario_all_green(module):
-    host = FakeEdgeT(module)
+def scenario_all_green(module, name="edge-t"):
+    host = FakeGateway(module, name)
     code, out = host.run_main(module, ["gateway"])
     assert code == 0, (code, out)
     lines = verdicts(out)
@@ -279,28 +287,51 @@ def scenario_all_green(module):
     assert lines[0].startswith("GREEN inside-subnet-egress-via-masquerade"), out
     assert lines[1].startswith("GREEN outside-subnet-no-reply"), out
     assert out.strip().splitlines()[-1] == "RESULT PASS", out
+    assert f" on {name}, uplink {UPLINK}," in out.splitlines()[0], out
     assert host.netns == set() and host.links == {}, "the namespaces and veths were not removed"
     return host, out
 
 
+def wrong_host_cases(name):
+    """(hostname, addresses) a host named `name` must be refused with."""
+    other = "edge1" if name == "edge-t" else "edge-t"
+    own, theirs = HOSTS[name], HOSTS[other]
+    return (
+        (other, own),  # the other host's name on this host's addresses
+        ("edge2", own),  # a name with no profile, this host's addresses
+        ("edge2", theirs),  # a name with no profile, the other host's addresses
+        ("", own),  # no name at all
+        (name, [own[0]]),  # right name, its private address missing
+        (name, [own[0], theirs[1]]),  # right name, only the other host's private address
+        (name, own + [theirs[1]]),  # right name and address, and the other host's address too
+    )
+
+
 def scenario_wrong_host_is_refused(module):
-    for knob, value in (
-        ("hostname", "edge1"),
-        ("addresses", ["203.0.113.10"]),
-        ("addresses", ["203.0.113.10", "10.20.1.10"]),
-        ("addresses", ["203.0.113.10", "10.20.1.210", "10.20.1.10"]),
-    ):
-        host = FakeEdgeT(module)
-        setattr(host, knob, value)
-        code, out = host.run_main(module, ["gateway"])
-        assert code == 2, (knob, value, code, out)
-        assert "REFUSED" in out, out
-        assert not [c for c in host.calls if c[:3] == ["ip", "netns", "add"]], "it built a lab on the wrong host"
-        assert not verdicts(out), out
+    for name in HOSTS:
+        for hostname, addresses in wrong_host_cases(name):
+            host = FakeGateway(module, name)
+            host.hostname, host.addresses = hostname, list(addresses)
+            code, out = host.run_main(module, ["gateway"])
+            assert code == 2, (name, hostname, addresses, code, out)
+            assert "REFUSED" in out, out
+            assert not [c for c in host.calls if c[:3] == ["ip", "netns", "add"]], "it built a lab on the wrong host"
+            assert not verdicts(out), out
+
+
+def scenario_sabotage_is_refused_on_edge1(module):
+    host = FakeGateway(module, "edge1")
+    code, out = host.run_main(module, ["gateway", "--sabotage"])
+    assert code == 2, (code, out)
+    assert "REFUSED: --sabotage is refused on edge1" in out, out
+    assert not verdicts(out), out
+    assert not [c for c in host.calls if c[:3] == ["ip", "netns", "add"]], "it built a lab before refusing"
+    assert host.mutations() == [], host.mutations()
+    assert host.masq is not None
 
 
 def scenario_masquerade_counter_must_rise(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
 
     original = host.probe_in
 
@@ -318,7 +349,7 @@ def scenario_masquerade_counter_must_rise(module):
 
 
 def scenario_outside_reply_is_red(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     host.launder_outside = True
     code, out = host.run_main(module, ["gateway"])
     assert code == 1, out
@@ -329,7 +360,7 @@ def scenario_outside_reply_is_red(module):
 
 def scenario_garbage_probe_is_not_silence(module):
     """Output that is neither a reply nor a clean timeout must not read as 'no reply'."""
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     original = host.probe_in
 
     def garbage_for_outside(ns):
@@ -346,7 +377,7 @@ def scenario_garbage_probe_is_not_silence(module):
 
 
 def scenario_silent_veth_is_not_a_clean_control(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     host.veth_silent = True
     code, out = host.run_main(module, ["gateway"])
     assert code == 1, out
@@ -355,7 +386,7 @@ def scenario_silent_veth_is_not_a_clean_control(module):
 
 
 def scenario_outside_needs_the_inside_positive(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     host.masq = None
     code, out = host.run_main(module, ["gateway"])
     assert code == 1, out
@@ -366,7 +397,7 @@ def scenario_outside_needs_the_inside_positive(module):
 
 def scenario_cleanup_on_interrupt(module):
     for exc in (KeyboardInterrupt(), SystemExit(143), RuntimeError("boom")):
-        host = FakeEdgeT(module)
+        host = FakeGateway(module)
         host.raise_on_probe = exc
         try:
             host.run_main(module, ["gateway"])
@@ -378,7 +409,7 @@ def scenario_cleanup_on_interrupt(module):
 
 
 def scenario_sabotage_red_then_green(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     code, out = host.run_main(module, ["gateway", "--sabotage"])
     assert code == 0, out
     lines = verdicts(out)
@@ -396,7 +427,7 @@ def scenario_sabotage_red_then_green(module):
 
 
 def scenario_nothing_is_deleted_without_the_flag(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     code, out = host.run_main(module, ["gateway"])
     assert code == 0, out
     assert host.mutations() == [], host.mutations()
@@ -406,7 +437,7 @@ def scenario_nothing_is_deleted_without_the_flag(module):
 
 def scenario_restore_on_any_exit_after_delete(module):
     for exc in (KeyboardInterrupt(), SystemExit(143), RuntimeError("boom")):
-        host = FakeEdgeT(module)
+        host = FakeGateway(module)
         host.raise_on_probe_after_delete = exc
         try:
             host.run_main(module, ["gateway", "--sabotage"])
@@ -420,7 +451,7 @@ def scenario_restore_on_any_exit_after_delete(module):
 
 
 def scenario_sabotage_refuses_on_a_red_baseline(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     host.out = None
     code, out = host.run_main(module, ["gateway", "--sabotage"])
     assert code == 1, out
@@ -429,7 +460,7 @@ def scenario_sabotage_refuses_on_a_red_baseline(module):
 
 
 def scenario_failed_restore_is_loud(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     host.restart_works = False
     code, out = host.run_main(module, ["gateway", "--sabotage"])
     assert code == 3, (code, out)
@@ -439,7 +470,7 @@ def scenario_failed_restore_is_loud(module):
 
 def scenario_unreadable_unit_state_after_restore_is_loud(module):
     """If `systemctl is-active` itself times out during the restore, say so and exit 3, not 2."""
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     original = host.handle
 
     def is_active_times_out(argv, timeout=30):
@@ -458,7 +489,7 @@ def scenario_unreadable_unit_state_after_restore_is_loud(module):
 
 
 def scenario_proof_that_cannot_go_red_fails(module):
-    host = FakeEdgeT(module)
+    host = FakeGateway(module)
     host.reply_without_masq = True
     code, out = host.run_main(module, ["gateway", "--sabotage"])
     assert code == 1, (code, out)
@@ -500,7 +531,7 @@ class GatewayTests(unittest.TestCase):
         }
         for name, bend in cases.items():
             with self.subTest(name):
-                host = FakeEdgeT(probe)
+                host = FakeGateway(probe)
                 bend(host)
                 code, out = host.run_main(probe, ["gateway"])
                 self.assertEqual(code, 2, out)
@@ -509,7 +540,7 @@ class GatewayTests(unittest.TestCase):
                 self.assertEqual(host.netns, set())
 
     def test_no_docker_falls_back_to_forward_like_the_reconciler(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         host.docker_user = False
         host.docker_active = False
         code, out = host.run_main(probe, ["gateway"])
@@ -519,10 +550,10 @@ class GatewayTests(unittest.TestCase):
 
     def test_malformed_target_and_unparseable_reads_are_refusals(self):
         for argv in (["gateway", "--target", "example.com:53"], ["gateway", "--target", "9.9.9.9"], ["gateway", "--target", "9.9.9.9:0"]):
-            host = FakeEdgeT(probe)
+            host = FakeGateway(probe)
             code, out = host.run_main(probe, argv)
             self.assertEqual(code, 2, (argv, out))
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         host.iptables_listing = lambda table, chain: "Chain x (policy ACCEPT)\n"
         code, out = host.run_main(probe, ["gateway"])
         self.assertEqual(code, 2, out)
@@ -539,7 +570,7 @@ class GatewayTests(unittest.TestCase):
         }
         for needle, bend in cases.items():
             with self.subTest(needle):
-                host = FakeEdgeT(probe)
+                host = FakeGateway(probe)
                 bend(host)
                 code, out = host.run_main(probe, ["gateway"])
                 self.assertEqual(code, 1, out)
@@ -563,7 +594,7 @@ class GatewayTests(unittest.TestCase):
         scenario_garbage_probe_is_not_silence(probe)
 
     def test_a_counter_that_moves_during_the_outside_probe_is_red(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         original = host.probe_in
 
         def moves_the_out_counter(ns):
@@ -578,7 +609,7 @@ class GatewayTests(unittest.TestCase):
         self.assertIn("counter moved by 1", verdicts(out)[1])
 
     def test_a_gateway_that_never_goes_quiet_is_a_refusal(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         with contextlib.ExitStack() as stack:
             host.install(stack)
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
@@ -597,21 +628,21 @@ class GatewayTests(unittest.TestCase):
         scenario_cleanup_on_interrupt(probe)
 
     def test_a_failure_building_the_lab_removes_what_was_built(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         host.fail_link_add = True
         code, out = host.run_main(probe, ["gateway"])
         self.assertEqual(code, 2, out)
         self.assertEqual(host.netns, set())
 
     def test_a_leftover_lab_from_a_killed_run_is_cleared_first(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         host.netns.add(probe.INSIDE.netns)
         host.links[probe.INSIDE.host_if] = 0
         code, out = host.run_main(probe, ["gateway"])
         self.assertEqual(code, 0, out)
 
     def test_a_lab_that_cannot_be_removed_is_loud_and_never_a_pass(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         code, out = 0, ""
         host.netns_del_fails = True
         code, out = host.run_main(probe, ["gateway"])
@@ -619,7 +650,7 @@ class GatewayTests(unittest.TestCase):
         self.assertNotIn("RESULT PASS", out)
 
     def test_two_runs_do_not_disturb_each_other_or_the_register(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         for _ in range(2):
             code, out = host.run_main(probe, ["gateway"])
             self.assertEqual(code, 0, out)
@@ -645,7 +676,7 @@ class SabotageTests(unittest.TestCase):
         scenario_proof_that_cannot_go_red_fails(probe)
 
     def test_it_refuses_when_another_source_is_using_the_gateway(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         original = host.probe_in
 
         def go_busy_after_outside(ns):
@@ -660,7 +691,7 @@ class SabotageTests(unittest.TestCase):
         self.assertFalse([c for c in host.calls if c[0] == "iptables" and "-D" in c])
 
     def test_a_delete_that_does_not_take_is_a_refusal_and_still_restores(self):
-        host = FakeEdgeT(probe)
+        host = FakeGateway(probe)
         host.delete_does_not_take = True
         code, out = host.run_main(probe, ["gateway", "--sabotage"])
         self.assertEqual(code, 2, out)
@@ -682,6 +713,91 @@ class SabotageTests(unittest.TestCase):
         host, out = scenario_sabotage_red_then_green(probe)
         self.assertLess(out.index("if this process is killed"), out.index("RED inside-subnet"))
         self.assertIn("systemctl restart branchleft-nat.service", out)
+
+
+class ProfileTests(unittest.TestCase):
+    """Table-driven over the host profiles: each host gets the same proof and the same interlock."""
+
+    def test_the_table_is_exactly_edge_t_and_edge1(self):
+        self.assertEqual(set(probe.PROFILES), {"edge-t", "edge1"})
+        self.assertEqual(set(probe.PROFILES), set(HOSTS))
+        for key, profile in probe.PROFILES.items():
+            self.assertEqual(key, profile.hostname)
+            self.assertEqual(profile.private_address, HOSTS[key][1])
+
+    def test_each_host_proves_green_and_names_itself_in_the_header(self):
+        for name in HOSTS:
+            with self.subTest(name):
+                host, out = scenario_all_green(probe, name)
+                self.assertIn("MASQUERADE 0->1", out)
+                self.assertIn("DOCKER-USER out 0->3", out)
+                self.assertIn("forwarding chain DOCKER-USER, target 9.9.9.9:53", out.splitlines()[0])
+
+    def test_each_host_is_read_only_without_the_sabotage_flag(self):
+        for name in HOSTS:
+            with self.subTest(name):
+                host = FakeGateway(probe, name)
+                code, out = host.run_main(probe, ["gateway"])
+                self.assertEqual(code, 0, out)
+                self.assertEqual(host.mutations(), [])
+                self.assertEqual(host.route_writes_outside_a_namespace(), [])
+                self.assertIsNotNone(host.masq)
+
+    def test_each_host_fails_red_and_refuses_the_same_way(self):
+        for name in HOSTS:
+            with self.subTest(name, case="missing masquerade"):
+                host = FakeGateway(probe, name)
+                host.masq = None
+                code, out = host.run_main(probe, ["gateway"])
+                self.assertEqual(code, 1, out)
+                self.assertTrue(verdicts(out)[0].startswith("RED inside-subnet-egress-via-masquerade"), out)
+            with self.subTest(name, case="two default routes"):
+                host = FakeGateway(probe, name)
+                host.default_routes.append(dict(host.default_routes[0], metric=200))
+                code, out = host.run_main(probe, ["gateway"])
+                self.assertEqual(code, 2, out)
+                self.assertEqual(host.netns, set())
+
+    def test_a_host_that_matches_no_profile_or_the_wrong_one_is_refused_before_anything_is_built(self):
+        scenario_wrong_host_is_refused(probe)
+
+    def test_the_refusal_names_the_mismatch(self):
+        host = FakeGateway(probe, "edge-t")
+        host.hostname = "edge2"
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 2)
+        self.assertIn("edge2, which has no profile", out)
+        host = FakeGateway(probe, "edge1")
+        host.addresses = ["203.0.113.11"]
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 2)
+        self.assertIn("holds no 10.20.1.10, which is edge1's private address", out)
+        host = FakeGateway(probe, "edge1")
+        host.addresses = HOSTS["edge1"] + ["10.20.1.210"]
+        code, out = host.run_main(probe, ["gateway"])
+        self.assertEqual(code, 2)
+        self.assertIn("holds 10.20.1.210, which is edge-t's address", out)
+
+    def test_sabotage_is_refused_on_edge1_and_still_works_on_edge_t(self):
+        scenario_sabotage_is_refused_on_edge1(probe)
+        host, out = scenario_sabotage_red_then_green(probe)
+        self.assertIn("RECORD red-then-green", out)
+        self.assertFalse(probe.PROFILES["edge1"].sabotage_allowed)
+        self.assertTrue(probe.PROFILES["edge-t"].sabotage_allowed)
+
+    def test_there_is_no_flag_that_names_a_host_or_a_profile(self):
+        parser = probe.build_parser()
+        flags: set[str] = set()
+        for action in parser._actions:
+            flags.update(action.option_strings)
+            if isinstance(getattr(action, "choices", None), dict):
+                for sub in action.choices.values():
+                    for inner in sub._actions:
+                        flags.update(inner.option_strings)
+        self.assertEqual(flags, {"-h", "--help", "--target", "--sabotage", "--expect"})
+        for argv in (["gateway", "--host", "edge1"], ["gateway", "--hostname", "edge1"], ["gateway", "--profile", "edge1"]):
+            with self.subTest(argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                probe.build_parser().parse_args(argv)
 
 
 class SshProbeTests(unittest.TestCase):
@@ -835,6 +951,23 @@ class PinTests(unittest.TestCase):
         self.assertEqual(probe.EDGET_PRIVATE, self.entry("TENANTS_HOST_IPS", "edgeT"))
         self.assertEqual(probe.EDGE1_PRIVATE, self.entry("HOST_IPS", "edge1"))
 
+    def test_every_profile_is_the_plans_subnet_and_address(self):
+        self.assertEqual(probe.PROFILES["edge-t"].private_address, self.entry("TENANTS_HOST_IPS", "edgeT"))
+        self.assertEqual(probe.PROFILES["edge1"].private_address, self.entry("HOST_IPS", "edge1"))
+        for profile in probe.PROFILES.values():
+            self.assertEqual(profile.subnet, self.constant("SUBNET_CIDR"))
+
+    def test_the_profiles_are_the_hosts_the_playbooks_make_gateways(self):
+        playbooks = ROOT / "ansible" / "playbooks"
+        gateways = {
+            path.stem
+            for path in playbooks.glob("*.yml")
+            if re.search(r"^\s+egress_nat_gateway_enabled:\s*true\s*$", path.read_text(encoding="utf-8"), re.M)
+        }
+        names = {"edge1": "edge1", "edget": "edge-t"}  # playbook name -> the name `hostname` prints
+        self.assertEqual(gateways, set(names), "a gateway playbook has no profile, or a profile has no gateway playbook")
+        self.assertEqual({names[g] for g in gateways}, set(probe.PROFILES))
+
     def test_the_subnet_is_the_nat_reconcilers(self):
         nat = (HERE.parent / "provision" / "branchleft_nat.sh").read_text(encoding="utf-8")
         match = re.search(r'^SUBNET="\$\{BRANCHLEFT_NAT_SUBNET:-([^}]+)\}"$', nat, re.M)
@@ -921,6 +1054,51 @@ class RunbookTests(unittest.TestCase):
         self.assertNotIn("--expect", blocks[0])
 
 
+class Edge1RunbookTests(unittest.TestCase):
+    """The edge1 runbook's one probe command parses against the script, and never carries the sabotage flag."""
+
+    runbook = ROOT / "hetzner" / "RUNBOOK-edge1-gateway-proof.md"
+
+    def blocks(self):
+        return re.findall(r"```bash\n(.*?)```", self.runbook.read_text(encoding="utf-8"), re.S)
+
+    def test_the_probe_command_parses_and_targets_edge1_only(self):
+        runs = [b for b in self.blocks() if "probe-edget-gateway.py" in b]
+        self.assertEqual(len(runs), 1)
+        match = re.search(r"python3 - (gateway[^;\n]*)", runs[0])
+        self.assertIsNotNone(match)
+        args = probe.build_parser().parse_args(match.group(1).split())
+        self.assertEqual(args.command, "gateway")
+        self.assertFalse(args.sabotage)
+        self.assertIn('root@"${EDGE1_IPV4}"', runs[0])
+        self.assertNotIn("ProxyCommand", runs[0])
+        self.assertNotIn("EDGET", runs[0])
+
+    def test_the_sabotage_flag_is_never_in_a_command(self):
+        for block in self.blocks():
+            self.assertNotIn("--sabotage", block)
+
+    def test_the_address_check_fails_on_any_empty_or_malformed_value(self):
+        import subprocess
+
+        checks = [b.strip() for b in self.blocks() if b.strip().startswith("case ")]
+        self.assertEqual(len(checks), 1)
+        for bad in ("", "edge1.example", "1.2.3.4;x"):
+            done = subprocess.run(["bash", "-c", checks[0]], env={"EDGE1_IPV4": bad}, capture_output=True, text=True, check=False)
+            self.assertNotEqual(done.returncode, 0, bad)
+        done = subprocess.run(["bash", "-c", checks[0]], env={"EDGE1_IPV4": "198.51.100.9"}, capture_output=True, text=True, check=False)
+        self.assertEqual(done.returncode, 0)
+
+    def test_the_expected_output_is_what_the_script_prints(self):
+        text = self.runbook.read_text(encoding="utf-8")
+        _host, out = scenario_all_green(probe, "edge1")
+        for line in verdicts(out):
+            control = line.split(" ")[1]
+            self.assertIn(f"GREEN {control} [live]", text)
+        self.assertIn("on edge1, uplink", text)
+        self.assertIn("RESULT PASS", text)
+
+
 # ----------------------------------------------------------------------------- mutations
 
 
@@ -931,20 +1109,30 @@ def broken(old: str, new: str) -> str:
 
 
 MUTATIONS = {
-    "drops the hostname guard": (
-        'if code != 0 or name != EDGET_HOSTNAME:',
+    "accepts any hostname": (
+        "profile = PROFILES.get(name) if code == 0 else None",
+        "profile = PROFILES.get(name, PROFILES[EDGE1_HOSTNAME])",
+        scenario_wrong_host_is_refused,
+    ),
+    "drops the check that the host's own private address is present": (
+        "if profile.private_address not in addresses:",
         "if False:",
         scenario_wrong_host_is_refused,
     ),
-    "drops the check that edge-t's own address is present": (
-        "if EDGET_PRIVATE not in addresses:",
+    "drops the refusal on the other gateway's address": (
+        "if other is not profile and other.private_address in addresses:",
         "if False:",
         scenario_wrong_host_is_refused,
     ),
-    "drops the refusal on edge1's address": (
-        "if EDGE1_PRIVATE in addresses:",
+    "drops the sabotage refusal on edge1": (
+        "if sabotage and not profile.sabotage_allowed:",
         "if False:",
-        scenario_wrong_host_is_refused,
+        scenario_sabotage_is_refused_on_edge1,
+    ),
+    "allows the sabotage on edge1 in the table": (
+        "EDGE1_PRIVATE, SUBNET, sabotage_allowed=False",
+        "EDGE1_PRIVATE, SUBNET, sabotage_allowed=True",
+        scenario_sabotage_is_refused_on_edge1,
     ),
     "stops requiring the masquerade counter to rise": (
         "        elif moved < 1:\n            fails.append(f\"the counter of {name} did not rise",
