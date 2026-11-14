@@ -1,6 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -203,6 +204,17 @@ async function waitFor(check: () => boolean, ms: number) {
   while (!check()) {
     if (Date.now() > until) throw new Error(`condition not met within ${ms} ms`);
     await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+/** Resolves with the pid once the file holds one. Uses no timers, so it runs under fake ones. */
+async function pidWritten(file: string, ms: number): Promise<number> {
+  const until = Date.now() + ms;
+  for (;;) {
+    const pid = existsSync(file) ? Number(readFileSync(file, 'utf8').trim()) : 0;
+    if (pid > 0) return pid;
+    if (Date.now() > until) throw new Error(`no pid in ${file} within ${ms} ms`);
+    await new Promise((r) => setImmediate(r));
   }
 }
 
@@ -426,11 +438,29 @@ describe.skipIf(!hasCli)(
     }, 20_000);
 
     it('kills the whole process group of a client that ignores the deadline', async () => {
-      const pidFile = join(mkdtempSync(join(tmpdir(), 'bl-pid-')), 'child.pid');
-      cleanup.push(() => rmSync(pidFile, { force: true }));
-      const dir = shim(`sleep 60 &\necho $! > "${pidFile}"\nwait`);
+      const work = mkdtempSync(join(tmpdir(), 'bl-pid-'));
+      cleanup.push(() => rmSync(work, { recursive: true, force: true }));
+      const pidFile = join(work, 'child.pid');
+      const gate = join(work, 'go');
+      // The shell forks its grandchild only after the gate exists, so the deadline
+      // can never kill it before it has written the pid.
+      const dir = shim(
+        `while [ ! -e "${gate}" ]; do sleep 0.01; done\nsleep 60 &\necho $! > "${pidFile}"\nwait`
+      );
       const env = { ...process.env, PATH: `${dir}:${process.env.PATH}` };
-      const r = await docker(['anything'], 800, { env });
+      // The deadline is a fake timer. It fires only after the pid file holds a pid,
+      // so the kill cannot race the shell's write. The poll is bounded in real time.
+      let pending: ReturnType<typeof docker>;
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      try {
+        pending = docker(['anything'], 800, { env });
+        writeFileSync(gate, '');
+        await pidWritten(pidFile, 10_000);
+        vi.advanceTimersByTime(800);
+      } finally {
+        vi.useRealTimers();
+      }
+      const r = await pending;
       expect(r.timedOut).toBe(true);
       const grandchild = Number(readFileSync(pidFile, 'utf8').trim());
       expect(grandchild).toBeGreaterThan(0);
