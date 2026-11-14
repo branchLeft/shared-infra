@@ -37,6 +37,7 @@ ops1:
   - breakglass_mint_host
   - status_page
   - deploy_verifier
+  - deploy_tooling
   - control_plane
   - nextcloud_stack
   - backup_worker
@@ -59,6 +60,7 @@ app1:
 db1:
   - host_inputs
   - deploy_verifier
+  - deploy_tooling
   - db1_stack
   - db1_backup_timers
   - db1_grants

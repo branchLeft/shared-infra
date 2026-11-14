@@ -3,8 +3,9 @@
 # playbook runs with, then the trigger that runs it. After them, the loader of the
 # host's private inputs (host_inputs, first: check_enrolment R11), which reads the one
 # root-only file the owner places on the host and stops the run if it is missing or
-# unsafe, then the host baseline, the break-glass mint, then the control plane. The
-# control plane needs no input from the owner: it takes the image
+# unsafe, then the host baseline, the break-glass mint, then the deploy tooling (class
+# internal: the control plane installs this host's firewall policy, so the policy half is not
+# applied here), then the control plane. The control plane needs no input from the owner: it takes the image
 # the running stack already uses and leaves the live env file and master key alone.
 # The status page follows it and never precedes it: the page binds this host's private
 # address, and the DOCKER-USER drop that confines that port to the gateway is installed
@@ -41,6 +42,7 @@
   gather_facts: false
   vars:
     enrolled_host: ops1
+    deploy_tooling_host_class: internal
   vars_files:
     - '{{ playbook_dir }}/includes/pull_trigger_common.yml'
     - '{{ playbook_dir }}/../trust/ops1.yml'
@@ -63,6 +65,7 @@
     - role: ../roles/safety_service # noqa: role-name[path]
     - role: ../roles/safety_channel_key # noqa: role-name[path]
     - role: ../roles/deploy_verifier # noqa: role-name[path]
+    - role: ../roles/deploy_tooling # noqa: role-name[path]
     - role: ../roles/control_plane # noqa: role-name[path]
     - role: ../roles/status_page # noqa: role-name[path]
     - role: ../roles/nextcloud_stack # noqa: role-name[path]
