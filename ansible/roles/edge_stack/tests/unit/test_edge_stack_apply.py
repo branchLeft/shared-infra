@@ -514,7 +514,9 @@ class LockHeldAcrossBothPhases(TreeCase):
                 "ps",
                 "restart-crowdsec",
                 "lapi",
-                # config.yaml.local, the two Ghost admin files, then a.yaml in acquis.d.
+                # config.yaml.local, the three branchleft files (two Ghost admin
+                # files and the brute-force scenario), then a.yaml in acquis.d.
+                "sha-crowdsec",
                 "sha-crowdsec",
                 "sha-crowdsec",
                 "sha-crowdsec",
