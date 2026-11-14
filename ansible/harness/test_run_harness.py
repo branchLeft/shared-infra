@@ -112,7 +112,7 @@ class RoleCase(unittest.TestCase):
         ``also`` names more scenarios, each with a valid scenario file.
         """
         if min_version is None:
-            # The version the lock pins, so a bump of ansible-core does not leave this fixture behind.
+            # The pinned version, so a bump of ansible-core does not leave this fixture behind.
             min_version = run_harness.pinned_version(run_harness.REQUIREMENTS, "ansible-core") or ""
         base = Path(tempfile.mkdtemp(prefix="harness-test-"))
         self.addCleanup(shutil.rmtree, base, True)

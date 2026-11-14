@@ -223,7 +223,7 @@ class UnitContractTests(unittest.TestCase):
 
 
 class NatUnitRetryTests(unittest.TestCase):
-    """A reconciler that refuses at boot is retried a bounded number of times (workspace#3182).
+    """A reconciler that refuses at boot is retried a bounded number of times.
 
     The unit is a oneshot that runs the reconciler once. Without a restart policy one refused
     run (Docker slow to start, so a probe the reconciler cannot answer) leaves the gateway with

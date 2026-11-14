@@ -819,9 +819,9 @@ What it does not see:
 - A loop variable is followed only when the loop names it (`loop_control.loop_var`), or the
   loop has no include. A `set_fact` or `register` copy of a secret attribute is followed as that
   attribute; a copy of a declared non-secret attribute is not, as for any read. Still open, and
-  not followed: a value that comes in through `lookup('template', ...)` is not read (item 3 of
-  ISSUE branchLeft/workspace#3140), and a `collections:` list set at play or role level is not in
-  scope, so a short name only that list resolves is an R4 finding (item 4 of the same issue). A
+  not followed: a value that comes in through `lookup('template', ...)` is not read, and a
+  `collections:` list set at play or role level is not in scope, so a short name only that
+  list resolves is an R4 finding. A
   subscript the parser cannot see as constant (`x[name]`) is not read either; it counts as a read
   of the whole option and so asks for more `no_log`.
 - R3 checks the table's rows, not what the consuming role does with a value.
