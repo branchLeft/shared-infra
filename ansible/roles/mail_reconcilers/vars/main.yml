@@ -78,6 +78,10 @@ mail_reconcilers_not_installed:
   # Runs only in CI, against the runner's own docker; never placed on a host.
   ci_only:
     - check_shim_image_starts.py
+  # Read-only report, piped to the host's Python from a copy of the merged file by hand
+  # (read_sending_state.md); never placed on a host.
+  run_by_hand:
+    - read_sending_state.py
   other_roles:
     - 00-harden-ssh.sh
     - 10-harden-updates-fail2ban.sh
