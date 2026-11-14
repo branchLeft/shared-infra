@@ -14,7 +14,7 @@ import pathlib
 import re
 import unittest
 
-from test_ci_apply_environments import APPLY_JOBS, PLAN_JOBS, job_block, job_names
+from test_ci_apply_environments import APPLY_JOBS, CHECK_WORKFLOWS, PLAN_JOBS, job_block, job_names
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -28,10 +28,10 @@ REQUIRED = {
     "Type check (hetzner)": "ci.yml",
     "Type check + test (hetzner-host)": "ci.yml",
     "Lint + test (hetzner/provision)": "ci.yml",
-    "Validate (edge Caddy config)": "ci.yml",
+    "Validate (edge Caddy config)": "ci-config-validate.yml",
     "Test (scripts)": "ci.yml",
     "Audit (Pulumi secrets + state backends)": "ci.yml",
-    "Validate (monitoring stack config)": "ci.yml",
+    "Validate (monitoring stack config)": "ci-config-validate.yml",
     "docs-lint / docs-lint": "docs-lint.yml",
     "Lint and test the Ansible roles": "ansible.yml",
 }
@@ -89,6 +89,19 @@ class MergeGroupTriggerTests(unittest.TestCase):
                 self.assertRegex(block, r"(?m)^  pull_request:")
                 self.assertRegex(block, r"(?m)^  push:")
 
+    def test_a_file_split_out_of_ci_has_ci_triggers_and_concurrency(self):
+        # A job moved out of ci.yml keeps the events it reported on, so a required check cannot
+        # go missing from the queue or from a pull request because the new file listened to less.
+        def code(text: str, top_key: str) -> list[str]:
+            match = re.search(rf"^{top_key}:[ \t]*\n((?:[ \t]+.*\n|[ \t]*\n)*)", text, re.M)
+            assert match, f"no top-level {top_key}"
+            return [line for line in match.group(1).splitlines() if line.strip() and not line.lstrip().startswith("#")]
+
+        for workflow in CHECK_WORKFLOWS[1:]:
+            for key in ("on", "permissions", "concurrency"):
+                with self.subTest(workflow=workflow, key=key):
+                    self.assertEqual(code(read("ci.yml"), key), code(read(workflow), key))
+
     def test_workflows_that_publish_or_poll_do_not_run_on_merge_group(self):
         for name in (
             "publish-hetzner-host.yml",
@@ -102,16 +115,17 @@ class MergeGroupTriggerTests(unittest.TestCase):
     def test_required_ci_jobs_have_no_condition_that_could_skip_them(self):
         # A skipped required check counts as passing, so none of these jobs may
         # carry a job-level `if:` that is false on merge_group.
-        text = read("ci.yml")
-        by_name: dict[str, str] = {}
-        for key in job_names(text):
-            named = re.search(r"^    name: (.*?)[ \t]*$", job_block(text, key), re.M)
-            if named:
-                by_name[named.group(1)] = key
-        for context in [n for n, f in REQUIRED.items() if f == "ci.yml"]:
-            with self.subTest(context=context):
-                self.assertIn(context, by_name, f"no job named {context!r}")
-                self.assertIsNone(job_if(job_block(text, by_name[context])))
+        for workflow in CHECK_WORKFLOWS:
+            text = read(workflow)
+            by_name: dict[str, str] = {}
+            for key in job_names(text):
+                named = re.search(r"^    name: (.*?)[ \t]*$", job_block(text, key), re.M)
+                if named:
+                    by_name[named.group(1)] = key
+            for context in [n for n, f in REQUIRED.items() if f == workflow]:
+                with self.subTest(workflow=workflow, context=context):
+                    self.assertIn(context, by_name, f"no job named {context!r} in {workflow}")
+                    self.assertIsNone(job_if(job_block(text, by_name[context])))
 
     def test_every_plan_and_apply_job_runs_on_push_to_main_only(self):
         text = read("ci.yml")
@@ -130,13 +144,15 @@ class MergeGroupTriggerTests(unittest.TestCase):
     def test_no_job_in_ci_runs_a_credentialed_step_on_merge_group(self):
         # Every job that names an environment is a plan or apply job, and each
         # of those is gated above. A new one would have to join that list.
-        text = read("ci.yml")
-        jobs = text.split("\njobs:\n", 1)[1]
-        for match in re.finditer(r"^  ([A-Za-z0-9_-]+):[ \t]*$", jobs, re.M):
-            key = match.group(1)
-            if re.search(r"^    environment: ", job_block(text, key), re.M):
-                with self.subTest(job=key):
-                    self.assertIn(key, [*PLAN_JOBS, *APPLY_JOBS])
+        for workflow in CHECK_WORKFLOWS:
+            text = read(workflow)
+            jobs = text.split("\njobs:\n", 1)[1]
+            for match in re.finditer(r"^  ([A-Za-z0-9_-]+):[ \t]*$", jobs, re.M):
+                key = match.group(1)
+                if re.search(r"^    environment: ", job_block(text, key), re.M):
+                    with self.subTest(workflow=workflow, job=key):
+                        self.assertEqual("ci.yml", workflow)
+                        self.assertIn(key, [*PLAN_JOBS, *APPLY_JOBS])
 
     def decide_step(self):
         text = read("ansible.yml")

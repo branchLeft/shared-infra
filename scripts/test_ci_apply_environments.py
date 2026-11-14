@@ -99,6 +99,27 @@ def workflow_text() -> str:
     return CI_YML.read_text(encoding="utf-8")
 
 
+# Check jobs that once stood in ci.yml and now stand in a file of their own,
+# with ci.yml's triggers. Nothing in ci.yml `needs` them. The gate tests that
+# are about every check job read ci.yml and these files as one list of jobs
+# (ci_jobs_text); the plan and apply jobs, and the `changes` job they read,
+# stay in ci.yml and are read from it alone (workflow_text).
+SPLIT_OUT_WORKFLOWS = ("ci-config-validate.yml",)
+CHECK_WORKFLOWS = ("ci.yml", *SPLIT_OUT_WORKFLOWS)
+
+
+def ci_jobs_text() -> str:
+    """ci.yml, then the `jobs:` mapping of every file split out of it, as one text.
+
+    job_block and job_names read it as they read ci.yml, so every pin that is
+    about a check job still sees the job wherever it now lives."""
+    text = CI_YML.read_text(encoding="utf-8")
+    for name in SPLIT_OUT_WORKFLOWS:
+        other = (CI_YML.parent / name).read_text(encoding="utf-8")
+        text += other.split("\njobs:\n", 1)[1]
+    return text
+
+
 def job_block(text: str, job: str) -> str:
     """The text of one top-level job: from its key to the next job key."""
     jobs = text.split("\njobs:\n", 1)[1]
@@ -107,7 +128,7 @@ def job_block(text: str, job: str) -> str:
         if match.group(1) == job:
             end = keys[i + 1].start() if i + 1 < len(keys) else len(jobs)
             return jobs[match.start() : end]
-    raise AssertionError(f"job {job!r} not found in ci.yml")
+    raise AssertionError(f"job {job!r} not found in ci.yml or the files split out of it")
 
 
 def job_names(text: str) -> list[str]:
@@ -1755,6 +1776,38 @@ class DnsFilterTests(unittest.TestCase):
         self.assertTrue(filter_matches(["a/**"], "a/b/c.json"))
         self.assertFalse(filter_matches(["a/**"], "ab/c.json"))
         self.assertFalse(filter_matches(["a/b.ts"], "a/c.ts"))
+
+
+class SplitOutWorkflowTests(unittest.TestCase):
+    """A job moved out of ci.yml must not take a credential, an environment or a
+    write grant with it, and ci.yml must not wait on it: ci.yml's own pins above
+    read ci.yml alone, so these are the same pins over the files split out."""
+
+    def test_a_split_out_file_holds_no_credential_environment_or_write_grant(self):
+        for name in SPLIT_OUT_WORKFLOWS:
+            text = (CI_YML.parent / name).read_text(encoding="utf-8")
+            code = "\n".join(line for line in text.split("\n") if not line.lstrip().startswith("#"))
+            with self.subTest(workflow=name):
+                self.assertNotRegex(code, r"(?m)^\s*environment:")
+                self.assertNotRegex(code, r"(?m)^\s*(actions|id-token|contents|packages|pull-requests|issues): write")
+                self.assertNotIn("secrets.", code.replace("secrets.GITHUB_TOKEN", ""))
+                self.assertNotIn("pulumi", code.lower())
+
+    def test_no_job_of_ci_yml_waits_on_a_split_out_job(self):
+        # A needs: on a job in another file is not a dependency GitHub can
+        # resolve, and a plan that did not wait for one would lose its gate.
+        split_out = [key for name in SPLIT_OUT_WORKFLOWS for key in job_names((CI_YML.parent / name).read_text(encoding="utf-8"))]
+        self.assertTrue(split_out)
+        text = workflow_text()
+        for job in job_names(text):
+            needs = re.search(r"^    needs:(.*?)(?=^    \S|\Z)", job_block(text, job), re.M | re.S)
+            with self.subTest(job=job):
+                for key in split_out:
+                    self.assertNotIn(key, needs.group(1) if needs else "")
+
+    def test_a_job_key_is_in_one_file_only(self):
+        keys = [key for name in CHECK_WORKFLOWS for key in job_names((CI_YML.parent / name).read_text(encoding="utf-8"))]
+        self.assertEqual(sorted(keys), sorted(set(keys)))
 
 
 if __name__ == "__main__":

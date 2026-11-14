@@ -1,6 +1,6 @@
 # test_ci_skip.py
 
-Pins the changed-path skip in `ci.yml`. A wrong path
+Pins the changed-path skip in `ci.yml` and `ci-config-validate.yml`. A wrong path
 map skips a required check without any sign, so the file proves the map, and then
 proves the proof.
 
@@ -12,7 +12,7 @@ proves the proof.
   an always-run or unknown job runs, a read path or a universal path runs, and only
   a fully mapped diff that misses every read skips. A table says which jobs read
   which paths.
-- **The census of `ci.yml`.** `check_workflow` requires every job reachable on
+- **The census of `ci.yml` and `ci-config-validate.yml`, read as one list of jobs.** `check_workflow` requires every job reachable on
   `pull_request` or `merge_group` to be in exactly one of `UNITS` or `ALWAYS_RUN`;
   `ALWAYS_RUN` to equal the literal set of six written in this file (so changing
   it is a reviewed edit) and to include the two owner-ruled jobs
@@ -54,7 +54,7 @@ passes to raise. The control case (the real code passes) runs first in each.
 | k      | a new job is in neither set                            |
 | l      | the always-run set loses a job                         |
 | m      | the event rule is dropped                              |
-| n      | the universal list forgets `ci.yml`                    |
+| n, n2  | the universal list forgets a CI workflow file          |
 | o, p   | a step names a path, or a root file, outside its entry |
 | q      | `docs/` leaves the zones, so a docs-only change runs   |
 

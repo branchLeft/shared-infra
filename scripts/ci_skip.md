@@ -1,7 +1,7 @@
 # ci_skip.py
 
 Decides, from the paths a pull request or merge queue entry changes, whether one
-`ci.yml` job needs to run its steps. It is the single home of the path map: the
+`ci.yml` job (or a job of a file split out of it, `ci-config-validate.yml`) needs to run its steps. It is the single home of the path map: the
 composite action `.github/actions/ci-skip` runs it, `trace_reads.py` and
 `test_ci_skip.py` import it, and nothing keeps a copy.
 
@@ -52,7 +52,7 @@ in `UNITS` with `mail/provision/`, not in `ALWAYS_RUN`. Every job reachable on
    `mail/`, `ovh/`, `scripts/`, `docs/`, `.github/`, `.claude/`): run. Root-level files and unknown
    directories are in this case.
 6. A changed path is one the job reads (`UNITS`), or one that changes the skip
-   machinery itself (`UNIVERSAL`: `ci.yml`, the ci-skip action, `ci_skip.py`,
+   machinery itself (`UNIVERSAL`: `ci.yml`, `ci-config-validate.yml`, the ci-skip action, `ci_skip.py`,
    `trace_reads.py`): run.
 7. Otherwise `run=false`.
 

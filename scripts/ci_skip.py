@@ -78,6 +78,7 @@ ZONES: tuple[str, ...] = (
 # A change here alters how every skippable job behaves, so every one runs.
 UNIVERSAL: tuple[str, ...] = (
     ".github/workflows/ci.yml",
+    ".github/workflows/ci-config-validate.yml",
     ".github/actions/ci-skip/",
     "scripts/ci_skip.py",
     "scripts/trace_reads.py",

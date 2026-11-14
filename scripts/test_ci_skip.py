@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin tests for the changed-path skip in ci.yml.
+"""Pin tests for the changed-path skip in ci.yml and the files split out of it.
 
 A wrong path map skips a required check silently, so this file proves the map
 two ways and proves the proof: the real code and workflow pass every invariant,
@@ -19,12 +19,11 @@ import types
 import unittest
 
 import ci_skip
-from test_ci_apply_environments import job_block, job_names, step_blocks
+from test_ci_apply_environments import CHECK_WORKFLOWS, ci_jobs_text, job_block, job_names, step_blocks
 from test_merge_group_triggers import REQUIRED, job_if
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
-CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
 CI_SKIP_PY = SCRIPTS / "ci_skip.py"
 
 SKIP_USES = "./.github/actions/ci-skip"
@@ -75,6 +74,7 @@ READ_BY_NONE = [
 ]
 UNIVERSAL_PATHS = [
     ".github/workflows/ci.yml",
+    ".github/workflows/ci-config-validate.yml",
     ".github/actions/ci-skip/action.yml",
     "scripts/ci_skip.py",
     "scripts/trace_reads.py",
@@ -179,7 +179,7 @@ def check_workflow(text: str, m) -> None:
         named = re.search(r"^    name: (.*?)[ \t]*$", job_block(text, key), re.M)
         if named:
             by_name[named.group(1)] = key
-    for context in [n for n, f in REQUIRED.items() if f == "ci.yml"]:
+    for context in [n for n, f in REQUIRED.items() if f in CHECK_WORKFLOWS]:
         assert context in by_name, f"required check {context!r} has no job"
         assert by_name[context] in classified, f"required check {context!r} is a job in neither set"
 
@@ -239,10 +239,10 @@ class RealCodeTests(unittest.TestCase):
         check_decisions(ci_skip)
 
     def test_every_workflow_job_is_classified_and_shaped(self):
-        check_workflow(CI_YML.read_text(encoding="utf-8"), ci_skip)
+        check_workflow(ci_jobs_text(), ci_skip)
 
     def test_every_path_a_skippable_job_names_is_in_its_map_entry(self):
-        check_reads_named(CI_YML.read_text(encoding="utf-8"), ci_skip)
+        check_reads_named(ci_jobs_text(), ci_skip)
 
     def test_always_run_is_exactly_the_six_jobs_and_includes_the_two_ruled(self):
         self.assertEqual(EXPECTED_ALWAYS_RUN, set(ci_skip.ALWAYS_RUN))
@@ -250,7 +250,7 @@ class RealCodeTests(unittest.TestCase):
         self.assertFalse(set(ci_skip.UNITS) & set(ci_skip.ALWAYS_RUN))
 
     def test_the_two_python_steps_that_read_a_tree_run_under_the_trace(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         monitoring = job_block(text, "monitoring-config-validate")
         mail = job_block(text, "mail-provision-checks")
         self.assertIn(
@@ -273,7 +273,7 @@ class RealCodeTests(unittest.TestCase):
                 self.assertTrue((ROOT / path).exists(), f"{path} is universal but absent")
 
     def test_the_cleanup_steps_still_run_after_a_failure(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         steps = dict(step_blocks(job_block(text, "monitoring-config-validate")))
         for name in ("Remove the rendered ntfy config", "Remove the rendered Alertmanager config"):
             self.assertEqual(f"always() && {GUARD}", step_if(steps[name]))
@@ -288,7 +288,7 @@ class MutantTests(unittest.TestCase):
             check_decisions(load_variant(old, new))
 
     def assert_workflow_catches(self, mutated: str, m=ci_skip):
-        check_workflow(CI_YML.read_text(encoding="utf-8"), m)  # control case
+        check_workflow(ci_jobs_text(), m)  # control case
         with self.assertRaises(AssertionError):
             check_workflow(mutated, m)
 
@@ -313,34 +313,34 @@ class MutantTests(unittest.TestCase):
         self.assert_decisions_catch('"mail-typecheck": ("mail/",),', '"mail-typecheck": ("mail/",),\n    "scripts-tests": ("scripts/",),')
 
     def test_f_a_step_guard_is_written_equals_true(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(text, "monitoring-config-validate", "if: steps.skip.outputs.run != 'false'", "if: steps.skip.outputs.run == 'true'")
         self.assert_workflow_catches(mutated)
 
     def test_g_a_job_names_another_jobs_key(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(text, "monitoring-config-validate", "unit: monitoring-config-validate", "unit: edge-config-validate")
         self.assert_workflow_catches(mutated)
 
     def test_h_a_skip_step_is_added_to_an_always_run_job(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         step = "\n      - name: Decide\n        id: skip\n        uses: ./.github/actions/ci-skip\n        with:\n          unit: scripts-tests\n"
         self.assert_workflow_catches(add_after_checkout(text, "scripts-tests", step))
 
     def test_i_a_job_level_if_is_added_to_a_skippable_job(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(
             text, "edge-config-validate", "    timeout-minutes: 15\n", "    timeout-minutes: 15\n    if: github.event_name == 'pull_request'\n"
         )
         self.assert_workflow_catches(mutated)
 
     def test_j_a_step_is_left_unguarded(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(text, "nextcloud1-config-validate", "        if: steps.skip.outputs.run != 'false'\n", "")
         self.assert_workflow_catches(mutated)
 
     def test_k_a_new_job_is_in_neither_set(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         extra = "  brand-new-check:\n    name: Brand new\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: true\n\n"
         mutated = text.replace("  scripts-tests:\n", extra + "  scripts-tests:\n", 1)
         self.assertNotEqual(text, mutated)
@@ -352,7 +352,7 @@ class MutantTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             check_decisions(variant)
         with self.assertRaises(AssertionError):
-            check_workflow(CI_YML.read_text(encoding="utf-8"), variant)
+            check_workflow(ci_jobs_text(), variant)
 
     def test_m_the_event_rule_is_dropped(self):
         self.assert_decisions_catch("if event not in EVENTS:", "if False:")
@@ -360,8 +360,18 @@ class MutantTests(unittest.TestCase):
     def test_n_the_universal_list_forgets_ci_yml(self):
         self.assert_decisions_catch('    ".github/workflows/ci.yml",\n', "")
 
+    def test_n2_the_universal_list_forgets_a_workflow_split_out_of_ci_yml(self):
+        # The jobs of ci-config-validate.yml skip on the paths ci_skip.py maps, so an edit to
+        # that file alone must run them all, as an edit to ci.yml does.
+        self.assert_decisions_catch('    ".github/workflows/ci-config-validate.yml",\n', "")
+
+    def test_n3_every_workflow_that_holds_a_skippable_job_is_universal(self):
+        for name in CHECK_WORKFLOWS:
+            with self.subTest(workflow=name):
+                self.assertIn(f".github/workflows/{name}", ci_skip.UNIVERSAL)
+
     def test_o_a_step_reads_a_path_outside_its_map(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         check_reads_named(text, ci_skip)  # control case
         mutated = mutate_workflow(
             text,
@@ -373,7 +383,7 @@ class MutantTests(unittest.TestCase):
             check_reads_named(mutated, ci_skip)
 
     def test_p_a_step_reads_a_root_level_file(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(text, "edge-config-validate", "docker build --tag edge-caddy-ci:validate hetzner/edge", "cat sites.ts && docker build --tag edge-caddy-ci:validate hetzner/edge")
         with self.assertRaises(AssertionError):
             check_reads_named(mutated, ci_skip)
