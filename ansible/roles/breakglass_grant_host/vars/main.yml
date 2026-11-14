@@ -20,7 +20,7 @@ breakglass_grant_host_docker_socket: /var/run/docker.sock
 # hashes together. The wrapper is root-only (0700): an operator runs it as root.
 breakglass_grant_host_files:
   - path: break-glass-grant.mjs
-    sha256: a24c3d1c0bf78a8483b1600d13c6d0c7e07bf6dfdf4f8211cd73e0f80e4621d2
+    sha256: 072ece80bf73bb118bfaf8af525b8898aefaff36ca7c938b9212b1cf90376312
     dest: '{{ breakglass_grant_host_tool_dir }}/break-glass-grant.mjs'
     mode: '0644'
   - path: docker-engine.mjs
@@ -31,12 +31,12 @@ breakglass_grant_host_files:
     sha256: a5e6661133ae8f8d66546d2de3d0e69eda412bdf5ab389710e315afadc6d3a37
     dest: '{{ breakglass_grant_host_tool_dir }}/provision-support-account.mjs'
     mode: '0644'
-  - path: host/branchleft-break-glass.sh
-    sha256: aded5b84bc3923f7804278c2e5af8af54f2063630fad534d2b64e6c373a71598
+  - path: host/branchleft-break-glass.py
+    sha256: 04cada06d2e3fa344abb2d1b7f9809fe6b338b6187da30a9f374642c116af171
     dest: '{{ breakglass_grant_host_wrapper_path }}'
     mode: '0700'
   - path: systemd/branchleft-break-glass-expire.service
-    sha256: 0afdd7fbcec25b6b748d1f20b1cd90890252ae904e541ec2d08116db522f5c5f
+    sha256: a49ad8def83f9a800713aca1f1ca92f0af9c87b748bcf670d06e1b13564662b9
     dest: '{{ breakglass_grant_host_unit_dir }}/branchleft-break-glass-expire.service'
     mode: '0644'
   - path: systemd/branchleft-break-glass-expire.timer
@@ -66,7 +66,7 @@ breakglass_grant_host_directories:
 # would make this role report green while the unit failed every minute and no
 # grant ever closed. It is changed in the same pull request as the commit and the
 # hashes above, and the other break-glass role's constant is changed with it.
-breakglass_grant_host_node_image: node:26.5.0-bookworm-slim@sha256:2d49d876e96237d76de412761cf05dbfe5aee325cc4406a4d41d5824c5bb8beb
+breakglass_grant_host_node_image: node:26.13.0-alpine@sha256:b2646ba6d774dc22c24d89fc37103fcf4c4467e870c78b9519aa403300b2835a
 
 # The part of the image reference that Docker lists back under RepoDigests.
 breakglass_grant_host_image_digest: "{{ breakglass_grant_host_node_image.split('@') | last }}"
