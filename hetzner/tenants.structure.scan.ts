@@ -14,8 +14,8 @@ const ALLOWED_MEMBERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['@branchleft/hetzner-host', new Set(['Host'])],
 ]);
 
-/** The number of `new Host(...)` the program declares: edge-t, and db-t1 behind its switch. */
-export const EXPECTED_HOST_COUNT = 2;
+/** The number of `new Host(...)` the program declares: edge-t, and db-t1 and app-t1 each behind its switch. */
+export const EXPECTED_HOST_COUNT = 3;
 
 const HOST_MODULE = '@branchleft/hetzner-host';
 const ROUTE_MODULE = '@pulumi/hcloud';
