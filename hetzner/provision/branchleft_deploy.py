@@ -9,12 +9,15 @@ from __future__ import annotations
 import contextlib
 import errno
 import fcntl
+import hashlib
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 CONFIG_DIR = "/etc/branchleft"
 STACK_DIR = "/opt/branchleft"
@@ -86,6 +89,21 @@ ATTESTED_IMAGES: dict[str, str] = {
 VERIFIER_GH_DIR = "/usr/local/libexec/branchleft-verifier"
 VERIFIER_HOME = "/var/lib/branchleft/verifier-home"
 
+# Offline verification, for a host with no outbound access (branchleft_deploy.md, "Offline
+# attestation verification"). The host's trusted root is placed by the deploy_verifier role from a
+# file reviewed in this repository, never delivered with an image. Where it exists, every
+# registered image is verified offline and there is no fallback to the registry. The bundle and
+# manifest are staged by the delivery, one directory per digest, root's and not writable by any
+# other account.
+OFFLINE_TRUSTED_ROOT = "/etc/branchleft/attestation/trusted_root.jsonl"
+OFFLINE_STAGING_DIR = "/var/lib/branchleft/attestations"
+OFFLINE_OWNER_UID = 0
+# A bundle is about 11 kB and an image manifest about 7 kB. The trusted root is about 34 kB.
+OFFLINE_FILE_LIMIT = 4 * 1024 * 1024
+GH_BIN = f"{VERIFIER_GH_DIR}/gh"
+ATTESTED_SOURCE_REF = "refs/heads/main"
+OIDC_ISSUER = "https://token.actions.githubusercontent.com"
+
 # gh's own words when it holds no credential: its refusal always names the login command. The
 # verifier passes gh's stderr on, so this is read from there.
 _NEEDS_LOGIN = re.compile(r"gh auth login")
@@ -137,6 +155,141 @@ def attested_name(image: str) -> str:
     return first.partition(":")[0] + slash + rest.partition(":")[0]
 
 
+def offline_verifier_env() -> dict[str, str]:
+    """The offline verifier's entire environment: verifier_env() without the registry key.
+
+    Offline verification reads no registry, so DOCKER_CONFIG is not passed. No GitHub
+    credential is in it either.
+    """
+    env = verifier_env()
+    del env["DOCKER_CONFIG"]
+    del env["VERIFY_PLAIN_ERRORS"]
+    return env
+
+
+def _refuse_offline(image: str, why: str) -> DeployError:
+    return DeployError(
+        f"cannot verify {image} offline: {why}; refusing to deploy it. This host holds a "
+        "trusted root, so it never reads an attestation from the registry"
+    )
+
+
+def _check_offline_directory(image: str, path: str) -> None:
+    try:
+        info = os.lstat(path)
+    except OSError:
+        raise _refuse_offline(image, f"the directory {path} is not staged") from None
+    if not stat.S_ISDIR(info.st_mode):
+        raise _refuse_offline(image, f"{path} is not a directory (a link is refused)")
+    if info.st_uid != OFFLINE_OWNER_UID or info.st_mode & 0o022:
+        raise _refuse_offline(
+            image, f"{path} is not owned by the trusted account or is group or world writable"
+        )
+
+
+def _read_offline_file(image: str, path: str) -> bytes:
+    """Read one staged file, refusing anything but a plain, trusted, bounded regular file.
+
+    The file is opened without following a link and without blocking on a FIFO, then judged by
+    what was opened, not by what the path said a moment ago.
+    """
+    name = os.path.basename(path)
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        raise _refuse_offline(image, f"{name} is not staged at {path}, or is a link") from None
+    with os.fdopen(descriptor, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise _refuse_offline(image, f"{name} is not a regular file")
+        if info.st_nlink != 1:
+            raise _refuse_offline(image, f"{name} is hard linked")
+        if info.st_uid != OFFLINE_OWNER_UID:
+            raise _refuse_offline(image, f"{name} is not owned by the trusted account")
+        if info.st_mode & 0o022:
+            raise _refuse_offline(image, f"{name} is group or world writable")
+        if info.st_size > OFFLINE_FILE_LIMIT:
+            raise _refuse_offline(image, f"{name} is larger than {OFFLINE_FILE_LIMIT} bytes")
+        data = handle.read(OFFLINE_FILE_LIMIT + 1)
+    if not data:
+        raise _refuse_offline(image, f"{name} is empty")
+    if len(data) > OFFLINE_FILE_LIMIT:
+        raise _refuse_offline(image, f"{name} is larger than {OFFLINE_FILE_LIMIT} bytes")
+    return data
+
+
+def verify_attestation_offline(image: str, signer: str, *, run=subprocess.run) -> None:
+    """Verify an image from the bundle and manifest its delivery staged, with no network.
+
+    The manifest is the image's manifest, so its sha256 is the image digest. It is held to the
+    digest in the reference here, and gh then verifies the bundle against the manifest, the host's
+    trusted root, the repository, the signing workflow and refs/heads/main. The files are read
+    once, checked, and copied into a private directory that gh reads, so nothing changes between
+    the check and the use.
+    """
+    digest = image.partition("@")[2].partition(":")[2]
+    trusted_root_dir = os.path.dirname(OFFLINE_TRUSTED_ROOT)
+    _check_offline_directory(image, trusted_root_dir)
+    root_bytes = _read_offline_file(image, OFFLINE_TRUSTED_ROOT)
+    _check_offline_directory(image, OFFLINE_STAGING_DIR)
+    staged = os.path.join(OFFLINE_STAGING_DIR, digest)
+    _check_offline_directory(image, staged)
+    manifest = _read_offline_file(image, os.path.join(staged, "manifest.json"))
+    bundle = _read_offline_file(image, os.path.join(staged, "bundle.jsonl"))
+    if hashlib.sha256(manifest).hexdigest() != digest:
+        raise _refuse_offline(image, "the staged manifest does not hash to the image digest")
+
+    with tempfile.TemporaryDirectory(prefix="branchleft-attest-") as private:
+        files = {"manifest.json": manifest, "bundle.jsonl": bundle, "trusted_root.jsonl": root_bytes}
+        for filename, content in files.items():
+            Path(private, filename).write_bytes(content)
+        argv = [
+            GH_BIN,
+            "attestation",
+            "verify",
+            os.path.join(private, "manifest.json"),
+            "--bundle",
+            os.path.join(private, "bundle.jsonl"),
+            "--custom-trusted-root",
+            os.path.join(private, "trusted_root.jsonl"),
+            "--repo",
+            ATTESTED_REPO,
+            "--signer-workflow",
+            signer,
+            "--source-ref",
+            ATTESTED_SOURCE_REF,
+            "--cert-oidc-issuer",
+            OIDC_ISSUER,
+            "--deny-self-hosted-runners",
+        ]
+        try:
+            result = run(
+                argv,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=offline_verifier_env(),
+                stdin=subprocess.DEVNULL,
+            )
+        except OSError as error:
+            raise DeployError(
+                f"could not run {GH_BIN} ({error}); refusing to deploy {image} "
+                "without verifying its attestation"
+            ) from None
+    if result.returncode != 0 and _NEEDS_LOGIN.search(result.stderr or ""):
+        raise DeployError(
+            "the host verifier needs GitHub credentials this host does not hold; "
+            "the deploy is refused; see branchleft_deploy.md"
+        )
+    if result.returncode != 0:
+        raise DeployError(
+            f"{image} is not attested by {signer} on {ATTESTED_SOURCE_REF} in the staged "
+            "bundle; refusing to deploy it. The bundle may be altered, for another artifact, "
+            "or signed by another workflow"
+        )
+    print(f"branchleft-deploy: verified {image} attested by {signer} (offline)", file=sys.stderr)
+
+
 def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     """Verify a registered image's attestation before anything touches the host.
 
@@ -158,6 +311,9 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     # The verifier takes registry/name@digest only, so it is given the register
     # name and the digest, however the image was spelled.
     canonical = f"{name}@{image.partition('@')[2]}"
+    if os.path.lexists(OFFLINE_TRUSTED_ROOT):
+        verify_attestation_offline(canonical, signer, run=run)
+        return True
     try:
         result = run(
             [VERIFIER, canonical, ATTESTED_REPO, signer, "--bundle-from-oci"],

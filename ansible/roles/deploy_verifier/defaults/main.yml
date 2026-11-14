@@ -1,3 +1,8 @@
 ---
 # This role takes no inputs. Its pins and paths are role variables in vars/main.yml, which
 # outrank any value a caller passes, so there is nothing here for an inventory to override.
+
+# Off for every host. True on a host with no outbound access: its images are delivered with their
+# attestation bundles and verified offline against the trusted root this role installs. The pins and
+# paths stay in vars/main.yml; this is the one input.
+deploy_verifier_offline: false
