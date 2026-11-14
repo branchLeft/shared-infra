@@ -585,7 +585,7 @@ describe('the rendered alert rules', () => {
       'time() - db_nightly_dump_last_success_timestamp_seconds{host="db1"} > 108000'
     );
     expect(block).not.toContain('for:');
-    // The longest healthy gap is 24h35m (03:10 timer, 5m random delay, 30m
+    // The longest healthy gap is 24h35m (03:00 timer, 5m random delay, 30m
     // unit timeout); the threshold must clear it.
     expect(DB_DUMP_STALE_SECONDS).toBeGreaterThan(24 * 3600 + 35 * 60);
   });
