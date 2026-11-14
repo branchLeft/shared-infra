@@ -213,6 +213,8 @@ hetzner/provision/test_00_harden_ssh.py:
 hetzner/provision/test_20_install_docker.py:
   - hetzner/provision/20-install-docker.sh
   - mail/provision/20-install-docker.sh
+hetzner/provision/test_30_install_deploy_tooling.py:
+  - hetzner/provision/30-install-deploy-tooling.sh
 hetzner/provision/test_45_install_db_tunnel.py:
   - hetzner/provision/45-install-db-tunnel.sh
 hetzner/provision/test_app_host_isolation.py:
@@ -237,6 +239,9 @@ hetzner/provision/test_compose_unit_contract.md:
   - hetzner/provision/30-install-deploy-tooling.sh
   - hetzner/provision/run-all.sh
   - mail/provision/run-all.sh
+hetzner/provision/test_nat_gateway.py:
+  - hetzner/provision/branchleft_nat.sh
+  - hetzner/provision/nat-gateway.sh
 hetzner/scripts/prove_control_plane_port_policy.py:
   - hetzner/provision/branchleft_docker_user_policy.sh
 hetzner/scripts/prove_spool_bridge_egress.py:
