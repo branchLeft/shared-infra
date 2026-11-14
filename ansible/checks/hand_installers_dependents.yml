@@ -32,20 +32,13 @@ ansible/roles/deploy_verifier/README.md:
   - hetzner/provision/30-install-deploy-tooling.sh
 ansible/roles/egress_nat/README.md:
   - hetzner/provision/05-configure-host-egress.sh
-  - hetzner/provision/branchleft_host_egress.sh
   - hetzner/provision/branchleft_nat.sh
   - hetzner/provision/nat-gateway.sh
-ansible/roles/egress_nat/molecule/default/verify.yml:
-  - hetzner/provision/branchleft_host_egress.sh
 ansible/roles/egress_nat/tasks/_reconciler.yml:
   - hetzner/provision/05-configure-host-egress.sh
   - hetzner/provision/nat-gateway.sh
 ansible/roles/egress_nat/tasks/main.yml:
   - hetzner/provision/05-configure-host-egress.sh
-ansible/roles/egress_nat/tests/unit/test_egress_nat_role.py:
-  - hetzner/provision/branchleft_host_egress.sh
-ansible/roles/egress_nat/vars/main.yml:
-  - hetzner/provision/branchleft_host_egress.sh
 ansible/roles/mail_reconcilers/tests/unit/test_mail_reconcilers.py:
   - hetzner/provision/run-all.sh
   - mail/provision/30-deploy-stalwart.sh

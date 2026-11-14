@@ -12,8 +12,8 @@
     egress_nat_verify_role_files: '{{ playbook_dir }}/../../files'
     egress_nat_verify_files:
       - dest: /usr/local/sbin/branchleft-host-egress
-        source: branchleft_host_egress.sh
-        source_dir: '{{ egress_nat_verify_provision }}'
+        source: branchleft_host_egress.py
+        source_dir: '{{ egress_nat_verify_role_files }}'
         mode: '0755'
       - dest: /etc/systemd/system/branchleft-host-egress.service
         source: branchleft-host-egress.service
