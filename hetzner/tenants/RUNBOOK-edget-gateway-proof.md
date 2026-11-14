@@ -39,8 +39,10 @@ A private source address cannot be answered by the internet, so a reply to the
 inside source is itself the proof that its packets left masqueraded; the counters
 name which rules carried them. The namespaces and veths are removed on every exit,
 the host's default route is never written, and the Hetzner network is never
-touched. The probe refuses to run on any host that is not `edge-t`: the hostname
-must be `edge-t`, `10.20.1.210` must be on it and edge1's `10.20.1.10` must not.
+touched. The probe refuses to run on any host that is not in its profile table (`edge-t` and
+`edge1`): on `edge-t` the hostname must be `edge-t`, `10.20.1.210` must be on it and edge1's
+`10.20.1.10` must not. The same `gateway` command also proves edge1, without `--sabotage`, which
+is refused there: `hetzner/RUNBOOK-edge1-gateway-proof.md`.
 
 **`gateway --sabotage`** is the red case, explicit and owner-run only. It first runs
 the two controls above and goes no further unless both are GREEN. Then it deletes

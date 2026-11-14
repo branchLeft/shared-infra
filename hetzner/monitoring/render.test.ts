@@ -341,26 +341,27 @@ describe('the rendered Prometheus config', () => {
   });
 
   describe('the mx1 mail liveness probe', () => {
-    it('probes mx1 by hostname, on the four ports the mail firewall opens', () => {
+    it("probes mx1 by hostname, on the four mail ports and the shim's TLS port the mail firewall opens", () => {
       const rendered = renderPrometheusConfig(sites);
       expect(rendered).toContain('job_name: blackbox_mail');
       expect(rendered).toContain('- mx1.branchleft.co.uk:25');
       expect(rendered).toContain('- mx1.branchleft.co.uk:587');
       expect(rendered).toContain('- mx1.branchleft.co.uk:465');
       expect(rendered).toContain('- mx1.branchleft.co.uk:993');
+      expect(rendered).toContain('- mx1.branchleft.co.uk:8443');
       // No IP literal for mx1 anywhere in this repo -- it is outside the
       // estate address plan projectGuard.ts polices.
       expect(rendered).not.toMatch(/\d+\.\d+\.\d+\.\d+.*mx1/);
     });
 
-    it('reads the SMTP banner on 25 and 587, and only completes a TLS handshake on 465 and 993', () => {
+    it('reads the SMTP banner on 25 and 587, and only completes a TLS handshake on 465, 993 and 8443', () => {
       const rendered = renderPrometheusConfig(sites);
       const mailSection = rendered.slice(rendered.indexOf('  - job_name: blackbox_mail'));
       expect(mailSection).toContain(
         "targets:\n          - mx1.branchleft.co.uk:25\n          - mx1.branchleft.co.uk:587\n        labels: {host: mx1, expected_up: 'true', __param_module: smtp_banner}"
       );
       expect(mailSection).toContain(
-        "targets:\n          - mx1.branchleft.co.uk:465\n          - mx1.branchleft.co.uk:993\n        labels: {host: mx1, expected_up: 'true', __param_module: tls_connect}"
+        "targets:\n          - mx1.branchleft.co.uk:465\n          - mx1.branchleft.co.uk:993\n          - mx1.branchleft.co.uk:8443\n        labels: {host: mx1, expected_up: 'true', __param_module: tls_connect}"
       );
     });
 
@@ -502,14 +503,26 @@ describe('the rendered alert rules', () => {
     expect(rendered).toContain('expr: probe_success{job="blackbox_mail"} == 0');
   });
 
-  it('alerts on Caddy declining a non-bridge, non-aggregate rate-limited request -- see alert_rules_test.yml for the promtool proof of both exclusions and of the general zone working once it is scoped in', () => {
-    expect(rendered).toContain('alert: RateLimitDecliningRealClients');
+  it('alerts on Caddy declining rate-limited requests from a non-bridge key for 30 minutes running -- see alert_rules_test.yml for the promtool proof that a scanner burst stays silent, that sustained declines fire, and of both exclusions', () => {
+    expect(rendered).toContain('alert: RateLimitDeclinesSustained');
+    // The retired name said "real clients" and fired on one decline.
+    expect(rendered).not.toContain('RateLimitDecliningRealClients');
+    // The `for:` is the whole change: without it one scanner burst, which
+    // CrowdSec bans within minutes, fires the alert.
     expect(rendered).toContain(
-      'expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[15m]) > 0'
+      'expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[10m]) > 0\n        for: 30m'
     );
     // Not scoped to zone -- posture.ts's rateLimit is 'enforcing', and the
     // expression must cover the general zones as well as the magic-link one.
     expect(rendered).not.toContain('members_magic_link_per_ip');
+    // A warning that routes to the on-host mailbox only: no owner_action and
+    // no page severity, so the off-host mailbox and the pager never see it.
+    const block = rendered
+      .split('      - alert: RateLimitDeclinesSustained')[1]
+      .split('\n      - alert: ')[0];
+    expect(block).toContain('severity: warning');
+    expect(block).not.toContain('owner_action');
+    expect(block).not.toContain('severity: page');
   });
 
   it('alerts on Alertmanager failing to deliver an email notification -- see alert_rules_test.yml for the promtool proof it is scoped to the email integration', () => {

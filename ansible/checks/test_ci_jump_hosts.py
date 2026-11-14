@@ -12,11 +12,11 @@ pipeline's route rests on (the 2 Nov ruling, ws#2894):
   destinations is a tenants address whose host has an enrolled playbook (the logical name is the
   TENANTS_HOST_IPS name in lower case: dbT1 is dbt1, edgeT is edget).
 
-It holds one more rule, for the hosts the gated run pushes to: a host that takes its
-commit as a pushed bundle (pull_trigger_bundle_hosts, demo1 today) is a leaf of the route, never a
-hop. It is never in JUMP_HOSTS and its playbook does not apply ci_jump, so the runner goes through
-edge1 to reach it and nothing goes through it. The list is read from the pull_trigger role's
-vars, its one home, and never copied here.
+It holds one more rule, for the hosts the gated run pushes to: a host that takes its commit as a
+pushed bundle (pull_trigger_bundle_hosts, demo1 today) is a leaf of the route, never a hop. It is
+never in JUMP_HOSTS and its playbook does not apply ci_jump, so the runner goes through edge1 to
+reach it. The list is read from the pull_trigger role's vars, its one home. A last pin holds the
+README's secret names to the workflow that passes them, so a rename cannot leave the page stale.
 
 The tenants addresses are read from hetzner-host/addressPlan.ts (TENANTS_HOST_IPS), their one home,
 and never copied here. Each pin is shown red on a sabotaged copy of the files it reads, and green
@@ -25,11 +25,12 @@ again on the copy left alone, which is also the real tree.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 import shutil
 import tempfile
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import yaml  # type: ignore[import-untyped]
 from check_enrolment import JUMP_HOSTS, ROOT
@@ -59,6 +60,16 @@ OWN_ADDRESS = "ci_jump_own_address"
 # The hosts that take their commit pushed to them. The pull_trigger role's vars are the one home.
 PULL_TRIGGER_VARS = "ansible/roles/pull_trigger/vars/main.yml"
 BUNDLE_HOSTS = "pull_trigger_bundle_hosts"
+# The secrets of the route that the role's README documents the shape of, and the workflow that
+# passes them.
+README = f"{ROLE_DIR}/README.md"
+DELIVERY = ".github/workflows/ansible-delivery.yml"
+ROUTE_SECRETS = (
+    "ANSIBLE_HOSTS",
+    "ANSIBLE_PUSH_HOSTS",
+    "ANSIBLE_HOST_CHECK_KEYS",
+    "SSH_HOST_APPLY_KEYS",
+)
 
 
 def tenants_host_ips(root: Path) -> dict[str, str]:
@@ -95,17 +106,62 @@ def _is_jump_entry(entry: object) -> bool:
     return isinstance(name, str) and name == ROLE_ENTRY
 
 
+# The task forms that apply a role from a task list, and the task keys that hold a nested list.
+TASK_FORMS = (
+    "include_role",
+    "import_role",
+    "ansible.builtin.include_role",
+    "ansible.builtin.import_role",
+)
+TASK_LISTS = ("block", "rescue", "always")
+TASK_SECTIONS = ("pre_tasks", "tasks", "post_tasks")
+
+
+def _applications_in(tasks: object, section: str) -> list[str]:
+    """One `<form> in <section>` for each task in the list, nested lists included, that applies
+    the role. The role is matched by its name's last part, so a path to it counts as well."""
+    found: list[str] = []
+    for item in tasks if isinstance(tasks, list) else []:
+        task = _mapping(item)
+        for form in TASK_FORMS:
+            name = _mapping(task.get(form)).get("name")
+            if isinstance(name, str) and PurePosixPath(name).name == ROLE_NAME:
+                found.append(f"{form} in {section}")
+        for nested in TASK_LISTS:
+            found.extend(_applications_in(task.get(nested), section))
+    return found
+
+
+def _task_applications(root: Path, host: str) -> list[str]:
+    """The applications of the role by a task, in the task lists of the one play of a host."""
+    document = _document(root / PLAYBOOKS / f"{host}.yml")
+    play = _mapping(document[0]) if isinstance(document, list) and document else {}
+    return [
+        application
+        for section in TASK_SECTIONS
+        for application in _applications_in(play.get(section), section)
+    ]
+
+
 def _playbook_findings(root: Path, host: str) -> list[str]:
     """The host applies the role once, as a plain role entry that no condition or variable
-    reaches."""
+    reaches. An include_role or import_role of it counts as an application, and is not plain."""
     entries = [entry for entry in _role_entries(root, host) if _is_jump_entry(entry)]
-    if len(entries) != 1:
-        return [f"playbooks/{host}.yml applies {ROLE_NAME} {len(entries)} times, want once"]
-    entry = entries[0]
+    by_task = _task_applications(root, host)
+    total = len(entries) + len(by_task)
+    found = [
+        f"playbooks/{host}.yml applies {ROLE_NAME} by {application}, want a plain role entry"
+        for application in by_task
+    ]
+    if total != 1:
+        found.insert(0, f"playbooks/{host}.yml applies {ROLE_NAME} {total} times, want once")
+    entry = entries[0] if total == 1 and entries else None
     extra = sorted(set(entry) - {"role"}) if isinstance(entry, dict) else []
     if extra:
-        return [f"playbooks/{host}.yml: the {ROLE_NAME} entry carries {extra}, want a plain entry"]
-    return []
+        found.append(
+            f"playbooks/{host}.yml: the {ROLE_NAME} entry carries {extra}, want a plain entry"
+        )
+    return found
 
 
 def _role_findings(root: Path) -> list[str]:
@@ -140,6 +196,13 @@ def _data_findings(root: Path) -> list[str]:
 
     edge1 = _owner_values(root, "edge1")
     for address in _text_list(edge1.get(DESTINATIONS)):
+        try:
+            ipaddress.IPv4Address(address)
+        except ValueError:
+            found.append(
+                f"owner_vars/edge1.yml: {DESTINATIONS} holds {address}, not an IPv4 address"
+            )
+            continue
         if address in private:
             found.append(
                 f"owner_vars/edge1.yml: {DESTINATIONS} holds {address}, a tenants private "
@@ -215,6 +278,23 @@ def _push_host_findings(root: Path, jump_hosts: frozenset[str]) -> list[str]:
     return found
 
 
+def _secret_findings(root: Path) -> list[str]:
+    """Each secret the README documents is passed by the delivery workflow, and is documented
+    in the form `NAME`. A missing file is a finding, or the rule would pass on nothing."""
+    readme, delivery = root / README, root / DELIVERY
+    if not readme.is_file() or not delivery.is_file():
+        return [f"{README} or {DELIVERY} cannot be read, so the secrets are not held"]
+    documented = readme.read_text(encoding="utf-8")
+    passed = delivery.read_text(encoding="utf-8")
+    found: list[str] = []
+    for name in ROUTE_SECRETS:
+        if f"`{name}`" not in documented:
+            found.append(f"{README} does not document the secret {name}")
+        if f"secrets.{name} " not in passed + " ":
+            found.append(f"{DELIVERY} does not pass the secret {name}")
+    return found
+
+
 def problems(root: Path, jump_hosts: frozenset[str] = JUMP_HOSTS) -> list[str]:
     """Return one finding per broken pin in the tree under ``root``."""
     found: list[str] = []
@@ -227,6 +307,7 @@ def problems(root: Path, jump_hosts: frozenset[str] = JUMP_HOSTS) -> list[str]:
     found.extend(_data_findings(root))
     found.extend(_second_hop_findings(root))
     found.extend(_push_host_findings(root, jump_hosts))
+    found.extend(_secret_findings(root))
     return found
 
 
@@ -250,6 +331,11 @@ class RealTree(unittest.TestCase):
         self.assertEqual([], _push_host_findings(ROOT, JUMP_HOSTS))
         self.assertFalse(set(bundle_hosts(ROOT)) & JUMP_HOSTS)
 
+    def test_the_route_secrets_are_documented_and_passed(self) -> None:
+        # The control of the secrets pin: the list it walks is not empty.
+        self.assertEqual(4, len(ROUTE_SECRETS))
+        self.assertEqual([], _secret_findings(ROOT))
+
 
 class Sabotage(unittest.TestCase):
     """Each pin goes red on a copy of the tree with one thing broken. The copy is the files the
@@ -267,6 +353,8 @@ class Sabotage(unittest.TestCase):
         shutil.copy(ROOT / ADDRESS_PLAN, self.root / ADDRESS_PLAN)
         (self.root / PULL_TRIGGER_VARS).parent.mkdir(parents=True)
         shutil.copy(ROOT / PULL_TRIGGER_VARS, self.root / PULL_TRIGGER_VARS)
+        (self.root / DELIVERY).parent.mkdir(parents=True)
+        shutil.copy(ROOT / DELIVERY, self.root / DELIVERY)
 
     def _edit(self, relative: str, old: str, new: str) -> None:
         path = self.root / relative
@@ -321,6 +409,42 @@ class Sabotage(unittest.TestCase):
             f"    - role: {ROLE_ENTRY} # noqa: role-name[path]\n      when: false\n",
         )
         self._expect("the ci_jump entry carries ['when']")
+
+    def test_a_host_name_in_edge1s_list_is_red(self) -> None:
+        self._edit(
+            f"{OWNER_VARS}/edge1.yml", f"{DESTINATIONS}:\n", f"{DESTINATIONS}:\n  - 'db-t1'\n"
+        )
+        self._expect("not an IPv4 address")
+
+    def test_an_include_role_of_the_role_in_pre_tasks_is_red(self) -> None:
+        self._edit(
+            f"{PLAYBOOKS}/edget.yml",
+            "  pre_tasks:\n",
+            f"  pre_tasks:\n    - ansible.builtin.include_role:\n        name: {ROLE_ENTRY}\n"
+            "      when: false\n",
+        )
+        self._expect("applies ci_jump 2 times, want once")
+
+    def test_an_import_role_of_the_role_inside_a_block_in_tasks_is_red(self) -> None:
+        last_role = f"    - role: {ROLE_ENTRY} # noqa: role-name[path]\n"
+        self._edit(
+            f"{PLAYBOOKS}/edget.yml",
+            last_role,
+            last_role + "  tasks:\n    - block:\n        - ansible.builtin.import_role:\n"
+            f"            name: {ROLE_ENTRY}\n",
+        )
+        self._expect("applies ci_jump 2 times, want once")
+
+    def test_an_include_role_as_the_only_application_is_red(self) -> None:
+        self._edit(
+            f"{PLAYBOOKS}/edget.yml", f"    - role: {ROLE_ENTRY} # noqa: role-name[path]\n", ""
+        )
+        self._edit(
+            f"{PLAYBOOKS}/edget.yml",
+            "  pre_tasks:\n",
+            f"  pre_tasks:\n    - ansible.builtin.include_role:\n        name: {ROLE_ENTRY}\n",
+        )
+        self._expect("want a plain role entry")
 
     def test_a_host_branch_in_the_role_is_red(self) -> None:
         path = self.root / ROLE_DIR / "tasks" / "main.yml"
@@ -383,6 +507,18 @@ class Sabotage(unittest.TestCase):
     def _expect_push(self, jump_hosts: frozenset[str], fragment: str) -> None:
         found = problems(self.root, jump_hosts)
         self.assertTrue(any(fragment in line for line in found), f"{fragment!r} not in {found}")
+
+    def test_a_secret_the_readme_does_not_document_is_red(self) -> None:
+        self._edit(README, "`SSH_HOST_APPLY_KEYS` (the", "`SSH_HOST_APPLY_KEY` (the")
+        self._expect(f"{README} does not document the secret SSH_HOST_APPLY_KEYS")
+
+    def test_a_secret_the_delivery_no_longer_passes_is_red(self) -> None:
+        self._edit(DELIVERY, "secrets.ANSIBLE_HOST_CHECK_KEYS", "secrets.ANSIBLE_HOST_KEYS")
+        self._expect(f"{DELIVERY} does not pass the secret ANSIBLE_HOST_CHECK_KEYS")
+
+    def test_a_delivery_that_cannot_be_read_is_red(self) -> None:
+        (self.root / DELIVERY).unlink()
+        self._expect("cannot be read, so the secrets are not held")
 
     def test_an_address_plan_that_cannot_be_read_is_red(self) -> None:
         # Without this an unreadable plan would let any list through the edge1 rule.

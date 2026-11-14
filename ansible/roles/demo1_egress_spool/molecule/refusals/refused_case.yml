@@ -9,6 +9,9 @@
 #   restore    commands to run afterwards, each an argv list, to undo what setup did
 #   reload_policy  true to flush the policy chains and run the egress program again
 #              afterwards, which rebuilds the chains and puts back a missing jump
+#   expect_calls  regular expressions the stand-in docker's call log must each match after the
+#              step (the case empties the log first, through setup)
+#   refuse_calls  regular expressions the call log must not match
 # tasks_from names the step; expect is a phrase of the step's own message. A case with
 # accepted: true is a control: the same step on the host as prepared must not refuse, so a
 # step that refused everything would not pass every case.
@@ -89,6 +92,31 @@
             demo1_egress_spool_egress_pending: false
             demo1_egress_spool_spool_pending: false
             demo1_egress_spool_start: {}
+
+        # A control that must have done something shows it in the stand-in docker's log of
+        # calls (a case empties the log first, through setup). expect_calls are regular
+        # expressions, each of which must match a line; refuse_calls must match none.
+        - name: Read the stand-in docker's calls
+          ansible.builtin.slurp:
+            src: /var/log/docker-standin.calls
+          register: demo1_egress_spool_case_calls
+          when: converge_case.expect_calls is defined or converge_case.refuse_calls is defined
+
+        - name: Assert the step made each call the case names
+          ansible.builtin.assert:
+            that:
+              - (demo1_egress_spool_case_calls.content | b64decode).splitlines() | select('match', item) | list | length > 0
+            quiet: true
+            fail_msg: 'The step did not make the call the case names: {{ item }}'
+          loop: '{{ converge_case.expect_calls | default([]) }}'
+
+        - name: Assert the step made none of the calls the case forbids
+          ansible.builtin.assert:
+            that:
+              - (demo1_egress_spool_case_calls.content | b64decode).splitlines() | select('match', item) | list | length == 0
+            quiet: true
+            fail_msg: 'The step made a call the case forbids: {{ item }}'
+          loop: '{{ converge_case.refuse_calls | default([]) }}'
 
         - name: Fail if the step accepted a state it must refuse
           ansible.builtin.fail:

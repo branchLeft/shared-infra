@@ -171,6 +171,15 @@ export const BLACKBOX_MODULE_OBJECT_STORAGE = 'http_object_storage';
 const MX1_HOSTNAME = 'mx1.branchleft.co.uk';
 
 /**
+ * The mailgun shim's Caddy TLS listener on mx1 (bulk mail from the sending
+ * application and the collector drain). It is open to the whole internet
+ * (`mail/firewall.ts`), so a probe from edge1 reaches it like any client.
+ * Probed with `tls_connect` alongside 465 and 993: a completed handshake with
+ * a verified certificate, not a plain TCP connect.
+ */
+export const MX1_SHIM_TLS_PORT = 8443;
+
+/**
  * The Stalwart exporter is reached by **address, not by name**: mx1's IPv6
  * (AAAA) half is not admitted by Stalwart's access-control rule, and naming
  * the address removes a Go dialer's own family choice rather than relying
@@ -329,7 +338,7 @@ export function renderPrometheusConfig(sites: readonly EdgeSite[]): string {
     '    metrics_path: /probe',
     '    static_configs:',
     mailProbeStaticConfig([25, 587], BLACKBOX_MODULE_SMTP_BANNER),
-    mailProbeStaticConfig([465, 993], BLACKBOX_MODULE_TLS_CONNECT),
+    mailProbeStaticConfig([465, 993, MX1_SHIM_TLS_PORT], BLACKBOX_MODULE_TLS_CONNECT),
     '    relabel_configs:',
     '      - source_labels: [__address__]',
     '        target_label: __param_target',
@@ -465,13 +474,36 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     // excludes 172.16.0.0/12 keys, so real clients collapsed onto a Docker
     // bridge address would not raise it: the blackbox probes seeing 429 are
     // the tripwire for that.
-    '      - alert: RateLimitDecliningRealClients',
-    '        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[15m]) > 0',
+    //
+    // Sustained, not instantaneous: an internet scanner tripping the
+    // throttle is the expected, handled case, because CrowdSec bans it
+    // (a 4h ban) within a few minutes and the declines stop. CrowdSec's
+    // Prometheus metrics, which the `crowdsec` job already scrapes, carry no
+    // per-address series (cs_active_decisions has only reason, origin and
+    // action labels), so a key with an active ban cannot be subtracted here
+    // and a new exporter is not worth it for one warning. The rule requires
+    // the decline rate to persist instead: increase() over 10m must stay
+    // above zero for 30m running, so a burst fires it only if it lasts more
+    // than 20 minutes (30m for, less the 10m window the expression keeps
+    // reading true after the last decline). That is longer than a burst
+    // CrowdSec bans, and a key that keeps declining past that point is one
+    // CrowdSec did not ban. Warning, with no owner_action and no page
+    // register entry, so it routes to the on-host mailbox only.
+    '      - alert: RateLimitDeclinesSustained',
+    '        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\\\.(1[6-9]|2\\\\d|3[01])\\\\..*", key!=""}[10m]) > 0',
+    '        for: 30m',
     '        labels:',
     '          severity: warning',
     '        annotations:',
-    '          summary: "Caddy declined at least one non-bridge rate-limited request in the last 15 minutes."',
+    '          summary: "Caddy has kept declining rate-limited requests from {{ $labels.key }} for at least 30 minutes."',
     '          description: >-',
+    '            A scanner burst that CrowdSec bans stops declining within',
+    '            minutes and does not reach this rule: the expression must',
+    '            hold for 30 minutes, which takes a burst of more than 20.',
+    '            Declines that persist that long come from a key CrowdSec has',
+    '            not banned. Check `cscli decisions list` on edge1 for the key',
+    '            and the access log for what it is requesting, before',
+    '            deciding whether to ban it by hand or raise the zone budget.',
     '            key!="" excludes the keyless zone-aggregate series -- an absent',
     '            label reads as "" in PromQL, and without this exclusion the',
     '            alert double-counts every decline once under the aggregate and',
@@ -929,12 +961,12 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        annotations:',
     '          summary: "{{ $labels.instance }}\'s mail TLS certificate expires in under 14 days."',
     '          description: >-',
-    '            Stalwart renews the certificate automatically, so a failed renewal',
-    '            shows only when the certificate reaches hard expiry and mail',
-    "            clients' TLS fails. This fires earlier, while there is still time",
-    '            to fix the renewal. The series comes from the implicit-TLS ports',
-    '            465 and 993 only: ports 25 and 587 use smtp_banner, which does no',
-    '            TLS handshake.',
+    '            Stalwart (ports 465 and 993) and Caddy (the mailgun shim, port 8443)',
+    '            renew their certificates automatically, so a failed renewal shows',
+    "            only when the certificate reaches hard expiry and clients' TLS",
+    '            fails. This fires earlier, while there is still time to fix the',
+    '            renewal. The series comes from the TLS ports 465, 993 and 8443',
+    '            only: ports 25 and 587 use smtp_banner, which does no TLS handshake.',
     '',
     '      - alert: MailHostDown',
     '        expr: probe_success{job="blackbox_mail"} == 0',

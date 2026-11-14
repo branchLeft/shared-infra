@@ -69,13 +69,21 @@ groups:
             today. Flip expected_up to true once the target is confirmed
             live.
 
-      - alert: RateLimitDecliningRealClients
-        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\.(1[6-9]|2\\d|3[01])\\..*", key!=""}[15m]) > 0
+      - alert: RateLimitDeclinesSustained
+        expr: increase(caddy_rate_limit_declined_requests_total{key!~"172\\.(1[6-9]|2\\d|3[01])\\..*", key!=""}[10m]) > 0
+        for: 30m
         labels:
           severity: warning
         annotations:
-          summary: "Caddy declined at least one non-bridge rate-limited request in the last 15 minutes."
+          summary: "Caddy has kept declining rate-limited requests from {{ $labels.key }} for at least 30 minutes."
           description: >-
+            A scanner burst that CrowdSec bans stops declining within
+            minutes and does not reach this rule: the expression must
+            hold for 30 minutes, which takes a burst of more than 20.
+            Declines that persist that long come from a key CrowdSec has
+            not banned. Check `cscli decisions list` on edge1 for the key
+            and the access log for what it is requesting, before
+            deciding whether to ban it by hand or raise the zone budget.
             key!="" excludes the keyless zone-aggregate series -- an absent
             label reads as "" in PromQL, and without this exclusion the
             alert double-counts every decline once under the aggregate and
@@ -485,12 +493,12 @@ groups:
         annotations:
           summary: "{{ $labels.instance }}'s mail TLS certificate expires in under 14 days."
           description: >-
-            Stalwart renews the certificate automatically, so a failed renewal
-            shows only when the certificate reaches hard expiry and mail
-            clients' TLS fails. This fires earlier, while there is still time
-            to fix the renewal. The series comes from the implicit-TLS ports
-            465 and 993 only: ports 25 and 587 use smtp_banner, which does no
-            TLS handshake.
+            Stalwart (ports 465 and 993) and Caddy (the mailgun shim, port 8443)
+            renew their certificates automatically, so a failed renewal shows
+            only when the certificate reaches hard expiry and clients' TLS
+            fails. This fires earlier, while there is still time to fix the
+            renewal. The series comes from the TLS ports 465, 993 and 8443
+            only: ports 25 and 587 use smtp_banner, which does no TLS handshake.
 
       - alert: MailHostDown
         expr: probe_success{job="blackbox_mail"} == 0
