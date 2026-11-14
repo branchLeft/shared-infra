@@ -1,7 +1,7 @@
 ---
 # Test scaffolding, not role tasks. The pinned test image has no OpenSSH server,
 # so this installs a stand-in sshd and a stand-in ssh.service (see
-# files/sshd-stub.sh). Then it places the run-time inputs the way the operator
+# files/sshd-stub). Then it places the run-time inputs the way the operator
 # does: one root-only file each, in the root-only inputs directory.
 - name: Prepare
   hosts: all
@@ -11,7 +11,7 @@
   tasks:
     - name: Install the stand-in sshd the role checks and reads back
       ansible.builtin.copy:
-        src: sshd-stub.sh
+        src: sshd-stub
         dest: /usr/local/sbin/sshd
         owner: root
         group: root

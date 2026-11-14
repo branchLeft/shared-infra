@@ -90,8 +90,9 @@ describe('resolvePrivateAddress', () => {
     expect(() => resolvePrivateAddress('mx1', 443)).toThrow(/not a backend this edge proxies to/);
   });
 
-  it.each([80, 443, 3000, 9090, 9093, 2587, 25860])(
-    'refuses edge1 on port %s: only the pager port is published for the edge',
+  // 18081 is the Sweego receiver's drain port: ops1 alone reaches it, so no edge route may name it.
+  it.each([80, 443, 3000, 9090, 9093, 2587, 25860, 18079, 18081])(
+    'refuses edge1 on port %s: only the pager port and the receiver webhook port are published for the edge',
     (port) => {
       expect(() => resolvePrivateAddress('edge1', port)).toThrow(
         /not a backend this edge proxies to/
@@ -99,9 +100,10 @@ describe('resolvePrivateAddress', () => {
     }
   );
 
-  it('allows edge1 only on the pager port', () => {
-    expect([...EDGE_HOST_ALLOWED_PORTS]).toEqual([2586]);
+  it('allows edge1 only on the pager port and the receiver webhook port', () => {
+    expect([...EDGE_HOST_ALLOWED_PORTS]).toEqual([2586, 18080]);
     expect(resolvePrivateAddress('edge1', 2586)).toBe('10.20.1.10:2586');
+    expect(resolvePrivateAddress('edge1', 18080)).toBe('10.20.1.10:18080');
   });
 
   it.each([0, -1, 65536, 1.5, Number.NaN])('refuses port %s', (port) => {
@@ -146,10 +148,14 @@ describe('the registry, now that only this edge reads it', () => {
   // edge `cloudRunService` used to route through) is gone, removed once it
   // described infrastructure that no longer existed. A registry entry with
   // no `privateUpstream` looks like a configured site but serves nothing.
-  it('every real entry declares a privateUpstream', () => {
+  //
+  // The one allowed exception is a placeholder entry the owner has not named
+  // yet: it also claims no hostname, so it cannot look configured while serving
+  // nothing. An entry that claims a hostname and has no upstream still fails.
+  it('every real entry declares a privateUpstream, or claims no hostname yet', () => {
     for (const entry of sites) {
       expect(
-        entry.privateUpstream !== undefined,
+        entry.privateUpstream !== undefined || entry.hostnames.length === 0,
         `site ${entry.name} declares no privateUpstream, so it is skipped and serves nothing`
       ).toBe(true);
     }

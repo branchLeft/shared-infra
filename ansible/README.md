@@ -15,7 +15,8 @@ first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
 in `checks/check_enrolment.py`), then
 `roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
 until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
-`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
+`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack`, then
+`roles/sweego_receiver` (the complaint-webhook receiver; last, and refusing until the owner has placed its two secret files), and
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
 `roles/control_plane`, then `roles/status_page` (after it, because the control plane installs the
 DOCKER-USER drop for the page's port), then `roles/nextcloud_stack`, then
@@ -242,6 +243,16 @@ The workflow has these kinds of job:
   number of roles in one job. A role whose one scenario would not fit in the
   limit puts its refusal cases in a second scenario, which is a second shard,
   not in a longer limit.
+
+The `lint` job is a matrix of three legs that run at once: `static` (the
+pins, yamllint, ansible-lint, mypy, ruff and the role program and library
+checks), `checks` (the unit tests of the harness, the checks and the tools) and
+`units` (every role's unit tests). Run one after the other these took 15 to 20
+minutes and a slow runner reached the job's limit; run at once the job takes as
+long as the longest leg. A step names its leg in `if: matrix.part == '<leg>'`,
+and `test_ci_gate_order.py` holds each condition to a leg of the matrix so a
+typo cannot skip a step everywhere. The job's result is success only when every
+leg succeeded, so the gate reads it as before.
 
 The gate job is named `Lint and test the Ansible roles`. The ruleset requires
 a check with exactly that name, and a matrix job would report its checks under

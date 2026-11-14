@@ -9,6 +9,8 @@ import {
   RATE_LIMIT_EVENTS,
   RATE_LIMIT_WINDOW_SECONDS,
   TLS_PROTOCOLS,
+  WEBHOOK_RATE_LIMIT_EVENTS,
+  WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
   type EdgePosture,
 } from './posture';
 
@@ -247,14 +249,18 @@ const PRIVATE_ADDRESSES: Record<string, string> = { ...HOST_IPS, ...APP_HOST_IPS
 const NOT_AN_UPSTREAM = new Set(['mx1']);
 
 /**
- * `edge1` is this host, so it is refused as an upstream except on the one
- * port a service on this host is deliberately published for: the monitoring
- * stack's pager. Any other port on its own address is the edge's own listener
- * (a proxy loop) or an internal service (Grafana, Prometheus) that must not be
- * exposed by a registry typo. Widening this is a decision, not a convenience.
+ * `edge1` is this host, so it is refused as an upstream except on the ports a
+ * service on this host is deliberately published for: the monitoring stack's
+ * pager (2586) and the Sweego receiver's webhook port (18080, the
+ * `sweego_receiver_port` of `ansible/owner_vars/edge1.yml`). The receiver's
+ * drain port (18081) is never listed: it is reachable from ops1 alone, and an
+ * edge upstream on it would put it on a public route. Any other port on its own
+ * address is the edge's own listener (a proxy loop) or an internal service
+ * (Grafana, Prometheus) that must not be exposed by a registry typo. Widening
+ * this is a decision, not a convenience.
  */
 const EDGE_HOST = 'edge1';
-export const EDGE_HOST_ALLOWED_PORTS: ReadonlySet<number> = new Set([2586]);
+export const EDGE_HOST_ALLOWED_PORTS: ReadonlySet<number> = new Set([2586, 18080]);
 
 export function resolvePrivateAddress(host: string, port: number): string {
   if (NOT_AN_UPSTREAM.has(host)) {
@@ -551,6 +557,24 @@ function membersMagicLinkRateLimitDirective(): string[] {
   ];
 }
 
+/**
+ * The tight, dedicated throttle of an inbound-webhook site, in a zone no other
+ * block names and keyed on the direct peer like the others. Not keyed on
+ * posture: it guards a route that is public the moment it exists, so no
+ * setting in `posture.ts` can switch it off. See `render.md`.
+ */
+function webhookRateLimitDirective(zone: string): string[] {
+  return [
+    'rate_limit @webhook {',
+    `\tzone ${zone} {`,
+    '\t\tkey {http.request.remote.host}',
+    `\t\twindow ${WEBHOOK_RATE_LIMIT_WINDOW_SECONDS}s`,
+    `\t\tevents ${WEBHOOK_RATE_LIMIT_EVENTS}`,
+    '\t}',
+    '}',
+  ];
+}
+
 // Why: throttle runs before WAF (unlike Cloud Armor baseline); order protects vCPUs
 // from floods reaching inspection. See render.md §"protectionChain: handler evaluation order".
 function protectionChain(
@@ -559,6 +583,7 @@ function protectionChain(
   options: {
     appsec: 'none' | 'all' | 'except-authoring';
     membersMagicLink?: boolean;
+    webhookZone?: string;
     beforeAppsec?: string[];
     /**
      * The session verification (`sessionVerification`), placed after the
@@ -579,6 +604,9 @@ function protectionChain(
   }
   if (posture.membersMagicLinkRateLimit === 'enforcing' && options.membersMagicLink) {
     lines.push(...membersMagicLinkRateLimitDirective());
+  }
+  if (options.webhookZone !== undefined) {
+    lines.push(...webhookRateLimitDirective(options.webhookZone));
   }
   // After the throttles, so they still count every request, verified or not,
   // and cap how many verification calls one address can cause.
@@ -712,10 +740,72 @@ function discardRouteResponses(): string[] {
   return ['header @discard Allow POST', 'respond @discard_post 204', 'respond @discard 405'];
 }
 
+const WEBHOOK_METHOD = 'POST';
+
+/**
+ * A site that only receives signed callbacks (`EdgeSite.inboundWebhookPath`).
+ * Deliberately not a Ghost block with a path matcher added: it carries none of
+ * the Ghost matchers, so it names no zone, matcher or path of the login-mail
+ * route. Why each line is where it is, and what it lets through: `render.md`.
+ */
+function webhookSiteBlock(
+  site: EdgeSite,
+  path: string,
+  hostnames: string[],
+  posture: EdgePosture
+): Block {
+  const upstream = site.privateUpstream;
+  if (upstream === undefined) {
+    throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
+  }
+  if (site.discardRoute !== undefined || site.injectionWafPreviewOnly) {
+    throw new Error(
+      `site ${site.name} is an inbound webhook site and cannot also declare a discardRoute or injectionWafPreviewOnly`
+    );
+  }
+  if (!/^\/[A-Za-z0-9_\-/]+$/.test(path)) {
+    throw new Error(
+      `inboundWebhookPath ${path} must be a plain literal path (letters, digits, _ - /)`
+    );
+  }
+  return {
+    addresses: hostnames,
+    body: [
+      ...logDirective(ACCESS_LOG),
+      ...tlsDirective(),
+      '@webhook {',
+      `\tmethod ${WEBHOOK_METHOD}`,
+      `\tpath ${path}`,
+      '}',
+      '@webhook_wrong_method {',
+      `\tnot method ${WEBHOOK_METHOD}`,
+      `\tpath ${path}`,
+      '}',
+      'route {',
+      ...hstsDirective().map((line) => `\t${line}`),
+      ...requestBodyDirective(site).map((line) => `\t${line}`),
+      ...protectionChain(posture, `${site.name}_per_ip`, {
+        appsec: 'all',
+        webhookZone: `${site.name}_inbound_per_ip`,
+      }).map((line) => `\t${line}`),
+      `\theader @webhook_wrong_method Allow ${WEBHOOK_METHOD}`,
+      '\trespond @webhook_wrong_method 405',
+      `\treverse_proxy @webhook ${resolvePrivateAddress(upstream.host, upstream.port)}`,
+      // Last, matcher-less: whatever the lines above did not answer or proxy is
+      // refused here, so a missed case fails closed rather than reaching upstream.
+      '\trespond 404',
+      '}',
+    ],
+  };
+}
+
 function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): Block {
   const upstream = site.privateUpstream;
   if (upstream === undefined) {
     throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
+  }
+  if (site.inboundWebhookPath !== undefined) {
+    return webhookSiteBlock(site, site.inboundWebhookPath, hostnames, posture);
   }
 
   const address = resolvePrivateAddress(upstream.host, upstream.port);

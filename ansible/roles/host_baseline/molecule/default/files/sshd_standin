@@ -1,0 +1,129 @@
+#!/usr/bin/python3 -I
+"""Test stand-in for OpenSSH's sshd: the test image has no sshd and no network.
+
+It models what the role depends on and nothing else, as the role's README lists: -t fails on a
+keyword outside a closed set, -T prints the resolved settings, Include expands in glob order, the
+first value for a keyword wins, and permitrootlogin prohibit-password prints as without-password.
+"""
+
+from __future__ import annotations
+
+import glob
+import sys
+
+KNOWN = {
+    "include",
+    "passwordauthentication",
+    "kbdinteractiveauthentication",
+    "permitrootlogin",
+    "pubkeyauthentication",
+    "port",
+}
+DEFAULT_CONFIG = "/etc/ssh/sshd_config"
+USAGE_STATUS = 64
+
+
+class Reader:
+    """Resolves the settings of a configuration file and the files it includes."""
+
+    def __init__(self) -> None:
+        """Start with the defaults the stand-in models, and no keyword seen yet."""
+        self.resolved: dict[str, str] = {
+            "passwordauthentication": "yes",
+            "kbdinteractiveauthentication": "no",
+            "permitrootlogin": "prohibit-password",
+            "pubkeyauthentication": "yes",
+            "port": "22",
+        }
+        self.seen: set[str] = set()
+        self.status = 0
+
+    def read_file(self, path: str) -> None:
+        """Read one file, line by line; an included file is read in place, in glob order."""
+        with open(path, "rb") as handle:
+            text = handle.read().decode("utf-8", errors="surrogateescape")
+        lines = text.split("\n")
+        if text.endswith("\n"):
+            lines.pop()
+        for number, raw in enumerate(lines, start=1):
+            line = raw.split("#", 1)[0]
+            pieces = line.split(None, 1)
+            if not pieces:
+                continue
+            keyword = pieces[0].lower()
+            value = pieces[1].strip() if len(pieces) > 1 else ""
+            if keyword not in KNOWN:
+                print(f"{path} line {number}: Bad configuration option: {keyword}", file=sys.stderr)
+                self.status = 255
+                continue
+            if keyword == "include":
+                for included in sorted(glob.glob(value)):
+                    self.read_file(included)
+                continue
+            if keyword not in self.seen:
+                self.seen.add(keyword)
+                self.resolved[keyword] = value
+
+
+def parse_options(argv: list[str]) -> tuple[str, str] | None:
+    """Read the -t, -T and -f options the way getopts does; None for a usage error."""
+    mode = ""
+    config = DEFAULT_CONFIG
+    index = 0
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--":
+            index += 1
+            break
+        if len(arg) < 2 or not arg.startswith("-"):
+            break
+        index += 1
+        position = 1
+        while position < len(arg):
+            letter = arg[position]
+            position += 1
+            if letter == "t":
+                mode = "syntax"
+            elif letter == "T":
+                mode = "dump"
+            elif letter == "f":
+                if position < len(arg):
+                    config = arg[position:]
+                elif index < len(argv):
+                    config = argv[index]
+                    index += 1
+                else:
+                    return None
+                break
+            else:
+                return None
+    return mode, config
+
+
+def main(argv: list[str]) -> int:
+    """Parse the options, resolve the configuration, and print it for -T."""
+    options = parse_options(argv)
+    if options is None:
+        return USAGE_STATUS
+    mode, config = options
+    reader = Reader()
+    try:
+        reader.read_file(config)
+    except OSError as error:
+        print(f"{error.filename}: {error.strerror}", file=sys.stderr)
+        return 1
+    if reader.status != 0:
+        return reader.status
+    if mode == "dump":
+        lines = []
+        for keyword, value in reader.resolved.items():
+            if keyword == "permitrootlogin" and value == "prohibit-password":
+                value = "without-password"
+            lines.append(f"{keyword} {value}")
+        for line in sorted(lines):
+            print(line)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

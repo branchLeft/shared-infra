@@ -1,0 +1,57 @@
+#!/usr/bin/python3 -I
+"""What the placeholder branchleft-compose@.service runs as its ExecStart in the role's test,
+installed by prepare.yml. The real unit runs `docker compose up -d --remove-orphans --wait`; this
+logs one line to the stand-in's call log, with the first twelve characters of the sha256 of the
+Caddyfile and the Compose file on the host at that moment, so a test can see both were placed
+before the unit started, and marks both services running. It fails while /run/edge-unit.fail
+exists.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import sys
+
+CALLS = "/var/log/docker-standin.calls"
+FAIL_FLAG = "/run/edge-unit.fail"
+RUNNING = "/run/standin.running"
+CADDYFILE = "/opt/branchleft/edge/caddy/Caddyfile"
+COMPOSE = "/opt/branchleft/edge/compose.yml"
+
+
+def short_sha(path: str) -> str:
+    """Return the first twelve hex digits of the file's sha256, or nothing if it is unreadable."""
+    try:
+        with open(path, "rb") as handle:
+            return hashlib.sha256(handle.read()).hexdigest()[:12]
+    except OSError:
+        return ""
+
+
+def append_call(text: str) -> None:
+    """Append one line to the call log, ignoring a failed write as the shell did."""
+    try:
+        with open(CALLS, "a", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError:
+        pass
+
+
+def main(argv: list[str]) -> int:
+    """Log the start and mark both services running, or fail while the flag exists."""
+    if os.path.exists(FAIL_FLAG):
+        append_call("UNIT-START-FAILED\n")
+        return 1
+    append_call(f"UNIT-START caddyfile={short_sha(CADDYFILE)} compose={short_sha(COMPOSE)}\n")
+    try:
+        with open(RUNNING, "w", encoding="utf-8") as handle:
+            handle.write("caddy\ncrowdsec\n")
+    except OSError as error:
+        print(f"{RUNNING}: {error.strerror}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

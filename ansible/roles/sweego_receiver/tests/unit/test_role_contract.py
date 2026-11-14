@@ -230,6 +230,24 @@ class ComposeHoldsNoSecret(unittest.TestCase):
         for name in ("WEBHOOK_SECRET_FILE", "WEBHOOK_DRAIN_TOKEN_FILE"):
             self.assertTrue(str(environment[name]).startswith("/run/secrets/"), name)
 
+    def test_the_environment_paths_are_the_roles_constants(self) -> None:
+        # The template writes the three mount points out, so the plan's secret scan finds in the
+        # checkout the lines it matches on the host. The constants of vars/main.yml name the same
+        # paths for the mounts and for the read-back, and this holds the two to each other.
+        constants = load_yaml("vars/main.yml")
+        environment = as_dict(receiver(**{PREVIOUS: "/etc/branchleft/old"})["environment"])
+        self.assertEqual(
+            environment["WEBHOOK_SECRET_FILE"], constants["sweego_receiver_container_secret_path"]
+        )
+        self.assertEqual(
+            environment["WEBHOOK_SECRET_FILE_PREVIOUS"],
+            constants["sweego_receiver_container_previous_secret_path"],
+        )
+        self.assertEqual(
+            environment["WEBHOOK_DRAIN_TOKEN_FILE"],
+            constants["sweego_receiver_container_token_path"],
+        )
+
     def test_the_secret_files_are_mounted_read_only_from_host_paths(self) -> None:
         mounts = [str(v) for v in as_list(receiver()["volumes"])]
         secret = [m for m in mounts if "/run/secrets/" in m]
