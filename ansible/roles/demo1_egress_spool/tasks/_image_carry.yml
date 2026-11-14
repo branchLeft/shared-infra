@@ -1,0 +1,98 @@
+---
+# Internal to the role. Included by _image.yml once it knows which image the spool would start.
+#
+# The signed image push (the control plane sends the image to the host's broker, and the
+# broker's wrapper runs `docker load` on it) leaves the image on the host by its digest
+# alone: the archive is made with `docker save <digest>`, so the loaded image has no name.
+# The spool runs `name@sha256:<digest>` with pull_policy never, and that reference does not
+# resolve for an unnamed image (observed with a real Docker, containerd image store). This
+# step gives such an image the name part of the pin as a local tag, and nothing else: no
+# connection is made, whatever the name looks like, because `docker tag` is a local
+# operation and the override never pulls.
+#
+# It tags only an image whose own id IS the pinned digest, which is the digest the signed
+# commit holds. On the containerd image store the id of an image is its manifest digest, so
+# this is the same identity check by digest. A different image, however it was loaded, has
+# another id and is left alone, so _image.yml then refuses it as not on the host. On a
+# classic image store the id is not the manifest digest, so no image matches and the check
+# fails closed (README, "How the spool's image gets onto the host").
+#
+# Reads in check mode too. The tag is written only in a real run, and a plan says it would.
+
+# Reset first: a register or fact set earlier in a run outlives its task (a second pass
+# must never read the last one's answer).
+- name: Forget what an earlier pass read of the image's id
+  ansible.builtin.set_fact:
+    demo1_egress_spool_carry_listed: []
+    demo1_egress_spool_carry_unreadable: false
+    demo1_egress_spool_carry_pending: false
+    demo1_egress_spool_carry_digest: "{{ demo1_egress_spool_wanted_image | regex_replace('^.*@', '') }}"
+    demo1_egress_spool_carry_repository: "{{ demo1_egress_spool_wanted_image | regex_replace('@.*$', '') }}"
+
+- name: Look for the image under its pinned reference
+  ansible.builtin.command:
+    argv:
+      ['{{ demo1_egress_spool_docker }}', image, inspect, '{{ demo1_egress_spool_wanted_image }}']
+  register: demo1_egress_spool_carry_named
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: demo1_egress_spool_wanted_image | length > 0
+
+# The digest begins with sha256: so it cannot be taken for an option.
+- name: Look for the image by its digest alone, where it is not on the host under its name
+  ansible.builtin.command:
+    argv:
+      ['{{ demo1_egress_spool_docker }}', image, inspect, '{{ demo1_egress_spool_carry_digest }}']
+  register: demo1_egress_spool_carry_by_id
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  when: demo1_egress_spool_wanted_image | length > 0 and demo1_egress_spool_carry_named.rc | default(0) != 0
+
+- name: Read what docker lists for the digest
+  when: demo1_egress_spool_wanted_image | length > 0 and demo1_egress_spool_carry_by_id.rc | default(1) == 0
+  block:
+    - name: Parse the listing
+      ansible.builtin.set_fact:
+        demo1_egress_spool_carry_listed: '{{ demo1_egress_spool_carry_by_id.stdout | from_json }}'
+  rescue:
+    - name: Note that the listing was not JSON
+      ansible.builtin.set_fact:
+        demo1_egress_spool_carry_unreadable: true
+
+# True only when docker returned exactly one image and its own id is the pinned digest. The
+# tests short-circuit, so a shape that is not a list of one mapping is never indexed.
+- name: Work out whether an unnamed image with the pinned id is on the host
+  ansible.builtin.set_fact:
+    demo1_egress_spool_carry_pending: >-
+      {{
+        not demo1_egress_spool_carry_unreadable
+        and demo1_egress_spool_carry_listed is sequence
+        and demo1_egress_spool_carry_listed is not string
+        and demo1_egress_spool_carry_listed is not mapping
+        and demo1_egress_spool_carry_listed | length == 1
+        and demo1_egress_spool_carry_listed[0] is mapping
+        and demo1_egress_spool_carry_listed[0].Id is defined
+        and demo1_egress_spool_carry_listed[0].Id is string
+        and demo1_egress_spool_carry_listed[0].Id == demo1_egress_spool_carry_digest
+      }}
+
+- name: Say the image would be given its name, in a plan
+  ansible.builtin.debug:
+    msg: >-
+      The pinned image is on the host unnamed, with the pinned id {{ demo1_egress_spool_carry_digest }}, as the
+      signed image push leaves it. An apply tags it {{ demo1_egress_spool_carry_repository }}:{{ demo1_egress_spool_carried_tag }}
+      so that the pinned reference resolves, and then checks the pinned digest by that reference.
+  when: ansible_check_mode and demo1_egress_spool_carry_pending | bool
+
+# The only write of this step. argv is a list, and both words begin with a letter or digit.
+- name: Give the image the name part of the pin as a local tag
+  ansible.builtin.command:
+    argv:
+      - '{{ demo1_egress_spool_docker }}'
+      - tag
+      - '{{ demo1_egress_spool_carry_digest }}'
+      - '{{ demo1_egress_spool_carry_repository }}:{{ demo1_egress_spool_carried_tag }}'
+  changed_when: true
+  when: not ansible_check_mode and demo1_egress_spool_carry_pending | bool

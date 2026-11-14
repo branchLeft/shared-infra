@@ -37,7 +37,9 @@ In this order, and it stops at the first refusal:
 4. **The spool.** Checks the drain token file, copies the Compose file and places the override
    that takes the image from the pin file and sets `pull_policy: never`, checks their posture,
    creates the image pin file once, **checks that the image the pin file names is already on the
-   host and that docker lists the pinned digest for it** (`_image.yml`), creates the queue volume and gives it to the spool's account, orders the
+   host and that docker lists the pinned digest for it** (`_image.yml`; an image that arrived
+   unnamed, as the signed image push leaves it, is first given the pin's name as a local tag by
+   `_image_carry.yml`, only if its own id is the pinned digest), creates the queue volume and gives it to the spool's account, orders the
    spool's unit after the egress unit with a drop-in, enables and starts the spool's unit. Then
    reads the running container back, and its image against the pin file.
 
@@ -46,7 +48,7 @@ registry, so it never pulls the spool's image: the shared Compose unit runs
 `docker compose pull` before every start, which fails with no registry, and the override's
 `pull_policy: never` makes Compose skip it (observed with an unresolvable registry: without the
 setting `docker compose pull` exits 1; with it, it reports the image skipped and exits 0).
-The owner carries the image onto the host once, and the role checks what arrived by digest
+The image is sent to the host by the signed image push (or carried once by the owner), and the role checks what arrived by digest
 (below, "How the spool's image gets onto the host"). **Step 4 refuses on a host that does not
 hold the pinned image**: in a real run with a message saying the host never pulls, or saying the
 image listed is not the pinned one, and in a plan with a visible "Spool image NOT on host" line.
@@ -157,8 +159,9 @@ text it reads for the same reason.
   own), the shared Compose template unit, the two root-owned directories, and the owner's token
   file, all in place before the role runs.
 - No network from the host: the role fetches nothing and pulls no image. The spool's image must
-  already be on the host, carried there once by the owner as "How the spool's image gets onto the
-  host" describes, on a Docker that uses the containerd image store.
+  already be on the host, sent by the signed image push or carried once by the owner as "How the
+  spool's image gets onto the host" describes, on a Docker that uses the containerd image store.
+  The one write the role makes for it is a local tag on an image that arrived unnamed.
 
 ## What it changes on a host
 
@@ -324,7 +327,25 @@ Also covered, each with its control on the good value:
 
 ## How the spool's image gets onto the host
 
-**The route: a one-off carry, then a check by digest.** The host has no route to a registry, and
+**The route, once the control plane sends it: the signed image push.** The control plane pulls the
+image where it may, checks its attestation and its digest, and sends it to demo1's broker over the
+link it already dials in on (`POST /image`, the same edge1 route as the push of the commit). The
+broker stages the archive and runs the slot wrapper's `load` verb, which is `docker load`. The
+archive is made with `docker save <digest>`, so the loaded image has **no name**: its own id is the
+manifest digest on the containerd image store. The host opens no connection and its allowlist is
+not touched. The sender, the control plane's call to `pushOciImage`, is not in this repository.
+What this role does for it (`_image_carry.yml`): where the pinned reference `name@sha256:<digest>`
+is not found, it looks the image up by the bare digest, and only if exactly one image comes back
+whose own id **is** the pinned digest does it run `docker tag <digest> <name>:carried`, a local
+tag that makes the pinned reference resolve (a pull is never made: the override sets
+`pull_policy: never`). `_image.yml` then holds the image to the pinned digest by that reference,
+as it does an image that arrived any other way. An image of any other id is not named and the run
+refuses it as not on the host. Observed with a real Docker 29.9.2 (containerd image store):
+`docker save <digest>`, remove, `docker load` gives an unnamed image; `name@sha256:<digest>` then
+exits 1 "No such image"; after `docker tag <digest> name:carried` it resolves and lists
+`name@sha256:<digest>` in `RepoDigests`; `name@sha256:<other digest>` still exits 1.
+
+**The first-run route, a one-off carry, then a check by digest.** The host has no route to a registry, and
 its egress allowlist holds the package mirrors only. So the owner pulls the pinned image
 on a workstation, checks it there with
 `ansible/tools/spool_image_gate.py`, tags it with a name, and streams `docker save` into
@@ -345,13 +366,13 @@ rule used at both ends of the carry.
 
 **Rejected, with the reason:**
 
-1. _The broker's signed-image route_ (the control plane signs a descriptor, the slot wrapper's
-   `load` verb streams a tar into `docker load`). It needs the control plane's private signing key,
-   which authorises everything the broker does, on a workstation. The digest it signs is that of the
-   tar's bytes, not the image's, so the image's identity would still have to be checked after the
-   load. And it loads the image by its id, so the image lands without a name, while the Compose
-   override runs `name@sha256:...` with `pull_policy: never`, which needs the name. Changing that is
-   a change to the broker, outside this role.
+1. _The broker's signed-image route from a workstation_ (the control plane signs a descriptor, the
+   slot wrapper's `load` verb streams a tar into `docker load`). It needs the control plane's
+   private signing key, which authorises everything the broker does, on a workstation, so the owner's
+   hand carry does not use it. The control plane's own sender is the route above. The digest the
+   push signs is that of the tar's bytes, not the image's, so the image's identity is checked again
+   after the load, by `_image.yml`. The image lands without a name, which `_image_carry.yml` fixes
+   in this role and not in the broker.
 2. _A registry pull on demo1._ It widens the allowlist beyond package mirrors.
 3. _The image inside the signed commit._ An image is hundreds of megabytes of git.
 4. _Using the CI account to stream it._ That widens a forced-command account on a privileged host.
@@ -376,9 +397,14 @@ history` still pass.** Only `docker create --pull=never` fails ("apply layer err
 
 **Limits, named:**
 
-- **The carry is a bootstrap route.** A bump of the pin before an automated route exists needs the
-  same steps again. The automated route (the image carried beside the signed bundle in the push
-  that already reaches demo1, gated by the digest in the verified commit) is not built here.
+- **The hand carry is a bootstrap route.** A bump of the pin before the control plane sends the
+  image needs the same steps again. The image cannot ride beside the signed bundle: the push
+  receiver reads one git bundle on standard input, up to 200 MiB, and the image is about 190 MB.
+  The sender of the signed image push (the control plane's call) is not in this repository; the
+  role only accepts what the push leaves.
+- **The plan says it would tag, and cannot show more.** `docker tag` does not run in check mode.
+  A plan on a host that holds the image unnamed prints one line saying the apply will tag it. The
+  tag itself is covered by the refusals scenario, not by a plan.
 - **It fails closed on a classic image store.** Docker's classic store does not record the digest
   the way the containerd store does, so the digest check finds none and refuses. The runbook reads
   the store on both ends first.
