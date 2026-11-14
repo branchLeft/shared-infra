@@ -1,10 +1,33 @@
-#!/bin/sh
-# A fake date, for the db1_grants test only, installed as /usr/local/bin/date in
-# the test container. The role refuses to change the dump account between 02:55 and
-# 03:40 UTC, so the test must choose the time: when /etc/fake-now exists, its one
-# line is the answer to the role's `date -u +%H%M`; otherwise the real date runs.
-if [ -f /etc/fake-now ]; then
-  cat /etc/fake-now
-  exit 0
-fi
-exec /usr/bin/date "$@"
+#!/usr/bin/python3 -I
+"""Fake date, for the db1_grants test only, installed as /usr/local/bin/date in the test container.
+
+The role refuses to change the dump account between 02:55 and 03:40 UTC, so the test must choose
+the time: when /etc/fake-now exists, its one line is the answer to the role's `date -u +%H%M`;
+otherwise the real date runs with the same arguments.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+FAKE_NOW = "/etc/fake-now"
+REAL_DATE = "/usr/bin/date"
+
+
+def main(argv: list[str]) -> int:
+    """Answer with the fake clock when it is set, or run the real date."""
+    if os.path.isfile(FAKE_NOW):
+        with open(FAKE_NOW, "rb") as handle:
+            sys.stdout.buffer.write(handle.read())
+        return 0
+    try:
+        os.execv(REAL_DATE, [REAL_DATE, *argv])  # noqa: S606 - exec replaces the process, as the shell's exec did
+    except OSError as error:
+        print(f"{REAL_DATE}: {error.strerror}", file=sys.stderr)
+        return 127
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -16,7 +16,7 @@
     # verify.yml say so.
     - name: Install the program the placeholder unit runs
       ansible.builtin.copy:
-        src: standin-unit-start.sh
+        src: standin-unit-start
         dest: /usr/local/bin/standin-unit-start
         owner: root
         group: root
@@ -44,7 +44,7 @@
 
     - name: Install a stand-in for docker
       ansible.builtin.copy:
-        src: standin-docker.sh
+        src: standin-docker
         dest: /usr/bin/docker
         owner: root
         group: root
