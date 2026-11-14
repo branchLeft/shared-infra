@@ -1700,8 +1700,7 @@ class SetFactAndRegisterTest(unittest.TestCase):
 
     def test_a_set_fact_copy_of_a_copy_is_followed(self) -> None:
         findings = self._findings(
-            self.SET_FACT_COPY
-            + "- name: Copy the copy\n  ansible.builtin.set_fact:\n"
+            self.SET_FACT_COPY + "- name: Copy the copy\n  ansible.builtin.set_fact:\n"
             "    probe_second: '{{ probe_copy }}'\n  no_log: true\n"
             "- name: Print the second copy\n  ansible.builtin.debug:\n"
             "    msg: '{{ probe_second }}'\n"
@@ -1720,14 +1719,14 @@ class SetFactAndRegisterTest(unittest.TestCase):
 
     # register: the result of a task that used the secret, named later.
 
-    REGISTER_OF_SECRET = (
+    REGISTER_OF_PROBE = (
         "---\n- name: Run with the probe\n  ansible.builtin.command: echo '{{ probe_secret }}'\n"
         "  register: probe_out\n  no_log: true\n"
     )
 
     def test_a_register_of_a_secret_printed_without_no_log_is_red(self) -> None:
         findings = self._findings(
-            self.REGISTER_OF_SECRET
+            self.REGISTER_OF_PROBE
             + "- name: Print the result\n  ansible.builtin.debug:\n    var: probe_out\n"
         )
         self._assert_red(
@@ -1739,7 +1738,7 @@ class SetFactAndRegisterTest(unittest.TestCase):
     def test_a_register_of_a_secret_printed_with_no_log_is_green(self) -> None:
         self.assertEqual(
             self._findings(
-                self.REGISTER_OF_SECRET
+                self.REGISTER_OF_PROBE
                 + "- name: Print the result\n  ansible.builtin.debug:\n    var: probe_out\n"
                 "  no_log: true\n"
             ),
@@ -1760,7 +1759,7 @@ class SetFactAndRegisterTest(unittest.TestCase):
         # The expression keywords print only their expression: a `when` on the result is no read.
         self.assertEqual(
             self._findings(
-                self.REGISTER_OF_SECRET
+                self.REGISTER_OF_PROBE
                 + "- name: Act on the result\n  ansible.builtin.debug:\n    msg: fine\n"
                 "  when: probe_out.changed\n"
             ),
@@ -1769,8 +1768,7 @@ class SetFactAndRegisterTest(unittest.TestCase):
 
     def test_a_set_fact_of_a_register_is_followed_to_the_fact(self) -> None:
         findings = self._findings(
-            self.REGISTER_OF_SECRET
-            + "- name: Keep the stdout\n  ansible.builtin.set_fact:\n"
+            self.REGISTER_OF_PROBE + "- name: Keep the stdout\n  ansible.builtin.set_fact:\n"
             "    probe_kept: '{{ probe_out.stdout }}'\n  no_log: true\n"
             "- name: Print the kept stdout\n  ansible.builtin.debug:\n    var: probe_kept\n"
         )

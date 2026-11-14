@@ -63,7 +63,8 @@ TEMPLATE_FQCNS = frozenset(("ansible.builtin.template",))
 # calls evaluate_expression on it. It is the only action of ansible-core 2.21.5 that does besides
 # assert, whose `that` is the expression-only read above (plugins/action/*.py: evaluate_expression).
 DEBUG_FQCNS = frozenset(("ansible.builtin.debug",))
-# set_fact copies each of its arguments into a variable of its own name (`cacheable` is no variable).
+# set_fact copies each of its arguments into a variable of its own name (`cacheable` is no
+# variable).
 SET_FACT_FQCNS = frozenset(("ansible.builtin.set_fact",))
 VARS_LOOKUP_FQCN = "ansible.builtin.vars"
 LOOKUP_CALLS = frozenset(("lookup", "query", "q"))
@@ -885,7 +886,7 @@ def _taint(
                     partial.pop(reg.key, None)
                     origin[reg.key] = origin.get(reg.key, set()) | reached
                     changed = True
-    role_binds =[b for b in binds if b.includes and b.key in origin]
+    role_binds = [b for b in binds if b.includes and b.key in origin]
     for bind in role_binds:
         if not bind.followed:
             findings.append(
@@ -1274,7 +1275,8 @@ def _baseline(root: Path) -> tuple[set[tuple[str, str, str]], list[str]]:
 
 def _against_baseline(root: Path, findings: list[str]) -> list[str]:
     """Hold the findings to the baseline, which only shrinks: a finding it does not list is a
-    finding, and a listed entry that no longer fires is a finding too (so a fixed task leaves it)."""
+    finding, and a listed entry that no longer fires is a finding too (so a fixed task leaves
+    it)."""
     listed, problems = _baseline(root)
     fired: set[tuple[str, str, str]] = set()
     out = list(problems)
