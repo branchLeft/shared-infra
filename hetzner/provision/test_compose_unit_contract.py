@@ -566,6 +566,8 @@ def retry_faults(unit_text: str) -> list[str]:
     unit = section_lines_of_text(unit_text, "Unit")
     service = section_lines_of_text(unit_text, "Service")
     faults = []
+    pause_seconds: float | None = None
+    interval_seconds: float | None = None
 
     restart = last_assignment(service, "Restart")
     if restart is None:
@@ -576,15 +578,18 @@ def retry_faults(unit_text: str) -> list[str]:
     pause = last_assignment(service, "RestartSec")
     if pause is None:
         faults.append(f"[Service] has no `RestartSec=` of at least {MINIMUM_RESTART_SECONDS}s")
-    elif parse_seconds(pause.partition("=")[2]) < MINIMUM_RESTART_SECONDS:
-        faults.append(f"[Service] `{pause}` is under {MINIMUM_RESTART_SECONDS}s")
+    else:
+        pause_seconds = parse_seconds(pause.partition("=")[2])
+        if pause_seconds < MINIMUM_RESTART_SECONDS:
+            faults.append(f"[Service] `{pause}` is under {MINIMUM_RESTART_SECONDS}s")
 
     interval = last_assignment(unit, "StartLimitIntervalSec")
     if interval is None:
         faults.append("[Unit] has no finite `StartLimitIntervalSec=`")
     else:
-        seconds = parse_seconds(interval.partition("=")[2])
-        if seconds == 0 or seconds == INFINITY:
+        interval_seconds = parse_seconds(interval.partition("=")[2])
+        if interval_seconds == 0 or interval_seconds == INFINITY:
+            interval_seconds = None
             faults.append(f"[Unit] `{interval}` is not finite: systemd reads 0 and infinity as no limit")
 
     burst = last_assignment(unit, "StartLimitBurst")
@@ -596,6 +601,14 @@ def retry_faults(unit_text: str) -> list[str]:
             raise UnparseableUnitValue(f"`{burst}` is not a whole number")
         if int(count) < MINIMUM_START_LIMIT_BURST:
             faults.append(f"[Unit] `{burst}` is under {MINIMUM_START_LIMIT_BURST}")
+        elif pause_seconds is not None and interval_seconds is not None:
+            # The limit trips on the burst-th start inside the interval, and
+            # the burst-th start comes (burst - 1) pauses after the first.
+            if (int(count) - 1) * pause_seconds >= interval_seconds:
+                faults.append(
+                    f"[Unit] `{burst}` with `{pause}` and `{interval}` can never trip: "
+                    f"({int(count)} - 1) x {pause_seconds:g}s is not under {interval_seconds:g}s"
+                )
     return faults
 
 
@@ -1239,6 +1252,54 @@ class UnitRetryContractTests(unittest.TestCase):
                 faults = retry_faults(text)
                 self.assertEqual(len(faults), 1, faults)
                 self.assertIn(f"`StartLimitBurst={burst}` is under 3", faults[0])
+
+    def test_a_start_limit_that_can_never_trip_is_refused_naming_its_lines(self):
+        # The limit trips on the burst-th start inside the interval, and the
+        # burst-th start is (burst - 1) restart pauses after the first.
+        for burst, pause, interval in (
+            ("1000", "30s", "900"),
+            ("5", "30s", "120"),
+            ("5", "30s", "119"),
+            ("5", "5min", "900"),
+            ("31", "30s", "900"),
+        ):
+            with self.subTest(burst=burst, pause=pause, interval=interval):
+                text = self.with_line("StartLimitBurst", burst)
+                text = text.replace("RestartSec=30s", f"RestartSec={pause}")
+                text = text.replace("StartLimitIntervalSec=900", f"StartLimitIntervalSec={interval}")
+                faults = retry_faults(text)
+                self.assertEqual(len(faults), 1, faults)
+                self.assertIn("can never trip", faults[0])
+                self.assertIn(f"`StartLimitBurst={burst}`", faults[0])
+                self.assertIn(f"`RestartSec={pause}`", faults[0])
+                self.assertIn(f"`StartLimitIntervalSec={interval}`", faults[0])
+
+    def test_a_start_limit_that_trips_inside_its_interval_is_accepted(self):
+        for burst, pause, interval in (
+            ("5", "30s", "900"),
+            ("5", "30s", "121"),
+            ("3", "30s", "61"),
+            ("31", "30s", "901"),
+        ):
+            with self.subTest(burst=burst, pause=pause, interval=interval):
+                text = self.with_line("StartLimitBurst", burst)
+                text = text.replace("StartLimitIntervalSec=900", f"StartLimitIntervalSec={interval}")
+                self.assertEqual(retry_faults(text), [])
+
+    def test_the_trip_relation_is_not_reported_on_top_of_a_missing_or_disabled_value(self):
+        # Each of these already has its own fault; the relation needs all
+        # three values and would only repeat the same cause.
+        for text in (
+            self.without_line("RestartSec"),
+            self.without_line("StartLimitIntervalSec"),
+            self.without_line("StartLimitBurst"),
+            self.with_line("StartLimitIntervalSec", "0"),
+            self.with_line("StartLimitIntervalSec", "infinity"),
+            self.with_line("StartLimitBurst", "0"),
+        ):
+            with self.subTest(text=text):
+                for fault in retry_faults(text):
+                    self.assertNotIn("can never trip", fault)
 
     def test_a_missing_start_limit_burst_is_refused(self):
         faults = retry_faults(self.without_line("StartLimitBurst"))

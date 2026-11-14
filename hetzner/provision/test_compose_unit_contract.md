@@ -176,6 +176,15 @@ undoes the other if it drifts.
     deploy's own two explicit starts (the new pin, then the rollback) can
     spend. Every start counts, the wrapper's included.
 
+    The limit must also be able to trip: `(StartLimitBurst - 1) * RestartSec`
+    has to be under `StartLimitIntervalSec`. The burst-th start comes
+    `burst - 1` pauses after the first, so with a burst of 1000, or a pause
+    longer than the interval allows for, the starts never pile up inside one
+    interval and the retry never stops, while every directive above still
+    passes on its own. The unit's own 5, 30 seconds and 900 seconds give 120
+    seconds against 900. The relation is only checked when all three values
+    are present and the interval is finite; each of those has its own fault.
+
     An instance drop-in that sets any of the four directives replaces the
     template's value for that one stack, so none may. The scan covers every
     committed `hetzner/*/systemd/*.override.conf`; `snds-collector.service`
