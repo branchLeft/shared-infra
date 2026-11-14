@@ -24,7 +24,7 @@ import os
 import re
 import secrets
 import stat
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from ansible.module_utils.basic import AnsibleModule
 
@@ -40,6 +40,10 @@ description:
     mode only. A key or directory that another account owns is refused.
   - Refuses to make a new key when the public file already exists and the key does not. A key
     that has gone is not made again, because a new key would change what others trust.
+  - Mends a key left with two names by a run that stopped between the link and the unlink of its
+    temporary name. Only a temporary name in the key's own directory for the very same file (same
+    device and inode) counts, and when the public file is already there it must be exactly the
+    half derived from this key. A mismatch, or any other extra name, is refused.
   - Anything else at the key's path is refused, naming the path and nothing else.
   - Reads the key inside this process to derive the public half and returns that half as an SPKI
     PEM text. The private bytes never leave the process.
@@ -57,8 +61,9 @@ options:
   public_file:
     description: >-
       Absolute path of the world-readable file the role writes the public half to. The module
-      never writes it. It only refuses to make a new key while this file exists and the key does
-      not.
+      never writes it. It refuses to make a new key while this file exists and the key does not,
+      and it reads the file only to compare it with the key's derived half before it mends a key
+      that has two names.
     type: str
     required: true
 attributes:
@@ -120,6 +125,9 @@ PRIVATE_FOOTER = b"\n-----END PRIVATE KEY-----\n"
 PUBLIC_HEADER = "-----BEGIN PUBLIC KEY-----\n"
 PUBLIC_FOOTER = "\n-----END PUBLIC KEY-----\n"
 MAX_KEY_FILE_BYTES = 256
+# The public file is one PEM line of 60 characters with its header and footer. Anything bigger is
+# not the half this module derives, and is not read.
+MAX_PUBLIC_FILE_BYTES = 256
 # A temporary file is made in the same directory, so that the final link is on one file system.
 KEY_TEMP_PREFIX = ".record-signing.key.tmp-"
 TEMP_NAME = re.compile(r"\.record-signing\.key\.tmp-[0-9a-f]{16}\Z")
@@ -141,6 +149,7 @@ E_KEY_FORM = "E-KEY-FORM"
 E_KEY_MODE = "E-KEY-MODE-WIDE"
 E_KEY_OWNER = "E-KEY-OWNER"
 E_KEY_LOST = "E-KEY-LOST"
+E_PUB_MISMATCH = "E-PUB-MISMATCH"
 E_IO = "E-IO"
 E_INTERNAL = "E-INTERNAL"
 
@@ -410,10 +419,15 @@ def _list_directory(settings: Settings, dfd: int) -> list[str]:
     return temps
 
 
-def _inspect_key(settings: Settings, seams: Seams, dfd: int) -> tuple[int, KeyFile] | None:
-    """Open and judge the key file. Return its descriptor and facts, or None when it is absent.
+def _inspect_key(
+    settings: Settings, seams: Seams, dfd: int, temps: Sequence[str] = ()
+) -> tuple[int, KeyFile, list[str]] | None:
+    """Open and judge the key file. Return its descriptor, facts and the temporary names that are
+    the key's own other names, or None when it is absent.
 
-    The private bytes are read here and used for the public half only; they do not leave it.
+    The private bytes are read here and used for the public half only; they do not leave it. A
+    temporary name counts as the key's other name only when it is the same file (device and inode),
+    so a link made anywhere else is still a refusal.
 
     Raises:
         RefusalError: when the key cannot be opened, or is not a valid key as described above.
@@ -431,15 +445,30 @@ def _inspect_key(settings: Settings, seams: Seams, dfd: int) -> tuple[int, KeyFi
     except OSError as error:
         raise RefusalError(E_KEY_OPEN, path) from error
     try:
-        key = judge_key(fd, path, seams)
+        own = _names_of_the_same_file(fd, dfd, temps)
+        key = judge_key(fd, path, seams, extra_links=len(own))
     except BaseException:
         os.close(fd)
         raise
-    return fd, key
+    return fd, key, own
 
 
-def judge_key(fd: int, path: str, seams: Seams) -> KeyFile:
+def _names_of_the_same_file(fd: int, dfd: int, temps: Sequence[str]) -> list[str]:
+    """Return the temporary names in the directory that are the very file the descriptor holds."""
+    info = os.fstat(fd)
+    same: list[str] = []
+    for name in temps:
+        other = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+        if (other.st_dev, other.st_ino) == (info.st_dev, info.st_ino):
+            same.append(name)
+    return same
+
+
+def judge_key(fd: int, path: str, seams: Seams, extra_links: int = 0) -> KeyFile:
     """Judge an open key file by its descriptor and return what is learned from it.
+
+    The key has one name, or one more for each of `extra_links` names the caller has shown to be
+    the same file, so a link that is not accounted for is refused.
 
     Raises:
         RefusalError: when it is not a lone regular root-owned file of a narrow mode holding a
@@ -448,7 +477,7 @@ def judge_key(fd: int, path: str, seams: Seams) -> KeyFile:
     info = os.fstat(fd)
     if not stat.S_ISREG(info.st_mode):
         raise RefusalError(E_KEY_TYPE, path)
-    if info.st_nlink != 1:
+    if info.st_nlink != 1 + extra_links:
         raise RefusalError(E_KEY_LINKS, path)
     if info.st_size > MAX_KEY_FILE_BYTES:
         raise RefusalError(E_KEY_SIZE, path)
@@ -462,6 +491,34 @@ def judge_key(fd: int, path: str, seams: Seams) -> KeyFile:
     if seed is None:
         raise RefusalError(E_KEY_FORM, path)
     return KeyFile(derive_public(seed), stat.S_IMODE(info.st_mode))
+
+
+def check_public_matches(settings: Settings, public: bytes) -> None:
+    """Refuse unless the public file, when there is one, is exactly the half derived from the key.
+
+    An absent file is accepted: the role writes it from this module's result. A file that is a
+    link, not a plain file, too big to be that half or different in any byte is refused, and the
+    refusal holds the path and no text from either side.
+
+    Raises:
+        RefusalError: when the file is there and is not exactly the derived half.
+    """
+    path = settings.public_file
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise RefusalError(E_PUB_MISMATCH, path) from error
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_PUBLIC_FILE_BYTES:
+            raise RefusalError(E_PUB_MISMATCH, path)
+        data = os.read(fd, MAX_PUBLIC_FILE_BYTES + 1)
+    finally:
+        os.close(fd)
+    if data != public_pem(public).encode("ascii"):
+        raise RefusalError(E_PUB_MISMATCH, path)
 
 
 def _write_new_file(dfd: int, name: str, mode: int, data: bytes) -> None:
@@ -551,12 +608,16 @@ def converge_in_directory(
     if info.st_uid != seams.root_uid:
         raise RefusalError(E_DIR_OWNER, settings.directory)
     temps = _list_directory(settings, dfd)
-    found = _inspect_key(settings, seams, dfd)
+    found = _inspect_key(settings, seams, dfd, temps)
     key_fd = found[0] if found else None
     try:
         if found is None and _exists(settings.public_file):
             # A key that has gone is never made again: a new one would change what others trust.
             raise RefusalError(E_KEY_LOST, settings.public_file)
+        if found is not None and found[2]:
+            # The key has another name of its own, left by a run that stopped between the link and
+            # the unlink. It is mended only when the public file, if there is one, is this key's.
+            check_public_matches(settings, found[1].public)
         if stat.S_IMODE(info.st_mode) != DIR_MODE:
             result.adopted = True
             if not check_mode:

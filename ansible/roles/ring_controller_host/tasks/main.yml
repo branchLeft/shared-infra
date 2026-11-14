@@ -13,6 +13,17 @@
 # --- Inputs first, refused before any task changes anything. No message names a value (ANS-16).
 # The argument spec coerces a wrong type rather than rejecting it and accepts an empty string, so
 # these reject both. Each input has its own task, so a refusal names the one input at fault.
+# The ledger URL input is retired: nothing reads it. A play variable or an owner_vars value is never
+# read against the argument spec, so this task is what refuses the old name, even when it is empty.
+# It is the first task, so nothing has changed when it stops the run. The text names the input and
+# never a value (ANS-16).
+- name: Refuse the retired ledger URL input
+  ansible.builtin.assert:
+    that:
+      - ring_controller_host_ledger_url is not defined
+    quiet: true
+    fail_msg: ring_controller_host_ledger_url is retired and nothing reads it. Remove it from the owner's values.
+
 - name: Refuse a bundle digest that is set and is not 64 lowercase hex digits
   ansible.builtin.assert:
     that:
@@ -29,27 +40,13 @@
     quiet: true
     fail_msg: ring_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
 
-- name: Refuse a ledger URL that is set and is not an https URL with no credential
-  ansible.builtin.assert:
-    that:
-      - ring_controller_host_ledger_url is string
-      - ring_controller_host_ledger_url | length == 0 or ring_controller_host_ledger_url is match(ring_controller_host_ledger_url_pattern)
-    quiet: true
-    fail_msg: ring_controller_host_ledger_url must be empty or an https URL with no user name, password, query or fragment.
-
-# A digest names a bundle to run, and a bundle with no ledger to read would be started half
-# configured. Each missing input is named.
+# A digest names a bundle to run, and a bundle with nowhere to fetch it from cannot be run. The
+# missing input is named.
 - name: Refuse a bundle digest with no bundle URL
   ansible.builtin.assert:
     that: ring_controller_host_bundle_sha256 | length == 0 or ring_controller_host_bundle_url | length > 0
     quiet: true
     fail_msg: ring_controller_host_bundle_url is empty while ring_controller_host_bundle_sha256 is set.
-
-- name: Refuse a bundle digest with no ledger URL
-  ansible.builtin.assert:
-    that: ring_controller_host_bundle_sha256 | length == 0 or ring_controller_host_ledger_url | length > 0
-    quiet: true
-    fail_msg: ring_controller_host_ledger_url is empty while ring_controller_host_bundle_sha256 is set.
 
 # --- What the role stands on. It asserts these and never makes or changes them.
 - name: Look at the parent directories

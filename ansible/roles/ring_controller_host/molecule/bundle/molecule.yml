@@ -38,7 +38,6 @@ provisioner:
         scenario_url_pattern: '^file:///srv/ring-fixture/[a-z.-]+\Z'
         scenario_good_url: file:///srv/ring-fixture/bundle-good.tar.gz
         scenario_noexec_url: file:///srv/ring-fixture/bundle-noexec.tar.gz
-        scenario_ledger_url: https://ledger.example.test/ledger
         # A well-formed digest of nothing that exists: a download with this digest must fail.
         scenario_wrong_digest: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 verifier:

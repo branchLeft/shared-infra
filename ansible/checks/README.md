@@ -194,10 +194,11 @@ is not loaded there.
   in its module. For ops1 the two keys are `pull_trigger_steps`,
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text, and
   `control_plane_db_apps_image`, the applications image the steps run, which must be text.
-  The `ring_controller_host` role adds three more, all text and all allowed on ops1 only:
-  `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url` and
-  `ring_controller_host_ledger_url`. Each may be the empty string, which is how the role
-  starts inert; what a value may look like is the role's rule alone. The push remote and the
+  The `ring_controller_host` role adds two more, both text and both allowed on ops1 only:
+  `ring_controller_host_bundle_sha256` and `ring_controller_host_bundle_url`. Each may be the
+  empty string, which is how the role starts inert; what a value may look like is the role's
+  rule alone. The role's old `ring_controller_host_ledger_url` is no longer allowed: an owner
+  file that still sets it is refused here, and the role refuses the name too. The push remote and the
   known-hosts line it used to take are no longer allowed, so an owner file that still sets one is
   refused here (Ansible's own spec check does not read an owner file's values).
   R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
