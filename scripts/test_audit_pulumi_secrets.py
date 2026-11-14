@@ -759,6 +759,33 @@ class ReferenceScanTests(unittest.TestCase):
         os.symlink("no-such-target.md", self.tree / "node_modules" / "broken.md")
         self.assertEqual(audit.scan_backend_references(self.tree), set())
 
+    def test_an_unlistable_directory_is_reported_not_skipped(self):
+        # os.walk drops a directory it cannot list without a word, so a scan
+        # reports the tree clean over every file inside it.
+        locked = self.tree / "locked"
+        locked.mkdir()
+        (locked / "a.md").write_text("gs://branchleft-pulumi-state\n")
+        locked.chmod(0o000)
+        self.addCleanup(locked.chmod, 0o755)
+        with self.assertRaises(Exception) as caught:
+            audit.scan_backend_references(self.tree)
+        self.assertIn("locked", str(caught.exception))
+
+    def test_an_unlistable_directory_exits_two_through_main(self):
+        locked = self.tree / "locked"
+        locked.mkdir()
+        (locked / "a.md").write_text("gs://branchleft-pulumi-state\n")
+        locked.chmod(0o000)
+        self.addCleanup(locked.chmod, 0o755)
+        out = io.StringIO()
+        err = io.StringIO()
+        with unittest.mock.patch.object(audit, "REPO_ROOT", self.tree):
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = audit.main([])
+        self.assertEqual(code, 2)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("locked", err.getvalue())
+
 
 class ProviderSelectionScanTests(unittest.TestCase):
     """The regression assertion hetzner/RUNBOOK-existing-stack-migration.md

@@ -19,7 +19,7 @@ import tempfile
 import unittest
 from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
 import deploy_slot_keys_reconcile as slots
 from ruamel.yaml import YAML
@@ -605,6 +605,63 @@ class ProgramTests(unittest.TestCase):
         with self.assertRaises(slots.HostRefusalError) as caught:
             host.converge([entry(STACK_A, KEY_A)])
         self.assertEqual("host: readback-register-differs-from-declared", str(caught.exception))
+
+
+REGISTER_DIR = "/etc/branchleft/deploy-slots"
+
+
+class ReadSlots(Protocol):
+    """The program's own read_slots, with the register directory its other callers pass."""
+
+    def __call__(self, *, fs: slots.Fs, slot_dir: str = ...) -> dict[str, str]: ...
+
+
+class FailedReadbackTests(HostCase):
+    """A failed read-back must never bring a key the apply took away back into the file."""
+
+    AUTHORIZED = "replace /home/deploy/.ssh/authorized_keys"
+
+    def fail_readback_once_rewritten(self) -> None:
+        """Make the register unreadable once the apply has rewritten authorized_keys."""
+        program = self.host.program
+        written = self.host.fs.writes
+        real = cast("ReadSlots", program.read_slots)
+
+        def read_slots(*, fs: slots.Fs, slot_dir: str = REGISTER_DIR) -> dict[str, str]:
+            if self.AUTHORIZED in written:
+                raise program.ProvisionError("EXAMPLE")
+            return real(fs=fs, slot_dir=slot_dir)
+
+        program.read_slots = read_slots  # type: ignore[method-assign]
+
+    def failed_readback(self, entries: list[slots.Entry]) -> None:
+        self.fail_readback_once_rewritten()
+        with self.assertRaises(slots.HostRefusalError) as caught:
+            self.host.converge(entries)
+        self.assertEqual("host: readback-register-differs-from-declared", str(caught.exception))
+
+    def test_a_revoked_key_is_not_restored(self) -> None:
+        self.host.converge([entry(STACK_A, KEY_A), entry(STACK_B, KEY_B)])
+        self.host.fs.writes.clear()
+        self.failed_readback([entry(STACK_A, KEY_A)])
+        self.assertNotIn(KEY_B.split(" ")[1], self.host.authorized())
+
+    def test_a_rotated_out_key_is_not_restored(self) -> None:
+        self.host.converge([entry(STACK_A, KEY_A)])
+        self.host.fs.writes.clear()
+        self.failed_readback([entry(STACK_A, KEY_A_ROTATED)])
+        self.assertNotIn(KEY_A.split(" ")[1], self.host.authorized())
+
+    def test_no_managed_slot_line_is_left_and_the_unmanaged_lines_are_kept(self) -> None:
+        unmanaged = f"restrict {HOST_KEY} {HOST_LEVEL_COMMENT}\n"
+        self.host.converge([entry(STACK_A, KEY_A), entry(STACK_B, KEY_B)])
+        self.host.fs.writes.clear()
+        self.failed_readback([entry(STACK_A, KEY_A_ROTATED), entry(STACK_B, KEY_B)])
+        self.assertEqual(unmanaged, self.host.authorized())
+        self.assertEqual(
+            (0, DEPLOY_GID, slots.PINNED_AUTHORIZED_KEYS_MODE),
+            self.host.fs.owner_mode("/home/deploy/.ssh/authorized_keys"),
+        )
 
 
 class OutputTests(HostCase):

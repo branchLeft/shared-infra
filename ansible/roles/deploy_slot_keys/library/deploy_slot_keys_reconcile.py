@@ -600,10 +600,32 @@ def read_back(program: Program, fs: Fs, valid: Sequence[Valid], plan: Plan) -> N
         raise HostRefusalError(RULE_READBACK_DRIFT)
 
 
+def unmanaged_lines(text: str) -> str:
+    """Return ``text`` without any line that carries the pinned slot marker.
+
+    The marker test is the one the shape check uses, so a line is dropped here exactly
+    when the module would have counted it as a slot line.
+    """
+    return "".join(
+        f"{line}\n"
+        for line in text.splitlines()
+        if not (line.split() and line.split()[-1].startswith(PINNED_MARKER))
+    )
+
+
 def restore_authorized_keys(fs: Fs, plan: Plan) -> None:
-    """Put the authorized_keys text from before the apply back, so a bad line is not left."""
+    """Leave only the lines the role does not manage, so a failed apply loses deploys.
+
+    The text from before the apply is not put back whole: it carries the line of every key
+    the apply revoked or rotated out, and the register has already dropped those slots. A
+    key that was revoked must stay refused, so no slot line is written, kept or not.
+    """
     fs.replace_text(
-        PINNED_AUTHORIZED_KEYS, plan.original_text, PINNED_AUTHORIZED_KEYS_MODE, 0, plan.gid
+        PINNED_AUTHORIZED_KEYS,
+        unmanaged_lines(plan.original_text),
+        PINNED_AUTHORIZED_KEYS_MODE,
+        0,
+        plan.gid,
     )
 
 

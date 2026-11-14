@@ -50,6 +50,8 @@ edge_stack_caddy_file: caddy/Caddyfile
 edge_stack_compose_file: compose.yml
 edge_stack_crowdsec_files:
   - crowdsec/config.yaml.local
+  - crowdsec/appsec-configs/ghost-admin-previews.yaml
+  - crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml
 # Every regular file directly in this directory is CrowdSec's. It is the one
 # directory the role prunes.
 edge_stack_acquis_dir: crowdsec/acquis.d
@@ -59,3 +61,5 @@ edge_stack_dirs:
   - caddy
   - crowdsec
   - crowdsec/acquis.d
+  - crowdsec/appsec-configs
+  - crowdsec/postoverflows

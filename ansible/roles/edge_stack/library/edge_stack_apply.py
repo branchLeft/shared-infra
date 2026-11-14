@@ -289,7 +289,17 @@ PHASE_APPLY = "apply"
 LOCK_POLL_INTERVAL = 0.2
 DETAIL_LIMIT = 2000
 CADDYFILE_INSIDE = "/etc/caddy/Caddyfile"
-CROWDSEC_CONFIG_INSIDE = "/etc/crowdsec/config.yaml.local"
+# Each CrowdSec file the restart reads back, by its path under the stack's crowdsec/
+# directory, and where the container sees it (hetzner/edge/stack/compose.yml).
+CROWDSEC_FILES_INSIDE = {
+    "config.yaml.local": "/etc/crowdsec/config.yaml.local",
+    "appsec-configs/ghost-admin-previews.yaml": (
+        "/etc/crowdsec/appsec-configs/branchleft/ghost-admin-previews.yaml"
+    ),
+    "postoverflows/ghost-admin-api-postoverflow.yaml": (
+        "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/ghost-admin-api-postoverflow.yaml"
+    ),
+}
 CROWDSEC_ACQUIS_INSIDE = "/etc/crowdsec-acquis.d"
 MODE_PATTERN = re.compile(r"0?[0-7]{3,4}\Z")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}\Z")
@@ -848,13 +858,8 @@ def restart_crowdsec(settings: Settings, report: Report, context: Context) -> No
             )
         context.sleep(settings.wait_interval)
     crowdsec_dir = f"{settings.project_dir}/crowdsec"
-    same_inside(
-        settings,
-        "crowdsec",
-        CROWDSEC_CONFIG_INSIDE,
-        f"{crowdsec_dir}/config.yaml.local",
-        Code.CROWDSEC_READBACK,
-    )
+    for name, inside in CROWDSEC_FILES_INSIDE.items():
+        same_inside(settings, "crowdsec", inside, f"{crowdsec_dir}/{name}", Code.CROWDSEC_READBACK)
     host_names = visible_names(f"{crowdsec_dir}/acquis.d")
     for name in host_names:
         host_path = f"{crowdsec_dir}/acquis.d/{name}"

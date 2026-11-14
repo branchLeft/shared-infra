@@ -268,3 +268,62 @@
     # docker fails unless the override says pull_policy never, did not stop the start.
     - name: Assert that GitHub and its registry were unreachable
       ansible.builtin.include_tasks: '{{ playbook_dir }}/../../../demo1_build/molecule/default/tasks/blocked_outbound.yml'
+
+    # The revert program and what the role's confirm leaves. The role was applied twice and
+    # the second apply changed nothing, so a record left behind, or a timer still waiting,
+    # would show here. No timer was armed by the first apply, which had no known-good table to
+    # go back to; the confirm created it. The revert scenario proves the timer itself.
+    - name: Look at the revert program, its state directory, its record and the known-good tables
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /usr/local/sbin/branchleft-demo-egress-revert
+        - /var/lib/branchleft-demo-egress-revert
+        - /var/lib/branchleft-demo-egress-revert/state
+        - /var/lib/branchleft-demo-egress-revert/last-good.iptables
+        - /var/lib/branchleft-demo-egress-revert/last-good.ip6tables
+      register: demo1_egress_spool_verify_revert
+
+    - name: Assert the program and the directory are root's with the modes the role sets, and no record is left
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_verify_revert.results[0].stat.isreg
+          - demo1_egress_spool_verify_revert.results[0].stat.mode == '0755'
+          - demo1_egress_spool_verify_revert.results[0].stat.pw_name == 'root'
+          - demo1_egress_spool_verify_revert.results[1].stat.isdir
+          - demo1_egress_spool_verify_revert.results[1].stat.mode == '0700'
+          - demo1_egress_spool_verify_revert.results[1].stat.pw_name == 'root'
+          - not demo1_egress_spool_verify_revert.results[2].stat.exists
+          - demo1_egress_spool_verify_revert.results[3].stat.isreg
+          - demo1_egress_spool_verify_revert.results[4].stat.isreg
+        quiet: true
+        fail_msg: The revert program, its state directory or its known-good tables are not as the role leaves them, or an apply was left unconfirmed.
+
+    - name: Ask whether the revert timer is waiting
+      ansible.builtin.command:
+        argv: [systemctl, is-active, branchleft-demo-egress-revert.timer]
+      register: demo1_egress_spool_verify_revert_timer
+      changed_when: false
+      failed_when: demo1_egress_spool_verify_revert_timer.rc == 0
+
+    - name: Read the known-good table of each family
+      ansible.builtin.slurp:
+        src: '/var/lib/branchleft-demo-egress-revert/last-good.{{ item }}'
+      loop: [iptables, ip6tables]
+      register: demo1_egress_spool_verify_last_good
+
+    - name: Assert each holds both chains, a REJECT in each, and the jump in DOCKER-USER
+      ansible.builtin.assert:
+        that:
+          - (item.content | b64decode) is search('(?m)^:BRANCHLEFT-DEMO-EGRESS ')
+          - (item.content | b64decode) is search('(?m)^:BRANCHLEFT-DEMO-INPUT ')
+          - (item.content | b64decode) is search('(?m)^-A BRANCHLEFT-DEMO-EGRESS .*-j REJECT')
+          - (item.content | b64decode) is search('(?m)^-A BRANCHLEFT-DEMO-INPUT -j REJECT')
+          - (item.content | b64decode) is search('(?m)^-A DOCKER-USER -j BRANCHLEFT-DEMO-EGRESS$')
+          - not ((item.content | b64decode) is search('ACCEPT'))
+        quiet: true
+        fail_msg: The known-good {{ item.item }} table is not a whole, closed table.
+      loop: '{{ demo1_egress_spool_verify_last_good.results }}'
+      loop_control:
+        label: '{{ item.item }}'

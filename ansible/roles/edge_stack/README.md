@@ -8,11 +8,11 @@ This README is for a maintainer who is new to the repository. It follows the ord
 
 The source of truth is the directory `hetzner/edge/stack` (the link `files/stack` points at it). Every file in it is in exactly one class, and a file in no class stops the run before anything changes:
 
-| Class      | Files                                                            | Action when the class is due                                                                |
-| ---------- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `caddy`    | `Caddyfile`                                                      | validate the candidate in the pinned image, write it in place, `caddy reload`, read it back |
-| `compose`  | `compose.yml`, and the hash of `/etc/branchleft/edge.env`        | `systemctl restart branchleft-compose@edge.service`                                         |
-| `crowdsec` | `crowdsec/config.yaml.local`, every file in `crowdsec/acquis.d/` | `docker compose restart crowdsec`, then read back                                           |
+| Class      | Files                                                                                                                                                                             | Action when the class is due                                                                |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `caddy`    | `Caddyfile`                                                                                                                                                                       | validate the candidate in the pinned image, write it in place, `caddy reload`, read it back |
+| `compose`  | `compose.yml`, and the hash of `/etc/branchleft/edge.env`                                                                                                                         | `systemctl restart branchleft-compose@edge.service`                                         |
+| `crowdsec` | `crowdsec/config.yaml.local`, `crowdsec/appsec-configs/ghost-admin-previews.yaml`, `crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml`, every file in `crowdsec/acquis.d/` | `docker compose restart crowdsec`, then read back                                           |
 
 **Restart shape.** This is the shape of the monitoring_stack role, as that role's restart-by-fingerprint amendment states it. A run works out what is due, validates every candidate, places every file, acts, reads the result back and writes the stamp last. There are no handlers. A class is due when its stamp is not the fingerprint of what the repository holds now, or when a file of the class on the host differs from the repository's (a hand edit, or a file torn by a power cut). Only the second of these is visible to a stamp that merely equals the fingerprint, which is why both are read. The steps that read the stamps, decide from them, mark, adopt and record are this role's own copy of the monitoring_stack steps ("The stamp steps" below); the hashes, the fingerprints, the drift, the gate and the actions with their read-backs are in the same role.
 
@@ -67,7 +67,7 @@ The paths, the stamp names, the classes and the pin pattern are constants in `va
 
 ### Classes
 
-A file added to `hetzner/edge/stack` is refused until it is in a class: add it to `vars/main.yml` (Caddyfile, Compose file and the single CrowdSec config are named there; a file directly in `crowdsec/acquis.d` is CrowdSec's with no edit). A link is refused. A file removed from the repository stays on the host, as in the sibling roles, except under `crowdsec/acquis.d`, the one directory the role prunes: a file there that the repository does not hold is a CrowdSec configuration nobody reads in the repository. A stale file anywhere else under `/opt/branchleft/edge` is the owner's to remove.
+A file added to `hetzner/edge/stack` is refused until it is in a class: add it to `vars/main.yml` (Caddyfile, Compose file and the CrowdSec files Compose mounts one by one are named there, and a new one of those also needs its container path in the module's `CROWDSEC_FILES_INSIDE` and in the stand-in `docker`; a file directly in `crowdsec/acquis.d` is CrowdSec's with no edit). A link is refused. A file removed from the repository stays on the host, as in the sibling roles, except under `crowdsec/acquis.d`, the one directory the role prunes: a file there that the repository does not hold is a CrowdSec configuration nobody reads in the repository. A stale file anywhere else under `/opt/branchleft/edge` is the owner's to remove.
 
 ### The unit's drop-in
 

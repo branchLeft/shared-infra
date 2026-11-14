@@ -33,6 +33,32 @@ backup_worker_env_secret: >-
      | ansible.builtin.selectattr('path', 'equalto', backup_worker_env_file)
      | ansible.builtin.first }}
 
+# The tenants and recipients files' owner, group and mode: the one home of those
+# values. They are tenant data, not credentials, and only root writes them; the
+# service account reads them through its group. The create-empty tasks and the
+# writes read them through the two lookups below, and the attribute task sets them
+# on every run. Only attributes are here, never content.
+backup_worker_private_files:
+  - path: '{{ backup_worker_tenants_file }}'
+    owner: root
+    group: '{{ backup_worker_account }}'
+    mode: '0640'
+  - path: '{{ backup_worker_recipients_file }}'
+    owner: root
+    group: '{{ backup_worker_account }}'
+    mode: '0640'
+
+# The entries for the two files, found by path. A list without an entry fails its
+# lookup, loudly.
+backup_worker_tenants_private: >-
+  {{ backup_worker_private_files
+     | ansible.builtin.selectattr('path', 'equalto', backup_worker_tenants_file)
+     | ansible.builtin.first }}
+backup_worker_recipients_private: >-
+  {{ backup_worker_private_files
+     | ansible.builtin.selectattr('path', 'equalto', backup_worker_recipients_file)
+     | ansible.builtin.first }}
+
 # The directories of a release that hold a file. The installer refuses a
 # release with an entry owned by anyone but root or writable by group or other.
 backup_worker_release_subdirs:

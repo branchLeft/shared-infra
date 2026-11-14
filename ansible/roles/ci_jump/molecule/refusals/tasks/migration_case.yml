@@ -3,8 +3,11 @@
 # with, or empty when it must succeed), migration_tasks_from (the role's tasks file to run),
 # migration_block_ahead (a drop-in that sorts first and loosens the account's forwarding, so the
 # first read-back of the new files fails), migration_arm (the reload hook puts a file of the old
-# layout back once the role removed it, so the last read-back fails) and migration_inode_kept
-# (whether the old files must be the very files that were there, not copies of them).
+# layout back once the role removed it, so the last read-back fails), migration_inode_kept
+# (whether the old files must be the very files that were there, not copies of them) and
+# migration_reload_delta (how often sshd must have been reloaded from the start of the step to its
+# end. A failed case counts the reload after the write, the reload after the old files went (when
+# it got that far) and the reload in the rescue, so a rescue that does not reload is short by one).
 #
 # The account's name is in the old paths, so every task that handles one hides its result.
 - name: Put the host in the state the prepare made, the hand-made files and none of the role's own
@@ -161,6 +164,7 @@
         - '/etc/ssh/{{ scenario_jump_user }}'
         - /etc/ssh/sshd_config.d/40-branchleft-jump.conf
         - /etc/ssh/authorized_keys.d/branchleft-jump
+        - '{{ migration_marker }}'
       register: ci_jump_migration_after
       no_log: true
 
@@ -192,6 +196,24 @@
         fail_msg: >-
           A step that failed did not leave the hand-made files as they were (the account's name is
           not shown), or left a file of its own.
+      when: migration_expect | length > 0
+
+    # The rescue puts the files back, checks the configuration, reloads sshd so that it reads them,
+    # and only then takes the marker away. Dropping the reload leaves the count short; dropping the
+    # marker's removal leaves the marker.
+    - name: Assert the rescue of a failed step reloaded sshd and took the reload marker away
+      ansible.builtin.assert:
+        that:
+          - >-
+            (ci_jump_migration_reloads_after.content | b64decode).splitlines() | length
+            - (ci_jump_migration_reloads_before.content | b64decode).splitlines() | length
+            == migration_reload_delta | int
+          - not ci_jump_migration_after.results[5].stat.exists
+        quiet: true
+        fail_msg: >-
+          The rescue of a step that failed did not reload sshd as often as it must
+          ({{ migration_reload_delta }}), or left the marker that says a reload is owed (the account's
+          name is not shown).
       when: migration_expect | length > 0
 
     - name: Assert a step that succeeded removed the hand-made layout and wrote the new files
