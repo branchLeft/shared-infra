@@ -210,8 +210,8 @@ address, written once in the file and taken by alias) in their own `environment:
 the environment file reaches the containers only through `${VAR}` references in the compose
 file. Delivering that change recreates `portal` and `console` once, on the image the wrapper
 last pinned, and leaves `db` and `zitadel` as they are. It does not move the image: the role
-keeps the running image unless `control_plane_app_image` is given, and the deploy wrapper run
-by the owner is what moves it.
+keeps the running image unless `control_plane_app_image` is given. On ops1 that value comes from
+`owner_vars/ops1.yml`, so a pin merged there is what moves it, through the gated apply.
 
 ## Requirements
 

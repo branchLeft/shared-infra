@@ -191,9 +191,13 @@ is not loaded there.
   the keys without the role. The role's fifth variable, `ci_jump_user` (the jump account's name, which
   the owner keeps out of the repository), is not allowed in an `owner_vars` file: it reaches the
   role through the host's `host_inputs` row. What a destination or a key may look like is the role's rule alone,
-  in its module. For ops1 the two keys are `pull_trigger_steps`,
+  in its module. For ops1 the required keys are `pull_trigger_steps`,
   the gated pull's step allow-list: a list of `{id, tag, word}` mappings, all text, and
   `control_plane_db_apps_image`, the applications image the steps run, which must be text.
+  `control_plane_app_image`, the image the control plane runs, is allowed on ops1 only and is
+  the one key a file may leave out (`OPTIONAL_OWNER_KEYS`): it must be text when present, and
+  `test_step_allowlist.py` holds it to the `control_plane` role's digest pattern. Absent, the role
+  keeps the running image; present, the next gated apply moves the pin.
   The `ring_controller_host` role adds three more, all text and all allowed on ops1 only:
   `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url` and
   `ring_controller_host_ledger_url`. Each may be the empty string, which is how the role

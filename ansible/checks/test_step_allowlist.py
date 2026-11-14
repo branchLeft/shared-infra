@@ -31,6 +31,8 @@ PROGRAM = ANSIBLE / "roles" / "pull_trigger" / "files" / "pull_trigger.py"
 ROLE = ANSIBLE / "roles" / "control_plane_db"
 STEPS_KEY = "pull_trigger_steps"
 IMAGE_KEY = "control_plane_db_apps_image"
+PIN_KEY = "control_plane_app_image"
+CONTROL_PLANE_ROLE = ANSIBLE / "roles" / "control_plane"
 APPLICATIONS_IMAGE = "ghcr.io/branchleft/portal-apps"
 NEVER = "never"
 IMPORT_TASKS = frozenset(("ansible.builtin.import_tasks", "import_tasks"))
@@ -207,6 +209,51 @@ class RealApplicationsImage(unittest.TestCase):
     def test_the_role_step_variable_is_not_an_owner_value(self) -> None:
         owner = yaml.safe_load(OWNER_FILE.read_text(encoding="utf-8"))
         self.assertNotIn("control_plane_db_step", owner)
+
+
+class RealControlPlanePin(unittest.TestCase):
+    """The control plane's image pin is the owner's value, held to the role's own rules.
+
+    owner_vars/ops1.yml may set control_plane_app_image, which moves the image ops1 runs. R10 reads
+    only that it is text and that the key is allowed. Here a committed value is held to the
+    control_plane role's digest pattern (read by its name from that role's constants, not copied),
+    and the pattern is shown to refuse what a pin is not. The key is optional, so the committed
+    value is checked only when the file sets one.
+    """
+
+    def setUp(self) -> None:
+        self.owner = yaml.safe_load(OWNER_FILE.read_text(encoding="utf-8"))
+        role_vars = yaml.safe_load(
+            (CONTROL_PLANE_ROLE / "vars" / "main.yml").read_text(encoding="utf-8")
+        )
+        self.pattern = re.compile(role_vars["control_plane_image_pattern"])
+
+    def test_a_committed_pin_is_the_applications_image_pinned_by_digest(self) -> None:
+        # Absent is allowed: the role then keeps the image the deploy wrapper last pinned.
+        for pin in [self.owner[PIN_KEY]] if PIN_KEY in self.owner else []:
+            self.assertRegex(pin, self.pattern)
+            self.assertTrue(pin.startswith(APPLICATIONS_IMAGE + "@sha256:"), pin)
+
+    def test_the_pattern_refuses_what_is_not_a_pin(self) -> None:
+        digest = "a" * 64
+        for bad in (
+            f"{APPLICATIONS_IMAGE}:latest",
+            f"{APPLICATIONS_IMAGE}@sha256:{digest[:-1]}",
+            f"{APPLICATIONS_IMAGE}@sha256:{digest.upper()}",
+            f"{APPLICATIONS_IMAGE}@sha256:{digest}\n",
+            "",
+        ):
+            with self.subTest(value=bad):
+                self.assertIsNone(self.pattern.match(bad))
+        self.assertIsNotNone(self.pattern.match(f"{APPLICATIONS_IMAGE}@sha256:{digest}"))
+
+    def test_the_pin_reaches_the_role_by_its_own_name(self) -> None:
+        spec = yaml.safe_load(
+            (CONTROL_PLANE_ROLE / "meta" / "argument_specs.yml").read_text(encoding="utf-8")
+        )
+        options = spec["argument_specs"]["main"]["options"]
+        self.assertIn(PIN_KEY, options)
+        self.assertFalse(options[PIN_KEY].get("required", False))
 
 
 class ProgramRefusesBadLists(unittest.TestCase):

@@ -64,6 +64,14 @@ JUMP_VARS = frozenset(
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
 APPS_IMAGE_KEY = "control_plane_db_apps_image"
+# The control plane's image pin, the value that moves the image ops1 runs. It is the one
+# key an owner file may leave out: without it the control_plane role keeps the image the deploy
+# wrapper last pinned, so allowing the key changes nothing until the owner sets it. That it is
+# NAME@sha256: and 64 hex digits is the role's pattern (control_plane_image_pattern), which
+# test_step_allowlist.py reads by name.
+CONTROL_PLANE_IMAGE_KEY = "control_plane_app_image"
+# Keys a host's file may omit, by host. Every other allowed key is required.
+OPTIONAL_OWNER_KEYS: dict[str, frozenset[str]] = {"ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,))}
 # The three inputs of the ring_controller_host role. Each is public text that is empty until the
 # owner sets it, and an empty digest keeps the controller's timer off. The role holds the shapes
 # (its vars/main.yml patterns), so only the type is read here, as for APPS_IMAGE_KEY.
@@ -76,7 +84,8 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
 )
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS,
-    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)) | RING_CONTROLLER_TEXT_KEYS,
+    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY, CONTROL_PLANE_IMAGE_KEY))
+    | RING_CONTROLLER_TEXT_KEYS,
 }
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
@@ -766,6 +775,8 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     # (control_plane_db_image_pattern), which test_step_allowlist.py reads by name.
     if APPS_IMAGE_KEY in doc and not isinstance(doc[APPS_IMAGE_KEY], str):
         problems.append(f"{APPS_IMAGE_KEY} must be text")
+    if CONTROL_PLANE_IMAGE_KEY in doc and not isinstance(doc[CONTROL_PLANE_IMAGE_KEY], str):
+        problems.append(f"{CONTROL_PLANE_IMAGE_KEY} must be text")
     problems.extend(
         f"{key} must be text"
         for key in sorted(RING_CONTROLLER_TEXT_KEYS)
@@ -805,8 +816,11 @@ def _check_owner_vars(directory: Path, enrolled: set[str], findings: list[str]) 
             findings.append(f"{label}: this host has no owner_vars keys, so it may have no file")
             continue
         doc = _mapping(_load(path, findings, label))
-        if set(doc) != allowed:
-            findings.append(f"{label}: must hold exactly {sorted(allowed)}")
+        optional = OPTIONAL_OWNER_KEYS.get(path.stem, frozenset())
+        required = allowed - optional
+        if not required <= set(doc) or not set(doc) <= allowed:
+            may = f", and may hold {sorted(optional)}" if optional else ""
+            findings.append(f"{label}: must hold exactly {sorted(required)}{may}")
         findings.extend(f"{label}: {problem}" for problem in _owner_key_problems(doc))
 
 
