@@ -1,29 +1,23 @@
 """A verified Ghost staff session is never refused by a CrowdSec ban or AppSec.
 
-What it proves, against the edge's real Caddy (the image CI builds from
-`Dockerfile`, bouncer and AppSec modules included) and the edge's real CrowdSec
-(the `crowdsec` service of `stack/compose.yml`, its mounted files included):
+Run against the edge's real Caddy (the image CI builds from `Dockerfile`) and
+real CrowdSec (the `crowdsec` service of `stack/compose.yml`). It proves that:
 
 - an address CrowdSec has banned still reaches Ghost with a valid staff session;
 - the same address is refused with a forged, expired or wrong-origin cookie, and
   with every other answer from Ghost that is not a 2xx JSON one;
 - traffic that would ban an address bans nobody when its session is verified,
-  because its access-log lines never reach a bucket; and a forged
+  because its access-log lines never reach a bucket, and a forged
   `edge_trusted` header or query parameter changes nothing.
 
 Caddy loads `validation/Caddyfile.trusted-session`, which `render.test.ts`
-renders with this renderer: two Ghost tenants with `trustedSession` set. The one
-changes made to it here are the certificate source (`local_certs`, so Caddy
-issues from its own test CA instead of asking Let's Encrypt) and the upstream
-address, which becomes the address of Ghost on the test network. Ghost is
-`fixtures/ghost_session_stub.py`.
-Each case's requests come from `fixtures/edge_client.py` in its own container,
-at its own public test address, so a ban names the case that caused it.
+renders with two Ghost tenants that set `trustedSession`. Only the certificate
+source (`local_certs`) and the upstream address are changed here. Ghost is
+`fixtures/ghost_session_stub.py`; each case's requests come from
+`fixtures/edge_client.py` at its own public test address.
 
-Why the edge does this: `render.md`, "Verified sessions". It needs a Docker
-engine that can start containers, so like `test_crowdsec_replay.py` it is
-skipped unless `BRANCHLEFT_CROWDSEC_REPLAY=1`, which CI's
-`edge-config-validate` job sets after building the edge image.
+Why: `render.md`, "Verified sessions". It needs a Docker engine, so like
+`test_crowdsec_replay.py` it is skipped unless `BRANCHLEFT_CROWDSEC_REPLAY=1`.
 """
 
 from __future__ import annotations

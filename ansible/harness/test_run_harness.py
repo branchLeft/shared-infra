@@ -102,7 +102,7 @@ class RoleCase(unittest.TestCase):
 
     def make_role(
         self,
-        min_version: str = "2.21.5",
+        min_version: str | None = None,
         with_tasks: bool = True,
         scenario: str | None = SCENARIO,
         also: Sequence[str] = (),
@@ -111,6 +111,9 @@ class RoleCase(unittest.TestCase):
 
         ``also`` names more scenarios, each with a valid scenario file.
         """
+        if min_version is None:
+            # The version the lock pins, so a bump of ansible-core does not leave this fixture behind.
+            min_version = run_harness.pinned_version(run_harness.REQUIREMENTS, "ansible-core") or ""
         base = Path(tempfile.mkdtemp(prefix="harness-test-"))
         self.addCleanup(shutil.rmtree, base, True)
         role = base / "demo_role"

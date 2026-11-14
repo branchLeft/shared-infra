@@ -296,6 +296,7 @@ SCANNED_SUFFIXES = frozenset(
         ".timer",
         ".tmpl",
         ".toml",
+        ".trusted-session",
         ".ts",
         ".txt",
         ".yaml",
