@@ -99,14 +99,13 @@ describe('the rendered Prometheus config', () => {
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1')?.address).toBe(HOST_IPS.ops1);
   });
 
-  it('marks edge1, db1 and ops1 node_exporter expected up -- app1 still has none', () => {
-    // Verified against edge1's own target list on 2026-08-28: `node` on app1
-    // and db1 both report `down`, so `false` is a current fact here rather
-    // than an assumption inherited from when the constant was written. ops1
-    // is `true` because RUNBOOK-monitoring.md's ops1 section read its
-    // exporter back answering live before this flag flipped.
+  it("marks every estate host's node_exporter expected up", () => {
+    // ops1 is `true` because RUNBOOK-monitoring.md's ops1 section read its
+    // exporter back answering live before this flag flipped. app1 flips with
+    // the node_exporter role joining its playbook; it pages only once the gated
+    // apply has delivered the exporter.
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'edge1')?.expectedUp).toBe(true);
-    expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.expectedUp).toBe(false);
+    expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'app1')?.expectedUp).toBe(true);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'db1')?.expectedUp).toBe(true);
     expect(MONITORED_NODE_HOSTS.find((host) => host.name === 'ops1')?.expectedUp).toBe(true);
   });

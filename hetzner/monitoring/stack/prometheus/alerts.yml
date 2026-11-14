@@ -25,7 +25,7 @@ groups:
         annotations:
           summary: "{{ $labels.job }} on {{ $labels.host }} has been unreachable for 5 minutes."
           description: >-
-            Scoped to expected_up="true" targets only -- app1 carries
+            Scoped to expected_up="true" targets only -- a host carries
             expected_up="false" until its node exporter is provisioned,
             so targets without exporters do not page anyone.
 

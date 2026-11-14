@@ -5,7 +5,7 @@
 # the break-glass grant (breakglass_grant_host), then the website stack (website_app1) and
 # the publicpress website stack (publicpress_website_app1), then the deploy tooling and the
 # deploy slot keys, then the tenant onboarding role (which installs the volume program the
-# tenant compose role calls), and last the export bundler.
+# tenant compose role calls), then the export bundler, and last the node exporter.
 # The loader reads the one root-only file the owner places on the host and sets the four
 # SMTP values the website role requires and the list of deploy slots; it stops the run if
 # that file is missing or unsafe, or holds no slot, and it runs first so every later role
@@ -19,7 +19,10 @@
 # need the wrapper it installs; both come last so that a failure in either, which acts on
 # the Docker firewall or on SSH keys, cannot hold the website back. The export bundler is
 # last of all: it copies pinned files into root-only directories and runs nothing, so a
-# failure in it, which is a refusal of a changed file, holds back none of the others.
+# failure in it, which is a refusal of a changed file, holds back none of the others. The
+# node exporter follows it, last of all, because it refuses to install when a mount is at
+# or above its disk stop, and that refusal must hold nothing else back. It binds the host's
+# estate-subnet address only, so the Prometheus on edge1 reaches it and the public side does not.
 # The tenant onboarding role fetches its program and register from the network. If a fetch
 # fails or a fetched file does not match its pinned digest, the role fails closed: the run
 # ends there and the roles after it (the export bundler) do not run, but the roles before it,
@@ -63,3 +66,4 @@
     - role: ../roles/deploy_slot_keys # noqa: role-name[path]
     - role: ../roles/tenant_onboarding # noqa: role-name[path]
     - role: ../roles/export_bundler # noqa: role-name[path]
+    - role: ../roles/node_exporter # noqa: role-name[path]

@@ -23,9 +23,9 @@ const GENERATED_BANNER = [
 
 /**
  * The estate hosts this stack watches, and whether each node_exporter target
- * is expected to answer today -- `app1` has none yet, so only the edge1, db1 and
- * ops1 node targets contribute to `HostOrServiceDown` below. `ops1`'s own
- * membership and `expectedUp` flip are reviewed, never hand-edited; see
+ * is expected to answer today -- all four are, so every node target contributes
+ * to `HostOrServiceDown` below. A host's membership and `expectedUp` flip are
+ * reviewed, never hand-edited; see
  * render.md#monitoredhost--monitored_node_hosts for why, and why the
  * membership below is reviewed rather than derived from `HOST_IPS` whole.
  */
@@ -37,7 +37,7 @@ export interface MonitoredHost {
 
 export const MONITORED_NODE_HOSTS: readonly MonitoredHost[] = [
   { name: 'edge1', address: HOST_IPS.edge1, expectedUp: true },
-  { name: 'app1', address: APP_HOST_IPS.app1, expectedUp: false },
+  { name: 'app1', address: APP_HOST_IPS.app1, expectedUp: true },
   { name: 'db1', address: HOST_IPS.db1, expectedUp: true },
   { name: 'ops1', address: HOST_IPS.ops1, expectedUp: true },
 ];
@@ -408,7 +408,7 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '        annotations:',
     '          summary: "{{ $labels.job }} on {{ $labels.host }} has been unreachable for 5 minutes."',
     '          description: >-',
-    '            Scoped to expected_up="true" targets only -- app1 carries',
+    '            Scoped to expected_up="true" targets only -- a host carries',
     '            expected_up="false" until its node exporter is provisioned,',
     '            so targets without exporters do not page anyone.',
     '',

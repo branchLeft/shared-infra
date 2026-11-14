@@ -24,9 +24,11 @@ record a cutover has to hunt for. Every hostname below is derived.
 ## MonitoredHost / MONITORED_NODE_HOSTS
 
 The estate hosts this stack watches, and whether each node_exporter target
-is expected to answer today. `app1`'s entry is `false`, so only the
-edge1, db1 and ops1 node targets contribute to the `HostOrServiceDown` alert
-`renderAlertRules` emits below.
+is expected to answer today. Every entry is `true`, so all four node targets
+(edge1, app1, db1 and ops1) contribute to the `HostOrServiceDown` alert
+`renderAlertRules` emits below. `app1` flipped with the `node_exporter` role
+joining its playbook (ws#885): the flag takes effect when the rendered config
+reaches edge1, so the gated apply that installs the exporter on app1 comes first.
 
 **`db1` is expected up because its node_exporter reads the nightly dump's
 textfile directory.** The dump writes its lock wait, hold and abort gauges
@@ -50,7 +52,7 @@ volumes), which is why `hetzner/nextcloud1/` and this repository's
 only the host's own identity moved. `expectedUp` is `true` only because
 `RUNBOOK-monitoring.md`'s ops1 section read the exporter back answering
 live first: a target that has never answered must not page anyone the
-moment its config deploys, which is why app1 stays `false`. The flip
+moment its config deploys, which is why app1 stayed `false` until its exporter was delivered. The flip
 is a reviewed change, never a hand edit -- a hand edit of this flag, on a
 different host's exporter, once hid a four-day outage (see this file's
 `MONITORED_MYSQLD_HOST` comment below).
@@ -192,7 +194,7 @@ this repository cannot scan JavaScript in another one.
 
 Why nothing here can fire from absence. Every rule selects
 `job="node", expected_up="true"`, so a host whose exporter is not yet confirmed
-live (`app1` today, `expected_up="false"`) is silent however its series look,
+live (any host carrying `expected_up="false"`) is silent however its series look,
 and none uses `absent()`: a host or tenant with no scanner series, or with
 export switched off, is not a fault. The flip is the same reviewed hand edit as
 every other `expectedUp`, in `MONITORED_NODE_HOSTS`, and it is a claim that
