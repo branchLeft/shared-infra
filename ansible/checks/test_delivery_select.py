@@ -49,9 +49,26 @@ def real_shards() -> list[dict[str, str]]:
     return delivery_select.listed_shards(ROOT)
 
 
-def job(name: str, conclusion: str | None) -> dict[str, object]:
+def job(
+    name: str, conclusion: str | None, steps: list[dict[str, object]] | None = None
+) -> dict[str, object]:
     """Return one job of a delivery run, named as the reusable workflow's jobs are."""
-    return {"name": f"delivery / {name}", "conclusion": conclusion}
+    entry: dict[str, object] = {"name": f"delivery / {name}", "conclusion": conclusion}
+    if steps is not None:
+        entry["steps"] = steps
+    return entry
+
+
+def discover(confirm: str | None) -> dict[str, object]:
+    """Return the discover job of a run whose confirm step ended as ``confirm``."""
+    return job(
+        delivery_select.DISCOVER_JOB,
+        "success",
+        [
+            {"name": "Checkout", "conclusion": "success"},
+            {"name": delivery_select.CONFIRM_STEP, "conclusion": confirm},
+        ],
+    )
 
 
 def green_run() -> list[object]:
@@ -282,11 +299,48 @@ class ChecksPassedTest(unittest.TestCase):
 
     def test_a_run_the_merge_queue_vouched_for_counts(self) -> None:
         jobs = [
-            job(delivery_select.DISCOVER_JOB, "success"),
+            discover("success"),
             job(delivery_select.LINT_JOB, "skipped"),
             job("Molecule: ${{ matrix.name }}", "skipped"),
         ]
         self.assertTrue(delivery_select.checks_passed(jobs))
+
+    def test_a_queue_vouched_run_whose_confirm_step_did_not_succeed_does_not_count(self) -> None:
+        for result in ("skipped", "failure", "cancelled", None):
+            with self.subTest(result=result):
+                jobs = [
+                    discover(result),
+                    job(delivery_select.LINT_JOB, "skipped"),
+                    job("Molecule: ${{ matrix.name }}", "skipped"),
+                ]
+                self.assertFalse(delivery_select.checks_passed(jobs))
+
+    def test_a_queue_vouched_run_whose_confirm_step_is_missing_or_unreadable_does_not_count(
+        self,
+    ) -> None:
+        confirm = {"name": delivery_select.CONFIRM_STEP, "conclusion": "success"}
+        other = {"name": "Checkout", "conclusion": "success"}
+        cases: dict[str, list[object]] = {
+            "no steps key": [],
+            "no steps listed": [[]],
+            "other steps only": [[other]],
+            "steps not a list": ["success"],
+            "a step that is not a mapping": [[confirm, "x"]],
+            "the step twice": [[confirm, confirm]],
+        }
+        for label, steps in cases.items():
+            with self.subTest(label=label):
+                entry = job(delivery_select.DISCOVER_JOB, "success")
+                if label != "no steps key":
+                    entry["steps"] = steps[0]
+                jobs = [entry, job(delivery_select.LINT_JOB, "skipped")]
+                self.assertFalse(delivery_select.checks_passed(jobs))
+
+    def test_a_fully_tested_run_counts_though_its_confirm_step_was_skipped(self) -> None:
+        for result in ("skipped", None):
+            with self.subTest(result=result):
+                jobs = [discover(result), *green_run()[1:]]
+                self.assertTrue(delivery_select.checks_passed(jobs))
 
     def test_a_run_missing_its_discover_or_lint_job_does_not_count(self) -> None:
         self.assertFalse(delivery_select.checks_passed([job("Molecule: x", "success")]))
