@@ -29,8 +29,7 @@ It does not install `sudo`, an SSH server or the trigger program (`pull_trigger`
 ## The accepted risk: no source address limit
 
 The key lines carry no `from=` option. GitHub's runners have no fixed address, so the owner
-accepted this on the ruling at
-https://github.com/branchLeft/workspace/issues/2339#issuecomment-6492257550 ("any address,
+accepted this on the owner's ruling ("any address,
 two commands only"). What bounds a stolen key is the forced command, `restrict`, and a
 sudoers grant of the two trigger modes. Unlike the `sudoers_and_keys` pattern, which refuses a
 forced command with no source address, this role has no `from_addresses` option, and the
