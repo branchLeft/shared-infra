@@ -4,9 +4,7 @@ DKIM signing key, then prints the DNS records that key needs published.
 
     python3 provision_sending_domain.py <domain> [--selector bl] [--dkim-only] [--json]
 
-It never touches a key that already exists, and the key is fixed, not rotated.
-The private key is never written to disk, printed or logged. See
-provision_sending_domain.md.
+Narrative, usage notes and rationale: see `provision_sending_domain.md` next to this file.
 """
 from __future__ import annotations
 

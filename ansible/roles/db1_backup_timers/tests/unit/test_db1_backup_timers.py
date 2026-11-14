@@ -68,8 +68,8 @@ def _unit_value(unit: str, key: str) -> list[str]:
 
 
 class ScheduleTests(unittest.TestCase):
-    def test_dump_timer_runs_at_0310_utc(self) -> None:
-        self.assertEqual(_unit_value("branchleft-db-dump.timer", "OnCalendar"), ["*-*-* 03:10:00"])
+    def test_dump_timer_runs_at_0300_utc(self) -> None:
+        self.assertEqual(_unit_value("branchleft-db-dump.timer", "OnCalendar"), ["*-*-* 03:00:00"])
 
     def test_prune_timer_runs_at_0345_utc(self) -> None:
         self.assertEqual(_unit_value("branchleft-db-prune.timer", "OnCalendar"), ["*-*-* 03:45:00"])
