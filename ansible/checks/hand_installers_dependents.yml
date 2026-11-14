@@ -220,6 +220,9 @@ hetzner/provision/test_00_harden_ssh.py:
 hetzner/provision/test_05_configure_host_egress.py:
   - hetzner/provision/05-configure-host-egress.sh
   - hetzner/provision/branchleft_host_egress.sh
+hetzner/provision/test_10_harden_updates_fail2ban.py:
+  - hetzner/provision/10-harden-updates-fail2ban.sh
+  - mail/provision/10-harden-updates-fail2ban.sh
 hetzner/provision/test_20_install_docker.py:
   - hetzner/provision/20-install-docker.sh
   - mail/provision/20-install-docker.sh
