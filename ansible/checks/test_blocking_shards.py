@@ -1,6 +1,6 @@
 """The list of blocking container tests, the split it drives, and what the gate does with it.
 
-Each test's name states the rule it holds; the reasons are in ansible/checks/README.md.
+Each test's name states the rule it holds; the reasons are in ansible/checks/blocking_shards.md.
 """
 
 from __future__ import annotations

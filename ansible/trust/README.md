@@ -14,7 +14,7 @@ push, so a commit of `main` is not what it applies. The limit for demo1 is in
   the owner writes a value.
 - Public keys only. Never a secret.
 - Only exact `.yml` files sit at the top of this directory, plus this README. A file of
-  any other name, case or depth is refused by the check (`checks/README.md`, name rule).
+  any other name, case or depth is refused by the check (`checks/check_enrolment.md`, name rule).
 - `checks/check_enrolment.py` requires that the files here are exactly the enrolled
   playbooks, one file each (R4), and that no other file under `ansible/` that Ansible
   loads as variables sets `pull_trigger_signers` (R6). The config writer must take its
@@ -27,5 +27,5 @@ push, so a commit of `main` is not what it applies. The limit for demo1 is in
   `branchLeft/github-workflows`, and the control on a role edit is the owner's deploy
   approval of that gated apply.
 
-The rules, and what each one does not see, are in `checks/README.md` (R0 to R8).
+The rules, and what each one does not see, are in `checks/check_enrolment.md` (R0 to R8).
 Which keys a host trusts, and when, is an owner decision, not a code decision.

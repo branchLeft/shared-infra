@@ -236,7 +236,7 @@ jobs:
       # catch that rather than pass.
       #
       # ansible/checks/ci_select.py then keeps the shards this run needs, from the event and
-      # the changed files (its rules are in ansible/checks/README.md). It prints `shards=false` and a
+      # the changed files (its rules are in ansible/checks/ci_select.md). It prints `shards=false` and a
       # one-entry matrix that the shard job refuses when nothing is needed, because GitHub
       # rejects an empty matrix. A pull request with no changed-files list, because the base
       # commit was unknown, keeps every shard.
@@ -283,7 +283,8 @@ jobs:
     name: Quick lint gate
     needs: [discover]
     if: needs.discover.outputs.ansible == 'true'
-    # Pinned until the harness is verified on the next Ubuntu LTS image.
+    # Pinned until the harness is verified on the next Ubuntu LTS image (ansible/README.md, "The
+    # CI runner image pin").
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -377,7 +378,7 @@ jobs:
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       # The pip the parity oracle reads is pinned by hash before the lock, so the oracle
-      # does not depend on the runner image's ensurepip (ansible/checks/README.md).
+      # does not depend on the runner image's ensurepip (ansible/checks/test_lock_reader_parity.md).
       - name: Install the pinned pip
         if: steps.venv.outputs.cache-hit != 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'
@@ -613,7 +614,7 @@ jobs:
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
 
       # The pip the parity oracle reads is pinned by hash before the lock, so the oracle
-      # does not depend on the runner image's ensurepip (ansible/checks/README.md).
+      # does not depend on the runner image's ensurepip (ansible/checks/test_lock_reader_parity.md).
       - name: Install the pinned pip
         if: steps.venv.outputs.cache-hit != 'true'
         run: '"$RUNNER_TEMP/ansible-venv/bin/pip" install --require-virtualenv --require-hashes --only-binary=:all: -r ansible/checks/pip-requirements.txt'

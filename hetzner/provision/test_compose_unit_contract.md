@@ -206,9 +206,8 @@ Otherwise the assertion above passes over an empty scan.
         so their names are in its own configuration whatever the prose says.
 
         The other half is not, and the difference is worth stating rather than
-        implying. `website`, `db` and `blog` are named in `hetzner/README.md`
-        and nowhere else here, and the README assertion below is what puts two
-        of them there -- so this half detects the registers being emptied and
+        implying. `website`, `db` and `blog` are named in no file here but the
+        register itself, so this half detects the registers being emptied and
         does not prove the scan can see a mention from outside. Nothing in this
         repository can prove that, which is the same limit as the register being
         a floor rather than a census.

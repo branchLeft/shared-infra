@@ -205,9 +205,11 @@ def tool_job_findings(job: str) -> list[str]:
 def readmes_outside_the_recipe() -> list[Path]:
     """Return every README* file under ansible/ except the one that holds the install recipe.
 
-    The skeleton's README.md.j2 is included: every new role's README is made from it.
+    The skeleton's README.md.j2 is included: every new role's README is made from it. So is each
+    markdown file beside a check in checks/, where a check's narrative lives.
     """
-    return [path for path in ANSIBLE.rglob("README*") if path.is_file() and path != README]
+    found = [*ANSIBLE.rglob("README*"), *(ANSIBLE / "checks").glob("*.md")]
+    return sorted({path for path in found if path.is_file() and path != README})
 
 
 def python_directories() -> set[str]:
@@ -396,6 +398,7 @@ class WorkflowPythonStepsTest(unittest.TestCase):
         self.assertIn("roles/ansible_runtime/README.md", names)
         self.assertTrue(any(name.startswith("patterns/") for name in names), names)
         self.assertIn("role_skeleton/README.md.j2", names)
+        self.assertIn("checks/test_lock_reader_parity.md", names)
         for path in scanned:
             with self.subTest(readme=str(path.relative_to(ROOT))):
                 self.assertEqual([], lock_installs(path.read_text(encoding="utf-8")))

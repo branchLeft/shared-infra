@@ -8,6 +8,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 
 # `drop_in_for` below returns `pathlib.Path | None`: PEP 604 syntax that a
@@ -253,6 +254,7 @@ CONTRACT_DOES_NOT_REACH: dict[str, str] = {
 # module exists to refuse.
 STACK_NAME_FRAGMENT = bd.STACK_NAME.pattern.removeprefix(r"\A").removesuffix(r"\Z")
 
+
 # Every written shape that names one instance of the template. Placeholders --
 # `%i`, `<stack>`, `${stack}`, and the template's own `@.service` -- are
 # excluded by the character class rather than by a stop list, because none of
@@ -385,42 +387,16 @@ def walked_files() -> list[pathlib.Path]:
     ]
 
 
-# One row of the reach table: the instance it names, and whether the row claims
-# this module reads that stack's Compose file. Read from the cells rather than
-# searched for as text, because a `yes` found anywhere in the row would also
-# match one inside the prose of a different column.
-REACH_ROW_INSTANCE = re.compile(rf"`branchleft-compose@({STACK_NAME_FRAGMENT})`")
+# A row of a table naming one instance of the template. The instances are held once, in the two
+# registers above; a second list of them in the README is a copy that goes stale unmentioned.
+REACH_ROW_INSTANCE = re.compile(
+    rf"^\|\s*`branchleft-compose@({STACK_NAME_FRAGMENT})`", re.MULTILINE
+)
 
 
-def documented_reach(readme: pathlib.Path) -> dict[str, bool]:
-    """The reach table as a mapping of instance name to "this module reads it".
-
-    Raises rather than skips, in both directions: a row naming two instances and
-    a verdict cell holding anything but yes/no are each a shape this cannot
-    classify, and returning a partial mapping would leave the rows it dropped
-    unasserted.
-    """
-    reach: dict[str, bool] = {}
-    for line in readme.read_text(encoding="utf-8").splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        instances = REACH_ROW_INSTANCE.findall(cells[0])
-        if not instances:
-            continue
-        if len(instances) != 1:
-            raise AssertionError(
-                f"reach table row names {len(instances)} instances: {line!r}. One row "
-                "per instance, or the verdict column says nothing about which."
-            )
-        verdict = cells[-1].lower()
-        if verdict not in ("yes", "no"):
-            raise AssertionError(
-                f"reach table row for {instances[0]} has verdict {cells[-1]!r}, which "
-                "is neither yes nor no."
-            )
-        reach[instances[0]] = verdict == "yes"
-    return reach
+def documented_instance_rows(readme: pathlib.Path) -> list[str]:
+    """Return the instances the README lists one per table row, for each row that names one."""
+    return REACH_ROW_INSTANCE.findall(readme.read_text(encoding="utf-8"))
 
 
 def stacks_named_in_this_repository() -> dict[str, set[str]]:
@@ -465,9 +441,7 @@ def stack_compose_files() -> dict[str, pathlib.Path]:
     The instance name is the directory holding `stack/`, because the template's
     `WorkingDirectory=/opt/branchleft/%i` is what the deploy rsyncs into.
     """
-    return {
-        path.parent.parent.name: path for path in sorted(HETZNER.glob("*/stack/compose.yml"))
-    }
+    return {path.parent.parent.name: path for path in sorted(HETZNER.glob("*/stack/compose.yml"))}
 
 
 def drop_in_for(stack: str) -> pathlib.Path | None:
@@ -530,11 +504,22 @@ DURATION_TOKEN = re.compile(
     r"(?P<unit>usec|us|msec|ms|seconds|second|sec|s|minutes|minute|min|m|hours|hour|hr|h)?"
 )
 SECONDS_PER_UNIT = {
-    "us": 0.000001, "usec": 0.000001,
-    "ms": 0.001, "msec": 0.001,
-    "s": 1, "sec": 1, "second": 1, "seconds": 1,
-    "m": 60, "min": 60, "minute": 60, "minutes": 60,
-    "h": 3600, "hr": 3600, "hour": 3600, "hours": 3600,
+    "us": 0.000001,
+    "usec": 0.000001,
+    "ms": 0.001,
+    "msec": 0.001,
+    "s": 1,
+    "sec": 1,
+    "second": 1,
+    "seconds": 1,
+    "m": 60,
+    "min": 60,
+    "minute": 60,
+    "minutes": 60,
+    "h": 3600,
+    "hr": 3600,
+    "hour": 3600,
+    "hours": 3600,
 }
 
 
@@ -603,7 +588,9 @@ def retry_faults(unit_text: str) -> list[str]:
     else:
         seconds = parse_seconds(interval.partition("=")[2])
         if seconds == 0 or seconds == INFINITY:
-            faults.append(f"[Unit] `{interval}` is not finite: systemd reads 0 and infinity as no limit")
+            faults.append(
+                f"[Unit] `{interval}` is not finite: systemd reads 0 and infinity as no limit"
+            )
 
     burst = last_assignment(unit, "StartLimitBurst")
     if burst is None:
@@ -623,7 +610,9 @@ def drop_in_retry_faults(drop_in_text: str) -> list[str]:
     An instance drop-in is applied over the template, so a line here replaces
     the template's bound for that one stack.
     """
-    lines = section_lines_of_text(drop_in_text, "Unit") + section_lines_of_text(drop_in_text, "Service")
+    lines = section_lines_of_text(drop_in_text, "Unit") + section_lines_of_text(
+        drop_in_text, "Service"
+    )
     return [
         f"`{line}` overrides the template's retry bound"
         for line in lines
@@ -881,9 +870,7 @@ services:
                 text = self.PLAIN.replace(
                     "    healthcheck:\n      test: ['CMD', 'true']\n", spelling
                 )
-                self.assertEqual(
-                    self.probe(text), {"probed": DISABLED, "bare": ABSENT}
-                )
+                self.assertEqual(self.probe(text), {"probed": DISABLED, "bare": ABSENT})
 
     def test_a_disable_outside_the_healthcheck_block_says_nothing_about_the_probe(self):
         """Scoped to the block, not to the service.
@@ -954,9 +941,7 @@ class WaitSignalContractTests(unittest.TestCase):
     def test_every_named_service_still_exists(self):
         """A stale entry silently widens the rule for whatever is named next."""
         real = {
-            (stack, service)
-            for stack, services in stack_states().items()
-            for service in services
+            (stack, service) for stack, services in stack_states().items() for service in services
         }
         for table, name in ((IMAGE_PROVIDED_HEALTHCHECK, "IMAGE_PROVIDED_HEALTHCHECK"),):
             for entry in table:
@@ -1066,7 +1051,9 @@ class UnitTemplateAssumptionTests(unittest.TestCase):
 
 
 EXEC_START_RESET = "ExecStart="
-FORCE_RECREATE_START = "ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait --force-recreate"
+FORCE_RECREATE_START = (
+    "ExecStart=/usr/bin/docker compose up -d --remove-orphans --wait --force-recreate"
+)
 
 
 class MonitoringForceRecreateTests(unittest.TestCase):
@@ -1168,12 +1155,18 @@ class UnitRetryContractTests(unittest.TestCase):
     )
 
     def without_line(self, directive: str) -> str:
-        kept = [line for line in self.compliant_unit.splitlines() if not line.startswith(f"{directive}=")]
+        kept = [
+            line
+            for line in self.compliant_unit.splitlines()
+            if not line.startswith(f"{directive}=")
+        ]
         return "\n".join(kept) + "\n"
 
     def with_line(self, directive: str, value: str) -> str:
         """The compliant unit with `directive=` set to `value` where it already sits."""
-        original = next(line for line in self.compliant_unit.splitlines() if line.startswith(f"{directive}="))
+        original = next(
+            line for line in self.compliant_unit.splitlines() if line.startswith(f"{directive}=")
+        )
         return self.compliant_unit.replace(original, f"{directive}={value}")
 
     def test_the_template_meets_the_retry_contract(self):
@@ -1222,8 +1215,15 @@ class UnitRetryContractTests(unittest.TestCase):
 
     def test_durations_are_read_as_systemd_reads_them(self):
         for spelling, seconds in (
-            ("30", 30), ("30s", 30), ("30 s", 30), ("1min", 60), ("1min 30s", 90),
-            ("2m", 120), ("1h", 3600), ("1500ms", 1.5), ("infinity", INFINITY),
+            ("30", 30),
+            ("30s", 30),
+            ("30 s", 30),
+            ("1min", 60),
+            ("1min 30s", 90),
+            ("2m", 120),
+            ("1h", 3600),
+            ("1500ms", 1.5),
+            ("infinity", INFINITY),
         ):
             with self.subTest(spelling=spelling):
                 self.assertEqual(parse_seconds(spelling), seconds)
@@ -1269,7 +1269,9 @@ class UnitRetryContractTests(unittest.TestCase):
             retry_faults(text)
 
     def test_a_start_limit_in_the_wrong_section_does_not_count(self):
-        text = self.without_line("StartLimitBurst").replace("[Install]", "StartLimitBurst=5\n\n[Install]")
+        text = self.without_line("StartLimitBurst").replace(
+            "[Install]", "StartLimitBurst=5\n\n[Install]"
+        )
         faults = retry_faults(text)
         self.assertEqual(len(faults), 1, faults)
         self.assertIn("no `StartLimitBurst=`", faults[0])
@@ -1277,7 +1279,9 @@ class UnitRetryContractTests(unittest.TestCase):
     def test_no_committed_instance_drop_in_sets_a_retry_directive(self):
         drop_ins = sorted(HETZNER.glob("*/systemd/*.override.conf"))
         self.assertGreaterEqual(
-            len(drop_ins), 3, f"the glob found {drop_ins}: edge, monitoring and nextcloud1 are committed"
+            len(drop_ins),
+            3,
+            f"the glob found {drop_ins}: edge, monitoring and nextcloud1 are committed",
         )
         for drop_in in drop_ins:
             with self.subTest(drop_in=str(drop_in.relative_to(HETZNER))):
@@ -1317,9 +1321,7 @@ class StackNameScanTests(unittest.TestCase):
     """
 
     def names(self, text: str) -> set[str]:
-        return {
-            match.group(1) for pattern in STACK_MENTIONS for match in pattern.finditer(text)
-        }
+        return {match.group(1) for pattern in STACK_MENTIONS for match in pattern.finditer(text)}
 
     def test_the_scan_applies_the_deploy_wrappers_own_stack_name_rule(self):
         """The fragment is sliced off `bd.STACK_NAME`, so it has to still fit it."""
@@ -1499,32 +1501,29 @@ class ContractReachTests(unittest.TestCase):
                     "that path, or widen the glob and EXPECTED_SERVICES together.",
                 )
 
-    def test_the_deploy_documentation_agrees_with_the_registers(self):
-        """One place a reader finds the whole set, and it has to be the true one.
+    def test_the_deploy_documentation_points_at_the_registers_and_holds_no_copy(self):
+        """The registers are the one list of instances, and the README says where they are.
 
-        The table's verdict column is the only part of it carrying a claim.
-        Asserting only that each instance is *mentioned* leaves a row free to
-        say a stack is checked when nothing reads it -- the original defect,
-        restated inside the document written to remove it.
+        A table of the instances in the README is a second copy that is edited by hand
+        and goes stale unmentioned, and the registers already say, for each instance, whether
+        this module reads it and who owns the Compose file when it does not.
         """
-        documented = documented_reach(HETZNER / "README.md")
-        self.assertEqual(
-            set(documented),
-            CONTRACT_COVERS | set(CONTRACT_DOES_NOT_REACH),
-            "hetzner/README.md's reach table and the registers hold different sets. "
-            "The table is what a reader finds, so it is the one that goes stale "
-            "unmentioned.",
-        )
-        for stack, documented_as_read in sorted(documented.items()):
-            with self.subTest(stack=stack):
-                self.assertEqual(
-                    documented_as_read,
-                    stack in CONTRACT_COVERS,
-                    f"hetzner/README.md says branchleft-compose@{stack} is "
-                    f"{'read' if documented_as_read else 'not read'} by this module, "
-                    f"and the registers say it is "
-                    f"{'read' if stack in CONTRACT_COVERS else 'not read'}.",
-                )
+        readme = HETZNER / "README.md"
+        self.assertEqual([], documented_instance_rows(readme), "a copy of the registers")
+        text = readme.read_text(encoding="utf-8")
+        for register in ("expected_services/", "CONTRACT_DOES_NOT_REACH"):
+            with self.subTest(register=register):
+                self.assertIn(register, text)
+
+    def test_a_table_row_that_names_an_instance_is_found(self):
+        with tempfile.TemporaryDirectory() as directory:
+            readme = pathlib.Path(directory, "README.md")
+            readme.write_text(
+                "| Instance | Read |\n| --- | --- |\n| `branchleft-compose@edge` | yes |\n"
+                "Prose about `branchleft-compose@edge` is not a row.\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(["edge"], documented_instance_rows(readme))
 
     def test_the_scan_surface_accounts_for_every_file_type_in_the_tree(self):
         """A suffix in neither set is a file type the scan silently cannot see.

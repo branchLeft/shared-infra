@@ -7,7 +7,7 @@ it fails, and the required check does not wait for it. A scheduled or manual run
 every shard as blocking. One exception on a pull request: when a run-everything file changed
 (ci_select.py prints ``direct=``), an advisory shard that the pull request's own role or
 pattern files do not select is left to the nightly run, and the step summary says so.
-ansible/checks/README.md has the rules and the reasons.
+ansible/checks/blocking_shards.md has the rules and the reasons.
 
 Standard library only, because the discover job installs nothing.
 

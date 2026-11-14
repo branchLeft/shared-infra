@@ -18,7 +18,7 @@ or, with the lint and shards skipped, whose discover job's merge-queue confirm s
 Any failure of any step prints the full selection: every role and pattern. The shell step that
 runs this program does the same when the program itself cannot run. Nothing here may print an
 empty selection except for a diff that names no file a shard reads. The rules are in
-ansible/checks/README.md, "delivery_select.py".
+ansible/checks/delivery_select.md.
 """
 
 from __future__ import annotations

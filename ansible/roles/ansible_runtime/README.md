@@ -86,7 +86,7 @@ because the gate reads it. The parity with pip is tested against pip's own
 code in `ansible/checks/test_lock_reader_parity.py`. It asks one pip only: the
 version pinned, with its wheel hash, in `ansible/checks/pip-requirements.txt`.
 It refuses any other pip and names both versions in the failure message.
-`ansible/checks/README.md` holds the pin and the steps to change it.
+`ansible/checks/test_lock_reader_parity.md` holds the pin and the steps to change it.
 
 The parity table is therefore proven against that pinned pip and no other. The
 host does not run that pip. `install_runtime.py` makes the environment with

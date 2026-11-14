@@ -1,6 +1,6 @@
 """Choose the Ansible shards a CI run must execute.
 
-The rules, and why each errs towards running more, are in ansible/checks/README.md. This
+The rules, and why each errs towards running more, are in ansible/checks/ci_select.md. This
 program reads the event, the changed files and the repository tree, and prints the two job
 outputs as ``name=value`` lines. It uses only the standard library, because discover installs
 nothing.

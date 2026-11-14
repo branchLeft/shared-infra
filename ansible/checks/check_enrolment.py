@@ -1,8 +1,8 @@
 """Check the host playbooks under the gated pull.
 
-Rules R0 to R11, and what each one does not see, are in ansible/checks/README.md. A
+Rules R0 to R11, and what each one does not see, are in ansible/checks/check_enrolment.md. A
 failure names the rule and the file. This check catches a protected key set outside
-its one file. It does not judge a role edit: nothing here gates one (see checks/README.md).
+its one file. It does not judge a role edit: nothing here gates one (see checks/check_enrolment.md).
 """
 
 from __future__ import annotations
