@@ -102,7 +102,7 @@ class RoleCase(unittest.TestCase):
 
     def make_role(
         self,
-        min_version: str = "2.21.5",
+        min_version: str = "2.21.6",
         with_tasks: bool = True,
         scenario: str | None = SCENARIO,
         also: Sequence[str] = (),
