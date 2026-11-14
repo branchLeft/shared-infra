@@ -238,14 +238,14 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after 
 approval of its protected environment. A plan job shows the host's diff in check mode
 first; after the approval the host pulls that exact commit of `main` and applies it, and
 a second run must report zero changes. Nothing is applied from a laptop. The role is
-wired into three playbooks, each after `host_baseline` (Docker and `iptables` come from
+wired into four playbooks, each after `host_baseline` (Docker and `iptables` come from
 there): `ansible/playbooks/edge1.yml` (before `ci_login`), `ansible/playbooks/edget.yml`
-(before `ci_jump`) and `ansible/playbooks/dbt1.yml` (before `deploy_verifier`), and no
-other.
+(before `ci_jump`), `ansible/playbooks/dbt1.yml` and `ansible/playbooks/appt1.yml` (each before
+`deploy_verifier`), and no other.
 edge1 and edget are the two gateways. Their switch `egress_nat_gateway_enabled` is set in
 their play vars, not in an inventory (the inventory trees load no group variables), and the
 enrolment checker pins it to exactly those two hosts in `HOST_PLAY_VARS` (R2), so no other
-host can become a second gateway. dbt1 applies the role bare with the switch unset, which
+host can become a second gateway. dbt1 and appt1 apply the role bare with the switch unset, which
 installs the host egress half only: the reconciler and unit that give a host with no public
 address its default route and resolver, and nothing that forwards traffic.
 `ansible/checks/test_egress_nat_single_gateway.py` holds all of that. The provisioning

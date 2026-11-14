@@ -27,7 +27,8 @@
   "state_backends": {
     "shared": "gs://branchleft-pulumi-state",
     "tenant_blog": "gs://branchleft-blog-pulumi-state",
-    "hetzner": "s3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1"
+    "hetzner": "s3://branchleft-pulumi-state?endpoint=hel1.your-objectstorage.com&s3ForcePathStyle=true&region=hel1",
+    "ephemeral_file": "file://<per-run directory the ovh-copy2-probe workflow creates and throws away with the run>"
   },
   "stacks": [
     {
@@ -179,6 +180,18 @@
       "expected_secrets_provider": "passphrase",
       "terminal_state": "never-kms",
       "note": "Born on the passphrase provider, never KMS-wrapped. Not yet created: the first apply is a hand-gated operation with an operator-held salt and the tenants project's token, and needs the marker firewall and the owner SSH key registered in that project first. The committed config file holds non-secret configuration only and reads `absent`, which never-kms accepts on its own, same as the network stack.",
+      "attestation": null
+    },
+    {
+      "project": "branchleft-ovh-copy2",
+      "stack": "probe",
+      "repo": "shared-infra",
+      "project_path": "ovh/copy2/Pulumi.yaml",
+      "config_path": "ovh/copy2/Pulumi.probe.yaml",
+      "state_backend": "ephemeral_file",
+      "expected_secrets_provider": "passphrase",
+      "terminal_state": "never-kms",
+      "note": "The OVHcloud London second backup copy; only the probe stack exists. Its workflow supplies a throwaway passphrase, a fresh salt and a file:// backend that dies with the run, so no state outlives it and nothing is ever KMS-wrapped. Pulumi.probe.yaml carries no secretsprovider or encryptionsalt, so it reads `absent`, which never-kms accepts on its own. The production stack, when it exists, pins a persistent backend and gets its own entry here before its first apply.",
       "attestation": null
     }
   ],

@@ -104,7 +104,7 @@ class Sabotage(unittest.TestCase):
 
     # R1: an empty enrolled set fails, it does not pass over nothing.
     def test_r1_no_enrolled_playbook(self) -> None:
-        for host in ("edge1", "edget", "ops1", "app1", "db1", "dbt1", "demo1", "mx1"):
+        for host in ("edge1", "edget", "ops1", "app1", "db1", "dbt1", "appt1", "demo1", "mx1"):
             (self.ansible / "playbooks" / f"{host}.yml").unlink()
             (self.ansible / "trust" / f"{host}.yml").unlink()
         self._assert_rule("R1")
