@@ -85,8 +85,20 @@
     run_class: app
     run_variant: standard
 
+# The watch applies the module's test, so it fails the unit on the same chain.
+- name: Run the watch on the chain in the wrong order
+  ansible.builtin.include_tasks: expect_watch_failure.yml
+  vars:
+    expect_label: established accept below the drops
+    expect_status: '1'
+
 - name: Reset the chains and run the program to repair
   ansible.builtin.include_tasks: reapply_policy.yml
+
+- name: Run the watch on the repaired chain
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_watch_unit_name }}'
+    state: started
 
 # ----- A foreign accept above the policy is refused -----
 
