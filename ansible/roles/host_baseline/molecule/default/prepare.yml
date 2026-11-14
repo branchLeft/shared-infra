@@ -8,7 +8,7 @@
 #     installed, as it does on a host that has been set up, and makes no apt call
 #   - a unit for ssh, unattended-upgrades, fail2ban and docker, so that the role
 #     can enable and start them; ssh and fail2ban count their reloads in a file
-#   - sshd, a script that models what the role depends on (files/sshd_standin.sh),
+#   - sshd, a script that models what the role depends on (files/sshd_standin),
 #     with a Debian-style sshd_config that includes sshd_config.d, and a
 #     50-cloud-init.conf that allows passwords, as cloud-init writes it
 #
@@ -124,7 +124,7 @@
 
     - name: Install the sshd stand-in
       ansible.builtin.copy:
-        src: sshd_standin.sh
+        src: sshd_standin
         dest: /usr/sbin/sshd
         owner: root
         group: root
