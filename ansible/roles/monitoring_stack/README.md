@@ -175,7 +175,7 @@ time.
 arguments are `path` and `skip_key`; it returns `digest` (64 hex characters) and
 `changed: false` in both modes, and it never writes the file. A refusal names the path or
 the argument, never a line. Its unit test is `tests/unit/test_monitoring_stack_envfile_digest.py`;
-the role's unit suites run with `ansible/checks/run_role_unit_tests.sh`.
+the role's unit suites run with `ansible/checks/run_role_unit_tests.py`.
 
 `library/monitoring_stack_envfile_keys.py` is the second. Its arguments are `path` and
 `keys`; it returns `configured` and `missing` (key names only) and `changed: false` in

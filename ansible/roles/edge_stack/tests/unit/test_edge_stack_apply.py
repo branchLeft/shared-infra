@@ -1,7 +1,7 @@
 """Unit tests for edge_stack_apply: one lock across both phases, the exit-code contract, check mode.
 
 Run from the role's directory with library/ on PYTHONPATH, the way
-``ansible/checks/run_role_unit_tests.sh`` does. The module runs against a temporary tree.
+``ansible/checks/run_role_unit_tests.py`` does. The module runs against a temporary tree.
 ``docker`` and ``systemctl`` are stand-ins on PATH: each logs its call and whether the deploy
 lock was held by another process at that moment, so the lock is observed from outside, by a
 second process, and not read from the module's own state.

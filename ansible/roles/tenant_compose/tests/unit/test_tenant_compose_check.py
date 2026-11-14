@@ -1,7 +1,7 @@
 """Unit tests for tenant_compose_check: every refusal, the verdict's purity and its secrecy.
 
 Run from the role's directory, with the library directory on PYTHONPATH, the way
-``ansible/checks/run_role_unit_tests.sh`` does. Every name is a placeholder, and every
+``ansible/checks/run_role_unit_tests.py`` does. Every name is a placeholder, and every
 secret is a throwaway made for the test.
 """
 
