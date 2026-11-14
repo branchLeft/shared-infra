@@ -74,6 +74,7 @@ pnpm-workspace.yaml                                          @branchLeft/branchl
 /hetzner/provision/provision_deploy_slot.py                  @branchLeft/branchleft-admin
 /hetzner/provision/test_provision_deploy_slot.py             @branchLeft/branchleft-admin
 /hetzner/provision/test_suite_size.py                        @branchLeft/branchleft-admin
+/hetzner/provision/test_counts/                              @branchLeft/branchleft-admin
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
 test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
 /hetzner/edge/breakGlassToken.test.ts                        @branchLeft/branchleft-admin

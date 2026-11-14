@@ -89,6 +89,11 @@ SAMPLES: tuple[Sample, ...] = (
     Sample("hetzner/provision/branchleft_deploy.py", "gate: the deploy account command", True),
     Sample("hetzner/provision/test_suite_size.py", "gate: the suite-size floor", True),
     Sample(
+        "hetzner/provision/test_counts/test_suite_size.txt",
+        "gate: a per-module suite-size floor",
+        True,
+    ),
+    Sample(
         "hetzner/scripts/check-crowdsec-hub-pin.py",
         "gate: a script whose exit code gates a write-token step",
         True,

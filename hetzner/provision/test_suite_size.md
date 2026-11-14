@@ -11,7 +11,17 @@ can still exit 0 if everything it did collect passes -- a shrunken run looks
 identical to a smaller, still-complete one unless something states what the
 count should be.
 
+The expected number is kept per module, in `test_counts/<module>.txt`
+(one integer and a newline), not as one constant for the directory. A single
+number was a line every pull request that adds a test had to edit, so
+unrelated pull requests collided on it; one file per module means two pull
+requests adding tests to different modules touch different files. The test
+fails on a test module with no count file, a count file with no module (the
+module was deleted or failed to import), and a module whose count differs.
+`test_counts/` is owned by the same CODEOWNERS owner as this file.
+
 This can only guard the rest of the directory, never itself: a test that
 vanished along with this file would leave nothing here to notice the drop.
-Bump EXPECTED_TEST_COUNT in the same change that adds or removes a test
-method anywhere under hetzner/provision, including in this file.
+Change `test_counts/<module>.txt` in the same change that adds or removes a
+test method in that module, and add or delete the file with the module,
+including for this file's own `test_counts/test_suite_size.txt`.

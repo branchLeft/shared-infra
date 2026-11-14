@@ -163,6 +163,7 @@ GATE_PATHS = [
     "hetzner/provision/provision_deploy_slot.py",
     "hetzner/provision/test_provision_deploy_slot.py",
     "hetzner/provision/test_suite_size.py",
+    "hetzner/provision/test_counts/test_suite_size.txt",
     "hetzner/vitest.config.ts",
     "hetzner-host/vitest.config.ts",
     "ovh/copy2/projectGuard.ts",
@@ -726,6 +727,8 @@ class CodeownersTests(unittest.TestCase):
                 "mail/provision/a_new_program.py",
                 "scripts/a_new_ci_script.py",
                 "hetzner/scripts/a_new_ci_script.py",
+                # A new test module's count file is the owner's before any line names it.
+                "hetzner/provision/test_counts/test_a_new_module.txt",
                 "ansible/trust/newhost.yml",
                 "ansible/owner_vars/newhost.yml",
                 "ansible/roles/mail_reconcilers/tasks/new.yml",

@@ -49,4 +49,4 @@ The tests require both variables in the applications' `environment:`, equal to t
 private address read from `hetzner-host/addressPlan.ts` (`HOST_IPS.edge1`) and not copied here,
 and require the address to be written once in the compose file, shared by an anchor.
 
-Bump `EXPECTED_TEST_COUNT` in `test_suite_size.py` with any change here.
+Bump `test_counts/test_control_plane_stack.txt` with any change here.
