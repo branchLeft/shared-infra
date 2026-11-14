@@ -69,12 +69,28 @@ VERIFIER = "/usr/local/sbin/branchleft-verify-image"
 ATTESTED_REPO = "branchLeft/ghost-platform"
 
 # The register: each image this host verifies before it deploys, mapped to the
-# one workflow whose attestation it must carry. An image name absent from this
-# table is not verified here. Adding an image is a reviewed diff; an image it
-# lists is refused unless attested by exactly that workflow on refs/heads/main.
+# one workflow whose attestation it must carry. Adding an image is a reviewed
+# diff; an image it lists is refused unless attested by exactly that workflow on
+# refs/heads/main. An image name absent from this table is refused too, unless
+# UNATTESTED_STACK_IMAGES below names it for that stack.
 ATTESTED_IMAGES: dict[str, str] = {
     "ghcr.io/branchleft/ghost-tenant": f"{ATTESTED_REPO}/.github/workflows/registry-push.yml",
     "ghcr.io/branchleft/portal-apps": f"{ATTESTED_REPO}/.github/workflows/portal-apps-image.yml",
+}
+
+# The reviewed exemption list: for each stack, the image names it may deploy with
+# no attestation check, because no workflow attests them yet. Keyed by stack as
+# well as by name, so one stack's exemption does not open the others (a tenant
+# slot key cannot pin the edge image). Every entry is a stack that pins through
+# this wrapper today. Adding an entry is a reviewed diff, and each one is a gap
+# to close by registering the image in ATTESTED_IMAGES instead. See
+# branchleft_deploy.md, "verify_attestation and ATTESTED_IMAGES".
+UNATTESTED_STACK_IMAGES: dict[str, frozenset[str]] = {
+    "website": frozenset({"ghcr.io/branchleft/website"}),
+    "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
+    "edge": frozenset({"ghcr.io/branchleft/edge-caddy"}),
+    "db": frozenset({"mysql"}),
+    "dbt1": frozenset({"ghcr.io/branchleft/percona-server"}),
 }
 
 
@@ -136,13 +152,15 @@ def attested_name(image: str) -> str:
     return first.partition(":")[0] + slash + rest.partition(":")[0]
 
 
-def verify_attestation(image: str, *, run=subprocess.run) -> bool:
+def verify_attestation(image: str, *, stack: str, run=subprocess.run) -> bool:
     """Verify a registered image's attestation before anything touches the host.
 
-    Returns False for an image outside the register, which is not verified here.
-    Raises DeployError when a registered image cannot be verified, for any
-    reason: refused, unknown digest, or the verifier missing. There is no
-    argument, environment variable or stack setting that skips this.
+    Returns True for a registered image the verifier accepted, and False for an
+    image that the reviewed exemption list names for this stack (not verified).
+    Raises DeployError for an image in neither place, and when a registered image
+    cannot be verified, for any reason: refused, unknown digest, or the verifier
+    missing. There is no argument, environment variable or stack setting that
+    skips this.
 
     The design is fail-closed. The host holds no GitHub API credential and the
     verifier needs none (see branchleft_deploy.md). A gh that still asks for a
@@ -153,7 +171,14 @@ def verify_attestation(image: str, *, run=subprocess.run) -> bool:
     name = attested_name(image)
     signer = ATTESTED_IMAGES.get(name)
     if signer is None:
-        return False
+        if name in UNATTESTED_STACK_IMAGES.get(stack, frozenset()):
+            return False
+        raise DeployError(
+            f"{name} is not a registered image and stack {stack!r} has no reviewed "
+            f"exemption for it; refusing to deploy {image} without verifying its "
+            "attestation. Registering an image, or exempting it for a stack, is a "
+            "reviewed change to branchleft_deploy.py"
+        )
     # The verifier takes registry/name@digest only, so it is given the register
     # name and the digest, however the image was spelled.
     canonical = f"{name}@{image.partition('@')[2]}"
@@ -539,7 +564,7 @@ def deploy(
     validate_image_ref(image)
     # Before the lock, the compose read, the pin write and any restart: a
     # refusal here leaves the pin file and the running stack exactly as they were.
-    verify_attestation(image, run=run)
+    verify_attestation(image, stack=stack, run=run)
 
     compose_file = compose_file_path(stack, stack_dir)
     if not os.path.exists(compose_file):
