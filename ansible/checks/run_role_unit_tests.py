@@ -11,6 +11,11 @@ result line after the last Ran line, when any suite fails, and when a suite skip
 expected-fails a test: a role suite is a control, so a skipped test is a control that does
 not run. Each suite runs from its role's directory with files/ and library/ on PYTHONPATH,
 because the roles' tests import from both.
+
+The roles run side by side, one worker each, so the step takes as long as its slowest role
+rather than the sum of all of them. Each role writes its own log, and the logs are printed in
+role order once every role has finished, so the output reads the same as a serial run. A role's
+verdict is its own.
 """
 
 from __future__ import annotations
@@ -20,6 +25,7 @@ import re
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 SUMMARY = re.compile(r"Ran ([0-9]+) tests? in [0-9.]+s")
@@ -109,25 +115,29 @@ def summarise(name: str, status: int, output: str) -> tuple[bool, str]:
     return True, f"{name}: {ran} unit tests passed."
 
 
-def run_role(unit: Path, python: str) -> bool:
-    """Runs one role's unit suites, prints the verdict, and returns True when the role failed."""
+def run_role(unit: Path, python: str) -> tuple[bool, str]:
+    """Runs one role's unit suites; returns whether the role failed, and its log.
+
+    The log is returned and not printed, so roles can run side by side and the caller prints
+    the logs in role order.
+    """
     role = unit.parent.parent
     name = role.name
-    print(f"::group::{name} unit tests")
+    log = [f"::group::{name} unit tests"]
     if not unit.is_dir():
-        print(f"{name}: tests/unit is not a directory, so its tests would not run.")
-        print("::endgroup::")
-        return True
+        log.append(f"{name}: tests/unit is not a directory, so its tests would not run.")
+        log.append("::endgroup::")
+        return True, "\n".join(log)
     if not sorted(unit.glob("test_*.py")):
-        print(f"{name}: tests/unit holds no test_*.py, so nothing would be tested.")
-        print("::endgroup::")
-        return True
+        log.append(f"{name}: tests/unit holds no test_*.py, so nothing would be tested.")
+        log.append("::endgroup::")
+        return True, "\n".join(log)
     status, output = run_suites(role, python)
-    print(output)
+    log.append(output)
     passed, message = summarise(name, status, output)
-    print(message)
-    print("::endgroup::")
-    return not passed
+    log.append(message)
+    log.append("::endgroup::")
+    return not passed, "\n".join(log)
 
 
 def main(argv: list[str]) -> int:
@@ -152,10 +162,18 @@ def main(argv: list[str]) -> int:
         )
         return 1
 
+    # The roles run side by side, so the step takes as long as its slowest role and not the sum
+    # of them all. Each role keeps its own log, and the logs are printed in role order once the
+    # roles have finished, so the output reads the same as a serial run. A role's verdict is its
+    # own.
     failed = 0
-    for unit in units:
-        if run_role(unit, python):
-            failed += 1
+    with ThreadPoolExecutor(max_workers=len(units)) as pool:
+        results = [pool.submit(run_role, unit, python) for unit in units]
+        for result in results:
+            role_failed, log = result.result()
+            print(log)
+            if role_failed:
+                failed += 1
     if failed:
         print(f"{failed} role unit suite(s) failed or did not run.")
         return 1
