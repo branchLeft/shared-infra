@@ -69,7 +69,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's tenant_onboarding, and app1's
-# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back), db1's
+# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else
+# back), db1's
 # host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes first;
 # db1_grants follows the timers, which deliver the dump programs it checks), ops1's host_inputs
 # (first), control_plane after the status page, then nextcloud_stack, backup_worker and
