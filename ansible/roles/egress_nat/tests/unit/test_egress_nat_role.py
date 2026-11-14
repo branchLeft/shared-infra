@@ -16,15 +16,14 @@ ROLE = Path(__file__).resolve().parents[2]
 REPO = ROLE.parents[2]
 PROVISION = REPO / "hetzner" / "provision"
 
-# The files the role delivers. The host egress pair lives in hetzner/provision; the NAT program and
-# its unit live in the role's files/. The NAT unit's copy in hetzner/provision is read by the
-# NAT hand installer until that installer is removed, and must match the role's copy.
+# The files the role delivers. The host egress unit and timer live in hetzner/provision; both
+# reconcilers and the NAT unit live in the role's files/. The NAT unit's copy in hetzner/provision
+# is read by the NAT hand installer until that installer is removed, and must match the role's copy.
 PROVISION_FILES = (
-    "branchleft_host_egress.sh",
     "branchleft-host-egress.service",
     "branchleft-host-egress.timer",
 )
-ROLE_FILES = ("branchleft_nat.py", "branchleft-nat.service")
+ROLE_FILES = ("branchleft_host_egress.py", "branchleft_nat.py", "branchleft-nat.service")
 ROLE_FILES_DIR = ROLE / "files"
 
 SHELL_MODULES = ("ansible.builtin.shell", "ansible.builtin.raw", "ansible.builtin.script")
@@ -119,15 +118,19 @@ class SourceTests(unittest.TestCase):
 
     def test_vars_name_only_files_the_role_holds(self) -> None:
         constants = as_dict(load("vars/main.yml"))
+        known = PROVISION_FILES + ROLE_FILES
         expected = {
-            "egress_nat_host_egress": (PROVISION, PROVISION_FILES),
-            "egress_nat_nat_gateway": (ROLE_FILES_DIR, ROLE_FILES),
+            "egress_nat_host_egress": {"reconciler_src": ROLE_FILES_DIR, "unit_src": PROVISION},
+            "egress_nat_nat_gateway": {
+                "reconciler_src": ROLE_FILES_DIR,
+                "unit_src": ROLE_FILES_DIR,
+            },
         }
-        for key, (directory, names) in expected.items():
+        for key, directories in expected.items():
             item = as_dict(constants[key])
-            for field in ("reconciler_src", "unit_src"):
+            for field, directory in directories.items():
                 with self.subTest(item=key, field=field):
-                    self.assertIn(resolve(item[field]).name, names)
+                    self.assertIn(resolve(item[field]).name, known)
                     self.assertEqual(resolve(item[field]).parent, directory.resolve())
         host_egress = as_dict(constants["egress_nat_host_egress"])
         self.assertEqual(resolve(host_egress["timer_src"]).name, "branchleft-host-egress.timer")
