@@ -193,9 +193,8 @@ same way:
 CI runs the same commands, the pin check, and the harness over every role. The workflow
 (`.github/workflows/ansible.yml`) runs on every pull request and every push to
 `main`, with no path filter, so its jobs always report. The first job decides
-whether a file under `ansible/`, the two lint files or the workflow itself
-changed (`ansible/`, `hetzner/` and `mail/provision/` are watched whole); when none did, the other
-jobs are skipped and the gate passes.
+whether any file changed (`.`, the whole repository, is watched, because three of the lint job's
+checks enumerate the checkout); when none did, the other jobs are skipped and the gate passes.
 
 What runs, by event:
 
@@ -237,7 +236,7 @@ The workflow has these kinds of job:
   with `--scenario` set to the entry's scenario, and only after `quick-lint` has
   passed, so a malformed file is red in minutes and starts no container. It does
   not wait for the full `lint`. `shard-advisory` is the same job for the advisory
-  entries. `report` and `daily-issue` are described below. Each shard
+  entries. `report` and `daily-summary` are described below. Each shard
   has its own time limit (25 minutes), so the run time does not grow with the
   number of roles in one job. A role whose one scenario would not fit in the
   limit puts its refusal cases in a second scenario, which is a second shard,
@@ -257,11 +256,10 @@ a manual run, a skipped blocking shard job fails the gate. A scheduled or manual
 treats every shard as blocking.
 
 `report` runs after every shard job, reads the Actions API with a read-only token and
-writes the step summary; it is not a required check. `daily-issue` runs only for a
-scheduled run whose gate failed. It opens one issue titled "Daily container tests red:
-DATE" with the run link and the failed shard ids and the label `ci-red-daily`, or comments
-on the one still open. It mentions and assigns no one and wakes no agent; it is the only
-job with write access, `issues: write`.
+writes the step summary; it is not a required check. `daily-summary` runs only for a
+scheduled run whose gate failed. It writes "Daily container tests red: DATE", the run link
+and the failed shard ids to that run's step summary. It files no issue, mentions and assigns
+no one, wakes no agent and has read access only: the red run is the signal.
 `ansible/checks/advisory_passes.py SHARD` counts how many daily runs in a row a shard
 passed, for the pull request that moves it on or off the list.
 

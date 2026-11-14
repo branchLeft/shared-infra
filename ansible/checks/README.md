@@ -392,9 +392,12 @@ The rules for the list:
   offline on recorded answers (`advisory_passes_fixture.json`).
 - The approver records every red advisory shard of the pull request, from the `report` job's
   table, on the pull request.
-- A red daily run opens one issue (`daily_red_issue.py`), titled with the date, with the run
-  link and the failed shard ids and the one label `ci-red-daily`, or comments on the one still
-  open. Nothing there mentions, assigns or prompts anyone or anything.
+- A red daily run is red on its own status and writes its date, the run link and the failed
+  shard ids to its step summary (`daily_red_issue.py --summary`, job `daily-summary`, read
+  permissions only). No workflow in this repository grants `issues: write` except the drift
+  check caller, which `test_ci_gate_order.py` allowlists until its reusable workflow moves.
+  The program's issue-opening code is not run by any workflow now. Nothing there mentions,
+  assigns or prompts anyone or anything.
 
 Two things to know. A new role or scenario starts advisory: it is on no list until a pull
 request puts it there. And the delivery workflow (`ansible-delivery.yml`) runs the harness
@@ -569,9 +572,9 @@ Named limit: that only an org-admin pull-request bypass can skip the queue comes
 ruleset standard. The ruleset's bypass list could not be read with the App tokens, so the owner
 should confirm it from the owner's view.
 
-## run_role_unit_tests.sh: the role unit suites
+## run_role_unit_tests.py: the role unit suites
 
-The lint job runs `run_role_unit_tests.sh` once, and it runs the unit tests of every
+The lint job runs `run_role_unit_tests.py` once, and it runs the unit tests of every
 `roles/*/tests/unit` directory found by glob, with no list to edit. A suite fails the step when it
 fails, runs no test, or skips or expected-fails a test: a role suite is a control, and a skipped
 test is a control that does not run, so `OK (skipped=N)` and `OK (expected failures=N)` both fail

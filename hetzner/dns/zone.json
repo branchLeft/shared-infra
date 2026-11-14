@@ -83,6 +83,14 @@
       ]
     },
     {
+      "name": "_smtp._tls",
+      "type": "TXT",
+      "ttl": 3600,
+      "values": [
+        "\"v=TLSRPTv1; rua=mailto:rob@branchleft.co.uk\""
+      ]
+    },
+    {
       "name": "blog",
       "type": "A",
       "ttl": 3600,

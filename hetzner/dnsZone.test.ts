@@ -143,9 +143,12 @@ describe('rrsetResourceName', () => {
 });
 
 /**
- * The resource name is part of each rrset's URN. These are the names already
- * applied for branchleft.co.uk: a change to any one is a delete-and-create of
- * a live record, mail included, so the list is literal and any drift fails.
+ * The resource name is part of each rrset's URN, in zone.json's order. The
+ * names through `_domainconnect-cname` are already applied for
+ * branchleft.co.uk: a change to any one is a delete-and-create of a live
+ * record, mail included, so those are literal and any drift fails.
+ * `_smtp._tls-txt` is the TLS-RPT record added by a later change: it is a
+ * create when the zone is applied, not a rename of anything live.
  */
 const BRANCHLEFT_RESOURCE_NAMES = [
   'apex-a',
@@ -156,6 +159,7 @@ const BRANCHLEFT_RESOURCE_NAMES = [
   '_acme-challenge.www-cname',
   '_dmarc-txt',
   '_domainconnect-cname',
+  '_smtp._tls-txt',
   'blog-a',
   'blog-mx',
   'blog-txt',

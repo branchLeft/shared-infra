@@ -1,4 +1,4 @@
-"""Tests for ansible/checks/run_role_unit_tests.sh, the one home for running role unit tests.
+"""Tests for ansible/checks/run_role_unit_tests.py, the one home for running role unit tests.
 
 Each case builds a scratch ansible/ tree in a temporary directory and runs the script over
 it with the interpreter that runs this suite. The workflow tests pin that the lint job calls
@@ -17,7 +17,7 @@ import unittest
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = ROOT / "ansible" / "checks" / "run_role_unit_tests.sh"
+SCRIPT = ROOT / "ansible" / "checks" / "run_role_unit_tests.py"
 WORKFLOW = ROOT / ".github" / "workflows" / "ansible.yml"
 
 PASSING = (
@@ -249,7 +249,7 @@ class RoleUnitTestScript(unittest.TestCase):
             check=False,
         )
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
-        self.assertIn("usage: run_role_unit_tests.sh", result.stderr)
+        self.assertIn("usage: run_role_unit_tests.py", result.stderr)
 
 
 class WorkflowCallsTheScript(unittest.TestCase):
@@ -258,8 +258,8 @@ class WorkflowCallsTheScript(unittest.TestCase):
         self.lint = self.text.split("\n  lint:\n", 1)[1].split("\n  shard:\n", 1)[0]
 
     def test_the_lint_job_calls_the_script_once(self) -> None:
-        self.assertEqual(1, self.lint.count("ansible/checks/run_role_unit_tests.sh"))
-        self.assertEqual(1, self.text.count("ansible/checks/run_role_unit_tests.sh"))
+        self.assertEqual(1, self.lint.count("ansible/checks/run_role_unit_tests.py"))
+        self.assertEqual(1, self.text.count("ansible/checks/run_role_unit_tests.py"))
 
     def test_no_second_unittest_run_reaches_the_role_tests(self) -> None:
         lines = self.text.splitlines()

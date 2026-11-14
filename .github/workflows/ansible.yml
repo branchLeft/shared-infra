@@ -25,7 +25,8 @@ name: Ansible
 # needs discover, the two lints and the blocking shards, and fails unless each of them
 # succeeded. It does not wait for, or read, an advisory shard: that shard shows red on its
 # own check line, and `report` lists every red one in the step summary. Scheduled and manual
-# runs treat every shard as blocking, and a red scheduled run opens one issue (`daily-issue`).
+# runs treat every shard as blocking, and a red scheduled run writes what failed to its step
+# summary (`daily-summary`).
 #
 # What runs, by event:
 #   - a pull request: lint, and the shards of the roles and patterns it changed (and of
@@ -132,6 +133,15 @@ jobs:
       # change must start the lint job, and a file named one by one is the one the next edit forgets.
       # The other mail/ files (the Pulumi project) cost one lint run; no shard reads them.
       #
+      # The last entry, `.`, is the whole repository. Three of the lint job's checks enumerate the
+      # checkout instead of naming files: ansible/checks/test_no_new_script_dependents.py lists every
+      # tracked file, and test_no_new_hand_installers.py and test_no_new_hand_runbook_steps.py walk
+      # it. A change to any file can fail one of them, so a pull request that touched only scripts/
+      # once merged a red `main`. A directory named one by one cannot be complete, and a new top-level
+      # path would be the one the list forgot. ansible/checks/test_ci_watched_paths.py finds those
+      # checks from their own source and fails if the filter does not cover every tracked file.
+      # Watching decides only whether the lint runs; the shards are still ci_select.py's choice.
+      #
       # The full list of changed files is kept for ci_select.py, NUL-separated and with
       # renames shown as a delete and an add, so a moved role names both places.
       - name: Decide whether the Ansible inputs changed
@@ -182,6 +192,7 @@ jobs:
             hetzner-host/cloudInit.ts
             hetzner-host/pullBootstrapFixed.json
             mail/
+            .
           )
           git diff --name-only -z --no-renames "$base" "$head" > "$RUNNER_TEMP/changed-files.z"
           echo "changed=$RUNNER_TEMP/changed-files.z" >> "$GITHUB_OUTPUT"
@@ -487,11 +498,11 @@ jobs:
       # keeps this the only copy, run in the "Test the checks" step above and in
       # scripts/test_merge_group_triggers.py.
       - name: Run every role's unit tests
-        run: 'PYTHON="$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/run_role_unit_tests.sh ansible'
+        run: 'PYTHON="$RUNNER_TEMP/ansible-venv/bin/python" python3 ansible/checks/run_role_unit_tests.py ansible'
 
   # The blocking shards: the ones named in ansible/checks/blocking_shards.json, and every
   # shard on a scheduled or manual run. The gate job waits for this job and fails with it.
-  # The job name `Harness: <shard id>` is what the report, the daily issue and
+  # The job name `Harness: <shard id>` is what the report, the daily summary and
   # advisory_passes.py read the shard id from (ansible/checks/shard_results.py).
   shard:
     name: 'Harness: ${{ matrix.name }}'
@@ -776,11 +787,11 @@ jobs:
           RUN_ID: ${{ github.run_id }}
         run: python3 ansible/checks/shard_results.py report --run-id "$RUN_ID" >> "$GITHUB_STEP_SUMMARY"
 
-  # A red scheduled run opens one plain issue, or comments on the one still open. It
-  # starts, mentions and labels nothing that wakes anyone: a title with the date, the run
-  # link, the failed shard ids and the label `ci-red-daily`. The only job that can write issues.
-  daily-issue:
-    name: Daily run issue
+  # A red scheduled run says so in its own step summary: the run link and the failed shard
+  # ids. The run itself is red, which is the signal; this job files no issue and holds no write
+  # permission. It mentions and assigns no one.
+  daily-summary:
+    name: Daily run summary
     needs: [roles]
     if: always() && github.event_name == 'schedule' && needs.roles.result == 'failure'
     runs-on: ubuntu-24.04
@@ -788,15 +799,14 @@ jobs:
     permissions:
       contents: read
       actions: read
-      issues: write
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Open or extend the day's issue
+      - name: Write what failed to the step summary
         env:
           GITHUB_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
-        run: python3 ansible/checks/daily_red_issue.py --run-id "$RUN_ID"
+        run: python3 ansible/checks/daily_red_issue.py --summary --run-id "$RUN_ID" >> "$GITHUB_STEP_SUMMARY"

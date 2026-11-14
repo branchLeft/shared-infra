@@ -28,6 +28,12 @@ DEPLOY_SOURCE = (ROOT / "hetzner" / "provision" / "branchleft_deploy.py").read_t
 )
 DIGEST = "a" * 64
 GOOD_IMAGE = f"ghcr.io/branchleft/percona-server@sha256:{DIGEST}"
+# The digest the Percona image workflow pushed, scanned with no blocking finding and
+# attested on the default branch of ghost-platform (run 43331723453, commit 1289eb507b95).
+SCANNED_IMAGE = (
+    "ghcr.io/branchleft/percona-server@sha256:"
+    "20e400e5558480067f8d72610b27064efa97d260d51f9e86af60afb69fd93696"
+)
 ROOT_KEY = "MYSQL_ROOT_PASSWORD"
 
 
@@ -324,8 +330,27 @@ class PinsAndNames(unittest.TestCase):
     def test_the_version_is_the_one_the_proof_measured(self) -> None:
         self.assertEqual(VARS["db_t1_server_version"], "8.0.46-37")
 
-    def test_the_default_deploys_nothing(self) -> None:
-        self.assertEqual(DEFAULTS, {"db_t1_image": ""})
+    def test_the_default_is_the_one_scanned_and_attested_digest_and_nothing_else(self) -> None:
+        self.assertEqual(DEFAULTS, {"db_t1_image": SCANNED_IMAGE})
+        self.assertRegex(SCANNED_IMAGE, text_var("db_t1_image_pattern"))
+
+    def test_the_image_is_in_the_deploy_programs_register_with_the_workflow_that_signs_it(
+        self,
+    ) -> None:
+        image = DEFAULTS["db_t1_image"]
+        self.assertIsInstance(image, str)
+        name = str(image).partition("@")[0]
+        # The deploy program verifies only an image whose name is in its register; a name
+        # outside it is pinned unverified. So the name must be there, against this signer.
+        register = re.search(
+            r"^ATTESTED_IMAGES: dict\[str, str\] = \{(?P<body>.*?)^\}", DEPLOY_SOURCE, re.M | re.S
+        )
+        self.assertIsNotNone(register)
+        body = register.group("body") if register else ""
+        self.assertIn(
+            f'"{name}": f"{{ATTESTED_REPO}}/.github/workflows/percona-image.yml"',
+            body,
+        )
 
     def test_the_other_compose_names_cover_the_files_compose_also_reads(self) -> None:
         names = sequence(VARS["db_t1_other_compose_names"])

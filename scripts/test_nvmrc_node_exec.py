@@ -1,4 +1,4 @@
-"""Tests for scripts/nvmrc-node-exec.sh, run against fakes in a temp directory.
+"""Tests for scripts/nvmrc-node-exec.py, run against fakes in a temp directory.
 
 The selector must run its command under the Node named by .nvmrc, not the
 Node first on PATH. Fake `node` binaries stand in for the nvm install and
@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
-SELECTOR = SCRIPTS / "nvmrc-node-exec.sh"
+SELECTOR = SCRIPTS / "nvmrc-node-exec.py"
 
 
 def write_exec(path: Path, body: str) -> None:
@@ -30,7 +30,7 @@ class NvmrcNodeExecTest(unittest.TestCase):
         base = Path(self._tmp.name)
         self.repo = base / "repo"
         (self.repo / "scripts").mkdir(parents=True)
-        shutil.copy2(SELECTOR, self.repo / "scripts" / "nvmrc-node-exec.sh")
+        shutil.copy2(SELECTOR, self.repo / "scripts" / "nvmrc-node-exec.py")
         self.home = base / "home"
         self.path_dir = base / "path-bin"
         write_exec(self.path_dir / "node", 'echo "PATH-NODE $*"')
@@ -52,7 +52,7 @@ class NvmrcNodeExecTest(unittest.TestCase):
             "PATH": f"{self.path_dir}:/usr/bin:/bin",
         }
         return subprocess.run(
-            [str(self.repo / "scripts" / "nvmrc-node-exec.sh"), *args],
+            [str(self.repo / "scripts" / "nvmrc-node-exec.py"), *args],
             env=env,
             capture_output=True,
             text=True,
