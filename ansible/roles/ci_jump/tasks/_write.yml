@@ -276,6 +276,12 @@
       when: not ansible_check_mode
       no_log: true
 
+    - name: Reload sshd with the previous files back
+      ansible.builtin.systemd_service:
+        name: '{{ ci_jump_sshd_service }}'
+        state: reloaded
+      when: not ansible_check_mode and ci_jump_rescue_check.rc | default(1) == 0
+
     - name: Note that no reload of sshd is owed, the previous files being back
       ansible.builtin.file:
         path: '{{ ci_jump_reload_marker }}'
