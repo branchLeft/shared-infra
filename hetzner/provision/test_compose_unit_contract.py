@@ -297,6 +297,7 @@ SCANNED_SUFFIXES = frozenset(
         ".toml",
         ".ts",
         ".txt",
+        ".webhook",
         ".yaml",
         ".yml",
     }
