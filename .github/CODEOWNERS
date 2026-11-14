@@ -69,6 +69,8 @@ pnpm-workspace.yaml                                          @branchLeft/branchl
 /hetzner/scripts/                                            @branchLeft/branchleft-admin
 /hetzner/provision/branchleft_deploy.py                      @branchLeft/branchleft-admin
 /hetzner/provision/test_branchleft_deploy.py                 @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_deploy_offline.py         @branchLeft/branchleft-admin
+/hetzner/provision/fixtures/offline-attestation/             @branchLeft/branchleft-admin
 /hetzner/provision/provision_deploy_slot.py                  @branchLeft/branchleft-admin
 /hetzner/provision/test_provision_deploy_slot.py             @branchLeft/branchleft-admin
 /hetzner/provision/test_suite_size.py                        @branchLeft/branchleft-admin
@@ -113,6 +115,8 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2 @branchLeft/branchleft-admin
 broker-verify-key*                                           @branchLeft/branchleft-admin
 /ansible/roles/deploy_verifier/vars/main.yml                 @branchLeft/branchleft-admin
+/ansible/roles/deploy_verifier/files/trusted_root.jsonl      @branchLeft/branchleft-admin
+/ansible/roles/deploy_verifier/tasks/_offline.yml            @branchLeft/branchleft-admin
 /ansible/roles/demo1_build/tasks/_accounts.yml               @branchLeft/branchleft-admin
 /ansible/roles/node_exporter/tasks/_node_exporter.yml        @branchLeft/branchleft-admin
 /ansible/roles/host_baseline/tasks/_ssh.yml                  @branchLeft/branchleft-admin

@@ -7,7 +7,19 @@ argument_specs:
       and installs the gh release it runs, pinned by version and sha256 digest in vars/main.yml, at a
       directory of its own. It creates the empty, root-only home the verifier's gh reads its config
       from, and refuses a host where a gh credential file sits there. It also checks, and never writes,
-      the registry read key the owner places at /etc/branchleft/registry/docker. The role takes no inputs: the
-      pins are role variables and cannot be overridden. Nothing here is a secret.
+      the registry read key the owner places at /etc/branchleft/registry/docker. With
+      deploy_verifier_offline set it also installs the pinned trusted root and an empty staging directory,
+      so the wrapper verifies delivered bundles with no network. The pins are role variables and cannot be
+      overridden. Nothing here is a secret.
     author: branchLeft
-    options: {}
+    options:
+      deploy_verifier_offline:
+        type: bool
+        required: false
+        default: false
+        description: >-
+          True on a host with no outbound access. Installs the trusted root at
+          /etc/branchleft/attestation/trusted_root.jsonl and creates the root-only staging directory
+          /var/lib/branchleft/attestations. Where the trusted root exists the wrapper verifies every
+          registered image offline from the bundle and manifest its delivery staged, and never reads
+          the registry.

@@ -295,6 +295,7 @@ SCANNED_SUFFIXES = frozenset(
         ".j2",
         ".js",
         ".json",
+        ".jsonl",
         ".local",
         ".md",
         ".mjs",

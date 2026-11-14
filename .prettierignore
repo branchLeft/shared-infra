@@ -39,3 +39,7 @@ ansible/roles/*/files/ghost-platform/
 # formatter re-wraps the arrays it writes.
 hetzner/dns/zone.json
 hetzner/dns/publicpress.co.uk.json
+
+# The bytes of a real image manifest: their sha256 is the image digest the offline-attestation
+# tests check, so no formatter may touch them.
+hetzner/provision/fixtures/offline-attestation/manifest.json
