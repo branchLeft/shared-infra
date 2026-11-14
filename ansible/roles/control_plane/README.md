@@ -89,10 +89,32 @@ the copy is finished by the next one.
 
 **The first apply after the directory mount ships** is the one that recreates the `db`
 container: the compose file's mount line changed, so Compose recreates it once, on the new
-mount, with its `db-data` volume untouched. Compose may recreate the services that depend
-on the database (the sign-in service, the portal and the console) in the same step, which
-is a brief sign-in, portal and console interruption. The owner chooses the apply window
-when approving the gate. Every apply after that only reloads.
+mount, with its `db-data` volume untouched. Every apply after that only reloads. Compose may
+recreate the services that depend on the database (the sign-in service, the portal and the
+console) in the same step.
+
+The owner's ruling is that no service is down for more than 10 seconds. That window is
+not measured: nothing in the role, the Molecule scenario or CI starts the stack (the test
+host has no Docker daemon), so no figure exists, and the role does not hold the apply to
+10 seconds. What the stack itself shows is the least time Compose's own gate takes. Docker
+runs a service's first health probe one interval after it starts, and each dependant starts
+only once the service it waits on is healthy, so the gate cannot clear sooner than:
+
+- gate floor db: 10 seconds, the database's first probe;
+- gate floor zitadel: 25 seconds, the sign-in service starting after a healthy database
+  and passing its own first probe;
+- gate floor apps: 55 seconds, the portal and the console starting after a healthy
+  sign-in service and passing theirs.
+
+These are the gate's times, not downtime: a service answers requests before its first probe.
+They show that the gate is no evidence of a 10-second window, and that a recreate of the
+sign-in service, the portal and the console is not shown to fit in one. Until the first apply
+is measured on the host, the apply is not claimed to meet the ruling. The measure is the
+container events of the stack over the apply (`docker events --since START --until END
+--filter label=com.docker.compose.project=control-plane`): the `die` of each old container to
+the `start` of its replacement is that service's window. If a window is over 10 seconds, the
+change is delivered another way (a database-only recreate first, so Compose finds the
+dependants unchanged), and this section records the figure measured.
 
 ### What the role does not do
 
