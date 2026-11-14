@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Holds one supervised ssh forward from ops1 to each host's spool drain port, for each host a descriptor names.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

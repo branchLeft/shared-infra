@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Gives ops1 an unprivileged account on a spool host that can open the spool's loopback drain port and nothing else.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'
