@@ -287,6 +287,17 @@ class GuardTests(unittest.TestCase):
                 self.assertIs(copy["remote_src"], True)
                 self.assertIn(f"egress_nat_{dest_key}_copy.backup_file", str(copy["src"]))
 
+    def test_each_put_back_task_runs_only_when_its_kept_copy_exists(self) -> None:
+        _, _, rescue = reconciler_tasks()
+        tasks = [as_dict(task) for task in rescue]
+        for start, kept_copy in (
+            ("Put the previous reconciler back", "egress_nat_reconciler_copy.backup_file"),
+            ("Put the previous unit back", "egress_nat_unit_copy.backup_file"),
+            ("Put the previous timer back", "egress_nat_timer_copy.backup_file"),
+        ):
+            with self.subTest(task=start):
+                self.assertIn(kept_copy, str(named(tasks, start).get("when")))
+
     def test_the_rescue_removes_what_a_first_install_wrote(self) -> None:
         _, _, rescue = reconciler_tasks()
         tasks = [as_dict(task) for task in rescue]
