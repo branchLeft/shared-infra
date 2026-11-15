@@ -20,6 +20,10 @@ from types import ModuleType
 from typing import Any
 
 WRAPPER_PATH = "/usr/local/sbin/branchleft-deploy"
+# The wrapper asks which stack a deploy is for, because an unregistered image is refused unless that
+# stack is exempt. The probe checks registered images only, which verify on any stack, so the name is
+# one no exemption list holds: an unregistered image is refused here, never passed.
+PROBE_STACK = "image-verify-probe"
 
 # A digest nobody published: the sha256 of a fixed string. An image of a registered name at this
 # digest has no attestation anywhere, which is what an unsigned or locally built image looks like
@@ -63,7 +67,7 @@ def canonical(wrapper: ModuleType, image: str) -> tuple[str, str]:
 def accepted_check(wrapper: ModuleType, image: str, run: Run) -> Result:
     name = "real-image-accepted"
     try:
-        verified = wrapper.verify_attestation(image, run=run)
+        verified = wrapper.verify_attestation(image, stack=PROBE_STACK, run=run)
     except wrapper.DeployError as error:
         return Result(name, False, f"refused: {error}")
     if verified is not True:
@@ -79,7 +83,7 @@ def unsigned_check(wrapper: ModuleType, image: str, run: Run) -> Result:
     name = "unsigned-image-refused"
     unsigned = f"{canonical(wrapper, image)[0]}@sha256:{UNSIGNED_DIGEST}"
     try:
-        wrapper.verify_attestation(unsigned, run=run)
+        wrapper.verify_attestation(unsigned, stack=PROBE_STACK, run=run)
     except wrapper.DeployError as error:
         message = str(error)
         if REFUSAL_MARKER in message and LOGIN_MARKER not in message:

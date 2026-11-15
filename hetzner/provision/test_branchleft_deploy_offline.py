@@ -48,6 +48,8 @@ ROLE_TRUSTED_ROOT = HERE.parent.parent / "ansible" / "roles" / "deploy_verifier"
 REAL_DIGEST = "0d8ddc21a9e51237e1d709614973f7b418d9a0c69e0933e4301281ee90481ae4"
 REAL_IMAGE = f"ghcr.io/branchleft/ghost-tenant@sha256:{REAL_DIGEST}"
 REAL_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
+# The stack is irrelevant to a registered image: it verifies on any stack.
+STACK = "blog"
 
 GH = shutil.which("gh")
 # GitHub Actions, and most CI, set CI. Where it is set the real-gh tests are required to run.
@@ -127,7 +129,7 @@ class OfflineCase(unittest.TestCase):
 
     def refused(self, run: Run, image: str = REAL_IMAGE) -> str:
         with self.assertRaises(bd.DeployError) as caught:
-            bd.verify_attestation(image, run=run)
+            bd.verify_attestation(image, stack=STACK, run=run)
         return str(caught.exception)
 
 
@@ -136,7 +138,7 @@ class SelectionTests(OfflineCase):
         self,
     ) -> None:
         run = Recorder()
-        self.assertTrue(bd.verify_attestation(REAL_IMAGE, run=run))
+        self.assertTrue(bd.verify_attestation(REAL_IMAGE, stack=STACK, run=run))
         self.assertEqual(len(run.calls), 1)
         argv = run.calls[0]
         self.assertEqual(argv[0], bd.GH_BIN)
@@ -147,7 +149,7 @@ class SelectionTests(OfflineCase):
 
     def test_gh_is_given_the_staged_bundle_and_manifest_and_the_hosts_own_trusted_root(self) -> None:
         run = Recorder()
-        bd.verify_attestation(REAL_IMAGE, run=run)
+        bd.verify_attestation(REAL_IMAGE, stack=STACK, run=run)
         seen = run.staged[0]
         self.assertEqual(seen["--bundle"], (FIXTURES / "bundle.jsonl").read_bytes())
         self.assertEqual(seen["artifact"], (FIXTURES / "manifest.json").read_bytes())
@@ -155,7 +157,7 @@ class SelectionTests(OfflineCase):
 
     def test_the_identity_checks_are_the_online_verifiers_checks(self) -> None:
         run = Recorder()
-        bd.verify_attestation(REAL_IMAGE, run=run)
+        bd.verify_attestation(REAL_IMAGE, stack=STACK, run=run)
         argv = run.calls[0]
 
         def after(flag: str) -> str:
@@ -169,7 +171,7 @@ class SelectionTests(OfflineCase):
 
     def test_the_environment_holds_no_credential_and_no_registry_key(self) -> None:
         run = Recorder()
-        bd.verify_attestation(REAL_IMAGE, run=run)
+        bd.verify_attestation(REAL_IMAGE, stack=STACK, run=run)
         self.assertEqual(
             run.kwargs[0]["env"],
             {
@@ -184,15 +186,19 @@ class SelectionTests(OfflineCase):
         )
         self.assertEqual(run.kwargs[0]["stdin"], subprocess.DEVNULL)
 
-    def test_an_image_outside_the_register_is_not_verified_here_and_runs_nothing(self) -> None:
+    def test_an_image_outside_the_register_is_refused_unless_exempt_and_runs_nothing(self) -> None:
         run = Recorder()
-        self.assertFalse(bd.verify_attestation(f"ghcr.io/branchleft/other@sha256:{'a' * 64}", run=run))
+        other = f"ghcr.io/branchleft/other@sha256:{'a' * 64}"
+        with self.assertRaises(bd.DeployError):
+            bd.verify_attestation(other, stack=STACK, run=run)
+        exempt = f"ghcr.io/branchleft/edge-caddy@sha256:{'a' * 64}"
+        self.assertFalse(bd.verify_attestation(exempt, stack="edge", run=run))
         self.assertEqual(run.calls, [])
 
     def test_a_host_without_a_trusted_root_still_uses_the_registry_verifier(self) -> None:
         self.trusted_root.unlink()
         run = Recorder()
-        self.assertTrue(bd.verify_attestation(REAL_IMAGE, run=run))
+        self.assertTrue(bd.verify_attestation(REAL_IMAGE, stack=STACK, run=run))
         self.assertEqual(run.calls[0][0], bd.VERIFIER)
         self.assertIn("--bundle-from-oci", run.calls[0])
 
@@ -377,7 +383,7 @@ class RealGhTests(OfflineCase):
         return run
 
     def test_a_real_attestation_verifies_with_no_network(self) -> None:
-        self.assertTrue(bd.verify_attestation(REAL_IMAGE, run=self.run_real))
+        self.assertTrue(bd.verify_attestation(REAL_IMAGE, stack=STACK, run=self.run_real))
 
     def test_a_tampered_bundle_is_refused(self) -> None:
         lines = self.staged().read_text(encoding="utf-8").splitlines()
@@ -452,7 +458,7 @@ class PrivateCopyTests(OfflineCase):
                 "trusted_root": self.trusted_root,
             }
         )
-        self.assertTrue(bd.verify_attestation(REAL_IMAGE, run=run))
+        self.assertTrue(bd.verify_attestation(REAL_IMAGE, stack=STACK, run=run))
         return run
 
     def test_a_swap_of_the_staged_files_after_the_check_does_not_change_what_gh_reads(self) -> None:
