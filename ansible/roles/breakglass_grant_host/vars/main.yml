@@ -20,7 +20,7 @@ breakglass_grant_host_docker_socket: /var/run/docker.sock
 # hashes together. The wrapper is root-only (0700): an operator runs it as root.
 breakglass_grant_host_files:
   - path: break-glass-grant.mjs
-    sha256: 072ece80bf73bb118bfaf8af525b8898aefaff36ca7c938b9212b1cf90376312
+    sha256: dbcf15c4e96c84be8fd17ef5071e3e3959efbc224c493c78a4b8781d5f311459
     dest: '{{ breakglass_grant_host_tool_dir }}/break-glass-grant.mjs'
     mode: '0644'
   - path: docker-engine.mjs
@@ -32,7 +32,7 @@ breakglass_grant_host_files:
     dest: '{{ breakglass_grant_host_tool_dir }}/provision-support-account.mjs'
     mode: '0644'
   - path: host/branchleft-break-glass.py
-    sha256: 04cada06d2e3fa344abb2d1b7f9809fe6b338b6187da30a9f374642c116af171
+    sha256: d757b96666b9804fcd64bffd8bb63074f1ad7ff99b4b5b57e06f1aa60f0763c0
     dest: '{{ breakglass_grant_host_wrapper_path }}'
     mode: '0700'
   - path: systemd/branchleft-break-glass-expire.service

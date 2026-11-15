@@ -13,7 +13,7 @@ argument_specs:
     options:
       breakglass_mint_host_source_commit:
         type: str
-        default: e9851d16a4422b4a99f834a3ca6c43aea05699c7
+        default: c23ffbd4609e37a55cb9a49cf907cda3de3c84d2
         description: >-
           The full 40-character commit of the ghost-platform repository the minter
           is fetched at. The download is held to the sha256 in the role, so a

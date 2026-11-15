@@ -4,4 +4,4 @@
 # tool, its wrapper and its units come from. The Node image is not an input: it
 # is a constant in vars/main.yml, set together with the file hashes, because the
 # wrapper and the expire unit carry their own copy of its digest.
-breakglass_grant_host_source_commit: e9851d16a4422b4a99f834a3ca6c43aea05699c7
+breakglass_grant_host_source_commit: c23ffbd4609e37a55cb9a49cf907cda3de3c84d2
