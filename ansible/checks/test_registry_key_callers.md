@@ -7,7 +7,8 @@ a copy in its own `vars/main.yml` (`<role>_registry_docker_config`), and this te
 to the constant. It scans the tasks and handlers of every role and pattern, so a new caller is
 found and not named by hand. A caller is a task that runs `docker pull`, `docker run`,
 `docker create` or `docker compose` with `up`, `run`, `pull` or `create`, a `community.docker`
-module that pulls or starts, or a shell script from the role's `files/` that does one of those.
+module that pulls or starts, a module in the role's own `library/` that runs `docker` to pull or
+start (`edge_stack_apply`), or a shell script from the role's `files/` that does one of those.
 Each caller must set `DOCKER_CONFIG` in its `environment` (or its block's) to
 `{{ <role>_registry_docker_config }}`, the variable must sit in `vars/` and equal the constant, and
 no task file may hold the path as a literal. A role whose templates name `*_IMAGE=` lines for a

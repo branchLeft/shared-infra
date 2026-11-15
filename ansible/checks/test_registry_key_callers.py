@@ -134,11 +134,22 @@ def _script_pulls(task: dict[str, object], files_dir: Path) -> bool:
     return False
 
 
+MODULE_PULLS = re.compile(r'"docker",\s*"(?:pull|run|create|compose)"')
+
+
+def _module_pulls(name: str, library: Path) -> bool:
+    """Whether a module the role carries in its library runs docker to pull or start."""
+    module = library / f"{name}.py"
+    return module.is_file() and bool(MODULE_PULLS.search(_code(module.read_text(encoding="utf-8"))))
+
+
 def task_pulls(task: dict[str, object], files_dir: Path) -> bool:
     """Whether a task pulls an image or starts a container directly."""
     for key, value in task.items():
         name = _short(key)
         if name in DOCKER_MODULES or (name in COMMAND_MODULES and command_pulls(value)):
+            return True
+        if _module_pulls(name, files_dir.parent / "library"):
             return True
     return _script_pulls(task, files_dir)
 
@@ -418,6 +429,20 @@ class SabotageTests(unittest.TestCase):
         out = findings(base)
         self.assertEqual(len(out), 1, out)
         self.assertIn("not defaults", out[0])
+
+    def test_a_module_of_the_role_that_runs_docker_is_a_caller(self) -> None:
+        tasks = "- name: Apply\n  probe_apply:\n    project_dir: /srv/x\n"
+        base = self.tree(tasks=tasks)
+        _write(
+            base,
+            "ansible/roles/probe/library/probe_apply.py",
+            'argv = ["docker", "run", "--rm", pin]\n',
+        )
+        out = findings(base)
+        self.assertTrue(any("does not set DOCKER_CONFIG" in line for line in out), out)
+        fixed = tasks + "  environment:\n    DOCKER_CONFIG: '{{ probe_registry_docker_config }}'\n"
+        _write(base, "ansible/roles/probe/tasks/main.yml", fixed)
+        self.assertEqual(findings(base), [])
 
     def test_a_script_from_the_role_files_that_runs_an_image_is_a_caller(self) -> None:
         base = self.tree(
