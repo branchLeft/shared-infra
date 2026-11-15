@@ -1,0 +1,5 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+simulation: false
+exclusions:
+  - crowdsecurity/crowdsec-appsec-outofband

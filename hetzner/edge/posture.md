@@ -157,3 +157,42 @@ memory is swept, not hard-capped, same as the general zone above.
 The dedicated throttle on a site that only receives signed callbacks (`EdgeSite.inboundWebhookPath`), in its own zone, on the one matched `POST` path. It has no posture field: it guards a route that is public the moment the site is named, so no setting may switch it off.
 
 Ten events per 60 seconds per address, a judgement and not a measurement, and a value for the owner to confirm before the route goes live. A complaint callback is rare and small, and the sender retries a refused delivery on a timer measured in minutes, so a refused burst is delayed, not lost. The figure is one twentieth of the general budget, and it assumes the sender delivers from few addresses; if it delivers a burst from one address after receiver downtime, the first retry window is where that would show. Neither the sender's concurrency nor its source addresses are published, so both are unproven.
+
+## Nextcloud throttle
+
+`NEXTCLOUD_RATE_LIMIT_EVENTS` replaces `RATE_LIMIT_EVENTS` on every site whose
+`backend` is `nextcloud`, in the same 60-second window. 200 a minute was never
+measured against Nextcloud: opening a Files folder fetches one preview per
+file, the desktop client sends one request per file it syncs, and a Talk call
+polls the chat, the participant list and the signalling endpoint at the same
+time. Each of those can pass 200 a minute from one address, and a 429 mid-call
+breaks the call. 1200 a minute is 20 a second, an order of magnitude above a
+person and still far below what one address needs to load two vCPUs. Nextcloud
+keeps its own brute-force throttle on sign-in, so this zone is load shedding,
+not a login guard. It is not a measured figure: the measurement of a real
+session is filed, and the figure moves to what it shows.
+
+## Ban length
+
+What a ban costs. Every ban CrowdSec issues on this edge lasts
+`BAN_LADDER_MINUTES[n]` minutes, where `n` is how many decisions the same
+address already had in the last `BAN_LADDER_WINDOW`, capped at the last rung:
+10 minutes, then 30, then 2 hours, then 4 hours. A false alarm costs a coffee
+break; an attacker who comes back climbs to the four hours every ban used to
+be. The count is CrowdSec's own (`GetDecisionsSinceCount`), read from its
+database when the decision is made, so a restart does not reset it. It also
+counts a watch-only scenario's simulated decisions, so a person whose traffic
+keeps tripping a watched rule starts a real ban one rung higher; that is the
+cost of using CrowdSec's count rather than keeping our own.
+
+## Watch-only scenarios
+
+Scenarios whose overflows CrowdSec records as simulated decisions: the alert
+is stored and `cscli decisions list` shows the would-be ban, marked simulated,
+but no bouncer receives it and nobody is refused. Today the one entry is the
+out-of-band Core Rule Set scenario, the "sixth note bans" rule that banned the
+owner on 14 Nov and most likely on 15 Nov. The rule set was meant to run
+watch-only until its false alarms had been reviewed; bans
+were switched on before that review. The in-band rules (known exploits, which
+refuse the one request) and their scenario stay enforcing. An entry leaves
+this list by a pull request that cites the review.

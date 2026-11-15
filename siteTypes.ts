@@ -51,11 +51,13 @@ export interface EdgeSite {
    * (a registry test fails for one that does not). `ghost` is a Ghost tenant:
    * the edge refuses an uploaded script, document or stylesheet under Ghost's
    * upload paths and sets `nosniff` on every response, because Ghost serves a
-   * tenant's uploads from the tenant's own origin. `other` is anything else and
-   * gets neither. Why, and what it leaves alone: `sites.md` section "What the
-   * site runs".
+   * tenant's uploads from the tenant's own origin. `nextcloud` is a Nextcloud
+   * instance: the edge gives it a larger throttle budget and keeps its own
+   * normal traffic out of CrowdSec's log scenarios (`hetzner/edge/render.md`,
+   * "Nextcloud profile"). `other` is anything else and gets none of these. Why,
+   * and what it leaves alone: `sites.md` section "What the site runs".
    */
-  backend?: 'ghost' | 'other';
+  backend?: 'ghost' | 'nextcloud' | 'other';
   /**
    * A signed-in session the edge verifies with the site itself before the
    * CrowdSec bouncer and AppSec. A request whose session the site confirms is

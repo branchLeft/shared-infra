@@ -5,11 +5,14 @@ import { describe, expect, it } from 'vitest';
 import { hostRedirects, sites, staticSites } from '../../sites';
 import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
 import {
+  BAN_LADDER_MINUTES,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS,
+  NEXTCLOUD_RATE_LIMIT_EVENTS,
   POSTURE,
   RATE_LIMIT_EVENTS,
   RATE_LIMIT_WINDOW_SECONDS,
+  WATCH_ONLY_SCENARIOS,
 } from './posture';
 import type { EdgePosture } from './posture';
 import {
@@ -18,6 +21,9 @@ import {
   renderCaddyLogAcquisition,
   renderGhostAdminAppsecConfig,
   renderGhostAdminPostoverflow,
+  renderNextcloudWhitelist,
+  renderProfiles,
+  renderSimulation,
   renderTrustedSessionWhitelist,
   renderGhostBruteForceScenario,
   EDGE_HOST_ALLOWED_PORTS,
@@ -1065,10 +1071,19 @@ describe("the committed posture's general throttle", () => {
     ];
     expect(directives.length).toBeGreaterThan(0);
     expect(directives).toHaveLength(generalCount(rendered));
+    const nextcloudZones = sites
+      .filter((entry) => entry.backend === 'nextcloud')
+      .map((entry) => `zone ${entry.name}_per_ip {`);
+    expect(nextcloudZones.length).toBeGreaterThan(0);
     for (const [, zone] of directives) {
       expect(zone).toContain('\t\t\t\tkey {http.request.remote.host}\n');
       expect(zone).toContain(`\t\t\t\twindow ${RATE_LIMIT_WINDOW_SECONDS}s\n`);
-      expect(zone).toContain(`\t\t\t\tevents ${RATE_LIMIT_EVENTS}\n`);
+      // A Nextcloud site's own zone has its larger budget (posture.md,
+      // "Nextcloud throttle"); every other zone keeps the parity value.
+      const events = nextcloudZones.some((name) => zone?.includes(name))
+        ? NEXTCLOUD_RATE_LIMIT_EVENTS
+        : RATE_LIMIT_EVENTS;
+      expect(zone).toContain(`\t\t\t\tevents ${events}\n`);
     }
   });
 
@@ -1633,7 +1648,7 @@ describe('the uploaded-file refusal and nosniff on a Ghost site', () => {
   it('every served site in the registry declares what it runs, and only a Ghost site gets the rules', () => {
     const rendered = renderCaddyfile(sites, hostRedirects, POSTURE, staticSites);
     for (const entry of sites.filter((candidate) => candidate.privateUpstream !== undefined)) {
-      expect(['ghost', 'other'], `site ${entry.name} must declare backend`).toContain(
+      expect(['ghost', 'nextcloud', 'other'], `site ${entry.name} must declare backend`).toContain(
         entry.backend
       );
       const block = blockOf(rendered, entry.hostnames[0] ?? '');
@@ -1799,6 +1814,89 @@ describe('the committed stack directory', () => {
     );
     await expect(renderGhostBruteForceScenario(sites)).toMatchFileSnapshot(
       './stack/crowdsec/scenarios/ghost-admin-login-bruteforce.yaml'
+    );
+    await expect(renderProfiles()).toMatchFileSnapshot(
+      './stack/crowdsec/remediation/profiles.yaml'
+    );
+    await expect(renderSimulation()).toMatchFileSnapshot(
+      './stack/crowdsec/remediation/simulation.yaml'
+    );
+    await expect(renderNextcloudWhitelist(sites)).toMatchFileSnapshot(
+      './stack/crowdsec/parsers/nextcloud-profile.yaml'
+    );
+  });
+});
+
+// Why: render.md, "Ban length and watch-only scenarios" and "Nextcloud
+// profile". The behaviour is proved against a
+// running CrowdSec by test_crowdsec_replay.py; these pin what the renderer owns.
+describe('ban length and watch-only scenarios', () => {
+  it('every ban takes the next rung of the ladder, never the flat four hours', () => {
+    const profiles = renderProfiles();
+    expect(profiles).not.toMatch(/duration: \d+h/);
+    expect(profiles).toContain(`duration: ${BAN_LADDER_MINUTES[0]}m`);
+    expect(profiles).toContain(
+      "duration_expr: \"Sprintf('%dm', [10, 30, 120, 240][min(GetDecisionsSinceCount(Alert.GetValue(), '24h'), 3)])\""
+    );
+    expect(profiles.match(/^on_success: break$/gm)).toHaveLength(1);
+    expect(profiles).toContain('Alert.GetScope() in ["Ip", "Range"]');
+    // One YAML document: the repo's YAML check refuses a stream of several.
+    expect(profiles).not.toMatch(/^---$/m);
+    // No fixed scope on the decision, so each ban takes its alert's scope.
+    expect(profiles).not.toMatch(/^\s+scope:/m);
+  });
+
+  it('the first rung is minutes and the ladder only climbs', () => {
+    expect(BAN_LADDER_MINUTES[0]).toBeLessThanOrEqual(10);
+    for (let rung = 1; rung < BAN_LADDER_MINUTES.length; rung += 1) {
+      expect(BAN_LADDER_MINUTES[rung]).toBeGreaterThan(BAN_LADDER_MINUTES[rung - 1] ?? 0);
+    }
+  });
+
+  it('only the out-of-band Core Rule Set scenario is watch-only', () => {
+    expect(WATCH_ONLY_SCENARIOS).toEqual(['crowdsecurity/crowdsec-appsec-outofband']);
+    const simulation = renderSimulation();
+    expect(simulation).toContain('simulation: false');
+    expect(simulation).toContain('  - crowdsecurity/crowdsec-appsec-outofband');
+    expect(simulation).not.toContain('appsec-vpatch');
+  });
+});
+
+describe('the Nextcloud profile', () => {
+  const nextcloud = site({
+    name: 'nc-one',
+    hostnames: ['nc-one.test'],
+    backend: 'nextcloud',
+    privateUpstream: { host: 'ops1', port: 11000 },
+  });
+  const other = site({ name: 'other-one', hostnames: ['other-one.test'], backend: 'other' });
+
+  it('the registry marks the Nextcloud site', () => {
+    expect(sites.find((entry) => entry.name === 'nextcloud1')?.backend).toBe('nextcloud');
+  });
+
+  it('is scoped to Nextcloud hostnames, never counts a 401, and keeps dot segments', () => {
+    const profile = renderNextcloudWhitelist([nextcloud, other]);
+    expect(profile).toContain("evt.Meta.target_fqdn in ['nc-one.test']");
+    expect(profile).not.toContain('other-one.test');
+    expect(profile).not.toContain("'401'");
+    expect(profile).toContain("not (evt.Meta.http_path matches '(?i)[.][.]|%2e')");
+    expect(profile).toContain('remote|public');
+    expect(profile).toContain('apps/spreed/');
+  });
+
+  it('refuses to render with no Nextcloud site, and refuses a hostile hostname', () => {
+    expect(() => renderNextcloudWhitelist([other])).toThrow(/no site has backend nextcloud/);
+    const hostile = site({ hostnames: ["x.test' || true || '"], backend: 'nextcloud' });
+    expect(() => renderNextcloudWhitelist([hostile])).toThrow(/not a plain lower-case hostname/);
+  });
+
+  it('gives a Nextcloud site the larger throttle budget and leaves every other site at the default', () => {
+    const rendered = renderCaddyfile([nextcloud, other], [], ENFORCING);
+    expect(blockOf(rendered, 'nc-one.test')).toContain(`events ${NEXTCLOUD_RATE_LIMIT_EVENTS}`);
+    expect(blockOf(rendered, 'other-one.test')).toContain(`events ${RATE_LIMIT_EVENTS}`);
+    expect(blockOf(rendered, 'other-one.test')).not.toContain(
+      `events ${NEXTCLOUD_RATE_LIMIT_EVENTS}`
     );
   });
 });
