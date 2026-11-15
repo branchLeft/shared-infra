@@ -97,6 +97,7 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2 @branchLeft/branchleft-admin
 /ansible/roles/ci_jump/                                      @branchLeft/branchleft-admin
 /ansible/roles/ci_login/                                     @branchLeft/branchleft-admin
+/ansible/roles/ci_step_login/                                @branchLeft/branchleft-admin
 /ansible/roles/control_plane_db/                             @branchLeft/branchleft-admin
 /ansible/roles/db1_grants/                                   @branchLeft/branchleft-admin
 /ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/branchleft_slot.py @branchLeft/branchleft-admin

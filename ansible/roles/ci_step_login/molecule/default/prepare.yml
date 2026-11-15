@@ -1,0 +1,62 @@
+---
+# The scenario starts from a host that has no step account: the role must make it. Prepare
+# makes the throwaway keys on the controller (the image has no ssh-keygen), keeps a copy of the
+# main sudoers file for the verify play to compare against, and puts a stand-in for the trigger
+# program where the real one lives, so verify can run it through sudo as the step account.
+- name: Make the throwaway keys on the controller
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Make the directory for this run's throwaway keys
+      ansible.builtin.file:
+        path: '{{ scenario_key_dir }}'
+        state: directory
+        mode: '0700'
+
+    # No module in the pinned collections makes an SSH key pair, so the command is used (ANS-9).
+    - name: Make one throwaway key pair for each key the scenario uses
+      ansible.builtin.command:
+        argv:
+          - ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -C
+          - 'PLACEHOLDER_{{ item }}'
+          - -f
+          - '{{ scenario_key_dir }}/{{ item }}'
+        creates: '{{ scenario_key_dir }}/{{ item }}.pub'
+      loop:
+        - step
+        - other
+        - stale
+
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Keep a copy of the main sudoers file as the image ships it
+      ansible.builtin.copy:
+        src: /etc/sudoers
+        dest: /var/tmp/sudoers.before
+        remote_src: true
+        mode: preserve
+
+    # It prints what it was given and who it ran as. It is not the trigger program: the pull_trigger
+    # role proves that. Here it shows what sudo lets the step account run and what it passes.
+    - name: Put a stand-in for the trigger program in its place
+      ansible.builtin.copy:
+        content: |
+          #!/usr/bin/python3 -I
+          import os
+          import sys
+
+          print("ARGS=" + " ".join(sys.argv[1:]))
+          print("EUID=" + str(os.geteuid()))
+          print("REQUEST=" + os.environ.get("SSH_ORIGINAL_COMMAND", "UNSET"))
+        dest: '{{ scenario_program }}'
+        owner: root
+        group: root
+        mode: '0755'
