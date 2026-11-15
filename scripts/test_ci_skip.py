@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pin tests for the changed-path skip in ci.yml.
+"""Pin tests for the changed-path skip in ci.yml and the files split out of it.
 
 A wrong path map skips a required check silently, so this file proves the map
 two ways and proves the proof: the real code and workflow pass every invariant,
@@ -19,12 +19,11 @@ import types
 import unittest
 
 import ci_skip
-from test_ci_apply_environments import job_block, job_names, step_blocks
+from test_ci_apply_environments import CHECK_WORKFLOWS, ci_jobs_text, job_block, job_names, step_blocks
 from test_merge_group_triggers import REQUIRED, job_if
 
 SCRIPTS = pathlib.Path(__file__).resolve().parent
 ROOT = SCRIPTS.parent
-CI_YML = ROOT / ".github" / "workflows" / "ci.yml"
 CI_SKIP_PY = SCRIPTS / "ci_skip.py"
 
 SKIP_USES = "./.github/actions/ci-skip"
@@ -75,6 +74,7 @@ READ_BY_NONE = [
 ]
 UNIVERSAL_PATHS = [
     ".github/workflows/ci.yml",
+    ".github/workflows/ci-config-validate.yml",
     ".github/actions/ci-skip/action.yml",
     "scripts/ci_skip.py",
     "scripts/trace_reads.py",
@@ -179,7 +179,7 @@ def check_workflow(text: str, m) -> None:
         named = re.search(r"^    name: (.*?)[ \t]*$", job_block(text, key), re.M)
         if named:
             by_name[named.group(1)] = key
-    for context in [n for n, f in REQUIRED.items() if f == "ci.yml"]:
+    for context in [n for n, f in REQUIRED.items() if f in CHECK_WORKFLOWS]:
         assert context in by_name, f"required check {context!r} has no job"
         assert by_name[context] in classified, f"required check {context!r} is a job in neither set"
 
@@ -239,10 +239,10 @@ class RealCodeTests(unittest.TestCase):
         check_decisions(ci_skip)
 
     def test_every_workflow_job_is_classified_and_shaped(self):
-        check_workflow(CI_YML.read_text(encoding="utf-8"), ci_skip)
+        check_workflow(ci_jobs_text(), ci_skip)
 
     def test_every_path_a_skippable_job_names_is_in_its_map_entry(self):
-        check_reads_named(CI_YML.read_text(encoding="utf-8"), ci_skip)
+        check_reads_named(ci_jobs_text(), ci_skip)
 
     def test_always_run_is_exactly_the_six_jobs_and_includes_the_two_ruled(self):
         self.assertEqual(EXPECTED_ALWAYS_RUN, set(ci_skip.ALWAYS_RUN))
@@ -250,7 +250,7 @@ class RealCodeTests(unittest.TestCase):
         self.assertFalse(set(ci_skip.UNITS) & set(ci_skip.ALWAYS_RUN))
 
     def test_the_two_python_steps_that_read_a_tree_run_under_the_trace(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         monitoring = job_block(text, "monitoring-config-validate")
         mail = job_block(text, "mail-provision-checks")
         self.assertIn(
@@ -273,7 +273,7 @@ class RealCodeTests(unittest.TestCase):
                 self.assertTrue((ROOT / path).exists(), f"{path} is universal but absent")
 
     def test_the_cleanup_steps_still_run_after_a_failure(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         steps = dict(step_blocks(job_block(text, "monitoring-config-validate")))
         for name in ("Remove the rendered ntfy config", "Remove the rendered Alertmanager config"):
             self.assertEqual(f"always() && {GUARD}", step_if(steps[name]))
@@ -288,7 +288,7 @@ class MutantTests(unittest.TestCase):
             check_decisions(load_variant(old, new))
 
     def assert_workflow_catches(self, mutated: str, m=ci_skip):
-        check_workflow(CI_YML.read_text(encoding="utf-8"), m)  # control case
+        check_workflow(ci_jobs_text(), m)  # control case
         with self.assertRaises(AssertionError):
             check_workflow(mutated, m)
 
@@ -313,34 +313,34 @@ class MutantTests(unittest.TestCase):
         self.assert_decisions_catch('"mail-typecheck": ("mail/",),', '"mail-typecheck": ("mail/",),\n    "scripts-tests": ("scripts/",),')
 
     def test_f_a_step_guard_is_written_equals_true(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(text, "monitoring-config-validate", "if: steps.skip.outputs.run != 'false'", "if: steps.skip.outputs.run == 'true'")
         self.assert_workflow_catches(mutated)
 
     def test_g_a_job_names_another_jobs_key(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(text, "monitoring-config-validate", "unit: monitoring-config-validate", "unit: edge-config-validate")
         self.assert_workflow_catches(mutated)
 
     def test_h_a_skip_step_is_added_to_an_always_run_job(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         step = "\n      - name: Decide\n        id: skip\n        uses: ./.github/actions/ci-skip\n        with:\n          unit: scripts-tests\n"
         self.assert_workflow_catches(add_after_checkout(text, "scripts-tests", step))
 
     def test_i_a_job_level_if_is_added_to_a_skippable_job(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(
             text, "edge-config-validate", "    timeout-minutes: 15\n", "    timeout-minutes: 15\n    if: github.event_name == 'pull_request'\n"
         )
         self.assert_workflow_catches(mutated)
 
     def test_j_a_step_is_left_unguarded(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(text, "nextcloud1-config-validate", "        if: steps.skip.outputs.run != 'false'\n", "")
         self.assert_workflow_catches(mutated)
 
     def test_k_a_new_job_is_in_neither_set(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         extra = "  brand-new-check:\n    name: Brand new\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    steps:\n      - run: true\n\n"
         mutated = text.replace("  scripts-tests:\n", extra + "  scripts-tests:\n", 1)
         self.assertNotEqual(text, mutated)
@@ -352,7 +352,7 @@ class MutantTests(unittest.TestCase):
         with self.assertRaises(AssertionError):
             check_decisions(variant)
         with self.assertRaises(AssertionError):
-            check_workflow(CI_YML.read_text(encoding="utf-8"), variant)
+            check_workflow(ci_jobs_text(), variant)
 
     def test_m_the_event_rule_is_dropped(self):
         self.assert_decisions_catch("if event not in EVENTS:", "if False:")
@@ -360,8 +360,18 @@ class MutantTests(unittest.TestCase):
     def test_n_the_universal_list_forgets_ci_yml(self):
         self.assert_decisions_catch('    ".github/workflows/ci.yml",\n', "")
 
+    def test_n2_the_universal_list_forgets_a_workflow_split_out_of_ci_yml(self):
+        # The jobs of ci-config-validate.yml skip on the paths ci_skip.py maps, so an edit to
+        # that file alone must run them all, as an edit to ci.yml does.
+        self.assert_decisions_catch('    ".github/workflows/ci-config-validate.yml",\n', "")
+
+    def test_n3_every_workflow_that_holds_a_skippable_job_is_universal(self):
+        for name in CHECK_WORKFLOWS:
+            with self.subTest(workflow=name):
+                self.assertIn(f".github/workflows/{name}", ci_skip.UNIVERSAL)
+
     def test_o_a_step_reads_a_path_outside_its_map(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         check_reads_named(text, ci_skip)  # control case
         mutated = mutate_workflow(
             text,
@@ -373,7 +383,7 @@ class MutantTests(unittest.TestCase):
             check_reads_named(mutated, ci_skip)
 
     def test_p_a_step_reads_a_root_level_file(self):
-        text = CI_YML.read_text(encoding="utf-8")
+        text = ci_jobs_text()
         mutated = mutate_workflow(text, "edge-config-validate", "docker build --tag edge-caddy-ci:validate hetzner/edge", "cat sites.ts && docker build --tag edge-caddy-ci:validate hetzner/edge")
         with self.assertRaises(AssertionError):
             check_reads_named(mutated, ci_skip)
@@ -515,6 +525,172 @@ class RealGitTests(unittest.TestCase):
     def test_an_unknown_base_cannot_be_read_and_so_runs(self):
         changed = ci_skip.changed_files("c" * 40, self.head_sha, real_runner, cwd=self.clone)
         self.assertIsNone(changed)
+        self.assertTrue(ci_skip.decide("edge-config-validate", "pull_request", changed)[0])
+
+
+SHA_C = "c" * 40
+SHA_D = "d" * 40
+
+
+def commit_object(*parents: str) -> subprocess.CompletedProcess:
+    """What `git cat-file commit` prints: headers, a blank line, the message."""
+    lines = ["tree " + "e" * 40, *(f"parent {p}" for p in parents), "author t <t@example.invalid> 1 +0000", "", "msg"]
+    return done(0, "\n".join(lines).encode())
+
+
+def pull_request_runner(commit, diff=b"ansible/a.yml\0", present=(SHA_A, SHA_B, SHA_C, SHA_D)):
+    """A runner for a merge commit SHA_B: its commit object is `commit`, and `present` are known."""
+
+    def cat_file(command):
+        if command[2] == "commit":
+            return commit
+        return done(0 if command[3].split("^")[0] in present else 1)
+
+    return Scripted({"cat-file": cat_file, "fetch": done(0), "diff": done(0, diff)})
+
+
+def diff_arguments(runner):
+    return [call[-2:] for call in runner.calls if call[0] == "diff"]
+
+
+class MergeFirstParentTests(unittest.TestCase):
+    """A pull request is compared with the commit it merges into, never with the stale event base."""
+
+    def test_the_first_parent_of_the_test_merge_is_read_from_the_commit_object(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        self.assertEqual(SHA_C, ci_skip.merge_first_parent(SHA_B, SHA_D, runner))
+        self.assertEqual([["cat-file", "commit", SHA_B]], runner.calls)
+
+    def test_anything_but_a_two_parent_merge_of_the_pull_request_head_is_not_a_test_merge(self):
+        cases = {
+            "no parent": commit_object(),
+            "one parent": commit_object(SHA_C),
+            "three parents": commit_object(SHA_C, SHA_D, SHA_A),
+            "second parent is another commit": commit_object(SHA_C, SHA_A),
+            "the pull request head is the first parent": commit_object(SHA_D, SHA_C),
+            "a parent that is not a sha": commit_object("HEAD", SHA_D),
+            "the read fails": done(128),
+        }
+        for name, commit in cases.items():
+            with self.subTest(name):
+                self.assertIsNone(ci_skip.merge_first_parent(SHA_B, SHA_D, pull_request_runner(commit)))
+
+    def test_a_missing_or_malformed_pull_request_head_or_commit_is_not_a_test_merge(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        for head, pr_head in [(SHA_B, None), (SHA_B, ""), (SHA_B, "HEAD"), (None, SHA_D), ("HEAD", SHA_D)]:
+            with self.subTest(head=head, pr_head=pr_head):
+                self.assertIsNone(ci_skip.merge_first_parent(head, pr_head, runner))
+        self.assertEqual([], runner.calls, "no git command may run for a value that is not a sha")
+
+    def test_a_runner_that_raises_is_not_a_test_merge(self):
+        runner = Scripted({"cat-file": OSError("no git")})
+        self.assertIsNone(ci_skip.merge_first_parent(SHA_B, SHA_D, runner))
+
+    def test_a_pull_request_diffs_the_first_parent_not_the_event_base(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        self.assertEqual(["ansible/a.yml"], ci_skip.changed_for("pull_request", SHA_A, SHA_B, SHA_D, runner))
+        self.assertEqual([[SHA_C, SHA_B]], diff_arguments(runner))
+
+    def test_the_first_parent_is_fetched_when_the_shallow_checkout_lacks_it(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        present = iter([done(0), done(1), done(0)])
+        runner.answers["cat-file"] = lambda c: commit_object(SHA_C, SHA_D) if c[2] == "commit" else next(present)
+        ci_skip.changed_for("pull_request", SHA_A, SHA_B, SHA_D, runner)
+        fetch = [c for c in runner.calls if c[0] == "fetch"]
+        self.assertEqual([["fetch", "--no-tags", "--depth=1", "--quiet", "origin", SHA_C]], fetch)
+
+    def test_a_pull_request_that_is_not_a_test_merge_diffs_the_event_base(self):
+        runner = pull_request_runner(commit_object(SHA_C))
+        ci_skip.changed_for("pull_request", SHA_A, SHA_B, SHA_D, runner)
+        self.assertEqual([[SHA_A, SHA_B]], diff_arguments(runner))
+
+    def test_a_first_parent_that_cannot_be_fetched_falls_back_to_the_event_base(self):
+        # Absent, and the fetch fails: the event base is tried, exactly as before.
+        def cat_file(command):
+            if command[2] == "commit":
+                return commit_object(SHA_C, SHA_D)
+            return done(0 if command[3].split("^")[0] in (SHA_A, SHA_B) else 1)
+
+        runner = Scripted({"cat-file": cat_file, "fetch": done(128), "diff": done(0, b"mail/a\0")})
+        self.assertEqual(["mail/a"], ci_skip.changed_for("pull_request", SHA_A, SHA_B, SHA_D, runner))
+        self.assertEqual([[SHA_A, SHA_B]], diff_arguments(runner))
+
+    def test_a_merge_queue_entry_never_reads_the_commit_object(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        ci_skip.changed_for("merge_group", SHA_A, SHA_B, SHA_D, runner)
+        self.assertEqual([[SHA_A, SHA_B]], diff_arguments(runner))
+        self.assertNotIn(["cat-file", "commit", SHA_B], runner.calls)
+
+    def test_main_passes_the_pull_request_head_through(self):
+        runner = pull_request_runner(commit_object(SHA_C, SHA_D))
+        env = {"EVENT_NAME": "pull_request", "BASE_SHA": SHA_A, "HEAD_SHA": SHA_B, "PR_HEAD_SHA": SHA_D}
+        import contextlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            ci_skip.main(["--unit", "edge-config-validate"], environ=env, runner=runner)
+        self.assertEqual([[SHA_C, SHA_B]], diff_arguments(runner))
+
+    def test_the_action_hands_the_script_the_pull_request_head(self):
+        action = (ROOT / ".github" / "actions" / "ci-skip" / "action.yml").read_text(encoding="utf-8")
+        self.assertRegex(action, r"(?m)^        PR_HEAD_SHA: \$\{\{ github\.event\.pull_request\.head\.sha \}\}$")
+
+
+class RealTestMergeTests(unittest.TestCase):
+    """A real test-merge commit, as `refs/pull/N/merge` makes one, in a depth-1 clone."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        base = pathlib.Path(self.tmp.name)
+        self.origin = str(base / "origin")
+        os.mkdir(self.origin)
+        git_in(self.origin, "init", "--quiet", "-b", "main")
+        for key, value in (
+            ("user.email", "t@example.invalid"),
+            ("user.name", "t"),
+            ("commit.gpgsign", "false"),
+            ("uploadpack.allowAnySHA1InWant", "true"),
+        ):
+            git_in(self.origin, "config", key, value)
+        self.commit("start", {"ansible/a.yml": "1", "README.md": "1"})
+        self.event_base = git_in(self.origin, "rev-parse", "HEAD")
+        git_in(self.origin, "checkout", "--quiet", "-b", "feature")
+        self.commit("the pull request", {"ansible/pr.yml": "1"})
+        self.pr_head = git_in(self.origin, "rev-parse", "HEAD")
+        git_in(self.origin, "checkout", "--quiet", "main")
+        # Main moves on after the pull request was opened: the event base is now stale.
+        self.commit("another pull request", {"mail/other.ts": "1", "hetzner/edge/render.ts": "1"})
+        self.tip = git_in(self.origin, "rev-parse", "HEAD")
+        git_in(self.origin, "merge", "--quiet", "--no-ff", "-m", "test merge", self.pr_head)
+        self.merge = git_in(self.origin, "rev-parse", "HEAD")
+        self.clone = str(base / "clone")
+        git_in(self.tmp.name, "clone", "--quiet", "--depth=1", f"file://{self.origin}", self.clone)
+
+    def commit(self, message, files):
+        for path, content in files.items():
+            full = pathlib.Path(self.origin, path)
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text(content)
+        git_in(self.origin, "add", ".")
+        git_in(self.origin, "commit", "--quiet", "-m", message)
+
+    def test_the_stale_event_base_lists_other_pull_requests_files(self):
+        changed = ci_skip.changed_files(self.event_base, self.merge, real_runner, cwd=self.clone)
+        self.assertEqual(["ansible/pr.yml", "hetzner/edge/render.ts", "mail/other.ts"], sorted(changed))
+
+    def test_the_first_parent_lists_only_the_pull_requests_own_files(self):
+        self.assertEqual(self.tip, ci_skip.merge_first_parent(self.merge, self.pr_head, real_runner, cwd=self.clone))
+        changed = ci_skip.changed_for("pull_request", self.event_base, self.merge, self.pr_head, real_runner, cwd=self.clone)
+        self.assertEqual(["ansible/pr.yml"], changed)
+        self.assertEqual(
+            (False, "no changed path is one this job reads"),
+            ci_skip.decide("edge-config-validate", "pull_request", changed),
+        )
+
+    def test_a_pull_request_head_that_is_not_the_second_parent_keeps_the_event_base(self):
+        changed = ci_skip.changed_for("pull_request", self.event_base, self.merge, SHA_C, real_runner, cwd=self.clone)
+        self.assertEqual(["ansible/pr.yml", "hetzner/edge/render.ts", "mail/other.ts"], sorted(changed))
         self.assertTrue(ci_skip.decide("edge-config-validate", "pull_request", changed)[0])
 
 

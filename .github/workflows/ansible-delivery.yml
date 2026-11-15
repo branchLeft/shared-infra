@@ -59,6 +59,8 @@ jobs:
   # toward "false": an unreadable answer is "false".
   queue-proof:
     name: Find the merge queue run of this commit
+    # Pinned until the harness is verified on the next Ubuntu LTS image (ansible/README.md, "The
+    # CI runner image pin").
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:

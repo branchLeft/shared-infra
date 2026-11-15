@@ -6,7 +6,7 @@ right after Checkout, before any job has set up a Python of its own. The
 interface, the rules and why every error means "run" are written up in
 ci_skip.md.
 
-    EVENT_NAME=pull_request BASE_SHA=<sha> HEAD_SHA=<sha> \
+    EVENT_NAME=pull_request BASE_SHA=<sha> HEAD_SHA=<sha> PR_HEAD_SHA=<sha> \
         python3 scripts/ci_skip.py --unit monitoring-config-validate
 
 prints two lines, `run=true|false` and `reason=<one line>`, ready to append to
@@ -78,6 +78,7 @@ ZONES: tuple[str, ...] = (
 # A change here alters how every skippable job behaves, so every one runs.
 UNIVERSAL: tuple[str, ...] = (
     ".github/workflows/ci.yml",
+    ".github/workflows/ci-config-validate.yml",
     ".github/actions/ci-skip/",
     "scripts/ci_skip.py",
     "scripts/trace_reads.py",
@@ -166,6 +167,57 @@ def changed_files(
         return None
 
 
+def merge_first_parent(
+    head: str | None, pr_head: str | None, runner=subprocess.run, cwd: str | None = None
+) -> str | None:
+    """The base branch tip a pull request's test-merge commit was made on, or None.
+
+    On `pull_request` the checkout is the merge commit GitHub builds from the base branch
+    tip (first parent) and the pull request head (second parent). The event's own base sha
+    is where the branch stood when the pull request was opened or last pushed, so it goes
+    stale as the branch moves and a diff against it lists other pull requests' files. The
+    first parent is read from the commit object itself, so a depth-1 checkout is enough.
+    It is trusted only when `head` is a commit with exactly two parents whose second one
+    is the event's pull request head; anything else is None and the caller keeps the
+    event's base, which can only list more paths, never fewer.
+    """
+    try:
+        if not head or not pr_head or not SHA.match(head) or not SHA.match(pr_head):
+            return None
+        shown = git(["cat-file", "commit", head], runner, cwd)
+        if shown.returncode != 0:
+            return None
+        header = shown.stdout.decode("utf-8", "replace").split("\n\n", 1)[0]
+        parents = [line[len("parent ") :] for line in header.split("\n") if line.startswith("parent ")]
+        if len(parents) != 2 or parents[1] != pr_head or not SHA.match(parents[0]):
+            return None
+        return parents[0]
+    except Exception:  # noqa: BLE001 - every failure is "not a test merge", which keeps the event base
+        return None
+
+
+def changed_for(
+    event: str,
+    base: str | None,
+    head: str | None,
+    pr_head: str | None,
+    runner=subprocess.run,
+    cwd: str | None = None,
+) -> list[str] | None:
+    """The changed paths for this event; a pull request is compared with the commit it merges into.
+
+    A merge queue entry always uses the event's own base. If the first parent cannot be
+    used or fetched, the event's base is tried, as it was before this existed.
+    """
+    if event == "pull_request":
+        first = merge_first_parent(head, pr_head, runner, cwd)
+        if first is not None:
+            changed = changed_files(first, head, runner, cwd)
+            if changed is not None:
+                return changed
+    return changed_files(base, head, runner, cwd)
+
+
 def one_line(text: str) -> str:
     """A reason is printed into $GITHUB_OUTPUT: it must stay one plain line."""
     return re.sub(r"[^A-Za-z0-9 ,.;:()/_-]", "?", text)[:200]
@@ -180,7 +232,13 @@ def main(argv: list[str] | None = None, environ=None, runner=subprocess.run) -> 
         event = environ.get("EVENT_NAME", "")
         changed = None
         if event in EVENTS and args.unit in UNITS:
-            changed = changed_files(environ.get("BASE_SHA"), environ.get("HEAD_SHA"), runner)
+            changed = changed_for(
+                event,
+                environ.get("BASE_SHA"),
+                environ.get("HEAD_SHA"),
+                environ.get("PR_HEAD_SHA"),
+                runner,
+            )
         run, reason = decide(args.unit, event, changed)
     except Exception as error:  # noqa: BLE001 - a crash must widen the run, never skip it
         run, reason = True, f"the decision failed: {type(error).__name__}"

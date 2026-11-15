@@ -200,21 +200,23 @@ checks enumerate the checkout); when none did, the other jobs are skipped and th
 
 What runs, by event:
 
-| Event          | Lint | Shards                                                                                                                                                                                                                                                    |
-| -------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if the harness, the lock, the lint config, the workflow, or `ci_select.py`, `check_pins.py` or `pip-requirements.txt` changed |
-| merge queue    | yes  | none: the pull request ran them on its own head, so the queue runs the lint and the unit tests only                                                                                                                                                       |
-| push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything, over the roles `delivery_select.py` names (every role unless the diff since the last tested delivery says fewer)                                                                 |
-| schedule       | yes  | every shard, each blocking for the run's own result, once a day and on a manual run; a red scheduled run opens one issue                                                                                                                                  |
+| Event          | Lint | Shards                                                                                                                                                                                                                                                                              |
+| -------------- | ---- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| pull request   | yes  | the roles and patterns it changed, those that name them, and those that read a changed file outside `ansible/`; every shard if a file that `EVERY_SHARD` in `ci_select.py` names changed: the harness, the lock, the lint config, the workflow and the checks files the shards read |
+| merge queue    | yes  | none: the pull request ran them on its own head, so the queue runs the lint and the unit tests only                                                                                                                                                                                 |
+| push to `main` | yes  | none: the delivery workflow runs the harness before it applies anything, over the roles `delivery_select.py` names (every role unless the diff since the last tested delivery says fewer)                                                                                           |
+| schedule       | yes  | every shard, each blocking for the run's own result, once a day and on a manual run; a red scheduled run opens one issue                                                                                                                                                            |
 
-Every container test (shard) the table names runs on every pull request, and each is
-either blocking or advisory. The one list of blocking shards is
+Every container test (shard) the table names runs on every pull request, except that when
+a pull request changed a file that makes every shard run, only the blocking shards and the
+shards its own role or pattern files select run, and the step summary names the advisory
+shards left to the daily run. Each shard is either blocking or advisory. The one list of blocking shards is
 `ansible/checks/blocking_shards.json`; every shard not on it is advisory. A blocking shard
 fails the required check. An advisory shard runs, shows red on its own check line when it
 fails, and the required check neither waits for it nor reads it. The `report` job writes the
 counts and one table of every red shard to the run's step summary, and the approver records
 each red advisory shard on the pull request. Rules for moving a shard on or off the list are
-in `ansible/checks/README.md`.
+in `ansible/checks/blocking_shards.md`.
 
 The workflow has these kinds of job:
 
@@ -228,7 +230,7 @@ The workflow has these kinds of job:
   `scenario-limits` step. A shard's name is the directory, and the directory and
   the scenario in brackets for any scenario but `default`, so names are unique.
   `ansible/checks/ci_select.py` then narrows that list by the table above (its
-  rules are in `ansible/checks/README.md`); any doubt keeps the shard.
+  rules are in `ansible/checks/ci_select.md`); any doubt keeps the shard.
 - `quick-lint` runs the two cheap checks first: yamllint and the tests of the
   shard selection (`test_ci_select.py`).
 - `lint` runs the static checks once, all of them, alongside the shards:
@@ -327,9 +329,10 @@ be found and removed by that label.
 ## The CI runner image pin
 
 Every Ansible workflow job runs on the `ubuntu-24.04` runner image, not
-`ubuntu-latest`: `ansible.yml`, `ansible-offline.yml`, `ansible-delivery.yml` and
-`ansible-environment-probe.yml`. The comment above the harness jobs' `runs-on`
-lines says "Pinned until the harness is verified on the next Ubuntu LTS image".
+`ubuntu-latest`. Each workflow file that takes the pin carries a comment above
+its first pinned `runs-on` line that names this section and says "Pinned until the
+harness is verified on the next Ubuntu LTS image"; `test_ci_runner_pin_documented.py`
+fails on a workflow that pins the image without it, so a new one is not listed here.
 
 - **Why.** GitHub is moving `ubuntu-latest` to Ubuntu 26.04, rolling out from
   19 October 2026 to 19 November 2026
@@ -341,7 +344,7 @@ lines says "Pinned until the harness is verified on the next Ubuntu LTS image".
   only a pull request the owner merges changes it.
 - **When it comes off.** Run the harness once on `ubuntu-26.04`: a branch whose
   workflow sets that `runs-on`, with every shard selected. If every shard is green,
-  one pull request moves all four files to the verified label and cites the run URL in
+  one pull request moves every workflow file that carries the pin to the verified label and cites the run URL in
   its description. If a shard is red, the pull request records what fails and the fix
   it needs, here and in the workflow comment, and the pin stays.
 - **When to look.** At each GitHub runner-images notice that retires `ubuntu-24.04`,
@@ -485,7 +488,7 @@ alert for the package that carries it.
 which reads the one-line pin in `checks/pip-requirements.txt` and opens a pull
 request of its own for a new pip. That pull request fails the parity test until
 the table in `checks/test_lock_reader_parity.py` is re-checked against the new
-pip (`checks/README.md` says how), which is the prompt to do it.
+pip (`checks/test_lock_reader_parity.md` says how), which is the prompt to do it.
 
 `checks/check_pins.py` fails if the `uv` entry for `/ansible` or the `pip` entry
 for `/ansible/checks` goes missing, so the route cannot be switched off by an

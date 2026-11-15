@@ -110,4 +110,4 @@ attributes is the Ghost platform repository's test, and is cited here, not copie
   The migrator's is the same, and reaches the server on standard input.
 - The server's log (printed only when a server does not start) carries no password.
 
-Bump `EXPECTED_TEST_COUNT` in `test_suite_size.py` with any change here.
+Bump `test_counts/test_control_plane_hba_server.txt` with any change here.

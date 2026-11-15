@@ -1,0 +1,4 @@
+---
+# mx1, the mail host. One role after the pull roles: the host baseline only. It has no
+# private inputs, so host_inputs is not listed. The mail stack is not enrolled here.
+- host_baseline

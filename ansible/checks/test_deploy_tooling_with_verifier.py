@@ -3,7 +3,7 @@
 The verifier checks images for the deploy wrapper, and the deploy_tooling role is the only role
 that installs the wrapper and the compose template unit. A host that applies the verifier and not
 the tooling gets its wrapper and unit from the hand-run installer, so a change to either reaches
-it by hand, or not at all. This file holds each host's list in checks/host_roles.yml, and each
+it by hand, or not at all. This file holds each host's list in checks/host_roles/, and each
 host's playbook, to the pair. A host is exempt only by a named entry in EXEMPT_HOSTS with its
 reason, and an entry for a host that does not need it is itself a finding, so the list cannot go
 stale. Each check returns the findings it made; the tests run it on the real files (none) and on
@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import HOST_ROLES_FILE, ROOT
+from check_enrolment import HOST_ROLES_DIR, ROOT, read_host_roles_raw
 
 ANSIBLE = ROOT / "ansible"
 VERIFIER = "deploy_verifier"
@@ -25,20 +25,16 @@ TOOLING = "deploy_tooling"
 EXEMPT_HOSTS: dict[str, str] = {}
 
 
-def _lists(text: str) -> dict[str, list[str]]:
-    """Return each host's role list from the text of host_roles.yml.
+def _lists() -> dict[str, list[str]]:
+    """Return each host's role list from checks/host_roles/.
 
     Raises:
-        TypeError: the file is not a mapping of lists.
+        TypeError: a host's file is not a list.
     """
-    document: object = yaml.safe_load(text)
-    if not isinstance(document, dict):
-        message = f"{HOST_ROLES_FILE} is not a mapping"
-        raise TypeError(message)
     found: dict[str, list[str]] = {}
-    for host, roles in document.items():
+    for host, roles in read_host_roles_raw(ANSIBLE).items():
         if not isinstance(roles, list):
-            message = f"{host}'s entry in {HOST_ROLES_FILE} is not a list"
+            message = f"{host}'s file in {HOST_ROLES_DIR} is not a list"
             raise TypeError(message)
         found[str(host)] = [str(role) for role in roles]
     return found
@@ -81,9 +77,9 @@ def listed_findings(listed: dict[str, list[str]], exempt: dict[str, str]) -> lis
     """Return the findings for every host in host_roles.yml, and for an exempt host not in it."""
     found: list[str] = []
     for host, roles in sorted(listed.items()):
-        found.extend(findings_for(HOST_ROLES_FILE, roles, exempt, host))
+        found.extend(findings_for(HOST_ROLES_DIR, roles, exempt, host))
     found.extend(
-        f"{host} is exempt from the pair but is not in {HOST_ROLES_FILE}"
+        f"{host} is exempt from the pair but is not in {HOST_ROLES_DIR}"
         for host in sorted(set(exempt) - set(listed))
     )
     return found
@@ -108,16 +104,14 @@ class TestRealTree(unittest.TestCase):
     """The files as they stand have no host with the verifier and without the tooling."""
 
     def test_every_listed_host_with_the_verifier_has_the_tooling(self) -> None:
-        text = (ANSIBLE / HOST_ROLES_FILE).read_text(encoding="utf-8")
-        self.assertEqual(listed_findings(_lists(text), EXEMPT_HOSTS), [])
+        self.assertEqual(listed_findings(_lists(), EXEMPT_HOSTS), [])
 
     def test_every_playbook_with_the_verifier_has_the_tooling(self) -> None:
         self.assertEqual(playbook_findings(_real_playbooks(), EXEMPT_HOSTS), [])
 
     def test_the_pair_is_not_vacuous(self) -> None:
         # A check over no host proves nothing: at least the five wrapper hosts carry the pair.
-        text = (ANSIBLE / HOST_ROLES_FILE).read_text(encoding="utf-8")
-        paired = {h for h, roles in _lists(text).items() if VERIFIER in roles and TOOLING in roles}
+        paired = {h for h, roles in _lists().items() if VERIFIER in roles and TOOLING in roles}
         self.assertGreaterEqual(paired, {"edge1", "app1", "ops1", "db1", "dbt1"})
 
 
@@ -125,15 +119,14 @@ class TestControls(unittest.TestCase):
     """Each way of leaving a host with the verifier and no tooling is found."""
 
     def setUp(self) -> None:
-        self.text = (ANSIBLE / HOST_ROLES_FILE).read_text(encoding="utf-8")
-        self.listed = _lists(self.text)
+        self.listed = _lists()
 
     def test_a_list_with_the_tooling_removed_is_found(self) -> None:
         # Sabotage: the tooling taken off ops1's list, as it stood before it was assigned.
         broken = {**self.listed, "ops1": [r for r in self.listed["ops1"] if r != TOOLING]}
         self.assertEqual(
             listed_findings(broken, EXEMPT_HOSTS),
-            [f"ops1 applies {VERIFIER} and not {TOOLING} ({HOST_ROLES_FILE})"],
+            [f"ops1 applies {VERIFIER} and not {TOOLING} ({HOST_ROLES_DIR})"],
         )
 
     def test_a_playbook_with_the_tooling_removed_is_found(self) -> None:
@@ -153,13 +146,13 @@ class TestControls(unittest.TestCase):
     def test_an_exemption_for_a_host_that_has_the_pair_is_found(self) -> None:
         self.assertEqual(
             listed_findings(self.listed, {"edge1": "reason"}),
-            [f"edge1 is exempt from the pair but does not need it ({HOST_ROLES_FILE})"],
+            [f"edge1 is exempt from the pair but does not need it ({HOST_ROLES_DIR})"],
         )
 
     def test_an_exemption_for_a_host_not_listed_is_found(self) -> None:
         self.assertEqual(
             listed_findings(self.listed, {"mx9": "reason"}),
-            [f"mx9 is exempt from the pair but is not in {HOST_ROLES_FILE}"],
+            [f"mx9 is exempt from the pair but is not in {HOST_ROLES_DIR}"],
         )
 
     def test_a_host_with_neither_role_is_no_finding(self) -> None:

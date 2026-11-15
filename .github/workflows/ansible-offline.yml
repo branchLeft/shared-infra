@@ -41,6 +41,8 @@ concurrency:
 jobs:
   render:
     name: Render the Ansible templates offline
+    # Pinned until the harness is verified on the next Ubuntu LTS image (ansible/README.md, "The
+    # CI runner image pin").
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

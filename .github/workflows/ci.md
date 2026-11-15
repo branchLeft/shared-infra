@@ -9,6 +9,12 @@ pointer beside each block; the rules live here.
 CI-owned stacks on every push to `main`, each through a plan job whose output a
 human approves before the paired apply job runs.
 
+The four stack-config validation jobs (the edge Caddy config, the monitoring,
+nextcloud1 and control-plane stacks) are in `ci-config-validate.yml`, with the
+same triggers, permissions and concurrency as `ci.yml`. No plan or apply job
+`needs` any of them, which is what lets them live in a file of their own; every
+job keeps its name, so the required checks are matched as before.
+
 The GCP edge program that used to live at the repository root (`edge.ts` and its
 deploy-plan/deploy-apply jobs) is gone: the GCP estate was destroyed 2026-09-13
 and the program was removed once it described infrastructure that no longer

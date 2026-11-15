@@ -9,7 +9,7 @@ older table of script-side names to the files that read them. R4 refuses a task 
 holds a secret that the check cannot follow. What a task calls, and which file an include names,
 is decided by Ansible's own task parser and plugin loaders (see "The task layer" below), never by
 a spelling matcher of this module. The rules, and what they do not see, are in
-ansible/checks/README.md, "The secret taint check". A finding names the rule, the file and the
+ansible/checks/check_secret_no_log.md. A finding names the rule, the file and the
 task, never a value.
 """
 

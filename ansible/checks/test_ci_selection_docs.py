@@ -68,10 +68,14 @@ class EveryShardProse(unittest.TestCase):
             "Any other file under ansible/checks/ runs the lint job only", header_clause()
         )
 
-    def test_readme_row_names_each_checks_file_that_runs_every_shard(self) -> None:
+    def test_readme_row_points_at_the_list_instead_of_copying_it(self) -> None:
+        # The README does not list the checks files: EVERY_SHARD is the one list, and a copy
+        # here would be edited by every change that adds a file to it. The row names the list.
         clause = readme_clause()
+        self.assertIn("`EVERY_SHARD` in `ci_select.py`", clause)
         for name in SHARD_INPUTS:
-            self.assertIn(name, clause)
+            if name != "ci_select.py":
+                self.assertNotIn(name, clause)
 
     def test_readme_row_drops_the_stale_wording(self) -> None:
         clause = readme_clause()

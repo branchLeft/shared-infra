@@ -278,7 +278,7 @@ repository.
   the checks that select shards); a merge-queue entry runs no shard, because the pull
   request ran it; the weekly sweep runs every shard; a push to `main` runs none here,
   because the delivery workflow runs every shard before it applies anything.
-  [`ansible/checks/README.md`](../../checks/README.md) gives the rules.
+  [`ansible/checks/ci_select.md`](../../checks/ci_select.md) gives the rules.
 - The settings in `molecule.yml` are measured on two hosts: Docker Desktop (the
   owner's machine) and a GitHub `ubuntu-24.04` runner (cgroup v2, Docker 28.0.4), where
   the full harness passed with `cgroupns_mode: host` in place. The runner evidence is a

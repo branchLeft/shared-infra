@@ -212,11 +212,11 @@ class SelectionTest(unittest.TestCase):
         self.assertEqual(own, self.queue_entry(path))
 
     def test_host_roles_and_playbooks_keep_their_pinned_behaviour(self) -> None:
-        # host_roles.yml is read by the lint job's tests, not by a shard, so it selects none.
+        # host_roles/ is read by the lint job's tests, not by a shard, so it selects none.
         # It selected every shard before, only because it sat under ansible/checks/. A playbook
         # selects none, as it did before.
         for path in (
-            "ansible/checks/host_roles.yml",
+            "ansible/checks/host_roles/edge1.yml",
             "ansible/playbooks/app1.yml",
             "ansible/playbooks/edge1.yml",
         ):
@@ -224,7 +224,7 @@ class SelectionTest(unittest.TestCase):
                 self.assertEqual([], self.pull_request(path))
         own = [shard for shard in self.shards if shard["path"] == "ansible/roles/egress_nat"]
         chosen = self.pull_request(
-            "ansible/roles/egress_nat/tasks/main.yml", "ansible/checks/host_roles.yml"
+            "ansible/roles/egress_nat/tasks/main.yml", "ansible/checks/host_roles/edge1.yml"
         )
         self.assertEqual(own, chosen)
 
@@ -410,7 +410,9 @@ class TreeFixtureTest(unittest.TestCase):
         self.assertEqual([], self.names("ansible/roles/gone/tasks/main.yml"))
 
 
-class CommandTest(unittest.TestCase):
+class CommandFixture(unittest.TestCase):
+    """A two-role tree and the command run over it; the tests are in the classes below."""
+
     def setUp(self) -> None:
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
@@ -438,6 +440,8 @@ class CommandTest(unittest.TestCase):
         path.write_text("\0".join(names) + "\0", encoding="utf-8")
         return path
 
+
+class CommandTest(CommandFixture):
     def test_a_narrow_run_prints_its_shards(self) -> None:
         changed = self.changed("ansible/roles/a/tasks/main.yml")
         status, outputs = self.run_main("--event", "pull_request", "--changed-file", str(changed))
@@ -497,6 +501,87 @@ class CommandTest(unittest.TestCase):
     def test_the_real_listing_parses(self) -> None:
         listing = json.dumps({"include": real_shards()})
         self.assertIsNotNone(ci_select.parse_matrix(listing))
+
+
+class DirectSelectionTest(unittest.TestCase):
+    """What a pull request's own files select when a run-everything file made every shard run."""
+
+    def setUp(self) -> None:
+        self.shards = real_shards()
+
+    def direct(self, *changed: str, event: str = "pull_request") -> list[dict[str, str]] | None:
+        return ci_select.direct_selection(event, list(changed), self.shards, ROOT)
+
+    def test_a_run_everything_file_alone_selects_no_shard_directly(self) -> None:
+        self.assertEqual([], self.direct(".yamllint"))
+        self.assertEqual([], self.direct(".github/workflows/ansible.yml", "README.md"))
+
+    def test_the_pull_requests_own_role_is_selected_directly_with_what_names_it(self) -> None:
+        role = "ansible/roles/egress_nat/tasks/main.yml"
+        own = ci_select.select("pull_request", [role], self.shards, ROOT)
+        self.assertTrue(own)
+        self.assertLess(len(own), len(self.shards))
+        self.assertEqual(own, self.direct(".yamllint", role))
+        # The run-everything file still makes every shard run, as before.
+        self.assertEqual(
+            self.shards, ci_select.select("pull_request", [".yamllint", role], self.shards, ROOT)
+        )
+
+    def test_a_file_outside_ansible_that_a_role_reads_selects_that_role_directly(self) -> None:
+        read = next(path for path in ci_select.reads_by_path(ROOT) if path.startswith("hetzner/"))
+        own = ci_select.select("pull_request", [read], self.shards, ROOT)
+        self.assertTrue(own)
+        self.assertEqual(own, self.direct("ansible/requirements.txt", read))
+
+    def test_an_unrecognised_file_under_ansible_selects_every_shard_directly(self) -> None:
+        self.assertEqual(self.shards, self.direct(".yamllint", "ansible/mystery/file.txt"))
+
+    def test_a_change_with_no_run_everything_file_asks_nothing(self) -> None:
+        self.assertIsNone(self.direct("ansible/roles/egress_nat/tasks/main.yml"))
+        self.assertIsNone(self.direct("README.md"))
+
+    def test_only_a_pull_request_with_known_changes_asks(self) -> None:
+        for event in ("schedule", "workflow_dispatch", "merge_group", "push", ""):
+            with self.subTest(event=event):
+                self.assertIsNone(self.direct(".yamllint", event=event))
+        self.assertIsNone(ci_select.direct_selection("pull_request", None, self.shards, ROOT))
+
+    def test_every_every_shard_entry_is_found_as_a_run_everything_file(self) -> None:
+        for entry in ci_select.EVERY_SHARD:
+            with self.subTest(entry=entry):
+                self.assertEqual([entry], ci_select.run_everything_files([entry, "README.md"]))
+        self.assertEqual([], ci_select.run_everything_files(["ansible/roles/x/tasks/main.yml"]))
+
+
+class DirectOutputTest(CommandFixture):
+    """The extra output lines of the command, which blocking_shards.py reads."""
+
+    def run_lines(self, *args: str) -> dict[str, str]:
+        return self.run_main("--event", "pull_request", *args)[1]
+
+    def test_a_run_everything_file_prints_the_direct_shards_and_the_files(self) -> None:
+        changed = self.changed(".yamllint", "ansible/roles/a/tasks/main.yml")
+        outputs = self.run_lines("--changed-file", str(changed))
+        self.assertEqual(["a", "b"], [s["name"] for s in json.loads(outputs["matrix"])["include"]])
+        self.assertEqual(["a"], json.loads(outputs["direct"]))
+        self.assertEqual([".yamllint"], json.loads(outputs["run_everything_files"]))
+
+    def test_no_run_everything_file_prints_neither_line(self) -> None:
+        changed = self.changed("ansible/roles/a/tasks/main.yml")
+        outputs = self.run_lines("--changed-file", str(changed))
+        self.assertNotIn("direct", outputs)
+        self.assertNotIn("run_everything_files", outputs)
+
+    def test_unknown_changes_print_neither_line(self) -> None:
+        outputs = self.run_lines()
+        self.assertNotIn("direct", outputs)
+
+    def test_the_sweep_and_the_queue_print_neither_line(self) -> None:
+        changed = self.changed(".yamllint")
+        for event in ("schedule", "workflow_dispatch", "merge_group"):
+            with self.subTest(event=event):
+                _, outputs = self.run_main("--event", event, "--changed-file", str(changed))
+                self.assertNotIn("direct", outputs)
 
 
 @dataclass(frozen=True)

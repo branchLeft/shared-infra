@@ -550,40 +550,19 @@ is installed on every host role by the base provisioning sequence, and `branchle
 `branchleft-compose@<stack>` for any stack name, while that test globs
 `hetzner/*/stack/compose.yml`.
 
-| Instance                                                            | Compose file committed in                                                                                | Read by that test |
-| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | ----------------- |
-| `branchleft-compose@edge`                                           | here, `hetzner/edge/stack/`                                                                              | yes               |
-| `branchleft-compose@monitoring`                                     | here, `hetzner/monitoring/stack/`                                                                        | yes               |
-| `branchleft-compose@nextcloud1`                                     | here, `hetzner/nextcloud1/stack/`                                                                        | yes               |
-| `branchleft-compose@control-plane`                                  | here, `hetzner/control-plane/stack/`                                                                     | yes               |
-| `branchleft-compose@website`                                        | `branchLeft/website`, `deploy/compose.yml`                                                               | no                |
-| `branchleft-compose@db`                                             | `branchLeft/ghost-platform`, `db/stack/compose.yml`                                                      | no                |
-| `branchleft-compose@blog`, and one per further tenant slug          | nowhere: rendered by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`                             | no                |
-| `branchleft-compose@tenant-a`, a placeholder tenant slug            | nowhere: rendered, as for `blog`, by `branchLeft/ghost-platform`'s `infra/tenant/compose.ts`             | no                |
-| `branchleft-compose@demo-`, the prefix of each demo slot            | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
-| `branchleft-compose@demo-0-a`, one named demo instance              | nowhere: provisioned by `branchLeft/ghost-platform`'s `demo-host/provision`                              | no                |
-| `branchleft-compose@demo-host`, which is not an instance            | nowhere: the directory the `demo1_build` role stages `branchLeft/ghost-platform`'s demo programs into    | no                |
-| `branchleft-compose@demo-sidecar`, which is no instance             | nowhere: the sidecar's image pin file, read by `branchLeft/ghost-platform`'s `demo-host/provision`       | no                |
-| `branchleft-compose@broker`, which is not an instance               | nowhere: the broker program has its own unit, built from `branchLeft/ghost-platform`'s `services/broker` | no                |
-| `branchleft-compose@backup-worker`                                  | nowhere: a systemd unit, not a Compose stack                                                             | no                |
-| `branchleft-compose@ring-controller`                                | nowhere: a systemd unit, not a Compose stack                                                             | no                |
-| `branchleft-compose@state-copy`                                     | nowhere: a systemd unit, not a Compose stack                                                             | no                |
-| `branchleft-compose@restore-drill`                                  | nowhere: a systemd unit, not a Compose stack                                                             | no                |
-| `branchleft-compose@ntfy-pager`, which is not an instance           | nowhere: the pager's secrets file, `/etc/branchleft/ntfy-pager.env`, written by the `ntfy_pager` role    | no                |
-| `branchleft-compose@control-plane-backup`, which is not an instance | nowhere: the program directory of the `control_plane_backup` role's oneshot backup service               | no                |
-| `branchleft-compose@mail-spool`                                     | nowhere: `branchLeft/ghost-platform`'s `render-core` golden, fetched by the `demo1_egress_spool` role    | no                |
-| `branchleft-compose@status`, which is not an instance               | nowhere: the project directory of the `status_page` role's plain `docker compose` Gatus page             | no                |
-| `branchleft-compose@dbt1`                                           | nowhere: rendered from a template by the `db_t1` role of `branchLeft/shared-infra`                       | no                |
-| `branchleft-compose@sweego-receiver`                                | nowhere: rendered from a template by the `sweego_receiver` role of `branchLeft/shared-infra`             | no                |
-| `branchleft-compose@publicpress-website`                            | the `publicpress_website_app1` role of `branchLeft/shared-infra`, not under `*/stack/`                   | no                |
+The instances are listed once, in the two registers of that test module, and
+nowhere else: `provision/expected_services/` has one file per stack whose
+Compose file is committed here (the stacks that test reads), and
+`CONTRACT_DOES_NOT_REACH` has one entry for every other instance the template
+starts, or that a path here reads as one, with the repository that owns its
+Compose file or the reason it is not an instance.
 
-**No means unread, not failed.** Nothing in this repository has an opinion
-about whether those stacks declare a health signal, so a service in one that
-declares none is deployed unwatched, with `--wait` reporting a clean start over
-it. The two registers in that test module are the machine-checked copy of this
-table: a stack this repository names anywhere and classifies in neither of them
-fails the suite, and so does a row here whose last column disagrees with them.
-They are
+**Not in `expected_services/` means unread, not failed.** Nothing in this
+repository has an opinion about whether those stacks declare a health signal,
+so a service in one that declares none is deployed unwatched, with `--wait`
+reporting a clean start over it. A stack this repository names anywhere and
+classifies in neither register fails the suite, and so does a copy of the
+register in this document. The registers are
 a floor rather than a census — a tenant slug granted a deploy slot is written
 down in no file here at all, so nothing here can discover it.
 

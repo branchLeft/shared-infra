@@ -30,6 +30,9 @@ runs:
         EVENT_NAME: ${{ github.event_name }}
         BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
         HEAD_SHA: ${{ github.event.merge_group.head_sha || github.sha }}
+        # Lets the script prove the checkout is the pull request's test merge and compare
+        # with the commit it merges into; empty on a merge queue entry.
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       # If the script cannot run at all, say run=true: a crash widens, never skips.
       run: |
         python3 scripts/ci_skip.py --unit "$UNIT" | tee -a "$GITHUB_OUTPUT" || echo "run=true" >> "$GITHUB_OUTPUT"

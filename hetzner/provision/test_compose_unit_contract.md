@@ -54,6 +54,12 @@ for a stack this repository commits. `CONTRACT_COVERS` and
 `CONTRACT_DOES_NOT_REACH` name both sides, and the scan below refuses to let
 this repository write down a stack that is in neither.
 
+The services each covered stack must have are kept one file per stack, in
+`expected_services/STACK.txt` (one service name per line), and read together
+into `EXPECTED_SERVICES`: two pull requests that touch different stacks touch
+different files. A stack with a Compose file and no file there fails the exact
+comparison, and so does a file with no Compose file.
+
 Everything here reads the `[Service]` section only, and matches whole stripped
 lines. systemd ignores assignments before a section header, so a directive
 found anywhere in the file is not a directive systemd applies.
@@ -209,9 +215,8 @@ Otherwise the assertion above passes over an empty scan.
         so their names are in its own configuration whatever the prose says.
 
         The other half is not, and the difference is worth stating rather than
-        implying. `website`, `db` and `blog` are named in `hetzner/README.md`
-        and nowhere else here, and the README assertion below is what puts two
-        of them there -- so this half detects the registers being emptied and
+        implying. `website`, `db` and `blog` are named in no file here but the
+        register itself, so this half detects the registers being emptied and
         does not prove the scan can see a mention from outside. Nothing in this
         repository can prove that, which is the same limit as the register being
         a floor rather than a census.

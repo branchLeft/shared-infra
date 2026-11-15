@@ -3,9 +3,10 @@ tenant_compose calls.
 
 tenant_compose calls its volume program at one fixed path and refuses to run unless that file is
 executable. The tenant onboarding role installs the program. Three things must hold together: the
-host's list in host_roles.yml names the onboarding role, app1's playbook applies it, the program
-it installs is the program tenant_compose calls, executable, and the register is installed in the
-same directory as the program (the program refuses every slug otherwise). When both roles are
+host's list in host_roles/app1.yml names the onboarding role, app1's playbook applies it, the
+program it installs is the program tenant_compose calls, executable, and the register is
+installed in the same directory as the program (the program refuses every slug otherwise). When
+both roles are
 applied, the onboarding role comes first, so the program exists before the compose role looks for
 it.
 
@@ -20,7 +21,7 @@ import unittest
 from pathlib import Path, PurePosixPath
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import ROOT
+from check_enrolment import ROOT, read_host_roles_raw
 
 ROLE = "tenant_onboarding"
 CALLER = "tenant_compose"
@@ -39,7 +40,6 @@ REGISTER_URL_SUFFIX = "/registers/tenant-names.json"
 # The directory the role installed into before it moved to the path tenant_compose calls.
 OLD_DIR = "/usr/local/lib/branchleft/provision"
 
-HOST_ROLES = ROOT / "ansible" / "checks" / "host_roles.yml"
 APP1 = ROOT / "ansible" / "playbooks" / f"{HOST}.yml"
 ROLE_VARS = ROOT / "ansible" / "roles" / ROLE / "vars" / "main.yml"
 ROLE_TASKS = ROOT / "ansible" / "roles" / ROLE / "tasks" / "main.yml"
@@ -90,7 +90,7 @@ def wiring_problems(host_list: list[str], roles: list[str]) -> list[str]:
     """Checks (a) and (b): the role is on the host's list and applied, and before the caller."""
     problems: list[str] = []
     if ROLE not in host_list:
-        problems.append(f"{ROLE} is not on {HOST}'s list in host_roles.yml")
+        problems.append(f"{ROLE} is not on {HOST}'s list in host_roles/{HOST}.yml")
     if ROLE not in roles:
         problems.append(f"{ROLE} is not applied in {HOST}.yml")
     if ROLE in roles and CALLER in roles and roles.index(ROLE) > roles.index(CALLER):
@@ -134,9 +134,10 @@ class RealTree(unittest.TestCase):
     """The checks on the files as they are on this tree."""
 
     def test_the_real_tree_wires_the_role_to_app1(self) -> None:
-        host_roles = yaml.safe_load(HOST_ROLES.read_text(encoding="utf-8"))
+        host_roles = read_host_roles_raw(ROOT / "ansible")[HOST]
         roles = play_roles(APP1.read_text(encoding="utf-8"))
-        self.assertEqual(wiring_problems(host_roles[HOST], roles), [])
+        listed = [str(r) for r in host_roles] if isinstance(host_roles, list) else []
+        self.assertEqual(wiring_problems(listed, roles), [])
 
     def test_the_real_tree_installs_the_program_tenant_compose_calls(self) -> None:
         caller = yaml.safe_load(CALLER_VARS.read_text(encoding="utf-8"))
@@ -189,7 +190,7 @@ class Mutations(unittest.TestCase):
         # Fault: the role is taken off the host's list.
         without = [name for name in self.host_list if name != ROLE]
         problems = wiring_problems(without, self.roles_ok)
-        self.assertTrue(any("host_roles.yml" in problem for problem in problems), problems)
+        self.assertTrue(any("host_roles/" in problem for problem in problems), problems)
 
     def test_role_applied_after_the_caller_is_refused(self) -> None:
         # Fault: the role is moved after tenant_compose in the playbook.

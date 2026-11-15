@@ -14,7 +14,7 @@ import re
 import unittest
 
 import yaml  # type: ignore[import-untyped]
-from check_enrolment import HOST_ROLES_FILE, ROOT
+from check_enrolment import ROOT, read_host_roles_raw
 
 ANSIBLE = ROOT / "ansible"
 HOST = "edge1"
@@ -90,7 +90,7 @@ def _playbook_roles() -> list[str]:
 
 
 def _host_roles() -> dict[str, list[str]]:
-    doc = _mapping(yaml.safe_load((ANSIBLE / HOST_ROLES_FILE).read_text(encoding="utf-8")))
+    doc = read_host_roles_raw(ANSIBLE)
     return {
         host: [str(item) for item in roles]
         for host, roles in doc.items()

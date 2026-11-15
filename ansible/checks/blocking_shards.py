@@ -4,12 +4,15 @@ The list is ansible/checks/blocking_shards.json. Every shard runs on every pull 
 a shard on the list is a blocking shard, and the required check waits for it and fails
 with it. Every other shard is advisory: it runs, it shows red on its own check line when
 it fails, and the required check does not wait for it. A scheduled or manual run treats
-every shard as blocking. ansible/checks/README.md has the rules and the reasons.
+every shard as blocking. One exception on a pull request: when a run-everything file changed
+(ci_select.py prints ``direct=``), an advisory shard that the pull request's own role or
+pattern files do not select is left to the nightly run, and the step summary says so.
+ansible/checks/blocking_shards.md has the rules and the reasons.
 
 Standard library only, because the discover job installs nothing.
 
     blocking_shards.py validate --all-file all-shards.json
-    blocking_shards.py split --event E --all-file all-shards.json --selection-file S
+    blocking_shards.py split --event E --all-file A --selection-file S [--summary-file F]
 
 ``split`` prints the job outputs of the discover job as ``name=value`` lines.
 """
@@ -30,6 +33,10 @@ KEY = "blocking"
 # (the scheduled sweep, a manual run, one nobody planned for) treats every shard as
 # blocking, so an event the split does not know fails closed.
 SPLIT_EVENTS = (PULL_REQUEST, MERGE_GROUP)
+# The schedule of the sweep that runs every shard as blocking (ansible.yml `schedule:`).
+NIGHTLY = "cron 41 2 * * *"
+MAX_NAMED = 5
+MAX_LISTED = 40
 
 
 class ListError(Exception):
@@ -123,6 +130,63 @@ def selected_from(selection: str) -> list[dict[str, str]]:
     raise ListError(message)
 
 
+def listed_in(selection: str, key: str) -> list[str] | None:
+    """Return the JSON list of strings on the ``key=`` line of the selection, or None.
+
+    None covers a missing line and a line that is not a list of strings alike, so a
+    selection that cannot be read as asked leaves every advisory shard running.
+    """
+    for line in selection.splitlines():
+        if line.startswith(key + "="):
+            try:
+                document: object = json.loads(line.removeprefix(key + "="))
+            except ValueError:
+                return None
+            if isinstance(document, list) and all(isinstance(entry, str) for entry in document):
+                return [str(entry) for entry in document]
+            return None
+    return None
+
+
+def defer_advisory(
+    event: str, advisory: Sequence[Mapping[str, str]], direct: Sequence[str] | None
+) -> tuple[list[Mapping[str, str]], list[Mapping[str, str]]]:
+    """Return the advisory shards as (run now, left to the nightly run).
+
+    Only a pull request whose selection named the shards its own files choose (``direct``,
+    printed by ci_select.py when a run-everything file changed) defers anything, and it
+    defers the advisory shards not among them. Every other case runs every advisory shard.
+    """
+    if event != PULL_REQUEST or direct is None:
+        return list(advisory), []
+    chosen = frozenset(direct)
+    return (
+        [shard for shard in advisory if shard["name"] in chosen],
+        [shard for shard in advisory if shard["name"] not in chosen],
+    )
+
+
+def deferral_note(deferred: Sequence[Mapping[str, str]], triggers: Sequence[str] | None) -> str:
+    """Return the plain note, as Markdown, of the advisory shards left to the nightly run."""
+    if not deferred:
+        return ""
+    shown = list(triggers or [])[:MAX_NAMED]
+    files = ", ".join(f"`{name}`" for name in shown) or "a shared file"
+    lines = [
+        f"### {len(deferred)} advisory shard(s) left to the nightly run",
+        "",
+        f"This pull request changed {files}, which makes every shard run. On a pull request "
+        "that runs the blocking shards and any shard the pull request's own role or pattern "
+        "files select. The advisory shards below were not run here: the scheduled sweep "
+        f"({NIGHTLY}) runs every shard, each one blocking.",
+        "",
+        *[f"- {shard['name']}" for shard in deferred[:MAX_LISTED]],
+    ]
+    if len(deferred) > MAX_LISTED:
+        lines.append(f"- and {len(deferred) - MAX_LISTED} more")
+    return "\n".join(lines) + "\n"
+
+
 def main(argv: Sequence[str]) -> int:
     """Run ``validate`` or ``split``; return 1, with the reasons on stderr, when the list is bad."""
     parser = argparse.ArgumentParser(description=(__doc__ or "").split("\n", maxsplit=1)[0])
@@ -131,6 +195,7 @@ def main(argv: Sequence[str]) -> int:
     parser.add_argument("--list-file", type=Path, default=LIST_FILE)
     parser.add_argument("--event", default="")
     parser.add_argument("--selection-file", type=Path, default=None)
+    parser.add_argument("--summary-file", type=Path, default=None)
     args = parser.parse_args(argv)
     try:
         known = [shard["name"] for shard in parse_matrix(args.all_file.read_text(encoding="utf-8"))]
@@ -146,17 +211,28 @@ def main(argv: Sequence[str]) -> int:
         if args.selection_file is None:
             print("split needs --selection-file", file=sys.stderr)
             return 1
-        selected = selected_from(args.selection_file.read_text(encoding="utf-8"))
+        selection = args.selection_file.read_text(encoding="utf-8")
+        selected = selected_from(selection)
     except (ListError, OSError) as error:
         print(error, file=sys.stderr)
         return 1
     blocking, advisory = partition(args.event, selected, frozenset(listed))
+    advisory, deferred = defer_advisory(args.event, advisory, listed_in(selection, "direct"))
     print(
         f"{args.event}: {len(blocking)} blocking and {len(advisory)} advisory shard(s).",
         file=sys.stderr,
     )
     for shard in advisory:
         print(f"  advisory: {shard['name']}", file=sys.stderr)
+    note = deferral_note(deferred, listed_in(selection, "run_everything_files"))
+    if note:
+        print(note, file=sys.stderr)
+        if args.summary_file is not None:
+            try:
+                with args.summary_file.open("a", encoding="utf-8") as summary:
+                    summary.write(note)
+            except OSError as error:
+                print(f"the step summary cannot be written: {error}", file=sys.stderr)
     for line in [*matrix_lines("blocking", blocking), *matrix_lines("advisory", advisory)]:
         print(line)
     return 0

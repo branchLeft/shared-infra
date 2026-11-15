@@ -1,7 +1,7 @@
 """The order and the gate of the Ansible workflow, and the schedules the CI work depends on.
 
 ci_select.py chooses shards; these tests hold the workflow to what that choice assumes. Each
-test's name states the rule it holds; the reasons are in ansible/checks/README.md.
+test's name states the rule it holds; the reasons are in ansible/checks/test_ci_gate_order.md.
 """
 
 from __future__ import annotations

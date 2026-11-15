@@ -42,7 +42,8 @@ OWNED = (
 )
 NAT_ROLE = "egress_nat"
 # The roles demo1's playbook must not apply, with the reason each is held off. The list in
-# checks/host_roles.yml holds the same three off a pushed playbook (R2); this keeps the reasons.
+# checks/host_roles/demo1.yml holds the same three off a pushed playbook (R2); this keeps the
+# reasons.
 EXCLUDED = {
     NAT_ROLE: "which would give the demo containers a route out",
     "host_baseline": "which is the host's own step, under its own enrolment decision",

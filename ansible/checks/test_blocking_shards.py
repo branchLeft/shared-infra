@@ -1,6 +1,6 @@
 """The list of blocking container tests, the split it drives, and what the gate does with it.
 
-Each test's name states the rule it holds; the reasons are in ansible/checks/README.md.
+Each test's name states the rule it holds; the reasons are in ansible/checks/blocking_shards.md.
 """
 
 from __future__ import annotations
@@ -265,6 +265,176 @@ class SplitTest(unittest.TestCase):
         code, out = self.run_split(["x", "zzz"], "pull_request")
         self.assertEqual(1, code)
         self.assertEqual("", out, "a refused list must print no output for the job to use")
+
+
+class DeferralTest(unittest.TestCase):
+    """On a pull request that changed a run-everything file, own-file shards run, the rest wait."""
+
+    ADVISORY = [
+        {"name": "x", "path": "p/x", "scenario": "default", "kind": "role"},
+        {"name": "y", "path": "p/y", "scenario": "default", "kind": "role"},
+        {"name": "z", "path": "p/z", "scenario": "default", "kind": "role"},
+    ]
+
+    def names(self, shards: Sequence[Mapping[str, str]]) -> list[str]:
+        return [shard["name"] for shard in shards]
+
+    def test_the_advisory_shards_the_pull_request_does_not_select_are_deferred(self) -> None:
+        run, left = blocking_shards.defer_advisory("pull_request", self.ADVISORY, ["y"])
+        self.assertEqual(["y"], self.names(run))
+        self.assertEqual(["x", "z"], self.names(left))
+
+    def test_no_direct_line_defers_nothing(self) -> None:
+        run, left = blocking_shards.defer_advisory("pull_request", self.ADVISORY, None)
+        self.assertEqual(["x", "y", "z"], self.names(run))
+        self.assertEqual([], left)
+
+    def test_an_empty_direct_list_defers_every_advisory_shard(self) -> None:
+        run, left = blocking_shards.defer_advisory("pull_request", self.ADVISORY, [])
+        self.assertEqual([], run)
+        self.assertEqual(["x", "y", "z"], self.names(left))
+
+    def test_no_other_event_defers_anything(self) -> None:
+        for event in ("merge_group", *FULL_RUN_EVENTS, "", "something_new"):
+            with self.subTest(event=event):
+                run, left = blocking_shards.defer_advisory(event, self.ADVISORY, [])
+                self.assertEqual(["x", "y", "z"], self.names(run))
+                self.assertEqual([], left)
+
+    def test_a_line_that_is_not_a_list_of_strings_reads_as_absent(self) -> None:
+        for text in ("direct=", "direct=not json", 'direct={"a": 1}', "direct=[1]", "other=[]"):
+            with self.subTest(text=text):
+                self.assertIsNone(blocking_shards.listed_in(text, "direct"))
+        self.assertEqual(["a"], blocking_shards.listed_in('x=1\ndirect=["a"]\n', "direct"))
+        self.assertEqual([], blocking_shards.listed_in("direct=[]", "direct"))
+
+    def test_the_note_says_which_shards_wait_why_and_for_what(self) -> None:
+        note = blocking_shards.deferral_note(self.ADVISORY[:2], [".yamllint"])
+        self.assertIn("2 advisory shard(s) left to the nightly run", note)
+        self.assertIn("`.yamllint`", note)
+        self.assertIn("cron 41 2 * * *", note)
+        self.assertIn("- x\n- y\n", note)
+        self.assertEqual("", blocking_shards.deferral_note([], [".yamllint"]))
+
+    def test_a_long_list_is_cut_and_says_how_many_more(self) -> None:
+        many = [{"name": f"s{n}", "path": "", "scenario": "", "kind": "role"} for n in range(50)]
+        note = blocking_shards.deferral_note(many, [f"f{n}" for n in range(9)])
+        self.assertIn("- and 10 more", note)
+        self.assertNotIn("`f5`", note)
+
+    def test_the_nightly_name_is_the_schedule_the_workflow_has(self) -> None:
+        cron = str(get(ANSIBLE_WORKFLOW, "on", "schedule", 0, "cron"))
+        self.assertEqual(blocking_shards.NIGHTLY, f"cron {cron}")
+
+
+class DeferralCommandTest(unittest.TestCase):
+    SELECTED = SplitTest.SELECTED + [
+        {"name": "w", "path": "p/w", "scenario": "default", "kind": "role"},
+    ]
+
+    def run_split(
+        self, event: str, extra: list[str], listed: list[str] | None = None
+    ) -> tuple[int, str, str, str]:
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            (base / "list.json").write_text(
+                json.dumps({"blocking": listed if listed is not None else ["x"]}), encoding="utf-8"
+            )
+            (base / "all.json").write_text(json.dumps({"include": self.SELECTED}), encoding="utf-8")
+            lines = ["shards=true", "matrix=" + json.dumps({"include": self.SELECTED}), *extra]
+            (base / "sel.txt").write_text("\n".join(lines), encoding="utf-8")
+            summary = base / "summary.md"
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = blocking_shards.main(
+                    [
+                        "split",
+                        "--event",
+                        event,
+                        "--all-file",
+                        str(base / "all.json"),
+                        "--selection-file",
+                        str(base / "sel.txt"),
+                        "--list-file",
+                        str(base / "list.json"),
+                        "--summary-file",
+                        str(summary),
+                    ]
+                )
+            written = summary.read_text(encoding="utf-8") if summary.exists() else ""
+            return code, out.getvalue(), err.getvalue(), written
+
+    def advisory_names(self, out: str) -> list[str]:
+        line = next(line for line in out.splitlines() if line.startswith("advisory_matrix="))
+        return [entry["name"] for entry in json.loads(line.split("=", 1)[1])["include"]]
+
+    def test_a_run_everything_pull_request_runs_blocking_and_own_shards_only(self) -> None:
+        extra = ['direct=["y"]', 'run_everything_files=[".yamllint"]']
+        code, out, err, summary = self.run_split("pull_request", extra)
+        self.assertEqual(0, code)
+        self.assertEqual(["y"], self.advisory_names(out))
+        self.assertIn("blocking=true", out)
+        self.assertIn("1 blocking and 1 advisory shard(s)", err)
+        for text in (err, summary):
+            self.assertIn("1 advisory shard(s) left to the nightly run", text)
+            self.assertIn("- w", text)
+            self.assertIn("`.yamllint`", text)
+        self.assertNotIn("- y", summary)
+
+    def test_every_advisory_shard_deferred_leaves_the_advisory_job_with_nothing(self) -> None:
+        extra = ["direct=[]", 'run_everything_files=["ansible/requirements.txt"]']
+        _, out, _, _ = self.run_split("pull_request", extra)
+        self.assertIn("advisory=false", out)
+
+    def test_without_the_direct_line_every_advisory_shard_runs_and_nothing_is_written(self) -> None:
+        _, out, err, summary = self.run_split("pull_request", [])
+        self.assertEqual(["y", "w"], self.advisory_names(out))
+        self.assertEqual("", summary)
+        self.assertNotIn("nightly", err)
+
+    def test_the_sweep_ignores_a_direct_line_and_runs_every_shard_blocking(self) -> None:
+        _, out, _, summary = self.run_split("schedule", ["direct=[]"])
+        self.assertIn("advisory=false", out)
+        self.assertIn("blocking=true", out)
+        self.assertEqual("", summary)
+
+    def test_a_blocking_shard_is_never_deferred(self) -> None:
+        _, out, _, _ = self.run_split("pull_request", ["direct=[]"], listed=["w", "x", "y"])
+        blocking = next(line for line in out.splitlines() if line.startswith("blocking_matrix="))
+        names = [e["name"] for e in json.loads(blocking.split("=", 1)[1])["include"]]
+        self.assertEqual(["x", "y", "w"], names)
+
+    def test_a_summary_file_that_cannot_be_written_does_not_fail_the_split(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            (base / "list.json").write_text('{"blocking": ["x"]}', encoding="utf-8")
+            (base / "all.json").write_text(json.dumps({"include": self.SELECTED}), encoding="utf-8")
+            lines = ["matrix=" + json.dumps({"include": self.SELECTED}), "direct=[]"]
+            (base / "sel.txt").write_text("\n".join(lines), encoding="utf-8")
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = blocking_shards.main(
+                    [
+                        "split",
+                        "--event",
+                        "pull_request",
+                        "--all-file",
+                        str(base / "all.json"),
+                        "--selection-file",
+                        str(base / "sel.txt"),
+                        "--list-file",
+                        str(base / "list.json"),
+                        "--summary-file",
+                        str(base / "no-such-folder" / "summary.md"),
+                    ]
+                )
+        self.assertEqual(0, code)
+        self.assertIn("the step summary cannot be written", err.getvalue())
+        self.assertIn("advisory=false", out.getvalue())
+
+    def test_the_workflow_passes_the_step_summary_to_the_split(self) -> None:
+        step = str(get(ANSIBLE_WORKFLOW, "jobs", "discover", "steps", 3, "run"))
+        self.assertIn('--summary-file "$GITHUB_STEP_SUMMARY"', step)
 
 
 class TruthTableTest(unittest.TestCase):
