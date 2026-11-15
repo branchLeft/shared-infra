@@ -803,14 +803,18 @@ before the request proceeds — the behaviour the retired edge declared for its
 `crowdsecurity/appsec-vpatch`, a leaky bucket at `capacity: 1` counting distinct
 rule names per address, so a **second** distinct in-band rule match from the same
 address inside 60 seconds becomes a ban across every hostname on the edge for
-the profile's duration. Out-of-band matches do the same at `capacity: 5`. The
+the ban ladder's duration (below). Out-of-band matches would do the same at
+`capacity: 5`, but that scenario is watch-only: it records and bans nobody. The
 retired edge's rules answered 403 and never touched the address.
 This is the difference the parity artifact records, and it is the reason the
 detect-only review in step 9 is about false positives rather than about counts.
 
-Run the check above twice and you will ban yourself. For a command run on the
-host that address is the Docker bridge gateway. Clear it, or the host's own
-container traffic stays banned for the decision's lifetime:
+A command run on the host reaches Caddy from the Docker bridge gateway, a
+private address the hub's `crowdsecurity/whitelists` parser drops, so the check
+above does not ban the host (`hetzner/edge/render.md`, "Our own hosts are never
+banned"). If `cscli decisions list` ever shows a bridge address banned, that
+whitelist is not loaded: clear the decision, or the host's own container traffic
+stays banned for its lifetime, and report it:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
@@ -863,6 +867,39 @@ a password a few times, and Ghost's own lockout after five, do not reach it.
 CI replays a burst that must ban and the owner's sign-in and admin use that
 must not. A `cscli decisions list` after an apply names the scenario in the
 `Reason` column when it fires.
+
+**A ban is short the first time.** Every ban follows a ladder
+(`hetzner/edge/render.md`, "Ban length and watch-only scenarios"): ten minutes
+for an address with no ban in the last day, then thirty minutes, two hours and
+four hours. To confirm it after an apply, run the `cscli decisions list` command
+above after any ban: the first ban for an address shows a duration under ten
+minutes.
+
+**The Core Rule Set only records.** Its out-of-band scenario,
+`crowdsecurity/crowdsec-appsec-outofband`, runs in simulation: `cscli decisions
+list` shows its would-be bans marked simulated, and no bouncer refuses them.
+These are the false-alarm review's data (step 9). Ending watch-only is a
+reviewed change to `WATCH_ONLY_SCENARIOS` in `hetzner/edge/posture.ts`.
+
+**Our own hosts are never banned.** Every private address, our hosts' fixed
+addresses and Docker bridge addresses included, is dropped before any scenario
+reads it, by the hub whitelist the CrowdSec image installs
+(`hetzner/edge/render.md`, "Our own hosts are never banned"). No person's
+address is on any list. To confirm it after an apply:
+`docker exec "$CROWDSEC_CTR" cscli parsers list` on edge1 lists
+`crowdsecurity/whitelists` as enabled.
+
+**Nextcloud's own traffic does not ban.** On `cloud.branchleft.co.uk` the
+Talk call API, WebDAV sync and preview requests are dropped before any
+scenario reads them, and the throttle allows 1200 requests a minute
+(`hetzner/edge/render.md`, "Nextcloud profile"). CI replays a Talk video call
+and a desktop sync that must not ban, and attacks on the same hostname that
+must.
+
+**Every ban pages.** The `EdgeBanIssued` page (`hetzner/monitoring/render.ts`)
+reaches the phone through ntfy within about two minutes of a ban, naming the
+scenario. It names no address: read it with the `cscli decisions list` command
+above, and clear a false alarm with the `cscli decisions delete --ip` command.
 
 ## 11. Adding a site to the edge
 

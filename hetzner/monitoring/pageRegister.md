@@ -65,7 +65,7 @@ Healthchecks-delivered entries are not checked. `pageRegister.test.ts` runs it
 against the real register and the real rendered rules, and against the reaper
 entry flipped to live with no rule, which must report it.
 
-Today the rendered rules carry no `severity: page` rule at all, so each of the
+One `severity: page` rule exists, `EdgeBanIssued`, raised from CrowdSec's decision gauge on edge1, and its entry carries no exemption. Each of the other
 three live Alertmanager entries carries a `ruleExemption`: the tier-two safety
 match and the failed-unsafe tenant are raised by the platform itself, and the
 reader-facing probe's page is per tenant, which this stack's instance-labelled

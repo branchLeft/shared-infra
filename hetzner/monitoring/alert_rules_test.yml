@@ -2179,3 +2179,52 @@ tests:
       - eval_time: 45m
         alertname: HostCPUSaturated
         exp_alerts: []
+
+  # EdgeBanIssued: CrowdSec's decision gauge as edge1's crowdsec job scrapes
+  # it (labels action, origin, reason; no address). No ban, no page.
+  - interval: 30s
+    input_series:
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-admin-interface-probing", host="edge1", instance="10.20.1.10:6060", job="crowdsec"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: EdgeBanIssued
+        exp_alerts: []
+
+  # A ban pages at once, with the scenario that made it, and two bans by one
+  # scenario are one alert carrying the count. A ban by another scenario is a
+  # second alert. When the bans end, the alert ends.
+  - interval: 30s
+    input_series:
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="crowdsecurity/http-admin-interface-probing", host="edge1", instance="10.20.1.10:6060", job="crowdsec"}'
+        values: '0 0 1 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 2 0 0 0'
+      - series: 'cs_active_decisions{action="ban", origin="crowdsec", reason="branchleft/ghost-admin-login-bruteforce", host="edge1", instance="10.20.1.10:6060", job="crowdsec"}'
+        values: '0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 0 0 0'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: EdgeBanIssued
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              reason: crowdsecurity/http-admin-interface-probing
+            exp_annotations:
+              summary: 'The edge is banning 2 address(es), by crowdsecurity/http-admin-interface-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). If it is you: from a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+      - eval_time: 2m30s
+        alertname: EdgeBanIssued
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              reason: crowdsecurity/http-admin-interface-probing
+            exp_annotations:
+              summary: 'The edge is banning 2 address(es), by crowdsecurity/http-admin-interface-probing.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). If it is you: from a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+          - exp_labels:
+              severity: page
+              reason: branchleft/ghost-admin-login-bruteforce
+            exp_annotations:
+              summary: 'The edge is banning 1 address(es), by branchleft/ghost-admin-login-bruteforce.'
+              description: 'A banned address gets 403 from every site on edge1 until the ban ends (10 minutes for a first ban, up to 4 hours for a repeat). If it is you: from a network that is not banned, or over SSH to edge1, `cscli decisions list` shows the ban and `cscli decisions delete --ip ADDRESS` lifts it. The reason is the CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says what each one reads.'
+      - eval_time: 11m
+        alertname: EdgeBanIssued
+        exp_alerts: []

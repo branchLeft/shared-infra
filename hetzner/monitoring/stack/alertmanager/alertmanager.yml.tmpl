@@ -59,7 +59,7 @@ route:
       receiver: email-on-host
     - matchers:
         - severity = "page"
-        - alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead)$"
+        - alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued)$"
       receiver: ntfy-page
       group_by: ['tenant']
 

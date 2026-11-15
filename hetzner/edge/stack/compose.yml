@@ -143,6 +143,12 @@ services:
       # never drops it. A local scenario under the same `branchleft/` convention,
       # for the same reasons as the two mounts above; no image path is under it.
       - ./crowdsec/scenarios:/etc/crowdsec/scenarios/branchleft:ro
+      # How long a ban lasts and which scenarios only watch (hetzner/edge/render.md,
+      # "Ban length and watch-only scenarios"). Outside /etc/crowdsec for the
+      # reason the acquisition mount above gives; config.yaml.local points
+      # profiles_path and simulation_path here. Read-only, so `cscli simulation`
+      # cannot change it on the host: a change is a pull request.
+      - ./crowdsec/remediation:/etc/crowdsec-remediation:ro
       - crowdsec-data:/var/lib/crowdsec/data
       - caddy-logs:/var/log/caddy:ro
     # Without one, `--wait` waits only for *running*, which a crash-looping

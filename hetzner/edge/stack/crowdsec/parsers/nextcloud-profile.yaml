@@ -1,0 +1,15 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+name: branchleft/nextcloud-profile
+description: Nextcloud's own normal traffic on our Nextcloud hostnames
+filter: >-
+  evt.Meta.service == 'http' &&
+  evt.Meta.log_type == 'http_access-log' &&
+  evt.Meta.target_fqdn in ['cloud.branchleft.co.uk', 'book.branchleft.co.uk'] &&
+  not (evt.Meta.http_path matches '(?i)[.][.]|%2e')
+whitelist:
+  reason: Nextcloud's own traffic on a Nextcloud hostname
+  expression:
+    - evt.Meta.http_path matches '^/(?:remote|public)[.]php/(?:web)?dav(?:/|[?]|$)' && evt.Meta.http_status in ['200', '201', '204', '207', '304', '404', '409', '412', '423']
+    - evt.Meta.http_path matches '^/ocs/v[12][.]php/apps/spreed/' && evt.Meta.http_status in ['200', '201', '304', '400', '403', '404', '409', '412']
+    - evt.Meta.http_path matches '^(?:/index[.]php)?/(?:core/preview|avatar/|apps/(?:files/api/v1/thumbnail|files_trashbin/preview|files_versions/preview|photos/api/v1/preview|files_sharing/publicpreview|theming/))' && evt.Meta.http_status in ['200', '304', '404']

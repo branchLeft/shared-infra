@@ -302,9 +302,14 @@ CROWDSEC_FILES_INSIDE = {
     "parsers/edge-trusted-session.yaml": (
         "/etc/crowdsec/parsers/s02-enrich/branchleft/edge-trusted-session.yaml"
     ),
+    "parsers/nextcloud-profile.yaml": (
+        "/etc/crowdsec/parsers/s02-enrich/branchleft/nextcloud-profile.yaml"
+    ),
     "scenarios/ghost-admin-login-bruteforce.yaml": (
         "/etc/crowdsec/scenarios/branchleft/ghost-admin-login-bruteforce.yaml"
     ),
+    "remediation/profiles.yaml": "/etc/crowdsec-remediation/profiles.yaml",
+    "remediation/simulation.yaml": "/etc/crowdsec-remediation/simulation.yaml",
 }
 CROWDSEC_ACQUIS_INSIDE = "/etc/crowdsec-acquis.d"
 MODE_PATTERN = re.compile(r"0?[0-7]{3,4}\Z")

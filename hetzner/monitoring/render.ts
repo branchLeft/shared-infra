@@ -514,6 +514,31 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            varies between 172.17 and 172.18, hence the whole /12 rather',
     '            than the literal address.',
     '',
+    // Every ban the edge makes reaches the owner's phone, with the scenario
+    // that made it and never an address: CrowdSec's decision gauge carries no
+    // per-address label. A ban costs the person banned every site on the
+    // edge, the pager's own public name and the sign-in service included, so
+    // it cannot wait for the digest; the page route posts to ntfy over the
+    // stack's own network, not through the edge. One alert per scenario: a
+    // second ban by a scenario already firing raises the count in the next
+    // repeat, not a new page. Watch-only scenarios' simulated decisions are
+    // not in the gauge (test_crowdsec_replay.py asserts it), so a would-be
+    // ban never pages. Why: hetzner/edge/render.md, "Being told about a ban".
+    '      - alert: EdgeBanIssued',
+    '        expr: sum by (reason) (cs_active_decisions{action="ban"}) > 0',
+    '        labels:',
+    '          severity: page',
+    '        annotations:',
+    '          summary: "The edge is banning {{ $value }} address(es), by {{ $labels.reason }}."',
+    '          description: >-',
+    '            A banned address gets 403 from every site on edge1 until the ban',
+    '            ends (10 minutes for a first ban, up to 4 hours for a repeat).',
+    '            If it is you: from a network that is not banned, or over SSH to',
+    '            edge1, `cscli decisions list` shows the ban and',
+    '            `cscli decisions delete --ip ADDRESS` lifts it. The reason is the',
+    '            CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says',
+    '            what each one reads.',
+    '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',
     '        for: 24h',

@@ -24,6 +24,16 @@ cscli:
 crowdsec_service:
   acquisition_dir: /etc/crowdsec-acquis.d
 
+# The rendered ban ladder and watch-only list (hetzner/edge/render.md, "Ban
+# length and watch-only scenarios"), mounted read-only at /etc/crowdsec-remediation
+# by compose.yml. They replace the image's profiles.yaml (a flat four-hour ban)
+# and simulation.yaml (nothing simulated), which stay in the config volume unread.
+config_paths:
+  simulation_path: /etc/crowdsec-remediation/simulation.yaml
+api:
+  server:
+    profiles_path: /etc/crowdsec-remediation/profiles.yaml
+
 # The alerts and decisions CrowdSec stores in its database hold client
 # addresses with the scenario and a timestamp. They are flushed after 30 days,
 # the same figure as the edge's log retention: change one, change the other
