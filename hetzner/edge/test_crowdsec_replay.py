@@ -321,7 +321,7 @@ def go_duration_minutes(text: str) -> float:
     return total
 
 
-def run_cases(stack: "Stack", cases: Sequence[Case]) -> dict[str, list[int]]:
+def run_cases(stack: Stack, cases: Sequence[Case]) -> dict[str, list[int]]:
     """Play every case at the stack; returns the AppSec status of each request, by case."""
     statuses: dict[str, list[int]] = {}
     for case in cases:
@@ -334,7 +334,7 @@ def run_cases(stack: "Stack", cases: Sequence[Case]) -> dict[str, list[int]]:
     return statuses
 
 
-def await_verdicts(stack: "Stack", cases: Sequence[Case]) -> dict[str, list[str]]:
+def await_verdicts(stack: Stack, cases: Sequence[Case]) -> dict[str, list[str]]:
     """Wait until every expected ban and every expected watched alert has landed,
     then a little longer for anything not expected; returns the enforced bans."""
     expected = {case.ip for case in cases if case.banned}
@@ -872,7 +872,10 @@ class FailedGhostSignInsAreBannedAndTheOwnersAreNot(unittest.TestCase):
 NEXTCLOUD_HOST = "cloud.branchleft.co.uk"
 TALK_ROOM = "k7v3qz9p"
 NC_USER = "owner"
-OWN_HOST_IP = "10.20.1.50"  # ops1, on the never-ban list
+# ops1. A private address: the hub's crowdsecurity/whitelists parser, which the
+# image installs, drops it before any scenario (render.md, "Our own hosts are
+# never banned"). This case fails if that whitelist ever stops loading.
+OWN_HOST_IP = "10.20.1.50"
 FIRST_RUNG_MINUTES = 10
 SECOND_RUNG_MINUTES = 30
 ADMIN_PROBING = "crowdsecurity/http-admin-interface-probing"
@@ -1109,6 +1112,22 @@ LOCKOUT_CASES: tuple[Case, ...] = (
         banned=True,
         appsec=known_exploits(NEXTCLOUD_HOST),
     ),
+    # --- The Core Rule Set alone: recorded, never banned, never paged. ---
+    Case(
+        "probe: SQL injection on the Nextcloud hostname, Core Rule Set only",
+        "203.0.113.63",
+        banned=False,
+        watched=True,
+        appsec=tuple(
+            AppsecRequest(
+                "GET",
+                NEXTCLOUD_HOST,
+                f"/index.php/apps/files/?dir=1%27%20OR%20%271%27%3D%27{index}",
+                browser_headers(NEXTCLOUD_HOST, "*/*", "empty"),
+            )
+            for index in range(REPEATS)
+        ),
+    ),
     # --- The ban ladder. ---
     Case(
         "ladder: a first ban is the first rung",
@@ -1228,9 +1247,22 @@ class TheLockoutsDoNotRecurAndAttacksStillBan(unittest.TestCase):
             f"{minutes}\n{self._explain(case)}",
         )
 
+    def test_the_core_rule_set_alone_is_recorded_and_bans_none(self) -> None:
+        case = case_named("probe: SQL injection on the Nextcloud hostname")
+        explanation = self._explain(case)
+        print(explanation)
+        self.assertIn(OUT_OF_BAND_SCENARIO, self.stack.alerted(case.ip), explanation)
+        self.assertNotIn(case.ip, self.bans, explanation)
+
     def test_the_paging_metric_counts_real_bans_and_not_watched_ones(self) -> None:
         # The page rule reads cs_active_decisions{action="ban"} by reason
-        # (hetzner/monitoring/render.ts, EdgeBanIssued).
+        # (hetzner/monitoring/render.ts, EdgeBanIssued). The watched case above
+        # makes an out-of-band decision in this stack, so the last assertion
+        # can fail: with the scenario enforcing, its series is above zero.
+        watched_case = case_named("probe: SQL injection on the Nextcloud hostname")
+        self.assertIn(
+            OUT_OF_BAND_SCENARIO, self.stack.alerted(watched_case.ip), self._explain(watched_case)
+        )
         series = [
             line
             for line in self.metrics.splitlines()
