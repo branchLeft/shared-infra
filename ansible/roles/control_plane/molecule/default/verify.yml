@@ -694,6 +694,160 @@
           loop_control:
             label: '{{ item }}'
 
+    # The access rules. A step after their delivery fails (the stack's unit does not exist on
+    # this instance, so enabling it fails), and the rules that were on disk must be back, the
+    # kept copy gone, and the database asked to reload on them. The stand-in answers the
+    # database reload with success, because the real script needs a database.
+    - name: Run the undo case with a stand-in for the docker command
+      vars:
+        verify_old_rules: "# rules that were in force before this run\nlocal all all peer\n"
+        verify_rules_path: '{{ verify_project_dir }}/postgres/pg_hba.conf'
+      block:
+        - name: Create the stand-in's directory
+          ansible.builtin.file:
+            path: /var/lib/docker-stub
+            state: directory
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Install the stand-in for the docker command
+          ansible.builtin.copy:
+            content: |
+              #!/bin/sh
+              printf '%s\n' "$*" >> /var/lib/docker-stub/calls
+              case "$1" in
+                ps) cat /var/lib/docker-stub/ps ;;
+                inspect) cat /var/lib/docker-stub/inspect ;;
+                exec) cat > /dev/null ;;
+                *) echo "unexpected docker call: $*" >&2; exit 1 ;;
+              esac
+            dest: /usr/local/bin/docker
+            owner: root
+            group: root
+            mode: '0755'
+
+        - name: Say what the running stack looks like
+          ansible.builtin.copy:
+            content: '{{ item.content }}'
+            dest: '/var/lib/docker-stub/{{ item.name }}'
+            owner: root
+            group: root
+            mode: '0644'
+          loop:
+            - name: ps
+              content: "0123456789ab\n"
+            - name: inspect
+              content: "{{ verify_running_image }}\n"
+            - name: calls
+              content: ''
+          loop_control:
+            label: '{{ item.name }}'
+
+        - name: Look for a kept copy of the rules left by the runs so far
+          ansible.builtin.find:
+            paths: '{{ verify_project_dir }}/postgres'
+            patterns: 'pg_hba.conf.*'
+          register: control_plane_verify_kept_before
+
+        - name: Assert the runs so far, which changed the rules or left them, kept no copy
+          ansible.builtin.assert:
+            that:
+              - control_plane_verify_kept_before.matched == 0
+            quiet: true
+            fail_msg: A kept copy of the access rules was left behind by a run that went through.
+
+        - name: Put other rules on disk, as the rules in force before a run that changes them
+          ansible.builtin.copy:
+            content: '{{ verify_old_rules }}'
+            dest: '{{ verify_rules_path }}'
+            owner: root
+            group: root
+            mode: '0644'
+
+        - name: Run the role with the units switched on, where a step after the delivery fails
+          block:
+            - name: Apply the role
+              ansible.builtin.include_role:
+                name: branchleft.control_plane
+              vars:
+                control_plane_start_units: true
+                # The preflight reads the host through Docker's data root, which the stand-in
+                # does not answer. It runs before the delivery and is not what this case tests.
+                control_plane_preflight_reads_host: false
+            - name: Fail if the role went on
+              ansible.builtin.fail:
+                msg: The role went on although the stack's unit does not exist.
+          rescue:
+            - name: Record the message the run stopped with
+              ansible.builtin.set_fact:
+                control_plane_verify_message: '{{ ansible_failed_result.msg | default("") }}'
+
+        - name: Read the rules on disk after the failed run
+          ansible.builtin.slurp:
+            src: '{{ verify_rules_path }}'
+          register: control_plane_verify_rules_after
+          no_log: true
+
+        - name: Look for a kept copy of the rules after the failed run
+          ansible.builtin.find:
+            paths: '{{ verify_project_dir }}/postgres'
+            patterns: 'pg_hba.conf.*'
+          register: control_plane_verify_kept_after
+
+        - name: Read what the stand-in was asked
+          ansible.builtin.slurp:
+            src: /var/lib/docker-stub/calls
+          register: control_plane_verify_undo_calls
+
+        - name: Assert the rules that were on disk are back, no copy is left and the reload was asked for
+          ansible.builtin.assert:
+            that:
+              - "control_plane_verify_message.startswith('control_plane[hba-undone]: ')"
+              - (control_plane_verify_rules_after.content | ansible.builtin.b64decode) == verify_old_rules
+              - control_plane_verify_kept_after.matched == 0
+              - "'exec --interactive control-plane-db-1 sh -s' in (control_plane_verify_undo_calls.content | ansible.builtin.b64decode)"
+            quiet: true
+            fail_msg: >-
+              A failed step after the delivery left the delivered access rules on disk, left a kept copy,
+              or asked for no reload: {{ control_plane_verify_message | truncate(200) }}
+
+        # The run that goes through, over the old rules: it delivers the repository's rules,
+        # keeps the old ones for the length of the run, and leaves no copy behind.
+        - name: Apply the role again, which delivers the repository's rules over the old ones
+          ansible.builtin.include_role:
+            name: branchleft.control_plane
+
+        - name: Read the rules on disk after the run that went through
+          ansible.builtin.slurp:
+            src: '{{ verify_rules_path }}'
+          register: control_plane_verify_rules_final
+          no_log: true
+
+        - name: Look for a kept copy of the rules after the run that went through
+          ansible.builtin.find:
+            paths: '{{ verify_project_dir }}/postgres'
+            patterns: 'pg_hba.conf.*'
+          register: control_plane_verify_kept_final
+
+        - name: Assert the repository's rules are on disk and no kept copy is left
+          ansible.builtin.assert:
+            that:
+              - (control_plane_verify_rules_final.content | ansible.builtin.b64decode) == control_plane_verify_sources['postgres/pg_hba.conf']
+              - control_plane_verify_kept_final.matched == 0
+            quiet: true
+            fail_msg: The run that went through did not leave the repository's access rules on disk with no kept copy.
+      always:
+        - name: Remove the stand-in for the docker command
+          ansible.builtin.file:
+            path: '{{ item }}'
+            state: absent
+          loop:
+            - /usr/local/bin/docker
+            - /var/lib/docker-stub
+          loop_control:
+            label: '{{ item }}'
+
     - name: Read the isolation reconciler and its unit on the instance
       ansible.builtin.slurp:
         src: '{{ item }}'

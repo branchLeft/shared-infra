@@ -83,9 +83,22 @@ hand step:
    password is read from the container's own environment, so the role holds no secret and
    no value is in an argument. A file that does not parse fails the apply and the server
    keeps the rules it holds.
+4. The copy of the file and the steps after it (the bring-up, the deploy wrapper, the unit
+   check and the reload) form one block. The copy is made with Ansible's own backup, which
+   keeps the file it replaces, beside it in `postgres/`, only when the new file differs. If
+   any step of the block fails, the rescue copies that file back, reloads the database on
+   it, removes the kept copy and then fails the apply with `control_plane[hba-undone]`. So
+   the file on disk is the one the server holds, and the next start of the database reads a
+   file that loads. When the block goes through, its last task removes the kept copy. A run
+   that changes nothing makes no kept copy, so a second apply of one commit reports zero
+   changes. A first deploy has no file to keep: nothing is put back there, and the apply
+   still fails.
 
 The reload runs on every apply, not only when the file changed, so a run interrupted after
-the copy is finished by the next one.
+the copy is finished by the next one. A run killed inside the block never reaches the rescue:
+its kept copy stays in `postgres/` (the server reads only `pg_hba.conf`, so it does no harm)
+and the delivered file stays on disk. The next run copies again; if the file is by then the
+same, no new copy is made and the reload decides, as it did before the block.
 
 **The first apply after the directory mount ships** is the one that recreates the `db`
 container: the compose file's mount line changed, so Compose recreates it once, on the new
