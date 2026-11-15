@@ -977,7 +977,9 @@ class MainTests(unittest.TestCase):
         )
 
     def test_invalid_input_exits_one_without_touching_the_host(self):
-        self.assertEqual(bd.main(["branchleft-deploy", "../edge", VALID_IMAGE]), 1)
+        self.assertEqual(
+            bd.main(["branchleft-deploy", "../edge", VALID_IMAGE], log=lambda *args: None), 1
+        )
 
     def test_slot_mode_deploys_the_slots_stack_with_the_image_from_stdin(self):
         # The binding itself, asserted positively. Every other slot test here
@@ -1026,7 +1028,8 @@ class MainTests(unittest.TestCase):
         # blocking on a read it will never use is the wrong way to say so.
         stdin = io.StringIO(f"{VALID_IMAGE}\n")
         self.assertEqual(
-            bd.main(["branchleft-deploy", "--slot", "../edge"], stdin=stdin), 1
+            bd.main(["branchleft-deploy", "--slot", "../edge"], stdin=stdin, log=lambda *args: None),
+            1,
         )
         self.assertEqual(stdin.tell(), 0)
 
@@ -1035,6 +1038,7 @@ class MainTests(unittest.TestCase):
             bd.main(
                 ["branchleft-deploy", "--slot", "blog"],
                 stdin=io.StringIO(f"other-tenant {VALID_IMAGE}\n"),
+                log=lambda *args: None,
             ),
             1,
         )
@@ -1044,7 +1048,12 @@ class MainTests(unittest.TestCase):
         # No compose file exists for this stack, so the failure is the expected
         # one; what matters is that stdin was never consulted to produce it.
         self.assertEqual(
-            bd.main(["branchleft-deploy", "no-such-stack", VALID_IMAGE], stdin=stdin), 1
+            bd.main(
+                ["branchleft-deploy", "no-such-stack", VALID_IMAGE],
+                stdin=stdin,
+                log=lambda *args: None,
+            ),
+            1,
         )
         self.assertEqual(stdin.tell(), 0)
 
@@ -1087,6 +1096,65 @@ class MainTests(unittest.TestCase):
         self.assertEqual(calls, [{}])
         self.assertIn(bd.LOCK_TIMEOUT_ENV_VAR, stderr.getvalue())
         self.assertIn("not-a-number", stderr.getvalue())
+
+
+class JournalLineTests(unittest.TestCase):
+    """A refused deploy leaves one line in the host journal, whoever hid the caller's stderr."""
+
+    def _refuse(self):
+        def refusing(stack_name, image, **kwargs):
+            raise bd.DeployError(f"{image} is not attested by the signing workflow")
+
+        return refusing
+
+    def test_a_refusal_writes_one_journal_line_naming_the_stack_and_the_reason(self):
+        calls = []
+
+        def recorded(command, **kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0)
+
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = bd.main(
+                ["branchleft-deploy", "tenant-x", VALID_IMAGE],
+                deploy=self._refuse(),
+                log=lambda stack, error: bd.log_refusal(stack, error, run=recorded),
+            )
+        self.assertEqual(code, 1)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0][:3], ["logger", "-t", bd.JOURNAL_TAG])
+        self.assertIn("tenant-x", calls[0][3])
+        self.assertIn("refused", calls[0][3])
+        self.assertIn("is not attested by", calls[0][3])
+        self.assertIn("is not attested by", stderr.getvalue())
+
+    def test_a_deploy_that_succeeds_writes_no_journal_line(self):
+        logged = []
+        code = bd.main(
+            ["branchleft-deploy", "tenant-x", VALID_IMAGE],
+            deploy=lambda stack, image, **kwargs: None,
+            log=lambda *args: logged.append(args),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(logged, [])
+
+    def test_a_usage_error_writes_no_journal_line(self):
+        logged = []
+        self.assertEqual(bd.main(["branchleft-deploy"], log=lambda *args: logged.append(args)), 2)
+        self.assertEqual(logged, [])
+
+    def test_a_host_with_no_logger_still_refuses_the_same_way(self):
+        def missing(command, **kwargs):
+            raise FileNotFoundError(command[0])
+
+        with contextlib.redirect_stderr(io.StringIO()):
+            code = bd.main(
+                ["branchleft-deploy", "tenant-x", VALID_IMAGE],
+                deploy=self._refuse(),
+                log=lambda stack, error: bd.log_refusal(stack, error, run=missing),
+            )
+        self.assertEqual(code, 1)
 
 
 class ResolvesImageFromEnvTests(unittest.TestCase):

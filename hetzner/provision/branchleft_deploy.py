@@ -895,7 +895,28 @@ def read_slot_image(stream, *, limit: int = SLOT_STDIN_LIMIT) -> str:
 LOCK_TIMEOUT_ENV_VAR = "BRANCHLEFT_DEPLOY_LOCK_TIMEOUT"
 
 
-def main(argv: list[str], *, stdin=None, deploy=deploy) -> int:
+# The syslog tag of the journal line below. See branchleft_deploy.md, "Journal line".
+JOURNAL_TAG = "branchleft-deploy"
+
+
+def log_refusal(stack: str, error: DeployError, *, run=subprocess.run) -> None:
+    """Write a refused or failed deploy to the host journal, under JOURNAL_TAG.
+
+    The reason otherwise reaches only the caller's stderr, which a caller may hide. Logging
+    must never change the outcome, so a missing `logger` is ignored. The message holds the
+    stack name and the error's own text: no pin, secret or credential.
+    """
+    try:
+        run(
+            ["logger", "-t", JOURNAL_TAG, f"{stack!r}: refused: {error}"],
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
+
+
+def main(argv: list[str], *, stdin=None, deploy=deploy, log=log_refusal) -> int:
     usage = (
         "usage: branchleft-deploy <stack> <image@sha256:...>\n"
         f"       branchleft-deploy {SLOT_FLAG} <stack>   (image read from stdin)"
@@ -929,6 +950,7 @@ def main(argv: list[str], *, stdin=None, deploy=deploy) -> int:
         deploy(stack, image, **deploy_kwargs)
     except DeployError as error:
         print(f"branchleft-deploy: {error}", file=sys.stderr)
+        log(stack, error)
         return 1
     print(f"branchleft-deploy: {stack} now pinned to {image}")
     return 0

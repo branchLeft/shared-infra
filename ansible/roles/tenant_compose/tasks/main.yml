@@ -1,6 +1,10 @@
 ---
 # Order: everything that can refuse runs first, over every stack, and the role writes
 # nothing until all of it has passed. A refusal then leaves the host exactly as it was.
+# One refusal comes later, by design: the deploy wrapper verifies a new tenant's image
+# attestation when it is asked for that tenant's first pin (tasks/_stack.yml). By then that
+# tenant's directory, volumes, compose file and secrets are in place, but it has no pin, so its
+# unit cannot start, and no stack is restarted by the refusal.
 # After that the spool is delivered, because the tenants' per-uid networks belong to the
 # spool's stack and must exist before a tenant's first start, and then each tenant.
 #
@@ -140,6 +144,39 @@
     tenant_compose_spool_refusals: '{{ tenant_compose_spool_verdict.refusals | default([]) }}'
     tenant_compose_tenant_refusals: "{{ tenant_compose_verdicts.results | map(attribute='refusals') | flatten }}"
     tenant_compose_refusals: '{{ tenant_compose_spool_refusals + tenant_compose_tenant_refusals }}'
+
+# The deploy wrapper verifies an image's attestation only when its register lists the image,
+# so a tenant's image must be the one tenant image it lists. Read from the verdicts' pins,
+# before anything is written. The test is hidden (no_log): the secret check follows the
+# verdicts, which carry a stamp derived from the secrets. So the rescue names the tenants from
+# the stacks' own pin text (not the verdicts): a pin the module accepts with blank lines
+# around it is listed too, which only names one more tenant than the test refused.
+- name: Refuse a tenant image the deploy wrapper would not verify, before anything is written
+  block:
+    - name: Judge that every tenant's image is the tenant image
+      ansible.builtin.assert:
+        that:
+          - tenant_compose_unverifiable | length == 0
+        quiet: true
+      no_log: true
+      vars:
+        tenant_compose_unverifiable: >-
+          {{ tenant_compose_verdicts.results
+          | rejectattr('image_env', 'match', tenant_compose_tenant_image_pattern)
+          | map(attribute='slug') | list }}
+  rescue:
+    - name: Say that a tenant image is not the one the deploy wrapper verifies
+      ansible.builtin.fail:
+        msg: >-
+          Refused, and nothing was written: the image pin of {{ tenant_compose_pin_suspects | join(', ') }} is not
+          the tenant image pinned by digest (tenant_compose_tenant_image_pattern), the one tenant image the deploy
+          wrapper verifies.
+      vars:
+        tenant_compose_pin_suspects: >-
+          {{ (tenant_compose_stacks | map(attribute='slug'))
+          | zip(tenant_compose_stacks | map(attribute='image_env_text'))
+          | rejectattr('1', 'match', tenant_compose_tenant_image_pattern)
+          | map(attribute='0') | list }}
 
 # ----- The deliveries -----
 
