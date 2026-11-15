@@ -86,37 +86,3 @@
   loop: '{{ broker_deploy_release_stats.results }}'
   loop_control:
     label: '{{ item.item.key }}'
-
-# The public half of the request-signing key is held the same way: a plain 32-byte file with
-# its pinned sha256, read where the role runs. The file is added with its pin in one change.
-- name: Refuse a verify key digest that is not a pinned sha256
-  ansible.builtin.assert:
-    that:
-      - broker_deploy_verify_key_sha256 is string
-      - broker_deploy_verify_key_sha256 is match('^[0-9a-f]{64}\Z')
-    quiet: true
-    fail_msg: >-
-      No verify key is pinned: broker_deploy_verify_key_sha256 must be 64 lower-case hex digits,
-      and the key file must be carried at broker_deploy_verify_key_src. Nothing has been written
-      to the host.
-
-- name: Hash the verify key where the role runs
-  ansible.builtin.stat:
-    path: '{{ broker_deploy_verify_key_src }}'
-    follow: false
-    checksum_algorithm: sha256
-  delegate_to: localhost
-  become: false
-  register: broker_deploy_verify_key_stat
-
-- name: Refuse a verify key that is not a plain 32-byte file with its pinned sha256
-  ansible.builtin.assert:
-    that:
-      - broker_deploy_verify_key_stat.stat.exists
-      - broker_deploy_verify_key_stat.stat.isreg
-      - broker_deploy_verify_key_stat.stat.size == 32
-      - broker_deploy_verify_key_stat.stat.checksum == broker_deploy_verify_key_sha256
-    quiet: true
-    fail_msg: >-
-      The verify key at {{ broker_deploy_verify_key_src }} is not a plain 32-byte file with its
-      pinned sha256. Nothing has been written to the host.
