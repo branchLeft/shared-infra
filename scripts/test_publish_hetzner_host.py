@@ -20,12 +20,12 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 WORKFLOW = WORKFLOWS / "publish-hetzner-host.yml"
 
 ATTEST_ACTION = "branchLeft/github-workflows/.github/actions/attest-npm-tarball"
-ATTEST_SHA = "2c34b90b367fd160bb01d311d29224d250460086"
+ATTEST_SHA = "231e592397f4c94668c64646c14160d9d497bdde"
 ATTEST_USES = re.compile(
     rf"^\s*uses:\s*{re.escape(ATTEST_ACTION)}@(?P<ref>\S+)\s*(?P<comment>#.*)?$",
     re.MULTILINE,
 )
-PINNED_COMMENT = re.compile(r"^#\s*v1\.2\.1\s*$")
+PINNED_COMMENT = re.compile(r"^#\s*v1\.2\.2\s*$")
 JOB = "publish"
 JOB_PERMISSIONS = {
     "contents": "read",
@@ -106,7 +106,7 @@ def problems(text: str, *, other_workflows: dict[str, str] | None = None) -> lis
         or not PINNED_COMMENT.match(lines[0][1] or "")
     ):
         found.append(
-            f"the attest step must be pinned to {ATTEST_SHA} with a `# v1.2.1` comment, found {lines}"
+            f"the attest step must be pinned to {ATTEST_SHA} with a `# v1.2.2` comment, found {lines}"
         )
     if step.get("with") != ATTEST_WITH:
         found.append(
@@ -190,12 +190,12 @@ class PublishHetznerHostSabotageTests(unittest.TestCase):
 
     def test_a_tag_instead_of_a_sha_is_red(self) -> None:
         self.assert_red(
-            self.mutate(f"@{ATTEST_SHA} # v1.2.1", "@v1.2.0"), "must be pinned"
+            self.mutate(f"@{ATTEST_SHA} # v1.2.2", "@v1.2.0"), "must be pinned"
         )
 
     def test_a_sha_with_no_version_comment_is_red(self) -> None:
         self.assert_red(
-            self.mutate(f"@{ATTEST_SHA} # v1.2.1", f"@{ATTEST_SHA}"), "must be pinned"
+            self.mutate(f"@{ATTEST_SHA} # v1.2.2", f"@{ATTEST_SHA}"), "must be pinned"
         )
 
     def test_dropping_id_token_is_red(self) -> None:
