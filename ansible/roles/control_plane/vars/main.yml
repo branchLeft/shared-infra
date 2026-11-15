@@ -80,6 +80,16 @@ control_plane_stack_files:
   - compose.init.yml
   - postgres/pg_hba.conf
 
+# The database's access rules, as a path below the project directory. The role delivers them
+# on their own, inside the block that can undo the delivery, and not in the loop of the
+# other stack files.
+control_plane_hba_file: postgres/pg_hba.conf
+
+# The files of the stack that the block delivers itself, so the loop of the other files leaves
+# them out. A unit test pins it to the access rules above.
+control_plane_stack_files_in_block:
+  - postgres/pg_hba.conf
+
 # The subdirectories of the project directory that hold the files above. The role makes
 # them before it copies. The database's access rules sit alone in `postgres`, because the
 # compose file mounts that whole directory into the db container (and not the single file:

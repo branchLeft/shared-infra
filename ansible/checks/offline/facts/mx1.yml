@@ -2,3 +2,4 @@
 architecture: x86_64
 distribution_release: trixie
 packages: {}
+services: {}

@@ -13,6 +13,7 @@
       tenant-a: "{{ tenant_compose_scenario_start_lines | select('match', '^tenant-a ') | list | length }}"
       tenant-b: "{{ tenant_compose_scenario_start_lines | select('match', '^tenant-b ') | list | length }}"
       tenant-c: "{{ tenant_compose_scenario_start_lines | select('match', '^tenant-c ') | list | length }}"
+      tenant-d: "{{ tenant_compose_scenario_start_lines | select('match', '^tenant-d ') | list | length }}"
       mail-spool: "{{ tenant_compose_scenario_start_lines | select('match', '^mail-spool ') | list | length }}"
   vars:
     tenant_compose_scenario_start_lines: "{{ ((tenant_compose_scenario_starts_raw.content | default('')) | b64decode).splitlines() }}"

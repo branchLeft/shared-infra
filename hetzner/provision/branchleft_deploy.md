@@ -221,11 +221,22 @@ ghost-platform's `scripts/verify-image-attestation.sh`, always with
 It fails closed. A missing verifier, an unknown digest, an unsigned image and
 an image signed by another workflow are all refused, and each refusal leaves
 the pin file and the running stack as they were. There is no argument,
-environment variable or stack setting that skips it. An image name outside the
-register is not verified here, so the other images on this host deploy as
-before. The register holds `ghcr.io/branchleft/ghost-tenant`,
-`ghcr.io/branchleft/portal-apps` and `ghcr.io/branchleft/percona-server` (the
-database image of `db-t1`, signed by the Percona image workflow).
+environment variable or stack setting that skips it.
+
+An image name outside the register is refused, not passed unverified, unless
+`UNATTESTED_STACK_IMAGES` names it for that stack. That table is the reviewed
+exemption list: each stack that pins through this wrapper today, with the one
+image name it runs and no workflow attests yet (`website`, `publicpress-website`,
+`edge`, `db`, `mail-spool`). `dbt1` is not listed: its image, percona-server, is in
+the register, so it is verified. It is keyed by stack as well as by name, so an exemption
+does not open the other stacks: a tenant slot key cannot pin the edge image, and
+cannot pin `attacker.example/evil@sha256:...`. A registered image deploys on any
+stack (the register holds `ghcr.io/branchleft/ghost-tenant`,
+`ghcr.io/branchleft/portal-apps` and `ghcr.io/branchleft/percona-server`, the
+database image of `db-t1`, signed by the Percona image workflow). Exempt images skip the verifier; adding
+an entry is a reviewed diff, and the way to remove one is to register the image
+in `ATTESTED_IMAGES`. A new stack or image is refused until one of the two tables
+names it.
 
 The register is looked up by registry host and path alone (`attested_name`). A
 tag or a registry port on the reference is a spelling, not another image: the
@@ -396,3 +407,16 @@ It does NOT reach the CI deploy account's sudo invocation: sudo's env_reset
 strips it unless the sudoers drop-in adds it to env_keep, which is a
 separate, deliberate change to a privileged file, not a side effect of
 this one.
+
+## Journal line
+
+A deploy that raises `DeployError` is also written to the host's journal, as one line under the
+tag `branchleft-deploy`: the stack name, the word `refused`, and the error's own text (the same
+words as stderr). A caller that hides the wrapper's output, such as the `tenant_compose` role
+(whose secret check requires `no_log`), points the operator at it:
+
+    journalctl -t branchleft-deploy -n 20 --no-pager
+
+The line holds no secret: the error text names the image reference and the signing
+workflow, which are public. Logging is best effort and never changes the exit status, so a host
+with no `logger` still refuses the same way. A successful deploy and a usage error write no line.

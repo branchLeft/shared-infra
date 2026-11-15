@@ -718,6 +718,26 @@ Stalwart's own listeners or ACME in any way. Three new artifacts under
   has no digest yet; it applies once a drain image's digest is added to the
   table — see "Handing the drain token to the collector" below.
 
+### Who can reach 8443
+
+`mail/firewall.ts` accepts tcp/8443 from two sources only, each read from the
+stack that names it and never typed:
+
+- app1's own public IPv4, from the application hosts stack's `app1PublicIpv4`
+  output (`branchLeft/ghost-platform`, `infra/hosts`). The caller is the blog's
+  Ghost on app1, which has its own public interface and so reaches mx1 from its
+  own address, not through edge1's NAT.
+- edge1's public IPv4, from the estate stack's `edge1PublicIpv4` output. edge1
+  runs the blackbox probe of this port and of the shim's certificate, and it is
+  the NAT of the estate's private-only hosts, so this also admits them, the
+  ops1 collector among them when it calls `GET /drain`.
+
+IPv4 only: Ghost runs in Docker on IPv4 networks. Port 80 stays open to all for
+ACME HTTP-01. Neither address is committed. If app1's primary IP changes, or
+edge1 is rebuilt onto a new address (`hetzner/RUNBOOK-estate-project-move.md`),
+re-apply the mail stack afterwards, or the blog's bulk mail, or the probe, is
+refused until it is.
+
 ### ACME coexistence
 
 Stalwart's ACME is TLS-ALPN-01 and owns port 443; Caddy's ACME is HTTP-01

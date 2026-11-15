@@ -86,19 +86,78 @@
   diff: false
   when: not (tenant_compose_is_spool | bool)
 
-# A tenant's pin is created once and never replaced: the deploy wrapper is the only writer
-# that advances it, so a run of this role can never roll an image back. The spool has no
-# `${IMAGE}`; its pin is derived from the digest in its compose file, so it is always
-# replaced with it.
-- name: Deliver the image pin
+# The spool has no `${IMAGE}`; its pin is derived from the digest in its compose file, so it
+# is always replaced with it. The deploy wrapper refuses a compose file that does not read
+# `${IMAGE}`, so the spool's pin is a copy.
+- name: Deliver the spool's image pin
   ansible.builtin.copy:
     content: '{{ tenant_compose_verdict.image_env }}'
     dest: '{{ tenant_compose_image_env_path }}'
     owner: root
     group: root
     mode: '0600'
-    force: '{{ tenant_compose_is_spool | bool }}'
   register: tenant_compose_image_delivery
+  # The pin is not a secret, but the secret check follows the verdict it comes from (it also carries
+  # the stamp derived from the secrets), so the task is hidden like the others (ANS-16).
+  no_log: true
+  diff: false
+  when: tenant_compose_is_spool | bool
+
+# A tenant's pin is written by the deploy wrapper alone, and this role never replaces one:
+# the wrapper is the only writer that advances it, so a run of this role can never roll an
+# image back. A tenant with no pin yet gets its first one from the wrapper below.
+- name: Look at the tenant's image pin
+  ansible.builtin.stat:
+    path: '{{ tenant_compose_image_env_path }}'
+    get_checksum: false
+  register: tenant_compose_pin
+  when: not (tenant_compose_is_spool | bool)
+
+- name: Work out whether the tenant's first deploy is due
+  ansible.builtin.set_fact:
+    tenant_compose_deploy_due: >-
+      {{ not (tenant_compose_is_spool | bool) and not (tenant_compose_pin.stat.exists | default(false)) }}
+
+# In check mode the deploy below is not run, so the plan says it in a line (ANS-10).
+- name: Say that this plan would deploy the tenant's first image through the deploy wrapper
+  ansible.builtin.debug:
+    msg: >-
+      {{ tenant_compose_deploy_program }} would verify the attestation of the image of
+      {{ tenant_compose_stack.slug }} in an apply, and only if it is attested write its pin and start
+      {{ tenant_compose_unit }}.
+  when:
+    - ansible_check_mode
+    - tenant_compose_deploy_due | bool
+
+# The wrapper verifies the image's attestation before it touches anything and refuses an
+# image that is not attested: then no pin is written, nothing is restarted, and the run
+# stops here. An attested image is pinned, and the unit is restarted under the stack's deploy
+# lock, its `up --wait` the health gate. A run that stops here records no stamp, and the next
+# run asks the wrapper again. The role runs as root under the pull, so no sudo is involved;
+# an argv list, so the digest is one argument.
+#
+# The command is hidden (no_log): the secret check follows the verdict its image comes from.
+# So a failure shows no wrapper output, and the rescue says what happened and where to read
+# the reason: the wrapper logs every refusal to the host's journal under its own tag (the
+# command below), and the line names the stack and the rule, never a secret.
+- name: Deploy the tenant's first image through the deploy wrapper, which verifies its attestation
+  when: tenant_compose_deploy_due | bool
+  block:
+    - name: Run the deploy wrapper for the tenant's first image
+      ansible.builtin.command:
+        argv:
+          - '{{ tenant_compose_deploy_program }}'
+          - '{{ tenant_compose_stack.slug }}'
+          - "{{ tenant_compose_verdict.image_env | regex_replace('^IMAGE=', '') | trim }}"
+      changed_when: true
+      no_log: true
+  rescue:
+    - name: Say that the deploy wrapper refused the tenant, and where its reason is
+      ansible.builtin.fail:
+        msg: >-
+          The deploy wrapper refused {{ tenant_compose_stack.slug }}. The reason is in the host's
+          journal: on the host, run `{{ tenant_compose_deploy_reason_command }}`. The tenant's first image was not
+          pinned or started and nothing is recorded as healthy, so the next run asks the wrapper again.
 
 - name: Enable the stack's unit
   ansible.builtin.systemd_service:
@@ -116,14 +175,17 @@
 # The stack is restarted when its content is not the content last recorded healthy, which
 # covers a first run, an edit and a run that failed before the stamp was written, and when
 # a delivery changed a file in this run, which covers a file edited by hand and put back.
+# A tenant's first deploy has just started the stack on the files delivered above, so it is
+# not restarted again.
 - name: Work out whether the stack must be restarted
   ansible.builtin.set_fact:
     tenant_compose_restart_needed: >-
-      {{ tenant_compose_compose_delivery is changed
+      {{ not (tenant_compose_deploy_due | bool)
+      and (tenant_compose_compose_delivery is changed
       or tenant_compose_secrets_delivery is changed
       or tenant_compose_image_delivery is changed
       or not (tenant_compose_recorded_stamp.stat.exists
-      and tenant_compose_recorded_stamp.stat.checksum == (tenant_compose_verdict.stamp | hash('sha256'))) }}
+      and tenant_compose_recorded_stamp.stat.checksum == (tenant_compose_verdict.stamp | hash('sha256')))) }}
   no_log: true
 
 - name: Say that this plan would restart the stack
@@ -153,12 +215,12 @@
   changed_when: true
   when: tenant_compose_restart_needed | bool
 
-# A plan that would restart the stack has no unit state to read yet, and says so above.
+# A plan that would restart the stack, or deploy it first, has no unit state to read yet, and says so above.
 - name: Read the stack's unit as systemd holds it
   ansible.builtin.systemd_service:
     name: '{{ tenant_compose_unit }}'
   register: tenant_compose_unit_state
-  when: not (ansible_check_mode and (tenant_compose_restart_needed | bool))
+  when: not (ansible_check_mode and ((tenant_compose_restart_needed | bool) or (tenant_compose_deploy_due | bool)))
 
 - name: Refuse a stack whose unit is not active
   ansible.builtin.assert:
@@ -168,7 +230,7 @@
     fail_msg: >-
       {{ tenant_compose_unit }} is {{ tenant_compose_unit_state.status.ActiveState }}, not active. Nothing is
       recorded as healthy, so the next run restarts it. A unit whose image pin file is missing is inactive, not failed.
-  when: not (ansible_check_mode and (tenant_compose_restart_needed | bool))
+  when: not (ansible_check_mode and ((tenant_compose_restart_needed | bool) or (tenant_compose_deploy_due | bool)))
 
 # Last, and only reached when the restart and the unit's state have passed: a run that
 # fails anywhere above leaves the old stamp. The stamp is derived from the secrets, so the
