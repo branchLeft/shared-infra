@@ -13,14 +13,35 @@
 
 # The destination is a loop item, so check_role_paths.py cannot compare it; a unit test holds
 # this list off every file the mail host's stack role owns.
-- name: Place the reconciler programs
+#
+# The programs are placed by two tasks that differ only in their loop and in the diff (ANS-16).
+# Some programs hold a line that reads to the plan's secret scan as a credential assignment (a
+# path to a credentials file, a variable named like one), and the scan would withhold the whole
+# plan of the host over it. They hold no secret value, and they live in mail/, which this role
+# cannot reword, so their diff is hidden: the owner's ruling (choice A on the plan-diff scan
+# issue) allows a hide where the match cannot be reworded, and the loop is split so that the
+# other programs keep a visible diff. ansible/checks/test_plan_diff_scan.py fails if a program
+# listed in mail_reconcilers_installed_hidden has no such line, or one left out of it has.
+- name: Place the reconciler programs whose diff the plan does not show
   ansible.builtin.copy:
     src: '{{ mail_reconcilers_programs_dir }}/{{ item.program }}'
     dest: '{{ mail_reconcilers_install_dir }}/{{ item.program }}'
     owner: root
     group: root
     mode: '{{ item.mode }}'
-  loop: '{{ mail_reconcilers_installed }}'
+  loop: "{{ mail_reconcilers_installed | selectattr('program', 'in', mail_reconcilers_installed_hidden) | list }}"
+  loop_control:
+    label: '{{ item.program }}'
+  diff: false
+
+- name: Place the other reconciler programs
+  ansible.builtin.copy:
+    src: '{{ mail_reconcilers_programs_dir }}/{{ item.program }}'
+    dest: '{{ mail_reconcilers_install_dir }}/{{ item.program }}'
+    owner: root
+    group: root
+    mode: '{{ item.mode }}'
+  loop: "{{ mail_reconcilers_installed | rejectattr('program', 'in', mail_reconcilers_installed_hidden) | list }}"
   loop_control:
     label: '{{ item.program }}'
 

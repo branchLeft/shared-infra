@@ -1,10 +1,15 @@
 ---
 # mx1: the logical name of the self-hosted mail host (HOST_NAME allows [a-z][a-z0-9]* only).
-# Under the gated pull. Three roles, in order: the Ansible toolchain the host runs this playbook
-# with, the trigger that runs it, then the host baseline (key-only sshd drop-in, unattended
-# upgrades, fail2ban and Docker CE). The baseline is the one the mail host's provisioning
-# scripts wrote by hand; the role writes the same bytes. The mail stack (mx1_stack and the
-# reconcilers) is not applied here: it stays hand-run until its own change enrols it.
+# Under the gated pull. Five roles, in order: the Ansible toolchain the host runs this playbook
+# with, the trigger that runs it, the host baseline (key-only sshd drop-in, unattended
+# upgrades, fail2ban and Docker CE), the mail host's two Compose projects, local resolver and
+# DNSBL check (mx1_stack, which needs the Docker the baseline installs), and last the mail
+# reconcilers (mail_reconcilers), which on this route only place their programs under
+# /root/mail-provision. The baseline is the one the mail host's provisioning scripts wrote by
+# hand; the role writes the same bytes. There is no owner_vars file for this host, so no step of
+# mail_reconcilers can be requested through the pull (R10): a plain apply is the only run it gets.
+# The first apply on a host that already runs mail is read in a plan before anything is approved;
+# mx1 is on the never-list, so it is the owner's to approve (mx1_stack README, "How it is delivered").
 #
 # The opt-out host_baseline_fail2ban_ignoreip_none is true for this host alone. Its play var is
 # pinned in HOST_PLAY_VARS in checks/check_enrolment.py, which R2 holds this play to exactly: the
@@ -13,7 +18,7 @@
 # 99- duplicate from the scripts; that duplicate is a known, accepted one.
 #
 # The host has no private inputs, so host_inputs is not applied and its row is absent from
-# checks/host_roles.yml beyond the baseline.
+# checks/host_roles.yml.
 #
 # The host's trigger runs this file on a signed checkout with the inventory `localhost,`,
 # which loads no group variables, so every value the roles read comes from vars_files and
@@ -40,3 +45,5 @@
         ansible_runtime_requirements_src: '{{ playbook_dir }}/../requirements.txt'
     - role: ../roles/pull_trigger # noqa: role-name[path]
     - role: ../roles/host_baseline # noqa: role-name[path]
+    - role: ../roles/mx1_stack # noqa: role-name[path]
+    - role: ../roles/mail_reconcilers # noqa: role-name[path]
