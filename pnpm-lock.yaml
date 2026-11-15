@@ -18,8 +18,8 @@ importers:
         specifier: ^26
         version: 26.6.6
       prettier:
-        specifier: ^3.10.0
-        version: 3.10.0
+        specifier: ^3.10.1
+        version: 3.10.1
       typescript:
         specifier: ^7.0.2
         version: 7.0.2
@@ -155,8 +155,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  prettier@3.10.0:
-    resolution: {integrity: sha512-mBi4765LgjO1PFjlEs7pUeK0nb1bw71c+N4/ItfeUWNdY5cV2pRKaFpbbFRYmDJMO+5ZwzGxHRqHxFZna7iv5w==}
+  prettier@3.10.1:
+    resolution: {integrity: sha512-70vp3ZUYoPlFbF9uiTdXHUUCGEIp7d4+6p+8DYbkm2jP7x/3i/paXVF6dopSI3zd/CEitrZN1rc4i85xWmmXlg==}
     engines: {node: '>=14'}
     hasBin: true
 
@@ -238,7 +238,7 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  prettier@3.10.0: {}
+  prettier@3.10.1: {}
 
   typescript@7.0.2:
     optionalDependencies:
