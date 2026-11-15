@@ -25,7 +25,7 @@ It is built from the `monitoring_stack` role and the patterns under `ansible/pat
 | `/var/lib/branchleft/broker-slots/admin-keys/`    | broker      | 0700                  | none                                                                         |
 | `/opt/branchleft/broker/releases/<version>/`      | root        | dirs 0755, files 0644 | the pinned release files, `broker_deploy_release_dir`                        |
 | `/opt/branchleft/broker/current` (link)           | root        | link                  | the release directory                                                        |
-| `/etc/branchleft/broker-verify-key.bin`           | root:broker | 0640                  | `broker_deploy_verify_key_src`                                               |
+| `/etc/branchleft/broker-verify-key.bin`           | root:broker | 0640                  | the 32 raw bytes of `files/broker-verify-key.hex`, held to a sha256          |
 | `/etc/branchleft/broker.env`                      | root        | 0600                  | `templates/broker.env.j2`, the shipped template with the slots-file line set |
 | `/etc/sudoers.d/branchleft-slot`                  | root        | 0440                  | `templates/branchleft-slot.sudoers.j2`, one literal line per invocation      |
 | `/etc/systemd/system/branchleft-broker.service`   | root        | 0644                  | `files/branchleft-broker.service`                                            |
@@ -79,13 +79,27 @@ nothing).
 
 ## Inputs
 
-The one input with no default must be given:
+Every input has a default, because a playbook entry for this role carries no variables. The
+release stays empty until the owner carries one, and the role refuses before it writes anything
+while it is.
 
-- `broker_deploy_verify_key_src`: a path on the controller to the 32-byte public
-  key.
-
-The release is `broker_deploy_release_version` (empty until one is carried), its digests are
-in `broker_deploy_release_pins`, and the files are in `broker_deploy_release_dir`.
+- The release is `broker_deploy_release_version` (empty until one is carried), its digests are
+  in `broker_deploy_release_pins`, and the files are in `broker_deploy_release_dir`.
+- The request-signing public key is the text file `files/broker-verify-key.hex` of this role
+  (`broker_deploy_verify_key_src`): its 64 lower-case hex digits spell the key's 32 bytes, and
+  those bytes are held to the sha256 in `broker_deploy_verify_key_sha256` (the owner's key,
+  carried). The key is text so that no binary file is tracked in the repository. The role
+  builds the 32 raw bytes from the hex where it runs (`vars/main.yml`) and writes those bytes to
+  `/etc/branchleft/broker-verify-key.bin`; it never writes the hex. It refuses, before anything
+  is written and in a plan too, a digest that is empty or malformed, a file that is missing or a
+  link, text that is not exactly 64 lower-case hex digits (one line feed after them is allowed),
+  and bytes that do not have the pinned digest. After the write it reads the host's file back
+  and refuses one that is not 32 bytes with that digest. Changing the key is one change that
+  replaces the file and the digest, and a test holds the file to the key's hex and to the
+  digest, so a key is chosen by a reviewed change. The private half stays with the owner and
+  never reaches the role. The file's place and the digest are role defaults, so a run-time `-e`
+  could point `broker_deploy_verify_key_src` at another key file and give its digest; the pull
+  route passes no `-e` of its own, and a run by hand with one is outside the signed route.
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) documents all of them. None
 of them is a secret. The private half of the key never reaches the role.
@@ -111,11 +125,12 @@ These stay with an owner, as the runbook already says:
 ## Tests
 
 The Molecule scenario in `molecule/default` runs the role in a systemd container
-against a stand-in release (`files/release/0.0.1`) and a zero-filled 32-byte key. Neither is
+against a stand-in release (`files/release/0.0.1`) and a zero-filled 32-byte key, carried as 64 hex digits. Neither is
 a broker artefact: the stand-in entry point only answers the status request. A test-only
 drop-in (`prepare.yml`) lifts the unit's sandbox, which an unprivileged container cannot
 provide, so the sandboxed start is not proven here. `verify.yml` reads the result back, and
-compares the unit and the verify key with their sources. It checks the delivered release's
+compares the unit with its source and reads the verify key back as 32 bytes with the pinned
+sha256, which is the digest of the 32 zero bytes the stand-in file spells. It checks the delivered release's
 owner and modes, that the unit is enabled and active, that the broker answers its status
 request, and that the start step leaves the process alone when nothing changed and replaces
 it when the release changed. It checks the environment file's owner, mode, slots-file line
@@ -127,8 +142,16 @@ moved into it: a release with a changed, missing, extra, hidden or linked file, 
 directory, or a version or a pin of the wrong shape is refused before anything is written, a
 plan writes nothing, an apply delivers and links once, the next run and the next plan change
 nothing, and a byte changed on the host shows in a plan and is put back. A contract test holds
-the pins' shape, the stand-in release to its pins, the readiness port to the environment
-file's, and the pin check ahead of any write.
+the pins' shape, the stand-in release to its pins, the carried key file to the owner's key (as
+hex, with no binary file left in the role), the stand-in key to its pin, the readiness port to
+the environment file's, and both pin checks ahead of any write.
+
+The same tests run the two verify key task files: the host gets the pinned bytes of the carried
+key, which are not text, and every byte value from 0 to 255 comes out as it went in; the key
+file with one hex digit changed, a pin of another key, a malformed pin, a file that is not
+exactly 64 lower-case hex digits, and a missing or linked file are each refused before the
+host's key is written, in a plan too; a plan writes nothing, the next run and plan change
+nothing, and a key changed on the host shows in a plan and is put back.
 
 The Node unpack is skipped in check mode: `unarchive` needs its destination to
 exist even then, and on a host the role has not touched the directory and the
@@ -136,10 +159,18 @@ download are only reported, not made.
 
 ## Known limits
 
-- The Node runtime is still downloaded from nodejs.org, so a host whose egress allows
-  the package mirrors only cannot run this role until the runtime has another source.
-- The verify key has no source in a pushed commit yet: `broker_deploy_verify_key_src` is
-  a path the caller supplies.
+- The Node runtime is downloaded from nodejs.org, over https on the default port, so a host's
+  egress must allow that one host besides the package mirrors, for this download alone. The
+  owner decided it: the pinned Node version, its sha256 as the get_url `checksum`, no other
+  host. The allowlist is the host's, not this repository's. The check that holds demo1's roles
+  to no fetch (`ansible/checks/test_demo1_no_github_fetch.py`) lets through this one `get_url`
+  and refuses any other: a download with no checksum, from another host (a suffix of
+  nodejs.org included, or GitHub), from another role or another file of this role, a second
+  `get_url` in `tasks/main.yml`, a second place that sets `broker_deploy_node_base_url`, or a
+  pin that is not a sha256. Changing the base url or the url shape is a change to that test.
+  The check reads this role's text; the host's own firewall is not read by it. A variable
+  passed at run time could still move the base url (the pull route passes none, and the
+  checksum must still match). A host that already has the pinned version skips the download.
 - The attestation is not verified by the role, only the pinned digests (see "How the
   release arrives").
 - The sandboxed start of the unit is proven by the broker's own boot test, not by this

@@ -26,6 +26,10 @@ DIGEST = re.compile(r"^[0-9a-f]{64}\Z")
 # template to it.
 TENANT_PLATFORM_ZONE = "sites.publicpress.co.uk"
 PLAIN_PATH = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
+# The broker's request-signing public key, as the owner published it, and the sha256 of its 32
+# raw bytes. Both are public. A change to either, or to the carried file, is a change of key.
+OWNER_VERIFY_KEY_HEX = "74a5954901b7cc2bc854628f6cf176bf0829145141343f3b6652f3284afb74cc"
+OWNER_VERIFY_KEY_SHA256 = "a001696bc4047c5a43ae774025e35352214a03a9b264e9d4382832777b6fad17"
 # Modules that only read, decide or refuse: a task of any other module is a write to the host.
 READ_ONLY_MODULES = frozenset(
     {
@@ -113,6 +117,36 @@ class Pins(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertEqual(self.options[name]["default"], self.defaults[name])
 
+    def test_the_spec_defaults_of_the_verify_key_are_the_defaults(self) -> None:
+        for name in ("broker_deploy_verify_key_src", "broker_deploy_verify_key_sha256"):
+            with self.subTest(name=name):
+                self.assertNotIn("required", self.options[name])
+                self.assertEqual(self.options[name]["default"], self.defaults[name])
+
+    def test_the_carried_verify_key_is_the_owners_key_as_hex_and_pinned(self) -> None:
+        carried = ROLE / "files" / "broker-verify-key.hex"
+        self.assertEqual(
+            self.defaults["broker_deploy_verify_key_src"],
+            "{{ role_path }}/files/broker-verify-key.hex",
+        )
+        self.assertTrue(carried.is_file() and not carried.is_symlink())
+        self.assertEqual(carried.read_text(encoding="ascii"), OWNER_VERIFY_KEY_HEX + "\n")
+        key = bytes.fromhex(OWNER_VERIFY_KEY_HEX)
+        self.assertEqual(len(key), 32)
+        self.assertEqual(hashlib.sha256(key).hexdigest(), OWNER_VERIFY_KEY_SHA256)
+        digest = cast("str", self.defaults["broker_deploy_verify_key_sha256"])
+        self.assertRegex(digest, DIGEST)
+        self.assertEqual(digest, OWNER_VERIFY_KEY_SHA256)
+        self.assertEqual(self.options["broker_deploy_verify_key_sha256"]["default"], digest)
+
+    def test_no_binary_file_is_carried_in_the_role(self) -> None:
+        """Every file under the role is text: a tracked binary breaks the repository's scans."""
+        for path in sorted(ROLE.rglob("*")):
+            if path.is_file() and "__pycache__" not in path.parts:
+                with self.subTest(path=str(path.relative_to(ROLE))):
+                    path.read_bytes().decode("utf-8")
+                    self.assertNotIn(b"\x00", path.read_bytes())
+
     def test_a_release_the_role_carries_is_pinned_exactly(self) -> None:
         carried = ROLE / "files" / "releases"
         if not carried.is_dir():
@@ -145,6 +179,30 @@ class MoleculeRelease(unittest.TestCase):
         for path, digest in pins.items():
             with self.subTest(path=path):
                 self.assertEqual(sha256(release / path), digest)
+
+    def test_the_converge_pins_the_stand_in_key(self) -> None:
+        converge = cast("list[dict[str, object]]", load(SHARDS / "converge.yml"))
+        play_vars = cast("dict[str, object]", converge[0]["vars"])
+        key = SHARDS / "files" / "verify-key-stand-in.hex"
+        self.assertEqual(
+            play_vars["broker_deploy_verify_key_src"], "{{ playbook_dir }}/files/" + key.name
+        )
+        text = key.read_text(encoding="ascii")
+        self.assertRegex(text, r"^[0-9a-f]{64}\n\Z")
+        raw = bytes.fromhex(text.strip())
+        self.assertEqual(raw, b"\x00" * 32)
+        self.assertEqual(
+            play_vars["broker_deploy_verify_key_sha256"], hashlib.sha256(raw).hexdigest()
+        )
+
+    def test_the_verify_step_checks_the_pin_the_converge_sets(self) -> None:
+        converge = cast("list[dict[str, object]]", load(SHARDS / "converge.yml"))
+        converged = cast("dict[str, object]", converge[0]["vars"])[
+            "broker_deploy_verify_key_sha256"
+        ]
+        verify = cast("list[dict[str, object]]", load(SHARDS / "verify.yml"))
+        verified = cast("dict[str, object]", verify[0]["vars"])["verify_key_pinned_sha256"]
+        self.assertEqual(verified, converged)
 
 
 class Agreements(unittest.TestCase):
@@ -186,11 +244,40 @@ class Order(unittest.TestCase):
             with self.subTest(task=task.get("name")):
                 self.assertTrue(modules <= READ_ONLY_MODULES, f"{task.get('name')} writes first")
 
-    def test_the_pin_check_reads_and_refuses_and_writes_nothing(self) -> None:
-        for task in tasks(ROLE / "tasks" / "_release_pin.yml"):
-            modules = {key for key in task if key.startswith("ansible.builtin.")}
-            with self.subTest(task=task.get("name")):
-                self.assertTrue(modules <= READ_ONLY_MODULES)
+    def test_the_pin_checks_read_and_refuse_and_write_nothing(self) -> None:
+        for name in ("_release_pin.yml", "_verify_key_pin.yml"):
+            for task in tasks(ROLE / "tasks" / name):
+                modules = {key for key in task if key.startswith("ansible.builtin.")}
+                with self.subTest(file=name, task=task.get("name")):
+                    self.assertTrue(modules <= READ_ONLY_MODULES)
+
+    def test_the_verify_key_is_held_to_its_pin_before_anything_is_written(self) -> None:
+        main = tasks(ROLE / "tasks" / "main.yml")
+        names = [task.get("name") for task in main]
+        at = names.index("Hold the verify key to its pinned sha256")
+        self.assertEqual(main[at].get("ansible.builtin.include_tasks"), "_verify_key_pin.yml")
+        first_write = next(
+            index
+            for index, task in enumerate(main)
+            if {key for key in task if key.startswith("ansible.builtin.")} - READ_ONLY_MODULES
+        )
+        self.assertLess(at, first_write)
+
+    def test_the_key_is_installed_from_the_bytes_the_pin_checked(self) -> None:
+        install = tasks(ROLE / "tasks" / "_verify_key.yml")
+        copy = cast("dict[str, str]", install[0]["ansible.builtin.copy"])
+        self.assertEqual(copy["content"], "{{ broker_deploy_verify_key_bytes }}")
+        self.assertNotIn("src", copy)
+        self.assertEqual(install[0]["register"], "broker_deploy_key_result")
+        checked = " ".join(
+            str(task)
+            for task in tasks(ROLE / "tasks" / "_verify_key_pin.yml")
+            if "ansible.builtin.assert" in task
+        )
+        pinned = (
+            "broker_deploy_verify_key_bytes | hash('sha256') == broker_deploy_verify_key_sha256"
+        )
+        self.assertIn(pinned, checked)
 
     def test_the_restart_follows_every_input_the_broker_reads(self) -> None:
         main = tasks(ROLE / "tasks" / "main.yml")
@@ -204,7 +291,7 @@ class Order(unittest.TestCase):
         )
         registered = {
             str(task["register"])
-            for name in ("main.yml", "_release.yml")
+            for name in ("main.yml", "_release.yml", "_verify_key.yml")
             for task in tasks(ROLE / "tasks" / name)
             if "register" in task
         }

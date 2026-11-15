@@ -1,0 +1,55 @@
+---
+# Internal to the role: included from main.yml before the host is read or anything is written.
+# The public half of the request-signing key is carried as a text file of 64 hex digits, and
+# the 32 bytes those digits spell are held to a pinned sha256. A key file that is missing, is a
+# link, is not exactly 64 lower-case hex digits (and at most one line feed), or whose 32 bytes
+# have another digest stops the run here with nothing written. Reading is not a change, so this
+# runs in check mode too. The bytes are built by Jinja from the file's text (vars/main.yml).
+- name: Refuse a verify key digest that is not a pinned sha256
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_verify_key_sha256 is string
+      - broker_deploy_verify_key_sha256 is match('^[0-9a-f]{64}\Z')
+    quiet: true
+    fail_msg: >-
+      No verify key is pinned: broker_deploy_verify_key_sha256 must be 64 lower-case hex digits,
+      and the key file must be carried at broker_deploy_verify_key_src. Nothing has been written
+      to the host.
+
+- name: Look at the verify key file where the role runs
+  ansible.builtin.stat:
+    path: '{{ broker_deploy_verify_key_src }}'
+    follow: false
+    get_checksum: false
+  delegate_to: localhost
+  become: false
+  register: broker_deploy_verify_key_stat
+
+- name: Refuse a verify key file that is missing or is not a plain file
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_verify_key_stat.stat.exists
+      - broker_deploy_verify_key_stat.stat.isreg
+    quiet: true
+    fail_msg: >-
+      The verify key at {{ broker_deploy_verify_key_src }} is missing or is not a plain file.
+      Nothing has been written to the host.
+
+- name: Refuse a verify key file that is not 64 lower-case hex digits
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_verify_key_text is match('^[0-9a-f]{64}\n?\Z')
+    quiet: true
+    fail_msg: >-
+      The verify key file must hold exactly 64 lower-case hex digits, and at most one line feed
+      after them. Nothing has been written to the host.
+
+- name: Refuse a verify key whose 32 bytes do not have the pinned sha256
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_verify_key_bytes | length == 32
+      - broker_deploy_verify_key_bytes | hash('sha256') == broker_deploy_verify_key_sha256
+    quiet: true
+    fail_msg: >-
+      The 32 bytes the verify key file spells do not have the pinned sha256. Nothing has been
+      written to the host.

@@ -9,6 +9,10 @@
 - name: Hold the release files to their pinned sha256
   ansible.builtin.include_tasks: _release_pin.yml
 
+# The verify key is held the same way, from the text file the role carries.
+- name: Hold the verify key to its pinned sha256
+  ansible.builtin.include_tasks: _verify_key_pin.yml
+
 - name: Refuse a Node digest that is not a pinned sha256
   ansible.builtin.assert:
     that:
@@ -169,13 +173,7 @@
 # The public half of the request-signing key. The broker reads it, through the
 # group, and cannot replace it, so it is owned by root and not by the broker.
 - name: Install the public half of the request-signing key
-  ansible.builtin.copy:
-    src: '{{ broker_deploy_verify_key_src }}'
-    dest: '{{ broker_deploy_verify_key }}'
-    owner: root
-    group: '{{ broker_deploy_user }}'
-    mode: '0640'
-  register: broker_deploy_key_result
+  ansible.builtin.include_tasks: _verify_key.yml
 
 # The template is the shipped example with one line set from the variable
 # (the runbook's B-5 step). The file holds no secret: the verify key is a file.

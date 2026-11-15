@@ -86,9 +86,9 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
 # reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host
-# last of all so its failure holds nothing else back, and demo1's two build roles and
-# spool_path_account after them. ops1 and db1 also apply deploy_tooling (class internal) straight
-# after deploy_verifier, before the roles that run the deploy wrapper.
+# last of all so its failure holds nothing else back, and demo1's broker_deploy (first: demo1_build
+# reads what it leaves behind), two build roles and spool_path_account. ops1 and db1 also apply
+# deploy_tooling (class internal) straight after deploy_verifier, before the deploy wrapper roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
@@ -150,7 +150,7 @@ APPLIED_ON_MAIN = {
         "node_exporter",
         "db1_grants",
     ],
-    "demo1": ["demo1_build", "demo1_egress_spool", "spool_path_account"],
+    "demo1": ["broker_deploy", "demo1_build", "demo1_egress_spool", "spool_path_account"],
 }
 # The play-vars lines a playbook on main carries after enrolled_host (HOST_PLAY_VARS).
 PINNED_PLAY_VARS = {
@@ -559,10 +559,11 @@ class HostRoleLists(unittest.TestCase):
             del HOST_PLAY_VARS["app1"]
             self._assert_refused("app1", "vars must be exactly")
 
-    # Safety class: demo1 is held off host_baseline, egress_nat and broker_deploy by its own
-    # list in host_roles/demo1.yml. Green first: the real playbook applies exactly the pull roles
-    # then its two build roles and the real tree passes. Red: each of the three roles added to the
-    # real playbook is refused by name, and with demo1's list file deleted both build roles are.
+    # Safety class: demo1 is held off host_baseline and egress_nat by its own list in
+    # host_roles/demo1.yml. Green first: the real playbook applies exactly the pull roles, then
+    # broker_deploy and its build roles, and the real tree passes. Red: each of the two roles added
+    # to the real playbook is refused by name, with demo1's list file deleted every applied role is,
+    # and with broker_deploy's row removed from the list alone the real playbook is refused.
     def test_demo1_applies_only_its_build_roles(self) -> None:
         text = (ROOT / "ansible" / "playbooks" / "demo1.yml").read_text(encoding="utf-8")
         names = [Path(entry["role"]).name for entry in yaml.safe_load(text)[0]["roles"]]
@@ -571,6 +572,7 @@ class HostRoleLists(unittest.TestCase):
             [
                 "ansible_runtime",
                 "pull_trigger",
+                "broker_deploy",
                 "demo1_build",
                 "demo1_egress_spool",
                 "spool_path_account",
@@ -580,7 +582,7 @@ class HostRoleLists(unittest.TestCase):
         # that starts it.
         self.assertLess(names.index("demo1_egress_spool"), names.index("spool_path_account"))
         self.assertEqual(check(ROOT), [])
-        for name in ("host_baseline", "egress_nat", "broker_deploy"):
+        for name in ("host_baseline", "egress_nat"):
             with self.subTest(role=name):
                 self.assertNotIn(name, self.listed["demo1"], "the case is a role on demo1's list")
                 path = self.ansible / "playbooks" / "demo1.yml"
@@ -589,8 +591,13 @@ class HostRoleLists(unittest.TestCase):
         (self.ansible / "playbooks" / "demo1.yml").write_text(self.real["demo1"], encoding="utf-8")
         path = self.ansible / HOST_ROLES_DIR / "demo1.yml"
         self.assertTrue(path.is_file(), "the sabotage matched nothing")
+        listed = path.read_text(encoding="utf-8")
+        row = "- broker_deploy\n"
+        self.assertIn(row, listed, "the sabotage matched nothing")
+        path.write_text(listed.replace(row, "", 1), encoding="utf-8")
+        self._assert_refused("demo1", "role broker_deploy is not on demo1's list")
         path.unlink()
-        for name in ("demo1_build", "demo1_egress_spool", "spool_path_account"):
+        for name in ("broker_deploy", "demo1_build", "demo1_egress_spool", "spool_path_account"):
             with self.subTest(role=name, list="deleted"):
                 self._assert_refused("demo1", f"role {name} is not on demo1's list")
 

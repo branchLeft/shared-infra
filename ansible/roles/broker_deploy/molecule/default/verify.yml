@@ -1,14 +1,17 @@
 ---
 # What the role must leave on the host, read back from the instance. The unit
-# and the verify key are read from the role's own files, on the machine that
-# runs the test, so a copy in the role that differs from its source is a
-# failure. The broker must be enabled, active and answering its status request.
+# is read from the role's own file, on the machine that runs the test, so a copy
+# in the role that differs from its source is a failure. The verify key on the
+# instance must be the 32 raw bytes of the pinned digest. The broker must be
+# enabled, active and answering its status request.
 - name: Verify the instance
   hosts: all
   gather_facts: false
   vars:
     verify_unit_source: '{{ playbook_dir }}/../../files/branchleft-broker.service'
-    verify_key_source: '{{ playbook_dir }}/files/verify-key-stand-in.bin'
+    # The sha256 of the 32 zero bytes the stand-in key file spells, written out here so that
+    # the check does not read it from the role. It is the digest the converge pins.
+    verify_key_pinned_sha256: '66687aadf862bd776c8fc18b8e9f8e20089714856ee233b3902a591d0d5f2925'
     verify_node: /opt/branchleft/broker/node/bin/node
     verify_release: /opt/branchleft/broker/releases/0.0.1
     # The seven legal invocations of a slot in 0 to 6, and the one load.
@@ -130,23 +133,18 @@
         checksum_algorithm: sha256
       register: broker_deploy_verify_key_installed
 
-    - name: Read the verify key's source on the machine that runs the test
-      ansible.builtin.stat:
-        path: '{{ verify_key_source }}'
-        checksum_algorithm: sha256
-      register: broker_deploy_verify_key_source
-      delegate_to: localhost
-
-    - name: Assert the verify key is owned root:broker, mode 0640, and is the source byte for byte
+    - name: Assert the verify key is owned root:broker, mode 0640, 32 raw bytes, and the pinned digest
       ansible.builtin.assert:
         that:
           - broker_deploy_verify_key_installed.stat.exists
+          - broker_deploy_verify_key_installed.stat.isreg
           - broker_deploy_verify_key_installed.stat.pw_name == 'root'
           - broker_deploy_verify_key_installed.stat.gr_name == 'broker'
           - broker_deploy_verify_key_installed.stat.mode == '0640'
-          - broker_deploy_verify_key_installed.stat.checksum == broker_deploy_verify_key_source.stat.checksum
+          - broker_deploy_verify_key_installed.stat.size == 32
+          - broker_deploy_verify_key_installed.stat.checksum == verify_key_pinned_sha256
         quiet: true
-        fail_msg: The verify key is not root:broker 0640 or differs from its source.
+        fail_msg: The verify key is not root:broker 0640, or is not the 32 bytes with the pinned sha256.
 
     - name: Read the environment file on the instance
       ansible.builtin.slurp:

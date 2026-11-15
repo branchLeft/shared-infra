@@ -1,0 +1,37 @@
+---
+# Internal to the role: included from main.yml after the key's pin has been checked
+# (_verify_key_pin.yml). The host gets the 32 raw bytes the pinned hex file spells, root-owned and
+# readable by the broker's group. The broker reads the key and cannot replace it.
+# The plan's diff is hidden: the content is 32 raw bytes, which a text diff prints as noise. The
+# key is public, and the pinned digest, not the diff, says what is delivered.
+- name: Install the public half of the request-signing key as its 32 raw bytes
+  ansible.builtin.copy:
+    content: '{{ broker_deploy_verify_key_bytes }}'
+    dest: '{{ broker_deploy_verify_key }}'
+    owner: '{{ broker_deploy_verify_key_owner }}'
+    group: '{{ broker_deploy_user }}'
+    mode: '0640'
+  diff: false
+  register: broker_deploy_key_result
+
+- name: Hash the key the host now holds
+  ansible.builtin.stat:
+    path: '{{ broker_deploy_verify_key }}'
+    follow: false
+    checksum_algorithm: sha256
+  register: broker_deploy_key_installed
+
+# A plan has not written the file, so there it only reads. An apply stops here, at the host's
+# own bytes and not at the text they were decoded from, if the file is not the pinned key.
+- name: Refuse a host key that is not a plain 32-byte file with the pinned sha256
+  ansible.builtin.assert:
+    that:
+      - >-
+        ansible_check_mode or (broker_deploy_key_installed.stat.exists
+        and broker_deploy_key_installed.stat.isreg
+        and broker_deploy_key_installed.stat.size == 32
+        and broker_deploy_key_installed.stat.checksum == broker_deploy_verify_key_sha256)
+    quiet: true
+    fail_msg: >-
+      The verify key on the host is not a plain 32-byte file with the pinned sha256
+      {{ broker_deploy_verify_key_sha256 }}.
