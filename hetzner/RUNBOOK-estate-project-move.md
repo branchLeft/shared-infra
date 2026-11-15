@@ -295,6 +295,31 @@ firewall must show the tcp/22 source as the new `edge1PublicIpv4` recorded above
 with `/32`. `46.225.95.167/32` must not appear in it. If the old address is still
 there, the apply did not run: stop, and do not go on to step 8.
 
+### 7.2 Re-apply the mail stack
+
+The mail stack's firewall reads `edge1PublicIpv4` from this stack through a
+`StackReference` too, and only when it is applied: mx1's tcp/8443 (the mailgun
+shim's TLS port) accepts two sources, app1's public address and edge1's. The
+monitoring probe of that port runs on edge1, so after the rebuild it is refused
+and the `MailHostDown` alert fires for 8443 until the mail stack is re-applied.
+The old address goes back to the provider's pool and can be reassigned, so
+until then whichever host is given it can reach 8443 (it still needs a tenant
+API key).
+
+The mail stack is applied by CI and never by hand. It plans on a push to `main`
+that changes `mail/*.ts` or the mail stack files, then waits at environment
+`production-mail` for the owner's approval. Do this after step 7 has applied,
+because the plan reads the new address from the estate stack's state. Either
+land a change to one of those files, or the owner re-runs the last mail
+workflow run from the Actions page, which reads the new address live. The owner
+reads the plan, which must show one update to the mail firewall's tcp/8443
+sources and nothing else, and approves `production-mail`.
+
+Then check the rule with the mail project's token, read only. `hcloud firewall
+describe firewall-1` must show tcp/8443 with the new `edge1PublicIpv4` as one of
+its two sources, with `/32`. `46.225.95.167/32` must not appear in it. If the old
+address is still there, the apply did not run: do not go on to step 8.
+
 ## 8. Re-provision the host
 
 `edge1` is a bare Debian image again. Everything that was ever installed on it
