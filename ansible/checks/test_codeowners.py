@@ -192,8 +192,8 @@ GATE_PATHS = [
     "ansible/checks/test_no_new_script_dependents.py",
     "ansible/checks/test_deploy_verifier_coverage.py",
     "ansible/trust/edge1.yml",
-    "hetzner/provision/branchleft-verify-image",
-    "hetzner/provision/test_branchleft_verify_image.py",
+    "ansible/roles/deploy_verifier/files/branchleft-verify-image.py",
+    "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
     "hetzner/control-plane/stack/postgres/pg_hba.conf",
 ]
 
