@@ -407,3 +407,16 @@ It does NOT reach the CI deploy account's sudo invocation: sudo's env_reset
 strips it unless the sudoers drop-in adds it to env_keep, which is a
 separate, deliberate change to a privileged file, not a side effect of
 this one.
+
+## Journal line
+
+A deploy that raises `DeployError` is also written to the host's journal, as one line under the
+tag `branchleft-deploy`: the stack name, the word `refused`, and the error's own text (the same
+words as stderr). A caller that hides the wrapper's output, such as the `tenant_compose` role
+(whose secret check requires `no_log`), points the operator at it:
+
+    journalctl -t branchleft-deploy -n 20 --no-pager
+
+The line holds no secret: the error text names the image reference and the signing
+workflow, which are public. Logging is best effort and never changes the exit status, so a host
+with no `logger` still refuses the same way. A successful deploy and a usage error write no line.

@@ -51,9 +51,10 @@
         - '{{ tenant_compose_stack_root }}/tenant-c'
         - '{{ tenant_compose_config_root }}/tenant-c.env'
         - '{{ tenant_compose_config_root }}/tenant-c.image.env'
+        - '{{ tenant_compose_config_root }}/tenant-d.image.env'
       register: tenant_compose_verify_absent
 
-    - name: Assert the spool's token file was never written, and the refused tenant has no files
+    - name: Assert the spool's token file was never written, the refused tenant has no files, and the unattested one no pin
       ansible.builtin.assert:
         that:
           - not item.stat.exists
@@ -119,12 +120,44 @@
       loop:
         - /var/lib/standin/starts.log
         - /var/lib/standin/volume.log
+        - /var/lib/standin/verify.log
       register: tenant_compose_verify_records
 
     - name: Work out the lines of each record
       ansible.builtin.set_fact:
         tenant_compose_verify_start_lines: '{{ (tenant_compose_verify_records.results[0].content | b64decode).splitlines() }}'
         tenant_compose_verify_volume_lines: '{{ (tenant_compose_verify_records.results[1].content | b64decode).splitlines() }}'
+        tenant_compose_verify_attestation_lines: '{{ (tenant_compose_verify_records.results[2].content | b64decode).splitlines() }}'
+
+    # Every first pin went through the real deploy wrapper, which asked the verifier about the
+    # image before it wrote the pin: the two tenants' attested image passed, once each, and the
+    # unattested digest failed, once. The image outside the register never reached the
+    # verifier: the role refused it first. A pin written any other way leaves no line here.
+    - name: Assert the wrapper verified each first pin, and refused the one that is not attested
+      ansible.builtin.assert:
+        that:
+          - tenant_compose_verify_attestation_lines | sort == tenant_compose_verify_expected_attestations | sort
+        quiet: true
+        fail_msg: 'The verifier was asked {{ tenant_compose_verify_attestation_lines }}.'
+      vars:
+        tenant_compose_verify_signer: branchLeft/ghost-platform/.github/workflows/registry-push.yml
+        tenant_compose_verify_expected_attestations:
+          - '{{ scenario_image }} signer={{ tenant_compose_verify_signer }} pass'
+          - '{{ scenario_image }} signer={{ tenant_compose_verify_signer }} pass'
+          - '{{ scenario_unattested_image }} signer={{ tenant_compose_verify_signer }} fail'
+
+    - name: Read the unattested tenant's unit
+      ansible.builtin.systemd_service:
+        name: '{{ tenant_compose_unit_prefix }}@tenant-d.service'
+      register: tenant_compose_verify_unattested_unit
+
+    - name: Assert the unattested tenant's stack was never started
+      ansible.builtin.assert:
+        that:
+          - tenant_compose_verify_start_lines | select('match', '^tenant-d ') | list | length == 0
+          - tenant_compose_verify_unattested_unit.status.ActiveState != 'active'
+        quiet: true
+        fail_msg: The stack of the tenant whose image is not attested was started.
 
     # The restart is made under the deploy lock, and the unit's command saw it held. A
     # start with the lock free would be one the role made without it.
@@ -148,11 +181,13 @@
         fail_msg: A stack was last started on an image other than the one in its pin file.
 
     # The volume program is asked once for each tenant that did not hold its uid, however
-    # many times the role has run since, and the register holds the uids it was given.
+    # many times the role has run since, and the register holds the uids it was given. The
+    # tenant whose image is not attested had its volumes made before the wrapper refused its
+    # pin (the README names this); the tenant refused before anything was written did not.
     - name: Assert the volume program was called once for each tenant, and only for the tenants
       ansible.builtin.assert:
         that:
-          - tenant_compose_verify_volume_lines | sort == ['tenant-a 30901', 'tenant-b 30902']
+          - tenant_compose_verify_volume_lines | sort == ['tenant-a 30901', 'tenant-b 30902', 'tenant-d 30904']
         quiet: true
         fail_msg: 'The volume program was called {{ tenant_compose_verify_volume_lines }}.'
 
