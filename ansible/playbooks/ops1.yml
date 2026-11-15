@@ -36,6 +36,14 @@
 # The mail collector's inputs check goes just before the ring controller's role and changes nothing: it reads the file the owner places
 # for the collector and the descriptor directory, and stops the plan if either is wrong, so a
 # collector is never started against a real heartbeat URL with no host named.
+# The mail collector role is near the end, so that its failure holds back only the ring controller's
+# role. It stays off until the owner sets its image and sending target, and its unit starts only when
+# the owner has placed the credentials file and a descriptor names a host.
+#
+# The spool paths role comes right after it, so that a descriptor the collector role has just written is
+# the list of hosts it holds a path to, and a descriptor it has just removed takes its path down in the same
+# run, after the descriptor and never before. It holds nothing until the owner lists a host and an alias
+# block, and a path's unit starts only once the owner has placed that path's key.
 #
 # The refusal is not a host control: under the trigger inventory_hostname is
 # localhost. The root-owned pull config is the host control.
@@ -76,4 +84,6 @@
     - role: ../roles/control_plane_db # noqa: role-name[path]
     - role: ../roles/node_exporter # noqa: role-name[path]
     - role: ../roles/mail_collector_inputs # noqa: role-name[path]
+    - role: ../roles/mail_collector # noqa: role-name[path]
+    - role: ../roles/spool_paths # noqa: role-name[path]
     - role: ../roles/ring_controller_host # noqa: role-name[path]

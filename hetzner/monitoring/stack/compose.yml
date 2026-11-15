@@ -175,7 +175,7 @@ services:
         condition: service_started
 
   node-exporter:
-    image: docker.io/prom/node-exporter:v1.12.1@sha256:da83fae85603c4e47e6c68369a7d746e2dda683dc35ea2e234b4f171e0d92798
+    image: docker.io/prom/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
     restart: unless-stopped
     command:
       - --path.procfs=/host/proc

@@ -21,3 +21,13 @@
     name: '{{ deploy_tooling_policy_unit_name }}'
     state: restarted
   when: not ansible_check_mode
+
+# Only the timer is restarted, never the watch service: that is a oneshot the timer
+# starts, and the next tick reads the files this run wrote. A restart makes the timer
+# read a changed schedule. Skipped in check mode with a stated reason (ANS-10): check
+# mode wrote no unit, so there is nothing to restart.
+- name: Restart the watch timer
+  ansible.builtin.systemd_service:
+    name: '{{ deploy_tooling_watch_timer_name }}'
+    state: restarted
+  when: not ansible_check_mode

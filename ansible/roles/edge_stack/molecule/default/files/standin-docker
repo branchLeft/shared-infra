@@ -28,6 +28,7 @@ CROWDSEC_ACQUIS_PREFIX = "/etc/crowdsec-acquis.d/"
 CROWDSEC_APPSEC_PREFIX = "/etc/crowdsec/appsec-configs/branchleft/"
 CROWDSEC_WHITELIST_PREFIX = "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/"
 CROWDSEC_PARSERS_PREFIX = "/etc/crowdsec/parsers/s02-enrich/branchleft/"
+CROWDSEC_SCENARIOS_PREFIX = "/etc/crowdsec/scenarios/branchleft/"
 CADDY_FILE_ARG = "/etc/caddy/Caddyfile"
 RUN_MOUNT_PATTERN = "/*:/etc/caddy/Caddyfile:ro"
 
@@ -134,6 +135,10 @@ def crowdsec_checksum(path_arg: str) -> int:
     elif path_arg.startswith(CROWDSEC_PARSERS_PREFIX):
         source = os.path.join(
             PROJECT, "crowdsec", "parsers", path_arg[len(CROWDSEC_PARSERS_PREFIX) :]
+        )
+    elif path_arg.startswith(CROWDSEC_SCENARIOS_PREFIX):
+        source = os.path.join(
+            PROJECT, "crowdsec", "scenarios", path_arg[len(CROWDSEC_SCENARIOS_PREFIX) :]
         )
     elif path_arg.startswith(CROWDSEC_ACQUIS_PREFIX):
         source = os.path.join(

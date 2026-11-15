@@ -42,6 +42,22 @@ overrides:
   safety_service_gid:
     type: str
     value: '990'
+  # The numeric ids of the collector account, read from the host's account database while the
+  # role runs. Throwaway ids; getent gives them as text.
+  mail_collector_uid:
+    type: str
+    value: '991'
+  mail_collector_gid:
+    type: str
+    value: '991'
+  # One throwaway host for the descriptor template to render. A tenant entry, because a demo
+  # entry needs the demo mail domain, which this render does not set. The address is in 10/8.
+  mail_collector_hosts:
+    type: list
+    value:
+      - slug: offline-dummy
+        kind: tenant
+        app_host_ip: 10.0.0.40
   # The two host ports of the Sweego receiver, which the owner names. Throwaway numbers that
   # differ and are unprivileged, so the compose file validates (a dummy int would publish the
   # same port twice).
@@ -51,3 +67,27 @@ overrides:
   sweego_receiver_drain_port:
     type: int
     value: 18081
+  # The result of the spool paths plan, which the role registers at run time. One throwaway path
+  # through a jump host, so every template of the role renders. The key is a throwaway public key.
+  spool_paths_plan_result:
+    type: dict
+    value:
+      paths:
+        - slug: offline-dummy
+          alias: 10.250.0.5
+          ssh_host: 10.20.1.50
+          ssh_port: 22
+          spool_port: 8095
+          host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFhA+RWfOtSFhqoJe+knrml4N8qG+5YKd2bGyC2VIQJp
+          jump:
+            host: 192.0.2.20
+            port: 22
+            host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFhA+RWfOtSFhqoJe+knrml4N8qG+5YKd2bGyC2VIQJp
+      stale: []
+  # The far-host account's two inputs, which the role reads from root-only files at run time.
+  # Throwaway values: a documentation address and a throwaway public key.
+  spool_path_account_in:
+    type: dict
+    value:
+      from_address: 192.0.2.1
+      public_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFhA+RWfOtSFhqoJe+knrml4N8qG+5YKd2bGyC2VIQJp

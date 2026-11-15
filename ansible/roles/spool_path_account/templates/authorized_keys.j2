@@ -1,0 +1,1 @@
+restrict,port-forwarding,permitopen="{{ spool_path_account_loopback }}:{{ spool_path_account_spool_port }}",from="{{ spool_path_account_in.from_address }}",command="{{ spool_path_account_nologin }}" {{ spool_path_account_in.public_key.split(' ')[0] }} {{ spool_path_account_in.public_key.split(' ')[1] }}

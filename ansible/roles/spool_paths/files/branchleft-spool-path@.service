@@ -1,0 +1,45 @@
+# A spool drain path: one ssh local forward, dialled from ops1, to one host's spool drain port.
+# The instance name is the host's slug. The path is what the collector dials at the host's alias
+# address on ops1, so ops1 initiates and the spool never dials out.
+#
+# The unit starts only when the role's configuration, the pinned host keys and the owner's private
+# key are all there. A missing one leaves the unit inactive, not failed, so landing the role changes
+# nothing until the owner has placed the key.
+#
+# ssh does the detecting and systemd does the restarting. The keepalive options end a dead link
+# within about thirty seconds. The alias lives on an interface the network manager owns, not on
+# this unit, so while ssh is down nothing listens and the collector is refused at once.
+[Unit]
+Description=Spool drain path to %i
+After=network-online.target systemd-networkd.service
+Wants=network-online.target
+ConditionPathExists=/etc/branchleft/spool-paths/%i.conf
+ConditionPathExists=/etc/branchleft/spool-paths/%i.known_hosts
+ConditionPathExists=/etc/branchleft/spool-paths/%i.key
+StartLimitIntervalSec=0
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/ssh -F /etc/branchleft/spool-paths/%i.conf -N %i
+Restart=always
+RestartSec=5
+RestartSteps=6
+RestartMaxDelaySec=120
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
