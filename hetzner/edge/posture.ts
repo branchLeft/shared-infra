@@ -28,6 +28,10 @@ export const RATE_LIMIT_WINDOW_SECONDS = 60;
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS = 5;
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS = 60;
 
+// Narrative moved to hetzner/edge/posture.md, "Inbound webhook path".
+export const WEBHOOK_RATE_LIMIT_EVENTS = 10;
+export const WEBHOOK_RATE_LIMIT_WINDOW_SECONDS = 60;
+
 /**
  * TLS floor for every hostname. On the GCP edge this replaced, the
  * equivalent value lived on the target proxy's SSL policy rather than in the

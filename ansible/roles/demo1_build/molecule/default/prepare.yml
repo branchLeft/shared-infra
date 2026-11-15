@@ -140,7 +140,7 @@
     # Docker engine and no Caddy. The role asks docker two things: whether the Caddy image
     # is on the host (`docker image inspect IMAGE`, which lists it with its RepoDigests), and
     # for the config Caddy would run (`docker run ... caddy adapt`, the candidate on standard
-    # input). The script is files/standin-docker.sh, which says what it answers. It answers
+    # input). The script is files/standin-docker, which says what it answers. It answers
     # the first for the one image reference in its state directory, and the second with the file
     # /etc/stand-in-caddy-adapt.json whatever it is given. It adapts nothing, so what ties
     # these answers to real Caddy is tests/unit/test_caddy_judge.py: it adapts every case with
@@ -151,7 +151,7 @@
     # Caddyfile it cannot adapt.
     - name: Install a stand-in for docker that answers from recorded real output
       ansible.builtin.copy:
-        src: '{{ playbook_dir }}/../default/files/standin-docker.sh'
+        src: '{{ playbook_dir }}/../default/files/standin-docker'
         dest: /usr/bin/docker
         owner: root
         group: root

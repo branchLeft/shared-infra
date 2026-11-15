@@ -1,7 +1,7 @@
 """Unit tests for mx1_stack_envfile: the two environment files, and that no secret leaves the host.
 
 Run from the role's directory with library/ on PYTHONPATH, the way
-``ansible/checks/run_role_unit_tests.sh`` does. Every secret here is a throwaway made for the test.
+``ansible/checks/run_role_unit_tests.py`` does. Every secret here is a throwaway made for the test.
 """
 
 import copy
@@ -53,7 +53,7 @@ SMTP_ENV = (
 )
 DRAIN_ENV = (
     "PORT=8080\nSHIM_DB_PATH=/data/shim.db\nSHIM_THROTTLE_PATH=/data/throttle.json\n"
-    f"SHIM_DRAIN_TOKEN={TOKEN}\n"
+    f"SHIM_DRAIN_OUTCOMES=true\nSHIM_DRAIN_TOKEN={TOKEN}\n"
 )
 
 

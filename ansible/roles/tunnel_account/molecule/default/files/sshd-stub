@@ -1,0 +1,154 @@
+#!/usr/bin/python3 -I
+"""Test stand-in for sshd, not OpenSSH: the pinned test image has none. It answers the two calls
+the role makes; the README (Limits) says what it checks.
+
+sshd -t: refuse an unknown keyword, or one outside a Match block.
+sshd -T -C user=U,addr=A: print the keywords of the Match blocks that apply, in file order, so the
+first value wins as in sshd. A is required to be the from_address input, so the role has to ask
+about db1's own connection.
+"""
+
+from __future__ import annotations
+
+import glob
+import os
+import sys
+
+DIR = "/etc/ssh/sshd_config.d"
+FROM_ADDRESS_FILE = "/etc/branchleft/db-tunnel/inputs/from_address"
+KNOWN = {
+    "match",
+    "authorizedkeysfile",
+    "authenticationmethods",
+    "allowtcpforwarding",
+    "permitlisten",
+    "permitopen",
+    "gatewayports",
+    "allowagentforwarding",
+    "allowstreamlocalforwarding",
+    "x11forwarding",
+    "permittty",
+    "permittunnel",
+    "permituserrc",
+    "forcecommand",
+}
+WHITESPACE = " \t\n\r\v\f"
+
+
+def conf_files() -> list[str]:
+    """Return the drop-in files, in glob order."""
+    return sorted(glob.glob(os.path.join(DIR, "*.conf")))
+
+
+def read_lines(path: str) -> list[str]:
+    """Return the lines that end in a newline. A last line without one is not read, as the shell's
+    `while read` loop did not read it."""
+    with open(path, "rb") as handle:
+        text = handle.read().decode("utf-8", errors="surrogateescape")
+    return text.split("\n")[:-1]
+
+
+def split_line(line: str) -> tuple[str, str]:
+    """Return the first word of a line and the rest, trimmed; both empty for a blank line."""
+    stripped = line.strip(" \t")
+    if stripped == "":
+        return "", ""
+    pieces = stripped.split(None, 1)
+    rest = pieces[1].strip(" \t") if len(pieces) > 1 else ""
+    return pieces[0], rest
+
+
+def matches(user: str, address: str, criteria: list[str]) -> bool:
+    """Return whether a Match block's criteria hold for this user and address."""
+    if not criteria:
+        return False
+    if len(criteria) == 1:
+        return criteria[0].lower() == "all"
+    index = 0
+    while len(criteria) - index >= 2:
+        kind = criteria[index].lower()
+        value = criteria[index + 1]
+        if kind == "user" and value == user:
+            pass
+        elif kind == "address" and value == address:
+            pass
+        else:
+            return False
+        index += 2
+    return index == len(criteria)
+
+
+def check_syntax() -> int:
+    """Refuse an unknown keyword, or a keyword outside a Match block, as sshd -t does."""
+    for path in conf_files():
+        in_match = False
+        for line in read_lines(path):
+            first, _ = split_line(line)
+            if first == "" or first.startswith("#"):
+                continue
+            key = first.lower()
+            if key not in KNOWN:
+                print(f"stub sshd: {path}: unknown keyword {first}", file=sys.stderr)
+                return 1
+            if key == "match":
+                in_match = True
+            elif not in_match:
+                print(f"stub sshd: {path}: {first} is outside a Match block", file=sys.stderr)
+                return 1
+    return 0
+
+
+def dump(args: list[str]) -> int:
+    """Print the keywords of the Match blocks that apply to -C user= and addr=, as sshd -T does."""
+    user = ""
+    address = ""
+    if len(args) > 1 and args[1] == "-C":
+        value = args[2] if len(args) > 2 else ""
+        fields = value.split(",")
+        user = "\n".join(
+            field[len("user=") :] for field in fields if field.startswith("user=")
+        ).rstrip("\n")
+        address = "\n".join(
+            field[len("addr=") :] for field in fields if field.startswith("addr=")
+        ).rstrip("\n")
+    if user == "":
+        print("stub sshd: -C user= is required", file=sys.stderr)
+        return 1
+    if address == "":
+        print("stub sshd: -C addr= is required", file=sys.stderr)
+        return 1
+    try:
+        with open(FROM_ADDRESS_FILE, encoding="utf-8") as handle:
+            expected = "".join(char for char in handle.read() if char not in WHITESPACE)
+    except OSError:
+        return 1
+    if address != expected:
+        print("stub sshd: -C addr= is not the from address input", file=sys.stderr)
+        return 1
+    for path in conf_files():
+        active = False
+        for line in read_lines(path):
+            first, rest = split_line(line)
+            if first == "" or first.startswith("#"):
+                continue
+            key = first.lower()
+            if key == "match":
+                active = matches(user, address, rest.split())
+                continue
+            if active:
+                print(f"{key} {rest}")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    """Answer the two calls the role makes; any other is refused."""
+    command = argv[0] if argv else ""
+    if command == "-t":
+        return check_syntax()
+    if command == "-T":
+        return dump(argv)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1018,7 +1018,7 @@ class RealCaddyTests(unittest.TestCase):
 # The Docker-in-Docker image the throwaway daemons run, pinned by its digest. The containers
 # have no network, so nothing is pulled into them and nothing leaves them.
 DIND = "docker:27-dind@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
-STANDIN = ROLE / "molecule" / "default" / "files" / "standin-docker.sh"
+STANDIN = ROLE / "molecule" / "default" / "files" / "standin-docker"
 
 
 class Daemon:
@@ -1167,7 +1167,7 @@ class ImageStoreTests(unittest.TestCase):
 
             def standin(*args: str) -> subprocess.CompletedProcess[str]:
                 return subprocess.run(
-                    ["/bin/sh", str(STANDIN), *args],
+                    [str(STANDIN), *args],
                     env={"STANDIN_DOCKER_STATE": tmp, "PATH": os.environ["PATH"]},
                     capture_output=True,
                     text=True,

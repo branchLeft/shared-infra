@@ -78,15 +78,14 @@ change what a host does with its signers, and this check does not see that.
 approval of that gated apply.
 
 Limits of R2. It pins `vars` to exactly `enrolled_host: HOST` plus the entry pinned for that
-host in `HOST_PLAY_VARS` in `check_enrolment.py` (five rows: edge1's `deploy_tooling_host_class`
+host in `HOST_PLAY_VARS` in `check_enrolment.py` (seven rows: ops1's, db1's and dbt1's are each `deploy_tooling_host_class: internal` alone; edge1's `deploy_tooling_host_class`
 with `egress_nat_gateway_enabled: true`, the one switch that makes a host a NAT gateway; edget's
 `egress_nat_gateway_enabled: true` alone (edget is the server edge-t, the tenants network's gateway:
 a network does not span hcloud projects, so there is one gateway per network, edge1 for the estate's
 and edget for the tenants', and `test_egress_nat_single_gateway.py` refuses a second on either; the
 logical name has no hyphen because `HOST_NAME` allows `[a-z][a-z0-9]*`); app1's
 `deploy_tooling_host_class` with `deploy_tooling_policy_variant`,
-which the role takes with no default for the class and which a host of class app must name; dbt1's
-`deploy_tooling_host_class: internal`; and mx1's `host_baseline_fail2ban_ignoreip_none: true`; no other variable: a
+which the role takes with no default for the class and which a host of class app must name; and mx1's `host_baseline_fail2ban_ignoreip_none: true`; no other variable: a
 templated `lookup`, an `ansible_*` setting or an override of a role's defaults is refused),
 and pins `vars_files`, `roles` and `pre_tasks`, and refuses any play key outside `name`, `hosts`, `gather_facts`, `vars`,
 `vars_files`, `pre_tasks` and `roles`. So a `tasks`, `post_tasks`, `handlers`,
@@ -182,7 +181,10 @@ is not loaded there.
   exactly the keys its host is allowed and no other, with values of the right shape. For
   edge1 those are `ci_login_manage_keys`, a bool, and `ci_login_keys`, a list of
   `{key, mode}` entries with `mode` one of `apply` and `check`; an entry with any other
-  key (a source address list, say) is refused. The four values of the `ci_jump` role that live in the repository are
+  key (a source address list, say) is refused. edge1 also holds `sweego_receiver_port` and
+  `sweego_receiver_drain_port`, each a whole number (a bool or text is refused; the role holds
+  the range and that the two differ); `test_sweego_receiver_wiring.py` holds the webhook port to
+  the edge's list of upstream ports and the drain port out of it and out of the public firewall. The four values of the `ci_jump` role that live in the repository are
   allowed on every host in `JUMP_HOSTS` (each jump host has its own file, address,
   destinations and keys): `ci_jump_manage_keys`, a bool, `ci_jump_own_address`, text,
   `ci_jump_destinations`, a list of text, and `ci_jump_keys`, a
@@ -199,10 +201,11 @@ is not loaded there.
   the one key a file may leave out (`OPTIONAL_OWNER_KEYS`): it must be text when present, and
   `test_step_allowlist.py` holds it to the `control_plane` role's digest pattern. Absent, the role
   keeps the running image; present, the next gated apply moves the pin.
-  The `ring_controller_host` role adds three more, all text and all allowed on ops1 only:
-  `ring_controller_host_bundle_sha256`, `ring_controller_host_bundle_url` and
-  `ring_controller_host_ledger_url`. Each may be the empty string, which is how the role
-  starts inert; what a value may look like is the role's rule alone. The push remote and the
+  The `ring_controller_host` role adds two more, both text and both allowed on ops1 only:
+  `ring_controller_host_bundle_sha256` and `ring_controller_host_bundle_url`. Each may be the
+  empty string, which is how the role starts inert; what a value may look like is the role's
+  rule alone. The role's old `ring_controller_host_ledger_url` is no longer allowed: an owner
+  file that still sets it is refused here, and the role refuses the name too. The push remote and the
   known-hosts line it used to take are no longer allowed, so an owner file that still sets one is
   refused here (Ansible's own spec check does not read an owner file's values).
   R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
@@ -396,9 +399,12 @@ The rules for the list:
   offline on recorded answers (`advisory_passes_fixture.json`).
 - The approver records every red advisory shard of the pull request, from the `report` job's
   table, on the pull request.
-- A red daily run opens one issue (`daily_red_issue.py`), titled with the date, with the run
-  link and the failed shard ids and the one label `ci-red-daily`, or comments on the one still
-  open. Nothing there mentions, assigns or prompts anyone or anything.
+- A red daily run is red on its own status and writes its date, the run link and the failed
+  shard ids to its step summary (`daily_red_issue.py --summary`, job `daily-summary`, read
+  permissions only). No workflow in this repository grants `issues: write` except the drift
+  check caller, which `test_ci_gate_order.py` allowlists until its reusable workflow moves.
+  The program's issue-opening code is not run by any workflow now. Nothing there mentions,
+  assigns or prompts anyone or anything.
 
 Two things to know. A new role or scenario starts advisory: it is on no list until a pull
 request puts it there. And the delivery workflow (`ansible-delivery.yml`) runs the harness
@@ -422,8 +428,11 @@ it), so a change to it alone selects none.
   base is the nearest first-parent ancestor of the previous tip (at most 40 back) whose
   delivery run has a successful `Discover` job, and a successful `Lint` job with every
   `Molecule:` job successful, or a skipped `Lint` with no shard anything but skipped or
-  successful (the queue-vouched, no-shard run). A cancelled, failed, running or missing job
-  is no pass. No such commit within reach selects every shard.
+  successful and the `Discover` job's step "Confirm the merge queue passed this commit"
+  successful (the queue-vouched, no-shard run: that step is its only proof, and it is skipped
+  on a run that tested its own tree). A cancelled, failed, running or missing job, or a
+  confirm step that is skipped, failed, missing or unreadable on a skipped-lint run, is no
+  pass. No such commit within reach selects every shard.
 - **A failure selects every shard, never none.** Any error in the program (git, GitHub, the
   shard list, the rules, a bad argument) prints every role and pattern and exits 0. If the
   program cannot run at all, or prints anything but a verdict and a directory list, the
@@ -573,9 +582,9 @@ Named limit: that only an org-admin pull-request bypass can skip the queue comes
 ruleset standard. The ruleset's bypass list could not be read with the App tokens, so the owner
 should confirm it from the owner's view.
 
-## run_role_unit_tests.sh: the role unit suites
+## run_role_unit_tests.py: the role unit suites
 
-The lint job runs `run_role_unit_tests.sh` once, and it runs the unit tests of every
+The lint job runs `run_role_unit_tests.py` once, and it runs the unit tests of every
 `roles/*/tests/unit` directory found by glob, with no list to edit. A suite fails the step when it
 fails, runs no test, or skips or expected-fails a test: a role suite is a control, and a skipped
 test is a control that does not run, so `OK (skipped=N)` and `OK (expected failures=N)` both fail
@@ -700,6 +709,12 @@ Rules:
   `tasks/`, `handlers/`, `vars/`, `defaults/` or `meta/` that the check does not read is an
   `R4 <file>: ... does not read` finding naming the file (see "The role's files"). A role with no
   secret is not read, so R4 never fires there.
+- **R5, the baseline.** `secret_no_log_baseline.yml` lists, by file and task name, the R1
+  findings the tree has today (a task that names a tainted variable and lacks `no_log`, or
+  `diff: false`). A finding it does not list fails the check, and an entry that no longer fires
+  fails it too, so the list only shrinks: remove an entry in the change that fixes its task.
+  Adding an entry is not a fix, and the baseline is a control, so a new entry needs the owner's
+  review.
 
 Sub-option secrets. An option such as `tenant_compose_stacks` holds a secret only in an
 attribute of its items (`secrets_env_text`). The option is then a seed for that attribute only:
@@ -784,9 +799,11 @@ What it does not see:
 - Only options and sub-options that declare `no_log: true` seed the taint (and the loader's two
   variables). An option that holds a credential without the flag is invisible to R1. Which
   options are secrets is the owner's classification, so that list is a ticket of its own.
-- Taint is by variable name, within one role (ANS-12). It does not follow `set_fact`,
-  `register`, or a value passed through a playbook, a `trust/` file or another role. The
-  loader's facts are seeded by the role that consumes them, as options of that role.
+- Taint is by variable name, within one role (ANS-12). A `set_fact` argument is followed as a
+  variable of its name, and a `register`ed result is followed when its task names a tainted
+  variable, so a secret printed through either needs `no_log` on the task that prints it. It does
+  not follow a value passed through a playbook, a `trust/` file or another role. The loader's
+  facts are seeded by the role that consumes them, as options of that role.
 - Playbooks and `trust/` files are not scanned, and neither is a `molecule/` directory.
 - `control_plane_masterkey_secret` is not tainted. Its value is a file-attributes record (path,
   owner, group, mode) and holds no secret. The master key is guarded by the write task that
@@ -807,10 +824,13 @@ What it does not see:
   quiet change in what is followed (a test removes each in turn). The check does not run Ansible: it knows what parsing and plugin
   resolution can say, and nothing that depends on a variable's value at run time.
 - A loop variable is followed only when the loop names it (`loop_control.loop_var`), or the
-  loop has no include. A `set_fact` or `register` that copies an attribute into another
-  variable is not followed. A value that comes in through `lookup('template', ...)` is not
-  read, and neither is a subscript the parser cannot see as constant (`x[name]`, which counts
-  as a read of the whole option and so asks for more `no_log`).
+  loop has no include. A `set_fact` or `register` copy of a secret attribute is followed as that
+  attribute; a copy of a declared non-secret attribute is not, as for any read. Still open, and
+  not followed: a value that comes in through `lookup('template', ...)` is not read, and a
+  `collections:` list set at play or role level is not in scope, so a short name only that
+  list resolves is an R4 finding. A
+  subscript the parser cannot see as constant (`x[name]`) is not read either; it counts as a read
+  of the whole option and so asks for more `no_log`.
 - R3 checks the table's rows, not what the consuming role does with a value.
 
 Sabotage, each one a copy of the real files with one control broken, and the baseline copy

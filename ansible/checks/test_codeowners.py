@@ -275,7 +275,10 @@ BOOTSTRAP_GUARD_PATHS = [
 # whole role is the owner's, its module, units, environment template and the tests that hold them
 # included. The ring controller role also installs the unit that hands its root-only key to a
 # service account, and safety_service installs the unit that mounts the channel key and the
-# hash-source credential.
+# hash-source credential. mail_collector installs the unit that passes the owner's credentials
+# file to the collector, spool_paths installs the unit that holds the ssh key to every spool and
+# writes its client configuration, and spool_path_account makes the far-host account and the key
+# line that bounds what that key may open.
 KEY_ROLE_PATHS = [
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
@@ -297,6 +300,29 @@ KEY_ROLE_PATHS = [
     "ansible/roles/safety_service/templates/config.json.j2",
     "ansible/roles/safety_service/tests/unit/test_safety_service.py",
     "ansible/roles/safety_service/molecule/default/verify.yml",
+    "ansible/roles/mail_collector/tasks/main.yml",
+    "ansible/roles/mail_collector/vars/main.yml",
+    "ansible/roles/mail_collector/meta/argument_specs.yml",
+    "ansible/roles/mail_collector/files/mail-collector.service",
+    "ansible/roles/mail_collector/templates/unit.env.j2",
+    "ansible/roles/mail_collector/templates/collector.env.j2",
+    "ansible/roles/mail_collector/tests/unit/test_mail_collector.py",
+    "ansible/roles/mail_collector/molecule/default/verify.yml",
+    "ansible/roles/spool_paths/tasks/main.yml",
+    "ansible/roles/spool_paths/vars/main.yml",
+    "ansible/roles/spool_paths/meta/argument_specs.yml",
+    "ansible/roles/spool_paths/library/spool_paths_plan.py",
+    "ansible/roles/spool_paths/files/branchleft-spool-path@.service",
+    "ansible/roles/spool_paths/templates/path.conf.j2",
+    "ansible/roles/spool_paths/templates/known_hosts.j2",
+    "ansible/roles/spool_paths/tests/unit/test_spool_paths_forward.py",
+    "ansible/roles/spool_path_account/tasks/main.yml",
+    "ansible/roles/spool_path_account/vars/main.yml",
+    "ansible/roles/spool_path_account/meta/argument_specs.yml",
+    "ansible/roles/spool_path_account/library/spool_path_listener_check.py",
+    "ansible/roles/spool_path_account/templates/authorized_keys.j2",
+    "ansible/roles/spool_path_account/templates/sshd-drop-in.conf.j2",
+    "ansible/roles/spool_path_account/tests/unit/test_spool_path_account.py",
 ]
 
 # Roles that write sshd, sudoers, authorized_keys, login accounts, database grants, a break-glass
@@ -378,6 +404,14 @@ BACKUP_PATHS = [
 # the owner's to review. It arrives with the edge-caddy image change, so it need not exist yet.
 IMAGE_SCAN_PATHS = [".image-scan-exemptions.json"]
 
+# branchleft_promote.py runs as root on a tenant host and decides which signed image the
+# wrapper is handed, so it and the tests that hold its refusals are the owner's alone.
+HOST_APPLIER_PATHS = [
+    "hetzner/provision/branchleft_promote.py",
+    "hetzner/provision/test_branchleft_promote.py",
+    "hetzner/provision/test_branchleft_promote_wrapper_contract.py",
+]
+
 # Files merged on the reviewer App's approval alone, so that a matcher that called everything
 # owned would be seen. A host playbook is among them: the reviewer App may wire a listed role
 # into one (owner ruling of 2026-10-25), and the per-host role list
@@ -449,7 +483,7 @@ RELEASED_CHECK_PATHS = [
     "hetzner/scripts/check-address-plan-drift.py",
     "hetzner/scripts/test_check_address_plan_drift.py",
     "scripts/assert-min-python-version.py",
-    "scripts/nvmrc-node-exec.sh",
+    "scripts/nvmrc-node-exec.py",
     "ansible/checks/offline_render.py",
     "ansible/checks/test_offline_render.py",
     "ansible/checks/test_edge_single_home.py",
@@ -545,6 +579,9 @@ class CodeownersTests(unittest.TestCase):
 
     def test_the_pull_roles_and_sudoers_files_are_owned_by_the_owner(self) -> None:
         self.assert_owned(PULL_ROLE_PATHS)
+
+    def test_the_host_applier_and_its_tests_are_owned_by_the_owner(self) -> None:
+        self.assert_owned(HOST_APPLIER_PATHS)
 
     def test_the_host_inputs_loader_is_owned_by_the_owner(self) -> None:
         self.assert_owned(HOST_INPUTS_PATHS)
@@ -685,6 +722,7 @@ class CodeownersTests(unittest.TestCase):
             + RELEASED_PIN_PATHS
             + RELEASED_CHECK_PATHS
             + [sample.path for sample in SAMPLES]
+            + HOST_APPLIER_PATHS
         )
         for path in listed:
             if path in STANDS_FOR_MORE or path in PENDING:

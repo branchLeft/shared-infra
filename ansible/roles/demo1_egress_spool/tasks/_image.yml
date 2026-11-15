@@ -5,8 +5,10 @@
 # when the image is not there, before the volume is made or the unit is started, with
 # the reason in its message; in a plan it says so in a visible line, so a plan that
 # would fail the apply does not read as a pass (ANS-10). The role does not put the
-# image there. The owner carries it once and the role checks what arrived by digest
-# (README, "How the spool's image gets onto the host"). The name alone is not enough:
+# image there. The signed image push (or the owner's one-off carry) puts it there and the
+# role checks what arrived by digest (README, "How the spool's image gets onto the host").
+# The one thing the role writes for it is a local name for an image that arrived unnamed
+# (_image_carry.yml). The name alone is not enough:
 # a different image under the same name would pass a check of the name, so this reads
 # what docker lists for the pinned reference and wants the pinned digest in it.
 
@@ -50,6 +52,12 @@
   ansible.builtin.set_fact:
     demo1_egress_spool_wanted_image: '{{ demo1_egress_spool_compose_doc.services[demo1_egress_spool_service].image }}'
   when: not demo1_egress_spool_image_env_stat.stat.exists and demo1_egress_spool_compose_now.stat.exists
+
+# An image the signed image push loaded is on the host unnamed. This gives it the name part
+# of the pin where its own id is the pinned digest, so the lookup below finds it by the
+# pinned reference and holds it to the digest as it holds any other.
+- name: Give an image that arrived unnamed the name of the pin
+  ansible.builtin.include_tasks: _image_carry.yml
 
 # Reads only, so it runs in check mode too. A name that begins with a letter or digit
 # cannot be taken for an option (the pattern above holds the pin file to that).
@@ -121,7 +129,8 @@
       (image: {{ demo1_egress_spool_wanted_image | default('none named yet, no pin file or Compose file on the host', true) }}).
       The host never pulls an image, so an apply refuses to start the spool until it is.
   when: >-
-    ansible_check_mode and (demo1_egress_spool_wanted_image | length == 0
+    ansible_check_mode and not demo1_egress_spool_carry_pending | bool
+    and (demo1_egress_spool_wanted_image | length == 0
     or demo1_egress_spool_image_inspect.rc | default(1) != 0
     or not demo1_egress_spool_image_verified | bool)
 
@@ -133,8 +142,9 @@
     fail_msg: >-
       The image {{ demo1_egress_spool_wanted_image }} is not on this host. The host has no route to a
       registry and never pulls an image (the Compose override sets pull_policy never), so the image the
-      pin file {{ demo1_egress_spool_image_env_path }} names must already be on it. The owner carries it
-      once, over the edge1 jump (README, "How the spool's image gets onto the host"). The spool was not started.
+      pin file {{ demo1_egress_spool_image_env_path }} names must already be on it, sent by the signed image push
+      (or carried once by the owner, over the edge1 jump) and loaded with its id equal to the pinned digest
+      (README, "How the spool's image gets onto the host"). The spool was not started.
   when: not ansible_check_mode
 
 # A name can be loaded with the wrong content. docker finds an image by the digest in the

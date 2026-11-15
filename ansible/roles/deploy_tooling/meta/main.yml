@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Installs the CI deploy wrapper and, on an app host, the container isolation policy and its boot unit.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

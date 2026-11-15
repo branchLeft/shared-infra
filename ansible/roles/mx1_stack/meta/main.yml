@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Keeps the mx1 mail host's Stalwart project, mailgun-shim project and local resolver in step with the repository.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

@@ -122,7 +122,15 @@ blog.branchleft.co.uk {
 	tls {
 		protocols tls1.2 tls1.3
 	}
-	@inspected not path /ghost/api/*
+	@inspected {
+		not path /ghost/api/*
+		not vars edge_trusted 1
+	}
+	@edge_session_candidate {
+		path /ghost/*
+		header Cookie *ghost-admin-api-session=*
+	}
+	@edge_untrusted not vars edge_trusted 1
 	@members_magic_link {
 		method POST
 		path /members/api/send-magic-link /members/api/send-magic-link/
@@ -153,7 +161,28 @@ blog.branchleft.co.uk {
 				events 5
 			}
 		}
-		crowdsec
+		vars edge_trusted 0
+		log_append edge_trusted {http.vars.edge_trusted}
+		reverse_proxy @edge_session_candidate 10.20.1.100:8101 {
+			method GET
+			rewrite /ghost/api/admin/users/me/?
+			header_up -Authorization
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 10s
+			}
+			@edge_session_verified {
+				status 2xx
+				header Content-Type application/json*
+			}
+			handle_response @edge_session_verified {
+				vars edge_trusted 1
+			}
+			handle_response {
+				vars edge_trusted 0
+			}
+		}
+		crowdsec @edge_untrusted
 		appsec @inspected
 		respond @ghost_setup 403
 		@uploads_by_path {
@@ -539,6 +568,60 @@ publicpress.co.uk {
 		appsec
 		respond @ghost_setup 403
 		reverse_proxy 10.20.1.100:8081
+	}
+}
+
+status.branchleft.co.uk {
+	log {
+		output file /var/log/caddy/access.log {
+			roll_size 100MiB
+			roll_keep 31
+			roll_keep_for 720h
+			roll_at 00:00
+		}
+		format filter {
+			wrap json
+			request>uri regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			request>headers>Referer regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+			resp_headers>Location regexp "(?i)([?&](?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73))[^&#]*" "$1=REDACTED"
+		}
+	}
+	tls {
+		protocols tls1.2 tls1.3
+	}
+	@members_magic_link {
+		method POST
+		path /members/api/send-magic-link /members/api/send-magic-link/
+	}
+	@ghost_setup {
+		method POST PUT
+		path /ghost/api/admin/authentication/setup /ghost/api/admin/authentication/setup/* /ghost/api/*/admin/authentication/setup /ghost/api/*/admin/authentication/setup/*
+	}
+	@break_glass_strip expression `{http.request.orig_uri}.matches('^[^?]*[?](?:[^&]*&)*(?:b|%62)(?:l|%6[Cc])(?:_|%5[Ff])(?:b|%62)(?:r|%72)(?:e|%65)(?:a|%61)(?:k|%6[Bb])(?:_|%5[Ff])(?:g|%67)(?:l|%6[Cc])(?:a|%61)(?:s|%73)(?:s|%73)(?:=|&|$)') && (!{http.request.orig_uri}.matches('^/ghost(?:[/?]|$)') || {http.request.orig_uri}.matches('^[^?]*(?:[.]|%2[Ee])(?:[.]|%2[Ee])'))`
+	route {
+		header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		uri @break_glass_strip query -bl_break_glass
+		request_body {
+			max_size 64KiB
+		}
+		rate_limit {
+			zone status_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 200
+			}
+		}
+		rate_limit @members_magic_link {
+			zone members_magic_link_per_ip {
+				key {http.request.remote.host}
+				window 60s
+				events 5
+			}
+		}
+		crowdsec
+		appsec
+		respond @ghost_setup 403
+		reverse_proxy 10.20.1.50:8303
 	}
 }
 

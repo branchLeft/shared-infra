@@ -11,8 +11,12 @@ tests show the three halves of that:
   * a real gh, with every network call made to fail, verifies a real attestation of a real image
     and refuses the same bundle once it is altered.
 
-The real-gh tests need a gh with `attestation verify --bundle` and are skipped without one. CI's
-runner has gh.
+The real-gh tests need a gh with `attestation verify --bundle`. Without one they skip on a
+developer's machine, and fail wherever CI is set, so a runner that loses gh cannot turn the
+tampered-bundle, other-workflow and other-artifact refusals into silent skips.
+
+gh reads private copies of the staged files, never the staged files themselves, so that a swap
+after the check cannot change what is verified. PrivateCopyTests pin that.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import unittest
 from collections.abc import Callable
@@ -45,6 +50,21 @@ REAL_IMAGE = f"ghcr.io/branchleft/ghost-tenant@sha256:{REAL_DIGEST}"
 REAL_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
 
 GH = shutil.which("gh")
+# GitHub Actions, and most CI, set CI. Where it is set the real-gh tests are required to run.
+GH_REQUIRED = bool(os.environ.get("CI"))
+
+
+def require_gh(gh: str | None, required: bool) -> None:
+    """Return when gh is installed. Otherwise fail where gh is required, and skip where it is not."""
+    if gh:
+        return
+    if required:
+        raise AssertionError(
+            "gh is not installed, and CI must run the real-gh tests rather than skip them; "
+            "install gh on the runner"
+        )
+    raise unittest.SkipTest("gh is not installed")
+
 
 Run = Callable[..., "subprocess.CompletedProcess[str]"]
 
@@ -321,7 +341,6 @@ class DeployWiringTests(OfflineCase):
         self.assertEqual(run.calls, [])
 
 
-@unittest.skipUnless(GH, "gh is not installed")
 class RealGhTests(OfflineCase):
     """A real gh, with every network call made to fail, against a real attestation.
 
@@ -329,6 +348,10 @@ class RealGhTests(OfflineCase):
     mirrors or the GitHub API would fail the verification. The sabotage cases alter one thing at a
     time and show the same verifier refusing, so the green case is not green by accident.
     """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        require_gh(GH, GH_REQUIRED)
 
     def setUp(self) -> None:
         super().setUp()
@@ -386,6 +409,106 @@ class RealGhTests(OfflineCase):
     def test_a_truncated_trusted_root_is_refused(self) -> None:
         self.trusted_root.write_bytes(b'{"mediaType":"application/vnd.dev.sigstore.trustedroot+json;version=0.1"}\n')
         self.assertIn("is not attested", self.refused(self.run_real))
+
+
+class SwappingRun:
+    """A stand-in for gh run by a writer who wins the race: it rewrites the staged files first.
+
+    The staged files are replaced in place, after the host's checks and before gh would read
+    anything, then what each path given to gh holds is captured. gh handed a staged path reads
+    the swapped bytes. gh handed a private copy reads what the checks passed.
+    """
+
+    HOSTILE = b"swapped after the check\n"
+
+    def __init__(self, staged: dict[str, Path]) -> None:
+        self.staged = staged
+        self.argv: list[str] = []
+        self.read: dict[str, bytes] = {}
+        self.private_mode = 0
+
+    def __call__(self, argv: list[str], **kwargs: Any) -> "subprocess.CompletedProcess[str]":
+        self.argv = list(argv)
+        for path in self.staged.values():
+            path.write_bytes(self.HOSTILE)
+        given = {
+            "manifest": argv[3],
+            "bundle": argv[argv.index("--bundle") + 1],
+            "trusted_root": argv[argv.index("--custom-trusted-root") + 1],
+        }
+        self.read = {name: Path(path).read_bytes() for name, path in given.items()}
+        self.private_mode = stat.S_IMODE(os.stat(os.path.dirname(given["manifest"])).st_mode)
+        return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+
+class PrivateCopyTests(OfflineCase):
+    """gh reads private copies, so a swap of a staged file after the check changes nothing."""
+
+    def swapped_run(self) -> SwappingRun:
+        run = SwappingRun(
+            {
+                "manifest": self.staged("manifest.json"),
+                "bundle": self.staged(),
+                "trusted_root": self.trusted_root,
+            }
+        )
+        self.assertTrue(bd.verify_attestation(REAL_IMAGE, run=run))
+        return run
+
+    def test_a_swap_of_the_staged_files_after_the_check_does_not_change_what_gh_reads(self) -> None:
+        run = self.swapped_run()
+        # The swap happened: the staged files hold the hostile bytes now.
+        for path in (self.staged("manifest.json"), self.staged(), self.trusted_root):
+            self.assertEqual(path.read_bytes(), SwappingRun.HOSTILE)
+        # And gh still read the bytes the checks passed.
+        self.assertEqual(run.read["manifest"], (FIXTURES / "manifest.json").read_bytes())
+        self.assertEqual(run.read["bundle"], (FIXTURES / "bundle.jsonl").read_bytes())
+        self.assertEqual(run.read["trusted_root"], ROLE_TRUSTED_ROOT.read_bytes())
+
+    def test_gh_is_given_no_path_under_the_staging_or_trusted_root_directories(self) -> None:
+        run = self.swapped_run()
+        shielded = (self.staging.resolve(), self.trusted_root.parent.resolve())
+        paths = [
+            Path(run.argv[3]),
+            Path(run.argv[run.argv.index("--bundle") + 1]),
+            Path(run.argv[run.argv.index("--custom-trusted-root") + 1]),
+        ]
+        for path in paths:
+            for directory in shielded:
+                self.assertNotIn(directory, path.resolve().parents, str(path))
+        # One private directory holds all three copies, and only its owner can enter it.
+        self.assertEqual(len({path.parent for path in paths}), 1)
+        self.assertEqual(run.private_mode, 0o700)
+
+
+class RealGhRequiredTests(unittest.TestCase):
+    """A runner with no gh fails the real-gh tests under CI and skips them elsewhere."""
+
+    def run_real_gh_tests(self, ci: bool) -> "subprocess.CompletedProcess[str]":
+        with tempfile.TemporaryDirectory() as empty_path:
+            env = {"PATH": empty_path}
+            if ci:
+                env["CI"] = "true"
+            return subprocess.run(
+                [sys.executable, "-m", "unittest", "test_branchleft_deploy_offline.RealGhTests", "-v"],
+                cwd=HERE,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+                stdin=subprocess.DEVNULL,
+            )
+
+    def test_a_missing_gh_fails_the_real_gh_tests_under_ci(self) -> None:
+        result = self.run_real_gh_tests(ci=True)
+        self.assertNotEqual(result.returncode, 0, result.stderr)
+        self.assertIn("gh is not installed", result.stderr)
+        self.assertNotIn("skipped", result.stderr)
+
+    def test_a_missing_gh_skips_the_real_gh_tests_outside_ci(self) -> None:
+        result = self.run_real_gh_tests(ci=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("skipped", result.stderr)
 
 
 class FixtureTests(unittest.TestCase):

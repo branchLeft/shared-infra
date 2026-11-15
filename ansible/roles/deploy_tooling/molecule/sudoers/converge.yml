@@ -1,0 +1,5 @@
+---
+# The same first apply the default scenario makes. Imported, not copied, so the
+# play has one home.
+- name: Converge as the default scenario does
+  ansible.builtin.import_playbook: ../default/converge.yml

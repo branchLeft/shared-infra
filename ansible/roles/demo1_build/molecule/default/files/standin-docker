@@ -1,0 +1,128 @@
+#!/usr/bin/python3 -I
+"""Test stand-in for docker, installed by prepare.yml. It is not a Docker and proves nothing
+about the real one, except where tests/unit/test_caddy_judge.py runs it beside a real Docker
+and requires the same answers to the calls below.
+
+The role asks docker two things:
+  docker image inspect REF   whether the Caddy image is on the host, by the digest in REF
+  docker run ... caddy adapt the config for the candidate on standard input, which the
+                             stand-in answers with the recorded file (no file: it fails)
+
+It answers `docker images` with nothing, as a real Docker does for a digest reference. Only an
+image named in $state/images (one reference per line) is on this stand-in host. By default it
+lists one image whose RepoDigests is the asked reference. $state/image-digests replaces the
+digests (one per line; an empty file for none), $state/image-count the number of images, and
+$state/image-raw replaces the whole output. The role's own description is in the role README.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from pathlib import Path
+
+ZERO_ID = "sha256:" + "0" * 64
+DEFAULT_STATE = "/var/lib/standin-docker"
+DEFAULT_ADAPT = "/etc/stand-in-caddy-adapt.json"
+
+
+def complete_lines(data: bytes) -> list[str]:
+    """Return the lines that end in a newline, as a shell `read` loop sees them."""
+    parts = data.decode("utf-8", errors="surrogateescape").split("\n")
+    return parts[:-1]
+
+
+def image_listed(state: Path, ref: str) -> bool:
+    """Return whether the reference is one whole line of the images file."""
+    try:
+        listed = (state / "images").read_bytes().decode("utf-8", errors="surrogateescape")
+    except OSError:
+        return False
+    return ref in listed.split("\n")
+
+
+def image_digests(state: Path, ref: str) -> list[str]:
+    """Return the digests the listing reports for the image, in file order."""
+    digests_file = state / "image-digests"
+    if digests_file.exists():
+        lines = complete_lines(digests_file.read_bytes())
+        return [line for line in lines if line != "" and not line.startswith("#")]
+    return [ref] if "@sha256:" in ref else []
+
+
+def image_count(state: Path) -> int:
+    """Return how many images the listing names, as the stand-in's count file says."""
+    try:
+        text = (state / "image-count").read_bytes().decode("utf-8", errors="surrogateescape")
+    except OSError:
+        return 1
+    values = [line[len("count=") :] for line in text.split("\n") if line.startswith("count=")]
+    if not values:
+        return 1
+    if len(values) > 1:
+        # A count that is not one integer makes the shell loop test fail: nothing is listed.
+        return 0
+    value = values[0]
+    if value == "":
+        return 1
+    if re.fullmatch(r"-?[0-9]+", value):
+        return int(value)
+    return 0
+
+
+def inspect(state: Path, ref: str) -> int:
+    """Answer `docker image inspect REF` on the stand-in host."""
+    if ref == "" or not image_listed(state, ref):
+        print("[]")
+        print(f"Error response from daemon: No such image: {ref}", file=sys.stderr)
+        return 1
+    raw = state / "image-raw"
+    if raw.is_file():
+        sys.stdout.buffer.write(raw.read_bytes())
+        return 0
+    digests = ", ".join(f'"{digest}"' for digest in image_digests(state, ref))
+    entry = '{"Id": "' + ZERO_ID + '", "RepoTags": [], "RepoDigests": [' + digests + "]}"
+    listing = ", ".join(entry for _ in range(image_count(state)))
+    print(f"[{listing}]")
+    return 0
+
+
+def adapt(adapt_file: Path) -> int:
+    """Answer `docker run ... caddy adapt`: the recorded adapted config, whatever came in."""
+    try:
+        sys.stdin.buffer.read()
+    except (AttributeError, OSError):
+        pass
+    if not adapt_file.is_file():
+        print("stand-in caddy: cannot adapt", file=sys.stderr)
+        return 1
+    try:
+        sys.stdout.buffer.write(adapt_file.read_bytes())
+    except OSError as error:
+        print(f"stand-in caddy: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    """Dispatch one docker call the way the shell stand-in did."""
+    if not argv:
+        return 1
+    state = Path(os.environ.get("STANDIN_DOCKER_STATE") or DEFAULT_STATE)
+    adapt_file = Path(os.environ.get("STANDIN_DOCKER_ADAPT") or DEFAULT_ADAPT)
+    command = argv[0]
+    if command == "images":
+        return 0
+    if command == "image":
+        if len(argv) < 2 or argv[1] != "inspect":
+            return 1
+        ref = argv[2] if len(argv) > 2 else ""
+        return inspect(state, ref)
+    if command == "run":
+        return adapt(adapt_file)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

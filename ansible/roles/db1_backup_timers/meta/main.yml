@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Delivers the db1 backup programs and installs the dump, prune and binlog-ship timers.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

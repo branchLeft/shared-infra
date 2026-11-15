@@ -87,6 +87,10 @@ demo1_egress_spool_uid: 31000
 demo1_egress_spool_gid: 31000
 demo1_egress_spool_docker: /usr/bin/docker
 
+# The local tag an image gets when the signed image push loads it unnamed (_image_carry.yml).
+# A tag is what lets the pinned name@digest reference resolve; it names no registry visit.
+demo1_egress_spool_carried_tag: carried
+
 # The queue's volume. The Compose file declares it external, so it must exist
 # before the stack starts, and the container's account must own it.
 demo1_egress_spool_volume: branchleft-mail-spool-data

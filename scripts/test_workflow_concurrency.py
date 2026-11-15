@@ -1048,6 +1048,84 @@ class RealTreeMutationTests(unittest.TestCase):
         self.assert_refused("ci.yml", broken, "not the run-keyed block")
 
 
+DELIVERY_YML = WORKFLOWS / "ansible-delivery.yml"
+
+
+def delivery_problems(text: str) -> list[str]:
+    """What would let the delivery workflow skip or cancel a delivery; empty when it is as pinned.
+
+    The reusable workflow it calls serialises the deliveries: its plan and apply jobs each sit in
+    a group of their own that never cancels, and a newer push cancels only the lint and Molecule
+    legs of an older run. A group at the top of this caller would queue every newer run behind a
+    run that waits for approval, and would drop a queued run when a third arrived, so none is
+    allowed here. The write-up is in test_workflow_concurrency.md.
+    """
+    data = load(text)
+    problems = []
+    if trigger_names(data) != {"push"}:
+        problems.append("the delivery runs on a trigger other than a push")
+    push = data["on"]["push"] if isinstance(data["on"], dict) else None
+    if not isinstance(push, dict) or push.get("branches") != ["main"]:
+        problems.append("the push trigger is not exactly the main branch")
+    elif set(push) - {"branches"}:
+        problems.append(f"the push trigger carries a filter that could skip a delivery: {sorted(set(push) - {'branches'})}")
+    if "concurrency" in data:
+        problems.append("a top-level group would queue a newer run behind one waiting for approval")
+    for job_name, job in data.get("jobs", {}).items():
+        if "concurrency" in job:
+            problems.append(f"job {job_name} sets a group of its own")
+        gated_apply = "branchLeft/github-workflows/.github/workflows/ansible-gated-apply.yml@"
+        if "uses" in job and not str(job["uses"]).startswith(gated_apply):
+            problems.append(f"job {job_name} calls a workflow other than the gated apply")
+    return problems
+
+
+class DeliveryWorkflowTests(unittest.TestCase):
+    """The delivery workflow never skips and is never cancelled by anything this caller adds."""
+
+    def read(self) -> str:
+        return DELIVERY_YML.read_text(encoding="utf-8")
+
+    def test_the_real_delivery_workflow_is_as_pinned(self):
+        self.assertEqual([], delivery_problems(self.read()))
+
+    def test_the_gated_apply_is_still_called(self):
+        data = load(self.read())
+        self.assertIn("ansible-gated-apply.yml@", data["jobs"]["delivery"]["uses"])
+
+    def test_a_paths_filter_on_the_push_is_refused(self):
+        text = self.read()
+        self.assertIn("    branches: [main]\n", text)
+        broken = text.replace("    branches: [main]\n", "    branches: [main]\n    paths:\n      - ansible/**\n", 1)
+        self.assertTrue(any("filter that could skip" in p for p in delivery_problems(broken)))
+
+    def test_a_paths_ignore_filter_on_the_push_is_refused(self):
+        text = self.read()
+        broken = text.replace("    branches: [main]\n", "    branches: [main]\n    paths-ignore:\n      - docs/**\n", 1)
+        self.assertTrue(any("filter that could skip" in p for p in delivery_problems(broken)))
+
+    def test_a_pull_request_trigger_is_refused(self):
+        text = self.read()
+        broken = text.replace("on:\n  push:\n", "on:\n  pull_request:\n  push:\n", 1)
+        self.assertNotEqual(text, broken)
+        self.assertTrue(any("trigger other than a push" in p for p in delivery_problems(broken)))
+
+    def test_a_top_level_group_is_refused_cancelling_or_not(self):
+        text = self.read()
+        for cancel in ("true", "false"):
+            with self.subTest(cancel=cancel):
+                block = f"concurrency:\n  group: ansible-delivery\n  cancel-in-progress: {cancel}\n\njobs:\n"
+                broken = text.replace("jobs:\n", block, 1)
+                self.assertNotEqual(text, broken)
+                self.assertTrue(any("top-level group" in p for p in delivery_problems(broken)))
+
+    def test_the_concurrency_rules_also_refuse_a_top_level_group_on_the_real_file(self):
+        text = self.read()
+        block = "concurrency:\n  group: ansible-delivery\n  cancel-in-progress: false\n\njobs:\n"
+        found = violations("ansible-delivery.yml", text.replace("jobs:\n", block, 1))
+        self.assertTrue(found, "the run-keyed rule no longer refuses a literal group on a push-only workflow")
+
+
 class ScriptsSuiteDependencyTests(unittest.TestCase):
     """Every place the scripts suite runs has PyYAML, so this module imports.
 

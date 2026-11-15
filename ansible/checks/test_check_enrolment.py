@@ -33,10 +33,7 @@ from check_enrolment import (
 # A playbook that applies the pull on edge1: it is refused in any name the pull cannot read.
 EVIL_PLAY = "- hosts: all\n  vars:\n    enrolled_host: edge1\n  roles:\n    - pull_trigger\n"
 # An ops1 owner_vars line that sets the control plane's image pin to a digest.
-PIN_LINE = (
-    "ring_controller_host_ledger_url: ''\n"
-    "control_plane_app_image: 'ghcr.io/branchleft/portal-apps@sha256:" + "a" * 64 + "'\n"
-)
+PIN_LINE = "control_plane_app_image: 'ghcr.io/branchleft/portal-apps@sha256:" + "a" * 64 + "'\n"
 # The loader's entry in db1's playbook, as it stands on main.
 LOADER_LINE = "    - role: ../roles/host_inputs # noqa: role-name[path]\n"
 # The stack's entry in db1's playbook, after the loader, as it stands on main.
@@ -952,8 +949,8 @@ class Sabotage(unittest.TestCase):
     def test_r6_role_dependency_names_molecule(self) -> None:
         self._edit(
             "roles/pull_trigger/meta/main.yml",
-            "  min_ansible_version: '2.21.5'\n",
-            "  min_ansible_version: '2.21.5'\ndependencies:\n  - molecule/default\n",
+            "  min_ansible_version: '2.21.6'\n",
+            "  min_ansible_version: '2.21.6'\ndependencies:\n  - molecule/default\n",
         )
         self._assert_rule("R6 ansible/roles/pull_trigger/meta/main.yml")
 
@@ -969,8 +966,8 @@ class Sabotage(unittest.TestCase):
     def test_r6_meta_main_beside_argument_specs_is_read(self) -> None:
         self._edit(
             "roles/pull_trigger/meta/main.yml",
-            "  min_ansible_version: '2.21.5'\n",
-            "  min_ansible_version: '2.21.5'\npull_trigger_signers: []\n",
+            "  min_ansible_version: '2.21.6'\n",
+            "  min_ansible_version: '2.21.6'\npull_trigger_signers: []\n",
         )
         self._assert_rule("R6 ansible/roles/pull_trigger/meta/main.yml")
 
@@ -1036,8 +1033,33 @@ class Sabotage(unittest.TestCase):
             "ci_jump_own_address: 10.0.0.2\n"
             "ci_jump_destinations:\n  - db-t1\n  - 10.0.0.5\n"
             f"ci_jump_keys:\n  - key: {key} c\n"
+            "sweego_receiver_port: 18080\nsweego_receiver_drain_port: 18081\n"
         )
         self.assertEqual(check(self.root), [])
+
+    # R10 for the sweego_receiver ports: edge1 must hold both, each a whole number.
+    def test_r10_owner_vars_lacks_a_receiver_port(self) -> None:
+        for name in ("sweego_receiver_port: 18080\n", "sweego_receiver_drain_port: 18081\n"):
+            with self.subTest(name=name):
+                self._edit("owner_vars/edge1.yml", name, "")
+                self._assert_one("R10 owner_vars/edge1.yml: must hold exactly")
+                self._reset()
+
+    def test_r10_owner_vars_receiver_port_is_text_or_a_bool(self) -> None:
+        for key, old in (
+            ("sweego_receiver_port", "18080"),
+            ("sweego_receiver_drain_port", "18081"),
+        ):
+            for bad in ("'18080'", "true", "18080.5"):
+                with self.subTest(key=key, bad=bad):
+                    self._edit("owner_vars/edge1.yml", f"{key}: {old}", f"{key}: {bad}")
+                    self._assert_one(f"R10 owner_vars/edge1.yml: {key} must be a whole number")
+                    self._reset()
+
+    def test_r10_owner_vars_receiver_port_on_another_host(self) -> None:
+        # The role is edge1's alone, so another host's file may not carry its ports.
+        self._write("owner_vars/ops1.yml", "---\nsweego_receiver_port: 18080\n")
+        self._assert_one("R10 owner_vars/ops1.yml: must hold exactly")
 
     # R10: a key beyond the two the host is allowed.
     def test_r10_owner_vars_holds_an_extra_key(self) -> None:
@@ -1300,16 +1322,18 @@ class Sabotage(unittest.TestCase):
             {"ops1": frozenset(("control_plane_app_image",))}, dict(OPTIONAL_OWNER_KEYS)
         )
         self.assertNotIn("control_plane_app_image", self._ops1_keys())
-        self._edit("owner_vars/ops1.yml", "ring_controller_host_ledger_url: ''\n", PIN_LINE)
-        self.assertEqual(check(self.root), [])
-
-    def test_r10_ops1_control_plane_pin_must_be_text(self) -> None:
-        self._edit("owner_vars/ops1.yml", "ring_controller_host_ledger_url: ''\n", "")
         self._edit(
             "owner_vars/ops1.yml",
             "ring_controller_host_bundle_url: ''\n",
-            "ring_controller_host_bundle_url: ''\n"
-            "ring_controller_host_ledger_url: ''\ncontrol_plane_app_image: 7\n",
+            "ring_controller_host_bundle_url: ''\n" + PIN_LINE,
+        )
+        self.assertEqual(check(self.root), [])
+
+    def test_r10_ops1_control_plane_pin_must_be_text(self) -> None:
+        self._edit(
+            "owner_vars/ops1.yml",
+            "ring_controller_host_bundle_url: ''\n",
+            "ring_controller_host_bundle_url: ''\ncontrol_plane_app_image: 7\n",
         )
         self._assert_one("R10 owner_vars/ops1.yml: control_plane_app_image must be text")
 
@@ -1492,9 +1516,19 @@ class Sabotage(unittest.TestCase):
     # R2: a host with no row in the table keeps the exact pin (sabotage c).
     def test_r2_pinned_play_var_on_a_host_with_no_row(self) -> None:
         self._edit(
+            "playbooks/demo1.yml",
+            "    enrolled_host: demo1\n",
+            "    enrolled_host: demo1\n    deploy_tooling_host_class: gateway\n",
+        )
+        self._assert_one("R2 demo1.yml: vars must be exactly")
+
+    # R2: the class of a host with a row is exact too, so ops1 cannot be moved to another class
+    # in its playbook (sabotage c2).
+    def test_r2_internal_class_with_another_class(self) -> None:
+        self._edit(
             "playbooks/ops1.yml",
-            "    enrolled_host: ops1\n",
-            "    enrolled_host: ops1\n    deploy_tooling_host_class: gateway\n",
+            "deploy_tooling_host_class: internal",
+            "deploy_tooling_host_class: gateway",
         )
         self._assert_one("R2 ops1.yml: vars must be exactly")
 

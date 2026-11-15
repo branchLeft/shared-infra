@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Prepares the tenant database host's Percona Server stack and deploys its attested image once, on an empty host.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

@@ -1,0 +1,5 @@
+{{ spool_paths_marker }}
+{{ item.ssh_host if item.ssh_port == 22 else '[' ~ item.ssh_host ~ ']:' ~ item.ssh_port }} {{ item.host_key }}
+{% if item.jump %}
+{{ item.jump.host if item.jump.port == 22 else '[' ~ item.jump.host ~ ']:' ~ item.jump.port }} {{ item.jump.host_key }}
+{% endif %}

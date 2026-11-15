@@ -1,0 +1,20 @@
+---
+# The compose unit's retry case, on its own. It runs the installed template unit with
+# its real Restart=, RestartSec= and StartLimit*= (no override shortens them), and waits
+# for the unit's own timers three times (about 310 seconds in all), so it shares a shard
+# with no other case. The case file is the default scenario's, run from there: it is not
+# copied, and ansible/checks/test_deploy_tooling_cases_covered.py fails if it is run by
+# two scenarios or by none.
+- name: Verify
+  hosts: all
+  gather_facts: false
+  # The role's own fixed values, so the case is built from the same constants the role
+  # installs.
+  vars_files:
+    - ../../vars/main.yml
+  tasks:
+    - name: Apply the role to a host of class app, standard variant, and read it back
+      ansible.builtin.include_tasks: ../default/tasks/start_standard.yml
+
+    - name: Case, the compose unit retries a failed start and a deploy still sees the failure
+      ansible.builtin.include_tasks: ../default/tasks/case_compose_retry.yml

@@ -1,0 +1,8 @@
+---
+# The nightly timer stays off. Turning it on starts a nightly dump of production
+# data and a copy of it off the host: a production apply (README).
+control_plane_backup_timer_enabled: false
+
+# False leaves the timer as it is on the host. Set true, together with
+# control_plane_backup_timer_enabled false, to stop a running timer (README).
+control_plane_backup_timer_may_disable: false

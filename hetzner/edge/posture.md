@@ -86,7 +86,7 @@ rule that never enforced (it was `preview: true`), so it is a number no
 traffic has been measured against, and the key `{http.request.remote.host}`
 could collapse real clients onto a Docker bridge address (for example
 `172.18.0.1` behind the docker-proxy), in which case every collapsed client
-shares one budget per site. The `RateLimitDecliningRealClients` alert excludes
+shares one budget per site. The `RateLimitDeclinesSustained` alert excludes
 `172.16.0.0/12` keys, so a bridge collapse would not alert on its own; the
 tripwire is the blackbox probes seeing a 429. Traffic that may legitimately
 exceed 200 requests per 60 seconds from one address includes Nextcloud sync
@@ -151,3 +151,9 @@ Ghost's generic portal error, not a specific wait time, because Caddy's
 `rate_limit` answers a bodyless 429 and Ghost's own JSON-error parsing
 falls back to it (doc 12 §1 has the verified detail); and the zone's
 memory is swept, not hard-capped, same as the general zone above.
+
+## Inbound webhook path
+
+The dedicated throttle on a site that only receives signed callbacks (`EdgeSite.inboundWebhookPath`), in its own zone, on the one matched `POST` path. It has no posture field: it guards a route that is public the moment the site is named, so no setting may switch it off.
+
+Ten events per 60 seconds per address, a judgement and not a measurement, and a value for the owner to confirm before the route goes live. A complaint callback is rare and small, and the sender retries a refused delivery on a timer measured in minutes, so a refused burst is delayed, not lost. The figure is one twentieth of the general budget, and it assumes the sender delivers from few addresses; if it delivers a burst from one address after receiver downtime, the first retry window is where that would show. Neither the sender's concurrency nor its source addresses are published, so both are unproven.

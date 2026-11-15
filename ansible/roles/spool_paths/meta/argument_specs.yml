@@ -1,0 +1,67 @@
+---
+argument_specs:
+  main:
+    short_description: Hold one supervised ssh forward from ops1 to the spool drain port of each host a descriptor names
+    description: >-
+      Reads the collector's descriptor directory and the owner's table of far hosts, and for each
+      host both name makes one client configuration, one pinned known_hosts file and one enabled
+      instance of a template unit that runs ssh -N with a local forward from the descriptor's alias
+      address on ops1 to the far host's loopback drain port. The aliases sit on a dummy interface
+      the network manager owns. A host no descriptor names gets nothing. The role never creates,
+      reads or removes a private key. Every input is public data and none is a secret.
+    author: branchLeft
+    options:
+      spool_paths_hosts:
+        type: list
+        elements: dict
+        default: []
+        description: >-
+          The owner's table of far hosts. A row is used only while a descriptor names the same
+          slug. Each row holds the keys below and nothing else.
+        options:
+          slug:
+            type: str
+            required: true
+            description: The host's name, equal to its descriptor's slug.
+          ssh_host:
+            type: str
+            required: true
+            description: The address or name ops1 dials, the far host's public address or, through a jump host, its private one.
+          ssh_port:
+            type: int
+            default: 22
+            description: The far host's ssh port, 1 to 65535.
+          spool_port:
+            type: int
+            required: true
+            description: The far host's drain port, bound on its loopback, 1 to 65535.
+          host_key:
+            type: str
+            required: true
+            description: The far host's public key, one key type and its base64 body, pinned for the path.
+          jump:
+            type: dict
+            description: The jump host the path goes through, if any.
+            options:
+              host:
+                type: str
+                required: true
+                description: The jump host's address or name.
+              port:
+                type: int
+                default: 22
+                description: The jump host's ssh port, 1 to 65535.
+              host_key:
+                type: str
+                required: true
+                description: The jump host's public key, one key type and its base64 body.
+      spool_paths_alias_block:
+        type: str
+        default: ''
+        description: >-
+          The IPv4 block every alias address must sit in. It must be set before any path is built,
+          lie inside 10/8, 172.16/12 or 192.168/16 and avoid 10.20.0.0/16.
+      spool_paths_shim_port:
+        type: int
+        default: 8080
+        description: The port every host's drain surface is reached on, the collector's own shim port, 1 to 65535.

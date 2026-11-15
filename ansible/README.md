@@ -15,9 +15,11 @@ first), then `roles/host_baseline`: `playbooks/edge1.yml` adds
 in `checks/check_enrolment.py`), then
 `roles/ci_login`, then `roles/ci_jump` (the jump account's root-owned key file and sshd Match block; it only reports
 until the owner turns it on in `owner_vars/edge1.yml`), then `roles/deploy_tooling`, then `roles/edge_stack`, then
-`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack` (last), and
+`roles/exporters_and_collectors`, then `roles/ntfy_pager`, then `roles/monitoring_stack`, then
+`roles/sweego_receiver` (the complaint-webhook receiver; last, and refusing until the owner has placed its two secret files), and
 `playbooks/ops1.yml` adds `roles/breakglass_mint_host`, then
-`roles/status_page`, then `roles/control_plane`, then `roles/nextcloud_stack`, then
+`roles/control_plane`, then `roles/status_page` (after it, because the control plane installs the
+DOCKER-USER drop for the page's port), then `roles/nextcloud_stack`, then
 `roles/backup_worker` and `roles/backup_restore` (the restore follows the worker, whose variables it
 reads), then `roles/control_plane_db` last (it asserts the directory `roles/control_plane` makes; a
 plain apply makes one directory and runs no step). `owner_vars/ops1.yml` holds ops1's step
@@ -27,7 +29,7 @@ allow-list (`pull_trigger_steps`), the one key R10 allows for ops1. `playbooks/a
 `roles/deploy_tooling` (as class app, standard variant) and `roles/deploy_slot_keys`, then
 `roles/export_bundler`, last.
 `playbooks/db1.yml` applies the two pull roles, then `roles/host_inputs`, the loader of
-the host's private inputs, then `roles/host_baseline`, then `roles/db1_stack`, then
+the host's private inputs, then `roles/host_baseline`, then `roles/deploy_tooling` (as class internal), then `roles/db1_stack`, then
 `roles/db1_backup_timers`, then `roles/db1_grants` last; `roles/tunnel_account` is left out of it.
 `playbooks/demo1.yml` applies the two pull roles and then `roles/demo1_build` and
 `roles/demo1_egress_spool`, and not `roles/host_baseline`, `roles/egress_nat` or
@@ -193,9 +195,8 @@ same way:
 CI runs the same commands, the pin check, and the harness over every role. The workflow
 (`.github/workflows/ansible.yml`) runs on every pull request and every push to
 `main`, with no path filter, so its jobs always report. The first job decides
-whether a file under `ansible/`, the two lint files or the workflow itself
-changed (`ansible/`, `hetzner/` and `mail/provision/` are watched whole); when none did, the other
-jobs are skipped and the gate passes.
+whether any file changed (`.`, the whole repository, is watched, because three of the lint job's
+checks enumerate the checkout); when none did, the other jobs are skipped and the gate passes.
 
 What runs, by event:
 
@@ -237,11 +238,21 @@ The workflow has these kinds of job:
   with `--scenario` set to the entry's scenario, and only after `quick-lint` has
   passed, so a malformed file is red in minutes and starts no container. It does
   not wait for the full `lint`. `shard-advisory` is the same job for the advisory
-  entries. `report` and `daily-issue` are described below. Each shard
+  entries. `report` and `daily-summary` are described below. Each shard
   has its own time limit (25 minutes), so the run time does not grow with the
   number of roles in one job. A role whose one scenario would not fit in the
   limit puts its refusal cases in a second scenario, which is a second shard,
   not in a longer limit.
+
+The `lint` job is a matrix of three legs that run at once: `static` (the
+pins, yamllint, ansible-lint, mypy, ruff and the role program and library
+checks), `checks` (the unit tests of the harness, the checks and the tools) and
+`units` (every role's unit tests). Run one after the other these took 15 to 20
+minutes and a slow runner reached the job's limit; run at once the job takes as
+long as the longest leg. A step names its leg in `if: matrix.part == '<leg>'`,
+and `test_ci_gate_order.py` holds each condition to a leg of the matrix so a
+typo cannot skip a step everywhere. The job's result is success only when every
+leg succeeded, so the gate reads it as before.
 
 The gate job is named `Lint and test the Ansible roles`. The ruleset requires
 a check with exactly that name, and a matrix job would report its checks under
@@ -257,11 +268,10 @@ a manual run, a skipped blocking shard job fails the gate. A scheduled or manual
 treats every shard as blocking.
 
 `report` runs after every shard job, reads the Actions API with a read-only token and
-writes the step summary; it is not a required check. `daily-issue` runs only for a
-scheduled run whose gate failed. It opens one issue titled "Daily container tests red:
-DATE" with the run link and the failed shard ids and the label `ci-red-daily`, or comments
-on the one still open. It mentions and assigns no one and wakes no agent; it is the only
-job with write access, `issues: write`.
+writes the step summary; it is not a required check. `daily-summary` runs only for a
+scheduled run whose gate failed. It writes "Daily container tests red: DATE", the run link
+and the failed shard ids to that run's step summary. It files no issue, mentions and assigns
+no one, wakes no agent and has read access only: the red run is the signal.
 `ansible/checks/advisory_passes.py SHARD` counts how many daily runs in a row a shard
 passed, for the pull request that moves it on or off the list.
 
