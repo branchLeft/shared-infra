@@ -211,11 +211,22 @@ export const hostRedirects: HostRedirect[] = [
 ];
 
 /**
- * Hostnames the edge answers directly with a fixed page instead of proxying.
- * Empty: its one entry, the `publicpress.co.uk` holding page, gave way to the
- * `publicpress-website` site above. A new entry needs its page content
- * registered by `name` in `STATIC_SITE_CONTENT` in `hetzner/edge/render.ts` --
- * this registry stays hostname and addressing only, same rule as the rest of
- * this file.
+ * Hostnames the edge answers directly instead of proxying: a fixed page, or a
+ * fixed set of text files. A page needs its content registered by `name` in
+ * `STATIC_SITE_CONTENT` in `hetzner/edge/render.ts`; a set of files needs it
+ * registered by `name` in `SHARED_TENANT_FILES` in
+ * `hetzner/edge/sharedTenantFiles.ts`. This registry stays hostname and
+ * addressing only, same rule as the rest of this file.
  */
-export const staticSites: StaticSite[] = [];
+export const staticSites: StaticSite[] = [
+  {
+    // The shared tenant domain (ghost-platform-docs D10): customer sites live
+    // at *.sites.publicpress.co.uk, and this apex answers only the fixed files
+    // that say PublicPress hosts those sites and does not publish them. Their
+    // text is in hetzner/edge/sharedTenantFiles.ts. It is not a wildcard: a
+    // tenant's own hostname does not inherit these files, and each tenant that
+    // needs one is its own deliberate entry.
+    name: 'sites-tenant-signals',
+    hostname: 'sites.publicpress.co.uk',
+  },
+];
