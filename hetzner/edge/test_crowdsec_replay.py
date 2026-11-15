@@ -140,6 +140,7 @@ class AppsecRequest:
     host: str
     uri: str
     headers: Mapping[str, str]
+    body: bytes = b""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -154,17 +155,37 @@ class LogLine:
 
 @dataclasses.dataclass(frozen=True)
 class Case:
-    """A source address, the traffic it sends, and whether it must be banned."""
+    """A source address, the traffic it sends, and whether it must be banned.
+
+    `watched` means the out-of-band Core Rule Set scenario must record an alert
+    for the address while no bouncer is told to refuse it: the scenario is
+    watch-only (posture.md, "Watch-only scenarios").
+    """
 
     name: str
     ip: str
     banned: bool
     appsec: Sequence[AppsecRequest] = ()
     log: Sequence[LogLine] = ()
+    watched: bool = False
+
+
+# The out-of-band Core Rule Set scenario, which only watches.
+OUT_OF_BAND_SCENARIO = "crowdsecurity/crowdsec-appsec-outofband"
 
 
 def preview_post(host: str, preview: str | None) -> AppsecRequest:
     return AppsecRequest("POST", host, "/?admin_toolbar=0", preview_headers(host, preview))
+
+
+def known_exploits(host: str) -> tuple[AppsecRequest, ...]:
+    """Two requests the hub's in-band virtual patches refuse: a leaked .env and a
+    leaked git config. Different rules, so the second inside a minute bans."""
+    headers = {"User-Agent": "Mozilla/5.0 zgrab/0.x", "Accept": "*/*"}
+    return (
+        AppsecRequest("GET", host, "/.env", headers),
+        AppsecRequest("GET", host, "/.git/config", headers),
+    )
 
 
 GHOST_ADMIN_API_PATHS = (
@@ -203,11 +224,13 @@ CASES: tuple[Case, ...] = (
             for method in ("GET", "PUT")
         ),
     ),
-    # Probes: each must still ban.
+    # Probes the Core Rule Set alone sees: each is recorded, and none bans while
+    # the out-of-band scenario only watches. Before that, each banned.
     Case(
         "probe: an SQL injection in the query string of a Ghost site",
         "203.0.113.20",
-        banned=True,
+        banned=False,
+        watched=True,
         appsec=tuple(
             AppsecRequest(
                 "GET",
@@ -221,15 +244,26 @@ CASES: tuple[Case, ...] = (
     Case(
         "probe: the preview shape on a host that is not a Ghost site",
         "203.0.113.21",
-        banned=True,
+        banned=False,
+        watched=True,
         appsec=tuple(preview_post(OTHER_HOST, THEME_PREVIEW) for _ in range(REPEATS)),
     ),
     Case(
         "probe: a bodiless text/html POST to a Ghost site without the preview header",
         "203.0.113.22",
-        banned=True,
+        banned=False,
+        watched=True,
         appsec=tuple(preview_post(GHOST_HOST, None) for _ in range(REPEATS)),
     ),
+    # Known exploits: refused in-band, one request at a time, and two different
+    # ones inside a minute ban. This half of the WAF stays enforcing.
+    Case(
+        "probe: two known exploits, refused in-band",
+        "203.0.113.23",
+        banned=True,
+        appsec=known_exploits(OTHER_HOST),
+    ),
+    # Probes the access log shows: each must still ban.
     Case(
         "probe: generic admin interfaces on a Ghost site",
         "203.0.113.30",
@@ -267,6 +301,54 @@ CASES: tuple[Case, ...] = (
         ),
     ),
 )
+
+
+def go_duration_minutes(text: str) -> float:
+    """Minutes in a Go duration string as cscli prints one, such as `29m58.3s`."""
+    units = {"h": 60.0, "m": 1.0, "s": 1 / 60}
+    total = 0.0
+    number = ""
+    for char in text:
+        if char.isdigit() or char in ".-":
+            number += char
+            continue
+        if char not in units or not number:
+            fail(f"not a duration: {text!r}")
+        total += float(number) * units[char]
+        number = ""
+    if number or not text:
+        fail(f"not a duration: {text!r}")
+    return total
+
+
+def run_cases(stack: "Stack", cases: Sequence[Case]) -> dict[str, list[int]]:
+    """Play every case at the stack; returns the AppSec status of each request, by case."""
+    statuses: dict[str, list[int]] = {}
+    for case in cases:
+        for request in case.appsec:
+            status = stack.forward(case.ip, request)
+            if status not in (200, 403):
+                fail(f"{case.name}: AppSec answered {status}")
+            statuses.setdefault(case.name, []).append(status)
+        stack.write_log([caddy_log_line(case.ip, line) for line in case.log])
+    return statuses
+
+
+def await_verdicts(stack: "Stack", cases: Sequence[Case]) -> dict[str, list[str]]:
+    """Wait until every expected ban and every expected watched alert has landed,
+    then a little longer for anything not expected; returns the enforced bans."""
+    expected = {case.ip for case in cases if case.banned}
+    watched = [case.ip for case in cases if case.watched]
+    deadline = time.monotonic() + VERDICT_TIMEOUT_S
+    while time.monotonic() < deadline:
+        bans = stack.banned()
+        if expected <= bans.keys() and all(
+            OUT_OF_BAND_SCENARIO in stack.alerted(ip) for ip in watched
+        ):
+            break
+        time.sleep(3)
+    time.sleep(SETTLE_S)
+    return stack.banned()
 
 
 def caddy_log_line(ip: str, line: LogLine) -> str:
@@ -397,17 +479,21 @@ class Stack:
         """Send `request` to AppSec the way caddy-crowdsec-bouncer v0.15.0 does.
 
         A request with no body goes as a GET with no Content-Length (the
-        bouncer's own transport drops the client's), the original headers are
-        copied, and the original method, URI, host, address and user agent ride
-        in the X-Crowdsec-Appsec-* headers.
+        bouncer's own transport drops the client's); one with a body goes as a
+        POST carrying it. The original headers are copied, and the original
+        method, URI, host, address and user agent ride in the
+        X-Crowdsec-Appsec-* headers.
         """
         connection = http.client.HTTPConnection("127.0.0.1", self.appsec_port, timeout=10)
         try:
-            connection.putrequest("GET", "/", skip_host=True, skip_accept_encoding=True)
+            method = "POST" if request.body else "GET"
+            connection.putrequest(method, "/", skip_host=True, skip_accept_encoding=True)
             connection.putheader("Host", "crowdsec:7422")
             for name, value in request.headers.items():
-                if name != "User-Agent":
+                if name not in ("User-Agent", "Content-Length"):
                     connection.putheader(name, value)
+            if request.body:
+                connection.putheader("Content-Length", str(len(request.body)))
             connection.putheader("X-Crowdsec-Appsec-Ip", ip)
             connection.putheader("X-Crowdsec-Appsec-Uri", request.uri)
             connection.putheader("X-Crowdsec-Appsec-Host", request.host)
@@ -417,7 +503,7 @@ class Stack:
                 "X-Crowdsec-Appsec-User-Agent", request.headers.get("User-Agent", "")
             )
             connection.putheader("User-Agent", "caddy-crowdsec-bouncer")
-            connection.endheaders()
+            connection.endheaders(request.body or None)
             response = connection.getresponse()
             response.read()
             return response.status
@@ -430,17 +516,57 @@ class Stack:
                 handle.write(line + "\n")
                 handle.flush()
 
-    def banned(self) -> dict[str, list[str]]:
-        """Each banned address, with the scenarios behind its decisions."""
-        found: dict[str, list[str]] = {}
+    def decisions(self) -> list[dict[str, object]]:
+        """Every IP ban decision CrowdSec holds, simulated or not."""
+        found: list[dict[str, object]] = []
         alerts = self.cscli_json("decisions", "list", "--limit", "0")
         for alert in alerts if isinstance(alerts, list) else []:
             for decision in alert.get("decisions") or []:
                 if decision.get("type") == "ban" and decision.get("scope") == "Ip":
-                    found.setdefault(str(decision.get("value")), []).append(
-                        str(decision.get("scenario"))
-                    )
+                    found.append(decision)
         return found
+
+    def banned(self) -> dict[str, list[str]]:
+        """Each address a bouncer is told to refuse, with the scenarios behind
+        its decisions. A simulated decision refuses nobody, so it is not here."""
+        found: dict[str, list[str]] = {}
+        for decision in self.decisions():
+            if not decision.get("simulated"):
+                found.setdefault(str(decision.get("value")), []).append(
+                    str(decision.get("scenario"))
+                )
+        return found
+
+    def ban_minutes(self, ip: str, scenario: str) -> list[float]:
+        """How long each enforced decision `scenario` made against `ip` runs, in minutes."""
+        return [
+            go_duration_minutes(str(decision.get("duration")))
+            for decision in self.decisions()
+            if str(decision.get("value")) == ip
+            and str(decision.get("scenario")) == scenario
+            and not decision.get("simulated")
+        ]
+
+    def add_decision(self, ip: str) -> None:
+        """A one-minute ban by hand, as an operator's `cscli decisions add` makes one."""
+        self.compose(
+            "exec", "-T", "crowdsec", "cscli", "decisions", "add",
+            "--ip", ip, "--duration", "1m", "--reason", "replay: an earlier ban",
+        )  # fmt: skip
+
+    def alerted(self, ip: str) -> list[str]:
+        """The scenario behind each alert raised against `ip`."""
+        alerts = self.cscli_json("alerts", "list", "--ip", ip, "--limit", "0")
+        return [
+            str(alert.get("scenario")) for alert in (alerts if isinstance(alerts, list) else [])
+        ]
+
+    def metrics(self) -> str:
+        """CrowdSec's own Prometheus exposition, as edge1's monitoring scrapes it."""
+        ran = self.compose(
+            "exec", "-T", "crowdsec", "wget", "-q", "-O", "-", "http://127.0.0.1:6060/metrics",
+        )  # fmt: skip
+        return ran.stdout
 
     def alerts_for(self, ip: str) -> list[str]:
         """Every alert raised against `ip`, with the rule each event names."""
@@ -476,6 +602,7 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
     stack: Stack
     workdir: pathlib.Path
     bans: dict[str, list[str]]
+    statuses: dict[str, list[int]]
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -486,28 +613,12 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
         cls.stack = Stack(cls.workdir)
         try:
             cls.stack.start()
-            for case in CASES:
-                for request in case.appsec:
-                    status = cls.stack.forward(case.ip, request)
-                    if status not in (200, 403):
-                        fail(f"{case.name}: AppSec answered {status}")
-                cls.stack.write_log([caddy_log_line(case.ip, line) for line in case.log])
-            cls.bans = cls._await_verdicts()
+            cls.statuses = run_cases(cls.stack, CASES)
+            cls.bans = await_verdicts(cls.stack, CASES)
         except BaseException:
             cls.stack.stop()
             shutil.rmtree(cls.workdir, ignore_errors=True)
             raise
-
-    @classmethod
-    def _await_verdicts(cls) -> dict[str, list[str]]:
-        expected = {case.ip for case in CASES if case.banned}
-        deadline = time.monotonic() + VERDICT_TIMEOUT_S
-        bans = cls.stack.banned()
-        while not expected <= bans.keys() and time.monotonic() < deadline:
-            time.sleep(3)
-            bans = cls.stack.banned()
-        time.sleep(SETTLE_S)
-        return cls.stack.banned()
 
     @classmethod
     def tearDownClass(cls) -> None:
@@ -545,6 +656,20 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
                 explanation = self._explain(case)
                 print(explanation)
                 self.assertIn(case.ip, self.bans, explanation)
+
+    def test_the_core_rule_set_records_its_probes_and_bans_none(self) -> None:
+        for case in CASES:
+            if not case.watched:
+                continue
+            with self.subTest(case.name):
+                explanation = self._explain(case)
+                print(explanation)
+                self.assertIn(OUT_OF_BAND_SCENARIO, self.stack.alerted(case.ip), explanation)
+                self.assertNotIn(case.ip, self.bans, explanation)
+
+    def test_known_exploits_are_refused_in_band(self) -> None:
+        case = next(entry for entry in CASES if entry.name.endswith("refused in-band"))
+        self.assertEqual(self.statuses.get(case.name), [403, 403], self._explain(case))
 
 
 # --- Failed Ghost admin sign-ins and admin API key failures (workspace#3754) ---
@@ -710,7 +835,9 @@ class FailedGhostSignInsAreBannedAndTheOwnersAreNot(unittest.TestCase):
     def _alerted(self, ip: str) -> list[str]:
         """The scenario behind each alert raised against `ip`."""
         alerts = self.stack.cscli_json("alerts", "list", "--ip", ip, "--limit", "0")
-        return [str(alert.get("scenario")) for alert in (alerts if isinstance(alerts, list) else [])]
+        return [
+            str(alert.get("scenario")) for alert in (alerts if isinstance(alerts, list) else [])
+        ]
 
     def test_a_burst_of_failed_sign_ins_or_key_failures_is_banned_by_the_scenario(self) -> None:
         for case in BRUTE_FORCE_CASES:
@@ -732,6 +859,392 @@ class FailedGhostSignInsAreBannedAndTheOwnersAreNot(unittest.TestCase):
                 explanation = self._explain(case)
                 print(explanation)
                 self.assertNotIn(case.ip, self.bans, explanation)
+
+
+# --- The lockouts of 14 and 15 Nov, replayed, and what must still ban ---
+#
+# The owner was banned from every site twice on 15 Nov while on a Nextcloud
+# Talk video call, and on 14 Nov while editing the blog (the classes above
+# replay the blog). Which rule fired on 15 Nov was not read off the host, so
+# this replays the traffic a signed-in Talk call and the desktop sync client
+# make, both to AppSec and to the access log, and requires no ban.
+
+NEXTCLOUD_HOST = "cloud.branchleft.co.uk"
+TALK_ROOM = "k7v3qz9p"
+NC_USER = "owner"
+OWN_HOST_IP = "10.20.1.50"  # ops1, on the never-ban list
+FIRST_RUNG_MINUTES = 10
+SECOND_RUNG_MINUTES = 30
+ADMIN_PROBING = "crowdsecurity/http-admin-interface-probing"
+
+NC_COOKIE = (
+    "oc_sessionPassphrase=Zk1lZ2h0c2lnbmF0dXJlcGFzc3BocmFzZQ%3D%3D; "
+    "nc_session_id=3c9b2f0e8a1d4f6b9e7c5a3d1f0b8e6a; "
+    "ocx7a1b2c3d4e5=k2v9q8w7e6r5t4y3u2i1o0p9; "
+    "__Host-nc_sameSiteCookielax=true; __Host-nc_sameSiteCookiestrict=true"
+)
+
+# One WebRTC offer and one ICE candidate, as Talk's own signalling sends them
+# through Nextcloud when there is no separate signalling server.
+SDP_OFFER = (
+    "v=0\r\no=- 4611731400430051336 2 IN IP4 127.0.0.1\r\ns=-\r\nt=0 0\r\n"
+    "a=group:BUNDLE 0 1\r\na=extmap-allow-mixed\r\na=msid-semantic: WMS 3f2a9c\r\n"
+    "m=audio 9 UDP/TLS/RTP/SAVPF 111 63 9 0 8 13 110 126\r\nc=IN IP4 0.0.0.0\r\n"
+    "a=rtcp:9 IN IP4 0.0.0.0\r\na=ice-ufrag:Hk3p\r\na=ice-pwd:9vYlq0dS8m2PbXk1fJb0yZ7A\r\n"
+    "a=ice-options:trickle\r\na=fingerprint:sha-256 4A:AD:B9:B1:3F:82:18:3B:26:12:B7:3A:"
+    "5A:7E:8C:9A:8F:5E:3D:2C:1B:0A:99:88:77:66:55:44:33:22:11:00\r\n"
+    "a=setup:actpass\r\na=mid:0\r\na=sendrecv\r\na=rtcp-mux\r\na=rtpmap:111 opus/48000/2\r\n"
+    "a=rtcp-fb:111 transport-cc\r\na=fmtp:111 minptime=10;useinbandfec=1\r\n"
+    "m=video 9 UDP/TLS/RTP/SAVPF 96 97 102\r\nc=IN IP4 0.0.0.0\r\na=mid:1\r\na=sendrecv\r\n"
+    "a=rtpmap:96 VP8/90000\r\na=rtcp-fb:96 goog-remb\r\na=rtcp-fb:96 nack pli\r\n"
+)
+ICE_CANDIDATE = (
+    "candidate:842163049 1 udp 1677729535 198.51.100.60 54400 typ srflx raddr 0.0.0.0 "
+    "rport 0 generation 0 ufrag Hk3p network-cost 999"
+)
+
+
+def nextcloud_headers(content_type: str | None = None, ocs: bool = True) -> dict[str, str]:
+    """What the Nextcloud web app sends on a signed-in API call."""
+    headers = browser_headers(NEXTCLOUD_HOST, "application/json, text/plain, */*", "empty")
+    headers["Referer"] = f"https://{NEXTCLOUD_HOST}/call/{TALK_ROOM}"
+    headers["Cookie"] = NC_COOKIE
+    headers["requesttoken"] = "Yk9vT2x3N2s5c0J4c1hYb1dWZ0E9OjFEdkVhV2JKc2c="
+    if ocs:
+        headers["OCS-APIRequest"] = "true"
+    if content_type is not None:
+        headers["Content-Type"] = content_type
+    return headers
+
+
+def signalling_message(kind: str, payload: Mapping[str, object]) -> bytes:
+    """One internal-signalling POST body: a JSON list of messages, each a JSON string."""
+    inner = json.dumps(
+        {
+            "to": "b7d1e9c2a4f6",
+            "sid": "1731700000123",
+            "roomType": "video",
+            "type": kind,
+            "payload": payload,
+        }
+    )
+    messages = json.dumps([{"ev": "message", "fn": inner, "sessionId": "a3c5e7f9b1d2"}])
+    return json.dumps({"messages": messages}).encode()
+
+
+def talk_call() -> tuple[AppsecRequest, ...]:
+    """One round of a signed-in Talk video call, repeated as a call repeats it."""
+    ocs = "/ocs/v2.php/apps/spreed/api"
+    as_json = nextcloud_headers("application/json")
+    plain = nextcloud_headers()
+    one_round = (
+        AppsecRequest("POST", NEXTCLOUD_HOST, f"{ocs}/v4/room/{TALK_ROOM}/participants/active",
+                      as_json, b'{"force":true}'),
+        AppsecRequest("POST", NEXTCLOUD_HOST, f"{ocs}/v4/call/{TALK_ROOM}", as_json,
+                      b'{"flags":7,"silent":false,"recordingConsent":false}'),
+        AppsecRequest("POST", NEXTCLOUD_HOST, f"{ocs}/v3/signaling/{TALK_ROOM}", as_json,
+                      signalling_message("offer", {"type": "offer", "sdp": SDP_OFFER})),
+        AppsecRequest("POST", NEXTCLOUD_HOST, f"{ocs}/v3/signaling/{TALK_ROOM}", as_json,
+                      signalling_message("candidate", {"candidate": {
+                          "candidate": ICE_CANDIDATE, "sdpMid": "0", "sdpMLineIndex": 0}})),
+        AppsecRequest("GET", NEXTCLOUD_HOST, f"{ocs}/v3/signaling/{TALK_ROOM}", plain),
+        AppsecRequest("GET", NEXTCLOUD_HOST,
+                      f"{ocs}/v4/room/{TALK_ROOM}/participants?includeStatus=true", plain),
+        AppsecRequest("GET", NEXTCLOUD_HOST,
+                      f"{ocs}/v1/chat/{TALK_ROOM}?lookIntoFuture=1&limit=100&timeout=30"
+                      "&lastKnownMessageId=4211&markNotificationsAsRead=0&includeLastKnown=0",
+                      plain),
+        AppsecRequest("POST", NEXTCLOUD_HOST, f"{ocs}/v1/chat/{TALK_ROOM}", as_json,
+                      json.dumps({"message": "Can you hear me? I'm on -- my mic's muted; "
+                                  "one sec & I'll share the 'Q4' doc.",
+                                  "actorDisplayName": "", "replyTo": 0, "silent": False,
+                                  "referenceId": "9f86d081884c7d659a2feaa0c55ad015"}).encode()),
+        AppsecRequest("GET", NEXTCLOUD_HOST, "/ocs/v2.php/apps/notifications/api/v2/notifications",
+                      plain),
+        AppsecRequest("GET", NEXTCLOUD_HOST, f"/index.php/avatar/{NC_USER}/64/dark",
+                      nextcloud_headers(ocs=False)),
+    )  # fmt: skip
+    return tuple(request for _ in range(REPEATS) for request in one_round)
+
+
+def talk_call_log() -> tuple[LogLine, ...]:
+    """The access log of the same call, with the answers Talk gives mid-call."""
+    ocs = "/ocs/v2.php/apps/spreed/api"
+    one_round = (
+        LogLine(NEXTCLOUD_HOST, f"{ocs}/v4/room/{TALK_ROOM}/participants/active", 200, "POST"),
+        LogLine(NEXTCLOUD_HOST, f"{ocs}/v4/call/{TALK_ROOM}", 200, "POST"),
+        LogLine(NEXTCLOUD_HOST, f"{ocs}/v3/signaling/{TALK_ROOM}", 200, "POST"),
+        LogLine(NEXTCLOUD_HOST, f"{ocs}/v3/signaling/{TALK_ROOM}", 404),
+        LogLine(NEXTCLOUD_HOST, f"{ocs}/v4/room/{TALK_ROOM}/participants?includeStatus=true", 200),
+        LogLine(NEXTCLOUD_HOST, f"{ocs}/v1/chat/{TALK_ROOM}?lookIntoFuture=1&limit=100", 304),
+        LogLine(NEXTCLOUD_HOST, f"{ocs}/v4/call/{TALK_ROOM}", 412, "PUT"),
+        LogLine(NEXTCLOUD_HOST, f"/index.php/avatar/{NC_USER}/64/dark", 304),
+    )
+    guests = tuple(
+        LogLine(NEXTCLOUD_HOST, f"/index.php/avatar/guest-{index}/64", 404) for index in range(12)
+    )
+    return (*[line for _ in range(REPEATS) for line in one_round], *guests)
+
+
+PROPFIND_BODY = (
+    b'<?xml version="1.0"?><d:propfind xmlns:d="DAV:" xmlns:oc="http://owncloud.org/ns" '
+    b'xmlns:nc="http://nextcloud.org/ns"><d:prop><d:getlastmodified/><d:getcontentlength/>'
+    b"<d:resourcetype/><d:getetag/><oc:fileid/><oc:permissions/><nc:has-preview/></d:prop>"
+    b"</d:propfind>"
+)
+SYNC_CLIENT_UA = (
+    "Mozilla/5.0 (Macintosh) mirall/3.14.3 (Nextcloud, osx-23.3.0 ClientArchitecture: arm64 "
+    "OsArchitecture: arm64)"
+)
+
+
+def sync_and_files() -> tuple[AppsecRequest, ...]:
+    """The desktop client checking a folder, and the web app listing one."""
+    dav = f"/remote.php/dav/files/{NC_USER}/Documents/"
+    client = {
+        "User-Agent": SYNC_CLIENT_UA,
+        "Authorization": "Basic b3duZXI6YXBwLXBhc3N3b3JkLW5vdC1yZWFs",
+        "Content-Type": "application/xml; charset=utf-8",
+        "Depth": "1",
+        "Accept": "*/*",
+    }
+    web = nextcloud_headers("application/xml; charset=utf-8", ocs=False)
+    web["Depth"] = "1"
+    return tuple(
+        request
+        for _ in range(REPEATS)
+        for request in (
+            AppsecRequest("PROPFIND", NEXTCLOUD_HOST, dav, client, PROPFIND_BODY),
+            AppsecRequest("PROPFIND", NEXTCLOUD_HOST, dav, web, PROPFIND_BODY),
+        )
+    )
+
+
+def sync_and_files_log() -> tuple[LogLine, ...]:
+    """Sync and browsing as the access log shows them: a 404 before each new upload,
+    and a 404 for each file that has no preview yet."""
+    dav = f"/remote.php/dav/files/{NC_USER}"
+    return (
+        *[LogLine(NEXTCLOUD_HOST, f"{dav}/Documents/", 207, "PROPFIND") for _ in range(20)],
+        *[
+            line
+            for index in range(15)
+            for line in (
+                LogLine(NEXTCLOUD_HOST, f"{dav}/Documents/minutes-{index}.odt", 404, "PROPFIND"),
+                LogLine(NEXTCLOUD_HOST, f"{dav}/Documents/minutes-{index}.odt", 201, "PUT"),
+            )
+        ],
+        LogLine(NEXTCLOUD_HOST, f"{dav}/Photos/2026-11/", 201, "MKCOL"),
+        LogLine(NEXTCLOUD_HOST, f"{dav}/Photos/2026-11/", 405, "MKCOL"),
+        *[
+            LogLine(
+                NEXTCLOUD_HOST, f"/index.php/core/preview?fileId={9000 + index}&x=250&y=250", 404
+            )
+            for index in range(15)
+        ],
+        *[
+            LogLine(
+                NEXTCLOUD_HOST, f"/apps/files/api/v1/thumbnail/256/256/Photos/{index}.heic", 404
+            )
+            for index in range(15)
+        ],
+    )
+
+
+LOCKOUT_CASES: tuple[Case, ...] = (
+    # --- The owner's own use: must not ban. ---
+    Case(
+        "owner: a signed-in Nextcloud Talk video call",
+        "198.51.100.60",
+        banned=False,
+        appsec=talk_call(),
+        log=talk_call_log(),
+    ),
+    Case(
+        "owner: Nextcloud desktop sync and the Files app",
+        "198.51.100.61",
+        banned=False,
+        appsec=sync_and_files(),
+        log=sync_and_files_log(),
+    ),
+    Case(
+        "own host: ops1, whatever it sends",
+        OWN_HOST_IP,
+        banned=False,
+        appsec=(
+            *[preview_post(OTHER_HOST, None) for _ in range(REPEATS)],
+            *known_exploits(NEXTCLOUD_HOST),
+        ),
+        log=(
+            LogLine(NEXTCLOUD_HOST, "/wp-admin/", 404),
+            LogLine(NEXTCLOUD_HOST, "/phpmyadmin/", 404),
+            LogLine(NEXTCLOUD_HOST, "/admin/", 404),
+            LogLine(GHOST_HOST, "/wp-login.php", 404),
+        ),
+    ),
+    # --- Attacks on the Nextcloud hostname: must still ban. ---
+    Case(
+        "probe: generic admin interfaces on the Nextcloud hostname",
+        "203.0.113.60",
+        banned=True,
+        log=(
+            LogLine(NEXTCLOUD_HOST, "/wp-admin/", 404),
+            LogLine(NEXTCLOUD_HOST, "/phpmyadmin/", 404),
+            LogLine(NEXTCLOUD_HOST, "/admin/", 404),
+        ),
+    ),
+    Case(
+        "probe: dot segments out of the WebDAV prefix",
+        "203.0.113.61",
+        banned=True,
+        log=(
+            LogLine(NEXTCLOUD_HOST, "/remote.php/dav/../../wp-admin/", 404),
+            LogLine(NEXTCLOUD_HOST, "/remote.php/webdav/%2e%2e/%2e%2e/phpmyadmin/", 404),
+            LogLine(NEXTCLOUD_HOST, "/remote.php/dav/..%2f..%2fadmin/", 404),
+        ),
+    ),
+    Case(
+        "probe: two known exploits on the Nextcloud hostname, refused in-band",
+        "203.0.113.62",
+        banned=True,
+        appsec=known_exploits(NEXTCLOUD_HOST),
+    ),
+    # --- The ban ladder. ---
+    Case(
+        "ladder: a first ban is the first rung",
+        "203.0.113.70",
+        banned=True,
+        log=(
+            LogLine(OTHER_HOST, "/wp-admin/", 404),
+            LogLine(OTHER_HOST, "/phpmyadmin/", 404),
+            LogLine(OTHER_HOST, "/admin/", 404),
+        ),
+    ),
+    Case(
+        "ladder: a ban after an earlier one climbs a rung",
+        "203.0.113.71",
+        banned=True,
+        log=(
+            LogLine(OTHER_HOST, "/wp-admin/", 404),
+            LogLine(OTHER_HOST, "/phpmyadmin/", 404),
+            LogLine(OTHER_HOST, "/admin/", 404),
+        ),
+    ),
+)
+
+
+def case_named(prefix: str) -> Case:
+    return next(case for case in LOCKOUT_CASES if case.name.startswith(prefix))
+
+
+@unittest.skipUnless(
+    ENABLED, "needs a Docker engine that can start containers; CI sets BRANCHLEFT_CROWDSEC_REPLAY=1"
+)
+class TheLockoutsDoNotRecurAndAttacksStillBan(unittest.TestCase):
+    stack: Stack
+    workdir: pathlib.Path
+    bans: dict[str, list[str]]
+    statuses: dict[str, list[int]]
+    metrics: str
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if shutil.which("docker") is None:
+            fail("BRANCHLEFT_CROWDSEC_REPLAY=1 but there is no docker on PATH")
+        cls.workdir = pathlib.Path(tempfile.mkdtemp(prefix="crowdsec-replay-"))
+        cls.workdir.chmod(0o755)
+        cls.stack = Stack(cls.workdir)
+        try:
+            cls.stack.start()
+            # The second ladder case has had a ban today already.
+            cls.stack.add_decision(case_named("ladder: a ban after").ip)
+            cls.statuses = run_cases(cls.stack, LOCKOUT_CASES)
+            cls.bans = await_verdicts(cls.stack, LOCKOUT_CASES)
+            cls.metrics = cls.stack.metrics()
+        except BaseException:
+            cls.stack.stop()
+            shutil.rmtree(cls.workdir, ignore_errors=True)
+            raise
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls.stack.stop()
+        shutil.rmtree(cls.workdir, ignore_errors=True)
+
+    def _explain(self, case: Case) -> str:
+        alerts = self.stack.alerts_for(case.ip)
+        return (
+            f"{case.name} ({case.ip}): bans {self.bans.get(case.ip, [])}; statuses "
+            f"{self.statuses.get(case.name, [])}; alerts:\n  " + "\n  ".join(alerts)
+        )
+
+    def test_the_owners_talk_call_and_sync_are_not_banned(self) -> None:
+        for prefix in ("owner: a signed-in Nextcloud Talk", "owner: Nextcloud desktop sync"):
+            case = case_named(prefix)
+            with self.subTest(case.name):
+                explanation = self._explain(case)
+                print(explanation)
+                self.assertNotIn(case.ip, self.bans, explanation)
+
+    def test_nextclouds_own_traffic_raises_no_log_scenario_alert(self) -> None:
+        for prefix in ("owner: a signed-in Nextcloud Talk", "owner: Nextcloud desktop sync"):
+            case = case_named(prefix)
+            with self.subTest(case.name):
+                others = [s for s in self.stack.alerted(case.ip) if s != OUT_OF_BAND_SCENARIO]
+                self.assertEqual(others, [], self._explain(case))
+
+    def test_our_own_host_is_never_banned_and_raises_no_alert(self) -> None:
+        case = case_named("own host")
+        explanation = self._explain(case)
+        print(explanation)
+        self.assertNotIn(case.ip, self.bans, explanation)
+        self.assertEqual(self.stack.alerted(case.ip), [], explanation)
+
+    def test_attacks_on_the_nextcloud_hostname_still_ban(self) -> None:
+        for case in LOCKOUT_CASES:
+            if case.banned:
+                with self.subTest(case.name):
+                    explanation = self._explain(case)
+                    print(explanation)
+                    self.assertIn(case.ip, self.bans, explanation)
+        exploits = case_named("probe: two known exploits")
+        self.assertEqual(self.statuses.get(exploits.name), [403, 403], self._explain(exploits))
+
+    def test_a_first_ban_lasts_the_first_rung(self) -> None:
+        case = case_named("ladder: a first ban")
+        minutes = self.stack.ban_minutes(case.ip, ADMIN_PROBING)
+        self.assertTrue(minutes, self._explain(case))
+        self.assertTrue(
+            all(FIRST_RUNG_MINUTES - 2 < value <= FIRST_RUNG_MINUTES for value in minutes),
+            f"{minutes}\n{self._explain(case)}",
+        )
+
+    def test_a_ban_after_an_earlier_one_lasts_the_second_rung(self) -> None:
+        case = case_named("ladder: a ban after")
+        minutes = self.stack.ban_minutes(case.ip, ADMIN_PROBING)
+        self.assertTrue(minutes, self._explain(case))
+        self.assertTrue(
+            all(SECOND_RUNG_MINUTES - 2 < value <= SECOND_RUNG_MINUTES for value in minutes),
+            f"{minutes}\n{self._explain(case)}",
+        )
+
+    def test_the_paging_metric_counts_real_bans_and_not_watched_ones(self) -> None:
+        # The page rule reads cs_active_decisions{action="ban"} by reason
+        # (hetzner/monitoring/render.ts, EdgeBanIssued).
+        series = [
+            line
+            for line in self.metrics.splitlines()
+            if line.startswith("cs_active_decisions{") and 'action="ban"' in line
+        ]
+        probing = [line for line in series if f'reason="{ADMIN_PROBING}"' in line]
+        self.assertTrue(probing, "\n".join(series) or self.metrics[-4000:])
+        self.assertGreaterEqual(float(probing[0].rsplit(" ", 1)[1]), 1, "\n".join(series))
+        watched = [
+            line
+            for line in series
+            if f'reason="{OUT_OF_BAND_SCENARIO}"' in line and float(line.rsplit(" ", 1)[1]) > 0
+        ]
+        self.assertEqual(watched, [], "\n".join(series))
 
 
 if __name__ == "__main__":
