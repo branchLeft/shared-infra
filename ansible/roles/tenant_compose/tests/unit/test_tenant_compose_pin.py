@@ -147,6 +147,35 @@ class TenantImage(unittest.TestCase):
         self.assertIsNotNone(pattern().match(pin(image)))
         self.assertIn(module.attested_name(image), register())
 
+    def test_a_tenants_first_pin_is_verified_not_exempted_on_any_slug(self) -> None:
+        """The wrapper's default deny (it refuses an image outside the register and the
+        exemption list) does not refuse the tenant image: it is registered, so the verifier
+        runs for it and the exemption table is never consulted, whatever the tenant's slug.
+        """
+        module = wrapper()
+        image = f"{TENANT_IMAGE}@{DIGEST}"
+        for exempted in mapping(module.UNATTESTED_STACK_IMAGES).values():
+            self.assertNotIn(TENANT_IMAGE, exempted, "the tenant image must be verified")
+        calls: list[list[str]] = []
+
+        def verifier(argv: list[str], **_kwargs: object) -> object:
+            calls.append(argv)
+            return module.subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        for slug in ("tenant-zero", "a", "website", "edge", "db", "mail-spool", "x1-y2"):
+            with self.subTest(slug=slug):
+                calls.clear()
+                self.assertTrue(module.verify_attestation(image, stack=slug, run=verifier))
+                self.assertEqual(1, len(calls))
+                self.assertEqual(SIGNER, calls[0][3])
+
+    def test_an_image_outside_the_register_is_refused_for_a_tenant_slug(self) -> None:
+        """Were a tenant pin to name any other image, the wrapper would refuse it."""
+        module = wrapper()
+        for name in ("example.invalid/app", "ghcr.io/branchleft/ghost-tenant-other"):
+            with self.subTest(name=name), self.assertRaises(module.DeployError):
+                module.verify_attestation(f"{name}@{DIGEST}", stack="tenant-zero")
+
     def test_the_pattern_refuses_every_other_image_and_form(self) -> None:
         for line in (
             pin(f"example.invalid/app@{DIGEST}"),
