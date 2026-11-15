@@ -1,6 +1,7 @@
 ---
 - host_inputs
 - host_baseline
+- ci_step_login
 - safety_service
 - safety_channel_key
 - breakglass_mint_host

@@ -1,0 +1,300 @@
+---
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_step_type: "{{ scenario_step_public.split(' ')[0] }}"
+    verify_step_body: "{{ scenario_step_public.split(' ')[1] }}"
+    # A paste cut short: the mistake the key check exists for.
+    verify_truncated_body: '{{ verify_step_body[:40] }}'
+    # Code points: tab, line feed, vertical tab, form feed, carriage return, the three file,
+    # group and record separators, next line, line separator and paragraph separator.
+    # Python's str.splitlines splits on all of them but the tab, which sits here as the one
+    # control character that is not a line break. Each is a way to bring a second line the
+    # caller never declared, and none can be typed into this file.
+    verify_separators: [9, 10, 11, 12, 13, 28, 29, 30, 133, 8232, 8233]
+    verify_key_bodies:
+      - '{{ verify_step_body }}'
+      - "{{ scenario_other_public.split(' ')[1] }}"
+      - "{{ scenario_stale_public.split(' ')[1] }}"
+      - '{{ verify_truncated_body }}'
+    # Each of these must be refused by sudo for the step account. The first three are the
+    # trigger program's other modes and the option that names another configuration; the last
+    # two are the step mode with something added and another program altogether.
+    verify_refused_argument_lists:
+      - [--mode, apply]
+      - [--mode, check]
+      - [--config, /tmp/EXAMPLE_CONFIG]
+      - [--mode, step, EXAMPLE_EXTRA]
+      - [--mode, step, --mode, apply]
+      - []
+  tasks:
+    - name: Assert the host is configured
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # sudo reads the written file: the account may run the program in step mode as root, with
+    # the request text kept, and nothing else. The control case is the first run; the refusals
+    # then cannot be a broken runuser or a missing program.
+    - name: Run the program in step mode through sudo as the step account
+      ansible.builtin.command:
+        argv:
+          - runuser
+          - -u
+          - '{{ scenario_user }}'
+          - --
+          - sudo
+          - -n
+          - '{{ scenario_program }}'
+          - --mode
+          - step
+      environment:
+        SSH_ORIGINAL_COMMAND: EXAMPLE_REQUEST
+      register: ci_step_login_verify_step_run
+      changed_when: false
+      check_mode: false
+
+    - name: Assert the program ran as root, in step mode, with the request text kept
+      ansible.builtin.assert:
+        that:
+          - ci_step_login_verify_step_run.stdout_lines == ['ARGS=--mode step', 'EUID=0', 'REQUEST=EXAMPLE_REQUEST']
+        quiet: true
+
+    - name: Run the program through sudo as the step account with an argument list it must not have
+      ansible.builtin.command:
+        argv: "{{ ['runuser', '-u', scenario_user, '--', 'sudo', '-n', scenario_program] + item }}"
+      environment:
+        SSH_ORIGINAL_COMMAND: EXAMPLE_REQUEST
+      register: ci_step_login_verify_refused_runs
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      loop: '{{ verify_refused_argument_lists }}'
+
+    - name: Assert sudo refused every one of them and the program did not run
+      ansible.builtin.assert:
+        that:
+          - ci_step_login_verify_refused_runs.results | map(attribute='rc') | select('equalto', 0) | list | length == 0
+          - ci_step_login_verify_refused_runs.results | map(attribute='stdout') | select('search', 'EUID=') | list | length == 0
+        quiet: true
+
+    - name: Run another program through sudo as the step account
+      ansible.builtin.command:
+        argv: [runuser, -u, '{{ scenario_user }}', --, sudo, -n, /bin/true]
+      register: ci_step_login_verify_other_run
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Assert sudo refused the other program
+      ansible.builtin.assert:
+        that:
+          - ci_step_login_verify_other_run.rc != 0
+        quiet: true
+
+    - name: List what the step account may run through sudo
+      ansible.builtin.command:
+        argv: [runuser, -u, '{{ scenario_user }}', --, sudo, -n, -l]
+      register: ci_step_login_verify_sudo_list
+      changed_when: false
+      check_mode: false
+
+    - name: Assert the one grant is the only command the account may run
+      vars:
+        verify_sudo_grants: "{{ ci_step_login_verify_sudo_list.stdout_lines | select('search', '^ +[(]') | map('trim') | list }}"
+      ansible.builtin.assert:
+        that:
+          - "verify_sudo_grants == ['(root) NOPASSWD: /usr/local/sbin/pull-trigger --mode step']"
+        quiet: true
+
+    - name: Refuse an empty key, which is never read as remove every key
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key that is not one ed25519 public key on one line
+        refused_key: ''
+
+    # The key check has the shape of ed25519 only: another key type is refused whole.
+    - name: Refuse a key of another type
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key that is not one ed25519 public key on one line
+        refused_key: 'ssh-rsa {{ verify_step_body }} PLACEHOLDER_comment'
+
+    - name: Refuse a key whose body was cut short
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key that is not one ed25519 public key on one line
+        refused_key: '{{ verify_step_type }} {{ verify_truncated_body }}'
+
+    - name: Refuse a key whose type has a typo
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key that is not one ed25519 public key on one line
+        refused_key: 'ssh-ed25518 {{ verify_step_body }} PLACEHOLDER_comment'
+
+    # A key value that brings its own options would give the key more than the role's command.
+    - name: Refuse a key value that brings its own options
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key that is not one ed25519 public key on one line
+        refused_key: 'command="/bin/EXAMPLE_COMMAND" {{ scenario_step_public }}'
+
+    # A valid key, a separator, and behind it the key this host retired, now with an option of
+    # its own. The key check must refuse it and the retired key must not come back.
+    - name: Refuse a key value that smuggles in a second key behind a separator
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key that is not one ed25519 public key on one line
+        refused_key: '{{ scenario_step_public }}{{ ''%c'' | format(verify_separator) }}command="/bin/EXAMPLE_COMMAND" {{ scenario_stale_public }}'
+      loop: '{{ verify_separators }}'
+      loop_control:
+        loop_var: verify_separator
+        label: code point {{ verify_separator }}
+
+    # The line break after the key and nothing behind it: \Z refuses it, $ does not.
+    - name: Refuse a key value that ends in a line break
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key that is not one ed25519 public key on one line
+        refused_key: "{{ scenario_step_public }}{{ '%c' | format(10) }}"
+
+    - name: Refuse a key value with a comment that is not printable ASCII
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a key that is not one ed25519 public key on one line
+        refused_key: "{{ scenario_step_public }} PLACEHOLDER_comment_{{ '%c' | format(233) }}"
+
+    # A key with a forced command must say where it may come from.
+    - name: Refuse an empty list of source addresses
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an empty list of source addresses
+        refused_from: []
+
+    - name: Refuse a wildcard source address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not a dotted IPv4 address or a /24 to /32 range
+        refused_message_part: 'address number 2 '
+        refused_from:
+          - 192.0.2.10
+          - '*'
+
+    - name: Refuse a range that covers more than 256 addresses
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not a dotted IPv4 address or a /24 to /32 range
+        refused_message_part: 'address number 1 '
+        refused_from:
+          - 0.0.0.0/0
+
+    - name: Refuse a host name as a source address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not a dotted IPv4 address or a /24 to /32 range
+        refused_from:
+          - example.invalid
+
+    - name: Refuse a negated source address
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not a dotted IPv4 address or a /24 to /32 range
+        refused_from:
+          - '!192.0.2.10'
+
+    # A source address that brings an option of its own through a quote or a comma.
+    - name: Refuse a source address that carries a second option
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse a source address that is not a dotted IPv4 address or a /24 to /32 range
+        refused_from:
+          - '192.0.2.10",command="/bin/EXAMPLE_COMMAND'
+
+    # An account the role did not make is never changed, only judged. The role stops at the
+    # check that names the fault, and the account is put back before the next case.
+    - name: Give the account a password that is not locked
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        password: '$6$EXAMPLESALT$EXAMPLEHASH'
+      no_log: true
+
+    - name: Refuse an account that has a usable password
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an account that has a usable password
+
+    - name: Lock the password of the account again
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        password: '!'
+      no_log: true
+
+    - name: Give the account a shell that cannot run a forced command
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        shell: /usr/sbin/nologin
+
+    - name: Refuse an account whose shell cannot run a forced command
+      ansible.builtin.include_tasks: tasks/refused.yml
+      vars:
+        refused_task: Refuse an account whose shell cannot run a forced command
+
+    - name: Give the account its shell back
+      ansible.builtin.user:
+        name: '{{ scenario_user }}'
+        shell: /bin/bash
+
+    - name: Assert the refusals left the host as it was
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # exclusive: a key the host holds that the role was not given is removed.
+    - name: Give the account a key the role was not given
+      ansible.posix.authorized_key:
+        user: '{{ scenario_user }}'
+        key: '{{ scenario_stale_public }}'
+        manage_dir: true
+      no_log: true
+      diff: false
+
+    - name: Apply the role again
+      ansible.builtin.include_role:
+        name: branchleft.ci_step_login
+      vars:
+        ci_step_login_key: '{{ scenario_step_public }}'
+        ci_step_login_from: '{{ scenario_from }}'
+
+    - name: Assert the key the role was not given is gone
+      ansible.builtin.include_tasks: tasks/assert_state.yml
+
+    # ANS-16. The scenario sets verbosity 1 and a log path (molecule.yml), so a task that
+    # handles key material without no_log prints it into this log. The sudoers task has no
+    # no_log on purpose: the gated plan shows the owner its diff, so the sudoers lines must
+    # be in this log through that diff. molecule.yml sets ANSIBLE_DIFF_ALWAYS, so the first
+    # run that changes the host prints them whether or not the caller ran a --diff step.
+    # The scan runs last, so it covers the refused runs too. The canary and the task names
+    # show the scan reads the output of the converge, so "nothing found" cannot mean
+    # "nothing read".
+    - name: Read the log of this scenario's Ansible runs
+      ansible.builtin.set_fact:
+        ci_step_login_verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
+      no_log: true
+
+    - name: Assert the log holds the converge output
+      ansible.builtin.assert:
+        that:
+          - "'SCENARIO_LOG_CANARY' in ci_step_login_verify_log"
+          - "'Install the sudoers file of the step account' in ci_step_login_verify_log"
+          - "'Make the authorised keys of the step account exactly the one declared key' in ci_step_login_verify_log"
+        quiet: true
+
+    - name: Assert the sudoers line reached the log through the diff of the sudoers task
+      ansible.builtin.assert:
+        that:
+          - "'NOPASSWD: /usr/local/sbin/pull-trigger --mode step' in ci_step_login_verify_log"
+        quiet: true
+
+    - name: Assert no key body and no password hash reached the log
+      ansible.builtin.assert:
+        that:
+          - verify_key_bodies | select('in', ci_step_login_verify_log) | list | length == 0
+          - "'EXAMPLEHASH' not in ci_step_login_verify_log"
+        quiet: true

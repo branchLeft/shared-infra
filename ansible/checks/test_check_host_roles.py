@@ -81,8 +81,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back),
 # db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
 # first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
-# (first), control_plane, then the status page (it binds the private address, so it follows the
-# role that installs the drop for its port), then nextcloud_stack, backup_worker and
+# (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
+# the private address, so it follows the drop's role), nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
 # reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host
@@ -109,6 +109,7 @@ APPLIED_ON_MAIN = {
     "ops1": [
         "host_inputs",
         "host_baseline",
+        "ci_step_login",
         "breakglass_mint_host",
         "safety_service",
         "safety_channel_key",
@@ -471,6 +472,7 @@ class HostRoleLists(unittest.TestCase):
                 "pull_trigger",
                 "host_inputs",
                 "host_baseline",
+                "ci_step_login",
                 "breakglass_mint_host",
                 "safety_service",
                 "safety_channel_key",
@@ -490,6 +492,9 @@ class HostRoleLists(unittest.TestCase):
             ],
         )
         self.assertEqual(names[-1], "ring_controller_host")
+        # The step account follows the baseline directly, so no later role's failure holds back
+        # the route a step is sent over.
+        self.assertEqual(names.index("ci_step_login"), names.index("host_baseline") + 1)
         # The paths role reads the descriptors the collector role writes, so it follows that role.
         self.assertLess(names.index("mail_collector"), names.index("spool_paths"))
         self.assertLess(names.index("backup_worker"), names.index("backup_restore"))

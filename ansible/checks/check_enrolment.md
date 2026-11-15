@@ -167,6 +167,9 @@ is not loaded there.
   file that still sets it is refused here, and the role refuses the name too. The push remote and the
   known-hosts line it used to take are no longer allowed, so an owner file that still sets one is
   refused here (Ansible's own spec check does not read an owner file's values).
+  The `ci_step_login` role adds two, allowed on ops1 only: `ci_step_login_key`, text, and
+  `ci_step_login_from`, a list of text. `test_ci_step_login_pins.py` holds the real key and
+  addresses to the owner's values.
   R10 reads only those shapes; `test_step_allowlist.py` holds the image to the role's own
   digest pattern, read by name from the role's constants. Which ids exist, that a tag is `control_plane_db_` plus the id and what a
   word may look like are the program's rules alone, and `test_step_allowlist.py` feeds the
