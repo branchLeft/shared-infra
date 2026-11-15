@@ -1,8 +1,8 @@
 """mx1's playbook applies the mail host's three roles in the order they depend on, and no further.
 
-check_enrolment.py (R2, R9) holds a playbook to the host's list in host_roles/<host>.yml but leaves the
-order after the pull roles free. For the mail host the order carries meaning, so this file pins
-it, and pins what keeps the mail reconcilers' steps off:
+check_enrolment.py (R2, R9) holds a playbook to the host's list in host_roles/<host>.yml but
+leaves the order after the pull roles free. For the mail host the order carries meaning, so this
+file pins it, and pins what keeps the mail reconcilers' steps off:
 
   * host_baseline first, because mx1_stack needs the Docker it installs;
   * mx1_stack before mail_reconcilers, the order the mail host has always been provisioned in;

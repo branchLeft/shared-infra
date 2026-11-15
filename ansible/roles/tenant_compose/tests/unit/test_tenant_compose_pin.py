@@ -154,8 +154,8 @@ class TenantImage(unittest.TestCase):
         """
         module = wrapper()
         image = f"{TENANT_IMAGE}@{DIGEST}"
-        for exempted in mapping(module.UNATTESTED_STACK_IMAGES).values():
-            self.assertNotIn(TENANT_IMAGE, exempted, "the tenant image must be verified")
+        for stack, exempted in module.UNATTESTED_STACK_IMAGES.items():
+            self.assertNotIn(TENANT_IMAGE, exempted, f"{stack}: the tenant image must be verified")
         calls: list[list[str]] = []
 
         def verifier(argv: list[str], **_kwargs: object) -> object:
