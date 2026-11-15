@@ -321,6 +321,15 @@ def go_duration_minutes(text: str) -> float:
     return total
 
 
+def ban_series(metrics: str) -> list[str]:
+    """The `cs_active_decisions{action="ban"}` lines of a Prometheus scrape."""
+    return [
+        line
+        for line in metrics.splitlines()
+        if line.startswith("cs_active_decisions{") and 'action="ban"' in line
+    ]
+
+
 def run_cases(stack: Stack, cases: Sequence[Case]) -> dict[str, list[int]]:
     """Play every case at the stack; returns the AppSec status of each request, by case."""
     statuses: dict[str, list[int]] = {}
@@ -603,6 +612,7 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
     workdir: pathlib.Path
     bans: dict[str, list[str]]
     statuses: dict[str, list[int]]
+    metrics: str
 
     @classmethod
     def setUpClass(cls) -> None:
@@ -615,6 +625,7 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
             cls.stack.start()
             cls.statuses = run_cases(cls.stack, CASES)
             cls.bans = await_verdicts(cls.stack, CASES)
+            cls.metrics = cls.stack.metrics()
         except BaseException:
             cls.stack.stop()
             shutil.rmtree(cls.workdir, ignore_errors=True)
@@ -670,6 +681,24 @@ class GhostAdminIsNotBannedAndProbesAre(unittest.TestCase):
     def test_known_exploits_are_refused_in_band(self) -> None:
         case = next(entry for entry in CASES if entry.name.endswith("refused in-band"))
         self.assertEqual(self.statuses.get(case.name), [403, 403], self._explain(case))
+
+    def test_a_watched_decision_never_reaches_the_paging_metric(self) -> None:
+        # The page rule reads cs_active_decisions{action="ban"} by reason
+        # (hetzner/monitoring/render.ts, EdgeBanIssued). The Core Rule Set probes
+        # above make out-of-band decisions in this stack: with the scenario
+        # enforcing, its series is above zero and this fails.
+        watched = [case for case in CASES if case.watched]
+        self.assertTrue(
+            any(OUT_OF_BAND_SCENARIO in self.stack.alerted(case.ip) for case in watched),
+            "no out-of-band alert in this stack, so the check below would prove nothing",
+        )
+        series = ban_series(self.metrics)
+        counted = [
+            line
+            for line in series
+            if f'reason="{OUT_OF_BAND_SCENARIO}"' in line and float(line.rsplit(" ", 1)[1]) > 0
+        ]
+        self.assertEqual(counted, [], "\n".join(series))
 
 
 # --- Failed Ghost admin sign-ins and admin API key failures (workspace#3754) ---
@@ -1112,22 +1141,6 @@ LOCKOUT_CASES: tuple[Case, ...] = (
         banned=True,
         appsec=known_exploits(NEXTCLOUD_HOST),
     ),
-    # --- The Core Rule Set alone: recorded, never banned, never paged. ---
-    Case(
-        "probe: SQL injection in a query string, Core Rule Set only",
-        "203.0.113.63",
-        banned=False,
-        watched=True,
-        appsec=tuple(
-            AppsecRequest(
-                "GET",
-                GHOST_HOST,
-                f"/?id=1%27%20OR%20%271%27%3D%27{index}",
-                browser_headers(GHOST_HOST, "*/*", "empty"),
-            )
-            for index in range(REPEATS)
-        ),
-    ),
     # --- The ban ladder. ---
     Case(
         "ladder: a first ban is the first rung",
@@ -1247,36 +1260,15 @@ class TheLockoutsDoNotRecurAndAttacksStillBan(unittest.TestCase):
             f"{minutes}\n{self._explain(case)}",
         )
 
-    def test_the_core_rule_set_alone_is_recorded_and_bans_none(self) -> None:
-        case = case_named("probe: SQL injection in a query string")
-        explanation = self._explain(case)
-        print(explanation)
-        self.assertIn(OUT_OF_BAND_SCENARIO, self.stack.alerted(case.ip), explanation)
-        self.assertNotIn(case.ip, self.bans, explanation)
-
-    def test_the_paging_metric_counts_real_bans_and_not_watched_ones(self) -> None:
+    def test_the_paging_metric_counts_real_bans(self) -> None:
         # The page rule reads cs_active_decisions{action="ban"} by reason
-        # (hetzner/monitoring/render.ts, EdgeBanIssued). The watched case above
-        # makes an out-of-band decision in this stack, so the last assertion
-        # can fail: with the scenario enforcing, its series is above zero.
-        watched_case = case_named("probe: SQL injection in a query string")
-        self.assertIn(
-            OUT_OF_BAND_SCENARIO, self.stack.alerted(watched_case.ip), self._explain(watched_case)
-        )
-        series = [
-            line
-            for line in self.metrics.splitlines()
-            if line.startswith("cs_active_decisions{") and 'action="ban"' in line
-        ]
+        # (hetzner/monitoring/render.ts, EdgeBanIssued). That a watched decision
+        # is not counted is asserted where watched decisions are made:
+        # GhostAdminIsNotBannedAndProbesAre.
+        series = ban_series(self.metrics)
         probing = [line for line in series if f'reason="{ADMIN_PROBING}"' in line]
         self.assertTrue(probing, "\n".join(series) or self.metrics[-4000:])
         self.assertGreaterEqual(float(probing[0].rsplit(" ", 1)[1]), 1, "\n".join(series))
-        watched = [
-            line
-            for line in series
-            if f'reason="{OUT_OF_BAND_SCENARIO}"' in line and float(line.rsplit(" ", 1)[1]) > 0
-        ]
-        self.assertEqual(watched, [], "\n".join(series))
 
 
 if __name__ == "__main__":
