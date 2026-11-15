@@ -855,6 +855,15 @@ render.md "Limits" paragraph says why). Delete the decision when done, with the
 `cscli decisions delete --ip` command above and your address; it also expires by
 itself after five minutes.
 
+**Repeated failed Ghost admin sign-ins do ban.** The scenario
+`branchleft/ghost-admin-login-bruteforce` (`hetzner/edge/render.md`, "Ghost
+admin brute force") bans an address at the tenth failed sign-in or admin API
+401 on a Ghost hostname, counting about one fewer every 30 seconds. Mistyping
+a password a few times, and Ghost's own lockout after five, do not reach it.
+CI replays a burst that must ban and the owner's sign-in and admin use that
+must not. A `cscli decisions list` after an apply names the scenario in the
+`Reason` column when it fires.
+
 ## 11. Adding a site to the edge
 
 One registry entry, then a re-render. Nothing else.

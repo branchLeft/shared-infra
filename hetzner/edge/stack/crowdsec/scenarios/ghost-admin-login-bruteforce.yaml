@@ -1,0 +1,29 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+type: leaky
+name: branchleft/ghost-admin-login-bruteforce
+description: Repeated failed Ghost admin sign-ins or admin API key failures from one address
+filter: >-
+  evt.Meta.service == 'http' &&
+  evt.Meta.log_type == 'http_access-log' &&
+  evt.Meta.target_fqdn in ['blog.branchleft.co.uk'] &&
+  (
+    (evt.Meta.http_verb == 'POST' &&
+     evt.Meta.http_path matches '(?i)^/ghost/api/(?:[^/?]+/)?admin/session/?(?:[?]|$)' &&
+     evt.Meta.http_status in ['401', '404', '422', '429']) ||
+    (evt.Meta.http_status == '401' &&
+     evt.Meta.http_path matches '(?i)^/ghost/api/(?:[^/?]+/)?admin/')
+  )
+groupby: evt.Meta.source_ip
+capacity: 9
+leakspeed: 30s
+blackhole: 1m
+labels:
+  confidence: 3
+  spoofable: 0
+  classification:
+    - attack.T1110
+  behavior: "http:bruteforce"
+  label: "Ghost admin brute force"
+  service: http
+  remediation: true

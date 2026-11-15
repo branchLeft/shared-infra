@@ -138,6 +138,11 @@ services:
       # (hetzner/edge/render.md, "Verified sessions"). Mounted the same way, under
       # the enrich stage, where the hub's own whitelists sit.
       - ./crowdsec/parsers:/etc/crowdsec/parsers/s02-enrich/branchleft:ro
+      # The brute-force scenario ("Ghost admin brute force" in render.md), kept
+      # apart from the hub's admin-probing scenario so the postoverflow above
+      # never drops it. A local scenario under the same `branchleft/` convention,
+      # for the same reasons as the two mounts above; no image path is under it.
+      - ./crowdsec/scenarios:/etc/crowdsec/scenarios/branchleft:ro
       - crowdsec-data:/var/lib/crowdsec/data
       - caddy-logs:/var/log/caddy:ro
     # Without one, `--wait` waits only for *running*, which a crash-looping

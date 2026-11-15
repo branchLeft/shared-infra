@@ -1,0 +1,18 @@
+---
+argument_specs:
+  main:
+    short_description: Give ops1 an unprivileged account on a spool host that can open the spool's loopback drain port and nothing else
+    description: >-
+      Inert until the owner has placed two root-only input files, the address the account's key may
+      be used from and the public half of the key ops1 holds. Once both are there it makes an
+      account with no shell and no password, one key line that carries restrict, port-forwarding, a
+      permitopen of the drain port on the loopback address, the from address and a forced command of nologin, and an sshd settings
+      block that allows local forwarding to that one port and runs nothing. Before it writes the key
+      it reads that the drain port listens on the loopback address only. The role opens no port and
+      adds no firewall rule.
+    author: branchLeft
+    options:
+      spool_path_account_spool_port:
+        type: int
+        default: 8095
+        description: The port the spool's drain listener is bound to on this host's loopback address, 1 to 65535.

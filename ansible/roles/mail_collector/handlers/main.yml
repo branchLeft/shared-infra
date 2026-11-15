@@ -1,0 +1,14 @@
+---
+- name: Reload systemd manager
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+# Only when the role means the collector to run. A restart of a unit whose conditions are unmet
+# starts nothing, and a unit the role holds stopped is never restarted by a changed file.
+# Skipped in check mode with a stated reason (ANS-10): check mode writes no unit file, so the
+# unit may not be installed yet and the module would fail on it. A real run never skips it.
+- name: Restart the mail collector
+  ansible.builtin.systemd_service:
+    name: '{{ mail_collector_unit }}'
+    state: restarted
+  when: mail_collector_run | bool and not ansible_check_mode

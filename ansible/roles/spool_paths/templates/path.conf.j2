@@ -1,0 +1,49 @@
+{{ spool_paths_marker }}
+# The client configuration of one spool drain path. The unit passes it with -F, so no agent, no
+# default key and no user file is ever consulted. Each hop offers only its own key and checks the
+# host against the one key pinned for it.
+Host {{ item.slug }}
+    HostName {{ item.ssh_host }}
+    Port {{ item.ssh_port }}
+    User {{ spool_paths_far_user }}
+    IdentityFile {{ spool_paths_dir }}/{{ item.slug }}{{ spool_paths_key_suffix }}
+    LocalForward {{ item.alias }}:{{ spool_paths_shim_port }} {{ spool_paths_far_loopback }}:{{ item.spool_port }}
+{% if item.jump %}
+    ProxyJump {{ item.slug }}-jump
+{% endif %}
+{% if item.jump %}
+
+Host {{ item.slug }}-jump
+    HostName {{ item.jump.host }}
+    Port {{ item.jump.port }}
+    IdentityFile {{ spool_paths_dir }}/{{ item.slug }}{{ spool_paths_jump_key_suffix }}
+    Include {{ spool_paths_dir }}/{{ item.slug }}{{ spool_paths_jump_user_suffix }}
+{% endif %}
+
+Host *
+    IdentitiesOnly yes
+    IdentityAgent none
+    BatchMode yes
+    PreferredAuthentications publickey
+    PubkeyAuthentication yes
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    StrictHostKeyChecking yes
+    UserKnownHostsFile {{ spool_paths_dir }}/{{ item.slug }}{{ spool_paths_known_hosts_suffix }}
+    GlobalKnownHostsFile /dev/null
+    HashKnownHosts no
+    UpdateHostKeys no
+    VerifyHostKeyDNS no
+    CheckHostIP no
+    ExitOnForwardFailure yes
+    ServerAliveInterval 10
+    ServerAliveCountMax 3
+    ConnectTimeout 15
+    ConnectionAttempts 1
+    ControlMaster no
+    ControlPath none
+    ForwardAgent no
+    ForwardX11 no
+    RequestTTY no
+    PermitLocalCommand no
+    StreamLocalBindUnlink no

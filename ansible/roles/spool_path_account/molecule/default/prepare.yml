@@ -1,0 +1,94 @@
+---
+# What the role expects to find on the demo host before it runs, and nothing of the role itself. The
+# parent directory is made by a role that runs earlier on a real host. The owner's two input files
+# are made-up test values. The spool is what the role reads and never starts, so a stand-in
+# listener takes its place on the loopback address, and the ssh service and sshd are stand-ins too:
+# the service stays up and accepts a reload, and the daemon accepts a configuration check. The
+# container has no sshd of its own to check against, so what the unit tests prove against a real
+# sshd is not repeated here.
+- name: Prepare the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Make the directories the roles that run before this one make
+      ansible.builtin.file:
+        path: '{{ item }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+      loop:
+        - /etc/branchleft
+        - /etc/ssh
+        - /etc/ssh/sshd_config.d
+
+    - name: Make the inputs directory, closed to everyone but root, as the owner does
+      ansible.builtin.file:
+        path: '{{ scenario_inputs_dir }}'
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Place the two made-up inputs, readable only by root
+      ansible.builtin.copy:
+        content: '{{ item.value }}'
+        dest: '{{ scenario_inputs_dir }}/{{ item.key }}'
+        owner: root
+        group: root
+        mode: '0600'
+      loop:
+        - { key: from_address, value: '{{ scenario_from_address }}' }
+        - { key: public_key, value: '{{ scenario_public_key }}' }
+      loop_control:
+        label: '{{ item.key }}'
+      no_log: true
+
+    - name: Install a stand-in sshd that accepts a configuration check
+      ansible.builtin.copy:
+        content: |
+          #!/bin/sh
+          printf '%s\n' "$*" >> {{ scenario_sshd_calls }}
+          exit 0
+        dest: /usr/sbin/sshd
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Install a stand-in ssh service that stays up and accepts a reload
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Stand-in for the ssh service
+
+          [Service]
+          Type=simple
+          ExecStart=/bin/sleep 3600
+          ExecReload=/bin/true
+        dest: /etc/systemd/system/ssh.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install a stand-in spool that listens on the loopback address only
+      ansible.builtin.copy:
+        content: |
+          [Unit]
+          Description=Stand-in for the spool's drain listener
+
+          [Service]
+          Type=simple
+          ExecStart=/usr/bin/python3 -m http.server {{ scenario_spool_port }} --bind 127.0.0.1
+        dest: /etc/systemd/system/standin-spool.service
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Start both stand-ins
+      ansible.builtin.systemd_service:
+        name: '{{ item }}'
+        state: started
+        daemon_reload: true
+      loop:
+        - ssh
+        - standin-spool

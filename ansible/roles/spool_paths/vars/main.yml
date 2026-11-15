@@ -1,0 +1,49 @@
+---
+# Fixed by the role, not by the inventory: these are not inputs. A path, a name or a flag the path
+# depends on must not be moved by a play variable (ansible/README.md, variable precedence).
+#
+# Asserted and never made: made by host_inputs, which goes first on ops1.
+spool_paths_parents:
+  - /etc/branchleft
+
+# The role's directory. It holds what the role writes (one configuration file and one pinned
+# known_hosts file for each path) and what the owner places (each path's private key, and for a
+# jump the jump key and the file that names the jump account). The role never reads, writes or
+# removes a key or the jump account file. Root's, mode 0700.
+spool_paths_dir: /etc/branchleft/spool-paths
+spool_paths_dir_mode: '0700'
+spool_paths_conf_suffix: .conf
+spool_paths_known_hosts_suffix: .known_hosts
+spool_paths_key_suffix: .key
+spool_paths_jump_key_suffix: .jump.key
+spool_paths_jump_user_suffix: .jump.user
+
+# The collector's descriptor directory, the one home of the drain list. The collector role writes
+# it; this role only reads it. A test holds the two paths equal.
+spool_paths_descriptor_dir: /etc/branchleft/mail-collector/descriptors
+
+# The first line of every file the role writes into its directory. A configuration file without it
+# is never taken down by the role.
+spool_paths_marker: '# Written by the spool_paths role. Change the role inputs, not this file.'
+
+# The unit is a template unit: one instance for each host's slug.
+spool_paths_unit: branchleft-spool-path@.service
+spool_paths_unit_dir: /etc/systemd/system
+spool_paths_instance_prefix: branchleft-spool-path@
+spool_paths_instance_suffix: .service
+spool_paths_ssh: /usr/bin/ssh
+
+# What the far host runs the path as, and where it listens. The account is the far host's, made by
+# the spool_path_account role; a test holds the two names equal.
+spool_paths_far_user: spoolpath
+spool_paths_far_loopback: 127.0.0.1
+
+# The aliases sit on a dummy interface systemd-networkd owns, so a downed path leaves the address in
+# place and nothing listening: the collector is refused at once, never left hanging. The estate's
+# network and the tenants network share 10.20.0.0/16, so no alias may sit in it.
+spool_paths_interface: spoolpaths
+spool_paths_networkd_dir: /etc/systemd/network
+spool_paths_netdev_file: /etc/systemd/network/05-branchleft-spool-paths.netdev
+spool_paths_network_file: /etc/systemd/network/05-branchleft-spool-paths.network
+spool_paths_reserved_blocks:
+  - 10.20.0.0/16

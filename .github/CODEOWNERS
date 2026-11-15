@@ -74,6 +74,9 @@ pnpm-workspace.yaml                                          @branchLeft/branchl
 /hetzner/provision/provision_deploy_slot.py                  @branchLeft/branchleft-admin
 /hetzner/provision/test_provision_deploy_slot.py             @branchLeft/branchleft-admin
 /hetzner/provision/test_suite_size.py                        @branchLeft/branchleft-admin
+/hetzner/provision/branchleft_promote.py                      @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_promote.py                 @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_promote_wrapper_contract.py @branchLeft/branchleft-admin
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
 test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
 /hetzner/edge/breakGlassToken.test.ts                        @branchLeft/branchleft-admin
@@ -105,6 +108,9 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/safety_channel_key/                           @branchLeft/branchleft-admin
 /ansible/roles/ring_controller_host/                         @branchLeft/branchleft-admin
 /ansible/roles/safety_service/                               @branchLeft/branchleft-admin
+/ansible/roles/mail_collector/                                @branchLeft/branchleft-admin
+/ansible/roles/spool_paths/                                   @branchLeft/branchleft-admin
+/ansible/roles/spool_path_account/                            @branchLeft/branchleft-admin
 /ansible/roles/db1_grants/                                   @branchLeft/branchleft-admin
 /ansible/roles/breakglass_grant_host/                        @branchLeft/branchleft-admin
 /ansible/roles/breakglass_mint_host/                         @branchLeft/branchleft-admin

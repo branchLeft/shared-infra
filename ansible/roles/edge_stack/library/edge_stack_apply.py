@@ -302,6 +302,9 @@ CROWDSEC_FILES_INSIDE = {
     "parsers/edge-trusted-session.yaml": (
         "/etc/crowdsec/parsers/s02-enrich/branchleft/edge-trusted-session.yaml"
     ),
+    "scenarios/ghost-admin-login-bruteforce.yaml": (
+        "/etc/crowdsec/scenarios/branchleft/ghost-admin-login-bruteforce.yaml"
+    ),
 }
 CROWDSEC_ACQUIS_INSIDE = "/etc/crowdsec-acquis.d"
 MODE_PATTERN = re.compile(r"0?[0-7]{3,4}\Z")
