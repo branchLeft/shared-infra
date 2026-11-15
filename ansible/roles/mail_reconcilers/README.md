@@ -85,7 +85,11 @@ Throwaway secrets are searched for in every request's output and in the whole ru
 
 ## How it is delivered
 
-No playbook applies this role. The mail host's steps are run by hand from the mail runbooks.
+`playbooks/mx1.yml` applies this role, after `host_baseline` and `mx1_stack`, as a plain apply
+only: it places the programs and runs none of them. The gated pull's step allow-list holds only
+the control plane's three steps, and mx1 has no `owner_vars` file, so no step of this role can be
+requested through the pull. The hand procedure in the mail runbooks is unchanged, and so is the
+owner's merge of any change to this role. A run that touches mx1 is the owner's to approve.
 
 ## How to change it safely
 

@@ -3,9 +3,11 @@
 This role keeps the mail host's two Compose projects (Stalwart, and the mailgun-shim with its Caddy
 front) and its local recursive resolver in step with the repository, and delivers the hourly
 DNSBL check. It is Part 1 of moving the hand scripts `mail/provision/30`, `63`, `65` and `70`
-into Ansible: the role, its tests and these docs. No playbook applies it; the scripts stay the
-way to run those four steps (`ansible/checks/hand_installers.yml` lists them as `pending-role`,
-role `mx1_stack`).
+into Ansible: the role, its tests and these docs. The mail host's playbook,
+`playbooks/mx1.yml`, applies it after `host_baseline` and before `mail_reconcilers`, so it
+reaches the host only through the gated delivery. The scripts are due for removal
+(`ansible/checks/hand_installers.yml` lists them as `pending-role`, role `mx1_stack`); they stay
+on disk until a gated apply has converged the host, and nothing may add a caller to one.
 
 This README is written for a maintainer who is new to the repository. It follows the order the
 standard sets for a role README (ANS-14).
@@ -321,8 +323,14 @@ passed.
 Delivery to a host is ANS-17: only the gated workflow, run against `main` after the approval of its
 protected environment. A plan job shows the host's diff in check mode first; after the approval the
 host pulls that exact commit and applies it, and a second run must report zero changes. Nothing is
-applied from a laptop. This role is applied by no playbook. The hand scripts stay the documented
-path, and `ansible/checks/hand_installers.yml` keeps them as `pending-role` against this role.
+applied from a laptop. `playbooks/mx1.yml` applies this role, with the host's signer list in
+`trust/mx1.yml`. mx1 is the mail host, on the never-list: the owner merges the change that
+wires it, and a run that touches it is the owner's to approve. The first apply is the owner's,
+after they read its plan, and merging changes no host. If the running mail stack does not match
+the stamps this role computes, that first apply recreates the mail containers that differ, so
+mail is briefly down; the plan is read, and the apply placed outside a send window, before
+anything is approved. `ansible/checks/hand_installers.yml` keeps the scripts as `pending-role`
+against this role until the host has converged.
 
 ## How to change it safely
 
