@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """Pins who may reach the mailgun-shim's bulk-mail port in mail/firewall.ts.
 
-Port 8443 is the shim's TLS endpoint. Its one caller is the blog's Ghost on
-app1. app1 has its own public interface (ghost-platform `infra/hosts` creates
-it with public networking), so it reaches mx1 from its own public IPv4, not
-from the estate NAT's. The rule must name that address and nothing wider, and
-must read it from the hosts stack's `app1PublicIpv4` output rather than any
-other host's: edge1's address, which an earlier draft used, would refuse every
-send. The address is never typed into this repository. Stdlib only, like the
-port parity test beside this file, whose rule parsing this one does not reuse
-so that neither test depends on the other's parser.
+Port 8443 is the shim's TLS endpoint. Exactly two sources may reach it, each
+read from the stack that names it and never typed into this repository:
 
-Each check has a negative case that feeds the same parser a deliberately
-widened rule and expects the failure, so a parser that matched nothing, or a
-check that could not fail, shows red here instead of passing for it.
+- app1's own public IPv4, from the application hosts stack's `app1PublicIpv4`.
+  The blog's Ghost on app1 is the caller; app1 has its own public interface, so
+  it reaches mx1 from its own address, not through edge1's NAT.
+- edge1's public IPv4, from the estate stack's `edge1PublicIpv4`. edge1 runs
+  the blackbox probe of this port and certificate, and is the NAT of the
+  estate's private-only hosts (the ops1 collector).
+
+Anything else, a wildcard, an IPv6 source, a third address, or either binding
+read from the other host's stack, is refused. IPv6 is not allowed at all.
+Stdlib only, like the port parity test beside this file, whose rule parsing
+this one does not reuse so that neither test depends on the other's parser.
 """
 
 from __future__ import annotations
@@ -26,9 +27,16 @@ FIREWALL = pathlib.Path(__file__).resolve().parent.parent / "firewall.ts"
 
 BULK_MAIL_PORT = "8443"
 HOSTS_STACK = "organization/branchleft-ghost-platform-hosts/production"
+ESTATE_STACK = "organization/branchleft-hetzner-estate/production"
+APP1_BINDING = "app1EgressSource"
+EDGE1_BINDING = "edge1ProbeSource"
 APP1_OUTPUT = "app1PublicIpv4"
-WRONG_HOST_OUTPUT = "edge1PublicIpv4"
-SOURCE_BINDING = "app1EgressSource"
+EDGE1_OUTPUT = "edge1PublicIpv4"
+# binding name -> the (stack, output) it must read
+ALLOWED = {
+    APP1_BINDING: (HOSTS_STACK, APP1_OUTPUT),
+    EDGE1_BINDING: (ESTATE_STACK, EDGE1_OUTPUT),
+}
 
 RULE_OBJECT = re.compile(r"\{[^{}]*\}")
 RULE_PORT = re.compile(r"\bport:\s*'([^']*)'")
@@ -36,6 +44,7 @@ RULE_SOURCES = re.compile(r"\bsourceIps:\s*\[([^\]]*)\]")
 STACK_REFERENCE = re.compile(r"const (\w+) = new pulumi\.StackReference\(\s*'([^']*)'\s*\);")
 WILDCARD_SOURCES = ("0.0.0.0/0", "::/0")
 DOTTED_QUAD = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
+REQUIRED_OUTPUT = re.compile(r"\.requireOutput\('([^']*)'\)")
 
 
 def code_lines(text: str) -> str:
@@ -80,6 +89,17 @@ def binding_origin(text: str, binding: str) -> tuple[str, str]:
     return stacks[variable], output
 
 
+def refused_sources(sources: list[str]) -> list[str]:
+    """The entries of a rule's source list that are not one of the two allowed
+    bindings: wildcards, IPv6, typed addresses and any other name."""
+    return [entry for entry in sources if entry not in ALLOWED]
+
+
+def missing_sources(sources: list[str]) -> list[str]:
+    """The allowed bindings a rule's source list leaves out."""
+    return [binding for binding in ALLOWED if binding not in sources]
+
+
 def firewall_text() -> str:
     """The text of mail/firewall.ts."""
     return FIREWALL.read_text(encoding="utf-8")
@@ -103,10 +123,12 @@ class BulkMailSourceTests(unittest.TestCase):
         rules = rules_for_port(firewall_text(), BULK_MAIL_PORT)
         self.assertEqual(len(rules), 1, f"expected one rule for {BULK_MAIL_PORT}, found {rules}")
 
-    def test_the_bulk_mail_rule_names_the_app1_binding_alone(self):
-        """The rule's only source is the binding read from the hosts stack."""
+    def test_the_rule_names_exactly_the_two_allowed_sources(self):
+        """app1's and edge1's bindings, each once, and nothing else."""
         (sources,) = rules_for_port(firewall_text(), BULK_MAIL_PORT)
-        self.assertEqual(sources, [SOURCE_BINDING])
+        self.assertEqual(refused_sources(sources), [], f"sources outside the allowed two: {sources}")
+        self.assertEqual(missing_sources(sources), [], f"allowed sources left out: {sources}")
+        self.assertEqual(len(sources), len(ALLOWED), f"a source is repeated: {sources}")
 
     def test_no_wildcard_source_reaches_the_bulk_mail_port(self):
         """Neither the IPv4 nor the IPv6 wildcard appears in the rule: the port
@@ -115,28 +137,34 @@ class BulkMailSourceTests(unittest.TestCase):
             for wildcard in WILDCARD_SOURCES:
                 self.assertNotIn(wildcard, " ".join(sources))
 
-    def test_the_source_is_app1s_own_address_from_the_hosts_stack(self):
-        """The binding reads app1PublicIpv4 from the stack that creates app1. Any
-        other host's address, or another stack's output of the same name, is the
-        wrong host and would refuse every send."""
-        self.assertEqual(binding_origin(firewall_text(), SOURCE_BINDING), (HOSTS_STACK, APP1_OUTPUT))
+    def test_each_source_is_read_from_the_stack_that_names_that_host(self):
+        """app1's binding reads app1PublicIpv4 from the stack that creates app1;
+        edge1's reads edge1PublicIpv4 from the estate stack. Either read from the
+        other host's stack or output is the wrong host: app1's sends would be
+        refused, or the monitoring probe would be."""
+        text = firewall_text()
+        for binding, expected in ALLOWED.items():
+            with self.subTest(binding=binding):
+                self.assertEqual(binding_origin(text, binding), expected)
 
-    def test_the_source_goes_through_the_validator_and_is_never_typed(self):
-        """The binding passes the output through bulkMailSourceCidr, and the rule
+    def test_the_program_reads_no_other_output(self):
+        """Only the two outputs are read from any stack."""
+        outputs = REQUIRED_OUTPUT.findall(code_lines(firewall_text()))
+        self.assertEqual(sorted(outputs), sorted(output for _, output in ALLOWED.values()))
+
+    def test_each_source_goes_through_the_validator_and_is_never_typed(self):
+        """Each binding passes its output through bulkMailSourceCidr, and the rule
         holds no dotted-quad literal."""
         text = code_lines(firewall_text())
-        binding = re.search(rf"const {SOURCE_BINDING} = ([^;]*);", text)
-        self.assertIsNotNone(binding, f"no `const {SOURCE_BINDING} = ...;` in firewall.ts")
-        assert binding is not None
-        self.assertIn("bulkMailSourceCidr(", binding.group(1))
+        for binding in ALLOWED:
+            with self.subTest(binding=binding):
+                declared = re.search(rf"const {binding} = ([^;]*);", text)
+                self.assertIsNotNone(declared, f"no `const {binding} = ...;` in firewall.ts")
+                assert declared is not None
+                self.assertIn("bulkMailSourceCidr(", declared.group(1))
         (sources,) = rules_for_port(text, BULK_MAIL_PORT)
         for source in sources:
             self.assertIsNone(DOTTED_QUAD.search(source), f"a literal address in the rule: {source}")
-
-    def test_no_other_hosts_address_is_read_by_the_program(self):
-        """The edge1 output is not read anywhere in the file: it is the address of
-        a host that does not carry app1's traffic."""
-        self.assertNotIn(WRONG_HOST_OUTPUT, code_lines(firewall_text()))
 
     def test_the_comment_no_longer_claims_a_serverless_caller(self):
         """Ghost no longer runs on a serverless platform, so the old reason for
@@ -145,75 +173,96 @@ class BulkMailSourceTests(unittest.TestCase):
 
 
 class ParserCanFailTests(unittest.TestCase):
-    """The same parser, fed the rule as it would look if the narrowing were
-    undone, so each assertion above is shown able to fail."""
+    """The same parsers, fed the rule as it would look if the narrowing were
+    undone or pointed at the wrong host, so each assertion above is shown able
+    to fail."""
 
-    def test_a_reopened_rule_is_read_as_wildcard(self):
-        """Both wildcards back in the rule: the sources are not the binding."""
+    def test_a_reopened_rule_is_refused(self):
+        """Both wildcards back in the rule: neither is an allowed source."""
         (sources,) = rules_for_port(_rule("8443", "'0.0.0.0/0', '::/0'"), BULK_MAIL_PORT)
-        self.assertNotEqual(sources, [SOURCE_BINDING])
-        self.assertEqual(sources, ["'0.0.0.0/0'", "'::/0'"])
+        self.assertEqual(refused_sources(sources), ["'0.0.0.0/0'", "'::/0'"])
+        self.assertEqual(missing_sources(sources), list(ALLOWED))
+
+    def test_app1_alone_is_missing_edge1(self):
+        """The earlier head's rule, app1 only, leaves the monitoring probe out."""
+        (sources,) = rules_for_port(_rule("8443", APP1_BINDING), BULK_MAIL_PORT)
+        self.assertEqual(refused_sources(sources), [])
+        self.assertEqual(missing_sources(sources), [EDGE1_BINDING])
+
+    def test_edge1_alone_is_missing_app1(self):
+        """The first draft's rule, edge1 only, would refuse every send from app1."""
+        (sources,) = rules_for_port(_rule("8443", EDGE1_BINDING), BULK_MAIL_PORT)
+        self.assertEqual(refused_sources(sources), [])
+        self.assertEqual(missing_sources(sources), [APP1_BINDING])
+
+    def test_a_third_source_is_refused(self):
+        """A typed address or another binding beside the two is not allowed."""
+        for extra in ("'203.0.113.9/32'", "ops1Source", "'2001:db8::/64'", "'::/0'"):
+            with self.subTest(extra=extra):
+                (sources,) = rules_for_port(
+                    _rule("8443", f"{APP1_BINDING}, {EDGE1_BINDING}, {extra}"), BULK_MAIL_PORT
+                )
+                self.assertEqual(refused_sources(sources), [extra])
 
     def test_a_second_wider_rule_is_counted(self):
         """A wide rule added beside the narrow one is seen as a second rule."""
-        text = _rule("8443", SOURCE_BINDING) + _rule("8443", "'0.0.0.0/0'")
+        text = _rule("8443", f"{APP1_BINDING}, {EDGE1_BINDING}") + _rule("8443", "'0.0.0.0/0'")
         self.assertEqual(len(rules_for_port(text, BULK_MAIL_PORT)), 2)
 
-    def test_an_added_ipv6_wildcard_is_seen_beside_the_binding(self):
-        """IPv6 left open while IPv4 is narrowed is not the binding alone."""
-        (sources,) = rules_for_port(_rule("8443", f"{SOURCE_BINDING}, '::/0'"), BULK_MAIL_PORT)
-        self.assertNotEqual(sources, [SOURCE_BINDING])
-
-    def test_a_typed_address_is_not_the_binding(self):
-        """A literal address in place of the binding is a different source."""
-        (sources,) = rules_for_port(_rule("8443", "'203.0.113.9/32'"), BULK_MAIL_PORT)
-        self.assertNotEqual(sources, [SOURCE_BINDING])
-        self.assertTrue(DOTTED_QUAD.search(sources[0]))
-
-    def test_the_estate_nat_address_is_read_as_the_wrong_host(self):
-        """The earlier draft's source, edge1's address from the estate stack, reads
-        as a different origin from the one the rule must have."""
+    def test_the_app1_binding_reading_edge1_is_the_wrong_host(self):
+        """app1's binding fed edge1's output from the estate stack reads as a
+        different origin from the one it must have."""
         wrong = (
-            "const estateStack = new pulumi.StackReference('organization/branchleft-hetzner-estate/production');\n"
-            f"const {SOURCE_BINDING} = estateStack.requireOutput('{WRONG_HOST_OUTPUT}').apply(String);\n"
+            f"const estateStack = new pulumi.StackReference('{ESTATE_STACK}');\n"
+            f"const {APP1_BINDING} = estateStack.requireOutput('{EDGE1_OUTPUT}').apply(String);\n"
         )
-        origin = binding_origin(wrong, SOURCE_BINDING)
-        self.assertEqual(origin, ("organization/branchleft-hetzner-estate/production", WRONG_HOST_OUTPUT))
-        self.assertNotEqual(origin, (HOSTS_STACK, APP1_OUTPUT))
+        origin = binding_origin(wrong, APP1_BINDING)
+        self.assertEqual(origin, (ESTATE_STACK, EDGE1_OUTPUT))
+        self.assertNotEqual(origin, ALLOWED[APP1_BINDING])
 
-    def test_the_right_output_from_the_wrong_stack_is_caught(self):
-        """The output's name alone does not pass: the stack must be the hosts stack."""
-        wrong = (
-            "const estateStack = new pulumi.StackReference('organization/branchleft-hetzner-estate/production');\n"
-            f"const {SOURCE_BINDING} = estateStack.requireOutput('{APP1_OUTPUT}');\n"
-        )
-        self.assertNotEqual(binding_origin(wrong, SOURCE_BINDING), (HOSTS_STACK, APP1_OUTPUT))
-
-    def test_the_wrong_output_from_the_right_stack_is_caught(self):
-        """The stack alone does not pass either: the output must be app1's."""
+    def test_the_edge1_binding_reading_app1_is_the_wrong_host(self):
+        """The swap the other way: edge1's binding fed app1's output."""
         wrong = (
             f"const hostsStack = new pulumi.StackReference('{HOSTS_STACK}');\n"
-            f"const {SOURCE_BINDING} = hostsStack.requireOutput('db1PrivateIp');\n"
+            f"const {EDGE1_BINDING} = hostsStack.requireOutput('{APP1_OUTPUT}');\n"
         )
-        self.assertNotEqual(binding_origin(wrong, SOURCE_BINDING), (HOSTS_STACK, APP1_OUTPUT))
+        self.assertNotEqual(binding_origin(wrong, EDGE1_BINDING), ALLOWED[EDGE1_BINDING])
+
+    def test_the_right_output_from_the_wrong_stack_is_caught(self):
+        """The output's name alone does not pass: the stack must be the right one."""
+        wrong = (
+            f"const estateStack = new pulumi.StackReference('{ESTATE_STACK}');\n"
+            f"const {APP1_BINDING} = estateStack.requireOutput('{APP1_OUTPUT}');\n"
+        )
+        self.assertNotEqual(binding_origin(wrong, APP1_BINDING), ALLOWED[APP1_BINDING])
+
+    def test_the_wrong_output_from_the_right_stack_is_caught(self):
+        """The stack alone does not pass either: the output must be the host's."""
+        wrong = (
+            f"const hostsStack = new pulumi.StackReference('{HOSTS_STACK}');\n"
+            f"const {APP1_BINDING} = hostsStack.requireOutput('db1PrivateIp');\n"
+        )
+        self.assertNotEqual(binding_origin(wrong, APP1_BINDING), ALLOWED[APP1_BINDING])
 
     def test_a_binding_through_the_other_of_two_references_is_followed(self):
         """With both references present, the variable the binding reads decides the
         origin, not the order they are declared in."""
         text = (
             f"const hostsStack = new pulumi.StackReference('{HOSTS_STACK}');\n"
-            "const estateStack = new pulumi.StackReference('organization/branchleft-hetzner-estate/production');\n"
-            f"const {SOURCE_BINDING} = estateStack.requireOutput('{WRONG_HOST_OUTPUT}');\n"
+            f"const estateStack = new pulumi.StackReference('{ESTATE_STACK}');\n"
+            f"const {APP1_BINDING} = estateStack.requireOutput('{EDGE1_OUTPUT}');\n"
         )
-        self.assertEqual(
-            binding_origin(text, SOURCE_BINDING),
-            ("organization/branchleft-hetzner-estate/production", WRONG_HOST_OUTPUT),
-        )
+        self.assertEqual(binding_origin(text, APP1_BINDING), (ESTATE_STACK, EDGE1_OUTPUT))
 
     def test_a_binding_with_no_reference_raises(self):
         """A source that is not read from a stack reference is refused, not guessed."""
         with self.assertRaises(AssertionError):
-            binding_origin(f"const {SOURCE_BINDING} = someOutput.requireOutput('x');\n", SOURCE_BINDING)
+            binding_origin(f"const {APP1_BINDING} = someOutput.requireOutput('x');\n", APP1_BINDING)
+
+    def test_a_third_output_read_is_seen(self):
+        """An extra requireOutput in the program shows in the list the test compares."""
+        text = f"a.requireOutput('{APP1_OUTPUT}');\nb.requireOutput('{EDGE1_OUTPUT}');\nc.requireOutput('db1PrivateIp');\n"
+        self.assertEqual(len(REQUIRED_OUTPUT.findall(code_lines(text))), 3)
 
     def test_other_ports_are_not_read_as_the_bulk_mail_rule(self):
         """A wildcard on another port, such as 587, is not this rule."""
@@ -235,6 +284,7 @@ class ParserCanFailTests(unittest.TestCase):
         text = firewall_text()
         for port in ("22", "25", "587", "8443"):
             self.assertTrue(rules_for_port(text, port), f"no rule parsed for port {port}")
+        self.assertEqual(len(REQUIRED_OUTPUT.findall(code_lines(text))), len(ALLOWED))
 
 
 if __name__ == "__main__":

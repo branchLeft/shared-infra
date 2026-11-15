@@ -17,6 +17,12 @@ const hostsStack = new pulumi.StackReference(
 );
 
 /**
+ * The estate stack's outputs (this repository's `hetzner/estate.ts`, which
+ * creates edge1), read the same way `hetzner/tenants.ts` reads them.
+ */
+const estateStack = new pulumi.StackReference('organization/branchleft-hetzner-estate/production');
+
+/**
  * Ranges that are never the public source of a caller on the internet:
  * this-network, private, shared (CGNAT), loopback, link-local, IETF protocol,
  * benchmarking, multicast and reserved space. A rule naming one matches
@@ -79,6 +85,20 @@ export function bulkMailSourceCidr(address: string): string {
  */
 const app1EgressSource = hostsStack
   .requireOutput('app1PublicIpv4')
+  .apply((address) => bulkMailSourceCidr(String(address)));
+
+/**
+ * edge1's own public IPv4, as a /32. edge1 runs the blackbox probe that checks
+ * the shim's TLS endpoint and its certificate expiry
+ * (`hetzner/monitoring/stack/prometheus/prometheus.yml`, job `blackbox_mail`),
+ * and that probe leaves from edge1's public interface. Without this source the
+ * probe is refused and the mail liveness alert fires for good. edge1 is also
+ * the NAT for the estate's private-only hosts, so this admits them too (the
+ * ops1 collector among them, which will call the shim's drain route). Read
+ * from the estate stack's `edge1PublicIpv4` output, never typed.
+ */
+const edge1ProbeSource = estateStack
+  .requireOutput('edge1PublicIpv4')
   .apply((address) => bulkMailSourceCidr(String(address)));
 
 /**
@@ -166,18 +186,19 @@ export const mailFirewall = new hcloud.Firewall(
         sourceIps: ['0.0.0.0/0', '::/0'],
       },
       // The sending application -> the mailgun-shim's bulk-mail API,
-      // terminated by Caddy. The only caller is the blog's Ghost on app1, so
-      // the one source is app1's own public IPv4 (`app1EgressSource` above).
-      // IPv4 only: Ghost runs in a container on Docker's IPv4 networks, so its
-      // traffic leaves app1 as IPv4; an IPv6 source is deliberately not
-      // allowed. The endpoint itself stays API-key-authenticated and
-      // rate-limited. This stays narrowed until the shim is retired and the
+      // terminated by Caddy. Two sources only: the blog's Ghost on app1
+      // (`app1EgressSource` above) and edge1, which carries the blackbox probe
+      // of this port and the NAT of the estate's private-only hosts
+      // (`edge1ProbeSource` above). IPv4 only: Ghost runs in a container on
+      // Docker's IPv4 networks, so its traffic leaves app1 as IPv4, and no
+      // IPv6 source is allowed. The endpoint itself stays API-key-authenticated
+      // and rate-limited. This stays narrowed until the shim is retired and the
       // port closed.
       {
         direction: 'in',
         protocol: 'tcp',
         port: '8443',
-        sourceIps: [app1EgressSource],
+        sourceIps: [app1EgressSource, edge1ProbeSource],
       },
     ],
     applyTos: [
