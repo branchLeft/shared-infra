@@ -102,6 +102,8 @@
 - name: Pull the Node image by digest when the host lacks it
   ansible.builtin.command:
     argv: [/usr/bin/docker, pull, -q, '{{ breakglass_grant_host_node_image }}']
+  environment:
+    DOCKER_CONFIG: '{{ breakglass_grant_host_registry_docker_config }}'
   changed_when: true
   when: >-
     not (breakglass_grant_host_image_probe.rc == 0

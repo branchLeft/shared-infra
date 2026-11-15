@@ -208,6 +208,8 @@
     wait_timeout: '{{ compose_stack_wait_timeout }}'
     remove_orphans: false
     renew_anon_volumes: false
+  environment:
+    DOCKER_CONFIG: '{{ compose_stack_registry_docker_config }}'
   when:
     - compose_stack_compose_file_stat.stat.exists
     - compose_stack_up_needed | ansible.builtin.bool
@@ -228,6 +230,8 @@
     remove_orphans: false
     renew_anon_volumes: false
   register: compose_stack_health
+  environment:
+    DOCKER_CONFIG: '{{ compose_stack_registry_docker_config }}'
   check_mode: true
   changed_when: false
   when: compose_stack_compose_file_stat.stat.exists

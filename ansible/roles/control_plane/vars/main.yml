@@ -154,3 +154,8 @@ control_plane_project_names:
   - '{{ control_plane_project_name }}'
   - '{{ control_plane_project_dir | ansible.builtin.basename }}'
   - '{{ control_plane_stack_unit | ansible.builtin.regex_replace("\A[^@]+@(.+)\.service\Z", "\1") }}'
+
+# The registry read key's docker config directory, for the pulls of the database, the sign-in
+# service and the applications image. A copy of deploy_verifier_registry_docker_dir (a role imports
+# no role): test_registry_key_callers.py holds it.
+control_plane_registry_docker_config: /etc/branchleft/registry/docker

@@ -23,6 +23,7 @@ StartLimitIntervalSec=0
 [Service]
 Type=simple
 EnvironmentFile=/etc/branchleft/mail-collector/unit.env
+Environment=DOCKER_CONFIG=/etc/branchleft/registry/docker
 ExecStartPre=-/usr/bin/docker rm --force mail-collector
 ExecStart=/usr/bin/docker run --rm --name mail-collector --user ${MAIL_COLLECTOR_USER} --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL --security-opt no-new-privileges --volume /etc/branchleft/mail-collector/descriptors:/descriptors:ro --volume /var/lib/branchleft/mail-collector:/state:rw --env-file /etc/branchleft/mail-collector/collector.env --env-file /etc/branchleft/mail-collector/credentials.env ${MAIL_COLLECTOR_IMAGE}
 ExecStop=/usr/bin/docker stop --time 15 mail-collector

@@ -3,6 +3,10 @@
 # hand scripts under mail/provision, the runbooks and the DNSBL check already agree on, so a caller
 # cannot move one. ansible/checks/test_mx1_stack_agree.py holds them against those scripts.
 
+# The registry read key's docker config directory, for the projects' pulls. A copy of
+# deploy_verifier_registry_docker_dir (a role imports no role): test_registry_key_callers.py holds it.
+mx1_stack_registry_docker_config: /etc/branchleft/registry/docker
+
 # ----- Stalwart's project (30-deploy-stalwart.sh) -----
 mx1_stack_stalwart_project: stalwart
 mx1_stack_stalwart_dir: /opt/stalwart
