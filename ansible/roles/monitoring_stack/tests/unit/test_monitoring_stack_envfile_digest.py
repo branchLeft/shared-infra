@@ -1,7 +1,7 @@
 """Unit tests for monitoring_stack_envfile_digest: the digest, the refusals, the read-only promise.
 
 Run from the role's directory with library/ on PYTHONPATH, the way
-``ansible/checks/run_role_unit_tests.sh`` does. Every secret here is a throwaway made for the test.
+``ansible/checks/run_role_unit_tests.py`` does. Every secret here is a throwaway made for the test.
 """
 
 import contextlib

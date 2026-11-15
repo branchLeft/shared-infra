@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { type Created, installTenantsMocks, ofType, settle, TYPES } from './tenants.fixtures';
 
 /**
- * The tenants program with edge-t and db-t1 adopted from servers the owner made by
+ * The tenants program with edge-t, db-t1 and app-t1 adopted from servers the owner made by
  * hand. A separate file, because the program reads its config once, at import.
  *
  * `ignoreChanges` and the import id are fields of the request the SDK sends the
@@ -45,6 +45,8 @@ beforeAll(async () => {
         ipv6Id: '2002',
       }),
       'branchleft-hetzner-tenants:dbt1Adopt': JSON.stringify({ serverId: '1002' }),
+      'branchleft-hetzner-tenants:appt1Enabled': 'true',
+      'branchleft-hetzner-tenants:appt1Adopt': JSON.stringify({ serverId: '1003' }),
     },
   });
   const monitor = pulumi.runtime.getMonitor() as unknown as {
@@ -68,10 +70,11 @@ beforeAll(async () => {
 const server = (name: string) =>
   registrations.find((r) => r.type === TYPES.server && r.name === name);
 
-describe('the tenants program with edge-t and db-t1 adopted', () => {
+describe('the tenants program with edge-t, db-t1 and app-t1 adopted', () => {
   it('imports each server by the id in its stack config', () => {
     expect(server('edge-t')?.importId).toBe('1001');
     expect(server('db-t1')?.importId).toBe('1002');
+    expect(server('app-t1')?.importId).toBe('1003');
   });
 
   it('imports the two addresses of edge-t and creates no others', () => {
@@ -85,7 +88,7 @@ describe('the tenants program with edge-t and db-t1 adopted', () => {
   // Red when a create-time-only field is dropped from the component's list: a
   // console-made server differs from the program on all of them, and a diff on
   // one plans to destroy a live host.
-  it.each(['edge-t', 'db-t1'])(
+  it.each(['edge-t', 'db-t1', 'app-t1'])(
     'never plans to replace %s over a create-time-only field',
     (name) => {
       for (const field of ['userData', 'sshKeys', 'image', 'firewallIds']) {
@@ -98,15 +101,18 @@ describe('the tenants program with edge-t and db-t1 adopted', () => {
   // never reads a server's public interface into state, so the first apply would power
   // the server off and delete the primary IP it unassigns. edge-t is at the import
   // stage in this file; hetzner-host/host.test.ts covers the converge stage.
-  it.each(['edge-t', 'db-t1'])('never lets publicNets be rewritten on adopted %s', (name) => {
-    expect(server(name)?.ignoreChanges, name).toContain('publicNets');
-  });
+  it.each(['edge-t', 'db-t1', 'app-t1'])(
+    'never lets publicNets be rewritten on adopted %s',
+    (name) => {
+      expect(server(name)?.ignoreChanges, name).toContain('publicNets');
+    }
+  );
 
   it('gives each server its own firewall by attachment, never on the server', () => {
     expect(server('edge-t')?.inputs.firewallIds).toBeUndefined();
     const attached = registrations.filter((r) => r.type === FIREWALL_ATTACHMENT).map((r) => r.name);
-    // db-t1 is private-only, so it gets no firewall attachment at any stage: the
-    // provider refuses one, as it has no public interface to filter.
+    // db-t1 and app-t1 are private-only, so they get no firewall attachment at any
+    // stage: the provider refuses one, as they have no public interface to filter.
     expect(attached).toEqual(['edge-t-firewall-attachment']);
   });
 
@@ -119,8 +125,18 @@ describe('the tenants program with edge-t and db-t1 adopted', () => {
     );
   });
 
+  it('keeps app-t1 private-only, with no address of its own', () => {
+    expect(ofType(created, TYPES.primaryIp).map((ip) => ip.inputs.name)).not.toContain(
+      'app-t1-ipv4'
+    );
+    expect(server('app-t1')?.ignoreChanges).toEqual(
+      expect.arrayContaining(['networks', 'publicNets'])
+    );
+  });
+
   it('is the ruled server type', () => {
     expect(server('edge-t')?.inputs.serverType).toBe('cx23');
     expect(server('db-t1')?.inputs.serverType).toBe('cx23');
+    expect(server('app-t1')?.inputs.serverType).toBe('cx23');
   });
 });

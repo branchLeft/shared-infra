@@ -64,19 +64,31 @@ JUMP_VARS = frozenset(
 JUMP_HOSTS = frozenset(("edge1", "edget"))
 JUMP_ROLE = "ci_jump"
 APPS_IMAGE_KEY = "control_plane_db_apps_image"
-# The three inputs of the ring_controller_host role. Each is public text that is empty until the
+# The control plane's image pin, the value that moves the image ops1 runs. It is the one
+# key an owner file may leave out: without it the control_plane role keeps the image the deploy
+# wrapper last pinned, so allowing the key changes nothing until the owner sets it. That it is
+# NAME@sha256: and 64 hex digits is the role's pattern (control_plane_image_pattern), which
+# test_step_allowlist.py reads by name.
+CONTROL_PLANE_IMAGE_KEY = "control_plane_app_image"
+# Keys a host's file may omit, by host. Every other allowed key is required.
+OPTIONAL_OWNER_KEYS: dict[str, frozenset[str]] = {"ops1": frozenset((CONTROL_PLANE_IMAGE_KEY,))}
+# The two inputs of the ring_controller_host role. Each is public text that is empty until the
 # owner sets it, and an empty digest keeps the controller's timer off. The role holds the shapes
 # (its vars/main.yml patterns), so only the type is read here, as for APPS_IMAGE_KEY.
 RING_CONTROLLER_TEXT_KEYS = frozenset(
     (
         "ring_controller_host_bundle_sha256",
         "ring_controller_host_bundle_url",
-        "ring_controller_host_ledger_url",
     )
 )
+# The two host ports of the sweego_receiver role, whole numbers the owner names. The role holds the
+# range and the difference between them (its _inputs.yml), so only the type is read here. edge1
+# only: the role refuses any other host, and the playbook lists it there alone.
+SWEEGO_RECEIVER_PORT_KEYS = frozenset(("sweego_receiver_port", "sweego_receiver_drain_port"))
 _BASE_OWNER_KEYS = {
-    "edge1": CI_LOGIN_VARS,
-    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY)) | RING_CONTROLLER_TEXT_KEYS,
+    "edge1": CI_LOGIN_VARS | SWEEGO_RECEIVER_PORT_KEYS,
+    "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY, CONTROL_PLANE_IMAGE_KEY))
+    | RING_CONTROLLER_TEXT_KEYS,
 }
 OWNER_VARS_KEYS = {
     host: _BASE_OWNER_KEYS.get(host, frozenset())
@@ -167,7 +179,10 @@ HOST_PLAY_VARS: dict[str, dict[str, str | bool]] = {
     "edge1": {"deploy_tooling_host_class": "gateway", "egress_nat_gateway_enabled": True},
     "edget": {"egress_nat_gateway_enabled": True},
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
+    "ops1": {"deploy_tooling_host_class": "internal"},
+    "db1": {"deploy_tooling_host_class": "internal"},
     "dbt1": {"deploy_tooling_host_class": "internal"},
+    "appt1": {"deploy_tooling_host_class": "internal"},
     # mx1's jail has no ignoreip line (the opt-out of host_baseline). The pin is here, and the
     # playbook must carry the same value (R2 holds it exactly).
     "mx1": {"host_baseline_fail2ban_ignoreip_none": True},
@@ -766,10 +781,18 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     # (control_plane_db_image_pattern), which test_step_allowlist.py reads by name.
     if APPS_IMAGE_KEY in doc and not isinstance(doc[APPS_IMAGE_KEY], str):
         problems.append(f"{APPS_IMAGE_KEY} must be text")
+    if CONTROL_PLANE_IMAGE_KEY in doc and not isinstance(doc[CONTROL_PLANE_IMAGE_KEY], str):
+        problems.append(f"{CONTROL_PLANE_IMAGE_KEY} must be text")
     problems.extend(
         f"{key} must be text"
         for key in sorted(RING_CONTROLLER_TEXT_KEYS)
         if key in doc and not isinstance(doc[key], str)
+    )
+    # A bool is an int in Python, so it is refused by name: true would read as port 1.
+    problems.extend(
+        f"{key} must be a whole number"
+        for key in sorted(SWEEGO_RECEIVER_PORT_KEYS)
+        if key in doc and (isinstance(doc[key], bool) or not isinstance(doc[key], int))
     )
     problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
@@ -805,8 +828,11 @@ def _check_owner_vars(directory: Path, enrolled: set[str], findings: list[str]) 
             findings.append(f"{label}: this host has no owner_vars keys, so it may have no file")
             continue
         doc = _mapping(_load(path, findings, label))
-        if set(doc) != allowed:
-            findings.append(f"{label}: must hold exactly {sorted(allowed)}")
+        optional = OPTIONAL_OWNER_KEYS.get(path.stem, frozenset())
+        required = allowed - optional
+        if not required <= set(doc) or not set(doc) <= allowed:
+            may = f", and may hold {sorted(optional)}" if optional else ""
+            findings.append(f"{label}: must hold exactly {sorted(required)}{may}")
         findings.extend(f"{label}: {problem}" for problem in _owner_key_problems(doc))
 
 

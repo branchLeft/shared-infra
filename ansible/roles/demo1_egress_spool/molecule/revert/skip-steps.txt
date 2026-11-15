@@ -1,0 +1,10 @@
+# The steps this scenario's shard leaves out, one per line; a line that starts with # is
+# a comment. The harness reads it (ansible/README.md, "Sharing steps between scenarios").
+#
+# The converge breaks the host on purpose, twice (a table that is never confirmed, and one
+# that is), and a second converge or a check run of it would prove nothing. The static steps
+# and the idempotence of the role itself are the default scenario's.
+check-fresh
+check-configured
+molecule-check
+idempotence

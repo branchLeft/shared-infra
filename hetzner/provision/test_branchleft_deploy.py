@@ -608,6 +608,11 @@ class DeployTests(unittest.TestCase):
 TENANT_DIGEST = "b" * 64
 TENANT = f"ghcr.io/branchleft/ghost-tenant@sha256:{TENANT_DIGEST}"
 TENANT_SIGNER = "branchLeft/ghost-platform/.github/workflows/registry-push.yml"
+PERCONA_SIGNER = "branchLeft/ghost-platform/.github/workflows/percona-image.yml"
+# The digest the Percona image workflow pushed, scanned (blocking=0) and attested on
+# ghost-platform main, run 43331723453 at commit 1289eb507b95. The db_t1 role pins the same one.
+PERCONA_DIGEST = "20e400e5558480067f8d72610b27064efa97d260d51f9e86af60afb69fd93696"
+PERCONA = f"ghcr.io/branchleft/percona-server@sha256:{PERCONA_DIGEST}"
 
 # sha256 of hetzner/provision/branchleft-verify-image, the host copy of
 # ghost-platform's scripts/verify-image-attestation.sh. Change the copy and this
@@ -690,8 +695,29 @@ class AttestationTests(unittest.TestCase):
                 "ghcr.io/branchleft/portal-apps": (
                     "branchLeft/ghost-platform/.github/workflows/portal-apps-image.yml"
                 ),
+                "ghcr.io/branchleft/percona-server": PERCONA_SIGNER,
             },
         )
+
+    def test_the_scanned_percona_digest_is_verified_against_its_own_workflow_and_pinned(self):
+        run = FakeRun([0, 0])
+        self.deploy(PERCONA, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, PERCONA, bd.ATTESTED_REPO, PERCONA_SIGNER, "--bundle-from-oci"],
+        )
+        self.assertEqual(bd.read_current_image(self.env_path()), PERCONA)
+
+    def test_a_percona_digest_that_is_not_the_attested_one_is_refused_before_any_host_change(self):
+        other = f"ghcr.io/branchleft/percona-server@sha256:{'e' * 64}"
+        run = FakeRun([1])
+        with self.assertRaises(bd.DeployError):
+            self.deploy(other, run)
+        self.assertEqual(
+            run.calls[0],
+            [bd.VERIFIER, other, bd.ATTESTED_REPO, PERCONA_SIGNER, "--bundle-from-oci"],
+        )
+        self.assert_refused_before_any_host_change(run)
 
     def test_an_unsigned_or_wrong_signer_image_is_refused_before_any_host_change(self):
         run = FakeRun([1])
@@ -816,7 +842,7 @@ class AttestationTests(unittest.TestCase):
             "publicpress-website": "ghcr.io/branchleft/publicpress-website",
             "edge": "ghcr.io/branchleft/edge-caddy",
             "db": "mysql:8.4",
-            "dbt1": "ghcr.io/branchleft/percona-server",
+            "mail-spool": "ghcr.io/branchleft/mailgun-shim",
         }
         for stack, name in today.items():
             image = f"{name}@sha256:{'d' * 64}"
@@ -831,11 +857,34 @@ class AttestationTests(unittest.TestCase):
                     bd.read_current_image(bd.image_env_path(stack, self.config_dir)), image
                 )
 
+    def test_the_spool_stack_may_bump_the_mailgun_shim_without_the_verifier(self):
+        image = f"ghcr.io/branchleft/mailgun-shim@sha256:{'d' * 64}"
+        run = FakeRun([0])
+        self.deploy_to("mail-spool", image, run)
+        self.assertEqual(run.calls, [["systemctl", "restart", "branchleft-compose@mail-spool"]])
+        self.assertEqual(
+            bd.read_current_image(bd.image_env_path("mail-spool", self.config_dir)), image
+        )
+
+    def test_an_unknown_image_on_the_spool_stack_is_still_refused(self):
+        self.assert_refused_with_nothing_run(
+            "mail-spool", f"attacker.example/evil@sha256:{'d' * 64}"
+        )
+        self.assert_refused_with_nothing_run(
+            "mail-spool", f"ghcr.io/branchleft/anything-else@sha256:{'d' * 64}"
+        )
+
+    def test_the_mailgun_shim_exemption_is_for_the_spool_stack_only(self):
+        self.assert_refused_with_nothing_run(
+            "edge", f"ghcr.io/branchleft/mailgun-shim@sha256:{'d' * 64}"
+        )
+
     def test_the_registered_images_still_deploy_on_any_stack_through_the_verifier(self):
         # control-plane pins portal-apps; tenant slots pin ghost-tenant.
         for stack, name in (
             ("blog", "ghcr.io/branchleft/ghost-tenant"),
             ("control-plane", "ghcr.io/branchleft/portal-apps"),
+            ("dbt1", "ghcr.io/branchleft/percona-server"),
         ):
             image = f"{name}@sha256:{'e' * 64}"
             with self.subTest(stack=stack):
@@ -852,7 +901,7 @@ class AttestationTests(unittest.TestCase):
                 "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
                 "edge": frozenset({"ghcr.io/branchleft/edge-caddy"}),
                 "db": frozenset({"mysql"}),
-                "dbt1": frozenset({"ghcr.io/branchleft/percona-server"}),
+                "mail-spool": frozenset({"ghcr.io/branchleft/mailgun-shim"}),
             },
         )
         for names in bd.UNATTESTED_STACK_IMAGES.values():

@@ -168,3 +168,14 @@ describe('db-t1 behind its switch', () => {
     expect(ofType(created, TYPES.server).map((server) => server.inputs.name)).toEqual(['edge-t']);
   });
 });
+
+describe('app-t1 behind its switch', () => {
+  // Red when `appt1Enabled` defaults to true: a server that costs money would be
+  // planned by every preview, before the owner has chosen to bring it under the stack.
+  it('declares no app-t1 server, firewall or address while appt1Enabled is absent', () => {
+    expect(named(TYPES.server, 'app-t1')).toBeUndefined();
+    expect(named(TYPES.firewall, 'app-t1')).toBeUndefined();
+    expect(program.appT1).toBeUndefined();
+    expect(ofType(created, TYPES.server).map((server) => server.inputs.name)).toEqual(['edge-t']);
+  });
+});

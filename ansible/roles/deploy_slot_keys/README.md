@@ -20,7 +20,8 @@ order the standard sets for a role README (ANS-14).
   rotates a slot whose key changed, and revokes a slot that is no longer declared.
 - Reads `authorized_keys` back after the change and compares every managed line with a
   shape the module pins for itself. If the program has drifted and renders a line the
-  module does not expect, the run restores the file it started from and fails.
+  module does not expect, the run leaves only the lines it does not manage in the file (no
+  slot line) and fails.
 
 The slot program's own rules apply and the role does not weaken them: one key holds one
 slot; the key's comment is discarded; the `/home/deploy` tree belongs to root and is not
@@ -149,7 +150,11 @@ repository, not here.
 - **The module pins its own oracle.** If the module trusted the program to judge its own
   output, a drifted program would pass its own test. The module therefore checks every
   managed line, before the write (the plan) and after it (the read-back), against the
-  pinned shape. A failed read-back restores `authorized_keys` as it was.
+  pinned shape. A failed read-back never restores the file as it was, because that would
+  bring back a key the apply had revoked: it writes back the unmanaged lines only, so every
+  slot loses its deploys until the next run renders them again from the register. The
+  register keeps the apply's changes. A bad apply loses deploys; it never keeps a revoked
+  key working.
 - **It validates every entry before it reads the host.** A refusal names a rule and a
   position in the list ("slot entry number 2: key-already-installed") and nothing else.
   It never names a stack, a key or a fingerprint, because the log of a plan is not private.

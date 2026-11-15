@@ -1,11 +1,38 @@
-#!/bin/sh
-# TEST STAND-IN in front of the real unbound-checkconf, installed by prepare.yml. It records
-# each call and runs the real program, unless the switch checkconf_rejects is set, which is
-# a configuration that unbound refuses.
-state=/var/lib/standin-docker
-printf '%s\n' "$*" >> "$state/checkconf.log"
-if [ -e "$state/flags/checkconf_rejects" ]; then
-  echo "unbound-checkconf: stand-in rejection: the configuration is refused" >&2
-  exit 1
-fi
-exec /usr/sbin/unbound-checkconf "$@"
+#!/usr/bin/python3 -I
+"""TEST STAND-IN in front of the real unbound-checkconf, installed by prepare.yml.
+
+It records each call and runs the real program, unless the switch checkconf_rejects is set,
+which is a configuration that unbound refuses.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+STATE = "/var/lib/standin-docker"
+REAL = "/usr/sbin/unbound-checkconf"
+
+
+def main(argv: list[str]) -> int:
+    """Record the call, then refuse or run the real program with the same arguments."""
+    try:
+        with open(os.path.join(STATE, "checkconf.log"), "a", encoding="utf-8") as handle:
+            handle.write(" ".join(argv) + "\n")
+    except OSError:
+        pass
+    if os.path.exists(os.path.join(STATE, "flags", "checkconf_rejects")):
+        print(
+            "unbound-checkconf: stand-in rejection: the configuration is refused", file=sys.stderr
+        )
+        return 1
+    try:
+        os.execv(REAL, [REAL, *argv])  # noqa: S606 - exec replaces the process, as the shell's exec did
+    except OSError as error:
+        print(f"{REAL}: {error.strerror}", file=sys.stderr)
+        return 127
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

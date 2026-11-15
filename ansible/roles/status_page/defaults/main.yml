@@ -1,3 +1,5 @@
 ---
-status_page_listen_address: 127.0.0.1
+# ops1's private address: edge1 proxies to the page over the private network. The
+# molecule scenario sets loopback, because its container holds no such address.
+status_page_listen_address: 10.20.1.50
 status_page_wait_timeout: 120

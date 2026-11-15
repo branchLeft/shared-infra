@@ -4,3 +4,7 @@ ansible/roles/demo1_build/files/ghost-platform/demo-host/provision/branchleft_sl
 ansible/roles/export_bundler/files/ghost-platform/services/export-bundler/dist/scratchDatabase.js
 # Test harness that provisions a role and database in a throwaway Postgres container to prove the control-plane migration login holds no superuser power (database provisioning and administration, not application code).
 hetzner/provision/test_control_plane_hba_server.py
+# Backup and restore tooling for the control plane's two PostgreSQL databases: one read-only snapshot, a server-side row count per table, and a restore into a throwaway server (database administration and operational checks, not application code).
+ansible/roles/control_plane_backup/files/branchleft_control_plane_backup.py
+# The tests of that program, which hold the same statements as literals to prove what it sends.
+ansible/roles/control_plane_backup/tests/unit/test_control_plane_backup.py

@@ -25,7 +25,10 @@ const providerCreates = () => created.filter((resource) => resource.type.startsW
 beforeAll(() => {
   process.on('unhandledRejection', onRejection);
   created = installTenantsMocks({
-    config: { 'branchleft-hetzner-tenants:dbt1Enabled': 'true' },
+    config: {
+      'branchleft-hetzner-tenants:dbt1Enabled': 'true',
+      'branchleft-hetzner-tenants:appt1Enabled': 'true',
+    },
     servers: [{ name: 'demo1' }],
     firewalls: [{ name: 'project-marker-demos' }],
   });
@@ -54,8 +57,8 @@ describe('tenants program under a token for another project', () => {
     // loaded full suite that has outlasted the 5s default.
   }, 30_000);
 
-  it('registers no default route, no edge-t and no db-t1 while the check refuses', () => {
-    // db-t1 is switched on in this file's config so its absence is the gate's work.
+  it('registers no default route, no edge-t, no db-t1 and no app-t1 while the check refuses', () => {
+    // db-t1 and app-t1 are switched on in this file's config so its absence is the gate's work.
     const types = created.map((resource) => resource.type);
     expect(types).not.toContain(TYPES.route);
     expect(types).not.toContain(TYPES.server);

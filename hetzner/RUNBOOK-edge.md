@@ -584,7 +584,7 @@ The number was carried over from the retired edge, whose rule was live at
 `preview: true` and never enforced anything. The key is the direct peer (`{http.request.remote.host}`), which can
 also collapse real clients onto a Docker bridge address such as `172.18.0.1`
 behind the docker-proxy, so that every collapsed client shares one budget per
-site. `RateLimitDecliningRealClients` excludes `172.16.0.0/12` keys, so that
+site. `RateLimitDeclinesSustained` excludes `172.16.0.0/12` keys, so that
 collapse would not alert on its own; the tripwire is the blackbox probes seeing
 `429`.
 
@@ -822,6 +822,48 @@ ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" '
 Read the listed decisions first and delete the address the list actually shows —
 the bridge subnet depends on how many Compose networks the host has.
 
+**Our own Ghost admin does not ban.** Two rendered files narrow what used to
+ban the owner for ordinary Ghost admin use (`hetzner/edge/render.md`, "Ghost
+admin preview exclusion" and "Ghost admin API and admin-interface probing"):
+the design and announcement-bar previews no longer trip two Core Rule Set
+rules, and Ghost admin API 403s and 404s on a Ghost hostname no longer count as
+admin-interface probing. CI replays both, and probes that must still ban, on
+every change to `hetzner/edge/`. To confirm it on the host after an apply,
+change and save something in a Ghost site's Settings > Design, then run the
+`cscli decisions list` command above: it must list no new decision for your
+address.
+
+**A verified staff session is never refused.** On the blog, a request whose
+Ghost staff session the edge has checked with Ghost passes an IP ban and AppSec,
+and its log lines reach no CrowdSec bucket (`hetzner/edge/render.md`, "Verified
+sessions"). To confirm it on the host after an apply, open the blog's Ghost admin
+and stay signed in, then ban your own address for five minutes. Your address is
+the one `curl -s https://ifconfig.co` prints on your machine:
+
+```bash
+read -r MY_IP; export MY_IP
+ssh -i ~/.ssh/id_ed25519_hetzner root@"$EDGE1_IPV4" "
+  CROWDSEC_CTR=\$(docker ps -q --filter label=com.docker.compose.project=edge --filter label=com.docker.compose.service=crowdsec) &&
+  docker exec \"\$CROWDSEC_CTR\" cscli decisions add --ip $MY_IP --duration 5m --reason 'verified-session check'"
+```
+
+Wait 15 seconds. Good looks like: the Ghost admin keeps working (open a post,
+save it), `https://blog.branchleft.co.uk/` in a private window answers 403, and
+the `cscli decisions list` command above shows only your five-minute decision.
+Opening the admin from a typed URL or a bookmark is refused while banned (the
+render.md "Limits" paragraph says why). Delete the decision when done, with the
+`cscli decisions delete --ip` command above and your address; it also expires by
+itself after five minutes.
+
+**Repeated failed Ghost admin sign-ins do ban.** The scenario
+`branchleft/ghost-admin-login-bruteforce` (`hetzner/edge/render.md`, "Ghost
+admin brute force") bans an address at the tenth failed sign-in or admin API
+401 on a Ghost hostname, counting about one fewer every 30 seconds. Mistyping
+a password a few times, and Ghost's own lockout after five, do not reach it.
+CI replays a burst that must ban and the owner's sign-in and admin use that
+must not. A `cscli decisions list` after an apply names the scenario in the
+`Reason` column when it fires.
+
 ## 11. Adding a site to the edge
 
 One registry entry, then a re-render. Nothing else.
@@ -949,3 +991,11 @@ check again.
 - **It does not open the probe port.** Compose publishes `8080` on `127.0.0.1`
   only and the Hetzner firewall on `edge1` opens 22, 80, 443 and ICMP. Reaching
   the probe requires SSH to the host.
+- **It does not keep CrowdSec's decisions database longer than the edge keeps
+  its logs.** The alerts and decisions CrowdSec stores hold client addresses,
+  scenarios and timestamps. `db_config.flush` in `crowdsec/config.yaml.local`
+  flushes them at 30 days (`max_age: 30d`), the same figure as the edge's log
+  retention; `max_items` stays at the image default. Changing either figure
+  means changing the other. Read the effective value back with `docker exec
+"$CROWDSEC_CTR" cscli config show --key Config.DbConfig.Flush` once
+  `$CROWDSEC_CTR` is set as in the CrowdSec sections above.

@@ -54,15 +54,34 @@ case $1 in
         fi
         count=$(sed -n 's/^count=//p' "$state/image-count" 2>/dev/null)
         count=${count:-1}
+        # Asked by a bare digest, real docker finds an image by its id, and an image the
+        # signed image push loaded has no name, so it lists no RepoDigests. The Id is the
+        # asked digest, unless image-id (one line) names another, as an image of another
+        # id found for the same lookup would.
+        id=sha256:0000000000000000000000000000000000000000000000000000000000000000
+        case $3 in sha256:*) id=$3 ;; esac
+        [ -f "$state/image-id" ] && id=$(cat "$state/image-id")
         out=""
         n=0
         while [ "$n" -lt "$count" ]; do
-          out="$out${out:+,}{\"Id\": \"sha256:0000000000000000000000000000000000000000000000000000000000000000\", \"RepoDigests\": [$digests]}"
+          out="$out${out:+,}{\"Id\": \"$id\", \"RepoDigests\": [$digests]}"
           n=$((n + 1))
         done
         echo "[$out]"
         ;;
       *) exit 1 ;;
+    esac
+    ;;
+  tag)
+    # docker tag SOURCE TARGET. Only an image that is on this stand-in host can be tagged.
+    # An image held by its id and tagged under a name is then found by name@id, as a real
+    # docker finds it (observed, containerd image store), so the reference is added.
+    grep -qxF -- "$2" "$state/images" 2>/dev/null || {
+      echo "Error response from daemon: No such image: $2" >&2
+      exit 1
+    }
+    case $2 in
+      sha256:*) echo "${3%:*}@$2" >> "$state/images" ;;
     esac
     ;;
   inspect)

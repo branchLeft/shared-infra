@@ -18,6 +18,7 @@ hetzner/provision/branchleft_deploy.py as text, so this test does not import the
 
 from __future__ import annotations
 
+import hashlib
 import re
 import unittest
 from pathlib import Path
@@ -47,7 +48,7 @@ WRAPPER_ROLES = frozenset(
 
 # The hosts that run the wrapper, one playbook each. Another host that applies a wrapper role
 # fails test_only_the_listed_wrapper_hosts_apply_a_wrapper_role until it is listed here.
-WRAPPER_PLAYBOOKS = frozenset({"edge1", "app1", "ops1", "db1", "dbt1"})
+WRAPPER_PLAYBOOKS = frozenset({"edge1", "app1", "ops1", "db1", "dbt1", "appt1"})
 
 PINS = (
     "deploy_verifier_gh_version",
@@ -178,6 +179,40 @@ class VerifierCoverageTests(unittest.TestCase):
         self.assertEqual(
             f"{variables['deploy_verifier_gh_dir']}/gh", variables["deploy_verifier_gh_bin"]
         )
+
+    def test_the_wrapper_and_the_role_agree_on_the_offline_paths(self) -> None:
+        text = WRAPPER.read_text(encoding="utf-8")
+        variables = load_vars(ROLES / VERIFIER_ROLE / "vars" / "main.yml")
+        self.assertEqual(
+            wrapper_constant(text, "OFFLINE_TRUSTED_ROOT"),
+            variables["deploy_verifier_trusted_root_path"],
+        )
+        self.assertEqual(
+            wrapper_constant(text, "OFFLINE_STAGING_DIR"), variables["deploy_verifier_staging_dir"]
+        )
+        self.assertEqual(
+            f"{variables['deploy_verifier_trusted_root_dir']}/trusted_root.jsonl",
+            variables["deploy_verifier_trusted_root_path"],
+        )
+
+    def test_the_trusted_root_pin_is_the_sha256_of_the_file_the_role_installs(self) -> None:
+        variables = load_vars(ROLES / VERIFIER_ROLE / "vars" / "main.yml")
+        installed = ROLES / VERIFIER_ROLE / "files" / "trusted_root.jsonl"
+        self.assertEqual(
+            hashlib.sha256(installed.read_bytes()).hexdigest(),
+            variables["deploy_verifier_trusted_root_sha256"],
+        )
+
+    def test_offline_verification_is_off_by_default_and_its_pin_cannot_be_overridden(self) -> None:
+        defaults = load_vars(ROLES / VERIFIER_ROLE / "defaults" / "main.yml")
+        self.assertIs(defaults["deploy_verifier_offline"], False)
+        for pin in (
+            "deploy_verifier_trusted_root_sha256",
+            "deploy_verifier_trusted_root_src",
+            "deploy_verifier_trusted_root_path",
+            "deploy_verifier_staging_dir",
+        ):
+            self.assertNotIn(pin, defaults, f"{pin} is a default, so an inventory can override it")
 
     def test_the_pins_agree_with_one_another_and_sit_in_vars(self) -> None:
         variables = load_vars(ROLES / VERIFIER_ROLE / "vars" / "main.yml")

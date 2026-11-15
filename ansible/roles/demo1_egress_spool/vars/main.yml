@@ -41,6 +41,15 @@ demo1_egress_spool_firewall_tools:
   - iptables
   - ip6tables
 
+# The dead-man revert. The program keeps the last table an apply confirmed, and a timer puts
+# it back when the next apply that changes the table does not confirm in time. It owns its
+# state directory and the transient timer unit it starts; the egress program and its unit stay
+# the pinned ones. The program's own copy of these constants is held equal by a test.
+demo1_egress_spool_revert_src: demo_egress_revert.py
+demo1_egress_spool_revert_dest: /usr/local/sbin/branchleft-demo-egress-revert
+demo1_egress_spool_revert_state_dir: /var/lib/branchleft-demo-egress-revert
+demo1_egress_spool_revert_record: /var/lib/branchleft-demo-egress-revert/state
+
 # The mail spool. One Compose stack named mail-spool, run by the shared
 # Compose template unit, which this role asserts and never writes.
 demo1_egress_spool_project_dir: /opt/branchleft/mail-spool
@@ -77,6 +86,10 @@ demo1_egress_spool_container_port: 8081
 demo1_egress_spool_uid: 31000
 demo1_egress_spool_gid: 31000
 demo1_egress_spool_docker: /usr/bin/docker
+
+# The local tag an image gets when the signed image push loads it unnamed (_image_carry.yml).
+# A tag is what lets the pinned name@digest reference resolve; it names no registry visit.
+demo1_egress_spool_carried_tag: carried
 
 # The queue's volume. The Compose file declares it external, so it must exist
 # before the stack starts, and the container's account must own it.

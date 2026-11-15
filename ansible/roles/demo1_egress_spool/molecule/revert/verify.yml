@@ -1,0 +1,43 @@
+---
+# What the scenario leaves behind: the revert program and its directory as the role installs
+# them, a confirmed table, no record, no timer, and the policy in place. The converge asserted
+# the two behaviours as it went; this reads the end state with its own commands.
+- name: Verify the instance
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Look at the revert program and its state directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        follow: false
+      loop:
+        - /usr/local/sbin/branchleft-demo-egress-revert
+        - /var/lib/branchleft-demo-egress-revert
+      register: demo1_egress_spool_verify_revert
+
+    - name: Assert the program is root's and 0755, and the state directory root's and 0700
+      ansible.builtin.assert:
+        that:
+          - demo1_egress_spool_verify_revert.results[0].stat.isreg
+          - demo1_egress_spool_verify_revert.results[0].stat.mode == '0755'
+          - demo1_egress_spool_verify_revert.results[0].stat.pw_name == 'root'
+          - demo1_egress_spool_verify_revert.results[1].stat.isdir
+          - demo1_egress_spool_verify_revert.results[1].stat.mode == '0700'
+          - demo1_egress_spool_verify_revert.results[1].stat.pw_name == 'root'
+        quiet: true
+        fail_msg: The revert program or its state directory is not as the role installs it.
+
+    - name: Ask whether the revert timer is waiting
+      ansible.builtin.command:
+        argv: [systemctl, is-active, branchleft-demo-egress-revert.timer]
+      register: demo1_egress_spool_verify_timer
+      changed_when: false
+      failed_when: demo1_egress_spool_verify_timer.rc == 0
+
+    - name: Ask whether the policy is loaded in each family
+      ansible.builtin.command:
+        argv: '{{ item }}'
+      loop:
+        - [iptables, -t, filter, -C, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+        - [ip6tables, -t, filter, -C, DOCKER-USER, -j, BRANCHLEFT-DEMO-EGRESS]
+      changed_when: false

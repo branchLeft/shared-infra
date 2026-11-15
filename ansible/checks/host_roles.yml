@@ -19,6 +19,7 @@ edge1:
   - exporters_and_collectors
   - ntfy_pager
   - monitoring_stack
+  - sweego_receiver
 # edge-t, the tenants project's base host. The name has no hyphen because HOST_NAME allows
 # [a-z][a-z0-9]*. egress_nat makes it the gateway of the tenants network (one gateway per
 # network, test_egress_nat_single_gateway.py). ci_jump is the jump account's key options, the
@@ -37,6 +38,7 @@ ops1:
   - breakglass_mint_host
   - status_page
   - deploy_verifier
+  - deploy_tooling
   - control_plane
   - nextcloud_stack
   - backup_worker
@@ -44,6 +46,8 @@ ops1:
   - control_plane_db
   - node_exporter
   - mail_collector_inputs
+  - mail_collector
+  - spool_paths
   - ring_controller_host
 app1:
   - host_inputs
@@ -56,9 +60,11 @@ app1:
   - publicpress_website_app1
   - breakglass_grant_host
   - host_baseline
+  - node_exporter
 db1:
   - host_inputs
   - deploy_verifier
+  - deploy_tooling
   - db1_stack
   - db1_backup_timers
   - db1_grants
@@ -77,9 +83,19 @@ dbt1:
   - deploy_verifier
   - deploy_tooling
   - db_t1
+# appt1, the tenant app host app-t1. The roles of dbt1 without its database stack, and no
+# host_inputs (the host has no private inputs). egress_nat is applied bare with its gateway
+# switch unset: this host is no gateway. deploy_tooling (class internal) installs the deploy
+# wrapper the tenant stack role will use, so it follows deploy_verifier.
+appt1:
+  - host_baseline
+  - egress_nat
+  - deploy_verifier
+  - deploy_tooling
 demo1:
   - demo1_build
   - demo1_egress_spool
+  - spool_path_account
 # mx1, the mail host. One role after the pull roles: the host baseline only. It has no
 # private inputs, so host_inputs is not listed. The mail stack is not enrolled here.
 mx1:

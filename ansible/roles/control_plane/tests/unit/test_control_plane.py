@@ -350,5 +350,72 @@ class WrapperRecordTests(unittest.TestCase):
         self.assertIn("^IMAGE=", TASKS.read_text(encoding="utf-8"))
 
 
+COMPOSE = ROLE.parents[2] / "hetzner" / "control-plane" / "stack" / "compose.yml"
+README = ROLE / "README.md"
+
+
+def _seconds(value: object) -> int:
+    """Return a Compose duration such as ``15s`` as whole seconds.
+
+    Raises:
+        ValueError: the value is not a whole number of seconds.
+    """
+    match = re.fullmatch(r"(\d+)s", str(value))
+    if match is None:
+        message = f"not a whole number of seconds: {value!r}"
+        raise ValueError(message)
+    return int(match.group(1))
+
+
+class FirstApplyWindowTests(unittest.TestCase):
+    """The README's account of the first apply is derived from the stack, never typed by hand.
+
+    The owner's ruling is that the first apply after the directory mount may interrupt a
+    service for no more than 10 seconds. Nothing in the role measures that, so the README must
+    not call the interruption brief. It states the least time Compose's own gate takes, which
+    comes from the health checks in compose.yml, and these tests fail when the two disagree.
+    """
+
+    def setUp(self) -> None:
+        loaded = _load(COMPOSE)
+        if not isinstance(loaded, Mapping):
+            self.fail("compose.yml is not a mapping")
+        self.services = loaded["services"]
+        self.readme = README.read_text(encoding="utf-8")
+        # Docker runs a service's first health probe one interval after it starts.
+        db = _seconds(self.services["db"]["healthcheck"]["interval"])
+        zitadel = db + _seconds(self.services["zitadel"]["healthcheck"]["interval"])
+        apps = zitadel + max(
+            _seconds(self.services[name]["healthcheck"]["interval"])
+            for name in ("portal", "console")
+        )
+        self.floors = {"db": db, "zitadel": zitadel, "apps": apps}
+
+    def test_every_dependant_waits_for_a_healthy_database(self) -> None:
+        for name in ("zitadel", "portal", "console"):
+            self.assertEqual(
+                self.services[name]["depends_on"]["db"]["condition"], "service_healthy", name
+            )
+        for name in ("portal", "console"):
+            self.assertEqual(
+                self.services[name]["depends_on"]["zitadel"]["condition"], "service_healthy", name
+            )
+
+    def test_the_database_mounts_the_rules_as_a_directory(self) -> None:
+        mounts = self.services["db"]["volumes"]
+        self.assertIn("./postgres:/etc/postgresql-hba:ro", mounts)
+
+    def test_the_readme_does_not_call_the_interruption_brief(self) -> None:
+        self.assertNotRegex(self.readme, r"(?i)\ba brief (sign-in|interruption)")
+
+    def test_the_readme_says_the_window_is_not_measured_against_the_ruling(self) -> None:
+        self.assertIn("not measured", self.readme)
+        self.assertIn("10 seconds", self.readme)
+
+    def test_the_readme_states_the_gate_floors_the_compose_file_gives(self) -> None:
+        for label, seconds in self.floors.items():
+            self.assertIn(f"gate floor {label}: {seconds} seconds", self.readme)
+
+
 if __name__ == "__main__":
     unittest.main()

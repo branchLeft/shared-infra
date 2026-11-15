@@ -64,8 +64,10 @@ one host.
      (`E-LEGACY-PRESENT`).
   6. Take the marker away.
      A failure anywhere puts every file back as it was (the new files as they were, the old files and
-     their directory byte for byte), reloads sshd and fails the run. A second run finds the host
-     finished and changes nothing. A host that never had the hand-made layout skips steps 4 and 5.
+     their directory byte for byte), checks the whole configuration with those files back, reloads
+     sshd when that check passes (the item "Check, reload, read back" says what happens when it does
+     not), and fails the run. A second run finds the host finished and changes nothing. A host that
+     never had the hand-made layout skips steps 4 and 5.
 - **A pull that dies after the write still reloads sshd.** Before the first write the role leaves
   `/run/branchleft-jump-reload-owed` whenever the module's plan says a write is owed (a managed file
   not exactly as wanted, or an old file still there). The next run reloads sshd if the marker is
@@ -75,8 +77,14 @@ one host.
 - **Check, reload, read back.** After the write the whole sshd configuration is checked with
   `sshd -t`, sshd is reloaded when either file changed, and the module reads both files back and asks
   `sshd -T -C user=ACCOUNT,host=x,addr=OWN_ADDRESS` what sshd applies to the account. A failed check
-  or read-back puts the previous files back, reloads sshd again and fails the run (the same shape as
-  the `tunnel_account` replica half).
+  or read-back puts the previous files back and checks the whole configuration again. When that check
+  passes the rescue reloads sshd, takes the marker away, puts back the previous key file (or removes
+  the one the host did not have) and fails the run. When it does not pass (for example a file in
+  `sshd_config.d` that the role did not write and that sshd rejects), the rescue reloads nothing,
+  leaves the marker so that the next run reloads, leaves the new key file (the running sshd still
+  serves from it), and fails the run naming the step. The reload is never ignored: one that fails stops
+  the rescue loudly. This is the same shape as the `tunnel_account` replica half, except for that
+  condition.
 - **Remote forwarding is refused.** A key line with `port-forwarding` also lets its holder open a
   listening port on the jump host (`ssh -R`) unless sshd says `AllowTcpForwarding local` for the
   account. The read-back requires exactly that, and refuses any other value (`E-SSHD-FORWARDING`),
@@ -243,12 +251,19 @@ cd ansible/roles/ci_jump && PYTHONPATH=library ../../../.venv/bin/python -m unit
   read-back cases put a `Match` block ahead of the role's, which outranks it, or change a file or its
   owner, mode or directory behind the role's back, and run the read-back step alone. Two cases run
   the write step with a configuration that fails the whole check, and with a read-back sshd refuses,
-  and require the previous files to be back. A last play starts from the hand-made layout and runs:
-  the first read-back failing (the old files are the very files that were there afterwards); the
+  and each asserts what the rescue left. With the whole check failing the rescue's own check fails
+  too, so sshd was not reloaded, the marker is still there and the new key file stays; with the
+  read-back refused the rescue reloaded sshd (twice over the step: after the write and in the
+  rescue), the marker is gone and the key file is the very bytes it was. Both require the rescue's
+  own message, naming the step, and the previous drop-in as it was. A last play starts from the
+  hand-made layout and runs:
+  the first read-back failing (the old files are the very files that were there afterwards, and
+  sshd was reloaded twice, once after the write and once in the rescue); the
   second read-back failing, made to happen by a test-only hook on `ssh.service` that puts the old
   drop-in back after the role removed it (the old files are back with the same checksum and the new
-  files are gone); a success (the old layout and its directory gone, the new files in place, sshd
-  reloaded exactly twice); and a marker left by a dead pull (the next run reloads sshd exactly once,
+  files are gone, and sshd was reloaded three times: after the write, after the removal and in the
+  rescue); in both failures the marker is gone; a success (the old layout and its directory gone,
+  the new files in place, sshd reloaded exactly twice); and a marker left by a dead pull (the next run reloads sshd exactly once,
   the run after it not at all).
 - The unit tests run the module against a fake host: every code above, the parser, the report over
   hostile values with no account name in it, the read-back, and the reader's refusal of a link and a
@@ -343,8 +358,37 @@ runner  --ssh -F config -o ProxyJump=jump_hop-->  edge1 (the jump account's key 
   The list is read from the pull_trigger role's vars, its one home.
 - **Nothing in this role changes for it.** The destination list, the key lines and the sshd block
   are the same for every host behind the jump. The workflow side is shipped in github-workflows
-  (the jump pair, the push list and the push playbook), and the receiver on the host is the
-  pull_trigger role's bundle mode.
+  (the jump pair, the push list, the push playbook, the per-host key maps and, for the tenants
+  hosts, the second hop), and the receiver on the host is the pull_trigger role's bundle mode.
+- **Where each piece of the demo1 route lives.**
+  - Applied by push: `pull_trigger_bundle_hosts` (`roles/pull_trigger/vars/main.yml`),
+    `playbooks/demo1.yml` and `trust/demo1.yml`, enrolled by `check_enrolment.py`.
+  - No inventory entry, by design: an inventory entry does not enrol a host
+    (`inventories/README.md`), and a pushed host is named by the secret host list.
+  - The jump lock allowing it: one line in `ci_jump_destinations` of `owner_vars/edge1.yml`, demo1's
+    public address. That address is the owner's data and an agent never writes it.
+  - The workflow reaching it: the pin in `.github/workflows/ansible-delivery.yml` and
+    `ansible-drift-check.yml`, held at or above the floor `MIN_RELEASE` by `check_delivery.py`.
+  - The host lists, the push list and the keys: secrets the owner sets (shapes next).
+- **The secrets of the route, and their shapes.** A GitHub secret cannot be read back, so each is
+  set whole, and its shape is what the workflow's own checks read before any host is contacted.
+  - `ANSIBLE_HOSTS` (repository): one `user@host` per line, every host the run asks, pushed hosts
+    included.
+  - `ANSIBLE_PUSH_HOSTS` (repository): one `user@host` per line, each also a line of
+    `ANSIBLE_HOSTS`. Empty leaves every host on the pull route.
+  - `ANSIBLE_HOST_CHECK_KEYS` (repository; the drift caller passes it too): one JSON object,
+    `{"user@host": "PRIVATE_KEY_TEXT"}`, each name an exact line of `ANSIBLE_HOSTS`.
+  - `SSH_HOST_APPLY_KEYS` (the `ansible-hosts` environment, never the repository): the same shape,
+    for the apply keys.
+
+  A host with an entry in a map is reached with that key and no other. A host with no entry keeps
+  the shared key (`ANSIBLE_CHECK_KEY`, `SSH_APPLY_KEY`). Within a map no key repeats, and none
+  equals the shared key or a jump key, or the run stops before it contacts a host. A key's text is
+  the whole private key, header and footer lines included, with its line breaks kept. Setting a map
+  again replaces all of it, so the owner resubmits the entries already there. demo1's own CI key is
+  one entry in each map, named by the same `ansible-ci@ADDRESS` line the host lists carry. The
+  matching public keys are demo1's two forced-command lines on its CI account, which no role writes
+  (demo1 takes no owner keys: rule R10).
 
 What is proven where:
 

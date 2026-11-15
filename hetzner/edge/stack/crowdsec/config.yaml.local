@@ -23,3 +23,12 @@ cscli:
 # them; acquisition_path is unset here and keeps config.yaml's default.
 crowdsec_service:
   acquisition_dir: /etc/crowdsec-acquis.d
+
+# The alerts and decisions CrowdSec stores in its database hold client
+# addresses with the scenario and a timestamp. They are flushed after 30 days,
+# the same figure as the edge's log retention: change one, change the other
+# (RUNBOOK-edge.md, "What this stack deliberately does not do"). max_items is
+# left at the image default on purpose, as a second, independent bound.
+db_config:
+  flush:
+    max_age: 30d

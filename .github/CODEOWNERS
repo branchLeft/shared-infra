@@ -69,9 +69,14 @@ pnpm-workspace.yaml                                          @branchLeft/branchl
 /hetzner/scripts/                                            @branchLeft/branchleft-admin
 /hetzner/provision/branchleft_deploy.py                      @branchLeft/branchleft-admin
 /hetzner/provision/test_branchleft_deploy.py                 @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_deploy_offline.py         @branchLeft/branchleft-admin
+/hetzner/provision/fixtures/offline-attestation/             @branchLeft/branchleft-admin
 /hetzner/provision/provision_deploy_slot.py                  @branchLeft/branchleft-admin
 /hetzner/provision/test_provision_deploy_slot.py             @branchLeft/branchleft-admin
 /hetzner/provision/test_suite_size.py                        @branchLeft/branchleft-admin
+/hetzner/provision/branchleft_promote.py                      @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_promote.py                 @branchLeft/branchleft-admin
+/hetzner/provision/test_branchleft_promote_wrapper_contract.py @branchLeft/branchleft-admin
 branchleft-verify-image*                                     @branchLeft/branchleft-admin
 test_branchleft_verify_image.py                              @branchLeft/branchleft-admin
 /hetzner/edge/breakGlassToken.test.ts                        @branchLeft/branchleft-admin
@@ -103,6 +108,9 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/safety_channel_key/                           @branchLeft/branchleft-admin
 /ansible/roles/ring_controller_host/                         @branchLeft/branchleft-admin
 /ansible/roles/safety_service/                               @branchLeft/branchleft-admin
+/ansible/roles/mail_collector/                                @branchLeft/branchleft-admin
+/ansible/roles/spool_paths/                                   @branchLeft/branchleft-admin
+/ansible/roles/spool_path_account/                            @branchLeft/branchleft-admin
 /ansible/roles/db1_grants/                                   @branchLeft/branchleft-admin
 /ansible/roles/breakglass_grant_host/                        @branchLeft/branchleft-admin
 /ansible/roles/breakglass_mint_host/                         @branchLeft/branchleft-admin
@@ -113,6 +121,8 @@ test_branchleft_verify_image.py                              @branchLeft/branchl
 /ansible/roles/broker_deploy/templates/branchleft-slot.sudoers.j2 @branchLeft/branchleft-admin
 broker-verify-key*                                           @branchLeft/branchleft-admin
 /ansible/roles/deploy_verifier/vars/main.yml                 @branchLeft/branchleft-admin
+/ansible/roles/deploy_verifier/files/trusted_root.jsonl      @branchLeft/branchleft-admin
+/ansible/roles/deploy_verifier/tasks/_offline.yml            @branchLeft/branchleft-admin
 /ansible/roles/demo1_build/tasks/_accounts.yml               @branchLeft/branchleft-admin
 /ansible/roles/node_exporter/tasks/_node_exporter.yml        @branchLeft/branchleft-admin
 /ansible/roles/host_baseline/tasks/_ssh.yml                  @branchLeft/branchleft-admin
@@ -280,7 +290,7 @@ CLAUDE.md                                                   @branchLeft/branchle
 LICENSE                                                      @branchLeft/branchleft-admin
 /.github/CODEOWNERS                                          @branchLeft/branchleft-admin
 
-# The shared set from branchLeft/standards templates/codeowners at the v0.8.6 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above with the gate files.
+# The shared set from branchLeft/standards templates/codeowners at the v0.8.8 tag (SYNC-1), copied unchanged, in order, as the final lines of this file: GitHub applies the last matching pattern, so nothing may follow them. It covers the standards mode and ignore files, the docs-lint settings, the standards tooling pin, and /.github/, which owns the workflows, actions and dependabot settings. The floors file, /tools/floors.tsv, is listed above with the gate files.
 /.standardsignore        @branchLeft/branchleft-admin
 /.standards.mode         @branchLeft/branchleft-admin
 /.docs-lint*             @branchLeft/branchleft-admin

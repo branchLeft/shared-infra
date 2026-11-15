@@ -1,0 +1,76 @@
+---
+# Offline attestation verification, for a host with no outbound access.
+# Imported only when deploy_verifier_offline is true, so a host that reads attestations from the
+# registry is not touched by this file.
+#
+# The trusted root is what makes a staged bundle worth anything: a bundle and a root that arrive
+# together from one carrier prove nothing about that carrier. So the root is not delivered with an
+# image. It is a file in this role, pinned by sha256 in vars/main.yml, read here on the controller,
+# and refreshed only by a reviewed change to both. Its presence on the host is what tells
+# branchleft_deploy.py to verify every registered image offline and never read the registry.
+#
+# The staging directory is created empty and root-only. What stages a bundle and a manifest into it
+# is the delivery's own step, one directory per image digest; nothing here writes into it.
+#
+# Check mode (ANS-10): the pin is read on the controller and the writes are reported, not made.
+# Nothing here is a secret (ANS-16): the root is the public Sigstore and GitHub trust root.
+
+- name: Refuse a trusted root that is not the file the role pins
+  ansible.builtin.assert:
+    that:
+      - deploy_verifier_trusted_root_sha256 is match('^[0-9a-f]{64}\Z')
+      - (lookup('ansible.builtin.file', deploy_verifier_trusted_root_src) | hash('sha256')) == deploy_verifier_trusted_root_sha256
+    fail_msg: >-
+      deploy_verifier refused the trusted root (rule: pin): files/trusted_root.jsonl does not hash to
+      deploy_verifier_trusted_root_sha256. Change the file and the pin together, in one reviewed change.
+    quiet: true
+
+- name: Create the directory the trusted root is installed into
+  ansible.builtin.file:
+    path: '{{ deploy_verifier_trusted_root_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install the trusted root, owned by root and not writable by any other account
+  ansible.builtin.copy:
+    src: '{{ deploy_verifier_trusted_root_src }}'
+    dest: '{{ deploy_verifier_trusted_root_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Create the empty directory the delivery stages bundles and manifests into
+  ansible.builtin.file:
+    path: '{{ deploy_verifier_staging_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Read the trusted root back after it is installed
+  ansible.builtin.stat:
+    path: '{{ deploy_verifier_trusted_root_path }}'
+    follow: false
+    checksum_algorithm: sha256
+    get_mime: false
+    get_attributes: false
+  register: deploy_verifier_trusted_root_after
+  check_mode: false
+  when: not ansible_check_mode
+
+- name: Refuse a trusted root that is not the pinned file, root's, 0644, and a regular file
+  ansible.builtin.assert:
+    that:
+      - deploy_verifier_trusted_root_after.stat.isreg
+      - not deploy_verifier_trusted_root_after.stat.islnk
+      - deploy_verifier_trusted_root_after.stat.pw_name == 'root'
+      - deploy_verifier_trusted_root_after.stat.gr_name == 'root'
+      - deploy_verifier_trusted_root_after.stat.mode == '0644'
+      - deploy_verifier_trusted_root_after.stat.checksum == deploy_verifier_trusted_root_sha256
+    fail_msg: >-
+      deploy_verifier: {{ deploy_verifier_trusted_root_path }} is not the pinned trusted root, or is not
+      a root-owned, 0644, regular file. The wrapper will refuse every registered deploy until this is put right.
+    quiet: true
+  when: not ansible_check_mode

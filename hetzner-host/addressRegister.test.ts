@@ -32,6 +32,7 @@ describe('the address register', () => {
     expect(ips).toEqual(expected);
     expect(ADDRESS_REGISTER.filter((entry) => entry.project === 'tenants')).toEqual([
       { project: 'tenants', name: 'dbT1', ip: TENANTS_HOST_IPS.dbT1 },
+      { project: 'tenants', name: 'appT1', ip: TENANTS_HOST_IPS.appT1 },
       { project: 'tenants', name: 'edgeT', ip: TENANTS_HOST_IPS.edgeT },
     ]);
   });
@@ -42,7 +43,7 @@ describe('the address register', () => {
     }
   });
 
-  it('keeps db-t1 and edge-t off every org address', () => {
+  it('keeps db-t1, app-t1 and edge-t off every org address', () => {
     const org = new Set<string>([...Object.values(HOST_IPS), ...Object.values(APP_HOST_IPS)]);
     for (const ip of Object.values(TENANTS_HOST_IPS)) {
       expect(org.has(ip)).toBe(false);

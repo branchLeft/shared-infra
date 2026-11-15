@@ -32,21 +32,26 @@ In this order, and it stops at the first refusal:
 3. **The egress policy.** Copies the egress program to `/usr/local/sbin/branchleft-demo-egress`
    (mode 0755) and its unit to `/etc/systemd/system/` (0644) from the role's own copies, which
    step 1 held to their sha256. Enables the
-   unit, and runs the program again only when either file changed. Then reads the loaded rules
-   back, in both families (the table below says what is asserted).
+   unit, and runs the program again only when either file changed, or when an earlier run left
+   an apply unconfirmed. Before it runs the program it arms the revert timer (below). Then reads
+   the loaded rules back, in both families (the table below says what is asserted).
 4. **The spool.** Checks the drain token file, copies the Compose file and places the override
    that takes the image from the pin file and sets `pull_policy: never`, checks their posture,
    creates the image pin file once, **checks that the image the pin file names is already on the
-   host and that docker lists the pinned digest for it** (`_image.yml`), creates the queue volume and gives it to the spool's account, orders the
+   host and that docker lists the pinned digest for it** (`_image.yml`; an image that arrived
+   unnamed, as the signed image push leaves it, is first given the pin's name as a local tag by
+   `_image_carry.yml`, only if its own id is the pinned digest), creates the queue volume and gives it to the spool's account, orders the
    spool's unit after the egress unit with a drop-in, enables and starts the spool's unit. Then
    reads the running container back, and its image against the pin file.
+5. **The confirm.** The last task. It saves the table now loaded as the last known-good one, stops
+   the revert timer and clears the record of an unconfirmed apply (below).
 
 The role makes no request to the network. The host has no route to GitHub or to the container
 registry, so it never pulls the spool's image: the shared Compose unit runs
 `docker compose pull` before every start, which fails with no registry, and the override's
 `pull_policy: never` makes Compose skip it (observed with an unresolvable registry: without the
 setting `docker compose pull` exits 1; with it, it reports the image skipped and exits 0).
-The owner carries the image onto the host once, and the role checks what arrived by digest
+The image is sent to the host by the signed image push (or carried once by the owner), and the role checks what arrived by digest
 (below, "How the spool's image gets onto the host"). **Step 4 refuses on a host that does not
 hold the pinned image**: in a real run with a message saying the host never pulls, or saying the
 image listed is not the pinned one, and in a plan with a visible "Spool image NOT on host" line.
@@ -75,6 +80,59 @@ This role is the only pin of the egress program and its unit in this repository.
 does not pin or install either of them (its README marks the program as not a role step), and
 the agree test fails if `demo1_build` ever names them. There is therefore nothing to keep in step
 with another role: to bump them, change the pin below and nothing else.
+
+### The revert timer
+
+The egress program has no guard of its own: it loads its chains with `iptables-restore --noflush`
+and the role reads them back, so a table that is wrong in a way the read-back cannot see (one that
+cuts the host or the spool off later than the read-back runs) stays until someone with the
+provider's console puts it right. The revert timer is that guard. It is
+`files/demo_egress_revert.py`, installed as `/usr/local/sbin/branchleft-demo-egress-revert`
+(`root:root` `0755`), standard library only, and its state is in
+`/var/lib/branchleft-demo-egress-revert/` (`root:root` `0700`).
+
+1. **Known-good.** The last table a confirmed apply left: the two policy chains and the jumps to
+   them, in both families, saved in `iptables-save` form as `last-good.iptables` and
+   `last-good.ip6tables`. Docker's own chains are never part of it, so a revert never rewrites
+   them.
+2. **Arm.** When this run is going to load the table again (the egress program or its unit
+   changed, or an earlier run left an apply unconfirmed), the role runs `... arm --seconds N`
+   before the program. It writes the record `state` (`armed`) first, then starts a transient
+   systemd timer, `branchleft-demo-egress-revert.timer`, that runs `... revert` once after
+   `demo1_egress_spool_revert_seconds` (default 900, 10 to 3600). It fails, and the role stops
+   before the table is touched, if the timer does not start.
+3. **Confirm.** The role's last task, after both read-backs, runs `... confirm`. It refuses a table
+   that is not whole (both chains, each with a `REJECT` rule, and a jump to each), saves the
+   loaded table as known-good, stops the timer and clears the record. It prints `confirm: changed`
+   only when it did one of those things, so a run that changed nothing reports nothing.
+4. **Revert.** When the timer runs out, the program puts the known-good chains back in one atomic
+   `iptables-restore --noflush` per family, puts a missing jump back first, reads the table back
+   and compares it, and records `reverted`. A `confirm` that comes after that is refused, so a slow
+   apply cannot call a reverted table good.
+5. **Never empty, never open.** A snapshot is restored only when it is whole. A missing, empty or
+   damaged known-good file, or one with no `REJECT` or no jump, is refused and the loaded table is
+   left exactly as it is. A restore that fails changes nothing (the load is atomic) and leaves the
+   record `armed`.
+6. **After a revert.** The files on the host are the new ones while the loaded table is the old
+   one, which a plain converge would not notice. The record is what tells the next run to load the
+   table again, so the next apply arms a new timer, runs the program and confirms.
+
+Named limits of the timer:
+
+- **The first table has nothing to go back to.** On a host that has never confirmed a table there
+  is no known-good table, so no timer is armed and the program says so (`not armed: ...`). Going
+  back to nothing would open the host, which is worse. The first confirm creates the known-good
+  table; every later change is covered.
+- **The timer does not survive a reboot.** It is a transient unit. At boot the pinned egress unit
+  loads the pinned table again, and an apply that was unconfirmed at the reboot is applied again by
+  the next run, because the record is still there.
+- **It reverts the egress chains only.** A jump that was put back in `DOCKER-USER` or `INPUT` is
+  inserted first, as the pinned program does; one that has been moved down by another tool is left
+  where it is (see above).
+- **The confirm is the end of the role.** It is as good as the role's own read-backs: it proves the
+  run reached its last task with a whole table, not that every path off the host works. A lock-out
+  that stops the run from reaching the end is what the timer is for.
+- **No ask of the host.** The timer reverts on time alone; it does not probe a connection.
 
 ### What the program does, and the jump
 
@@ -106,6 +164,9 @@ first. The role's message says the same, and does not do it itself: a role that 
 - `demo1_egress_spool_drain_port`: the host port of the drain endpoint (default 8095). It is
   published on `127.0.0.1` only. The pinned Compose file publishes exactly this port, and the
   role refuses a file that publishes another.
+- `demo1_egress_spool_revert_seconds`: how long a changed egress table may stay unconfirmed
+  (default 900, 10 to 3600). It has to outlast the rest of the apply, the spool's start and
+  read-back included.
 
 `vars/main.yml` holds the constants (paths, the uid and gid 31000, the volume, the chain names,
 the networks, the patterns). A caller cannot override them.
@@ -134,13 +195,17 @@ to GitHub and its egress allowlist holds the package mirrors only. To bump them,
 3. Change `demo1_egress_spool_source_sha` and every checksum in `defaults/main.yml`, and the same
    values in `meta/argument_specs.yml`.
 
-Named limit: CI no longer compares the carried bytes with ghost-platform. It holds them to the pin
-in this repository, so a change to a file and its pin together passes. The review of such a change
-is a review of file content, not of a commit sha; a CI step that checks out ghost-platform at the
-pinned commit and diffs is filed as follow-up. The vendored files are not scanned by the no-fetch
-check, which reads the role's own tasks and variables: they are upstream's text, and root runs
-them. `ansible/checks/test_demo1_egress_spool_agree.py` leaves them out of the text it reads for
-the same reason.
+Named limit: the role's pins hold the carried bytes to the sha256 values in this repository, so
+a change to a file and its pin together passes the role and `test_demo1_no_github_fetch.py`. What
+compares them with ghost-platform is a CI step in `ci.yml`
+(`ansible/checks/check_vendored_ghost_platform.py`): it fetches ghost-platform at
+`demo1_egress_spool_source_sha` (and the build role's own pin, for its files) and fails, naming the
+file, on any carried byte that differs from the commit's. The limit that is left is the commit
+itself: the step proves the files are ghost-platform's at the pinned commit, not that the commit is
+the one to run, so a bump of the sha is still a review of which commit. The vendored files are not
+scanned by the no-fetch check, which reads the role's own tasks and variables: they are upstream's
+text, and root runs them. `ansible/checks/test_demo1_egress_spool_agree.py` leaves them out of the
+text it reads for the same reason.
 
 ## Requirements
 
@@ -153,8 +218,9 @@ the same reason.
   own), the shared Compose template unit, the two root-owned directories, and the owner's token
   file, all in place before the role runs.
 - No network from the host: the role fetches nothing and pulls no image. The spool's image must
-  already be on the host, carried there once by the owner as "How the spool's image gets onto the
-  host" describes, on a Docker that uses the containerd image store.
+  already be on the host, sent by the signed image push or carried once by the owner as "How the
+  spool's image gets onto the host" describes, on a Docker that uses the containerd image store.
+  The one write the role makes for it is a local tag on an image that arrived unnamed.
 
 ## What it changes on a host
 
@@ -162,6 +228,10 @@ the same reason.
   `root:root` `0644`. The unit is enabled for boot, and active.
 - The rules the program builds: the two policy chains in both families, the jump in
   `DOCKER-USER` and the jumps in `INPUT`. The role itself writes no rule.
+- `/usr/local/sbin/branchleft-demo-egress-revert`: `root:root` `0755`, the revert program.
+  `/var/lib/branchleft-demo-egress-revert/`: `root:root` `0700`, holding the lock, the record of
+  an unconfirmed apply and the last known-good table of each family. While an apply is
+  unconfirmed, a transient `branchleft-demo-egress-revert.timer`.
 - `/opt/branchleft/mail-spool/` (`root:root` `0755`), the Compose file in it (`0644`) and beside
   it `compose.override.yml` (`0644`), which sets the image from the pin file and sets
   `pull_policy: never`.
@@ -214,9 +284,10 @@ From the repository root, with the tools installed as `ansible/README.md` descri
 ```text
 python3 ansible/harness/run_harness.py ansible/roles/demo1_egress_spool
 python3 ansible/harness/run_harness.py ansible/roles/demo1_egress_spool --scenario refusals
+python3 ansible/harness/run_harness.py ansible/roles/demo1_egress_spool --scenario revert
 ```
 
-Both need Docker and are what CI runs, one shard each. The container is a Debian 13 systemd image,
+All three need Docker and are what CI runs, one shard each. The container is a Debian 13 systemd image,
 trusted by digest, named `demo1` and given the one added capability `NET_ADMIN`, so the
 firewall is real: the egress program loads real rules into the container's own network namespace
 and the role reads them back with real `iptables`. The things that are not real are stand-ins, and
@@ -225,7 +296,15 @@ and the role reads them back with real `iptables`. The things that are not real 
 the spool's drain endpoint (a small HTTP server on `127.0.0.1:8095`). The shared Compose template
 unit is the real one, copied from `hetzner/provision`.
 
-Without Docker, what runs anywhere: the agree test and the contract tests,
+Without Docker, what runs anywhere: the unit tests of the revert program, which run it against a
+fake host (a table per family, `iptables-restore --noflush` semantics, one timer a test fires by
+hand), from the role's directory,
+
+```text
+cd ansible/roles/demo1_egress_spool && PYTHONPATH=files python3 -m unittest discover -b -s tests/unit
+```
+
+the agree test and the contract tests,
 
 ```text
 python3 -m unittest discover -s ansible/checks -p test_demo1_egress_spool_agree.py
@@ -245,6 +324,28 @@ and the first rule with `-L`, each file's owner and mode, the token file unchang
 pin file untouched, the Compose file carrying the golden's image and port, the volume owned by
 31000, one listener on `127.0.0.1`, a `401` from the drain endpoint, and in the stand-in's call
 log the volume made once, the spool started once and never taken down.
+
+### What `revert` proves
+
+The real firewall and the real systemd of the test container, with a 20-second window where the apply must stop short and 60 seconds where it must finish (the egress restart restarts the spool, and an apply slower than its window is reverted). The case
+first gives the known-good table one rule (TCP port 9) that the pinned table does not have, so that
+a revert can be told from the apply that preceded it.
+
+1. **No confirm means a revert.** The installed egress program is changed, so the role loads the
+   table again, and the drain token file is made mode 0644, so that the role stops at the spool
+   step, after the table is loaded and before the confirm. The case asserts the role armed the
+   timer and stopped at the token, that the timer is waiting, and then that the known-good table
+   comes back: the port 9 rule is there again in both families, both chains end in `REJECT`, the
+   jumps are in place, and neither chain holds an accept.
+2. **After a revert the next apply recovers.** The role is applied again: it loads the table again
+   because of the record, confirms, and leaves no record and no timer.
+3. **A confirm means no revert.** The same change, applied with nothing in the way: the role arms
+   the timer and confirms, which stops it. The case waits longer than the window and asserts that
+   the port 9 rule did not come back and the timer is gone.
+
+The first play applies the role once, which is the first confirm (no timer is armed for it). The
+scenario breaks the host on purpose, so it skips the idempotence and check steps, which are the
+default scenario's.
 
 ### What `refusals` proves
 
@@ -320,7 +421,25 @@ Also covered, each with its control on the good value:
 
 ## How the spool's image gets onto the host
 
-**The route: a one-off carry, then a check by digest.** The host has no route to a registry, and
+**The route, once the control plane sends it: the signed image push.** The control plane pulls the
+image where it may, checks its attestation and its digest, and sends it to demo1's broker over the
+link it already dials in on (`POST /image`, the same edge1 route as the push of the commit). The
+broker stages the archive and runs the slot wrapper's `load` verb, which is `docker load`. The
+archive is made with `docker save <digest>`, so the loaded image has **no name**: its own id is the
+manifest digest on the containerd image store. The host opens no connection and its allowlist is
+not touched. The sender, the control plane's call to `pushOciImage`, is not in this repository.
+What this role does for it (`_image_carry.yml`): where the pinned reference `name@sha256:<digest>`
+is not found, it looks the image up by the bare digest, and only if exactly one image comes back
+whose own id **is** the pinned digest does it run `docker tag <digest> <name>:carried`, a local
+tag that makes the pinned reference resolve (a pull is never made: the override sets
+`pull_policy: never`). `_image.yml` then holds the image to the pinned digest by that reference,
+as it does an image that arrived any other way. An image of any other id is not named and the run
+refuses it as not on the host. Observed with a real Docker 29.9.2 (containerd image store):
+`docker save <digest>`, remove, `docker load` gives an unnamed image; `name@sha256:<digest>` then
+exits 1 "No such image"; after `docker tag <digest> name:carried` it resolves and lists
+`name@sha256:<digest>` in `RepoDigests`; `name@sha256:<other digest>` still exits 1.
+
+**The first-run route, a one-off carry, then a check by digest.** The host has no route to a registry, and
 its egress allowlist holds the package mirrors only. So the owner pulls the pinned image
 on a workstation, checks it there with
 `ansible/tools/spool_image_gate.py`, tags it with a name, and streams `docker save` into
@@ -341,13 +460,13 @@ rule used at both ends of the carry.
 
 **Rejected, with the reason:**
 
-1. _The broker's signed-image route_ (the control plane signs a descriptor, the slot wrapper's
-   `load` verb streams a tar into `docker load`). It needs the control plane's private signing key,
-   which authorises everything the broker does, on a workstation. The digest it signs is that of the
-   tar's bytes, not the image's, so the image's identity would still have to be checked after the
-   load. And it loads the image by its id, so the image lands without a name, while the Compose
-   override runs `name@sha256:...` with `pull_policy: never`, which needs the name. Changing that is
-   a change to the broker, outside this role.
+1. _The broker's signed-image route from a workstation_ (the control plane signs a descriptor, the
+   slot wrapper's `load` verb streams a tar into `docker load`). It needs the control plane's
+   private signing key, which authorises everything the broker does, on a workstation, so the owner's
+   hand carry does not use it. The control plane's own sender is the route above. The digest the
+   push signs is that of the tar's bytes, not the image's, so the image's identity is checked again
+   after the load, by `_image.yml`. The image lands without a name, which `_image_carry.yml` fixes
+   in this role and not in the broker.
 2. _A registry pull on demo1._ It widens the allowlist beyond package mirrors.
 3. _The image inside the signed commit._ An image is hundreds of megabytes of git.
 4. _Using the CI account to stream it._ That widens a forced-command account on a privileged host.
@@ -372,9 +491,14 @@ history` still pass.** Only `docker create --pull=never` fails ("apply layer err
 
 **Limits, named:**
 
-- **The carry is a bootstrap route.** A bump of the pin before an automated route exists needs the
-  same steps again. The automated route (the image carried beside the signed bundle in the push
-  that already reaches demo1, gated by the digest in the verified commit) is not built here.
+- **The hand carry is a bootstrap route.** A bump of the pin before the control plane sends the
+  image needs the same steps again. The image cannot ride beside the signed bundle: the push
+  receiver reads one git bundle on standard input, up to 200 MiB, and the image is about 190 MB.
+  The sender of the signed image push (the control plane's call) is not in this repository; the
+  role only accepts what the push leaves.
+- **The plan says it would tag, and cannot show more.** `docker tag` does not run in check mode.
+  A plan on a host that holds the image unnamed prints one line saying the apply will tag it. The
+  tag itself is covered by the refusals scenario, not by a plan.
 - **It fails closed on a classic image store.** Docker's classic store does not record the digest
   the way the containerd store does, so the digest check finds none and refuses. The runbook reads
   the store on both ends first.

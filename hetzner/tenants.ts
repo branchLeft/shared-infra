@@ -14,8 +14,9 @@ import { checkProjectResults } from './projectGuard';
 
 /**
  * The tenants project's network, its base host edge-t (web edge, SSH entry and
- * NAT gateway), the network's default route via edge-t, and its one database
- * host, db-t1, which is declared only once `dbt1Enabled` is true.
+ * NAT gateway), the network's default route via edge-t, its one database
+ * host, db-t1, which is declared only once `dbt1Enabled` is true, and its app
+ * host, app-t1, which is declared only once `appt1Enabled` is true.
  * Gated on the project check: the network, subnet and route, the Hosts'
  * network wiring, and each Host's firewall, server and PrimaryIp (the
  * transformation below). A resource declared outside a Host must depend on the
@@ -227,6 +228,46 @@ export const dbT1 = dbt1Enabled
 
 export const dbT1Location = dbT1?.server.location;
 export const dbT1PrivateIp = TENANTS_HOST_IPS.dbT1;
+
+/**
+ * app-t1 is declared only when `appt1Enabled` is true, and it defaults to false:
+ * the stack file carries no key until the owner has made the server and chosen to
+ * bring it under the stack, so a merge changes no server. A server costs money, so
+ * switching it on is the owner's change, reviewed on its own, and the apply stays
+ * the owner's hand apply (`RUNBOOK-adopt-console-servers.md`, "app-t1"). With
+ * `appt1Adopt` set the stack imports the hand-made server; with it absent the
+ * preview shows a create, which the owner does not apply for a host that exists.
+ */
+const appt1Enabled = config.getBoolean('appt1Enabled') ?? false;
+
+/**
+ * The tenant app host. Private only, like db-t1: `publicNetworking` is fixed at
+ * creation. It waits on the egress route for the same reason db-t1 does.
+ */
+export const appT1 = appt1Enabled
+  ? new Host(
+      {
+        name: 'app-t1',
+        role: 'app',
+        location: ESTATE_LOCATION,
+        image,
+        ownerSshKeyNames,
+        networkId: hostNetworkId,
+        serverType: config.require('appt1ServerType'),
+        privateIp: TENANTS_HOST_IPS.appT1,
+        deployPublicKey: config.require('appt1DeployPublicKey'),
+        publicNetworking: false,
+        environment: 'production',
+        protection: true,
+        backups: false,
+        adopt: adoptionOf('appt1Adopt'),
+      },
+      { transformations: [gateRegistration], dependsOn: [tenantsEgressRoute] }
+    )
+  : undefined;
+
+export const appT1Location = appT1?.server.location;
+export const appT1PrivateIp = TENANTS_HOST_IPS.appT1;
 
 export const edgeTPublicIpv4 = edgeT.publicIpv4;
 export const edgeTPrivateIp = TENANTS_HOST_IPS.edgeT;

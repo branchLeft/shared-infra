@@ -315,9 +315,16 @@ HCLOUD_TOKEN='<the token>' hcloud server list
 
 ## 5. Prove the backend before you rely on it
 
+A `git pull` can change `hetzner-host/*.ts` and leave its compiled `dist/`
+behind, and the stack then previews the old program. Run the freshness check
+first, from `hetzner/`; it exits 1 and names each stale file. If it does,
+run `pnpm install --frozen-lockfile` here (its postinstall rebuilds the
+package) and check again before the preview.
+
 ```bash
-pulumi stack ls                     # the new stack, on the new backend
-pulumi preview --stack production   # expect a create plan, no errors
+python3 scripts/check-hetzner-host-dist.py   # exit 0 before any preview
+pulumi stack ls                              # the new stack, on the new backend
+pulumi preview --stack production            # expect a create plan, no errors
 ```
 
 The preview is also the **passphrase check, and the only shape of check to

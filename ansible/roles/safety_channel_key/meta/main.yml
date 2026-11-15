@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Generates the safety service's request-signing key on the host when it is absent, and records its public half.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

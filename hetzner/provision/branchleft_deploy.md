@@ -121,12 +121,14 @@ is at least as likely as a genuinely stuck one.
 
 ## strip_yaml_comments
 
-Trailing comments are cut as well as whole lines: `image: foo@sha256:...
+Trailing comments are cut as well as whole lines:
 
-# was ${IMAGE}` otherwise reads as a live pin reference while the service
+```yaml
+image: foo@sha256:... # was ${IMAGE}
+```
 
-below it runs a hardcoded digest, which is exactly the state being guarded
-against.
+Otherwise that line reads as a live pin reference while the service below it
+runs a hardcoded digest, which is exactly the state being guarded against.
 
 Quoting is not tracked. The only question asked of the result is whether an
 IMAGE reference is live configuration or commentary, and a `#` inside a
@@ -225,12 +227,16 @@ An image name outside the register is refused, not passed unverified, unless
 `UNATTESTED_STACK_IMAGES` names it for that stack. That table is the reviewed
 exemption list: each stack that pins through this wrapper today, with the one
 image name it runs and no workflow attests yet (`website`, `publicpress-website`,
-`edge`, `db`, `dbt1`). It is keyed by stack as well as by name, so an exemption
+`edge`, `db`, `mail-spool`). `dbt1` is not listed: its image, percona-server, is in
+the register, so it is verified. It is keyed by stack as well as by name, so an exemption
 does not open the other stacks: a tenant slot key cannot pin the edge image, and
 cannot pin `attacker.example/evil@sha256:...`. A registered image deploys on any
-stack. Exempt images skip the verifier; adding an entry is a reviewed diff, and
-the way to remove one is to register the image in `ATTESTED_IMAGES`. A new stack
-or image is refused until one of the two tables names it.
+stack (the register holds `ghcr.io/branchleft/ghost-tenant`,
+`ghcr.io/branchleft/portal-apps` and `ghcr.io/branchleft/percona-server`, the
+database image of `db-t1`, signed by the Percona image workflow). Exempt images skip the verifier; adding
+an entry is a reviewed diff, and the way to remove one is to register the image
+in `ATTESTED_IMAGES`. A new stack or image is refused until one of the two tables
+names it.
 
 The register is looked up by registry host and path alone (`attested_name`). A
 tag or a registry port on the reference is a spelling, not another image: the
@@ -323,6 +329,45 @@ verifier. gh writes its TUF cache and a device id under the verifier's `HOME`
 (`.cache/gh`, `.local/state/gh`) and no `config.yml` or `hosts.yml`, so the role's
 credential-file refusal does not trip on a second apply; the directory is empty only
 until the first check.
+
+### Offline attestation verification
+
+A host with no outbound access cannot read an attestation from the registry or fetch the Sigstore
+trust root, so `--bundle-from-oci` cannot work there. On such a host the
+bundle travels with the delivery and nothing is fetched.
+
+**The mode is the host's, not the caller's.** `verify_attestation` verifies offline when
+`OFFLINE_TRUSTED_ROOT` exists, and then only offline: a missing or refused bundle is a refusal, never
+a fall back to the registry. Without that file the path above is unchanged. No argument, environment
+variable or stack setting selects either. The `deploy_verifier` role installs the file when its
+`deploy_verifier_offline` is true (default false, and no host sets it yet).
+
+**The trust root is not delivered.** A bundle and a root from one carrier prove nothing about that
+carrier, so the root is a reviewed file in the role, pinned by sha256 (`trusted_root.jsonl`,
+`deploy_verifier_trusted_root_sha256`) and refreshed by a change to both, from
+`gh attestation trusted-root`. The cost is that a Sigstore root rotation needs that change before a
+newly signed bundle verifies; an older bundle keeps verifying, because the root keeps each key's
+validity window.
+
+**What the delivery stages.** One directory per image digest under `OFFLINE_STAGING_DIR`
+(`/var/lib/branchleft/attestations/<64 hex>/`), holding `manifest.json`, the image's manifest, and
+`bundle.jsonl`, its attestation (`gh attestation download` writes it). The manifest's sha256 is the
+image digest, so the wrapper holds the file to the digest in the reference, and gh verifies the
+bundle's subject against the same file. That is how an image is verified with no registry: the
+artifact gh checks is the manifest, not an `oci://` reference. Whatever stages the files is outside
+this module; a file written by any account but root is refused.
+
+**What is checked, before the lock, the pin write and any restart.** Every directory and file is root's
+and not group or world writable; the files are regular, singly linked, non-empty and under 4 MiB, opened
+without following a link or blocking on a FIFO; the manifest hashes to the digest. The bytes read are
+copied into a private directory and gh reads the copies, so nothing changes between check and use. gh then
+verifies the repository, the signing workflow from `ATTESTED_IMAGES`, `refs/heads/main`, the OIDC issuer
+and a hosted runner, exactly as the online verifier does. Its environment is the online one without
+`DOCKER_CONFIG`: no registry key and no GitHub credential.
+
+**What it does not settle.** Whether `docker load` keeps the manifest digest on the target host's image
+store is a fact of that host and is recorded from a live run there, not here. This module checks the
+digest the deploy is given; it does not read the digest of the image a load produced.
 
 ### Installing the verifier and gh
 

@@ -1,5 +1,12 @@
 import type { EdgeSite, HostRedirect, StaticSite } from './siteTypes';
 
+// Placeholders until the owner names them. While either is unset the webhook
+// entry below claims no hostname and has no upstream, so the renderer skips it
+// and the edge asks for no certificate. Setting both is a deliberate step: see
+// the "Inbound webhook sites" section of `sites.md`.
+const WEBHOOK_HOSTNAME: string | undefined = undefined;
+const WEBHOOK_PORT: number | undefined = undefined;
+
 /**
  * The site registry: everything the Hetzner edge serves. Hostnames and service
  * addressing only; nothing else about a site belongs in this file.
@@ -15,6 +22,7 @@ export const sites: EdgeSite[] = [
     // Port matches deploy/compose.yml's `website` service in
     // branchLeft/website -- the two must move together, and each states so.
     privateUpstream: { host: 'app1', port: 8080 },
+    backend: 'other',
     // Not derived from a tenant stack -- this site has none. An SSR marketing
     // site whose only request bodies are contact-form posts; 1MiB is orders of
     // magnitude above anything legitimate and replaces no ceiling at all,
@@ -40,6 +48,13 @@ export const sites: EdgeSite[] = [
     // trips the injection signatures. Every Ghost tenant added here needs this
     // until there is enough admin-API traffic to prove otherwise.
     injectionWafPreviewOnly: true,
+    // Ghost serves its uploads from its own origin: see `sites.md`, "What the
+    // site runs".
+    backend: 'ghost',
+    // A signed-in Ghost staff session, verified with this Ghost, is never
+    // refused by a CrowdSec ban or AppSec: hetzner/edge/render.md, "Verified
+    // sessions".
+    trustedSession: 'ghost-staff',
   },
 
   {
@@ -66,6 +81,7 @@ export const sites: EdgeSite[] = [
     // Nextcloud itself picks -- the two must move together, same convention
     // as the blog entry above.
     privateUpstream: { host: 'ops1', port: 11000 },
+    backend: 'other',
     // Calendar/Talk attachments and avatars, not general file sync. Raise
     // deliberately if a real bulk-upload use case shows up.
     requestBodyMaxSize: '100MiB',
@@ -81,6 +97,7 @@ export const sites: EdgeSite[] = [
     // together. The application defaults to 8080, which both portal apps
     // would share, so each is given its own number there.
     privateUpstream: { host: 'ops1', port: 8301 },
+    backend: 'other',
     // Form posts at sign-in and sign-out only; no upload surface exists.
     requestBodyMaxSize: '1MiB',
   },
@@ -92,6 +109,7 @@ export const sites: EdgeSite[] = [
     hostnames: ['console.branchleft.co.uk'],
     // The owner console's `PORT` on ops1; see the tenant-portal entry.
     privateUpstream: { host: 'ops1', port: 8302 },
+    backend: 'other',
     requestBodyMaxSize: '1MiB',
     // The reviewer GitHub App's webhook target: GitHub requires an active
     // URL before the App may subscribe to the deployment-protection event,
@@ -108,6 +126,7 @@ export const sites: EdgeSite[] = [
     name: 'identity',
     hostnames: ['id.publicpress.co.uk'],
     privateUpstream: { host: 'ops1', port: 8300 },
+    backend: 'other',
     // Login form posts and token requests only; no upload surface exists.
     requestBodyMaxSize: '1MiB',
   },
@@ -120,6 +139,7 @@ export const sites: EdgeSite[] = [
     name: 'ntfy',
     hostnames: ['ntfy.branchleft.co.uk'],
     privateUpstream: { host: 'edge1', port: 2586 },
+    backend: 'other',
     // A page and a subscription request are a few hundred bytes.
     requestBodyMaxSize: '64KiB',
   },
@@ -134,11 +154,45 @@ export const sites: EdgeSite[] = [
     // repository, which publishes it on app1's private address; the two must
     // move together, and each states so. 8080 is the branchLeft website's.
     privateUpstream: { host: 'app1', port: 8081 },
+    backend: 'other',
     // The register form posts a few short fields; 64KiB is orders of magnitude
     // above that. Raise it deliberately if an upload surface is ever added.
     // The app sets its own per-request CSP and response headers: the edge adds
     // only HSTS to a proxied site and leaves every other response header alone.
     requestBodyMaxSize: '64KiB',
+  },
+
+  {
+    // The public status page, served by the Gatus stack on ops1 (the
+    // status_page role). Port 8303 must match that role's status_page_port
+    // and the DOCKER-USER protected ports of ops1's isolation policy (the drop
+    // that confines the port to the gateway): the three move together.
+    // The DNS record for this hostname must be live before this entry is
+    // applied: Caddy requests a certificate as soon as the block renders, and
+    // a failed HTTP-01 validation costs the account's failure budget.
+    name: 'status',
+    hostnames: ['status.branchleft.co.uk'],
+    privateUpstream: { host: 'ops1', port: 8303 },
+    backend: 'other',
+    // The page answers GET requests only; no upload surface exists.
+    requestBodyMaxSize: '64KiB',
+  },
+
+  {
+    // Receives the mail provider's signed complaint callbacks, nothing else.
+    // The receiver is a container on edge1; its public listener is the only
+    // port named here, and its private drain listener is never routed.
+    name: 'sweego-webhook',
+    hostnames: WEBHOOK_HOSTNAME === undefined ? [] : [WEBHOOK_HOSTNAME],
+    privateUpstream:
+      WEBHOOK_HOSTNAME === undefined || WEBHOOK_PORT === undefined
+        ? undefined
+        : { host: 'edge1', port: WEBHOOK_PORT },
+    // A complaint callback is a few hundred bytes of JSON; the receiver refuses
+    // anything over 16 KiB itself, and the edge refuses it first.
+    requestBodyMaxSize: '16KiB',
+    // The receiver's one public route (its README names it).
+    inboundWebhookPath: '/webhook',
   },
 ];
 

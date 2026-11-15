@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Loads a pulled host's private role inputs from its one root-only file, or refuses the run.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

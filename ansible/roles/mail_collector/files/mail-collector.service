@@ -1,0 +1,35 @@
+# The mail collector, run as a container by the mail_collector role. Installed as a static file,
+# never templated: the image and the account's numeric id come from unit.env, and the collector's
+# own settings from collector.env (public values) and credentials.env (the owner's file).
+#
+# It only dials: out to each host's drain surface and out to the sending target. Nothing here
+# publishes a port. Only the descriptor directory is mounted, read-only, and the state directory,
+# read-write; the container's own filesystem is read-only. The unit does not start (a condition,
+# not a failure) until the public settings exist, the descriptor directory holds a file and the
+# credentials file has been placed.
+#
+# It restarts whatever the exit, with no start limit: a collector that stops silently is a host
+# whose mail is never collected, so it is retried every ten seconds for as long as it fails.
+[Unit]
+Description=Mail collector, drains each named host's spool and submits its mail
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+ConditionFileNotEmpty=/etc/branchleft/mail-collector/collector.env
+ConditionFileNotEmpty=/etc/branchleft/mail-collector/credentials.env
+ConditionDirectoryNotEmpty=/etc/branchleft/mail-collector/descriptors
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/branchleft/mail-collector/unit.env
+ExecStartPre=-/usr/bin/docker rm --force mail-collector
+ExecStart=/usr/bin/docker run --rm --name mail-collector --user ${MAIL_COLLECTOR_USER} --read-only --tmpfs /tmp:rw,noexec,nosuid,size=16m --cap-drop ALL --security-opt no-new-privileges --volume /etc/branchleft/mail-collector/descriptors:/descriptors:ro --volume /var/lib/branchleft/mail-collector:/state:rw --env-file /etc/branchleft/mail-collector/collector.env --env-file /etc/branchleft/mail-collector/credentials.env ${MAIL_COLLECTOR_IMAGE}
+ExecStop=/usr/bin/docker stop --time 15 mail-collector
+Restart=always
+RestartSec=10
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

@@ -2,8 +2,6 @@
 - name: Verify
   hosts: all
   gather_facts: false
-  vars:
-    ring_controller_host_ledger_url: '{{ scenario_ledger_url }}'
   tasks:
     - name: Look at the good bundle
       ansible.builtin.stat:
@@ -67,10 +65,11 @@
         src: '{{ scenario_env_file }}'
       register: ring_controller_host_v_reads
 
-    - name: Require the file to hold the input
+    - name: Require the file to hold its three names and no ledger name
       ansible.builtin.assert:
         that:
-          - "('RING_CONTROLLER_LEDGER_URL=' ~ scenario_ledger_url) in (ring_controller_host_v_reads.content | b64decode).splitlines()"
+          - "'RING_CONTROLLER_LEDGER_URL' not in (ring_controller_host_v_reads.content | b64decode)"
+          - "(ring_controller_host_v_reads.content | b64decode).splitlines() | select('match', '^RING_CONTROLLER_[A-Z_]+=') | list | length == 3"
         quiet: true
 
     # --- With a digest the timer is on. Without one it is held off again, and a digest again

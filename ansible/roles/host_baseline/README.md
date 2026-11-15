@@ -54,8 +54,9 @@ never bans, one line of space-separated IP addresses and CIDR ranges. Its defaul
 is the list the baseline has always written, loopback and edge1's private address
 (`127.0.0.1/8 ::1 10.20.1.10`), so a host that already has the jail reports no
 change. Setting it changes only the `ignoreip` line of the jail. A value with a
-newline, or any character other than hex digits, `:`, `.`, `/` and space, is refused
-before the jail is written, so a host name is refused too. Every other value the role writes is the same on every
+newline, or a token that does not parse as an IPv4 or IPv6 address or CIDR range
+(checked with Python's `ipaddress` module by `filter_plugins/ignoreip.py`), is refused
+before the jail is written, so a host name such as `cafe` is refused too. Every other value the role writes is the same on every
 container host. None of the role's values is a secret and the role handles no
 secret.
 

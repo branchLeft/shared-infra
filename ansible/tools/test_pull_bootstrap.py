@@ -651,6 +651,70 @@ class ConfigRefusalTest(unittest.TestCase):
             "takes bundles, and this tool bootstraps a host that pulls", variables=variables
         )
 
+    def test_a_task_level_variable_the_tool_does_not_read_is_refused(self) -> None:
+        # Ansible gives a task's own vars precedence over the variable files, so an
+        # enrolled_host or a bundle list set here would change the file the host is given
+        # while the tool, which reads neither, rendered the record without it.
+        for name, value in (
+            ("enrolled_host", "demo1"),
+            ("pull_trigger_bundle_hosts", "[edge1]"),
+            ("pull_trigger_signers", "[]"),
+            ("some_other_name", "x"),
+        ):
+            with self.subTest(name=name):
+                tasks = ConfigTexts.tasks.replace(
+                    "  vars:\n    pull_trigger_config_source:",
+                    f"  vars:\n    {name}: {value}\n    pull_trigger_config_source:",
+                )
+                self.assertNotEqual(tasks, ConfigTexts.tasks)
+                self.refuses(
+                    f"the task's vars set {name}, which this tool does not read", tasks=tasks
+                )
+
+    def test_a_task_that_leaves_out_a_required_key_is_refused_by_name(self) -> None:
+        for key in sorted(tool.REQUIRED_CONFIG_KEYS):
+            with self.subTest(key=key):
+                tasks = re.sub(rf"^      {key}: .*\n", "", ConfigTexts.tasks, flags=re.MULTILINE)
+                self.assertNotEqual(tasks, ConfigTexts.tasks)
+                self.refuses(f"the configuration has no {key}$", tasks=tasks)
+
+    def test_a_configuration_with_several_keys_missing_names_them_all_in_order(self) -> None:
+        config = json.loads(render())
+        for key in ("steps", "keep_runs", "signers"):
+            del config[key]
+        with self.assertRaisesRegex(
+            tool.BootstrapError, "the configuration has no keep_runs, signers"
+        ):
+            tool.check_config(config)
+
+    def test_a_configuration_checked_directly_is_refused_for_a_missing_key(self) -> None:
+        tool.check_config(json.loads(render()))
+        for key in sorted(tool.REQUIRED_CONFIG_KEYS):
+            with self.subTest(key=key):
+                config = json.loads(render())
+                del config[key]
+                with self.assertRaisesRegex(
+                    tool.BootstrapError, f"the configuration has no {key}$"
+                ):
+                    tool.check_config(config)
+
+    def test_a_source_key_in_a_configuration_checked_directly_is_refused(self) -> None:
+        config = json.loads(render())
+        config["source"] = "bundle"
+        with self.assertRaisesRegex(
+            tool.BootstrapError, "takes bundles, and this tool bootstraps a host that pulls"
+        ):
+            tool.check_config(config)
+
+    def test_a_source_key_written_into_the_task_itself_is_refused(self) -> None:
+        tasks = ConfigTexts.tasks.replace(
+            "      remote_url: '{{ pull_trigger_remote_url }}'\n",
+            "      remote_url: '{{ pull_trigger_remote_url }}'\n"
+            "      source: '{{ pull_trigger_remote_url }}'\n",
+        )
+        self.assertNotEqual(tasks, ConfigTexts.tasks)
+        self.refuses("takes bundles, and this tool bootstraps a host that pulls", tasks=tasks)
+
     def test_a_task_key_that_is_not_a_plain_variable_is_refused(self) -> None:
         tasks = ConfigTexts.tasks.replace(
             "remote_url: '{{ pull_trigger_remote_url }}'",

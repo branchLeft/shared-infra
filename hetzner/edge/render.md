@@ -208,6 +208,38 @@ the `*` version segment.
 After the protection chain, before `reverse_proxy`: a client probing for an open setup is
 throttled and seen by CrowdSec rather than answered for free.
 
+## `siteBlock`: uploaded-file refusal and `nosniff`
+
+Ghost accepts `.js`, `.html` and `.css` as uploads, and also `.txt`, `.md`, `.json`, `.pdf`,
+`.zip` and `.py`, and serves everything a tenant uploads from the tenant's own origin, under
+`/content/files/`, `/content/images/` and `/content/media/`. An uploaded `x.js` therefore
+satisfies `script-src 'self'`, and an uploaded `.html` or `.svg` is a document a browser
+runs. The shared-domain limit is that no tenant script runs there, so for a site with
+`backend: 'ghost'` the edge does two things. Both are copied from the demo edge.
+
+- **Refusal.** 403 to any request below those prefixes for a file of an active type
+  (`ACTIVE_CONTENT_EXTENSIONS`: script, HTML, XML, stylesheet and SVG families), any method.
+  A refusal, not a download: a forced download would still put the bytes on the tenant's
+  origin, and a `<script src>` ignores `Content-Disposition`.
+- **`nosniff` on every response.** The list above cannot name every type Ghost accepts, and a
+  browser runs a same-origin `<script src>` of a response typed anything but image, audio,
+  video or `text/csv` unless `X-Content-Type-Options: nosniff` is set, so an uploaded `x.txt`
+  or `x.json` would still run. The header is deferred (`>`) so it replaces Ghost's own copy
+  rather than doubling it, and it sits in the route after HSTS. An error Caddy writes itself
+  (a 502 with no healthy upstream) never reaches the route's `header`, so the site also has a
+  `handle_errors` block with the same header; it is at the site level because Caddy refuses it
+  inside a `route`.
+
+`/content/public/` (Ghost's own shipped scripts), theme assets and the admin are outside the
+prefixes and are untouched, and `nosniff` does not stop them: they are served typed as
+script. A site with `backend: 'other'` has none of this, so its block does not change.
+
+The refusal is two matchers, because Caddy's `path` lowercases, cleans dot segments and
+decodes escapes but a regexp over the path as received also catches a run of slashes. The
+glob matcher needs a nested `route`: two `path` lines in one matcher are an OR, so the prefix
+and the extension are an AND only across the two matchers. After the protection chain, before
+`reverse_proxy`, for the same reason as the setup refusal.
+
 ## `logDirective`: retention and rotation
 
 Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of
@@ -330,6 +362,64 @@ path, and GitHub's JSON payloads are not exposed to rules built for form posts. 
 answers ahead of the `appsec` line, rather than editing that line, keeps the rendered change
 additions-only. The renderer accepts only a plain literal path.
 
+## `siteBlock`: inbound webhook
+
+`EdgeSite.inboundWebhookPath` marks a site that exists only to receive signed callbacks
+from one outside sender, and renders through `webhookSiteBlock` instead of the Ghost-shaped
+`siteBlock` body. The sender authenticates each delivery with a signature the receiver
+checks; the edge's job is to bound what can reach the receiver at all.
+
+What the block lets through, and nothing else:
+
+- `POST` on the one literal path, with a body of at most the site's `requestBodyMaxSize`
+  (16 KiB for the shipped entry), from a client under the dedicated throttle, the general
+  throttle, CrowdSec and AppSec, to the one upstream the entry names.
+- Every other method on that path gets 405 with `Allow: POST`, from the edge.
+- Every other request on the hostname gets 404, from the edge. The final `respond 404` is
+  matcher-less and last, so a case the lines above forgot fails closed.
+- The receiver's private drain listener is a different port and is never named here: the
+  block contains exactly one upstream address.
+
+Why a separate block rather than a path matcher added to the Ghost one: the Ghost block
+defines the members magic-link matcher and its shared zone on every site, inertly. A
+webhook block that carried them would name a zone and a matcher of the login-mail route.
+It carries none of the Ghost matchers, so it shares no zone, matcher, upstream or process
+with that route; the test file asserts each.
+
+The dedicated zone (`<site>_inbound_per_ip`, keyed on the direct peer like the others)
+applies to the matched `POST` only and sits after the general throttle, which is the
+unchanged one every site has. It is not keyed on posture: a posture setting that could
+switch it off would leave a public route with only the general budget. The budget is
+`WEBHOOK_RATE_LIMIT_EVENTS` per `WEBHOOK_RATE_LIMIT_WINDOW_SECONDS` (`posture.md`).
+
+Path matching is Caddy's: case-insensitive, dot segments cleaned, escapes decoded, `*` not
+used. A request for `/Webhook` is proxied as sent and the receiver, which compares the path
+exactly, answers its own 404.
+
+Not proven here: Caddy's behaviour against a real sender (the 413 a sender sees for an
+oversize body, the 429 it sees past the budget, the 404 and 405) was not run; the rendered
+file is only parsed by `caddy validate` in CI. Whether AppSec's rules flag a real callback
+payload is unknown, and a 403 would be retried by the sender. Caddy's read timeouts are
+server-wide in the global block, so slow-sender protection for this route is whatever the
+global block says, and changing it affects every site.
+
+`edge1` as the upstream host: `resolvePrivateAddress` refuses `edge1` on every port but
+those in `EDGE_HOST_ALLOWED_PORTS`, so the entry cannot render once its port is named
+until that set gains the receiver's port. That is one deliberate line in this file, made
+when the port is known and reviewed as a widening of what the edge proxies to.
+
+### Naming the hostname
+
+Naming the hostname is one change with three parts, and `webhookDns.test.ts` goes red
+until all three are there: the `WEBHOOK_HOSTNAME` constant in `sites.ts`; one `A` record
+for it in the matching zone file under `hetzner/dns/`, at the address the edge's other
+hostnames use, with its owner name added to that file's `probe_names`; and the port in
+`EDGE_HOST_ALLOWED_PORTS`. The record is not committed ahead of the name: a placeholder
+in a zone file would be applied to production DNS, and a name the registry does not claim
+would answer for a host that serves nothing. The same test refuses a hostname that is
+not a real lowercase DNS name, so an ALL_CAPS placeholder cannot reach a rendered
+configuration. The record's apply, like every DNS apply, is the owner's.
+
 ## `siteBlock`: `request_body` ordering
 
 Ahead of everything else, including request_body -- see hstsDirective's own comment for
@@ -443,3 +533,193 @@ loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` ne
 `protectionChain`. Under the committed posture that is one general `rate_limit` directive
 per throttled block, each in its own zone, and `render.test.ts` counts them per kind
 from the registries.
+
+## Ghost admin preview exclusion
+
+`renderGhostAdminAppsecConfig` writes `stack/crowdsec/appsec-configs/ghost-admin-previews.yaml`,
+the AppSec configuration `branchleft/ghost-admin-previews`. It holds one
+`pre_eval` hook and no rules.
+
+What it is for. On 14 November 2026 the owner was banned from every site on the
+edge for saving Settings > Design in the blog's Ghost admin. The admin API itself
+never reaches AppSec on a Ghost site (`AUTHORING_API_PATHS`); the design and
+announcement-bar previews do. Ghost admin fetches each preview by POSTing to the
+site root, `/?admin_toolbar=0`, with no body, `Content-Type: text/html;charset=utf-8`
+and the unsaved settings in an `X-Ghost-Preview` header, once per change. Two
+Core Rule Set rules match that request: 920420 (the content type is not one the
+rule set allows, 5 points) and 920180 (a POST with no Content-Length, 3 points;
+the bouncer forwards a bodiless request without one). That is the "anomaly: 8"
+in the owner's alerts. The out-of-band bucket bans an address at its sixth
+match inside its leak window, so a few design tweaks are a ban.
+
+What it narrows. The two rules, removed for one request, only when every
+condition holds: out-of-band evaluation; the host is a Ghost hostname from the
+registry (`backend: 'ghost'`); a POST to `/`; no body; exactly the preview's
+content type; the `X-Ghost-Preview` header present. Every other rule still
+evaluates that request, and both rules still evaluate everything else, including
+the same request with a body, on another path, on a non-Ghost host, or without
+the header. Sending the header is all a client needs to skip those two protocol
+checks on that one bodiless request, which reaches a Ghost front page that
+reads no body.
+
+Why it is named first in the AppSec acquisition. CrowdSec merges the named
+configurations in order: hooks and rules are appended, but options such as
+`default_remediation` are taken from the last one loaded. With ours first, the
+hub's configurations load after it exactly as before.
+
+The replay in `test_crowdsec_replay.py` (CI's `edge-config-validate`) is what
+found the rules and what proves the narrowing: it fails if the previews raise
+any WAF alert, and if the same shape stops banning off a Ghost host or without
+the header.
+
+## Ghost admin API and admin-interface probing
+
+`renderGhostAdminPostoverflow` writes
+`stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml`, a post-overflow whitelist.
+
+What it is for. The hub scenario `crowdsecurity/http-admin-interface-probing`
+reads a 403 or 404 on any path containing one of its entries as a probe, and
+bans at the third distinct such path in quick succession (capacity 2, leaking one every 10 seconds). One of its
+entries is `/admin`, which every Ghost admin API path contains
+(`/ghost/api/admin/...`). Ghost answers its own admin API 403 for an expired
+session or a device check and 404 for a missing resource, and the bouncer
+answers 403 to an address already banned, which is how the owner's second ban
+followed the first at 00:50:54Z.
+
+What it narrows. An overflow of that one scenario is dropped only when every
+event in it is a request to `/ghost/api/admin/` on a Ghost hostname with no dot
+segment, literal or percent-encoded. A probe for `/wp-admin`, `/phpmyadmin`,
+`/admin` or any other entry still bans on a Ghost host, any mix of those with
+admin API paths still bans, and admin API paths on any other host still ban.
+Every other scenario still reads every one of these requests.
+
+The limit it carries. A whitelisted overflow still arms the scenario's one-minute
+blackhole for that address, so three admin API 403s on a Ghost host mute this
+one scenario for that address for a minute. The other HTTP scenarios are not
+muted. The alternatives were worse: a parser whitelist would hide these
+requests from every scenario, and replacing the hub scenario with a copy would
+taint the `crowdsecurity/caddy` collection and stop its hub upgrades.
+
+## Verified sessions
+
+`EdgeSite.trustedSession`, `sessionVerification`, `sessionVerificationMatchers`
+and `renderTrustedSessionWhitelist`. A request whose signed-in session the site
+itself confirms is never refused by a CrowdSec IP decision or an AppSec verdict,
+and adds nothing to a CrowdSec bucket. A request with no session, or one the
+site refuses, is handled exactly as on a site without the field. Only `ghost-staff`
+exists: the Ghost staff cookie `ghost-admin-api-session` on `/ghost/*`, on a Ghost
+site. Ghost members are never trusted. The portal and console need an endpoint in
+the shell that answers 204 or 401 for a session, which does not exist yet.
+
+**The check.** The edge asks the site's own Ghost `GET /ghost/api/admin/users/me/`
+with the browser's cookie, Origin and Referer, the query emptied and any
+`Authorization` header dropped (an Admin API key would also authenticate). Ghost
+answers 2xx JSON only for a signed-in, origin-matching, verified (2FA) staff
+session. Only that answer sets the Caddy variable `edge_trusted` to `1`; any other
+status, a 2xx that is not JSON, a timeout or an error does not. It is written as
+`reverse_proxy` with two `handle_response` blocks, not `forward_auth`:
+`forward_auth` sends a non-2xx answer to the browser, which would break Ghost's
+own sign-in page for an expired cookie. `method GET` drops the body from the
+check only, so an upload reaches Ghost whole. There is no cache, so signing out,
+a password change or suspending the user takes effect on the next request.
+
+**Handler order.** HSTS, the break-glass strip and the body cap, then both
+throttles (still applied to everyone, and they cap how many checks one address
+can cause), then `vars edge_trusted 0`, `log_append` and the check, then
+`crowdsec @edge_untrusted` and AppSec on unverified requests only (on an
+authoring site `@inspected` gains `not vars edge_trusted 1`), then the setup
+refusal, the upload refusals and the upstream proxy, for everyone.
+
+**Keeping verified traffic out of every bucket.** A request that skips AppSec
+raises no AppSec event, but the log scenarios read every access-log line. Caddy
+writes the variable as a top-level `edge_trusted` field of the JSON log line,
+and the `s02-enrich` whitelist `branchleft/edge-trusted-session` drops a Caddy
+line whose top-level field is `1` before any scenario reads it. A client cannot
+forge it: everything a client sends (headers, path, query, cookies) is escaped
+into the line under `request`, never at the top level, and only the check's 2xx
+JSON answer sets the variable.
+
+**What still protects a stolen session.** Revocation, on the next request. The
+pass covers one site's `/ghost/*` and only that site's session: a tenant's staff
+session gives nothing on another tenant, the public pages or the portal. The
+per-address throttle, the body cap, the setup refusal and the upload refusals
+still apply. Ghost's staff history records what was done, and the access log
+marks every verified request. Ghost's own brute-force limits protect sign-in and
+password reset. What is left: while the session is valid, its holder cannot be
+banned by address and AppSec does not inspect their admin requests. An
+Administrator already controls the site; the answer is to revoke the session.
+Ghost staff sessions last months.
+
+**Cost.** A request without the staff cookie on `/ghost/*` costs a header match.
+A staff request costs one bodiless request to its own Ghost over the private
+network: a session and user lookup in MySQL, a few milliseconds, roughly doubling
+Ghost's load from admin use. A forged cookie costs one failed lookup, inside the
+throttle.
+
+**Failure.** Any answer other than 2xx JSON is the normal path, so the edge never
+fails open. If Ghost cannot be reached the check's error ends the request with a
+502 or 504; that request could not have been served by that Ghost anyway. The
+dial timeout is 3 seconds and the answer timeout 10 seconds.
+
+**Limits.** A request with neither Origin nor Referer is not verified, because
+Ghost refuses a session from no origin. The one such request in normal use is
+opening the admin app from a typed URL or a bookmark: on a banned address that
+page load is still refused. Every request the admin app then makes carries its
+origin and is verified. Supplying the site's own origin when the browser sends
+none would close this, at the cost of the edge vouching for an origin Ghost's
+CSRF check did not see; that is not done.
+`test_trusted_session_replay.py` proves each claim above against the real Caddy
+image and CrowdSec, and `render.test.ts` pins the rendered lines.
+
+## Ghost admin brute force
+
+`renderGhostBruteForceScenario` writes
+`stack/crowdsec/scenarios/ghost-admin-login-bruteforce.yaml`, the scenario
+`branchleft/ghost-admin-login-bruteforce`. No hub scenario counts failed Ghost
+sign-ins, and the post-overflow above drops the hub's admin-probing overflows
+on Ghost admin API paths, so before this nothing at the edge banned an address
+for guessing a password or an Admin API key.
+
+What Ghost already does, read from its source (v6.55): `POST
+/ghost/api/admin/session/` runs `brute.globalBlock` (per route per address,
+99 free retries, one-hour lock) and `brute.userLogin` (key `user_login`, per
+address, 4 free retries, so five tries, then a 10 minute lock that grows to a
+week; a good sign-in resets it). Both key on `req.ip`; Ghost enables `trust
+proxy` (`usingLoopbackReverseProxy` defaults false) and Caddy sets
+`X-Forwarded-For` to the client address without trusting a client-supplied one,
+so Ghost sees the real client and a client cannot choose it. That limiter is
+per tenant, because each tenant has its own database, and it does not cover
+the Admin API key: a bad or unknown key is answered 401 with no limit at all.
+The scenario covers those two gaps and holds one address across every Ghost
+hostname.
+
+What it counts, on a Ghost hostname only, from Caddy's access log:
+
+- `POST` to the session path (`/ghost/api/admin/session/`, with or without a
+  version segment) answered 422 (wrong password), 404 (unknown email), 401 (no
+  credentials, or a locked account) or 429 (Ghost's own lockout, so a client
+  that keeps going after Ghost says stop keeps counting).
+- Any request to `/ghost/api/admin/` answered 401: a bad, expired or unknown
+  Admin API key, a malformed `Authorization` header, and a wrong sign-in
+  verification code (`PUT /session/verify`, which Ghost answers 401).
+
+What it does not count. 403: a correct password from a new device is answered
+403 (`2FA_NEW_DEVICE_DETECTED`), and so is every admin call with no session,
+which is what the owner's expired session and the bouncer's answer to a banned
+address look like. 404 on any path but the session. Successes.
+
+The numbers. A leaky bucket per source address, `capacity: 9`, `leakspeed:
+30s`: the tenth failure inside the bucket bans, and one failure drains every 30
+seconds. Ghost's own limiter locks a sign-in after five tries, so a person who
+mistypes a password a few times, or one who tries a few more times against the
+lock, stays under ten; a script's burst does not, and a script that keeps
+sending 429s is banned though Ghost is already refusing it. Sustained guessing
+slower than two failures a minute is not banned by this scenario; Ghost's
+lock covers the sign-in and nothing covers the key, which is the limit it
+carries. The ban is the default profile's, four hours.
+
+Why it is a separate scenario: the post-overflow above matches one scenario by
+name, so this one is never dropped by it. The replay in
+`test_crowdsec_replay.py` proves a burst of sign-in failures and of key
+failures is banned, and that the owner's mistyped passwords, new-device
+sign-in and admin use are not.

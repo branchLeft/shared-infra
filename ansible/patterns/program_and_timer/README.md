@@ -42,6 +42,12 @@ not apply to it (see the named limits).
 | `program_and_timer_unit_description` | The description written into both units.                                      |
 | `program_and_timer_tick_calendar`    | The timer's `OnCalendar` value.                                               |
 
+The placeholder program is `files/example_program.py`. The role installs it as
+`program.sh` by default, a placeholder name kept from the shell script the recipe
+replaces. The name does not select the interpreter: the program's shebang does at run
+time, and the validator does at install time. A copier sets
+`program_and_timer_program_name` to a name of their own.
+
 `vars/main.yml` holds internal values (the installed path, the input patterns and
 the list of directories the role refuses). Role variables outrank a caller's, so a
 caller cannot change them; they are not part of the interface.
@@ -100,8 +106,8 @@ owner and the unit's user the same by construction.
   in `meta/main.yml` equal to it.
 - No collection beyond `ansible.builtin`. The test uses `community.docker`, from the
   `ansible` package pinned in `ansible/requirements.txt`.
-- Target: a systemd host with `/bin/sh` and `python3`. The validator is the program
-  itself, run by `/bin/sh` with `--check`.
+- Target: a systemd host with `/usr/bin/python3`. The validator is the program
+  itself, run by `python3 -I` with `--check`.
 
 ## What it changes on a host
 
@@ -146,7 +152,7 @@ changed. The reader must simulate it to learn the end state.
     owner: '{{ program_and_timer_service_user | default("root", true) }}'
     group: '{{ program_and_timer_service_group | default("root", true) }}'
     mode: '0755'
-    validate: /bin/sh %s --check
+    validate: /usr/bin/python3 -I %s --check
   notify: Restart the program timer
 
 - name: Load queued unit changes and restart the timer before it is enabled
@@ -170,12 +176,12 @@ notified it, and only when one of them changed.
 - `owner`, `group`, `mode` are explicit. A copy without them takes the process's umask
   and the invoking user, so the end state depends on who ran it. The owner comes from
   the service user so the test can tell the parameter from the default (see the limits).
-- `validate: /bin/sh %s --check` runs the program's own check on the temporary copy,
-  before the file replaces the installed one. A program whose check fails is never
-  installed: the task fails with the validator's message, and the previous program
-  stays in place. `%s` is the temporary path. The check is the program's own
-  `--check` argument; a program that has none fails its check, so a program must
-  support one to be installed by this role.
+- `validate: /usr/bin/python3 -I %s --check` runs the program's own check on the
+  temporary copy, before the file replaces the installed one. A program whose check
+  fails is never installed: the task fails with the validator's message, and the
+  previous program stays in place. `%s` is the temporary path. The check is the
+  program's own `--check` argument; a program that has none fails its check, so a
+  program must support one to be installed by this role.
 - `copy` reports a change only when the content or the metadata differs. The
   idempotence step is what checks that claim for this role.
 - `notify` on the program task, not an unconditional restart task. An unconditional
@@ -300,7 +306,7 @@ Molecule's own idempotence check, which names the task.
 | A task that changes on every run (a copy of `now()`) notifies the restart             | `idempotence`, naming the marker task and the restart                                                                             |
 | `notify` removed from the program copy                                                | `verify`, "systemd logged 0 stops and 0 starts of the timer"                                                                      |
 | The program copied and checked afterwards (the old program overwritten first)         | `converge`, "A program whose check fails changed what was installed"                                                              |
-| `validate: /bin/sh %s --check` removed                                                | `converge`, the same assertion: the bad program replaced the old one                                                              |
+| `validate: /usr/bin/python3 -I %s --check` removed                                    | `converge`, the same assertion: the bad program replaced the old one                                                              |
 | The program delivered as other bytes (content from a lookup, a trailing newline lost) | `verify`, "The installed program differs from the source file"                                                                    |
 | `enabled: true` changed to `false` for the timer                                      | `verify`, the timer's enabled assertion                                                                                           |
 | `mode: '0755'` changed to `'0644'` on the program                                     | `verify`, "owner, group or mode differs ... 0644"                                                                                 |
@@ -361,8 +367,8 @@ Molecule's own idempotence check, which names the task.
   limit of this pattern. A service role whose program takes a credentials file adds the
   delivery task with `no_log: true` and `diff: false` on it, and adds its own proof that
   the secret is absent from the run's output.
-- **The validator is `/bin/sh --check`, which is the program's own check.** It runs the
-  temporary copy as a shell script. A program in another language needs its own
+- **The validator is `python3 -I --check`, which is the program's own check.** It runs
+  the temporary copy as a Python program. A program in another language needs its own
   validator, and the role does not pick one.
 - **The count depends on the journal.** The test reads systemd's log through
   `journalctl`, so the base image must run `systemd-journald` (the pinned image does).
@@ -413,7 +419,7 @@ pattern is not applied to any host: it exists to be copied.
 4. Replace the placeholders: the program's content (it must support `--check`), the
    calendar, and the ALL_CAPS values in `meta/`. Choose the program directory: one made
    for this program, deep enough and not a system directory, or the role refuses it.
-5. Keep the install-time check. A program in a language other than `/bin/sh` needs its
+5. Keep the install-time check. A program in a language other than Python needs its
    own validator in `validate:`, and the scenario's second and bad programs must be
    written in that language.
 6. Set the service user and group in the scenario's group variables to placeholders for

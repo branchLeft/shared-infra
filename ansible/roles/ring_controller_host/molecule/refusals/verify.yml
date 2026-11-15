@@ -5,8 +5,8 @@
 # role must stop with (absent for a control that must be accepted); commands, argv lists that make
 # the bad state; files, to put in place after the commands (path, content, mode); restore, argv
 # lists that put the host back; changes, true for the one accepted case that may change a path;
-# the three inputs (digest, url, ledger), each empty
-# unless the case sets it; forbidden, texts the message must not hold; absent, paths that must not
+# the two inputs (digest, url), each empty unless the case sets it; retired_ledger, the text to
+# give the retired ledger URL input, which the role must refuse even when it is empty; forbidden, texts the message must not hold; absent, paths that must not
 # exist afterwards; modes, paths and the mode each must still have.
 #
 # The first case is a control: the same role on the host as delivered must accept. Without it, a
@@ -96,14 +96,12 @@
       - name: a digest in capitals
         digest: '{{ ring_controller_host_refusals_wrong_hex }}'
         url: '{{ scenario_bundle_url }}'
-        ledger: '{{ scenario_ledger_url }}'
         expect: ring_controller_host_bundle_sha256 must be empty or 64 lowercase hex digits.
         forbidden:
           - '{{ ring_controller_host_refusals_wrong_hex }}'
       - name: a bundle URL with plain http
         digest: '{{ scenario_digest }}'
         url: http://bundle.example.test/ring-controller.tar.gz
-        ledger: '{{ scenario_ledger_url }}'
         expect: ring_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
         forbidden:
           - http://bundle.example.test
@@ -112,30 +110,28 @@
       - name: a bundle URL that carries a credential
         digest: '{{ scenario_digest }}'
         url: https://u:p@bundle.example.test/ring-controller.tar.gz
-        ledger: '{{ scenario_ledger_url }}'
         expect: ring_controller_host_bundle_url must be empty or an https URL with no user name, password, query or fragment.
         forbidden:
           - u:p@
-      - name: a ledger URL with a query
-        ledger: https://ledger.example.test/ledger?token=x
-        expect: ring_controller_host_ledger_url must be empty or an https URL with no user name, password, query or fragment.
+      - name: the retired ledger URL input, with a value
+        retired_ledger: https://ledger.example.test/ledger?token=x
+        expect: ring_controller_host_ledger_url is retired and nothing reads it. Remove it from the owner's values.
         forbidden:
+          - ledger.example.test
           - token=x
+      - name: the retired ledger URL input, empty, which an old owner file may still set
+        retired_ledger: ''
+        expect: ring_controller_host_ledger_url is retired and nothing reads it. Remove it from the owner's values.
       - name: a digest with no bundle URL
         digest: '{{ scenario_digest }}'
-        ledger: '{{ scenario_ledger_url }}'
         expect: ring_controller_host_bundle_url is empty while ring_controller_host_bundle_sha256 is set.
         absent:
           - /opt/branchleft/ring-controller/releases/{{ scenario_digest }}
-      - name: a digest with no ledger URL
-        digest: '{{ scenario_digest }}'
-        url: '{{ scenario_bundle_url }}'
-        expect: ring_controller_host_ledger_url is empty while ring_controller_host_bundle_sha256 is set.
 
       # The last control: well-formed inputs and no digest are accepted, and this one changes the
       # environment file, so it is the one case that may change a path.
       - name: control, every input set and no digest
-        ledger: '{{ scenario_ledger_url }}'
+        url: '{{ scenario_bundle_url }}'
         changes: true
   tasks:
     - name: Run each case

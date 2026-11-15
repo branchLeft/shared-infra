@@ -14,7 +14,9 @@
 # _guards.yml); user, own_address, destinations and key_entries, in place of the delivered values;
 # files, to put in place (path, content, optional mode and owner, absent_after for a file that did
 # not exist); edits, to make in a delivered file; setup and restore, commands as argv lists;
-# accepted: true for a control.
+# accepted: true for a control; keep, files the step itself may change and the case puts back
+# (path); outcome, for a write-step case, what the step's rescue must leave (reloads, marker and
+# key_file: tasks/case.yml says what each is).
 - name: Apply the role once, so the cases have a delivered host to make bad
   hosts: all
   gather_facts: false
@@ -39,6 +41,10 @@
     case_key_file: /etc/ssh/authorized_keys.d/branchleft-jump
     case_dropin: /etc/ssh/sshd_config.d/40-branchleft-jump.conf
     case_reload: [[systemctl, reload, ssh]]
+    # The marker the write step leaves while a reload of sshd is owed, and the record the test
+    # sshd's reload hook appends to (molecule/default/prepare.yml): one line for each reload.
+    case_marker: /run/branchleft-jump-reload-owed
+    case_reload_record: '{{ scenario_record_dir }}/reloads'
     # The options of a delivered key line, spelled out here and not taken from the role.
     case_options: >-
       restrict,port-forwarding,permitopen="{{ scenario_listed }}:22",permitopen="{{ scenario_own }}:22",command="/usr/sbin/nologin"
@@ -308,26 +314,48 @@
         restore: [[chmod, '0755', '{{ case_key_dir }}']]
         expect: E-READBACK-MISMATCH
 
-      # --- The write step puts the previous files back when its check or read-back fails. These
-      # run last: the files are not kept for the case, so a role that did not put them back leaves
-      # them changed and the verify play of this scenario finds the host not as delivered. The
-      # case writes a list with a third address, so there is something to put back.
-      - name: sshd configuration invalid as a whole, the previous files go back
+      # --- The write step puts the previous files back when its check or read-back fails. The case
+      # writes a list with a third address, so there is something to put back, and asserts what the
+      # step's own rescue left (tasks/case.yml): the failure the rescue raises, the key file, the
+      # marker and how often sshd was reloaded. The key file is kept for the case and put back, and
+      # so is the marker taken away, so one case cannot leave the next a host it did not start from.
+      #
+      # The whole configuration does not check even with the previous files back, because the case's
+      # own drop-in is still there while the rescue runs, so the rescue must not reload sshd, must
+      # leave the marker, and must leave the new key file (the running sshd still serves from it).
+      - name: sshd configuration invalid as a whole, the rescue reloads nothing and keeps the marker
         tasks_from: _write.yml
         destinations: ['{{ scenario_listed }}', '{{ scenario_own }}', '{{ scenario_unlisted }}']
         files: [{ path: '{{ case_after }}', content: "NoSuchKeyword yes\n", absent_after: true }]
-        restore: '{{ case_reload }}'
-        expect: Check the whole sshd configuration before it is reloaded
-      - name: a read-back that sshd refuses after the write, the previous files go back
+        keep: [{ path: '{{ case_key_file }}' }]
+        restore: '{{ [["rm", "-f", case_marker]] + case_reload }}'
+        expect: 'ci_jump migration failed at Check the whole sshd configuration before it is reloaded; old files restored.'
+        outcome: { reloads: 0, marker: true, key_file: changed }
+      # The configuration checks with the previous files back, so the rescue must reload sshd once
+      # more (once after the write, once in the rescue), take the marker away, and put the previous
+      # key file back byte for byte.
+      - name: a read-back that sshd refuses after the write, the rescue reloads sshd and puts the files back
         tasks_from: _write.yml
         destinations: ['{{ scenario_listed }}', '{{ scenario_own }}', '{{ scenario_unlisted }}']
         files:
           - path: '{{ case_ahead }}'
             content: "Match User {{ scenario_jump_user }}\n  AllowTcpForwarding yes\nMatch all\n"
             absent_after: true
-        restore: '{{ case_reload }}'
-        expect: Stop if the files or sshd are not what was wanted
+        keep: [{ path: '{{ case_key_file }}' }]
+        restore: '{{ [["rm", "-f", case_marker]] + case_reload }}'
+        expect: 'ci_jump migration failed at Stop if the files or sshd are not what was wanted; old files restored.'
+        outcome: { reloads: 2, marker: false, key_file: kept }
   tasks:
+    - name: Make sure the record of reloads exists, so the write-step cases can count from it
+      ansible.builtin.copy:
+        content: ''
+        dest: '{{ case_reload_record }}'
+        owner: root
+        group: root
+        mode: '0644'
+        force: false
+      when: not ansible_check_mode
+
     - name: Read the public keys the cases use
       ansible.builtin.slurp:
         src: '{{ scenario_key_dir }}/{{ item }}.pub'
@@ -409,6 +437,7 @@
         migration_block_ahead: true
         migration_arm: false
         migration_inode_kept: true
+        migration_reload_delta: 2
       when: not ansible_check_mode
 
     - name: 2, the second read-back fails, so the old files are put back as they were
@@ -419,6 +448,7 @@
         migration_block_ahead: false
         migration_arm: true
         migration_inode_kept: false
+        migration_reload_delta: 3
       when: not ansible_check_mode
 
     - name: 3, nothing fails, so the old files go and the new ones stay
@@ -429,6 +459,7 @@
         migration_block_ahead: false
         migration_arm: false
         migration_inode_kept: false
+        migration_reload_delta: 2
       when: not ansible_check_mode
 
     # Case 4. The host is as case 3 left it. The marker is what a pull leaves when it dies after a

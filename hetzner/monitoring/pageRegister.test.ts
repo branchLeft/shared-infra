@@ -9,6 +9,7 @@ import {
   NTFY_PAGER_TOKEN_PLACEHOLDER,
   PAGE_REGISTER,
   PAGE_RECEIVER_NAME,
+  findLiveEntriesWithoutPageRule,
   findUnregisteredPageSeverityAlerts,
   pageAlertNames,
   renderPageReceiverBlock,
@@ -18,18 +19,19 @@ import {
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
 
 describe('PAGE_REGISTER', () => {
-  it('has exactly five entries -- four Alertmanager and the drain worker outside it', () => {
-    expect(PAGE_REGISTER).toHaveLength(5);
+  it('has exactly six entries -- five Alertmanager and the drain worker outside it', () => {
+    expect(PAGE_REGISTER).toHaveLength(6);
     expect(PAGE_REGISTER.map((entry) => entry.id)).toEqual([
       'tier2-safety-match',
       'tenant-failed-unsafe',
       'appeal-latency-breach',
       'readers-cannot-read',
       'drain-worker-stopped',
+      'stopped-demo-reaper',
     ]);
   });
 
-  it('routes four entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
+  it('routes five entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
     const byPath = (path: PageRegisterEntry['deliveryPath']) =>
       PAGE_REGISTER.filter((entry) => entry.deliveryPath === path).map((entry) => entry.id);
     expect(byPath('alertmanager')).toEqual([
@@ -37,6 +39,7 @@ describe('PAGE_REGISTER', () => {
       'tenant-failed-unsafe',
       'appeal-latency-breach',
       'readers-cannot-read',
+      'stopped-demo-reaper',
     ]);
     expect(byPath('healthchecks')).toEqual(['drain-worker-stopped']);
   });
@@ -46,9 +49,65 @@ describe('PAGE_REGISTER', () => {
     expect(drainWorker?.alertName).toBeNull();
   });
 
-  it('marks exactly appeal-latency-breach dormant', () => {
+  it('marks exactly appeal-latency-breach and stopped-demo-reaper dormant', () => {
     const dormant = PAGE_REGISTER.filter((entry) => entry.dormant).map((entry) => entry.id);
-    expect(dormant).toEqual(['appeal-latency-breach']);
+    expect(dormant).toEqual(['appeal-latency-breach', 'stopped-demo-reaper']);
+  });
+});
+
+/**
+ * The stopped demo reaper is registered before the reaper exists, so its
+ * entry must be dormant: a live entry would put its alertname in the page
+ * route while no rule can ever raise it. These tests prove a dormant entry
+ * does not page, and that dormancy alone is what keeps it off the route.
+ */
+describe('the stopped-demo-reaper entry', () => {
+  const reaper = PAGE_REGISTER.find((entry) => entry.id === 'stopped-demo-reaper');
+
+  it('is registered through Alertmanager, not tenant-scoped, and dormant', () => {
+    expect(reaper).toBeDefined();
+    expect(reaper?.alertName).toBe('StoppedDemoReaper');
+    expect(reaper?.deliveryPath).toBe('alertmanager');
+    expect(reaper?.tenantScoped).toBe(false);
+    expect(reaper?.dormant).toBe(true);
+  });
+
+  it('is left out of the alertnames the page route matches', () => {
+    expect(pageAlertNames(PAGE_REGISTER)).not.toContain('StoppedDemoReaper');
+  });
+
+  it('does not appear in the rendered page route or the rendered Alertmanager config', () => {
+    expect(renderPageRoute(PAGE_REGISTER)).not.toContain('StoppedDemoReaper');
+    expect(renderAlertmanagerTemplate()).not.toContain('StoppedDemoReaper');
+  });
+
+  it('would page if it were switched on -- dormancy alone is what keeps it off the route', () => {
+    const live = PAGE_REGISTER.map((entry) =>
+      entry.id === 'stopped-demo-reaper' ? { ...entry, dormant: false } : entry
+    );
+    expect(pageAlertNames(live)).toContain('StoppedDemoReaper');
+    expect(renderPageRoute(live)).toContain('StoppedDemoReaper');
+    expect(renderAlertmanagerTemplate(live)).toContain('StoppedDemoReaper');
+  });
+
+  it('refuses a severity: page rule under its alertname while it is dormant', () => {
+    // A rule that raised this page today would reach no phone, so the
+    // register's own check reports it rather than letting it ship.
+    const rules = [
+      'groups:',
+      '  - name: g',
+      '    rules:',
+      '      - alert: StoppedDemoReaper',
+      '        expr: vector(1)',
+      '        labels:',
+      '          severity: page',
+      '',
+    ].join('\n');
+    expect(findUnregisteredPageSeverityAlerts(rules, PAGE_REGISTER)).toEqual(['StoppedDemoReaper']);
+  });
+
+  it('carries no work-item reference in its shipped text', () => {
+    expect(`${reaper?.name} ${reaper?.reason}`).not.toMatch(/#\d|workspace/i);
   });
 });
 
@@ -355,5 +414,108 @@ describe('findUnregisteredPageSeverityAlerts', () => {
     // is a true negative against production, not an assertion that the
     // checker was never run for real.
     expect(findUnregisteredPageSeverityAlerts(renderAlertRules(), PAGE_REGISTER)).toEqual([]);
+  });
+});
+
+/**
+ * The opposite direction to the block above: a live Alertmanager entry whose
+ * alertname no `severity: page` rule raises would register a route for a page
+ * that never fires. Each live entry must carry such a rule in the rendered
+ * rules, or a named exemption saying who raises it instead.
+ */
+describe('findLiveEntriesWithoutPageRule', () => {
+  const rulesRaising = (alertName: string) =>
+    [
+      'groups:',
+      '  - name: g',
+      '    rules:',
+      `      - alert: ${alertName}`,
+      '        expr: vector(1)',
+      '        labels:',
+      '          severity: page',
+      '',
+    ].join('\n');
+  const live = (overrides: Partial<PageRegisterEntry> = {}): PageRegisterEntry => ({
+    id: 'fixture-only',
+    name: 'fixture only',
+    reason: 'exists only to prove the rule check',
+    alertName: 'FixtureOnlyPageAlert',
+    deliveryPath: 'alertmanager',
+    dormant: false,
+    tenantScoped: true,
+    ...overrides,
+  });
+
+  it('refuses a live Alertmanager entry no severity: page rule raises and that names no exemption', () => {
+    expect(findLiveEntriesWithoutPageRule(rulesRaising('SomethingElse'), [live()])).toEqual([
+      'FixtureOnlyPageAlert',
+    ]);
+  });
+
+  it('accepts a live entry whose alertname a severity: page rule raises', () => {
+    expect(findLiveEntriesWithoutPageRule(rulesRaising('FixtureOnlyPageAlert'), [live()])).toEqual(
+      []
+    );
+  });
+
+  it('does not accept a rule at another severity as the page rule', () => {
+    const warning = rulesRaising('FixtureOnlyPageAlert').replace(
+      'severity: page',
+      'severity: warning'
+    );
+    expect(findLiveEntriesWithoutPageRule(warning, [live()])).toEqual(['FixtureOnlyPageAlert']);
+  });
+
+  it('accepts a live entry with a named exemption and no rule', () => {
+    const exempt = live({ ruleExemption: 'Raised by an external sender, not a Prometheus rule.' });
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', [exempt])).toEqual([]);
+  });
+
+  it('does not accept a blank exemption as a reason', () => {
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', [live({ ruleExemption: '  ' })])).toEqual(
+      ['FixtureOnlyPageAlert']
+    );
+  });
+
+  it('leaves a dormant entry and a Healthchecks-delivered entry alone', () => {
+    const register = [
+      live({ id: 'a', alertName: 'DormantOne', dormant: true }),
+      live({ id: 'b', alertName: null, deliveryPath: 'healthchecks' }),
+    ];
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', register)).toEqual([]);
+  });
+
+  it('reports every offender, in register order', () => {
+    const register = [
+      live({ id: 'a', alertName: 'First' }),
+      live({ id: 'b', alertName: 'Second', ruleExemption: 'Raised elsewhere.' }),
+      live({ id: 'c', alertName: 'Third' }),
+    ];
+    expect(findLiveEntriesWithoutPageRule('groups: []\n', register)).toEqual(['First', 'Third']);
+  });
+
+  it('goes red when the dormant reaper entry is flipped live with no rule and no exemption', () => {
+    // The sabotage the register's own text asks for: `dormant: false` in the
+    // same change that adds no rule.
+    const flipped = PAGE_REGISTER.map((entry) =>
+      entry.id === 'stopped-demo-reaper' ? { ...entry, dormant: false } : entry
+    );
+    expect(findLiveEntriesWithoutPageRule(renderAlertRules(), flipped)).toEqual([
+      'StoppedDemoReaper',
+    ]);
+  });
+
+  it('holds for the register as it stands, against the actual rendered alert rules', () => {
+    expect(findLiveEntriesWithoutPageRule(renderAlertRules(), PAGE_REGISTER)).toEqual([]);
+  });
+
+  it('gives each of the three live Alertmanager entries a named exemption today, since no rule raises them', () => {
+    const exempt = PAGE_REGISTER.filter((entry) => entry.ruleExemption !== undefined).map(
+      (entry) => entry.alertName
+    );
+    expect(exempt).toEqual(['TierTwoSafetyMatch', 'TenantFailedUnsafe', 'ReadersCannotRead']);
+    for (const entry of PAGE_REGISTER) {
+      expect(entry.ruleExemption ?? 'none').not.toMatch(/#\d|workspace/i);
+    }
   });
 });

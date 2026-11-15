@@ -1071,6 +1071,60 @@ class LockTests(unittest.TestCase):
             pass
 
 
+class WritePrivateFileTests(unittest.TestCase):
+    """A private file is replaced whole, at mode 0600, even when two writers start together."""
+
+    def setUp(self) -> None:
+        """Make a directory for the file."""
+        self.root = Path(tempfile.mkdtemp(prefix="pt-write-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+        self.target = self.root / "state"
+
+    def test_the_file_is_written_at_mode_0600(self) -> None:
+        trigger.write_private_file(self.target, "one\n")
+        self.assertEqual("one\n", self.target.read_text(encoding="utf-8"))
+        self.assertEqual(0o600, stat.S_IMODE(self.target.stat().st_mode))
+        self.assertEqual([self.target], list(self.root.iterdir()))
+
+    def test_two_writers_that_start_together_both_succeed(self) -> None:
+        # Hold both writers at the fsync, so both have written before either renames.
+        meeting = threading.Barrier(2, timeout=10)
+        real_fsync = os.fsync
+
+        def held_fsync(descriptor: int) -> None:
+            real_fsync(descriptor)
+            meeting.wait()
+
+        failures: list[BaseException] = []
+
+        def write(text: str) -> None:
+            try:
+                trigger.write_private_file(self.target, text)
+            except BaseException as error:  # noqa: BLE001 - the test reports whatever a writer raised
+                failures.append(error)
+
+        with mock.patch.object(os, "fsync", held_fsync):
+            writers = [threading.Thread(target=write, args=(text,)) for text in ("a\n", "b\n")]
+            for writer in writers:
+                writer.start()
+            for writer in writers:
+                writer.join()
+        self.assertEqual([], failures)
+        self.assertIn(self.target.read_text(encoding="utf-8"), {"a\n", "b\n"})
+        self.assertEqual(0o600, stat.S_IMODE(self.target.stat().st_mode))
+        self.assertEqual([self.target], list(self.root.iterdir()))
+
+    def test_a_failed_write_leaves_no_temporary_file_and_keeps_the_old_content(self) -> None:
+        trigger.write_private_file(self.target, "old\n")
+        with (
+            mock.patch.object(os, "fsync", side_effect=OSError(28, "No space left")),
+            self.assertRaises(OSError),
+        ):
+            trigger.write_private_file(self.target, "new\n")
+        self.assertEqual("old\n", self.target.read_text(encoding="utf-8"))
+        self.assertEqual([self.target], list(self.root.iterdir()))
+
+
 class ChangedCountTests(unittest.TestCase):
     """The play recap decides applied against unchanged."""
 

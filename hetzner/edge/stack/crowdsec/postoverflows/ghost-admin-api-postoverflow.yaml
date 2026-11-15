@@ -1,0 +1,15 @@
+# Generated from sites.ts and hetzner/edge/posture.ts.
+# Regenerate with `npm run render` in hetzner/. Hand edits are overwritten.
+name: branchleft/ghost-admin-api-is-not-admin-probing
+description: Ghost admin API answers on our Ghost hostnames are not admin-interface probing
+whitelist:
+  reason: Ghost admin API on a Ghost hostname
+  expression:
+    - >-
+      evt.Overflow.Alert.GetScenario() == 'crowdsecurity/http-admin-interface-probing' &&
+      len(evt.Overflow.Alert.Events) > 0 &&
+      all(evt.Overflow.Alert.Events, {
+        .GetMeta('target_fqdn') in ['blog.branchleft.co.uk'] &&
+        .GetMeta('http_path') startsWith '/ghost/api/admin/' &&
+        not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')
+      })

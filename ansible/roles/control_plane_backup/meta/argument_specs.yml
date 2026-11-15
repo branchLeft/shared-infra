@@ -1,0 +1,30 @@
+---
+argument_specs:
+  main:
+    short_description: Install the control plane's database backup program and hold its nightly timer to a variable
+    description: >-
+      Installs the program that backs up the portal and sign-in databases on the
+      control host, proves the copy by restoring it into a throwaway PostgreSQL,
+      seals it with age and puts the ciphertext to backup copy 1. The role makes
+      the program's directory and the on-host backup directory, installs the
+      program after its own check, installs the service and the timer, and keeps
+      the timer off unless control_plane_backup_timer_enabled is true. It takes
+      no private value: the program reads the estate recipient and copy 1's put
+      key from the state-copy environment file at run time. It never creates a
+      key, a secret or a bucket, and never starts a run.
+    author: branchLeft
+    options:
+      control_plane_backup_timer_enabled:
+        type: bool
+        default: false
+        description: >-
+          True enables and starts the nightly timer, and is refused while the
+          state-copy environment file is not on the host. False leaves a timer as
+          it is on the host unless control_plane_backup_timer_may_disable is true.
+          True is a production apply.
+      control_plane_backup_timer_may_disable:
+        type: bool
+        default: false
+        description: >-
+          True, together with control_plane_backup_timer_enabled false, stops and
+          disables the timer. With false a timer that is on is left alone.

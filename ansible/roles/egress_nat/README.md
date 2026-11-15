@@ -15,7 +15,7 @@ order the standard sets for a role README (ANS-14).
 It does what two shell scripts did, in the same order:
 
 1. `hetzner/provision/05-configure-host-egress.sh`: installs
-   `branchleft_host_egress.sh` as `/usr/local/sbin/branchleft-host-egress` and
+   `files/branchleft_host_egress.py` as `/usr/local/sbin/branchleft-host-egress` and
    `branchleft-host-egress.service` as its unit, makes systemd read the unit, enables
    it and runs it. This is for every host.
 2. `hetzner/provision/nat-gateway.sh`: the same for the NAT gateway reconciler,
@@ -27,9 +27,10 @@ It does what two shell scripts did, in the same order:
    the role applies would replace the Python program with the bash one, so it must not be run there.
 
 The two reconcilers themselves are programs that stay as code. The role installs them and
-rewrites none. The host egress reconciler, `branchleft_host_egress.sh`, is in
-`hetzner/provision`; the NAT gateway reconciler, `branchleft_nat.py`, and its unit are in
-this role's `files/`. The copy tasks read each one in place (below).
+rewrites none. The host egress reconciler, `branchleft_host_egress.py`, its unit and its timer
+are in this role's `files/` and `hetzner/provision` respectively; the NAT gateway reconciler,
+`branchleft_nat.py`, and its unit are in this role's `files/`. The copy tasks read each one in
+place (below).
 
 It does not:
 
@@ -93,6 +94,13 @@ The role leaves facts after a failed guard, which a caller or a test reads:
   On the gateway host, the reconciler also needs the host to hold a public address on
   the interface of its default route and an address in the estate's private subnet; it
   exits with a message when it does not.
+  An `ip -o addr` line it cannot parse is named on stderr and ignored: the decision rests
+  on the well-formed lines alone, so such a line is never read as a public address or a
+  subnet member. It is not a refusal, because the rules live only in the kernel and the
+  unit runs once per boot (a oneshot with no `Restart=`): refusing over a garbled line
+  beside a well-formed public uplink would leave the estate's only gateway without NAT
+  until the unit was run by hand. When the well-formed lines do not qualify the host,
+  the refusals above stop it, with nothing inserted, checked or removed.
 
 ## What it changes on a host
 
@@ -103,6 +111,11 @@ as `install -m 0755 -o root -g root` and `-m 0644` made them.
   `/etc/systemd/system/branchleft-host-egress.service`, enabled, and run at every boot.
 - When `egress_nat_gateway_enabled` is true: `/usr/local/sbin/branchleft-nat` and
   `/etc/systemd/system/branchleft-nat.service`, enabled, and run at every boot.
+- The NAT unit retries a refused run: `Restart=on-failure` after 30 seconds, and a start limit of five
+  starts in 900 seconds (one try, four retries, about two minutes). Then the unit stays `failed` until
+  `systemctl reset-failed` or the window passes, and a restart inside the window is refused with
+  `start-limit-hit`. A rerun is safe because the program checks each rule before it inserts it.
+  Needs systemd 244 or later. The host egress unit has its own retry.
 - One `daemon-reload` of the systemd manager, only when a unit file changed.
 - One restart of a unit, only when its reconciler or its unit file changed.
 - While a replaced file is being swapped, a kept copy of it beside it, ending in `~`.
@@ -238,14 +251,14 @@ Delivery to a host is ANS-17: only the gated workflow, run against `main` after 
 approval of its protected environment. A plan job shows the host's diff in check mode
 first; after the approval the host pulls that exact commit of `main` and applies it, and
 a second run must report zero changes. Nothing is applied from a laptop. The role is
-wired into three playbooks, each after `host_baseline` (Docker and `iptables` come from
+wired into four playbooks, each after `host_baseline` (Docker and `iptables` come from
 there): `ansible/playbooks/edge1.yml` (before `ci_login`), `ansible/playbooks/edget.yml`
-(before `ci_jump`) and `ansible/playbooks/dbt1.yml` (before `deploy_verifier`), and no
-other.
+(before `ci_jump`), `ansible/playbooks/dbt1.yml` and `ansible/playbooks/appt1.yml` (each before
+`deploy_verifier`), and no other.
 edge1 and edget are the two gateways. Their switch `egress_nat_gateway_enabled` is set in
 their play vars, not in an inventory (the inventory trees load no group variables), and the
 enrolment checker pins it to exactly those two hosts in `HOST_PLAY_VARS` (R2), so no other
-host can become a second gateway. dbt1 applies the role bare with the switch unset, which
+host can become a second gateway. dbt1 and appt1 apply the role bare with the switch unset, which
 installs the host egress half only: the reconciler and unit that give a host with no public
 address its default route and resolver, and nothing that forwards traffic.
 `ansible/checks/test_egress_nat_single_gateway.py` holds all of that. The provisioning
@@ -254,8 +267,9 @@ for a host that no playbook applies this role to yet.
 
 ## How to change it safely
 
-1. To change what a reconciler does, change `hetzner/provision/branchleft_host_egress.sh`
-   or `files/branchleft_nat.py`; the role delivers them as they are, and the NAT program's
+1. To change what a reconciler does, change `files/branchleft_host_egress.py` or
+   `files/branchleft_nat.py`; the role delivers them as they are. The host egress program's
+   tests are in `tests/unit/test_branchleft_host_egress.py`, and the NAT program's
    tests are in `hetzner/provision/test_branchleft_nat.py`. To change a unit, change the
    `.service` file there; for the NAT unit, change both copies so that they stay the same bytes. The role's unit
    test fails if a unit stops running the reconciler at the path the role installs it to.

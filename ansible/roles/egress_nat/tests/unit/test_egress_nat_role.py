@@ -16,15 +16,14 @@ ROLE = Path(__file__).resolve().parents[2]
 REPO = ROLE.parents[2]
 PROVISION = REPO / "hetzner" / "provision"
 
-# The files the role delivers. The host egress pair lives in hetzner/provision; the NAT program and
-# its unit live in the role's files/. The NAT unit's copy in hetzner/provision is read by the
-# NAT hand installer until that installer is removed, and must match the role's copy.
+# The files the role delivers. The host egress unit and timer live in hetzner/provision; both
+# reconcilers and the NAT unit live in the role's files/. The NAT unit's copy in hetzner/provision
+# is read by the NAT hand installer until that installer is removed, and must match the role's copy.
 PROVISION_FILES = (
-    "branchleft_host_egress.sh",
     "branchleft-host-egress.service",
     "branchleft-host-egress.timer",
 )
-ROLE_FILES = ("branchleft_nat.py", "branchleft-nat.service")
+ROLE_FILES = ("branchleft_host_egress.py", "branchleft_nat.py", "branchleft-nat.service")
 ROLE_FILES_DIR = ROLE / "files"
 
 SHELL_MODULES = ("ansible.builtin.shell", "ansible.builtin.raw", "ansible.builtin.script")
@@ -101,6 +100,38 @@ def position(tasks: list[dict[str, object]], start: str) -> int:
     return tasks.index(named(tasks, start))
 
 
+def unit_values(text: str) -> dict[str, dict[str, str]]:
+    """Each section of a unit file, with the last value assigned to each key.
+
+    systemd takes the last assignment of a key, so a later line outranks an earlier one.
+    """
+    sections: dict[str, dict[str, str]] = {}
+    current = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1]
+            sections.setdefault(current, {})
+        elif "=" in line:
+            key, value = line.split("=", 1)
+            sections.setdefault(current, {})[key.strip()] = value.strip()
+    return sections
+
+
+def seconds(value: str) -> int:
+    """A systemd time span written as whole seconds, with or without an `s`.
+
+    Anything else (`0`, `infinity`, `5min`) is refused, so a value the tests do not model
+    fails them instead of passing by accident.
+    """
+    digits = value[:-1] if value.endswith("s") else value
+    if not digits.isdigit():
+        raise AssertionError(f"not a whole number of seconds: {value!r}")
+    return int(digits)
+
+
 class SourceTests(unittest.TestCase):
     """Every file the role delivers exists where the vars say, and the vars name only those."""
 
@@ -119,15 +150,19 @@ class SourceTests(unittest.TestCase):
 
     def test_vars_name_only_files_the_role_holds(self) -> None:
         constants = as_dict(load("vars/main.yml"))
+        known = PROVISION_FILES + ROLE_FILES
         expected = {
-            "egress_nat_host_egress": (PROVISION, PROVISION_FILES),
-            "egress_nat_nat_gateway": (ROLE_FILES_DIR, ROLE_FILES),
+            "egress_nat_host_egress": {"reconciler_src": ROLE_FILES_DIR, "unit_src": PROVISION},
+            "egress_nat_nat_gateway": {
+                "reconciler_src": ROLE_FILES_DIR,
+                "unit_src": ROLE_FILES_DIR,
+            },
         }
-        for key, (directory, names) in expected.items():
+        for key, directories in expected.items():
             item = as_dict(constants[key])
-            for field in ("reconciler_src", "unit_src"):
+            for field, directory in directories.items():
                 with self.subTest(item=key, field=field):
-                    self.assertIn(resolve(item[field]).name, names)
+                    self.assertIn(resolve(item[field]).name, known)
                     self.assertEqual(resolve(item[field]).parent, directory.resolve())
         host_egress = as_dict(constants["egress_nat_host_egress"])
         self.assertEqual(resolve(host_egress["timer_src"]).name, "branchleft-host-egress.timer")
@@ -185,6 +220,53 @@ class UnitContractTests(unittest.TestCase):
             as_dict(constants["egress_nat_nat_gateway"])["reconciler_dest"],
             "/usr/local/sbin/branchleft-nat",
         )
+
+
+class NatUnitRetryTests(unittest.TestCase):
+    """A reconciler that refuses at boot is retried a bounded number of times.
+
+    The unit is a oneshot that runs the reconciler once. Without a restart policy one refused
+    run (Docker slow to start, so a probe the reconciler cannot answer) leaves the gateway with
+    no NAT rules, and every private-only host behind it with no egress, until the next converge.
+    The reconciler checks every rule before it inserts it, so a retry adds nothing twice.
+    """
+
+    def unit(self) -> dict[str, dict[str, str]]:
+        """The NAT unit the role installs, by section."""
+        item = as_dict(as_dict(load("vars/main.yml"))["egress_nat_nat_gateway"])
+        return unit_values(resolve(item["unit_src"]).read_text(encoding="utf-8"))
+
+    def test_a_failed_run_is_retried_on_failure_only(self) -> None:
+        # on-failure is the one policy systemd 244 or later allows on a oneshot that also stops
+        # at a clean exit; always and on-success are refused for Type=oneshot.
+        service = self.unit()["Service"]
+        self.assertEqual(service.get("Type"), "oneshot")
+        self.assertEqual(service.get("Restart"), "on-failure")
+
+    def test_the_pause_between_tries_outlasts_a_slow_docker_start(self) -> None:
+        pause = seconds(self.unit()["Service"].get("RestartSec", ""))
+        self.assertGreaterEqual(pause, 15)
+        self.assertLessEqual(pause, 120)
+
+    def test_the_start_limit_is_finite_and_can_trip(self) -> None:
+        # The limit counts starts in a window. systemd's own default (five starts in ten
+        # seconds) can never trip once the pause is over two seconds, which turns the retry
+        # into one that never ends, so the unit sets both numbers. The window must be longer
+        # than the starts it counts take, pauses included.
+        unit = self.unit()["Unit"]
+        interval = seconds(unit.get("StartLimitIntervalSec", ""))
+        burst = int(unit.get("StartLimitBurst", "0"))
+        pause = seconds(self.unit()["Service"].get("RestartSec", ""))
+        self.assertGreater(interval, 0)
+        self.assertLessEqual(interval, 3600)
+        self.assertGreaterEqual(burst, 3)
+        self.assertLessEqual(burst, 10)
+        self.assertGreater(interval, burst * pause)
+
+    def test_a_tripped_limit_only_fails_the_unit(self) -> None:
+        # StartLimitAction= would reboot or power off the gateway when the limit trips.
+        self.assertNotIn("StartLimitAction", self.unit()["Unit"])
+        self.assertNotIn("StartLimitAction", self.unit()["Service"])
 
 
 class InstallTests(unittest.TestCase):
@@ -286,6 +368,17 @@ class GuardTests(unittest.TestCase):
             with self.subTest(task=start):
                 self.assertIs(copy["remote_src"], True)
                 self.assertIn(f"egress_nat_{dest_key}_copy.backup_file", str(copy["src"]))
+
+    def test_each_put_back_task_runs_only_when_its_kept_copy_exists(self) -> None:
+        _, _, rescue = reconciler_tasks()
+        tasks = [as_dict(task) for task in rescue]
+        for start, kept_copy in (
+            ("Put the previous reconciler back", "egress_nat_reconciler_copy.backup_file"),
+            ("Put the previous unit back", "egress_nat_unit_copy.backup_file"),
+            ("Put the previous timer back", "egress_nat_timer_copy.backup_file"),
+        ):
+            with self.subTest(task=start):
+                self.assertIn(kept_copy, str(named(tasks, start).get("when")))
 
     def test_the_rescue_removes_what_a_first_install_wrote(self) -> None:
         _, _, rescue = reconciler_tasks()

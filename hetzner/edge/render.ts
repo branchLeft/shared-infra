@@ -9,6 +9,8 @@ import {
   RATE_LIMIT_EVENTS,
   RATE_LIMIT_WINDOW_SECONDS,
   TLS_PROTOCOLS,
+  WEBHOOK_RATE_LIMIT_EVENTS,
+  WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
   type EdgePosture,
 } from './posture';
 
@@ -54,6 +56,42 @@ const GHOST_SETUP_PATHS = [
 const GHOST_SETUP_METHODS = ['POST', 'PUT'];
 
 const GHOST_SETUP_REFUSAL_STATUS = 403;
+
+/**
+ * Ghost serves what a tenant uploads from the tenant's own origin, under these
+ * three prefixes, so an uploaded `.js` satisfies `script-src 'self'` and an
+ * uploaded `.html` or `.svg` is a document that runs script. The edge refuses
+ * the request for any file of an active type below them. Why, and why a
+ * refusal and not a download: `render.md`.
+ */
+const UPLOAD_PATH_PREFIXES = ['/content/files/', '/content/images/', '/content/media/'];
+const ACTIVE_CONTENT_EXTENSIONS = [
+  'js',
+  'mjs',
+  'cjs',
+  'html',
+  'htm',
+  'shtml',
+  'xhtml',
+  'xht',
+  'xml',
+  'xsl',
+  'xslt',
+  'css',
+  'svg',
+  'svgz',
+  'kml',
+  'gpx',
+];
+
+/**
+ * Over the path as received: any depth below a prefix, any case, any run of
+ * slashes. The glob matchers cover what Caddy cleans (dot segments, escapes)
+ * that this one does not.
+ */
+const UPLOAD_ACTIVE_PATH_REGEXP = `(?i)^/+content/+(?:files|images|media)/.*\\.(?:${ACTIVE_CONTENT_EXTENSIONS.join('|')})/*$`;
+
+const UPLOAD_REFUSAL_STATUS = 403;
 
 // Why: zone name re-declared per-site for shared counter via mholt/caddy-ratelimit's
 // LoadOrStore. See render.md §"MEMBERS_MAGIC_LINK_ZONE".
@@ -136,6 +174,85 @@ const APPSEC_CONFIG_INBAND = 'crowdsecurity/appsec-default';
 const APPSEC_CONFIG_OUT_OF_BAND = 'crowdsecurity/crs';
 
 /**
+ * Our own AppSec configuration: hooks only, no rules. It narrows two Core Rule
+ * Set rules on one Ghost admin request shape and nothing else. Named first in
+ * the acquisition, because CrowdSec merges the named configurations in order
+ * and the last one's options (`default_remediation`) win; the hub's stay last.
+ * Why, and what it narrows: `render.md`, "Ghost admin preview exclusion".
+ */
+const APPSEC_CONFIG_GHOST_ADMIN = 'branchleft/ghost-admin-previews';
+
+/**
+ * The Core Rule Set rules Ghost admin's design and announcement-bar previews
+ * trip, found by replaying the request in CI (`test_crowdsec_replay.py`):
+ * 920420 (request content type not allowed: `text/html`) and 920180 (a POST
+ * with no Content-Length, which is how the bouncer forwards a bodiless POST).
+ */
+const GHOST_PREVIEW_CRS_RULE_IDS = [920420, 920180] as const;
+
+/** Ghost's admin API prefix, as Caddy's access log writes the request URI. */
+const GHOST_ADMIN_API_PREFIX = '/ghost/api/admin/';
+
+/**
+ * Our own scenario that bans an address for repeated failed Ghost admin
+ * sign-ins and admin API key failures. Its name is deliberately not
+ * `ADMIN_PROBING_SCENARIO`, so the post-overflow above never drops it. Why, and
+ * what each number is: `render.md`, "Ghost admin brute force".
+ */
+const GHOST_BRUTE_FORCE_SCENARIO = 'branchleft/ghost-admin-login-bruteforce';
+
+/**
+ * The tenth failure inside the bucket bans (capacity 9), and one failure drains
+ * every 30 seconds. Ghost's own limiter allows five sign-in attempts per address
+ * and then answers 429, so a person who mistypes does not reach ten; a burst does.
+ */
+const GHOST_BRUTE_FORCE_CAPACITY = 9;
+const GHOST_BRUTE_FORCE_LEAKSPEED = '30s';
+
+/**
+ * The statuses Ghost answers a failed sign-in (`POST /ghost/api/admin/session/`)
+ * with: 422 a wrong password, 404 an unknown email address, 401 no credentials
+ * or a locked account, 429 its own limiter. Not 403: a right password from a new
+ * device is answered 403 (2FA_NEW_DEVICE_DETECTED) and is not a failure.
+ */
+const GHOST_FAILED_SIGNIN_STATUSES = [401, 404, 422, 429] as const;
+
+/** The hub scenario that reads a 403 or 404 on any path containing `/admin` as a probe. */
+const ADMIN_PROBING_SCENARIO = 'crowdsecurity/http-admin-interface-probing';
+
+/**
+ * The Caddy variable a verified session sets, and the top-level access-log
+ * field it is written to. Only the verification call's 2xx JSON answer sets it
+ * to `1`. Why it cannot be forged from a request: `render.md`, "Verified
+ * sessions".
+ */
+export const TRUSTED_SESSION_VAR = 'edge_trusted';
+
+/** Ghost's staff session cookie. Scoped by Ghost to `/ghost`. */
+const GHOST_STAFF_SESSION_COOKIE = 'ghost-admin-api-session';
+
+/**
+ * Where a Ghost staff session is checked: Ghost's own "who am I" endpoint,
+ * which answers 2xx JSON only for a signed-in, origin-matching, verified staff
+ * session. The trailing `?` empties the query, so nothing the client sent
+ * reaches Ghost's handler but the headers.
+ */
+const GHOST_STAFF_VERIFY_URI = '/ghost/api/admin/users/me/?';
+
+/** The paths a Ghost staff session is checked on: where its cookie is sent. */
+const GHOST_STAFF_PATHS = ['/ghost/*'];
+
+/**
+ * Bounds of the verification call. Generous, so a slow Ghost is not cut off:
+ * a timeout gives no trust and the request fails as the origin itself would.
+ */
+const TRUSTED_SESSION_DIAL_TIMEOUT = '3s';
+const TRUSTED_SESSION_RESPONSE_TIMEOUT = '10s';
+
+/** Where the whitelist that keeps verified requests out of every bucket sits. */
+const TRUSTED_SESSION_WHITELIST = 'branchleft/edge-trusted-session';
+
+/**
  * A hostname is written straight into a Caddyfile site address, where a space
  * or a brace would start a new address or a new block. The registry is
  * reviewed, so this is not the control that stops a hostile entry — it is what
@@ -156,14 +273,18 @@ const PRIVATE_ADDRESSES: Record<string, string> = { ...HOST_IPS, ...APP_HOST_IPS
 const NOT_AN_UPSTREAM = new Set(['mx1']);
 
 /**
- * `edge1` is this host, so it is refused as an upstream except on the one
- * port a service on this host is deliberately published for: the monitoring
- * stack's pager. Any other port on its own address is the edge's own listener
- * (a proxy loop) or an internal service (Grafana, Prometheus) that must not be
- * exposed by a registry typo. Widening this is a decision, not a convenience.
+ * `edge1` is this host, so it is refused as an upstream except on the ports a
+ * service on this host is deliberately published for: the monitoring stack's
+ * pager (2586) and the Sweego receiver's webhook port (18080, the
+ * `sweego_receiver_port` of `ansible/owner_vars/edge1.yml`). The receiver's
+ * drain port (18081) is never listed: it is reachable from ops1 alone, and an
+ * edge upstream on it would put it on a public route. Any other port on its own
+ * address is the edge's own listener (a proxy loop) or an internal service
+ * (Grafana, Prometheus) that must not be exposed by a registry typo. Widening
+ * this is a decision, not a convenience.
  */
 const EDGE_HOST = 'edge1';
-export const EDGE_HOST_ALLOWED_PORTS: ReadonlySet<number> = new Set([2586]);
+export const EDGE_HOST_ALLOWED_PORTS: ReadonlySet<number> = new Set([2586, 18080]);
 
 export function resolvePrivateAddress(host: string, port: number): string {
   if (NOT_AN_UPSTREAM.has(host)) {
@@ -375,6 +496,56 @@ function ghostSetupRefusal(): string {
   return `respond @ghost_setup ${GHOST_SETUP_REFUSAL_STATUS}`;
 }
 
+/**
+ * The refusal of an uploaded file a browser would run, as lines for a Ghost
+ * site's `route`. Two overlapping matchers, each followed by a 403: Caddy's
+ * cleaning, case-insensitive `path` (a nested `route` makes the prefix and the
+ * extension an AND, since two `path` lines in one matcher are an OR), and a
+ * `path_regexp` over the path as received. Every method is refused. Placed
+ * after the protection chain, so a client probing for an upload is throttled
+ * and CrowdSec still sees it. The refusal names active types only; `nosniff`
+ * (below) is what covers every other type Ghost lets a tenant upload.
+ */
+function uploadGuard(): string[] {
+  const prefixes = UPLOAD_PATH_PREFIXES.map((prefix) => `${prefix}*`).join(' ');
+  const extensions = ACTIVE_CONTENT_EXTENSIONS.map((extension) => `*.${extension}`).join(' ');
+  return [
+    '@uploads_by_path {',
+    `\tpath ${prefixes}`,
+    '}',
+    'route @uploads_by_path {',
+    '\t@active_upload_by_path {',
+    `\t\tpath ${extensions}`,
+    '\t}',
+    `\trespond @active_upload_by_path ${UPLOAD_REFUSAL_STATUS}`,
+    '}',
+    '@active_upload_by_pattern {',
+    `\tpath_regexp ${UPLOAD_ACTIVE_PATH_REGEXP}`,
+    '}',
+    `respond @active_upload_by_pattern ${UPLOAD_REFUSAL_STATUS}`,
+  ];
+}
+
+/**
+ * `nosniff` on every response of a Ghost-backed site, deferred (`>`) so it
+ * replaces Ghost's own copy instead of doubling it. The extension refusal
+ * cannot list every type Ghost accepts (`.txt`, `.md`, `.json`, `.pdf`, `.zip`,
+ * `.py` too), and a browser runs a same-origin `<script src>` of any response
+ * not typed image, audio, video or text/csv unless this header is set.
+ */
+function nosniffDirective(): string[] {
+  return ['header >X-Content-Type-Options "nosniff"'];
+}
+
+/**
+ * The same header on an error Caddy writes itself (502, no healthy upstream),
+ * which the route's `header` never reaches. Site level: Caddy refuses a
+ * `handle_errors` inside a `route`.
+ */
+function nosniffErrorBlock(): string[] {
+  return ['handle_errors {', '\theader >X-Content-Type-Options "nosniff"', '}'];
+}
+
 // Why: the token is read only on /ghost/, so anywhere else it is stripped before
 // any other handler. The gate reads the raw request target (Caddy's path matcher
 // decodes and cleans, Express does not). See render.md §"logDirective: break-glass
@@ -410,6 +581,24 @@ function membersMagicLinkRateLimitDirective(): string[] {
   ];
 }
 
+/**
+ * The tight, dedicated throttle of an inbound-webhook site, in a zone no other
+ * block names and keyed on the direct peer like the others. Not keyed on
+ * posture: it guards a route that is public the moment it exists, so no
+ * setting in `posture.ts` can switch it off. See `render.md`.
+ */
+function webhookRateLimitDirective(zone: string): string[] {
+  return [
+    'rate_limit @webhook {',
+    `\tzone ${zone} {`,
+    '\t\tkey {http.request.remote.host}',
+    `\t\twindow ${WEBHOOK_RATE_LIMIT_WINDOW_SECONDS}s`,
+    `\t\tevents ${WEBHOOK_RATE_LIMIT_EVENTS}`,
+    '\t}',
+    '}',
+  ];
+}
+
 // Why: throttle runs before WAF (unlike Cloud Armor baseline); order protects vCPUs
 // from floods reaching inspection. See render.md §"protectionChain: handler evaluation order".
 function protectionChain(
@@ -418,7 +607,14 @@ function protectionChain(
   options: {
     appsec: 'none' | 'all' | 'except-authoring';
     membersMagicLink?: boolean;
+    webhookZone?: string;
     beforeAppsec?: string[];
+    /**
+     * The session verification (`sessionVerification`), placed after the
+     * throttles and before the bouncer. When present, the bouncer and AppSec
+     * run only on a request it did not verify.
+     */
+    verification?: string[];
   }
 ): string[] {
   const lines: string[] = [];
@@ -433,16 +629,87 @@ function protectionChain(
   if (posture.membersMagicLinkRateLimit === 'enforcing' && options.membersMagicLink) {
     lines.push(...membersMagicLinkRateLimitDirective());
   }
+  if (options.webhookZone !== undefined) {
+    lines.push(...webhookRateLimitDirective(options.webhookZone));
+  }
+  // After the throttles, so they still count every request, verified or not,
+  // and cap how many verification calls one address can cause.
+  const verified = options.verification !== undefined;
+  lines.push(...(options.verification ?? []));
+  const unlessVerified = verified ? ' @edge_untrusted' : '';
   if (posture.crowdsec === 'enforcing') {
-    lines.push('crowdsec');
+    lines.push(`crowdsec${unlessVerified}`);
   }
   lines.push(...(options.beforeAppsec ?? []));
   if (options.appsec === 'all') {
-    lines.push('appsec');
+    lines.push(`appsec${unlessVerified}`);
   } else if (options.appsec === 'except-authoring') {
+    // `@inspected` itself carries the verified-session condition on such a site.
     lines.push('appsec @inspected');
   }
   return lines;
+}
+
+/**
+ * Site-scope matchers for a site whose sessions the edge verifies: which
+ * requests are worth a verification call, and which were not verified. Why:
+ * `render.md`, "Verified sessions".
+ */
+function sessionVerificationMatchers(site: EdgeSite): string[] {
+  if (site.trustedSession !== 'ghost-staff') {
+    return [];
+  }
+  return [
+    '@edge_session_candidate {',
+    `\tpath ${GHOST_STAFF_PATHS.join(' ')}`,
+    `\theader Cookie *${GHOST_STAFF_SESSION_COOKIE}=*`,
+    '}',
+    `@edge_untrusted not vars ${TRUSTED_SESSION_VAR} 1`,
+  ];
+}
+
+/**
+ * The verification call, written out as `reverse_proxy` by hand rather than
+ * `forward_auth`: `forward_auth` sends a non-2xx answer to the browser, which
+ * would break Ghost's own sign-in page for an expired cookie. Here a 2xx JSON
+ * answer sets the variable and any other answer leaves it at 0; either way the
+ * request carries on down the route. `method GET` drops the body from the
+ * verification call only; the request itself keeps it. Why each line:
+ * `render.md`, "Verified sessions".
+ */
+function sessionVerification(site: EdgeSite, upstream: string): string[] | undefined {
+  if (site.trustedSession === undefined) {
+    return undefined;
+  }
+  if (site.backend !== 'ghost') {
+    throw new Error(
+      `site ${site.name} sets trustedSession ${site.trustedSession}, which only a Ghost site (backend 'ghost') can verify`
+    );
+  }
+  return [
+    `vars ${TRUSTED_SESSION_VAR} 0`,
+    `log_append ${TRUSTED_SESSION_VAR} {http.vars.${TRUSTED_SESSION_VAR}}`,
+    `reverse_proxy @edge_session_candidate ${upstream} {`,
+    '\tmethod GET',
+    `\trewrite ${GHOST_STAFF_VERIFY_URI}`,
+    // A Ghost Admin API key authenticates too; only the session cookie may.
+    '\theader_up -Authorization',
+    '\ttransport http {',
+    `\t\tdial_timeout ${TRUSTED_SESSION_DIAL_TIMEOUT}`,
+    `\t\tresponse_header_timeout ${TRUSTED_SESSION_RESPONSE_TIMEOUT}`,
+    '\t}',
+    '\t@edge_session_verified {',
+    '\t\tstatus 2xx',
+    '\t\theader Content-Type application/json*',
+    '\t}',
+    '\thandle_response @edge_session_verified {',
+    `\t\tvars ${TRUSTED_SESSION_VAR} 1`,
+    '\t}',
+    '\thandle_response {',
+    `\t\tvars ${TRUSTED_SESSION_VAR} 0`,
+    '\t}',
+    '}',
+  ];
 }
 
 // Why: powers of two only; MB/GB are powers of ten in Caddy (~4.6% smaller); value
@@ -497,16 +764,88 @@ function discardRouteResponses(): string[] {
   return ['header @discard Allow POST', 'respond @discard_post 204', 'respond @discard 405'];
 }
 
+const WEBHOOK_METHOD = 'POST';
+
+/**
+ * A site that only receives signed callbacks (`EdgeSite.inboundWebhookPath`).
+ * Deliberately not a Ghost block with a path matcher added: it carries none of
+ * the Ghost matchers, so it names no zone, matcher or path of the login-mail
+ * route. Why each line is where it is, and what it lets through: `render.md`.
+ */
+function webhookSiteBlock(
+  site: EdgeSite,
+  path: string,
+  hostnames: string[],
+  posture: EdgePosture
+): Block {
+  const upstream = site.privateUpstream;
+  if (upstream === undefined) {
+    throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
+  }
+  if (site.discardRoute !== undefined || site.injectionWafPreviewOnly) {
+    throw new Error(
+      `site ${site.name} is an inbound webhook site and cannot also declare a discardRoute or injectionWafPreviewOnly`
+    );
+  }
+  if (!/^\/[A-Za-z0-9_\-/]+$/.test(path)) {
+    throw new Error(
+      `inboundWebhookPath ${path} must be a plain literal path (letters, digits, _ - /)`
+    );
+  }
+  return {
+    addresses: hostnames,
+    body: [
+      ...logDirective(ACCESS_LOG),
+      ...tlsDirective(),
+      '@webhook {',
+      `\tmethod ${WEBHOOK_METHOD}`,
+      `\tpath ${path}`,
+      '}',
+      '@webhook_wrong_method {',
+      `\tnot method ${WEBHOOK_METHOD}`,
+      `\tpath ${path}`,
+      '}',
+      'route {',
+      ...hstsDirective().map((line) => `\t${line}`),
+      ...requestBodyDirective(site).map((line) => `\t${line}`),
+      ...protectionChain(posture, `${site.name}_per_ip`, {
+        appsec: 'all',
+        webhookZone: `${site.name}_inbound_per_ip`,
+      }).map((line) => `\t${line}`),
+      `\theader @webhook_wrong_method Allow ${WEBHOOK_METHOD}`,
+      '\trespond @webhook_wrong_method 405',
+      `\treverse_proxy @webhook ${resolvePrivateAddress(upstream.host, upstream.port)}`,
+      // Last, matcher-less: whatever the lines above did not answer or proxy is
+      // refused here, so a missed case fails closed rather than reaching upstream.
+      '\trespond 404',
+      '}',
+    ],
+  };
+}
+
 function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): Block {
   const upstream = site.privateUpstream;
   if (upstream === undefined) {
     throw new Error(`site ${site.name} has no privateUpstream and must not be rendered`);
   }
+  if (site.inboundWebhookPath !== undefined) {
+    return webhookSiteBlock(site, site.inboundWebhookPath, hostnames, posture);
+  }
 
+  const address = resolvePrivateAddress(upstream.host, upstream.port);
+  const verification = sessionVerification(site, address);
   const body: string[] = [...logDirective(ACCESS_LOG), ...tlsDirective()];
-  if (site.injectionWafPreviewOnly) {
+  if (site.injectionWafPreviewOnly && verification !== undefined) {
+    body.push(
+      '@inspected {',
+      `\tnot path ${AUTHORING_API_PATHS.join(' ')}`,
+      `\tnot vars ${TRUSTED_SESSION_VAR} 1`,
+      '}'
+    );
+  } else if (site.injectionWafPreviewOnly) {
     body.push(`@inspected not path ${AUTHORING_API_PATHS.join(' ')}`);
   }
+  body.push(...sessionVerificationMatchers(site));
   if (site.discardRoute !== undefined) {
     body.push(...discardRouteMatchers(site.discardRoute));
   }
@@ -526,11 +865,13 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
   // posture, so no posture setting may switch it off.
   body.push(...ghostSetupMatcher());
   body.push(...breakGlassStripMatcher());
+  const isGhost = site.backend === 'ghost';
   body.push(
     'route {',
     // Ahead of everything else, including request_body -- see hstsDirective's
     // own comment for why its position is load-bearing rather than tidiness.
     ...hstsDirective().map((line) => `\t${line}`),
+    ...(isGhost ? nosniffDirective().map((line) => `\t${line}`) : []),
     // Before the body cap and the protection chain, so the WAF hop never carries it.
     `\t${breakGlassStrip()}`,
     // Why: does not terminate handler chain; ordering buys tidiness only. AppSec
@@ -540,11 +881,16 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
       appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
       membersMagicLink: true,
       beforeAppsec: site.discardRoute === undefined ? [] : discardRouteResponses(),
+      ...(verification === undefined ? {} : { verification }),
     }).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,
-    `\treverse_proxy ${resolvePrivateAddress(upstream.host, upstream.port)}`,
+    ...(isGhost ? uploadGuard().map((line) => `\t${line}`) : []),
+    `\treverse_proxy ${address}`,
     '}'
   );
+  if (isGhost) {
+    body.push(...nosniffErrorBlock());
+  }
 
   return { addresses: hostnames, body };
 }
@@ -832,8 +1178,8 @@ export function renderCaddyfile(
 export function renderAppsecAcquisition(posture: EdgePosture): string {
   const configs =
     posture.crowdsec !== 'detect-only'
-      ? [APPSEC_CONFIG_INBAND, APPSEC_CONFIG_OUT_OF_BAND]
-      : [APPSEC_CONFIG_OUT_OF_BAND];
+      ? [APPSEC_CONFIG_GHOST_ADMIN, APPSEC_CONFIG_INBAND, APPSEC_CONFIG_OUT_OF_BAND]
+      : [APPSEC_CONFIG_GHOST_ADMIN, APPSEC_CONFIG_OUT_OF_BAND];
 
   return `${[
     ...GENERATED_BANNER,
@@ -858,5 +1204,144 @@ export function renderCaddyLogAcquisition(): string {
     `  - ${ACCESS_LOG}`,
     'labels:',
     '  type: caddy',
+  ].join('\n')}\n`;
+}
+
+/**
+ * The hostnames of every Ghost tenant, for the two CrowdSec files below. Each
+ * is checked against `HOSTNAME`, which admits no quote, so it can be written
+ * into an expression as a quoted literal.
+ */
+function ghostHostnames(entries: EdgeSite[]): string[] {
+  const hostnames = entries
+    .filter((site) => site.backend === 'ghost')
+    .flatMap((site) => site.hostnames);
+  for (const host of hostnames) {
+    if (!HOSTNAME.test(host)) {
+      throw new Error(`Ghost hostname ${host} is not a plain lower-case hostname`);
+    }
+  }
+  return hostnames;
+}
+
+const quotedList = (values: readonly string[]): string =>
+  `[${values.map((value) => `'${value}'`).join(', ')}]`;
+
+/**
+ * The AppSec configuration that lets Ghost admin's previews through the Core
+ * Rule Set without a ban (`APPSEC_CONFIG_GHOST_ADMIN`). Every condition narrows:
+ * out-of-band only, a Ghost hostname, a bodiless POST to the site root with
+ * exactly the preview's content type and the preview header. Any other request,
+ * including the same one with a body, is evaluated by every rule. Why:
+ * `render.md`, "Ghost admin preview exclusion".
+ */
+export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
+  const hosts = ghostHostnames(entries);
+  return `${[
+    ...GENERATED_BANNER,
+    `name: ${APPSEC_CONFIG_GHOST_ADMIN}`,
+    // No `description:`: CrowdSec reads an appsec-config strictly and has no such field.
+    '# Ghost admin design and announcement previews, on our Ghost hostnames only.',
+    'pre_eval:',
+    '  - filter: >-',
+    '      IsOutBand == true &&',
+    `      req.Host in ${quotedList(hosts)} &&`,
+    "      req.Method == 'POST' &&",
+    "      req.URL.Path == '/' &&",
+    '      req.ContentLength == 0 &&',
+    "      req.Header.Get('Content-Type') == 'text/html;charset=utf-8' &&",
+    "      req.Header.Get('X-Ghost-Preview') != ''",
+    '    apply:',
+    ...GHOST_PREVIEW_CRS_RULE_IDS.map((id) => `      - RemoveOutBandRuleByID(${id})`),
+  ].join('\n')}\n`;
+}
+
+/**
+ * The post-overflow whitelist that stops `ADMIN_PROBING_SCENARIO` banning for
+ * Ghost's own admin API on our Ghost hostnames. It drops an overflow of that
+ * one scenario only when every event in it is a request to the admin API
+ * prefix on a Ghost hostname, with no dot segment, encoded or not. Why, and
+ * the limit it carries: `render.md`, "Ghost admin API and admin-interface
+ * probing".
+ */
+export function renderGhostAdminPostoverflow(entries: EdgeSite[]): string {
+  const hosts = ghostHostnames(entries);
+  return `${[
+    ...GENERATED_BANNER,
+    'name: branchleft/ghost-admin-api-is-not-admin-probing',
+    'description: Ghost admin API answers on our Ghost hostnames are not admin-interface probing',
+    'whitelist:',
+    '  reason: Ghost admin API on a Ghost hostname',
+    '  expression:',
+    '    - >-',
+    `      evt.Overflow.Alert.GetScenario() == '${ADMIN_PROBING_SCENARIO}' &&`,
+    '      len(evt.Overflow.Alert.Events) > 0 &&',
+    '      all(evt.Overflow.Alert.Events, {',
+    `        .GetMeta('target_fqdn') in ${quotedList(hosts)} &&`,
+    `        .GetMeta('http_path') startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
+    "        not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')",
+    '      })',
+  ].join('\n')}\n`;
+}
+
+/**
+ * The `s02-enrich` whitelist that keeps a verified request out of every
+ * CrowdSec bucket. It drops a Caddy access-log line whose top-level
+ * `TRUSTED_SESSION_VAR` field is `1`, before any scenario reads it. Only Caddy
+ * writes a top-level field: everything a client sends is escaped into the line
+ * under `request`, where `JsonExtract` on a top-level key never looks. Why:
+ * `render.md`, "Verified sessions".
+ */
+export function renderTrustedSessionWhitelist(): string {
+  return `${[
+    ...GENERATED_BANNER,
+    `name: ${TRUSTED_SESSION_WHITELIST}`,
+    'description: Requests whose signed-in session the edge verified with the site itself',
+    "filter: evt.Line.Labels.type == 'caddy'",
+    'whitelist:',
+    '  reason: a session the edge verified',
+    '  expression:',
+    `    - JsonExtract(evt.Line.Raw, '${TRUSTED_SESSION_VAR}') == '1'`,
+  ].join('\n')}\n`;
+}
+
+/**
+ * The scenario that bans an address after repeated failed Ghost admin sign-ins
+ * or admin API 401s (a bad or unknown Admin API key, a wrong sign-in
+ * verification code) on our Ghost hostnames. Separate from the hub's admin
+ * probing scenario so the post-overflow above cannot drop it. Why, and the
+ * limits it carries: `render.md`, "Ghost admin brute force".
+ */
+export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {
+  const hosts = ghostHostnames(entries);
+  return `${[
+    ...GENERATED_BANNER,
+    'type: leaky',
+    `name: ${GHOST_BRUTE_FORCE_SCENARIO}`,
+    'description: Repeated failed Ghost admin sign-ins or admin API key failures from one address',
+    'filter: >-',
+    "  evt.Meta.service == 'http' &&",
+    "  evt.Meta.log_type == 'http_access-log' &&",
+    `  evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    '  (',
+    "    (evt.Meta.http_verb == 'POST' &&",
+    "     evt.Meta.http_path matches '(?i)^/ghost/api/(?:[^/?]+/)?admin/session/?(?:[?]|$)' &&",
+    `     evt.Meta.http_status in ${quotedList(GHOST_FAILED_SIGNIN_STATUSES.map(String))}) ||`,
+    "    (evt.Meta.http_status == '401' &&",
+    "     evt.Meta.http_path matches '(?i)^/ghost/api/(?:[^/?]+/)?admin/')",
+    '  )',
+    'groupby: evt.Meta.source_ip',
+    `capacity: ${GHOST_BRUTE_FORCE_CAPACITY}`,
+    `leakspeed: ${GHOST_BRUTE_FORCE_LEAKSPEED}`,
+    'blackhole: 1m',
+    'labels:',
+    '  confidence: 3',
+    '  spoofable: 0',
+    '  classification:',
+    '    - attack.T1110',
+    '  behavior: "http:bruteforce"',
+    '  label: "Ghost admin brute force"',
+    '  service: http',
+    '  remediation: true',
   ].join('\n')}\n`;
 }

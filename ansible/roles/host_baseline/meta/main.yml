@@ -7,4 +7,4 @@ galaxy_info:
   namespace: branchleft
   description: Hardened sshd, unattended upgrades, fail2ban and Docker CE for a container host.
   license: PolyForm-Shield-1.0.0
-  min_ansible_version: '2.21.5'
+  min_ansible_version: '2.21.6'

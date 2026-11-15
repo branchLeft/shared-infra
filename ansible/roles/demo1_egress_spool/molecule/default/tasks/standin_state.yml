@@ -12,7 +12,9 @@
 #   bind      the address the endpoint listens on (default 127.0.0.1)
 #   open      whether the endpoint answers the drain path with no token (default false)
 #   images    the images that are on the host, as the role's image check finds them (default:
-#             the golden Compose file's image and the bumped pin the converge step writes)
+#             the golden Compose file's image held by its digest alone, which is how the signed
+#             image push leaves it, and the bumped pin the converge step writes, which has a name)
+#   image_id  the Id docker lists for any image it is asked about (default: the asked digest)
 - name: Write the images the stand-in docker holds
   ansible.builtin.copy:
     # The header line keeps the content from ever rendering empty, which ansible.builtin.copy
@@ -30,7 +32,8 @@
     standin_golden_compose: '{{ playbook_dir }}/../../files/ghost-platform/render-core/test/golden/mail-spool-compose.demo1.yml'
     standin_golden_image: >-
       {{ lookup('ansible.builtin.file', standin_golden_compose) | regex_findall("image: '([^']+)'") | first }}
-    standin_images: '{{ (standin_override | default({})).images | default([standin_golden_image, standin_bumped_pin]) }}'
+    standin_golden_digest: "{{ standin_golden_image | regex_replace('^.*@', '') }}"
+    standin_images: '{{ (standin_override | default({})).images | default([standin_golden_digest, standin_bumped_pin]) }}'
 
 # What `docker image inspect` lists for an image that is on the host. With neither key the
 # stand-in lists one image whose RepoDigests is the asked reference. A case that wants a
@@ -54,6 +57,21 @@
     path: /var/lib/standin-docker/image-digests
     state: absent
   when: standin_override is not defined or standin_override.image_digests is not defined
+
+- name: Write the id the stand-in docker lists for an image
+  ansible.builtin.copy:
+    content: "{{ standin_override.image_id }}\n"
+    dest: /var/lib/standin-docker/image-id
+    owner: root
+    group: root
+    mode: '0644'
+  when: standin_override is defined and standin_override.image_id is defined
+
+- name: Take back the id where the override names none
+  ansible.builtin.file:
+    path: /var/lib/standin-docker/image-id
+    state: absent
+  when: standin_override is not defined or standin_override.image_id is not defined
 
 - name: Write how many images the stand-in docker lists
   ansible.builtin.copy:

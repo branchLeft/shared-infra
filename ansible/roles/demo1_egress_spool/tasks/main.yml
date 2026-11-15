@@ -31,3 +31,9 @@
 
 - name: Read the running spool back
   ansible.builtin.include_tasks: _readback_spool.yml
+
+# Last of all, so that the confirm means the whole apply held: the egress table, the spool and
+# both read-backs. A run that stops anywhere before this leaves the timer to put the last
+# confirmed table back.
+- name: Confirm the egress table
+  ansible.builtin.include_tasks: _revert_confirm.yml

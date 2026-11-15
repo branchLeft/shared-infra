@@ -6,6 +6,27 @@
 # files/ghost-platform, which _vendored.yml has already held to its pinned sha256
 # before anything was written. Nothing here reads from the network.
 
+# The dead-man revert (README, "The revert timer"). Its program and state directory go in
+# first, so that arming the timer is possible before the egress program is run. The program is
+# the role's own file, not a pinned one: it writes no rule of its own choosing, it only puts
+# back the table a confirmed apply left. The state directory holds the last confirmed table, so
+# it is root's alone.
+- name: Install the revert program
+  ansible.builtin.copy:
+    src: '{{ demo1_egress_spool_revert_src }}'
+    dest: '{{ demo1_egress_spool_revert_dest }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Make the revert program's state directory
+  ansible.builtin.file:
+    path: '{{ demo1_egress_spool_revert_state_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
 # Mode 0755 and root ownership are load-bearing: systemd runs this file as root
 # at every boot, so a group- or world-writable copy is a root shell for
 # whoever can write it. The program is on disk before the unit that names it.
@@ -48,6 +69,46 @@
   register: demo1_egress_spool_unit_enable
   when: demo1_egress_spool_unit_now.stat.exists
 
+# The record of an apply that was started and never confirmed. It is there when the last run
+# stopped between loading a table and confirming it, or when the timer reverted the table. In
+# either case the files on disk may be the new ones while the loaded table is not, so the
+# program is run again, however the files compare.
+- name: Read the record of an apply that was not confirmed
+  ansible.builtin.stat:
+    path: '{{ demo1_egress_spool_revert_record }}'
+    follow: false
+  register: demo1_egress_spool_revert_pending
+
+- name: Work out whether this run loads the egress table again
+  ansible.builtin.set_fact:
+    demo1_egress_spool_table_changes: >-
+      {{ demo1_egress_spool_script.changed or demo1_egress_spool_unit_file.changed
+      or demo1_egress_spool_revert_pending.stat.exists }}
+
+# check_mode skips a command, so a plan would show nothing of the timer. This says what the
+# apply will do, so that the plan is not silent about it (ANS-10).
+- name: Say the plan would arm the revert timer
+  ansible.builtin.debug:
+    msg: >-
+      This plan would arm the revert timer for {{ demo1_egress_spool_revert_seconds }}s and then
+      run the egress program again. The timer is only started when a confirmed table exists.
+  when: ansible_check_mode and (demo1_egress_spool_table_changes | bool)
+
+# Before the program runs, never after: a table that locks the host out can only be undone by
+# a timer that was already running. The program records the apply first, then starts the timer
+# only when a confirmed table exists to go back to, and fails when the timer does not start,
+# which stops the role before the table is touched. Not run in check mode, which loads nothing.
+- name: Arm the revert timer before the egress program loads a changed table
+  ansible.builtin.command:
+    argv:
+      - '{{ demo1_egress_spool_revert_dest }}'
+      - arm
+      - --seconds
+      - '{{ demo1_egress_spool_revert_seconds }}'
+  register: demo1_egress_spool_revert_arm
+  changed_when: "'revert: armed:' in demo1_egress_spool_revert_arm.stdout"
+  when: demo1_egress_spool_unit_now.stat.exists and (demo1_egress_spool_table_changes | bool)
+
 # restart, not start. The unit is a RemainAfterExit oneshot, so once it has
 # succeeded systemd counts it as active and a start does nothing, which would
 # leave a freshly installed program unrun until the next boot. Done only when a
@@ -56,7 +117,7 @@
   ansible.builtin.systemd_service:
     name: '{{ demo1_egress_spool_egress_unit_name }}'
     state: restarted
-  when: demo1_egress_spool_unit_now.stat.exists and (demo1_egress_spool_script.changed or demo1_egress_spool_unit_file.changed)
+  when: demo1_egress_spool_unit_now.stat.exists and (demo1_egress_spool_table_changes | bool)
 
 # A unit that failed on an earlier run is not active and nothing above touched
 # it, so this starts it, which runs the program again. On an active unit it
@@ -73,7 +134,7 @@
 - name: Work out whether this run changes the egress policy
   ansible.builtin.set_fact:
     demo1_egress_spool_egress_pending: >-
-      {{ demo1_egress_spool_script.changed or demo1_egress_spool_unit_file.changed
+      {{ demo1_egress_spool_table_changes | bool
       or not demo1_egress_spool_unit_now.stat.exists
       or (demo1_egress_spool_unit_enable.changed | default(false))
       or (demo1_egress_spool_unit_start.changed | default(false)) }}

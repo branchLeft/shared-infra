@@ -22,6 +22,7 @@
       - render_alertmanager_config.md
       - render_alertmanager_config.py
       - snds/collect_snds_metrics.py
+      - snds/collect_snds_metrics.md
   tasks:
     # The role's defaults hold no secret input (README, "Secrets"). A default for
     # one would let a run with no caller value write a fixed value, so the test

@@ -30,3 +30,12 @@
       - demo1_egress_spool_drain_port <= 65535
     quiet: true
     fail_msg: The drain port must be a whole number from 1024 to 65535.
+
+- name: Refuse a revert window that is not a bounded number of seconds
+  ansible.builtin.assert:
+    that:
+      - demo1_egress_spool_revert_seconds is integer
+      - demo1_egress_spool_revert_seconds >= 10
+      - demo1_egress_spool_revert_seconds <= 3600
+    quiet: true
+    fail_msg: The revert window must be a whole number of seconds from 10 to 3600.

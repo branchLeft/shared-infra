@@ -19,6 +19,11 @@ ring_controller_host_parents:
 ring_controller_host_config_dir: /etc/branchleft/ring-controller
 ring_controller_host_env_file: /etc/branchleft/ring-controller/ring-controller.env
 ring_controller_host_state_dir: /var/lib/branchleft/ring-controller
+# Reserved for the controller's own signed, hash-chained promotion record. It is a name and
+# nothing more: no task of this role makes, writes or reads it, and the controller derives it from
+# the state directory, so it is not in the environment file. It sits under the state directory,
+# which is the service account's, mode 0700, and the only path the unit may write.
+ring_controller_host_promotion_record_dir: '{{ ring_controller_host_state_dir }}/promotion-record'
 ring_controller_host_base_dir: /opt/branchleft/ring-controller
 ring_controller_host_releases_dir: /opt/branchleft/ring-controller/releases
 ring_controller_host_current_link: /opt/branchleft/ring-controller/current
@@ -63,4 +68,3 @@ ring_controller_host_unit_path: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bi
 # plain word in the environment file. A URL carries no user name, password, query or fragment.
 ring_controller_host_sha256_pattern: '^[0-9a-f]{64}\Z'
 ring_controller_host_bundle_url_pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/+-]*)?\Z'
-ring_controller_host_ledger_url_pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?(/[A-Za-z0-9._~/+-]*)?\Z'

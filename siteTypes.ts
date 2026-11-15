@@ -47,6 +47,28 @@ export interface EdgeSite {
    */
   injectionWafPreviewOnly?: boolean;
   /**
+   * What the site runs, declared by every entry that has a `privateUpstream`
+   * (a registry test fails for one that does not). `ghost` is a Ghost tenant:
+   * the edge refuses an uploaded script, document or stylesheet under Ghost's
+   * upload paths and sets `nosniff` on every response, because Ghost serves a
+   * tenant's uploads from the tenant's own origin. `other` is anything else and
+   * gets neither. Why, and what it leaves alone: `sites.md` section "What the
+   * site runs".
+   */
+  backend?: 'ghost' | 'other';
+  /**
+   * A signed-in session the edge verifies with the site itself before the
+   * CrowdSec bouncer and AppSec. A request whose session the site confirms is
+   * never refused by an IP ban or an AppSec verdict, and its access-log line is
+   * whitelisted out of every CrowdSec bucket; a request without one, or whose
+   * session the site refuses, is treated as if this field were absent.
+   * `ghost-staff` (a Ghost site only): the staff session cookie on `/ghost/*`,
+   * checked against that site's own Ghost. Ghost members are never trusted.
+   * Why, and what still protects a stolen session: `hetzner/edge/render.md`,
+   * "Verified sessions".
+   */
+  trustedSession?: 'ghost-staff';
+  /**
    * Maximum request body the edge accepts, as a Caddy size string in binary
    * units (`MiB`, never `MB`). Required for every site served. Why and where
    * the value comes from: `sites.md` section "The request body ceiling".
@@ -57,6 +79,14 @@ export interface EdgeSite {
    * empty 204, any other method 405. It runs before AppSec. See `render.md`.
    */
   discardRoute?: string;
+  /**
+   * One literal path of a site that exists only to receive signed callbacks
+   * from an outside sender. Set, the edge proxies `POST` on that path alone,
+   * answers 405 to any other method on it and 404 to every other path, and
+   * throttles it in a zone of its own. Why, and what it lets through:
+   * `hetzner/edge/render.md`, "`siteBlock`: inbound webhook".
+   */
+  inboundWebhookPath?: string;
   /**
    * Where the Hetzner edge proxies this site. Absent means the site has no
    * private-network backend yet: it is skipped entirely by the Caddy renderer,

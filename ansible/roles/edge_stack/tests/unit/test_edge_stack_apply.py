@@ -1,7 +1,7 @@
 """Unit tests for edge_stack_apply: one lock across both phases, the exit-code contract, check mode.
 
 Run from the role's directory with library/ on PYTHONPATH, the way
-``ansible/checks/run_role_unit_tests.sh`` does. The module runs against a temporary tree.
+``ansible/checks/run_role_unit_tests.py`` does. The module runs against a temporary tree.
 ``docker`` and ``systemctl`` are stand-ins on PATH: each logs its call and whether the deploy
 lock was held by another process at that moment, so the lock is observed from outside, by a
 second process, and not read from the module's own state.
@@ -161,8 +161,19 @@ if rest[:3] == ["exec", "-T", "crowdsec"]:
         finish("lapi")
     if tail[:1] == ["sha256sum"]:
         inside = tail[1]
-        if inside == "/etc/crowdsec/config.yaml.local":
-            source = project + "/crowdsec/config.yaml.local"
+        single = {
+            "/etc/crowdsec/config.yaml.local": "config.yaml.local",
+            "/etc/crowdsec/appsec-configs/branchleft/ghost-admin-previews.yaml":
+                "appsec-configs/ghost-admin-previews.yaml",
+            "/etc/crowdsec/postoverflows/s01-whitelist/branchleft/ghost-admin-api-postoverflow.yaml":
+                "postoverflows/ghost-admin-api-postoverflow.yaml",
+            "/etc/crowdsec/parsers/s02-enrich/branchleft/edge-trusted-session.yaml":
+                "parsers/edge-trusted-session.yaml",
+            "/etc/crowdsec/scenarios/branchleft/ghost-admin-login-bruteforce.yaml":
+                "scenarios/ghost-admin-login-bruteforce.yaml",
+        }
+        if inside in single:
+            source = project + "/crowdsec/" + single[inside]
         else:
             source = project + "/crowdsec/acquis.d/" + inside.rsplit("/", 1)[1]
         wrong = inside in CFG.get("inside_wrong", [])
@@ -297,6 +308,14 @@ class Tree:
         (self.project / "caddy" / "Caddyfile").write_bytes(b"old\n")
         (self.project / "compose.yml").write_bytes(b"old\n")
         (self.project / "crowdsec" / "config.yaml.local").write_bytes(CONFIG)
+        for name, text in (
+            ("appsec-configs/ghost-admin-previews.yaml", b"name: a\n"),
+            ("postoverflows/ghost-admin-api-postoverflow.yaml", b"name: b\n"),
+            ("parsers/edge-trusted-session.yaml", b"name: c\n"),
+            ("scenarios/ghost-admin-login-bruteforce.yaml", b"name: d\n"),
+        ):
+            (self.project / "crowdsec" / name).parent.mkdir(exist_ok=True)
+            (self.project / "crowdsec" / name).write_bytes(text)
         (self.project / "crowdsec" / "acquis.d" / "a.yaml").write_bytes(ACQUIS)
         self.image_env.write_text(PIN + "\n")
         self.env_file.write_text("KEY=throwaway\n")
@@ -498,6 +517,12 @@ class LockHeldAcrossBothPhases(TreeCase):
                 "ps",
                 "restart-crowdsec",
                 "lapi",
+                # config.yaml.local, the two Ghost admin files, the verified-session
+                # whitelist, the brute-force scenario, then a.yaml in acquis.d.
+                "sha-crowdsec",
+                "sha-crowdsec",
+                "sha-crowdsec",
+                "sha-crowdsec",
                 "sha-crowdsec",
                 "sha-crowdsec",
                 "ls-crowdsec",

@@ -6,7 +6,7 @@ This document is the design. It changes no trust file, role, check or workflow. 
 
 ## Summary
 
-Seven hosts apply a commit of `main` as root when that commit carries a signature from a key in their trust file (`ansible/trust/HOST.yml`). Every one of the seven lists the same key: GitHub's `web-flow` key, which signs every squash merge, web edit and merge-queue commit GitHub makes.
+Eight hosts apply a commit of `main` as root when that commit carries a signature from a key in their trust file (`ansible/trust/HOST.yml`). Every one of the eight lists the same key: GitHub's `web-flow` key, which signs every squash merge, web edit and merge-queue commit GitHub makes.
 
 That signature proves "GitHub made this commit". It does not prove who asked for it, who reviewed it, or that a person released it. In practice the trust is "whatever reaches `main`", and the protection of `main` is the protection of every host.
 
@@ -39,10 +39,11 @@ The program has three modes: `apply`, `check` and `step` (a routine step of a ro
 | `app1`     | pull                   | Covered by the owner's ruling.                                                                                                |
 | `db1`      | pull                   | Covered by the owner's ruling.                                                                                                |
 | `dbt1`     | pull                   | The tenants project's database host. Not named in the ruling; its file says it follows every other host.                      |
+| `appt1`    | pull                   | The tenants project's app host. Not named in the ruling; its file says it follows every other host.                           |
 | `edget`    | pull                   | The tenants project's base host, reached from edge1 only. Not named in the ruling; its file says it follows every other host. |
 | `demo1`    | push (bundle on stdin) | Has no `main` to compare with, so step 2 does not exist there. Its limit is named in the role README ("Push receiver").       |
 
-The design treats all seven as one estate. The ruling names four. That the other three follow is recommended and needs the owner's confirmation (D3).
+The design treats all eight as one estate. The ruling names four. That the other four follow is recommended and needs the owner's confirmation (D3).
 
 ### The signature key
 

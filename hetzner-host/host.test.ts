@@ -99,6 +99,9 @@ describe('Host', () => {
     expect(ips.map((i) => i.inputs.type).sort()).toEqual(['ipv4', 'ipv6']);
     expect(ips.every((i) => i.inputs.autoDelete === false)).toBe(true);
     expect(ips.every((i) => i.inputs.deleteProtection === true)).toBe(true);
+    // The provider now treats assigneeType as optional, and it is only meaningful with
+    // assigneeId, which this program does not set. Declaring it only produced a warning.
+    expect(ips.every((i) => i.inputs.assigneeType === undefined)).toBe(true);
     expect(await resolve(host.publicIpv4)).toBe('203.0.113.10');
   });
 

@@ -97,8 +97,8 @@ ALLOWLIST: dict[tuple[str, str], tuple[int, str]] = {
         "# `plaintext` keys mean the export was taken with --show-secrets. It is",
     ): (1, "comment describing what a fixture's data represents, not a live command"),
     (
-        "scripts/verify-archive-passphrase.py",
-        "`pulumi stack export --show-secrets` is deliberately *not* used. It is the",
+        "scripts/verify-archive-passphrase.md",
+        "`pulumi stack export --show-secrets` is deliberately _not_ used. It is the",
     ): (1, "docstring prose explaining why the anti-pattern is unsafe"),
     (
         "scripts/verify-archive-passphrase.py",

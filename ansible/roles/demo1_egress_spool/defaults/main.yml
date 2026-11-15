@@ -28,3 +28,10 @@ demo1_egress_spool_files:
 # The pinned Compose file publishes this port; the role refuses a file that
 # publishes any other.
 demo1_egress_spool_drain_port: 8095
+
+# How long a changed egress table may stay unconfirmed, in seconds. When an apply loads a
+# changed table the role arms a timer for this long; the role's last task confirms the apply
+# and stops it, and a timer that runs out puts the last confirmed table back. It has to be
+# longer than the rest of the apply (the spool's start and read-back) and short enough that a
+# lock-out is not left for long. 10 to 3600.
+demo1_egress_spool_revert_seconds: 900

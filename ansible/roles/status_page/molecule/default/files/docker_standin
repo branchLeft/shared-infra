@@ -1,0 +1,63 @@
+#!/usr/bin/python3 -I
+"""TEST STAND-IN, not docker. The test has no container engine (ANS-15 forbids reaching one), so
+prepare.yml installs this as `docker` in the instance. It records each call and answers the few
+the role and the compose module make, in the shapes the module's source parses. It runs no
+containers.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+STATE = "/var/lib/status_page_standin"
+PS_FILE = os.path.join(STATE, "ps.json")
+PADDED_DRY_RUN = " --dry-run "
+
+
+def append_log(name: str, text: str) -> None:
+    """Append one line to a call log, ignoring a failed write as the shell's printf did."""
+    try:
+        with open(os.path.join(STATE, name), "a", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError:
+        pass
+
+
+def main(argv: list[str]) -> int:
+    """Record the call, then answer it by the words it contains."""
+    padded = " " + " ".join(argv) + " "
+    log = "dryrun.log" if PADDED_DRY_RUN in padded else "argv.log"
+    append_log(log, " ".join(argv) + "\n")
+    if " compose version " in padded:
+        print('{"version":"v2.40.3"}')
+    elif " version " in padded:
+        print('{"Client":{"Version":"28.0.0"}}')
+    elif " config " in padded:
+        pass
+    elif " up " in padded:
+        print(
+            '{"id":"Container stand-in-gatus-1","status":"Working","text":"Recreate"}',
+            file=sys.stderr,
+        )
+        print(
+            '{"id":"Container stand-in-gatus-1","status":"Done","text":"Recreated"}',
+            file=sys.stderr,
+        )
+    elif " ps " in padded:
+        try:
+            with open(PS_FILE, "rb") as handle:
+                sys.stdout.buffer.write(handle.read())
+        except OSError as error:
+            print(f"cat: {PS_FILE}: {error.strerror}", file=sys.stderr)
+            return 1
+    elif " images " in padded:
+        print("[]")
+    else:
+        print("stand-in: call not expected", file=sys.stderr)
+        return 64
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

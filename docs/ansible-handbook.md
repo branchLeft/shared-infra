@@ -140,6 +140,7 @@ WHITEBOARD_INTRO_TEXT
 | `breakglass_mint_host`     | [README](../ansible/roles/breakglass_mint_host/README.md)     |
 | `broker_deploy`            | [README](../ansible/roles/broker_deploy/README.md)            |
 | `control_plane`            | [README](../ansible/roles/control_plane/README.md)            |
+| `control_plane_db`         | [README](../ansible/roles/control_plane_db/README.md)         |
 | `db1_backup_timers`        | [README](../ansible/roles/db1_backup_timers/README.md)        |
 | `db1_grants`               | [README](../ansible/roles/db1_grants/README.md)               |
 | `db1_stack`                | [README](../ansible/roles/db1_stack/README.md)                |

@@ -590,8 +590,9 @@ itself is up, with no such delay, so do not apply the same caution there.
 
 Expect `prometheus`, `alertmanager`, `caddy`, `crowdsec`, `website`,
 `cadvisor`, `blackbox_http` (nine targets, one per `sites.ts` hostname),
-`blackbox_mail` (four targets on `mx1.branchleft.co.uk`: 25 and 587 read the
-SMTP banner, 465 and 993 complete a TLS handshake), `stalwart` (Stalwart's own
+`blackbox_mail` (five targets on `mx1.branchleft.co.uk`: 25 and 587 read the
+SMTP banner; 465, 993 and 8443, the mailgun shim's Caddy endpoint, complete a
+TLS handshake), `stalwart` (Stalwart's own
 Prometheus exporter on `mx1`, over HTTPS on 443), the `node` target for
 `edge1`, `db1` and `ops1`, and the `mysqld` target for `db1` all `up`. All of those carry
 `expected_up: 'true'` -- a sustained `down` on any of them pages within 5
@@ -652,14 +653,28 @@ Two alert rules read metrics this stack already scrapes rather than a new
 target: `AlertEmailDeliveryFailing` reads `alertmanager_notifications_failed_total`
 from the `alertmanager` job above -- it fires on a failed email delivery
 attempt, not on the process being unreachable, which is exactly what
-`HostOrServiceDown` cannot see. `RateLimitDecliningRealClients` reads Caddy's
+`HostOrServiceDown` cannot see. `RateLimitDeclinesSustained` reads Caddy's
 own `caddy_rate_limit_declined_requests_total` from the `caddy` job -- see
 `render.ts`'s comment on the rule for why it excludes the keyless
 zone-aggregate series and the Docker bridge range. Only `AlertEmailDeliveryFailing`
 (and `MailHostDown`) route to the `mailhost-deadman` receiver in addition to
-`email`, per the rewritten circularity note above -- `RateLimitDecliningRealClients`
-is an ordinary `warning` routed through `email` alone, unrelated to the mx1
-circularity this PR closes.
+`email`, per the rewritten circularity note above -- `RateLimitDeclinesSustained`
+is an ordinary `warning`, which routes to the on-host mailbox only (see "Alerts
+that stay on mx1" below), unrelated to the mx1 circularity this PR closes.
+
+`RateLimitDeclinesSustained` fires only when one key has kept being declined for
+30 minutes running (`increase(...[10m]) > 0` held `for: 30m`, so a burst has to
+last more than 20 minutes). An internet scanner that trips the throttle is the
+expected case, and CrowdSec bans it within minutes (a 4h ban), after which the
+declines stop and the alert stays silent. The `crowdsec` job on `:6060` exposes
+only aggregate decision counts (`cs_active_decisions` has `reason`, `origin` and
+`action` labels, no address), so a key with an active ban cannot be subtracted
+in PromQL; the persistence window is the stand-in. When it does fire, the key
+declined for half an hour without being banned: on `edge1`, read
+`cscli decisions list` for that address (an owner step) and the access log for
+what it asks for, then ban it by hand or raise the zone's budget. Absence of
+the alert does not mean no declines: a short burst that is banned is meant to
+stay quiet, and the counter itself still records it.
 
 `mysqld` being `up` is necessary and not sufficient -- the exporter answers
 with a full 200 and `mysql_up 0` when it cannot read MySQL, which is the state
@@ -1142,11 +1157,11 @@ change, and `renderAlertmanagerTemplate` renders the page route in
 build if a rule ever carries `severity: page` under an alertname the
 register does not know.
 
-Four entries route through this stack's own Alertmanager, matched on
+Five entries route through this stack's own Alertmanager, matched on
 `severity = "page"` and their `alertname`, and grouped on the `tenant`
 label rather than on `alertname` -- two different entries firing for the
 same tenant collapse into one notification, because it is one incident, not
-two. The fifth -- a stopped drain worker -- pages through its own
+two. The sixth -- a stopped drain worker -- pages through its own
 Healthchecks.io dead-man's switch directly, so it renders no Alertmanager
 route at all; it is listed in the register purely so the register still
 names every path that can reach a phone.
@@ -1187,9 +1202,17 @@ enough: there is deliberately no second route and no failed-delivery alert.
 The phone is Android only, with no relay: `upstream-base-url` stays unset, and
 `pageRegister.test.ts` fails the build if it is set.
 
-An entry marked `dormant` in the register (appeal latency, until a target
-is set) renders no route at all; flip the flag in the same change that sets
-the target.
+An entry marked `dormant` in the register renders no route at all and so
+cannot page; flip the flag in the same change that sets the target. Two are
+dormant today: appeal latency, until a target is set, and the stopped demo
+reaper (`stopped-demo-reaper`, alertname `StoppedDemoReaper`, not
+tenant-scoped), until the reaper that ends a demo at the close of its lease
+exists and its silence threshold is set. The reaper's alert rule arrives with
+the reaper, in the change that flips its flag; a rule carrying
+`severity: page` under that alertname before then fails the build, because a
+dormant entry reaches no phone. Nothing here is applied to the host: this
+section's change is to the committed register, and the rendered Alertmanager
+config is unchanged until the entry is switched on.
 
 ## Responding to the mail-delivery alerts
 
@@ -1204,8 +1227,10 @@ abusive signup flood looks like from the mail host, an hour or more before any
 bounce ratio moves. The edge rate limiter is the control that should have
 stopped it; this alert firing means the control did not. Check Caddy's
 `caddy_rate_limit_declined_requests_total` for the same window --
-`RateLimitDecliningRealClients` reads the same counter -- and confirm the
-traffic is actually transiting the edge before concluding the limiter failed.
+`RateLimitDeclinesSustained` reads the same counter, but only fires after 30
+minutes of continuous declines, so its silence says nothing about a short
+burst -- and confirm the traffic is actually transiting the edge before
+concluding the limiter failed.
 The threshold is a ceiling picked from "this estate has no reason to send at
 this rate", not from observed volume; re-tune it once a fortnight of real data
 exists.
@@ -1260,13 +1285,40 @@ mx1 delivers locally, so they cost no sending reputation. Two kinds carry it:
 
 - **The SNDS rules.** They are expected to fire while mx1's volume is too
   low for Microsoft to report, and unengaged repeats of machine mail to an
-  external provider spend the very reputation they watch.
+  external provider spend the very reputation they watch. The exception is
+  `SNDSAccessLinkExpiringSoon`, which also carries `owner_action` (below) and
+  so reaches the off-host mailbox too.
 - **The two deferral rules above.** The provider deferring mx1 is usually
   the one hosting the off-host mailbox, so the alert would queue behind the
   mail it reports on.
 
+**The `owner_action` label.** An alert whose fix needs the owner's own hands
+carries `owner_action: "true"`: a portal visit, a spend, a dated expiry, or a
+value only the owner can set. The `owner_action` route in
+`alertmanager.yml.tmpl` (lines 42-46) sends such a warning to the off-host `email` receiver as well as to
+`email-on-host`, so the owner reads it off-host. Criticals are not
+duplicated: they already reach the off-host mailbox. Seven alerts carry the
+label, in `hetzner/monitoring/stack/prometheus/alerts.yml` (rendered from
+`hetzner/monitoring/render.ts`):
+
+- `HostMemoryPressure` and `HostDiskSpaceLow`: the scale-out triggers in the
+  capacity doc (provision a host, grow a volume), which the owner funds.
+- `MySQLConnectionsHigh`: the database scale-out trigger, which needs the
+  owner's decision on the next database rung.
+- `TLSCertificateExpiringSoon` and `MailCertificateExpiringSoon`: a certificate
+  renewal has failed and needs fixing by hand before hard expiry.
+- `NtfyPagerDisabled`: the pager's `NTFY_` values are missing from
+  `/etc/branchleft/ntfy-pager.env`, and only the owner sets them.
+- `SNDSAccessLinkExpiringSoon`: Microsoft's 30-day SNDS access link has a
+  dated expiry, renewed in the SNDS portal.
+
+The routing step in `.github/workflows/ci.yml` tests four of the seven
+(`HostMemoryPressure`, `HostDiskSpaceLow`, `MySQLConnectionsHigh` and
+`SNDSAccessLinkExpiringSoon`).
+
 **Every `severity: warning` alert also routes to `email-on-host`.** The
-off-host mailbox receives critical alerts only, with no resolved notices,
+off-host mailbox receives critical alerts, and the warnings that carry
+`owner_action`, with no resolved notices,
 `group_interval: 1h` and `repeat_interval: 24h`, because repeated unread
 machine mail to Gmail is what spent mx1's reputation. Three `inhibit_rules`
 mute an alert whose cause is already firing (`ServiceFlapping` under
@@ -1275,7 +1327,8 @@ three mail-delivery rules under `MailHostDown`). The route tree is proven by
 CI's `Test the Alertmanager routing` step; amtool cannot test inhibition, so
 read it back from `/api/v2/status` on the host after a deploy.
 
-Read these in the on-host mailbox, not the off-host one. CI's
+Read the warnings in the on-host mailbox; the `owner_action` ones are read in
+both. CI's
 `Test the Alertmanager routing` step proves the route tree delivers each to
 exactly the receiver it names; `MailHostDown` keeps its off-host path, since
 it fires precisely when mx1 cannot deliver anything.
@@ -1294,7 +1347,7 @@ that is accepted, delivered, and then marked as junk by its recipient never
 touches any of Stalwart's own delivery counters, which is exactly the shape
 of a magic-link signup flood landing on real, harvested addresses
 (branchLeft/workspace#222). Check the volume alerts
-(`MailDeliveryVolumeSpike`, `RateLimitDecliningRealClients`) for the same
+(`MailDeliveryVolumeSpike`, `RateLimitDeclinesSustained`) for the same
 period first -- a real complaint spike from a flood usually arrives a day
 after the volume spike that caused it, not alongside it.
 
@@ -1397,9 +1450,10 @@ is the gauge that now contradicts the panel within the hour.
 - **It does not run on its own host.** Doc 14 §3.1's `mon1` split is gated on
   TENANT_1, not on this story; everything here is sized on the assumption
   that it shares `edge1`'s 4 GB with the edge stack.
-- **It does not alert on `app1` node metrics.** The host carries
-  `expected_up: "false"` in `render.ts` -- see that file's
-  `MONITORED_NODE_HOSTS` docstring.
+- **It does not alert on a host whose node exporter is not provisioned.** Such
+  a host carries `expected_up: "false"` in `render.ts` -- see that file's
+  `MONITORED_NODE_HOSTS` docstring. None does today: `app1` flipped to `true`
+  with the `node_exporter` role joining its playbook.
 - **It does not send application-level alerts** (contact-form failures,
   per-tenant p95 latency, shim queue drain time). Doc 14 §9.2 and §4 name
   these as later, separately-scoped additions; this story covers the host

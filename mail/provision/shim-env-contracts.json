@@ -21,6 +21,7 @@
         "PORT=8080",
         "SHIM_DB_PATH=/data/shim.db",
         "SHIM_THROTTLE_PATH=/data/throttle.json",
+        "SHIM_DRAIN_OUTCOMES=true",
         "SHIM_DRAIN_TOKEN={secret}"
       ]
     }

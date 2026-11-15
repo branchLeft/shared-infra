@@ -604,6 +604,131 @@ class RefusalTests(HostCase):
         self.assertEqual(stat.S_IMODE(self.directory.stat().st_mode), 0o755)
 
 
+class RecoverTests(HostCase):
+    """A crash between the link and the unlink leaves a key with two names; the next run mends it.
+
+    The mend is allowed only when the extra name is a name in the key's own directory for the very
+    same file, and, when the public file is already there, only when it is the half derived from
+    this key. Anything else stays refused. The sabotage controls, each red when its guard is gone:
+    test_the_two_name_key_of_a_crash_is_mended (the extra-name allowance, set to zero) and
+    test_a_public_file_that_is_not_the_derived_half_stops_the_mend (the comparison, removed).
+    """
+
+    def leave_two_names(self) -> Path:
+        """Make a key and leave it with two names, as a crash between link and unlink does."""
+        self.run_module()
+        temp = self.directory / TEMP_NAME
+        os.link(self.key, temp)
+        self.assertEqual(self.key.stat().st_nlink, 2)
+        return temp
+
+    def crash_after_the_link(self) -> None:
+        """Run a first create that dies after the link and before the temporary name is removed."""
+        real_unlink = os.unlink
+
+        def die_on_the_temp(path: str, *, dir_fd: int | None = None) -> None:
+            if str(path).startswith(scheme.KEY_TEMP_PREFIX):
+                raise KeyboardInterrupt
+            real_unlink(path, dir_fd=dir_fd)
+
+        with mock.patch.object(os, "unlink", die_on_the_temp):
+            with self.assertRaises(KeyboardInterrupt):
+                self.run_module()
+
+    def test_the_two_name_key_of_a_crash_is_mended(self) -> None:
+        self.crash_after_the_link()
+        self.assertEqual(self.key.stat().st_nlink, 2)
+        inode = self.key.stat().st_ino
+        result = self.run_module()
+        self.assertTrue(result.changed)
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertFalse(result.created)
+        self.assertEqual(result.public_key, public_pem_by_library(SEED))
+        self.assertEqual(self.key.stat().st_nlink, 1)
+        self.assertEqual(self.key.stat().st_ino, inode)
+        self.assertEqual(self.key.read_bytes(), pem_of(SEED))
+        self.assertEqual([p.name for p in self.directory.iterdir()], [scheme.KEY_NAME])
+        self.assertFalse(self.run_module().changed)
+
+    def test_the_mend_is_accepted_when_the_public_file_is_the_derived_half(self) -> None:
+        temp = self.leave_two_names()
+        self.public.write_text(public_pem_by_library(SEED), encoding="ascii")
+        result = self.run_module()
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertFalse(temp.exists())
+        self.assertEqual(self.key.stat().st_nlink, 1)
+        self.assertEqual(self.public.read_text(encoding="ascii"), public_pem_by_library(SEED))
+
+    def test_a_public_file_that_is_not_the_derived_half_stops_the_mend(self) -> None:
+        """The comparison control: drop the comparison and this goes red."""
+        temp = self.leave_two_names()
+        self.public.write_text(public_pem_by_library(OTHER_SEED), encoding="ascii")
+        error = self.assert_refused(scheme.E_PUB_MISMATCH, self.public)
+        self.assert_no_seed_in(str(error))
+        self.assertTrue(temp.exists())
+        self.assertEqual(self.key.stat().st_nlink, 2)
+
+    def test_a_public_file_that_is_not_one_plain_file_of_the_exact_text_stops_the_mend(
+        self,
+    ) -> None:
+        self.leave_two_names()
+        good = public_pem_by_library(SEED)
+        elsewhere = self.root / "elsewhere"
+        elsewhere.write_text(good, encoding="ascii")
+        shapes: dict[str, Callable[[], object]] = {
+            "empty": lambda: self.public.write_bytes(b""),
+            "trailing text": lambda: self.public.write_text(good + "x", encoding="ascii"),
+            "no final newline": lambda: self.public.write_text(good[:-1], encoding="ascii"),
+            "too big": lambda: self.public.write_bytes(b"A" * 4096),
+            "a link to the right text": lambda: self.public.symlink_to(elsewhere),
+            "a directory": lambda: self.public.mkdir(),
+        }
+        for name, make in shapes.items():
+            with self.subTest(name):
+                make()
+                self.assert_refused(scheme.E_PUB_MISMATCH, self.public)
+                if self.public.is_dir() and not self.public.is_symlink():
+                    self.public.rmdir()
+                else:
+                    self.public.unlink()
+
+    def test_an_extra_name_for_another_file_is_not_a_mend(self) -> None:
+        # A copy with the same bytes under the temporary name is not the key's other name, so the
+        # key's second link (made elsewhere) stays unexplained and refused.
+        self.run_module()
+        os.link(self.key, self.root / "another-name")
+        self.plant(self.directory / TEMP_NAME, pem_of(SEED))
+        self.assert_refused(scheme.E_KEY_LINKS, self.key)
+
+    def test_a_third_name_is_not_a_mend(self) -> None:
+        temp = self.leave_two_names()
+        os.link(self.key, self.root / "another-name")
+        self.assert_refused(scheme.E_KEY_LINKS, self.key)
+        self.assertTrue(temp.exists())
+
+    def test_a_name_outside_the_directory_alone_is_not_a_mend(self) -> None:
+        self.run_module()
+        os.link(self.key, self.root / "another-name")
+        self.assert_refused(scheme.E_KEY_LINKS, self.key)
+
+    def test_the_mend_is_planned_in_check_mode_and_not_done(self) -> None:
+        temp = self.leave_two_names()
+        before = self.snapshot()
+        result = self.run_module(check_mode=True)
+        self.assertTrue(result.changed)
+        self.assertEqual(result.temp_cleaned, 1)
+        self.assertEqual(result.public_key, public_pem_by_library(SEED))
+        self.assertEqual(self.snapshot(), before)
+        self.assertTrue(temp.exists())
+
+    def test_check_mode_refuses_a_mismatch_as_an_apply_does(self) -> None:
+        self.leave_two_names()
+        self.public.write_text(public_pem_by_library(OTHER_SEED), encoding="ascii")
+        with self.assertRaises(scheme.RefusalError) as caught:
+            self.run_module(check_mode=True)
+        self.assertEqual(str(caught.exception), f"{scheme.E_PUB_MISMATCH}: {self.public}")
+
+
 class CheckModeTests(HostCase):
     """Check mode computes the plan and writes nothing."""
 

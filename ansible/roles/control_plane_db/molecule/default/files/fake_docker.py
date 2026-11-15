@@ -4,7 +4,7 @@
 It records every call as one JSON line, with the state of each file the call mounts
 at the moment of the call, and it answers the way the applications image's programs
 do: the lines the real ones print, read from the files they are told about. The mode
-file picks a behaviour: ok, fail, leak, drift, no-flag, no-network, stale-hba or no-db. It never
+file picks a behaviour: ok, fail, leak, drift, no-flag, no-network, stale-hba, not-reloaded or no-db. It never
 starts a container and never opens a network connection.
 """
 
@@ -167,17 +167,47 @@ def run_program(command: list[str], mounts: dict[str, str], env: dict[str, str])
     return 2
 
 
+def run_server_check(args: list[str]) -> int:
+    """Answer the exec that asks the server what it has loaded: `-i <db> sh -s -- <rules file>`.
+
+    The script arrives on standard input, as it does to the real container, and is read to
+    the end. It must be the role's check, which names the load time it compares. The
+    not-reloaded mode answers as a server that has not reloaded since the file was delivered,
+    which the container's own copy of the file cannot show.
+    """
+    script = sys.stdin.read()
+    if args[1:] != ["sh", "-s", "--", "/etc/postgresql-hba/pg_hba.conf"]:
+        print(f"fake docker: unknown exec {args}", file=sys.stderr)
+        return 2
+    if "pg_conf_load_time" not in script:
+        print("fake docker: the server check was not given on standard input", file=sys.stderr)
+        return 2
+    if mode() == "not-reloaded":
+        print(
+            "server_loaded_hba: the server has not reloaded since the rules file last changed",
+            file=sys.stderr,
+        )
+        return 1
+    print("server_loaded_hba: the server reloaded after the rules file last changed, and the file parses")
+    return 0
+
+
 def run_exec(args: list[str]) -> int:
-    """Answer the one exec the role makes: cat the access rules the running database holds.
+    """Answer the two execs the role makes: cat the access rules the running database holds, and ask it.
 
     The database is stood in for by the file the stack delivered, so the rules it "holds"
     are that file's content exactly, with no line break added. The stale-hba mode serves
     that content without the migrator login's rule, as a container that was started
     before the file was replaced would, and the no-db mode answers as a missing container.
     """
+    asking = args[:1] == ["-i"]
+    if asking:
+        args = args[1:]
     if mode() == "no-db":
         print(f"Error response from daemon: No such container: {args[0]}", file=sys.stderr)
         return 1
+    if asking:
+        return run_server_check(args)
     if args[1:] != ["cat", "/etc/postgresql-hba/pg_hba.conf"]:
         print(f"fake docker: unknown exec {args}", file=sys.stderr)
         return 2

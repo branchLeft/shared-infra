@@ -898,17 +898,25 @@ def ensure_private_dir(path: Path) -> None:
 def write_private_file(path: Path, text: str) -> None:
     """Replace ``path`` with ``text`` atomically, at mode 0600.
 
+    The text goes to a uniquely named file beside ``path`` (made at mode 0600, never
+    following a link), so two writers that start together cannot share a temporary
+    file. Each renames its own, and the last rename wins whole.
+
     Args:
         path: The file, in a private directory.
         text: What to write.
     """
-    pending = path.with_name(path.name + ".new")
-    descriptor = os.open(pending, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    pending.replace(path)
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".new")
+    pending = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        pending.replace(path)
+    except BaseException:
+        pending.unlink(missing_ok=True)
+        raise
 
 
 @contextlib.contextmanager
@@ -1457,9 +1465,16 @@ def describe(verdict: Verdict, mode: str, commit: str, playbook: str, step: str 
     shown only after it has been found on the root-owned allow-list, and then it is
     the allow-list's own text. The ``step`` field is added for ``mode=step`` and for no
     other mode, so the line of an apply and of a check is byte for byte what it was
-    before steps existed, which the workflow that reads it still expects.
+    before steps existed, which the workflow that reads it still expects. A refusal
+    prints ``changed=0`` (it ran no playbook); every other outcome with no recap keeps
+    ``changed=-``. Only the refusal's count differs from the line before this change.
     """
-    changed = "-" if verdict.changed is None else str(verdict.changed)
+    if verdict.changed is None and verdict.exit_code is Exit.REFUSED:
+        # A refusal ran no playbook, so it changed nothing: a digit, so a reader whose pattern
+        # needs a digit (the push judge's) can read the line. Other outcomes keep the dash.
+        changed = "0"
+    else:
+        changed = "-" if verdict.changed is None else str(verdict.changed)
     fields = (
         f"verdict={verdict.name} exit={int(verdict.exit_code)} reason={verdict.reason} "
         f"mode={mode} commit={commit} playbook={playbook} changed={changed}"

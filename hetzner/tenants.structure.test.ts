@@ -24,7 +24,7 @@ describe('tenants program declarations', () => {
     expect(source.match(/networkId: verified\(tenantsNetwork\.id\)/g)).toHaveLength(2);
   });
 
-  it('declares the Hosts, edge-t and db-t1, each with the gate transformation', () => {
+  it('declares the Hosts, edge-t, db-t1 and app-t1, each with the gate transformation', () => {
     expect([...source.matchAll(/new Host\(/g)].length).toBe(EXPECTED_HOST_COUNT);
     expect([...source.matchAll(/transformations: \[gateRegistration\]/g)]).toHaveLength(
       EXPECTED_HOST_COUNT
@@ -43,6 +43,7 @@ interface FixtureOptions {
   hostArgs?: string;
   edgeHostArgs?: string;
   soloHost?: boolean;
+  dropAppHost?: boolean;
   hostFirstArgument?: string;
   hostImport?: string;
   hostPrefix?: string;
@@ -69,6 +70,7 @@ function buildProgram(options: FixtureOptions): string {
     hostArgs = DEFAULT_HOST_ARGS,
     edgeHostArgs = DEFAULT_HOST_ARGS,
     soloHost = false,
+    dropAppHost = false,
     hostFirstArgument = 'args',
     hostImport = HOST_IMPORT,
     hostPrefix = '',
@@ -86,6 +88,7 @@ function buildProgram(options: FixtureOptions): string {
     "export const sub = new hcloud.NetworkSubnet('s', {});",
     `${hostPrefix}export const db = new ${hostConstructor}(${hostFirstArgument}${hostArgs});`,
     soloHost ? '' : `export const edge = new Host(args${edgeHostArgs});`,
+    soloHost || dropAppHost ? '' : `export const app = new Host(args${DEFAULT_HOST_ARGS});`,
     extra,
   ].join('\n');
 }
@@ -196,11 +199,12 @@ const VIOLATION_ROWS: ViolationRow[] = [
     code: 'host-gate',
   },
   {
-    id: 'H6-third-host-gated',
+    id: 'H6-fourth-host-gated',
     extra: 'export const h3 = new Host(args, { transformations: [gateRegistration] });',
     code: 'host-count',
   },
   { id: 'H6b-only-one-host', soloHost: true, code: 'host-count' },
+  { id: 'H6e-app-host-missing', dropAppHost: true, code: 'host-count' },
   {
     id: 'H6c-edge-host-ungated',
     edgeHostArgs: ', { transformations: [] }',
