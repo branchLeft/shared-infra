@@ -81,9 +81,8 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back),
 # db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
 # first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
-# (first), ci_step_login directly after host_baseline (the step account's route), control_plane,
-# then the status page (it binds the private address, so it follows the
-# role that installs the drop for its port), then nextcloud_stack, backup_worker and
+# (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
+# the private address, so it follows the drop's role), nextcloud_stack, backup_worker and
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
 # reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host
