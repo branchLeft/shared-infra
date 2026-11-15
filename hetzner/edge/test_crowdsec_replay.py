@@ -1114,16 +1114,16 @@ LOCKOUT_CASES: tuple[Case, ...] = (
     ),
     # --- The Core Rule Set alone: recorded, never banned, never paged. ---
     Case(
-        "probe: SQL injection on the Nextcloud hostname, Core Rule Set only",
+        "probe: SQL injection in a query string, Core Rule Set only",
         "203.0.113.63",
         banned=False,
         watched=True,
         appsec=tuple(
             AppsecRequest(
                 "GET",
-                NEXTCLOUD_HOST,
-                f"/index.php/apps/files/?dir=1%27%20OR%20%271%27%3D%27{index}",
-                browser_headers(NEXTCLOUD_HOST, "*/*", "empty"),
+                GHOST_HOST,
+                f"/?id=1%27%20OR%20%271%27%3D%27{index}",
+                browser_headers(GHOST_HOST, "*/*", "empty"),
             )
             for index in range(REPEATS)
         ),
@@ -1248,7 +1248,7 @@ class TheLockoutsDoNotRecurAndAttacksStillBan(unittest.TestCase):
         )
 
     def test_the_core_rule_set_alone_is_recorded_and_bans_none(self) -> None:
-        case = case_named("probe: SQL injection on the Nextcloud hostname")
+        case = case_named("probe: SQL injection in a query string")
         explanation = self._explain(case)
         print(explanation)
         self.assertIn(OUT_OF_BAND_SCENARIO, self.stack.alerted(case.ip), explanation)
@@ -1259,7 +1259,7 @@ class TheLockoutsDoNotRecurAndAttacksStillBan(unittest.TestCase):
         # (hetzner/monitoring/render.ts, EdgeBanIssued). The watched case above
         # makes an out-of-band decision in this stack, so the last assertion
         # can fail: with the scenario enforcing, its series is above zero.
-        watched_case = case_named("probe: SQL injection on the Nextcloud hostname")
+        watched_case = case_named("probe: SQL injection in a query string")
         self.assertIn(
             OUT_OF_BAND_SCENARIO, self.stack.alerted(watched_case.ip), self._explain(watched_case)
         )
