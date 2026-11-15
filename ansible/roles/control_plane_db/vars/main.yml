@@ -13,6 +13,11 @@ control_plane_db_step_ids:
 # trailing line break does not pass.
 control_plane_db_step_pattern: '^[a-z][a-z0-9_]{0,31}\Z'
 
+# The registry read key's docker config directory, for the pull and every run of the applications
+# image. A copy of deploy_verifier_registry_docker_dir (a role imports no role):
+# test_registry_key_callers.py holds it.
+control_plane_db_registry_docker_config: /etc/branchleft/registry/docker
+
 # Digest-pinned image reference. A tag is not a pin.
 control_plane_db_image_pattern: '^[^\s@]+@sha256:[0-9a-f]{64}\Z'
 

@@ -184,6 +184,26 @@
   when: backup_restore_release_ready | bool
   notify: Reload systemd after the restore units change
 
+# The drill pulls and runs images from inside the release's program. The unit is the release's
+# pinned file, so the registry read key's directory reaches the program through a drop-in. A
+# directory that is not there is anonymous access.
+- name: Create the directory of the restore-drill unit's drop-ins
+  ansible.builtin.file:
+    path: '{{ backup_restore_drill_dropin_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Point the restore-drill unit at the registry read key's directory
+  ansible.builtin.template:
+    src: restore-drill-registry-key.conf.j2
+    dest: '{{ backup_restore_drill_dropin_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Reload systemd after the restore units change
+
 # The directory the owner places each secret access key in. It is made, closed
 # to everyone but root, before the owner is asked to put anything in it.
 - name: Create the directory for the owner-placed secret files, closed to everyone but root

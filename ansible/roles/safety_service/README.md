@@ -97,6 +97,10 @@ credential directory, all read-only, and the state directory, read-write. The on
 into the container names the configuration file. The Docker socket, the host's other directories
 and the environment file are not mounted.
 
+The unit's own `Environment=DOCKER_CONFIG=/etc/branchleft/registry/docker` points the docker
+client at the registry read key the owner places there; a host without it pulls anonymously.
+`ansible/checks/test_registry_key_callers.py` holds the line to `deploy_verifier`'s constant.
+
 ## How the credential and the key reach the service
 
 The signing key is made on the host by `safety_channel_key`, as root's file. The service runs as

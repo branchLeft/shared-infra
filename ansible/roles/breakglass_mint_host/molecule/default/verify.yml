@@ -24,9 +24,13 @@
       - key_path
       - /etc
       - signing
+    # The one other path under /etc the role holds: the registry read key's directory, for the
+    # image pull. It is not the signing key's, and it is held to the shared constant by
+    # ansible/checks/test_registry_key_callers.py.
+    verify_registry_name: breakglass_mint_host_registry_docker_config
     verify_other_variables: >-
-      {{ (verify_role_vars | dict2items | rejectattr('key', 'equalto', verify_key_path_name) | list)
-      + (verify_defaults | dict2items | rejectattr('key', 'equalto', verify_key_path_name) | list) }}
+      {{ (verify_role_vars | dict2items | rejectattr('key', 'in', [verify_key_path_name, verify_registry_name]) | list)
+      + (verify_defaults | dict2items | rejectattr('key', 'in', [verify_key_path_name, verify_registry_name]) | list) }}
     verify_log: "{{ lookup('ansible.builtin.file', scenario_log_path) }}"
     # The role directory, from the playbook's directory (two levels below the role).
     verify_role_dir: '{{ playbook_dir }}/../..'
@@ -48,6 +52,9 @@
       - ansible.builtin.file
       - ansible.builtin.get_url
       - ansible.builtin.stat
+      # A task keyword the guard does not list with its own: the pull sets DOCKER_CONFIG to the
+      # registry read key's directory. It runs no module, and the shapes below still hold the argv.
+      - environment
     # The exact Docker commands the role may run, one regular expression per word,
     # with the image held by its template's name and not its value. The shared
     # guard holds every command of the role to these shapes.
