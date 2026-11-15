@@ -468,10 +468,6 @@ class RoleAgrees(Lab):
                 "-e",
                 f"broker_deploy_release_dir={directory}",
                 "-e",
-                # The role's defaults name the verify key by role_path; it is carried in the
-                # role itself, not in the copy the tool writes into.
-                f"role_path={ROLE}",
-                "-e",
                 f"ansible_python_interpreter={sys.executable}",
                 str(play),
             ],
