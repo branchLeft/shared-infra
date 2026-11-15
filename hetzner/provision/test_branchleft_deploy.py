@@ -614,10 +614,10 @@ PERCONA_SIGNER = "branchLeft/ghost-platform/.github/workflows/percona-image.yml"
 PERCONA_DIGEST = "20e400e5558480067f8d72610b27064efa97d260d51f9e86af60afb69fd93696"
 PERCONA = f"ghcr.io/branchleft/percona-server@sha256:{PERCONA_DIGEST}"
 
-# sha256 of hetzner/provision/branchleft-verify-image, the host copy of
-# ghost-platform's scripts/verify-image-attestation.sh. Change the copy and this
+# sha256 of the program the deploy_verifier role installs, the Python port of
+# ghost-platform's scripts/verify-image-attestation.sh. Change the program and this
 # constant in the same change, and carry the change to ghost-platform's script.
-VERIFIER_SHA256 = "4739d9e574c5448ce5720e28668c9b03b978f19c2a3a2ef0caec25438ce30fa5"
+VERIFIER_SHA256 = "e4ea42757d48571146645a42523bad2eef4d502dd7c802920a758ba771d8b59a"
 
 # The verifier's whole environment, exactly. Nothing is inherited from the host.
 # No GitHub API credential is in it; the one credential path is DOCKER_CONFIG,
@@ -1043,7 +1043,14 @@ class AttestationTests(unittest.TestCase):
 
     def test_the_vendored_verifier_is_pinned_to_its_digest(self):
         path = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "branchleft-verify-image"
+            os.path.dirname(os.path.abspath(__file__)),
+            os.pardir,
+            os.pardir,
+            "ansible",
+            "roles",
+            "deploy_verifier",
+            "files",
+            "branchleft-verify-image.py",
         )
         with open(path, "rb") as handle:
             self.assertEqual(hashlib.sha256(handle.read()).hexdigest(), VERIFIER_SHA256)
