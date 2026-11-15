@@ -174,7 +174,7 @@ the networks, the patterns). A caller cannot override them.
 ### The pin
 
 The files are copies of the ones in `branchLeft/ghost-platform` at commit
-`19622ee9c88bf918949f675a85897cfb64c65a24`, carried under `files/ghost-platform` at the paths they
+`c23ffbd4609e37a55cb9a49cf907cda3de3c84d2`, carried under `files/ghost-platform` at the paths they
 have there. The Compose file is the committed golden of the renderer in that repository, so the
 image digest, the networks and the one published port are written there and nowhere else here.
 Each file is held to its sha256 on the machine that runs the role before anything is written, so a

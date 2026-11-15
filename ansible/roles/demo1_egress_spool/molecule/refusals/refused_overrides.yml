@@ -58,7 +58,7 @@
             tasks_from: _inputs.yml
           vars:
             demo1_egress_spool_files:
-              - path: demo-host/provision/branchleft_demo_egress.sh
+              - path: demo-host/provision/branchleft_demo_egress.py
                 sha256: '0000000000000000000000000000000000000000000000000000000000000000'
               - path: demo-host/provision/branchleft-demo-egress.service
                 sha256: '0000000000000000000000000000000000000000000000000000000000000000'
@@ -182,8 +182,8 @@
             tasks_from: _vendored.yml
           vars:
             demo1_egress_spool_files: >-
-              {{ (converge_defaults.demo1_egress_spool_files | rejectattr('path', 'equalto', 'demo-host/provision/branchleft_demo_egress.sh') | list)
-              + [{'path': 'demo-host/provision/branchleft_demo_egress.sh',
+              {{ (converge_defaults.demo1_egress_spool_files | rejectattr('path', 'equalto', 'demo-host/provision/branchleft_demo_egress.py') | list)
+              + [{'path': 'demo-host/provision/branchleft_demo_egress.py',
               'sha256': '0000000000000000000000000000000000000000000000000000000000000000'}] }}
 
         - name: Fail if the file was accepted
@@ -193,7 +193,7 @@
         - name: Assert the refusal named the egress program and no other file
           ansible.builtin.assert:
             that:
-              - "'demo-host/provision/branchleft_demo_egress.sh in the role' in (ansible_failed_result | string)"
+              - "'demo-host/provision/branchleft_demo_egress.py in the role' in (ansible_failed_result | string)"
               - "'does not match its pin' in (ansible_failed_result | string)"
               - "'mail-spool-compose.demo1.yml in the role' not in (ansible_failed_result | string)"
             quiet: true
@@ -232,6 +232,6 @@
             that:
               - "'render-core/test/golden/mail-spool-compose.demo1.yml in the role' in (ansible_failed_result | string)"
               - "'does not match its pin' in (ansible_failed_result | string)"
-              - "'branchleft_demo_egress.sh in the role' not in (ansible_failed_result | string)"
+              - "'branchleft_demo_egress.py in the role' not in (ansible_failed_result | string)"
             quiet: true
             fail_msg: The role failed for a reason other than the pin of the Compose file.
