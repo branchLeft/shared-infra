@@ -86,10 +86,9 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # backup_restore (the restore reads the worker's variables, so it follows), then control_plane_db
 # (it asserts the directory control_plane makes), the node exporter, mail_collector_inputs (it only
 # reads), mail_collector, spool_paths (it reads mail_collector's descriptors), ring_controller_host
-# last of all so its failure holds nothing else back, and demo1's broker_deploy (first, because
-# demo1_build reads what it leaves behind), its two build roles and spool_path_account after them.
-# ops1 and db1 also apply deploy_tooling (class internal) straight after deploy_verifier, before
-# the roles that run the deploy wrapper.
+# last of all so its failure holds nothing else back, and demo1's broker_deploy (first: demo1_build
+# reads what it leaves behind), two build roles and spool_path_account. ops1 and db1 also apply
+# deploy_tooling (class internal) straight after deploy_verifier, before the deploy wrapper roles.
 # One test holds the real playbooks to exactly these; the fixtures start from the pull roles alone.
 APPLIED_ON_MAIN = {
     "edge1": [
