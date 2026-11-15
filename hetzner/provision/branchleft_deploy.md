@@ -236,7 +236,8 @@ stack (the register holds `ghcr.io/branchleft/ghost-tenant`,
 database image of `db-t1`, signed by the Percona image workflow). Exempt images skip the verifier; adding
 an entry is a reviewed diff, and the way to remove one is to register the image
 in `ATTESTED_IMAGES`. A new stack or image is refused until one of the two tables
-names it.
+names it. This holds for every image a stack's Compose files name, not only the pin
+(`verify_compose_images`, below).
 
 The register is looked up by registry host and path alone (`attested_name`). A
 tag or a registry port on the reference is a spelling, not another image: the
@@ -250,6 +251,89 @@ and blocking it could leave the host with nothing running.
 The vendored copy is pinned by sha256 in `test_branchleft_deploy.py`. Change
 the copy and that constant in one change, and take the bytes only from
 ghost-platform's script.
+
+## verify_compose_images
+
+The image on the command line is one of the images a stack runs. A Compose file
+can also name sidecars (an exporter, a database next to an app), and before this
+check they deployed unverified: the default deny above covered one reference per
+deploy. `deploy()` now asks Compose for the stack's model after the pin is
+verified and holds every other image to the same rule, before the lock, the pin
+write and any restart.
+
+**Compose reads the files, not this program.** `render_compose` runs, in the
+stack directory and as the unit does (no `-f`, so Compose finds `compose.yml`,
+`compose.override.yml` and a project `.env` itself):
+
+```
+/usr/bin/docker compose --profile '*' config --format json --no-interpolate
+```
+
+and parses the JSON it prints. An earlier version of this check read the YAML
+with a hand-written line reader; review found seven bypasses of it (a hidden
+`include`, a pin counted across files, an indented override, an image mount
+through an anchor), each a shape of YAML that Compose reads one way and a line
+grammar another. YAML is not a language to re-implement, so this check has no
+reader of its own. A pinned PyYAML was rejected too: it is still a second reader
+that is not Compose (it does not follow `include`), it would have to be installed
+for the system `python3` on every host, and a gate that failed to import would
+stop every deploy. CI uses PyYAML only to stand in for the render in unit tests.
+
+`--no-interpolate` leaves `${...}` as written. Nothing is substituted, so no
+value from the stack environment is read, printed or needed, and a variable
+that is unset does not stop the render. `--profile '*'` includes services behind
+a profile. The process gets a fixed environment (`PATH`, `HOME`, `LC_ALL`) and no
+stdin, so a `COMPOSE_FILE` or `COMPOSE_PROFILES` in the caller's environment
+cannot change what is read; a project `.env` in the stack directory still is, as
+it is for the unit. A 60 second timeout bounds it. Its output is parsed in memory
+and never written, logged or put in a message: the model can hold inline values.
+
+What counts as an image: the `image:` of every service in the rendered model.
+Each must be one of:
+
+- the pin, `${IMAGE}` or `${IMAGE:?message}` as `--no-interpolate` leaves it, or
+  the pin's own reference, already verified. At least one service must be the pin;
+- a literal, digest-pinned reference, which goes through `verify_attestation` for
+  this stack: verified if registered, logged as unattested by exemption if
+  `UNATTESTED_STACK_IMAGES` names it for this stack, refused otherwise. A
+  reference named by several services is verified once.
+
+Nothing else. A tag-only or bare name is refused (an attestation is of a digest),
+and so is any other `$`: reproducing Compose's substitution here would be a second,
+drifting reader. Every reference is checked for shape before the first verifier runs.
+
+Fail closed. The walker (`model_images`) refuses what it cannot account for: a
+failed or timed-out Compose, a missing `docker`, output that is not one JSON
+object; a top-level key other than `name`, `services`, `networks`, `volumes`,
+`secrets`, `configs` or `x-*` (so `models` and any key a newer Compose adds refuse
+until a reviewer teaches the walker); a service with `build`, `extends`, `provider`
+or `models`, or with no `image:`; and a mapping with `type: image` anywhere inside
+a service, because a volume of that type runs an image no `image:` key names.
+
+The `${IMAGE}` wiring text check on `compose.yml` itself (`resolves_image_from_env`)
+is unchanged and still runs first.
+
+**Sidecars and the exemption list.** Four third-party sidecars run beside a pin in
+the committed stacks: `prom/mysqld-exporter` (db), `docker.io/crowdsecurity/crowdsec`
+(edge), `docker.io/library/postgres` and `ghcr.io/zitadel/zitadel` (control-plane).
+None is in `ATTESTED_IMAGES` or `UNATTESTED_STACK_IMAGES` today, so this check
+refuses a deploy of those three stacks until each is either named for its stack in
+`UNATTESTED_STACK_IMAGES` or signed and registered. That is the owner's decision
+(`PENDING_SIDECARS` in `test_branchleft_deploy.py` holds the four, and the tests
+prove every committed stack verifies with them added). Do not merge this change
+before that decision is applied to the lists.
+
+**Registry port.** A port is a spelling only on a registry host, a dotted name or
+`localhost`. On a Docker Hub namespace, `prom:5000/mysqld-exporter` is another
+registry named `prom`, so the port stays in the name and matches no table entry.
+
+Not covered: a `COMPOSE_FILE` or `COMPOSE_PROFILES` set in
+`/etc/branchleft/<stack>.env` (a root-owned file nothing here writes); what a
+Compose file's image does once running; and the gap between this read and the
+unit's own. The files are read here, and `docker compose up` reads them again at
+start. They are root-owned, so closing the gap needs a second writer. It could be
+closed by having the unit start from the bytes checked (a private copy passed with
+`-f`), which changes the unit and the sudoers surface and so is not done here.
 
 ### The verifier runs with no credential
 

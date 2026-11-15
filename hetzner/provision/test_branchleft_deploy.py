@@ -11,12 +11,18 @@ import contextlib
 import fcntl
 import hashlib
 import io
+import json
 import os
+import pathlib
+import re
+import shutil
 import stat
 import subprocess
 import tempfile
 import unittest
 from unittest import mock
+
+import yaml
 
 import branchleft_deploy as bd
 
@@ -1445,7 +1451,7 @@ class HealthSignalGapsTests(unittest.TestCase):
         text = (
             "services:\n"
             "  probed:\n"
-            "    image: a\n"
+            f"    image: {VALID_IMAGE}\n"
             "    healthcheck:\n"
             "      test: ['CMD', 'true']\n"
             "  bare:\n"
@@ -1500,7 +1506,7 @@ class DeployHealthSignalTests(unittest.TestCase):
             "edge",
             "services:\n"
             "  probed:\n"
-            "    image: a\n"
+            f"    image: {VALID_IMAGE}\n"
             "    healthcheck:\n"
             "      test: ['CMD', 'true']\n"
             "  bare:\n"
@@ -1572,6 +1578,769 @@ class DeployHealthSignalTests(unittest.TestCase):
             self.deploy("missing", run)
         self.assertIn("no compose file", str(caught.exception))
         self.assertEqual(run.calls, [])
+
+
+# The real renderer, taken before setUpModule replaces it for the deploy() tests.
+REAL_RENDER = bd.render_compose
+
+EDGE_PIN = f"ghcr.io/branchleft/edge-caddy@sha256:{DIGEST}"
+PORTAL = f"ghcr.io/branchleft/portal-apps@sha256:{'e' * 64}"
+PORTAL_SIGNER = "branchLeft/ghost-platform/.github/workflows/portal-apps-image.yml"
+STRAY = f"ghcr.io/branchleft/stray@sha256:{'d' * 64}"
+EVIL = f"evil.example/x@sha256:{'f' * 64}"
+EXPORTER = f"prom/mysqld-exporter:v0.20.0@sha256:{'c' * 64}"
+CROWDSEC = f"docker.io/crowdsecurity/crowdsec:v1.7.8@sha256:{'c' * 64}"
+PROBE = "    healthcheck:\n      test: ['CMD', 'true']\n"
+OVERRIDE = "compose.override.yml"
+
+# The third-party sidecars the committed stacks run beside their pin, by stack. None of
+# them is in ATTESTED_IMAGES or UNATTESTED_STACK_IMAGES yet: whether each is named as an
+# exception, or signed and registered, is the owner's decision. Every test that needs them
+# accounted for adds them by patch (`name_the_pending_sidecars`), so the program is proven
+# correct with them added, and the shipped lists are untouched. When the owner decides,
+# move the entries to the shipped lists and empty this table.
+PENDING_SIDECARS = {
+    "db": frozenset({"prom/mysqld-exporter"}),
+    "edge": frozenset({"docker.io/crowdsecurity/crowdsec"}),
+    "control-plane": frozenset({"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}),
+}
+
+
+def name_the_pending_sidecars(case: unittest.TestCase) -> None:
+    """Add PENDING_SIDECARS to the exemption list for one test; the real table is restored."""
+    merged = {
+        stack: bd.UNATTESTED_STACK_IMAGES.get(stack, frozenset()) | names
+        for stack, names in PENDING_SIDECARS.items()
+    }
+    patcher = mock.patch.dict(bd.UNATTESTED_STACK_IMAGES, merged)
+    patcher.start()
+    case.addCleanup(patcher.stop)
+
+
+def service_block(name, image, extra=""):
+    return f"  {name}:\n    image: {image}\n{extra}{PROBE}"
+
+
+def compose_of(*blocks):
+    return "services:\n" + service_block("app", "${IMAGE}") + "".join(blocks)
+
+
+def yaml_render(directory):
+    """A stand-in for Compose's render, used by every deploy() test in this module.
+
+    PyYAML reads compose.yml and merges compose.override.yml service by service,
+    resolving anchors and merge keys as Compose does. It does not resolve
+    `include`, which is why the hostile shapes are also run through the real
+    `docker compose` in RealComposeTests, where it is available.
+    """
+
+    def load(name):
+        path = os.path.join(directory, name)
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
+
+    model = load("compose.yml") or {}
+    override = load(OVERRIDE)
+    if override:
+        services = model.setdefault("services", {})
+        for name, service in (override.get("services") or {}).items():
+            merged = dict(services.get(name) or {})
+            merged.update(service or {})
+            services[name] = merged
+        for key, value in override.items():
+            if key != "services":
+                model[key] = value
+    return model
+
+
+def setUpModule():
+    """No deploy() test in this module starts `docker`: the renderer is the
+    PyYAML stand-in unless a test passes another."""
+    patcher = mock.patch.object(bd, "render_compose", yaml_render)
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
+def model_of(*services):
+    """A rendered model: the pin service plus `(name, image, extra)` services."""
+    built = {"app": {"image": "${IMAGE}"}}
+    for name, image, extra in services:
+        built[name] = {"image": image, **extra}
+    return {"services": built}
+
+
+class SidecarVerificationTests(unittest.TestCase):
+    """deploy() holds every image the stack's Compose model names to the same
+    rule as the pin, not only the one passed on the command line.
+
+    The attestation step is real here (never patched). Each refusal must leave
+    the pin file absent and run no restart.
+    """
+
+    STACK = "edge"
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.config_dir = os.path.join(self.directory.name, "etc")
+        self.stack_dir = os.path.join(self.directory.name, "opt")
+        os.makedirs(self.config_dir)
+        os.makedirs(os.path.join(self.stack_dir, self.STACK))
+
+    def write(self, text, name="compose.yml", stack=None):
+        directory = os.path.join(self.stack_dir, stack or self.STACK)
+        os.makedirs(directory, exist_ok=True)
+        with open(os.path.join(directory, name), "w", encoding="utf-8") as handle:
+            handle.write(text)
+
+    def deploy(self, image, run, render=None, stack=None):
+        stderr = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(stderr):
+                bd.deploy(
+                    stack or self.STACK,
+                    image,
+                    config_dir=self.config_dir,
+                    stack_dir=self.stack_dir,
+                    run=run,
+                    render=render,
+                )
+        finally:
+            self.log = stderr.getvalue()
+
+    def env_path(self, stack=None):
+        return bd.image_env_path(stack or self.STACK, self.config_dir)
+
+    def assert_refused(self, text, run=None, image=EDGE_PIN, override=None):
+        """Refused with no restart and no pin; returns the message."""
+        self.write(text)
+        override_path = os.path.join(self.stack_dir, self.STACK, OVERRIDE)
+        if os.path.exists(override_path):
+            os.unlink(override_path)
+        if override is not None:
+            self.write(override, OVERRIDE)
+        run = run or FakeRun([0])
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(image, run)
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertNotIn(["systemctl", "restart", f"branchleft-compose@{self.STACK}"], run.calls)
+        return str(raised.exception)
+
+    def test_a_sidecar_on_neither_list_is_refused_before_any_host_change(self):
+        run = FakeRun([0])
+        message = self.assert_refused(compose_of(service_block("side", STRAY)), run)
+        self.assertEqual(run.calls, [])
+        self.assertIn("service 'side'", message)
+        self.assertIn("ghcr.io/branchleft/stray", message)
+        self.assertIn("no reviewed exemption", message)
+
+    def test_the_shipped_list_names_no_pending_sidecar(self):
+        """The owner has not decided yet, so a sidecar the committed stacks run is
+        refused until it is named or registered."""
+        for stack, names in PENDING_SIDECARS.items():
+            for name in names:
+                with self.subTest(stack=stack, name=name):
+                    self.assertNotIn(name, bd.ATTESTED_IMAGES)
+                    self.assertNotIn(name, bd.UNATTESTED_STACK_IMAGES.get(stack, frozenset()))
+
+    def test_a_sidecar_the_stack_exempts_deploys_and_the_log_says_so(self):
+        name_the_pending_sidecars(self)
+        run = FakeRun([0])
+        self.write(compose_of(service_block("side", CROWDSEC)))
+        self.deploy(EDGE_PIN, run)
+        self.assertEqual(run.calls, [["systemctl", "restart", "branchleft-compose@edge"]])
+        self.assertEqual(bd.read_current_image(self.env_path()), EDGE_PIN)
+        self.assertIn(
+            "service 'side' runs docker.io/crowdsecurity/crowdsec, which is unattested by exemption",
+            self.log,
+        )
+
+    def test_one_stacks_exemption_does_not_open_another_stack(self):
+        name_the_pending_sidecars(self)
+        website_pin = f"ghcr.io/branchleft/website@sha256:{DIGEST}"
+        self.write(compose_of(service_block("side", CROWDSEC)), stack="website")
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(website_pin, FakeRun([0]), stack="website")
+        self.assertFalse(os.path.exists(self.env_path("website")))
+        self.assertIn("service 'side'", str(raised.exception))
+        self.assertIn("stack 'website' has no reviewed exemption", str(raised.exception))
+
+    def test_a_registered_sidecar_goes_through_the_verifier(self):
+        run = FakeRun([0, 0, 0])
+        self.write(compose_of(service_block("side", PORTAL)))
+        self.deploy(TENANT, run)
+        self.assertEqual(
+            run.calls,
+            [
+                [bd.VERIFIER, TENANT, bd.ATTESTED_REPO, TENANT_SIGNER, "--bundle-from-oci"],
+                [bd.VERIFIER, PORTAL, bd.ATTESTED_REPO, PORTAL_SIGNER, "--bundle-from-oci"],
+                ["systemctl", "restart", "branchleft-compose@edge"],
+            ],
+        )
+        self.assertEqual(run.kwargs[1]["env"], EXPECTED_VERIFIER_ENV)
+        self.assertIn(f"verified {PORTAL} attested by {PORTAL_SIGNER}", self.log)
+
+    def test_a_registered_sidecar_the_verifier_refuses_stops_the_deploy(self):
+        run = FakeRun([0, 1])
+        message = self.assert_refused(
+            compose_of(service_block("side", PORTAL)), run, image=TENANT
+        )
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER, bd.VERIFIER])
+        self.assertIn("is not attested by", message)
+        self.assertIn("service 'side'", message)
+
+    def test_a_missing_verifier_for_a_sidecar_stops_the_deploy(self):
+        calls = []
+
+        def verifier_gone_after_the_pin(argv, **kwargs):
+            calls.append(argv)
+            if len(calls) == 2:
+                raise FileNotFoundError(argv[0])
+            return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
+
+        self.write(compose_of(service_block("side", PORTAL)))
+        with self.assertRaises(bd.DeployError):
+            self.deploy(TENANT, verifier_gone_after_the_pin)
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual(len(calls), 2)
+
+    def test_a_sidecar_without_a_digest_is_refused(self):
+        for reference in (
+            "docker.io/library/postgres:17-alpine",
+            "prom/mysqld-exporter",
+            f"'prom/mysqld-exporter:v1@sha256:{'c' * 63}'",
+        ):
+            with self.subTest(reference=reference):
+                run = FakeRun([0])
+                message = self.assert_refused(compose_of(service_block("side", reference)), run)
+                self.assertEqual(run.calls, [])
+                self.assertIn("digest-pinned", message)
+                self.assertIn("'side'", message)
+
+    def test_an_interpolated_sidecar_is_refused_not_resolved(self):
+        for reference in (
+            "${SIDECAR_IMAGE}",
+            "${SIDECAR_IMAGE:?set it in /etc/branchleft/edge.env}",
+            "${IMAGE:-prom/mysqld-exporter}",
+            "${IMAGE}-extra",
+            "prom/mysqld-exporter@sha256:${DIGEST}",
+        ):
+            with self.subTest(reference=reference):
+                message = self.assert_refused(compose_of(service_block("side", reference)))
+                self.assertIn("interpolated", message)
+
+    def test_a_digest_shape_error_is_found_before_any_verifier_runs(self):
+        run = FakeRun([0, 0])
+        self.assert_refused(
+            compose_of(service_block("good", PORTAL), service_block("bad", "redis")),
+            run,
+            image=TENANT,
+        )
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER])
+
+    def test_a_sidecar_named_twice_is_verified_once(self):
+        run = FakeRun([0, 0, 0, 0])
+        self.write(compose_of(service_block("one", PORTAL), service_block("two", PORTAL)))
+        self.deploy(TENANT, run)
+        self.assertEqual([call[0] for call in run.calls], [bd.VERIFIER, bd.VERIFIER, "systemctl"])
+
+    def test_a_sidecar_in_the_override_file_is_held_to_the_same_rule(self):
+        message = self.assert_refused(
+            compose_of(), override="services:\n" + service_block("extra", STRAY)
+        )
+        self.assertIn("ghcr.io/branchleft/stray", message)
+
+    def test_a_service_with_no_image_is_refused(self):
+        message = self.assert_refused(compose_of("  bare:\n" + PROBE))
+        self.assertIn("names no `image:`", message)
+
+    def test_a_stack_whose_services_never_take_the_pin_is_refused(self):
+        name_the_pending_sidecars(self)
+        text = "services:\n" + service_block("side", CROWDSEC, "    environment:\n      A: ${IMAGE}\n")
+        message = self.assert_refused(text)
+        self.assertIn("takes its image from the pin", message)
+
+    def test_the_pin_in_either_spelling_or_quoted_is_the_pin(self):
+        for reference in ("${IMAGE}", "${IMAGE:?pin the image}", "'${IMAGE}'", '"${IMAGE}"'):
+            with self.subTest(reference=reference):
+                run = FakeRun([0])
+                self.write(compose_of(service_block("second", reference)))
+                self.deploy(EDGE_PIN, run)
+                self.assertEqual(run.calls, [["systemctl", "restart", "branchleft-compose@edge"]])
+                os.unlink(self.env_path())
+
+    def test_a_same_path_on_another_registry_is_another_image(self):
+        name_the_pending_sidecars(self)
+        self.assert_refused(
+            compose_of(service_block("side", f"evil.example/crowdsecurity/crowdsec@sha256:{'d' * 64}"))
+        )
+
+    def test_an_image_mount_is_refused(self):
+        extra = "    volumes:\n      - type: image\n        source: " + EVIL + "\n        target: /x\n"
+        run = FakeRun([0])
+        message = self.assert_refused(compose_of(service_block("side", PORTAL, extra)), run, image=TENANT)
+        self.assertIn("mounts an image", message)
+
+    def test_the_ordinary_mount_types_are_not_refused(self):
+        name_the_pending_sidecars(self)
+        extra = (
+            "    volumes:\n      - type: bind\n        source: /a\n        target: /b\n"
+            "      - {type: volume, source: v, target: /c}\n"
+        )
+        self.write(compose_of(service_block("side", CROWDSEC, extra)))
+        self.deploy(EDGE_PIN, FakeRun([0]))
+        self.assertEqual(bd.read_current_image(self.env_path()), EDGE_PIN)
+
+    def test_a_render_that_fails_refuses_the_deploy_before_any_host_change(self):
+        def broken(directory):
+            raise bd.DeployError("`docker compose config` failed in somewhere (exit 1)")
+
+        run = FakeRun([0])
+        self.write(compose_of())
+        with self.assertRaises(bd.DeployError) as raised:
+            self.deploy(EDGE_PIN, run, render=broken)
+        self.assertIn("docker compose config", str(raised.exception))
+        self.assertFalse(os.path.exists(self.env_path()))
+        self.assertEqual(run.calls, [])
+
+    def test_the_render_is_asked_for_the_stack_directory(self):
+        seen = []
+
+        def record(directory):
+            seen.append(directory)
+            return model_of()
+
+        self.write(compose_of())
+        self.deploy(EDGE_PIN, FakeRun([0]), render=record)
+        self.assertEqual(seen, [os.path.join(self.stack_dir, "edge")])
+
+    def test_a_port_on_a_dockerhub_namespace_is_another_registry(self):
+        name_the_pending_sidecars(self)
+        other = f"prom:5000/mysqld-exporter:v0.20.0@sha256:{'c' * 64}"
+        self.assert_refused(compose_of(service_block("side", other)))
+
+    def test_a_port_is_a_spelling_only_on_a_registry_host(self):
+        for image, name in {
+            f"ghcr.io:443/branchleft/ghost-tenant:v1@sha256:{DIGEST}": "ghcr.io/branchleft/ghost-tenant",
+            f"localhost:5000/x/y@sha256:{DIGEST}": "localhost/x/y",
+            f"prom:5000/mysqld-exporter@sha256:{DIGEST}": "prom:5000/mysqld-exporter",
+            f"prom/mysqld-exporter:v1@sha256:{DIGEST}": "prom/mysqld-exporter",
+            f"mysql:8.0.43@sha256:{DIGEST}": "mysql",
+        }.items():
+            with self.subTest(image=image):
+                self.assertEqual(bd.attested_name(image), name)
+
+
+class ModelImagesTests(unittest.TestCase):
+    """The walker over a rendered Compose model, with models written out whole."""
+
+    def refused(self, model, fragment):
+        with self.assertRaises(bd.DeployError) as raised:
+            bd.model_images(model, EDGE_PIN)
+        self.assertIn(fragment, str(raised.exception))
+
+    def test_it_reports_the_pin_and_each_literal_reference(self):
+        pin_seen, literals = bd.model_images(
+            model_of(("side", EXPORTER, {}), ("two", STRAY, {})), EDGE_PIN
+        )
+        self.assertTrue(pin_seen)
+        self.assertEqual(literals, [("side", EXPORTER), ("two", STRAY)])
+
+    def test_a_service_naming_the_pin_literally_is_the_pin(self):
+        pin_seen, literals = bd.model_images({"services": {"app": {"image": EDGE_PIN}}}, EDGE_PIN)
+        self.assertTrue(pin_seen)
+        self.assertEqual(literals, [])
+
+    def test_a_model_with_no_pin_service_reports_it_unseen(self):
+        pin_seen, _ = bd.model_images({"services": {"s": {"image": EXPORTER}}}, EDGE_PIN)
+        self.assertFalse(pin_seen)
+
+    def test_the_top_level_keys_compose_documents_are_accepted(self):
+        model = model_of()
+        model.update({"name": "x", "networks": {}, "volumes": {}, "secrets": {}, "configs": {}})
+        model["x-anything"] = {"type": "image"}
+        bd.model_images(model, EDGE_PIN)
+
+    def test_an_unknown_top_level_key_is_refused(self):
+        for key in ("include", "models", "version", "extra"):
+            with self.subTest(key):
+                self.refused({**model_of(), key: {}}, "top-level")
+
+    def test_a_model_without_services_is_refused(self):
+        for model in ({}, {"services": None}, {"services": []}, {"services": "x"}):
+            with self.subTest(model=model):
+                self.refused(model, "no services")
+
+    def test_a_service_that_is_not_a_mapping_is_refused(self):
+        for service in (None, "x", [], 3):
+            with self.subTest(service=service):
+                self.refused({"services": {"app": service}}, "not a mapping")
+
+    def test_a_service_key_that_runs_something_no_image_names_is_refused(self):
+        for key in ("build", "extends", "provider", "models"):
+            with self.subTest(key):
+                self.refused(model_of(("s", EXPORTER, {key: {}})), f"`{key}`")
+
+    def test_an_image_mount_is_refused_wherever_it_sits_in_a_service(self):
+        for extra in (
+            {"volumes": [{"type": "image", "source": EVIL, "target": "/x"}]},
+            {"volumes": [{"type": " Image ", "source": EVIL}]},
+            {"deploy": {"x": [[{"type": "image"}]]}},
+        ):
+            with self.subTest(extra=extra):
+                self.refused(model_of(("s", EXPORTER, extra)), "mounts an image")
+
+    def test_the_other_mount_types_are_not_image_mounts(self):
+        extra = {
+            "volumes": [
+                {"type": "bind", "source": "/a", "target": "/b"},
+                {"type": "volume", "source": "v", "target": "/c"},
+                {"type": "tmpfs", "target": "/d"},
+            ],
+            "environment": {"type": "image-ish", "n": 3},
+        }
+        bd.model_images(model_of(("s", EXPORTER, extra)), EDGE_PIN)
+
+    def test_a_service_without_a_usable_image_is_refused(self):
+        for image in (None, "", "  ", 3, ["x"], {"a": "b"}):
+            with self.subTest(image=image):
+                self.refused({"services": {"s": {"image": image}}}, "names no `image:`")
+        self.refused({"services": {"s": {}}}, "names no `image:`")
+
+    def test_an_interpolated_reference_other_than_the_pin_is_refused(self):
+        for image in ("${OTHER}", "$IMAGE", "${IMAGE:-x}", "a/b@sha256:${D}", "${IMAGE}x"):
+            with self.subTest(image=image):
+                self.refused(model_of(("s", image, {})), "interpolated")
+
+    def test_a_literal_that_is_not_digest_pinned_names_its_service(self):
+        for image in ("redis", "redis:7", f"redis@sha256:{'1' * 63}", "A/B@sha256:" + "1" * 64):
+            with self.subTest(image=image):
+                self.refused(model_of(("cache", image, {})), "service 'cache'")
+
+
+class RenderComposeTests(unittest.TestCase):
+    """The one subprocess this part of the program starts."""
+
+    GOOD = '{"name": "edge", "services": {"app": {"image": "${IMAGE}"}}}'
+
+    def render(self, response, **kwargs):
+        run = FakeRun([response])
+        return run, REAL_RENDER("/opt/branchleft/edge", run=run, **kwargs)
+
+    def test_it_asks_compose_for_the_json_model_without_interpolating(self):
+        run, model = self.render((0, self.GOOD))
+        self.assertEqual(model["services"]["app"]["image"], "${IMAGE}")
+        self.assertEqual(
+            run.calls,
+            [["/usr/bin/docker", "compose", "--profile", "*", "config", "--format", "json", "--no-interpolate"]],
+        )
+
+    def test_it_runs_in_the_stack_directory_with_no_stdin_and_a_timeout(self):
+        run, _ = self.render((0, self.GOOD))
+        kwargs = run.kwargs[0]
+        self.assertEqual(kwargs["cwd"], "/opt/branchleft/edge")
+        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["timeout"], bd.COMPOSE_RENDER_TIMEOUT)
+
+    def test_it_inherits_nothing_from_the_callers_environment(self):
+        with mock.patch.dict(
+            os.environ, {"COMPOSE_FILE": "/elsewhere.yml", "COMPOSE_PROFILES": "p", "TOKEN": "t"}
+        ):
+            run, _ = self.render((0, self.GOOD))
+        self.assertEqual(run.kwargs[0]["env"], bd.COMPOSE_RENDER_ENV)
+        self.assertEqual(set(bd.COMPOSE_RENDER_ENV), {"PATH", "HOME", "LC_ALL"})
+
+    def test_a_failed_render_refuses_and_leaks_no_output(self):
+        for response in ((1, "", "secret-in-stderr"), (15, "secret-in-stdout", "")):
+            with self.subTest(response=response):
+                with self.assertRaises(bd.DeployError) as raised:
+                    self.render(response)
+                self.assertIn("exit", str(raised.exception))
+                self.assertNotIn("secret", str(raised.exception))
+
+    def test_a_docker_that_cannot_start_or_times_out_refuses(self):
+        for error in (
+            FileNotFoundError("/usr/bin/docker"),
+            PermissionError("x"),
+            subprocess.TimeoutExpired(["docker"], 60.0),
+        ):
+            with self.subTest(error=type(error).__name__):
+
+                def broken(argv, **kwargs):
+                    raise error
+
+                with self.assertRaises(bd.DeployError) as raised:
+                    REAL_RENDER("/d", run=broken)
+                self.assertIn(type(error).__name__, str(raised.exception))
+
+    def test_output_that_is_not_a_json_object_refuses(self):
+        for stdout in ("", "services:\n  a: {}\n", "[1]", '"x"', "null", "{", "3"):
+            with self.subTest(stdout=stdout):
+                with self.assertRaises(bd.DeployError) as raised:
+                    self.render((0, stdout))
+                self.assertIn("JSON object", str(raised.exception))
+
+    def test_the_output_is_never_written_to_disk_or_logged(self):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.render((0, self.GOOD))
+        self.assertEqual(stderr.getvalue(), "")
+
+
+def _usable_docker_compose():
+    docker = shutil.which("docker")
+    if docker is None:
+        return None
+    try:
+        result = subprocess.run(
+            [docker, "compose", "version"],
+            env=REAL_COMPOSE_ENV,
+            capture_output=True,
+            timeout=60,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return docker if result.returncode == 0 else None
+
+
+# A real HOME is kept (Compose finds its CLI plugin there when the package puts it
+# in the user's directory). A daemon that cannot be reached shows that rendering
+# does not need one.
+REAL_COMPOSE_ENV = {
+    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    "HOME": os.environ.get("HOME", "/root"),
+    "LC_ALL": "C",
+    "DOCKER_HOST": "unix:///nonexistent.sock",
+}
+REAL_DOCKER = _usable_docker_compose()
+EVIL_YML = "services:\n  evilsvc:\n    image: " + EVIL + "\n"
+EVIL_HOST = "evil.example"
+
+
+def real_render(directory):
+    return REAL_RENDER(directory, docker=REAL_DOCKER, env=REAL_COMPOSE_ENV)
+
+
+@unittest.skipUnless(REAL_DOCKER, "needs `docker compose` on PATH")
+class RealComposeTests(unittest.TestCase):
+    """Hostile shapes run through the real `docker compose config`.
+
+    The property: whatever Compose renders, if an image the verifier never saw is
+    in the model, verify_compose_images refuses; or Compose itself rejects the
+    file. Neither outcome may be an acceptance with the evil image in it.
+    """
+
+    def stack(self, files):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        files = {"evil.yml": EVIL_YML, **files}
+        for name, text in files.items():
+            with open(os.path.join(directory.name, name), "w", encoding="utf-8") as handle:
+                handle.write(text)
+        return directory.name
+
+    def verify(self, files, stack="edge"):
+        directory = self.stack(files)
+        bd.verify_compose_images(stack, directory, EDGE_PIN, run=FakeRun([0]), render=real_render)
+        return directory
+
+    def outcome(self, files):
+        """`rejected` (Compose or the walker refuses), or `accepted`; asserts an
+        accepted model holds no evil reference or image mount."""
+        try:
+            directory = self.verify(files)
+        except bd.DeployError as error:
+            return "rejected", str(error)
+        services = real_render(directory)["services"]
+        self.assertNotIn(EVIL_HOST, json.dumps(services), files)
+        self.assertFalse(bd._holds_image_mount(services), files)
+        return "accepted", ""
+
+    def test_the_real_compose_lists_the_pin_and_the_sidecar(self):
+        directory = self.stack({"compose.yml": compose_of(service_block("side", EXPORTER))})
+        model = real_render(directory)
+        self.assertEqual(model["services"]["app"]["image"], "${IMAGE}")
+        self.assertEqual(model["services"]["side"]["image"], EXPORTER)
+
+    def test_a_service_behind_a_profile_is_in_the_model_and_refused(self):
+        text = compose_of(service_block("gated", STRAY, "    profiles: [debug]\n"))
+        directory = self.stack({"compose.yml": text})
+        self.assertEqual(real_render(directory)["services"]["gated"]["image"], STRAY)
+        with self.assertRaises(bd.DeployError) as raised:
+            self.verify({"compose.yml": text})
+        self.assertIn("ghcr.io/branchleft/stray", str(raised.exception))
+
+    def test_an_unset_variable_does_not_stop_the_render_or_get_resolved(self):
+        text = compose_of(
+            service_block("side", EXPORTER, "    environment:\n      A: ${NEVER_SET:?must be set}\n")
+        )
+        model = real_render(self.stack({"compose.yml": text}))
+        self.assertEqual(model["services"]["side"]["environment"]["A"], "${NEVER_SET:?must be set}")
+
+    def test_an_include_is_followed_and_its_image_is_refused(self):
+        with self.assertRaises(bd.DeployError) as raised:
+            self.verify({"compose.yml": "include:\n  - evil.yml\n" + compose_of()})
+        self.assertIn("evil.example/x", str(raised.exception))
+
+    def test_an_override_file_sidecar_is_refused(self):
+        with self.assertRaises(bd.DeployError) as raised:
+            self.verify(
+                {"compose.yml": compose_of(), OVERRIDE: "services:\n" + service_block("x", STRAY)}
+            )
+        self.assertIn("ghcr.io/branchleft/stray", str(raised.exception))
+
+    def test_an_image_mount_is_refused_in_the_base_file_and_the_override(self):
+        mount = "    volumes:\n      - type: image\n        source: " + EVIL + "\n        target: /x\n"
+        flow = "    volumes:\n      - {type: image, source: " + EVIL + ", target: /x}\n"
+        anchored = (
+            "x-m: &m {type: image, source: " + EVIL + ", target: /x}\n",
+            "    volumes:\n      - *m\n",
+        )
+        cases = {
+            "block": ({"compose.yml": compose_of(service_block("s", PORTAL, mount))}),
+            "flow": ({"compose.yml": compose_of(service_block("s", PORTAL, flow))}),
+            "anchored": (
+                {"compose.yml": anchored[0] + compose_of(service_block("s", PORTAL, anchored[1]))}
+            ),
+            "override": (
+                {
+                    "compose.yml": compose_of(service_block("s", PORTAL)),
+                    OVERRIDE: "services:\n  s:\n" + mount,
+                }
+            ),
+        }
+        for label, files in cases.items():
+            with self.subTest(label):
+                self.assertEqual(self.outcome(files)[0], "rejected")
+
+    def test_a_service_that_builds_on_the_host_is_rejected(self):
+        files = {"compose.yml": compose_of(service_block("side", PORTAL, "    build: ./side\n"))}
+        self.assertEqual(self.outcome(files)[0], "rejected")
+
+    def test_an_extended_service_leaves_no_foreign_image_in_the_model(self):
+        """Compose resolves `extends` into the service's own fields, so the extended
+        image is replaced by the service's own `image:`, which is what is checked."""
+        fields = "    extends:\n      file: evil.yml\n      service: evilsvc\n"
+        self.outcome({"compose.yml": compose_of(service_block("side", PORTAL, fields))})
+
+    def test_a_top_level_key_this_program_cannot_read_is_rejected(self):
+        for text in ("models:\n  m:\n    model: evil\n", "extra:\n  a: b\n"):
+            with self.subTest(text.partition("\n")[0]):
+                self.assertEqual(self.outcome({"compose.yml": text + compose_of()})[0], "rejected")
+
+    def test_an_x_extension_holding_an_image_mount_is_data_and_is_not_run(self):
+        text = "x-m:\n  type: image\n  source: " + EVIL + "\n" + compose_of()
+        self.assertEqual(self.outcome({"compose.yml": text})[0], "accepted")
+
+    def test_an_env_file_in_the_stack_directory_cannot_hide_an_image(self):
+        files = {"compose.yml": compose_of(), ".env": "COMPOSE_FILE=compose.yml:evil.yml\n"}
+        self.outcome(files)
+
+    def test_a_file_that_is_not_compose_at_all_is_rejected(self):
+        for text in ("{", "- a\n", "services: 3\n"):
+            with self.subTest(text):
+                self.assertEqual(self.outcome({"compose.yml": text})[0], "rejected")
+
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
+
+# The Compose file each stack that pins through this wrapper ships in this repository.
+# The tenant stacks live in ghost-platform and are not here.
+COMMITTED_STACKS = {
+    "edge": "hetzner/edge/stack/compose.yml",
+    "control-plane": "hetzner/control-plane/stack/compose.yml",
+    "website": "ansible/roles/website_app1/files/compose.yml",
+    "publicpress-website": "ansible/roles/publicpress_website_app1/files/compose.yml",
+    "db": "ansible/roles/db1_stack/templates/compose.yml.j2",
+}
+
+# Stacks whose Compose file has no `${IMAGE}`: the wrapper refuses to deploy them, so
+# no sidecar of theirs reaches it.
+NOT_DEPLOYED_BY_THE_WRAPPER = {
+    "monitoring": "hetzner/monitoring/stack/compose.yml",
+    "nextcloud1": "hetzner/nextcloud1/stack/compose.yml",
+}
+
+
+def committed_compose_text(relative):
+    text = (REPO_ROOT / relative).read_text(encoding="utf-8")
+    if relative.endswith(".j2"):
+        vars_text = (REPO_ROOT / "ansible/roles/db1_stack/vars/main.yml").read_text(encoding="utf-8")
+        exporter = re.search(r"^db1_stack_exporter_image: (\S+)$", vars_text, re.MULTILINE)
+        assert exporter, "db1_stack_exporter_image is no longer a one-line value"
+        text = text.replace("{{ db1_stack_exporter_image }}", exporter.group(1))
+    return text
+
+
+class CommittedStackTests(unittest.TestCase):
+    """Every stack this repository ships through the wrapper, rendered whole.
+
+    Proves the program refuses nothing the committed stacks need once their
+    sidecars are accounted for, and that no sidecar is added without being
+    counted here. The render is the stand-in; RealCommittedStackTests runs the
+    same checks through the real Compose.
+    """
+
+    render = staticmethod(yaml_render)
+
+    def stack_directory(self, relative):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        with open(os.path.join(directory.name, "compose.yml"), "w", encoding="utf-8") as handle:
+            handle.write(committed_compose_text(relative))
+        return directory.name
+
+    def sidecars_of(self, stack):
+        directory = self.stack_directory(COMMITTED_STACKS[stack])
+        _pin_seen, literals = bd.model_images(self.render(directory), "x@sha256:" + "0" * 64)
+        return {bd.attested_name(reference) for _service, reference in literals}
+
+    def test_each_committed_stack_runs_exactly_the_sidecars_the_tests_count(self):
+        for stack in COMMITTED_STACKS:
+            with self.subTest(stack):
+                self.assertEqual(self.sidecars_of(stack), set(PENDING_SIDECARS.get(stack, ())))
+
+    def test_each_sidecar_is_registered_exempt_or_pending_the_owners_decision(self):
+        for stack in COMMITTED_STACKS:
+            for name in self.sidecars_of(stack):
+                with self.subTest(stack=stack, name=name):
+                    self.assertTrue(
+                        name in bd.ATTESTED_IMAGES
+                        or name in bd.UNATTESTED_STACK_IMAGES.get(stack, frozenset())
+                        or name in PENDING_SIDECARS.get(stack, frozenset())
+                    )
+
+    def test_with_the_pending_sidecars_named_each_committed_stack_verifies(self):
+        name_the_pending_sidecars(self)
+        for stack, relative in COMMITTED_STACKS.items():
+            with self.subTest(stack):
+                directory = self.stack_directory(relative)
+                bd.verify_compose_images(
+                    stack, directory, EDGE_PIN, run=FakeRun([0] * 4), render=self.render
+                )
+
+    def test_without_the_pending_sidecars_named_a_stack_that_runs_one_is_refused(self):
+        for stack, names in PENDING_SIDECARS.items():
+            with self.subTest(stack):
+                directory = self.stack_directory(COMMITTED_STACKS[stack])
+                with self.assertRaises(bd.DeployError) as raised:
+                    bd.verify_compose_images(
+                        stack, directory, EDGE_PIN, run=FakeRun([0] * 4), render=self.render
+                    )
+                self.assertTrue(any(name in str(raised.exception) for name in names))
+
+    def test_the_stacks_the_wrapper_cannot_deploy_have_no_image_pin(self):
+        for stack, relative in NOT_DEPLOYED_BY_THE_WRAPPER.items():
+            with self.subTest(stack):
+                self.assertFalse(bd.resolves_image_from_env((REPO_ROOT / relative).read_text()))
+
+
+@unittest.skipUnless(REAL_DOCKER, "needs `docker compose` on PATH")
+class RealCommittedStackTests(CommittedStackTests):
+    render = staticmethod(real_render)
 
 
 if __name__ == "__main__":
