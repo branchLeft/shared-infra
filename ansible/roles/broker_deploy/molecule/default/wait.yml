@@ -1,0 +1,12 @@
+---
+# The role as the delivery plan and the pull run it while no release is carried: the role's own
+# defaults, with no variable of this scenario's converge. Started by verify
+# (tasks/wait_probe.yml), once as an apply and once as a plan, and again with a half-carried
+# release. It is not one of Molecule's own steps, because the converge sets a release.
+- name: Run the role with the defaults
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Run the role
+      ansible.builtin.include_role:
+        name: branchleft.broker_deploy

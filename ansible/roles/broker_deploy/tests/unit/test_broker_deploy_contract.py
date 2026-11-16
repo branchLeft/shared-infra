@@ -41,6 +41,11 @@ READ_ONLY_MODULES = frozenset(
     }
 )
 
+# What the release pin check may do besides read and refuse: say the role waits while no release
+# is carried, and end the role there (test_broker_deploy_wait.py holds where and when). Neither
+# reads or writes the host.
+SAYS_AND_ENDS = frozenset({"ansible.builtin.debug", "ansible.builtin.meta"})
+
 
 def load(path: Path) -> object:
     """Return the parsed YAML of a file."""
@@ -249,7 +254,7 @@ class Order(unittest.TestCase):
             for task in tasks(ROLE / "tasks" / name):
                 modules = {key for key in task if key.startswith("ansible.builtin.")}
                 with self.subTest(file=name, task=task.get("name")):
-                    self.assertTrue(modules <= READ_ONLY_MODULES)
+                    self.assertTrue(modules <= READ_ONLY_MODULES | SAYS_AND_ENDS)
 
     def test_the_verify_key_is_held_to_its_pin_before_anything_is_written(self) -> None:
         main = tasks(ROLE / "tasks" / "main.yml")

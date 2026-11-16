@@ -1,0 +1,163 @@
+---
+# While no release is carried, the role waits: it says so and changes nothing. A release that
+# is only half carried is still refused.
+#
+# The instance already runs the converge's broker. Every path the role writes is listed before
+# and after, with owner, mode, size and modification time, and the broker's process is read
+# too, so a task of the role that ran past the wait shows as a difference. The broker's own
+# slots directory is left out of the listing: the running broker writes there.
+- name: List what the role writes, and read the broker's process, before the runs
+  ansible.builtin.command:
+    argv:
+      - find
+      - /opt/branchleft
+      - /etc/branchleft
+      - /etc/sudoers.d
+      - /etc/systemd/system
+      - /var/lib/branchleft
+      - -path
+      - /var/lib/branchleft/broker-slots
+      - -prune
+      - -o
+      - -printf
+      - '%p %y %m %U %G %s %T@ %l\n'
+  register: broker_deploy_wait_before
+  changed_when: false
+
+- name: Ask systemd which process the broker is, before the runs
+  ansible.builtin.command:
+    argv: [systemctl, show, branchleft-broker, '--property=MainPID,ActiveEnterTimestampMonotonic']
+  register: broker_deploy_wait_process_before
+  changed_when: false
+
+- name: Run the role with an empty version and empty pins, as an apply
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - --inventory
+      - '{{ inventory_dir }}'
+      - '{{ playbook_dir }}/wait.yml'
+  delegate_to: localhost
+  register: broker_deploy_wait_apply
+  changed_when: false
+  failed_when: false
+
+- name: Run the role with an empty version and empty pins, as a plan
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - --check
+      - --diff
+      - --inventory
+      - '{{ inventory_dir }}'
+      - '{{ playbook_dir }}/wait.yml'
+  delegate_to: localhost
+  register: broker_deploy_wait_plan
+  changed_when: false
+  failed_when: false
+
+- name: Run the role with a version and no pins
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - --inventory
+      - '{{ inventory_dir }}'
+      - --extra-vars
+      - '{"broker_deploy_release_version": "0.0.1"}'
+      - '{{ playbook_dir }}/wait.yml'
+  delegate_to: localhost
+  register: broker_deploy_wait_version_only
+  changed_when: false
+  failed_when: false
+
+- name: Run the role with pins and no version
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - --inventory
+      - '{{ inventory_dir }}'
+      - --extra-vars
+      - '{"broker_deploy_release_pins": {"0.0.1": {"broker.mjs": "0000000000000000000000000000000000000000000000000000000000000000"}}}'
+      - '{{ playbook_dir }}/wait.yml'
+  delegate_to: localhost
+  register: broker_deploy_wait_pins_only
+  changed_when: false
+  failed_when: false
+
+- name: List what the role writes, and read the broker's process, after the runs
+  ansible.builtin.command:
+    argv:
+      - find
+      - /opt/branchleft
+      - /etc/branchleft
+      - /etc/sudoers.d
+      - /etc/systemd/system
+      - /var/lib/branchleft
+      - -path
+      - /var/lib/branchleft/broker-slots
+      - -prune
+      - -o
+      - -printf
+      - '%p %y %m %U %G %s %T@ %l\n'
+  register: broker_deploy_wait_after
+  changed_when: false
+
+- name: Ask systemd which process the broker is, after the runs
+  ansible.builtin.command:
+    argv: [systemctl, show, branchleft-broker, '--property=MainPID,ActiveEnterTimestampMonotonic']
+  register: broker_deploy_wait_process_after
+  changed_when: false
+
+- name: Assert the role waited, in an apply and in a plan, and ran no task past the wait
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_wait_apply.rc == 0
+      - broker_deploy_wait_plan.rc == 0
+      - "'carries no release yet' in broker_deploy_wait_apply.stdout"
+      - "'carries no release yet' in broker_deploy_wait_plan.stdout"
+      - "'changed=0' in broker_deploy_wait_apply.stdout"
+      - "'changed=0' in broker_deploy_wait_plan.stdout"
+      # The first task of the role after the pin check, and one far past it, would be named in
+      # the output if the role went on.
+      - "'Hold the verify key to its pinned sha256' not in broker_deploy_wait_apply.stdout"
+      - "'Hold the verify key to its pinned sha256' not in broker_deploy_wait_plan.stdout"
+      - "'Install the environment file' not in broker_deploy_wait_apply.stdout"
+    quiet: true
+    fail_msg: >-
+      With no release carried the role must wait and change nothing (apply exit status
+      {{ broker_deploy_wait_apply.rc }}, plan exit status {{ broker_deploy_wait_plan.rc }}).
+      The apply ended: {{ broker_deploy_wait_apply.stdout_lines[-12:] | ansible.builtin.join('\n') }}
+      Its errors: {{ broker_deploy_wait_apply.stderr_lines[-8:] | ansible.builtin.join('\n') }}
+      The plan ended: {{ broker_deploy_wait_plan.stdout_lines[-12:] | ansible.builtin.join('\n') }}
+      Its errors: {{ broker_deploy_wait_plan.stderr_lines[-8:] | ansible.builtin.join('\n') }}
+
+- name: Assert a release that is only half carried is still refused, without the wait
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_wait_version_only.rc != 0
+      - broker_deploy_wait_pins_only.rc != 0
+      # ansible-core prints a failed task's message on stderr.
+      - "'must have pinned files' in broker_deploy_wait_version_only.stderr"
+      - "'must have pinned files' in broker_deploy_wait_pins_only.stderr"
+      - "'carries no release yet' not in broker_deploy_wait_version_only.stdout"
+      - "'carries no release yet' not in broker_deploy_wait_pins_only.stdout"
+    quiet: true
+    fail_msg: >-
+      A version with no pins, and pins with no version, must each be refused with the existing
+      message and not wait (exit status {{ broker_deploy_wait_version_only.rc }} and
+      {{ broker_deploy_wait_pins_only.rc }}). The version alone ended:
+      {{ broker_deploy_wait_version_only.stdout_lines[-8:] | ansible.builtin.join('\n') }}
+      Its errors: {{ broker_deploy_wait_version_only.stderr_lines[-8:] | ansible.builtin.join('\n') }}
+      The pins alone ended: {{ broker_deploy_wait_pins_only.stdout_lines[-8:] | ansible.builtin.join('\n') }}
+      Its errors: {{ broker_deploy_wait_pins_only.stderr_lines[-8:] | ansible.builtin.join('\n') }}
+
+- name: Assert the four runs changed nothing on the instance and left the broker's process alone
+  ansible.builtin.assert:
+    that:
+      - broker_deploy_wait_after.stdout == broker_deploy_wait_before.stdout
+      - broker_deploy_wait_process_after.stdout == broker_deploy_wait_process_before.stdout
+    quiet: true
+    fail_msg: >-
+      A run of the role with no release carried, or with a half-carried one, changed the instance.
+      Process before: {{ broker_deploy_wait_process_before.stdout_lines | ansible.builtin.join(' ') }}
+      after: {{ broker_deploy_wait_process_after.stdout_lines | ansible.builtin.join(' ') }}

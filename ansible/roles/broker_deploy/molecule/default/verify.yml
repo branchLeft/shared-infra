@@ -566,3 +566,8 @@
           its own message and to leave the file as it found it. Refused:
           {{ broker_deploy_verify_file_refused | default('not recorded') }}, message
           {{ broker_deploy_verify_file_msg | default('none') }}.
+
+    # Last, because it runs the role again as separate ansible-playbook runs from the machine
+    # that runs the test, and compares the instance before and after them.
+    - name: Prove the role waits while no release is carried, and refuses a half-carried one
+      ansible.builtin.include_tasks: tasks/wait_probe.yml
