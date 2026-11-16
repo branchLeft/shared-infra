@@ -75,6 +75,17 @@
         group: root
         mode: '0755'
 
+    # The wrapper renders the stack's Compose model with `docker compose config` before it pins
+    # an image, to hold every image in the stack to the attestation rule. The test host has no
+    # Docker, so the stand-in prints the same model from the stack's compose file.
+    - name: Put the compose render stand-in where the wrapper runs docker
+      ansible.builtin.copy:
+        src: standin-docker.py
+        dest: /usr/bin/docker
+        owner: root
+        group: root
+        mode: '0755'
+
     - name: Make the stand-ins' state directory
       ansible.builtin.file:
         path: /var/lib/standin

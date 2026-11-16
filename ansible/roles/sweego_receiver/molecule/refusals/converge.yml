@@ -4,15 +4,30 @@
 # scenario so that the default scenario applies the role only a few times (its shard is bound
 # by the time limit). A plan makes no change, so a check run skips every case.
 #
-# The first case runs on the host as prepared, before the role has written anything: the
-# owner has not yet placed the drain token, and the role must stop with the host untouched.
+# The first two cases run on the host as prepared, before the role has written anything. With
+# neither file placed the owner has not set the receiver up yet: the role must end without a
+# refusal, so the rest of the host's pull goes on. With one placed and the drain token not, the
+# placement is half done and the role must refuse. Both must leave the host untouched.
 # Then the role is applied once with everything in place, and every group after that starts
 # with a control: the same apply on the host as it was left must succeed. Without it, a step
 # that refused everything would pass every case.
-- name: Refuse a missing secret before anything is written
+- name: Wait for the owner's files, and refuse a half placement, before anything is written
   hosts: all
   gather_facts: false
   tasks:
+    - name: Run the waiting case, which must be accepted
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/case.yml'
+      vars:
+        case:
+          name: neither file is placed yet on a fresh host
+          break:
+            - [mv, /etc/branchleft/sweego-receiver-signing-secret, /root/signing-secret.held]
+            - [mv, /etc/branchleft/sweego-receiver-drain-token, /root/drain-token.held]
+          fix:
+            - [mv, /root/signing-secret.held, /etc/branchleft/sweego-receiver-signing-secret]
+            - [mv, /root/drain-token.held, /etc/branchleft/sweego-receiver-drain-token]
+      when: not ansible_check_mode
+
     - name: Run the case
       ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/case.yml'
       vars:
@@ -25,7 +40,7 @@
             - [mv, /root/drain-token.held, /etc/branchleft/sweego-receiver-drain-token]
       when: not ansible_check_mode
 
-    # The refusal above must have left no trace of the role on the host.
+    # Neither the wait nor the refusal above may have left a trace of the role on the host.
     - name: Look for anything the role writes
       ansible.builtin.stat:
         path: '{{ item }}'
@@ -52,7 +67,7 @@
           - sweego_receiver_refusals_chain.stdout_lines | select('search', 'ctorigdstport') | list | length == 0
           - sweego_receiver_refusals_chain.stdout_lines | select('search', '--dport 8081') | list | length == 0
         quiet: true
-        fail_msg: A run refused for a missing secret still wrote to the host.
+        fail_msg: A run that waited for, or refused, a missing secret file still wrote to the host.
       when: not ansible_check_mode
 
 - name: Apply the role once, so the cases have a delivered host to make bad

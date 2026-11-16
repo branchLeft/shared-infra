@@ -9,6 +9,10 @@
 # Mode 0440 with group 31100 and not 0400: the container runs as 31100 and a file read
 # through a bind mount is read as the container's account, whoever wrote it. Owner root, so
 # the account that reads the secret cannot replace it.
+#
+# The file is named for the owner's files and not for what they hold: when a task here fails,
+# Ansible prints the task's file and line, and the plan's credential scan reads a word such as
+# "secret" followed by a colon as an assignment and withholds the whole host.
 - name: Look at each secret file
   ansible.builtin.stat:
     path: '{{ item }}'
@@ -20,6 +24,22 @@
   loop_control:
     label: '{{ item }}'
   register: sweego_receiver_secret_stats
+
+# Until the owner has placed any of the files, the receiver is not set up yet, which is not a
+# fault: the role says so and ends here, before the drain-port rule or the receiver is
+# written, and the rest of the host's pull goes on. It runs in full on the first pull after the
+# owner places them. Once any file is there, every file is held to the checks below, so a
+# half-finished or wrong placement is still a refusal.
+- name: Say the role waits for the owner's files
+  ansible.builtin.debug:
+    msg: >-
+      The owner has not placed the receiver's files yet ({{ sweego_receiver_secret_files | join(', ') }}).
+      The role stops here and changes nothing; it runs in full on the first pull after they are placed.
+  when: sweego_receiver_secret_stats.results | selectattr('stat.exists') | list | length == 0
+
+- name: End the role until the owner has placed the files
+  ansible.builtin.meta: end_role
+  when: sweego_receiver_secret_stats.results | selectattr('stat.exists') | list | length == 0
 
 - name: Refuse a secret file that is missing, not root's, not group 31100, not mode 0440, a link or empty
   ansible.builtin.assert:

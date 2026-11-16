@@ -425,7 +425,7 @@ A registered image (`ghcr.io/branchleft/ghost-tenant`, `ghcr.io/branchleft/porta
 `ghcr.io/branchleft/percona-server`) is
 verified before the wrapper pins it. The verifier runs with no GitHub credential, and the design is
 fail-closed: a host with no credential refuses every registered deploy. An image outside the register
-is refused unless the reviewed exemption list (`UNATTESTED_STACK_IMAGES`) names it for that stack. The verifier and its pinned
+is refused unless the reviewed exemption list (`UNATTESTED_STACK_IMAGES`) names it for that stack. That rule holds for every image in the model that `docker compose config` renders for the stack, not only the one on the command line; a sidecar with no digest, an interpolated image, an image mount, a `build` or a Compose that fails to render is refused (`provision/branchleft_deploy.md`, "verify_compose_images"). The verifier and its pinned
 gh come from the `deploy_verifier` role, applied on `edge1`, `app1`, `ops1` and `db1`. See
 `provision/branchleft_deploy.md`, "The verifier runs with no credential" and "Live checks, in order".
 

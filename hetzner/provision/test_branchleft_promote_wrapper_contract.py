@@ -61,6 +61,9 @@ class WrapperContractTests(unittest.TestCase):
             config_dir=self.config_dir,
             stack_dir=self.stack_dir,
             run=wrapper_run,
+            # The stack's Compose model, as `docker compose config` would print it. This test
+            # is about the attestation check, and starts no `docker`.
+            render=lambda directory: {"services": {"app": {"image": "${IMAGE}"}}},
         )
 
         def as_the_wrapper(argv, **kwargs):
