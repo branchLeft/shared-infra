@@ -46,7 +46,7 @@
     that:
       - status_page_plan_due.rc == 0
       - "'is due to be brought up with new content' in status_page_plan_due.stdout"
-      - "'did not answer 200 on' not in status_page_plan_due.stdout"
+      - "'did not answer 200 on' not in (status_page_plan_due.stdout ~ status_page_plan_due.stderr)"
     quiet: true
     fail_msg: >-
       A plan whose stack is due to be brought up must not ask the page, which still runs the old
@@ -80,13 +80,15 @@
       ansible.builtin.assert:
         that:
           - status_page_plan_not_due.rc != 0
-          - "'did not answer 200 on' in status_page_plan_not_due.stdout"
+          # ansible-core prints a failed task's message on stderr.
+          - "'did not answer 200 on' in status_page_plan_not_due.stderr"
           - "'is due to be brought up with new content' not in status_page_plan_not_due.stdout"
         quiet: true
         fail_msg: >-
           A plan with no bring-up due must still refuse a page that does not answer (exit
           status {{ status_page_plan_not_due.rc }}). Its output ends:
           {{ status_page_plan_not_due.stdout_lines[-25:] | ansible.builtin.join('\n') }}
+          Its errors: {{ status_page_plan_not_due.stderr_lines[-10:] | ansible.builtin.join('\n') }}
   always:
     - name: Give the page its health answer back
       ansible.builtin.copy:
