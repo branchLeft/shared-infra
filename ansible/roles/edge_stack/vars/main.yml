@@ -53,7 +53,10 @@ edge_stack_crowdsec_files:
   - crowdsec/appsec-configs/ghost-admin-previews.yaml
   - crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml
   - crowdsec/parsers/edge-trusted-session.yaml
+  - crowdsec/parsers/nextcloud-profile.yaml
   - crowdsec/scenarios/ghost-admin-login-bruteforce.yaml
+  - crowdsec/remediation/profiles.yaml
+  - crowdsec/remediation/simulation.yaml
 # Every regular file directly in this directory is CrowdSec's. It is the one
 # directory the role prunes.
 edge_stack_acquis_dir: crowdsec/acquis.d
@@ -67,6 +70,7 @@ edge_stack_dirs:
   - crowdsec/postoverflows
   - crowdsec/parsers
   - crowdsec/scenarios
+  - crowdsec/remediation
 
 # The registry read key's docker config directory, for the module's `docker run` of the edge
 # image. A copy of deploy_verifier_registry_docker_dir (a role imports no role):

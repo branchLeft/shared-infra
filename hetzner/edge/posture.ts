@@ -24,6 +24,16 @@ export const POSTURE: EdgePosture = {
 export const RATE_LIMIT_EVENTS = 200;
 export const RATE_LIMIT_WINDOW_SECONDS = 60;
 
+// Narrative in hetzner/edge/posture.md, "Nextcloud throttle".
+export const NEXTCLOUD_RATE_LIMIT_EVENTS = 1200;
+
+// Narrative in hetzner/edge/posture.md, "Ban length".
+export const BAN_LADDER_MINUTES = [10, 30, 120, 240] as const;
+export const BAN_LADDER_WINDOW = '24h';
+
+// Narrative in hetzner/edge/posture.md, "Watch-only scenarios".
+export const WATCH_ONLY_SCENARIOS = ['crowdsecurity/crowdsec-appsec-outofband'] as const;
+
 // Narrative moved to hetzner/edge/posture.md, "Members magic-link send path".
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS = 5;
 export const MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS = 60;

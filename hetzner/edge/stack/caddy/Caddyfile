@@ -242,7 +242,7 @@ cloud.branchleft.co.uk {
 			zone nextcloud1_per_ip {
 				key {http.request.remote.host}
 				window 60s
-				events 200
+				events 1200
 			}
 		}
 		rate_limit @members_magic_link {

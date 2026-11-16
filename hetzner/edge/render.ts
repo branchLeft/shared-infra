@@ -4,12 +4,16 @@ import { APP_HOST_IPS, HOST_IPS } from '@branchleft/hetzner-host';
 
 import type { EdgeSite, HostRedirect, StaticSite } from '../../siteTypes';
 import {
+  BAN_LADDER_MINUTES,
+  BAN_LADDER_WINDOW,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_EVENTS,
   MEMBERS_MAGIC_LINK_RATE_LIMIT_WINDOW_SECONDS,
+  NEXTCLOUD_RATE_LIMIT_EVENTS,
   RATE_LIMIT_EVENTS,
   RATE_LIMIT_WINDOW_SECONDS,
   TLS_PROTOCOLS,
   WEBHOOK_RATE_LIMIT_EVENTS,
+  WATCH_ONLY_SCENARIOS,
   WEBHOOK_RATE_LIMIT_WINDOW_SECONDS,
   type EdgePosture,
 } from './posture';
@@ -454,7 +458,7 @@ function staticSiteContent(site: StaticSite): string {
   return html;
 }
 
-function rateLimitDirective(zone: string): string[] {
+function rateLimitDirective(zone: string, events: number = RATE_LIMIT_EVENTS): string[] {
   return [
     'rate_limit {',
     `\tzone ${zone} {`,
@@ -462,7 +466,7 @@ function rateLimitDirective(zone: string): string[] {
     // together with this key. See render.md §"rateLimitDirective: client IP key".
     '\t\tkey {http.request.remote.host}',
     `\t\twindow ${RATE_LIMIT_WINDOW_SECONDS}s`,
-    `\t\tevents ${RATE_LIMIT_EVENTS}`,
+    `\t\tevents ${events}`,
     '\t}',
     '}',
   ];
@@ -607,6 +611,8 @@ function protectionChain(
   zone: string,
   options: {
     appsec: 'none' | 'all' | 'except-authoring';
+    /** The general throttle's budget; `RATE_LIMIT_EVENTS` when absent. */
+    rateLimitEvents?: number;
     membersMagicLink?: boolean;
     webhookZone?: string;
     beforeAppsec?: string[];
@@ -625,7 +631,7 @@ function protectionChain(
   // nesting them meant the narrow control could not be enabled without the
   // broad one.
   if (posture.rateLimit === 'enforcing') {
-    lines.push(...rateLimitDirective(zone));
+    lines.push(...rateLimitDirective(zone, options.rateLimitEvents));
   }
   if (posture.membersMagicLinkRateLimit === 'enforcing' && options.membersMagicLink) {
     lines.push(...membersMagicLinkRateLimitDirective());
@@ -880,6 +886,7 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     ...requestBodyDirective(site).map((line) => `\t${line}`),
     ...protectionChain(posture, `${site.name}_per_ip`, {
       appsec: site.injectionWafPreviewOnly ? 'except-authoring' : 'all',
+      ...(site.backend === 'nextcloud' ? { rateLimitEvents: NEXTCLOUD_RATE_LIMIT_EVENTS } : {}),
       membersMagicLink: true,
       beforeAppsec: site.discardRoute === undefined ? [] : discardRouteResponses(),
       ...(verification === undefined ? {} : { verification }),
@@ -1407,5 +1414,134 @@ export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {
     '  label: "Ghost admin brute force"',
     '  service: http',
     '  remediation: true',
+  ].join('\n')}\n`;
+}
+
+/**
+ * Where the two remediation files below are mounted in the CrowdSec container,
+ * outside `/etc/crowdsec` for the reason the acquisition mount gives in
+ * `compose.yml`. `config.yaml.local` points CrowdSec at both.
+ */
+export const REMEDIATION_DIR = '/etc/crowdsec-remediation';
+
+/** The hub's out-of-band Core Rule Set scenario, the "sixth note bans" rule. */
+const OUT_OF_BAND_SCENARIO = 'crowdsecurity/crowdsec-appsec-outofband';
+
+/**
+ * CrowdSec's profiles: every ban lasts the next rung of `BAN_LADDER_MINUTES`,
+ * chosen by how many decisions the address already had within
+ * `BAN_LADDER_WINDOW`. Replaces the image's flat four hours. Why: `posture.md`,
+ * "Ban length", and `render.md`, "Ban length and watch-only scenarios".
+ *
+ * One profile for both scopes the image's two default profiles covered, an
+ * address and a range: a decision with no `scope` takes its alert's, so one
+ * document does what the image's two did, and the file stays a single YAML
+ * document.
+ */
+export function renderProfiles(): string {
+  const rungs = BAN_LADDER_MINUTES.join(', ');
+  const last = BAN_LADDER_MINUTES.length - 1;
+  const durationExpr =
+    `Sprintf('%dm', [${rungs}][min(GetDecisionsSinceCount(Alert.GetValue(), ` +
+    `'${BAN_LADDER_WINDOW}'), ${last})])`;
+  return `${[
+    ...GENERATED_BANNER,
+    'name: branchleft_remediation',
+    'filters:',
+    '  - Alert.Remediation == true && Alert.GetScope() in ["Ip", "Range"]',
+    'decisions:',
+    '  - type: ban',
+    // The first rung, used only if the expression below cannot be evaluated.
+    `    duration: ${BAN_LADDER_MINUTES[0]}m`,
+    `duration_expr: "${durationExpr}"`,
+    'on_success: break',
+  ].join('\n')}\n`;
+}
+
+/**
+ * CrowdSec's simulation file: the scenarios in `WATCH_ONLY_SCENARIOS` record
+ * their would-be bans as simulated decisions that no bouncer receives; every
+ * other scenario bans. Why: `posture.md`, "Watch-only scenarios".
+ */
+export function renderSimulation(): string {
+  if (!WATCH_ONLY_SCENARIOS.every((name) => name === OUT_OF_BAND_SCENARIO)) {
+    throw new Error(
+      `only ${OUT_OF_BAND_SCENARIO} may be watch-only until the false-alarm review names another`
+    );
+  }
+  return `${[
+    ...GENERATED_BANNER,
+    'simulation: false',
+    'exclusions:',
+    ...WATCH_ONLY_SCENARIOS.map((name) => `  - ${name}`),
+  ].join('\n')}\n`;
+}
+
+/** The hostnames of every Nextcloud site, checked as `ghostHostnames` checks Ghost's. */
+function nextcloudHostnames(entries: EdgeSite[]): string[] {
+  const hostnames = entries
+    .filter((site) => site.backend === 'nextcloud')
+    .flatMap((site) => site.hostnames);
+  for (const host of hostnames) {
+    if (!HOSTNAME.test(host)) {
+      throw new Error(`Nextcloud hostname ${host} is not a plain lower-case hostname`);
+    }
+  }
+  return hostnames;
+}
+
+/**
+ * Nextcloud's own normal traffic that the hub's log scenarios read as probing:
+ * WebDAV sync and file browsing, Talk's API, and previews, avatars and
+ * thumbnails. Each is a path family Nextcloud itself answers, with the
+ * statuses it answers a signed-in client; a 401 is never in a list, so password
+ * guessing still counts. Why each line: `render.md`, "Nextcloud profile".
+ */
+const NEXTCLOUD_NORMAL_TRAFFIC: readonly { path: string; statuses: readonly number[] }[] = [
+  {
+    path: '^/(?:remote|public)[.]php/(?:web)?dav(?:/|[?]|$)',
+    statuses: [200, 201, 204, 207, 304, 404, 409, 412, 423],
+  },
+  {
+    path: '^/ocs/v[12][.]php/apps/spreed/',
+    statuses: [200, 201, 304, 400, 403, 404, 409, 412],
+  },
+  {
+    path:
+      '^(?:/index[.]php)?/(?:core/preview|avatar/|apps/(?:files/api/v1/thumbnail|' +
+      'files_trashbin/preview|files_versions/preview|photos/api/v1/preview|' +
+      'files_sharing/publicpreview|theming/))',
+    statuses: [200, 304, 404],
+  },
+];
+
+/**
+ * The `s02-enrich` whitelist that keeps Nextcloud's own normal traffic out of
+ * every log scenario, on our Nextcloud hostnames only. A request whose path has
+ * a dot segment, encoded or not, is never dropped. Why: `render.md`,
+ * "Nextcloud profile".
+ */
+export function renderNextcloudWhitelist(entries: EdgeSite[]): string {
+  const hosts = nextcloudHostnames(entries);
+  if (hosts.length === 0) {
+    throw new Error('no site has backend nextcloud, so there is no Nextcloud profile to render');
+  }
+  return `${[
+    ...GENERATED_BANNER,
+    'name: branchleft/nextcloud-profile',
+    "description: Nextcloud's own normal traffic on our Nextcloud hostnames",
+    'filter: >-',
+    "  evt.Meta.service == 'http' &&",
+    "  evt.Meta.log_type == 'http_access-log' &&",
+    `  evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    "  not (evt.Meta.http_path matches '(?i)[.][.]|%2e')",
+    'whitelist:',
+    "  reason: Nextcloud's own traffic on a Nextcloud hostname",
+    '  expression:',
+    ...NEXTCLOUD_NORMAL_TRAFFIC.map(
+      ({ path, statuses }) =>
+        `    - evt.Meta.http_path matches '${path}' && ` +
+        `evt.Meta.http_status in ${quotedList(statuses.map(String))}`
+    ),
   ].join('\n')}\n`;
 }

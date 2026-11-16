@@ -738,10 +738,118 @@ lock, stays under ten; a script's burst does not, and a script that keeps
 sending 429s is banned though Ghost is already refusing it. Sustained guessing
 slower than two failures a minute is not banned by this scenario; Ghost's
 lock covers the sign-in and nothing covers the key, which is the limit it
-carries. The ban is the default profile's, four hours.
+carries. The ban follows the ladder in "Ban length and watch-only scenarios"
+below: ten minutes first, longer on repeats.
 
 Why it is a separate scenario: the post-overflow above matches one scenario by
 name, so this one is never dropped by it. The replay in
 `test_crowdsec_replay.py` proves a burst of sign-in failures and of key
 failures is banned, and that the owner's mistyped passwords, new-device
 sign-in and admin use are not.
+
+## Ban length and watch-only scenarios
+
+Two files CrowdSec reads instead of the image's own, rendered into
+`stack/crowdsec/remediation/` and mounted read-only at
+`/etc/crowdsec-remediation`; `config.yaml.local` points `profiles_path` and
+`simulation_path` at them. The image's own copies stay in the config volume,
+unread.
+
+`profiles.yaml` (`renderProfiles`). Every ban, by IP or by range, lasts
+`BAN_LADDER_MINUTES[n]` minutes, where `n` is the number of decisions the same
+value already had in the last `BAN_LADDER_WINDOW` (CrowdSec's
+`GetDecisionsSinceCount`), capped at the last rung: 10, 30, 120, 240. The
+image's profile was a flat four hours, so one false alarm cost the owner every
+site for four hours. `posture.md`, "Ban length", has the reasoning and the one
+cost (simulated decisions count towards `n`).
+
+`simulation.yaml` (`renderSimulation`). `simulation: false`, with the scenarios
+in `WATCH_ONLY_SCENARIOS` as exclusions: CrowdSec runs those in simulation and
+every other scenario for real. The one entry is the out-of-band Core Rule Set
+scenario. Its alerts and would-be bans are still stored and listed (`cscli
+decisions list` marks them simulated), so the false-alarm review keeps its
+data, but no bouncer receives them. The in-band rules still refuse a known
+exploit with a 403, and their scenario still bans. The renderer refuses any
+other entry, so widening watch-only is a reviewed change to it.
+
+Proved against a running CrowdSec by `test_crowdsec_replay.py`: the Core Rule
+Set probes are recorded and ban nobody, two known exploits are refused in-band
+and ban, a first ban lasts ten minutes and a ban after an earlier one thirty.
+
+## Our own hosts are never banned
+
+Nothing of ours renders this; the image already does it. The CrowdSec image
+installs the hub's `crowdsecurity/whitelists` parser, which drops every event
+from a private address (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`,
+loopback) at `s02-enrich`, access-log and AppSec alike. Our hosts' fixed
+addresses on the private network (`10.20.1.0/24`, in the estate address plan)
+are inside it, so no scenario can ban one. A private host that calls a site by
+its public name reaches Caddy over the private network, so Caddy sees that
+private address.
+
+The owner ruled that only fixed dedicated addresses go on a never-ban list,
+never a person's address, which can change. Nothing here lists a person's
+address, and our hosts' public addresses are not listed: nothing of ours is
+known to call the edge from one.
+
+The replay in `test_crowdsec_replay.py` sends Core Rule Set probes, known
+exploits and admin probes from ops1's address and requires no alert and no
+ban, so a change that drops the hub's whitelist fails CI.
+
+Two consequences to know:
+
+- The same whitelist covers every Docker bridge address (`172.16.0.0/12`).
+  edge1's own probes, and any check run on edge1, come from one and are never
+  banned. A real visitor whose address the docker-proxy collapses to a bridge
+  address ("client IP key" above) is never banned either.
+- A whitelist stops bans, not an in-band AppSec refusal of a single request:
+  the in-band rules still answer 403 to a known exploit from a private
+  address.
+
+## Nextcloud profile
+
+A site whose `backend` is `nextcloud` gets two things.
+
+The throttle. Its general zone allows `NEXTCLOUD_RATE_LIMIT_EVENTS` a minute
+instead of `RATE_LIMIT_EVENTS` (`posture.md`, "Nextcloud throttle").
+
+The log whitelist. `stack/crowdsec/parsers/nextcloud-profile.yaml`
+(`renderNextcloudWhitelist`) drops, on the Nextcloud hostnames only, the
+access-log lines of Nextcloud's own normal traffic before any scenario reads
+them. Each entry is a path family and the statuses Nextcloud answers a
+signed-in client there:
+
+- WebDAV (`/remote.php/dav`, `/remote.php/webdav`, `/public.php/...`). The
+  desktop client asks for each new file before uploading it and is answered
+  404, so a sync of ten new files looked like `http-probing`. An
+  unauthenticated request there is answered 401, which is never in the list.
+- Talk's API (`/ocs/v2.php/apps/spreed/`). Mid-call it answers 404 for an
+  expired signalling session, 412 for a call already left, 409 and 400 for
+  races between participants.
+- Previews, avatars and thumbnails. A file with no preview yet, or a guest
+  with no avatar, is a 404 at a new path each time.
+
+The patterns follow the hub's own Nextcloud whitelist, narrowed to our
+hostnames, to the path families we serve, and to no 401. A path with a dot
+segment, encoded or not, is never dropped. The hub's admin-interface,
+sensitive-file and exploit scenarios still read everything else on the
+hostname.
+
+What it does not do: the Core Rule Set still inspects Nextcloud traffic, and
+WebDAV verbs such as `PROPFIND` trip it. While that scenario is watch-only this
+only records. The OWASP Nextcloud rule exclusions belong to the false-alarm
+review that ends watch-only, not to this profile.
+
+The replay in `test_crowdsec_replay.py` plays a signed-in Talk video call and a
+desktop sync with the Files app, to AppSec and to the access log, and requires
+no ban; it plays admin probes, dot segments under the WebDAV prefix and two
+known exploits on the same hostname, and requires each to ban.
+
+## Being told about a ban
+
+Every ban pages the owner. `EdgeBanIssued` in `hetzner/monitoring/render.ts`
+reads CrowdSec's `cs_active_decisions{action="ban"}` by `reason` (the
+scenario), which the monitoring stack already scrapes from edge1, and its page
+register entry (`edge-ban`) routes it to ntfy. The gauge has no address label,
+so the page names the scenario and never an address. A simulated decision is
+not in the gauge, so a watch-only scenario never pages; the replay asserts it.

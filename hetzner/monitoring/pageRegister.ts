@@ -20,7 +20,7 @@ export interface PageRegisterEntry {
    */
   readonly alertName: string | null;
   /**
-   * How this entry's page actually reaches a phone. Five entries route
+   * How this entry's page actually reaches a phone. Six entries route
    * through this stack's own Alertmanager; the drain worker's dead-man's
    * switch pages through its own Healthchecks.io check directly, so this
    * entry renders no Alertmanager route at all -- it is listed here only so
@@ -103,6 +103,18 @@ export const PAGE_REGISTER: readonly PageRegisterEntry[] = [
       "this stack's blackbox probes carry an instance label and no tenant label, so no " +
       'rule here can raise a tenant-labelled page. A failing probe reaches the phone ' +
       'meanwhile through BlackboxProbeFailed at critical severity.',
+  },
+  {
+    id: 'edge-ban',
+    name: 'The edge banned an address',
+    reason:
+      'A CrowdSec ban refuses that address on every site behind edge1, the sign-in ' +
+      'service included, and the owner has been banned by false alarms three times; the ' +
+      'owner learns of each ban, and which scenario made it, as it happens.',
+    alertName: 'EdgeBanIssued',
+    deliveryPath: 'alertmanager',
+    dormant: false,
+    tenantScoped: false,
   },
   {
     id: 'drain-worker-stopped',

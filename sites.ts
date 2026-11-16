@@ -81,7 +81,8 @@ export const sites: EdgeSite[] = [
     // Nextcloud itself picks -- the two must move together, same convention
     // as the blog entry above.
     privateUpstream: { host: 'ops1', port: 11000 },
-    backend: 'other',
+    // Nextcloud's edge profile: hetzner/edge/render.md, "Nextcloud profile".
+    backend: 'nextcloud',
     // Calendar/Talk attachments and avatars, not general file sync. Raise
     // deliberately if a real bulk-upload use case shows up.
     requestBodyMaxSize: '100MiB',

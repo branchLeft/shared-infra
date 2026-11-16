@@ -19,19 +19,20 @@ import {
 import { renderAlertmanagerTemplate, renderAlertRules } from './render';
 
 describe('PAGE_REGISTER', () => {
-  it('has exactly six entries -- five Alertmanager and the drain worker outside it', () => {
-    expect(PAGE_REGISTER).toHaveLength(6);
+  it('has exactly seven entries -- six Alertmanager and the drain worker outside it', () => {
+    expect(PAGE_REGISTER).toHaveLength(7);
     expect(PAGE_REGISTER.map((entry) => entry.id)).toEqual([
       'tier2-safety-match',
       'tenant-failed-unsafe',
       'appeal-latency-breach',
       'readers-cannot-read',
+      'edge-ban',
       'drain-worker-stopped',
       'stopped-demo-reaper',
     ]);
   });
 
-  it('routes five entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
+  it('routes six entries through Alertmanager and the drain worker through Healthchecks.io instead', () => {
     const byPath = (path: PageRegisterEntry['deliveryPath']) =>
       PAGE_REGISTER.filter((entry) => entry.deliveryPath === path).map((entry) => entry.id);
     expect(byPath('alertmanager')).toEqual([
@@ -39,6 +40,7 @@ describe('PAGE_REGISTER', () => {
       'tenant-failed-unsafe',
       'appeal-latency-breach',
       'readers-cannot-read',
+      'edge-ban',
       'stopped-demo-reaper',
     ]);
     expect(byPath('healthchecks')).toEqual(['drain-worker-stopped']);
@@ -117,6 +119,7 @@ describe('pageAlertNames', () => {
       'TierTwoSafetyMatch',
       'TenantFailedUnsafe',
       'ReadersCannotRead',
+      'EdgeBanIssued',
     ]);
   });
 
@@ -152,11 +155,11 @@ describe('pageAlertNames', () => {
 });
 
 describe('renderPageRoute', () => {
-  it('renders exactly the three live Alertmanager entries into the matcher, from the register and nothing else', () => {
+  it('renders exactly the four live Alertmanager entries into the matcher, from the register and nothing else', () => {
     const route = renderPageRoute(PAGE_REGISTER);
     expect(route).toContain('severity = "page"');
     expect(route).toContain(
-      'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead)$"'
+      'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued)$"'
     );
     // Not present: the dormant entry, and the Healthchecks-delivered one.
     expect(route).not.toContain('AppealLatencyBreach');
@@ -305,7 +308,7 @@ describe('renderAlertmanagerTemplate wired to the page register', () => {
   it('uses PAGE_REGISTER by default', () => {
     const rendered = renderAlertmanagerTemplate();
     expect(rendered).toContain(
-      'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead)$"'
+      'alertname =~ "^(TierTwoSafetyMatch|TenantFailedUnsafe|ReadersCannotRead|EdgeBanIssued)$"'
     );
     expect(rendered).toContain(`name: ${PAGE_RECEIVER_NAME}`);
   });
