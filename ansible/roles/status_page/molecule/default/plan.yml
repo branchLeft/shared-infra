@@ -1,0 +1,11 @@
+---
+# The role as the plan job runs it: ansible-playbook --check --diff, started by verify
+# (tasks/plan_probe.yml). It is not one of Molecule's own steps. A separate run, because the
+# check_mode keyword of a task does not set ansible_check_mode, which the role reads.
+- name: Plan
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Plan the role
+      ansible.builtin.include_role:
+        name: branchleft.status_page

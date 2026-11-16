@@ -295,3 +295,6 @@
 
     - name: Complete with a health delay of zero
       ansible.builtin.include_tasks: tasks/zero_health_delay.yml
+
+    - name: Ask the page in a plan only when no bring-up is due
+      ansible.builtin.include_tasks: tasks/plan_probe.yml
