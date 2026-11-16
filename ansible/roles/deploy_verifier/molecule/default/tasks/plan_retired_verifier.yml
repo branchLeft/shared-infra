@@ -1,0 +1,92 @@
+---
+# The plan of a host that still holds the retired shell verifier.
+#
+# The delivery plan prints each change as a diff, and its secret scan withholds a host whose diff
+# has a line that reads as a credential assignment. The retired program held one such line, a
+# placeholder token it gave gh, so replacing it would print that line as removed and withhold the
+# host. The role hides the diff of that one replacement, named by the retired program's sha256,
+# and says what it replaces. Any other content at the path is shown as usual.
+#
+# A stand-in for the retired program is placed at the path. The role's pin is pointed at the
+# stand-in's digest with an extra variable, so the case runs without carrying the retired program.
+- name: Place a stand-in for the retired verifier, with its placeholder line
+  ansible.builtin.copy:
+    content: |
+      #!/bin/sh
+      # A stand-in for the retired shell verifier, for this test only.
+      export GH_TOKEN=placeholder-not-a-credential
+    dest: '{{ verify_program_path }}'
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Run the two plans and put the verifier back
+  block:
+    - name: Read the stand-in's digest
+      ansible.builtin.stat:
+        path: '{{ verify_program_path }}'
+        checksum_algorithm: sha256
+        follow: false
+      register: deploy_verifier_plan_standin
+
+    - name: Plan the role with the stand-in pinned as the retired verifier
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --check
+          - --diff
+          - --inventory
+          - '{{ inventory_dir }}'
+          - --extra-vars
+          - '{{ {"deploy_verifier_retired_shell_sha256": deploy_verifier_plan_standin.stat.checksum} | ansible.builtin.to_json }}'
+          - '{{ playbook_dir }}/plan.yml'
+      delegate_to: localhost
+      register: deploy_verifier_plan_retired
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the plan hid the retired lines and said what it replaces
+      ansible.builtin.assert:
+        that:
+          - deploy_verifier_plan_retired.rc == 0
+          - "'holds the retired shell verifier' in deploy_verifier_plan_retired.stdout"
+          - "'placeholder-not-a-credential' not in (deploy_verifier_plan_retired.stdout ~ deploy_verifier_plan_retired.stderr)"
+        quiet: true
+        fail_msg: >-
+          The plan of a host holding the retired verifier must not print its lines, and must say
+          what it replaces (exit status {{ deploy_verifier_plan_retired.rc }}). Its output ends:
+          {{ deploy_verifier_plan_retired.stdout_lines[-25:] | ansible.builtin.join('\n') }}
+
+    - name: Plan the role with the role's own pin, which the stand-in does not match
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --check
+          - --diff
+          - --inventory
+          - '{{ inventory_dir }}'
+          - '{{ playbook_dir }}/plan.yml'
+      delegate_to: localhost
+      register: deploy_verifier_plan_other
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the plan showed other content at the path as usual
+      ansible.builtin.assert:
+        that:
+          - deploy_verifier_plan_other.rc == 0
+          - "'placeholder-not-a-credential' in deploy_verifier_plan_other.stdout"
+          - "'holds the retired shell verifier' not in deploy_verifier_plan_other.stdout"
+        quiet: true
+        fail_msg: >-
+          The plan of a host holding anything but the retired verifier must show the diff and say
+          nothing of the retired program (exit status {{ deploy_verifier_plan_other.rc }}). Its output ends:
+          {{ deploy_verifier_plan_other.stdout_lines[-25:] | ansible.builtin.join('\n') }}
+  always:
+    - name: Put the verifier back as the role installs it
+      ansible.builtin.copy:
+        src: '{{ verify_program_src }}'
+        dest: '{{ verify_program_path }}'
+        owner: root
+        group: root
+        mode: '0755'
