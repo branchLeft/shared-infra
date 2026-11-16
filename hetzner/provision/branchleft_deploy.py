@@ -93,8 +93,15 @@ ATTESTED_IMAGES: dict[str, str] = {
 UNATTESTED_STACK_IMAGES: dict[str, frozenset[str]] = {
     "website": frozenset({"ghcr.io/branchleft/website"}),
     "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
-    "edge": frozenset({"ghcr.io/branchleft/edge-caddy"}),
-    "db": frozenset({"mysql"}),
+    # The CrowdSec sidecar beside the edge image: third-party, and nothing here builds it.
+    "edge": frozenset({"ghcr.io/branchleft/edge-caddy", "docker.io/crowdsecurity/crowdsec"}),
+    # prom/mysqld-exporter is TEMPORARY. ghost-platform's mysqld-exporter-image.yml builds and
+    # attests the same exporter as ghcr.io/branchleft/mysqld-exporter; once that image is published,
+    # registered in ATTESTED_IMAGES and named by the db role, delete the entry.
+    "db": frozenset({"mysql", "prom/mysqld-exporter"}),
+    # The control-plane stack's database and identity provider are third-party sidecars beside its
+    # registered portal-apps image. No workflow here signs either.
+    "control-plane": frozenset({"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}),
     # The spool stack pins mailgun-shim, which no workflow attests yet. Remove this row
     # when the image is registered in ATTESTED_IMAGES (a signing workflow for it exists).
     "mail-spool": frozenset({"ghcr.io/branchleft/mailgun-shim"}),

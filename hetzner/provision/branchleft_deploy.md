@@ -225,9 +225,9 @@ environment variable or stack setting that skips it.
 
 An image name outside the register is refused, not passed unverified, unless
 `UNATTESTED_STACK_IMAGES` names it for that stack. That table is the reviewed
-exemption list: each stack that pins through this wrapper today, with the one
-image name it runs and no workflow attests yet (`website`, `publicpress-website`,
-`edge`, `db`, `mail-spool`). `dbt1` is not listed: its image, percona-server, is in
+exemption list: each stack that pins through this wrapper today, with the image
+names it runs that no workflow attests yet, its own and its third-party sidecars
+(`website`, `publicpress-website`, `edge`, `db`, `control-plane`, `mail-spool`). `dbt1` is not listed: its image, percona-server, is in
 the register, so it is verified. It is keyed by stack as well as by name, so an exemption
 does not open the other stacks: a tenant slot key cannot pin the edge image, and
 cannot pin `attacker.example/evil@sha256:...`. A registered image deploys on any
@@ -314,14 +314,15 @@ The `${IMAGE}` wiring text check on `compose.yml` itself (`resolves_image_from_e
 is unchanged and still runs first.
 
 **Sidecars and the exemption list.** Four third-party sidecars run beside a pin in
-the committed stacks: `prom/mysqld-exporter` (db), `docker.io/crowdsecurity/crowdsec`
-(edge), `docker.io/library/postgres` and `ghcr.io/zitadel/zitadel` (control-plane).
-None is in `ATTESTED_IMAGES` or `UNATTESTED_STACK_IMAGES` today, so this check
-refuses a deploy of those three stacks until each is either named for its stack in
-`UNATTESTED_STACK_IMAGES` or signed and registered. That is the owner's decision
-(`PENDING_SIDECARS` in `test_branchleft_deploy.py` holds the four, and the tests
-prove every committed stack verifies with them added). Do not merge this change
-before that decision is applied to the lists.
+the committed stacks, and each is named for its own stack in `UNATTESTED_STACK_IMAGES`
+because no workflow here signs it: `docker.io/crowdsecurity/crowdsec` (edge),
+`docker.io/library/postgres` and `ghcr.io/zitadel/zitadel` (control-plane), and
+`prom/mysqld-exporter` (db). The db entry is temporary: ghost-platform's
+`mysqld-exporter-image.yml` builds the same exporter and signs it as
+`ghcr.io/branchleft/mysqld-exporter`, and once that image is published, registered
+in `ATTESTED_IMAGES` and named by the db role, the entry is deleted. The tests render
+every committed stack and prove it verifies with the shipped lists, and that a sidecar
+not named for its stack is refused.
 
 **Registry port.** A port is a spelling only on a registry host, a dotted name or
 `localhost`. On a Docker Hub namespace, `prom:5000/mysqld-exporter` is another

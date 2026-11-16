@@ -905,8 +905,13 @@ class AttestationTests(unittest.TestCase):
             {
                 "website": frozenset({"ghcr.io/branchleft/website"}),
                 "publicpress-website": frozenset({"ghcr.io/branchleft/publicpress-website"}),
-                "edge": frozenset({"ghcr.io/branchleft/edge-caddy"}),
-                "db": frozenset({"mysql"}),
+                "edge": frozenset(
+                    {"ghcr.io/branchleft/edge-caddy", "docker.io/crowdsecurity/crowdsec"}
+                ),
+                "db": frozenset({"mysql", "prom/mysqld-exporter"}),
+                "control-plane": frozenset(
+                    {"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}
+                ),
                 "mail-spool": frozenset({"ghcr.io/branchleft/mailgun-shim"}),
             },
         )
@@ -1593,28 +1598,14 @@ CROWDSEC = f"docker.io/crowdsecurity/crowdsec:v1.7.8@sha256:{'c' * 64}"
 PROBE = "    healthcheck:\n      test: ['CMD', 'true']\n"
 OVERRIDE = "compose.override.yml"
 
-# The third-party sidecars the committed stacks run beside their pin, by stack. None of
-# them is in ATTESTED_IMAGES or UNATTESTED_STACK_IMAGES yet: whether each is named as an
-# exception, or signed and registered, is the owner's decision. Every test that needs them
-# accounted for adds them by patch (`name_the_pending_sidecars`), so the program is proven
-# correct with them added, and the shipped lists are untouched. When the owner decides,
-# move the entries to the shipped lists and empty this table.
-PENDING_SIDECARS = {
+# The third-party sidecars the committed stacks run beside their pin, by stack. Each is named
+# for its stack in UNATTESTED_STACK_IMAGES: none has a signing workflow that registers it. The
+# db exporter's entry is temporary, until the exporter image is signed and registered.
+SIDECARS = {
     "db": frozenset({"prom/mysqld-exporter"}),
     "edge": frozenset({"docker.io/crowdsecurity/crowdsec"}),
     "control-plane": frozenset({"docker.io/library/postgres", "ghcr.io/zitadel/zitadel"}),
 }
-
-
-def name_the_pending_sidecars(case: unittest.TestCase) -> None:
-    """Add PENDING_SIDECARS to the exemption list for one test; the real table is restored."""
-    merged = {
-        stack: bd.UNATTESTED_STACK_IMAGES.get(stack, frozenset()) | names
-        for stack, names in PENDING_SIDECARS.items()
-    }
-    patcher = mock.patch.dict(bd.UNATTESTED_STACK_IMAGES, merged)
-    patcher.start()
-    case.addCleanup(patcher.stop)
 
 
 def service_block(name, image, extra=""):
@@ -1736,17 +1727,16 @@ class SidecarVerificationTests(unittest.TestCase):
         self.assertIn("ghcr.io/branchleft/stray", message)
         self.assertIn("no reviewed exemption", message)
 
-    def test_the_shipped_list_names_no_pending_sidecar(self):
-        """The owner has not decided yet, so a sidecar the committed stacks run is
-        refused until it is named or registered."""
-        for stack, names in PENDING_SIDECARS.items():
+    def test_each_committed_sidecar_is_named_for_its_own_stack_only(self):
+        for stack, names in SIDECARS.items():
             for name in names:
                 with self.subTest(stack=stack, name=name):
-                    self.assertNotIn(name, bd.ATTESTED_IMAGES)
-                    self.assertNotIn(name, bd.UNATTESTED_STACK_IMAGES.get(stack, frozenset()))
+                    self.assertIn(name, bd.UNATTESTED_STACK_IMAGES[stack])
+                    for other, listed in bd.UNATTESTED_STACK_IMAGES.items():
+                        if other != stack:
+                            self.assertNotIn(name, listed)
 
     def test_a_sidecar_the_stack_exempts_deploys_and_the_log_says_so(self):
-        name_the_pending_sidecars(self)
         run = FakeRun([0])
         self.write(compose_of(service_block("side", CROWDSEC)))
         self.deploy(EDGE_PIN, run)
@@ -1758,7 +1748,6 @@ class SidecarVerificationTests(unittest.TestCase):
         )
 
     def test_one_stacks_exemption_does_not_open_another_stack(self):
-        name_the_pending_sidecars(self)
         website_pin = f"ghcr.io/branchleft/website@sha256:{DIGEST}"
         self.write(compose_of(service_block("side", CROWDSEC)), stack="website")
         with self.assertRaises(bd.DeployError) as raised:
@@ -1857,7 +1846,6 @@ class SidecarVerificationTests(unittest.TestCase):
         self.assertIn("names no `image:`", message)
 
     def test_a_stack_whose_services_never_take_the_pin_is_refused(self):
-        name_the_pending_sidecars(self)
         text = "services:\n" + service_block("side", CROWDSEC, "    environment:\n      A: ${IMAGE}\n")
         message = self.assert_refused(text)
         self.assertIn("takes its image from the pin", message)
@@ -1872,7 +1860,6 @@ class SidecarVerificationTests(unittest.TestCase):
                 os.unlink(self.env_path())
 
     def test_a_same_path_on_another_registry_is_another_image(self):
-        name_the_pending_sidecars(self)
         self.assert_refused(
             compose_of(service_block("side", f"evil.example/crowdsecurity/crowdsec@sha256:{'d' * 64}"))
         )
@@ -1884,7 +1871,6 @@ class SidecarVerificationTests(unittest.TestCase):
         self.assertIn("mounts an image", message)
 
     def test_the_ordinary_mount_types_are_not_refused(self):
-        name_the_pending_sidecars(self)
         extra = (
             "    volumes:\n      - type: bind\n        source: /a\n        target: /b\n"
             "      - {type: volume, source: v, target: /c}\n"
@@ -1917,7 +1903,6 @@ class SidecarVerificationTests(unittest.TestCase):
         self.assertEqual(seen, [os.path.join(self.stack_dir, "edge")])
 
     def test_a_port_on_a_dockerhub_namespace_is_another_registry(self):
-        name_the_pending_sidecars(self)
         other = f"prom:5000/mysqld-exporter:v0.20.0@sha256:{'c' * 64}"
         self.assert_refused(compose_of(service_block("side", other)))
 
@@ -2301,20 +2286,18 @@ class CommittedStackTests(unittest.TestCase):
     def test_each_committed_stack_runs_exactly_the_sidecars_the_tests_count(self):
         for stack in COMMITTED_STACKS:
             with self.subTest(stack):
-                self.assertEqual(self.sidecars_of(stack), set(PENDING_SIDECARS.get(stack, ())))
+                self.assertEqual(self.sidecars_of(stack), set(SIDECARS.get(stack, ())))
 
-    def test_each_sidecar_is_registered_exempt_or_pending_the_owners_decision(self):
+    def test_each_sidecar_is_registered_or_named_for_its_stack(self):
         for stack in COMMITTED_STACKS:
             for name in self.sidecars_of(stack):
                 with self.subTest(stack=stack, name=name):
                     self.assertTrue(
                         name in bd.ATTESTED_IMAGES
                         or name in bd.UNATTESTED_STACK_IMAGES.get(stack, frozenset())
-                        or name in PENDING_SIDECARS.get(stack, frozenset())
                     )
 
-    def test_with_the_pending_sidecars_named_each_committed_stack_verifies(self):
-        name_the_pending_sidecars(self)
+    def test_each_committed_stack_verifies_with_the_shipped_lists(self):
         for stack, relative in COMMITTED_STACKS.items():
             with self.subTest(stack):
                 directory = self.stack_directory(relative)
@@ -2322,14 +2305,18 @@ class CommittedStackTests(unittest.TestCase):
                     stack, directory, EDGE_PIN, run=FakeRun([0] * 4), render=self.render
                 )
 
-    def test_without_the_pending_sidecars_named_a_stack_that_runs_one_is_refused(self):
-        for stack, names in PENDING_SIDECARS.items():
+    def test_a_stack_that_runs_a_sidecar_its_list_does_not_name_is_refused(self):
+        for stack, names in SIDECARS.items():
             with self.subTest(stack):
                 directory = self.stack_directory(COMMITTED_STACKS[stack])
-                with self.assertRaises(bd.DeployError) as raised:
-                    bd.verify_compose_images(
-                        stack, directory, EDGE_PIN, run=FakeRun([0] * 4), render=self.render
-                    )
+                trimmed = {
+                    key: listed - names for key, listed in bd.UNATTESTED_STACK_IMAGES.items()
+                }
+                with mock.patch.dict(bd.UNATTESTED_STACK_IMAGES, trimmed):
+                    with self.assertRaises(bd.DeployError) as raised:
+                        bd.verify_compose_images(
+                            stack, directory, EDGE_PIN, run=FakeRun([0] * 4), render=self.render
+                        )
                 self.assertTrue(any(name in str(raised.exception) for name in names))
 
     def test_the_stacks_the_wrapper_cannot_deploy_have_no_image_pin(self):
