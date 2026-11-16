@@ -481,7 +481,7 @@ class RoleReadsNoSecretAndWritesNoSecret(unittest.TestCase):
         self.assertEqual(end["when"], none_placed)
         self.assertEqual(stat["register"], "sweego_receiver_secret_stats")
         self.assertNotIn("when", refuse)
-        self.assertIn("item.stat.exists", as_dict(refuse["ansible.builtin.assert"])["that"])
+        self.assertIn("item.stat.exists", refuse["ansible.builtin.assert"]["that"])
 
     def test_no_step_file_name_trips_the_plan_scan(self) -> None:
         # A failed task's output names its file, and the plan withholds a host whose output
