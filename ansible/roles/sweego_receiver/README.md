@@ -27,10 +27,15 @@ In this order, and it stops at the first refusal:
    active and `DOCKER-USER` exists. `/etc/branchleft`, `/opt/branchleft` and `/usr/local/sbin` are
    real directories owned by root and not writable by group or others. The shared Compose template
    unit is loaded from its one path and is owned by root.
-4. **The secret files** (`_secrets.yml`). Each exists, is a regular file (not a link), is owned by
-   `root`, group `31100`, mode `0440`, and is not empty. The role looks at the file's metadata
-   only. It never opens a secret, never hashes one and never prints one. A missing or wrong file
-   stops the run with a message that names the path and the fault.
+4. **The secret files** (`_owner_files.yml`). Until the owner has placed any of them, the receiver
+   is not set up yet: the role says so and ends here, having written nothing, and the rest of the
+   host's pull goes on. It runs in full on the first pull after the files are placed. Once any
+   file is there, each must exist, be a regular file (not a link), be owned by `root`, group
+   `31100`, mode `0440`, and not be empty. The role looks at the file's metadata only. It never
+   opens a secret, never hashes one and never prints one. A missing or wrong file then stops the
+   run with a message that names the path and the fault. The step's file is not named for
+   secrets because a failed task's output names its file, and the plan's credential scan would
+   read a name like that as an assignment and withhold the host's whole plan.
 5. **The drain-port rule** (`_rule.yml`). Installs a small root-run program and its boot unit, loads
    the rule, and reads `DOCKER-USER` back. **This happens before the receiver is delivered or
    started**, so there is no moment when the drain port is published and unguarded.
@@ -176,8 +181,8 @@ written here as a placeholder. In order:
 
 1. Merge the wiring: the two ports in the host's owner variables, the role in the edge1 playbook
    and the host-role map, and the webhook port (never the drain port) in the edge's list of ports
-   it may proxy to. Each of those files is owner-merged. Place the secret files (step 2) before it
-   merges: the role refuses to run, and so fails the plan, while either is missing.
+   it may proxy to. Each of those files is owner-merged. Until step 2 is done the role waits: it
+   ends after its checks, writes nothing, and edge1's plan passes.
 2. Place the signing secret and the drain token as root-owned files (`root:31100`, mode `0440`) at
    the paths above.
 3. Publish the receiver image, and run `branchleft-deploy` for the stack `sweego-receiver` so the
