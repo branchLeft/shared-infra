@@ -455,12 +455,43 @@ class RoleReadsNoSecretAndWritesNoSecret(unittest.TestCase):
         stat = [
             task
             for name, task in self.tasks()
-            if name == "_secrets.yml" and "ansible.builtin.stat" in task
+            if name == "_owner_files.yml" and "ansible.builtin.stat" in task
         ]
         self.assertEqual(len(stat), 1)
         args = as_dict(stat[0]["ansible.builtin.stat"])
         self.assertIs(args["get_checksum"], False)
         self.assertIs(args["follow"], False)
+
+    def test_the_role_waits_only_while_no_file_is_placed(self) -> None:
+        steps = yaml.safe_load((ROLE / "tasks" / "_owner_files.yml").read_text(encoding="utf-8"))
+        modules = [next(k for k in task if k.startswith("ansible.builtin.")) for task in steps]
+        self.assertEqual(
+            modules,
+            [
+                "ansible.builtin.stat",
+                "ansible.builtin.debug",
+                "ansible.builtin.meta",
+                "ansible.builtin.assert",
+            ],
+        )
+        stat, say, end, refuse = steps
+        self.assertEqual(end["ansible.builtin.meta"], "end_role")
+        none_placed = "sweego_receiver_secret_stats.results | selectattr('stat.exists') | list | length == 0"
+        self.assertEqual(say["when"], none_placed)
+        self.assertEqual(end["when"], none_placed)
+        self.assertEqual(stat["register"], "sweego_receiver_secret_stats")
+        self.assertNotIn("when", refuse)
+        self.assertIn("item.stat.exists", as_dict(refuse["ansible.builtin.assert"])["that"])
+
+    def test_no_step_file_name_trips_the_plan_scan(self) -> None:
+        # A failed task's output names its file, and the plan withholds a host whose output
+        # matches this pattern (github-workflows ssh-check-hosts, credential-assignment).
+        pattern = re.compile(
+            r"(passw(or)?d|passphrase|secret|token|api[_-]?key|private[_-]?key|credential)"
+            r"[a-z0-9_.-]*\"?\s*[:=]\s*\"?[^\s\"]{4,}"
+        )
+        for path in sorted((ROLE / "tasks").glob("*.yml")):
+            self.assertIsNone(pattern.search(f"{path.name}:24:3".lower()), path.name)
 
     def test_no_task_opens_a_secret_file(self) -> None:
         for name, task in self.tasks():
@@ -499,7 +530,7 @@ class RoleReadsNoSecretAndWritesNoSecret(unittest.TestCase):
                 "_inputs.yml",
                 "_compose_check.yml",
                 "_preconditions.yml",
-                "_secrets.yml",
+                "_owner_files.yml",
                 "_rule.yml",
                 "_stack.yml",
                 "_readback.yml",
@@ -509,7 +540,7 @@ class RoleReadsNoSecretAndWritesNoSecret(unittest.TestCase):
     def test_the_rule_is_installed_and_read_back_before_the_stack_is_delivered(self) -> None:
         text = (ROLE / "tasks" / "main.yml").read_text(encoding="utf-8")
         self.assertLess(text.index("_rule.yml"), text.index("_stack.yml"))
-        self.assertLess(text.index("_secrets.yml"), text.index("_rule.yml"))
+        self.assertLess(text.index("_owner_files.yml"), text.index("_rule.yml"))
 
     def test_no_file_of_the_role_holds_a_secret_shaped_value(self) -> None:
         for path in sorted(ROLE.rglob("*")):

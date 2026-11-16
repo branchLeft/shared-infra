@@ -18,7 +18,7 @@
   ansible.builtin.include_tasks: _preconditions.yml
 
 - name: Check the secret files the owner placed
-  ansible.builtin.include_tasks: _secrets.yml
+  ansible.builtin.include_tasks: _owner_files.yml
 
 - name: Install the drain-port rule, load it and read it back
   ansible.builtin.include_tasks: _rule.yml
