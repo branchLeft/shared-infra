@@ -7,6 +7,21 @@
 broker_deploy_release_owner: root
 broker_deploy_release_group: root
 
+# Who owns the installed verify key. root, so the broker reads it through its group and cannot
+# replace it. The role's own test sets this to the account that runs the test.
+broker_deploy_verify_key_owner: root
+
+# The verify key file's text, and the 32 raw bytes it spells. The bytes are built in the
+# controller's memory, one character per byte: a byte below 128 is its own character and a byte
+# from 128 up is the lone surrogate Ansible turns back into that byte when it writes a file or
+# hashes a string, so no byte is lost and none is changed. Both are read where they are used,
+# after the shape of the file has been checked (tasks/_verify_key_pin.yml).
+broker_deploy_verify_key_text: "{{ lookup('ansible.builtin.file', broker_deploy_verify_key_src, rstrip=false) }}"
+broker_deploy_verify_key_bytes: >-
+  {%- for pair in broker_deploy_verify_key_text | trim | regex_findall('..') -%}
+  {%- set b = pair | int(base=16) -%}
+  {{ '%c' | format(b + 56320 * (b // 128)) }}{%- endfor -%}
+
 # The broker's unit, and the port the environment file's PORT line names. The role asks the
 # broker for its status on the loopback address only, and the unit allows nothing else.
 broker_deploy_unit_name: branchleft-broker.service

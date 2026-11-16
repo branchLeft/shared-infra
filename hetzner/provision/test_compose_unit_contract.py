@@ -298,6 +298,7 @@ SCANNED_SUFFIXES = frozenset(
         ".enforcing",
         ".golden",
         ".gotmpl",
+        ".hex",
         ".in",
         ".j2",
         ".js",
@@ -330,11 +331,6 @@ UNSCANNED_SUFFIXES: dict[str, str] = {
     ".pyc": (
         "compiled bytecode. The source it was compiled from is scanned, and a "
         "name reachable only through a stale .pyc is not one anybody wrote down."
-    ),
-    ".bin": (
-        "raw bytes, not text. The one file of this type is a Molecule stand-in "
-        "for a public key, 32 zero bytes, and a binary holds no prose or "
-        "configuration anybody authored for a name to be written down in."
     ),
 }
 

@@ -192,8 +192,8 @@ GATE_PATHS = [
     "ansible/checks/test_no_new_script_dependents.py",
     "ansible/checks/test_deploy_verifier_coverage.py",
     "ansible/trust/edge1.yml",
-    "hetzner/provision/branchleft-verify-image",
-    "hetzner/provision/test_branchleft_verify_image.py",
+    "ansible/roles/deploy_verifier/files/branchleft-verify-image.py",
+    "ansible/roles/deploy_verifier/tests/unit/test_branchleft_verify_image.py",
     "hetzner/control-plane/stack/postgres/pg_hba.conf",
 ]
 
@@ -233,6 +233,18 @@ CI_LOGIN_PATHS = [
     "ansible/roles/ci_login/templates/authorized_keys.j2",
     "ansible/roles/ci_login/vars/main.yml",
     "ansible/owner_vars/edge1.yml",
+]
+
+# ci_step_login grants the step account root-run sudo for the trigger in step mode and writes its
+# authorized_keys; the owner's values for ops1's roles are in owner_vars. Both are the owner's.
+CI_STEP_LOGIN_PATHS = [
+    "ansible/roles/ci_step_login/tasks/main.yml",
+    "ansible/roles/ci_step_login/tasks/_sudoers.yml",
+    "ansible/roles/ci_step_login/tasks/_keys.yml",
+    "ansible/roles/ci_step_login/templates/authorized_keys.j2",
+    "ansible/roles/ci_step_login/vars/main.yml",
+    "ansible/roles/ci_step_login/molecule/default/verify.yml",
+    "ansible/owner_vars/ops1.yml",
 ]
 
 # ci_jump writes the options of the jump account's key lines, which decide which private hosts
@@ -364,6 +376,7 @@ ACCOUNT_TASK_PATHS = [
     "ansible/roles/node_exporter/tasks/_node_exporter.yml",
     "ansible/roles/backup_worker/tasks/main.yml",
     "ansible/roles/ci_login/tasks/_account.yml",
+    "ansible/roles/ci_step_login/tasks/_account.yml",
     "ansible/roles/ring_controller_host/tasks/main.yml",
     "ansible/roles/safety_service/tasks/main.yml",
     "ansible/roles/tunnel_account/tasks/_account.yml",
@@ -550,6 +563,9 @@ class CodeownersTests(unittest.TestCase):
 
     def test_the_ci_login_role_and_the_owner_vars_are_owned_by_the_owner(self) -> None:
         self.assert_owned(CI_LOGIN_PATHS)
+
+    def test_the_ci_step_login_role_is_owned_by_the_owner(self) -> None:
+        self.assert_owned(CI_STEP_LOGIN_PATHS)
 
     def test_the_ci_jump_role_is_owned_by_the_owner(self) -> None:
         self.assert_owned(CI_JUMP_PATHS)
@@ -739,6 +755,7 @@ class CodeownersTests(unittest.TestCase):
             + PULL_ROLE_PATHS
             + HOST_INPUTS_PATHS
             + CI_LOGIN_PATHS
+            + CI_STEP_LOGIN_PATHS
             + SEEDING_TOOL_PATHS
             + BOOTSTRAP_GUARD_PATHS
             + KEY_ROLE_PATHS

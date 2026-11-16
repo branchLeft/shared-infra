@@ -47,3 +47,7 @@ breakglass_mint_host_key_path: /etc/branchleft/break-glass/signing-key.pem
 breakglass_mint_host_sha_pattern: '^[0-9a-f]{40}\Z'
 breakglass_mint_host_checksum_pattern: '^[0-9a-f]{64}\Z'
 breakglass_mint_host_image_pattern: '^[a-z0-9][a-z0-9._/-]*(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}\Z'
+
+# The registry read key's docker config directory, for the pull. A copy of
+# deploy_verifier_registry_docker_dir (a role imports no role): test_registry_key_callers.py holds it.
+breakglass_mint_host_registry_docker_config: /etc/branchleft/registry/docker

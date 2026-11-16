@@ -119,6 +119,18 @@
       loop_control:
         label: '{{ item.item | basename }}'
 
+    - name: Read the restore-drill unit's registry key drop-in
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/branchleft-restore-drill.service.d/10-registry-key.conf
+      register: backup_restore_verify_dropin
+
+    - name: Assert the drop-in sets the registry read key's directory and nothing else
+      ansible.builtin.assert:
+        that:
+          - (backup_restore_verify_dropin.content | ansible.builtin.b64decode) == "[Service]\nEnvironment=DOCKER_CONFIG=/etc/branchleft/registry/docker\n"
+        quiet: true
+        fail_msg: The restore-drill drop-in is missing, or does not set only DOCKER_CONFIG to the registry key directory.
+
     - name: Assert the secrets directory is root:root 0700
       ansible.builtin.assert:
         that:

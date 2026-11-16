@@ -71,3 +71,8 @@ edge_stack_dirs:
   - crowdsec/parsers
   - crowdsec/scenarios
   - crowdsec/remediation
+
+# The registry read key's docker config directory, for the module's `docker run` of the edge
+# image. A copy of deploy_verifier_registry_docker_dir (a role imports no role):
+# test_registry_key_callers.py holds it.
+edge_stack_registry_docker_config: /etc/branchleft/registry/docker

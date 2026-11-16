@@ -1,0 +1,40 @@
+---
+# Not part of the interface: role vars outrank inventory vars, so a caller cannot change these.
+ci_step_login_user: control-plane-step
+# sudo ignores a file whose name holds a dot or ends in a tilde; this one holds neither.
+ci_step_login_sudoers_name: control-plane-step
+ci_step_login_shell: /bin/bash
+# The trigger program has one home, in pull_trigger. This copy is held equal to it by a test.
+ci_step_login_program: /usr/local/sbin/pull-trigger
+# The one mode this account may ask the program for. Apply and check belong to the pipeline
+# account, which never holds this one.
+ci_step_login_mode: step
+
+# A shell whose last path word is one of these cannot run a forced command.
+ci_step_login_refused_shell_names:
+  - nologin
+  - 'false'
+# The password field of a locked account starts with one of these characters.
+ci_step_login_locked_pattern: '^[*!]'
+
+# Exactly two lines: the one that keeps the request text through sudo, and one grant of one
+# argument list. sudo matches a command with arguments exactly, so no other argument passes.
+ci_step_login_sudoers_lines:
+  - 'Defaults!{{ ci_step_login_program }} env_keep += "SSH_ORIGINAL_COMMAND"'
+  - '{{ ci_step_login_user }} ALL=(root) NOPASSWD: {{ ci_step_login_program }} --mode {{ ci_step_login_mode }}'
+
+# restrict switches off forwarding, a terminal, the agent and the user rc file.
+ci_step_login_key_options: restrict
+
+# The ed25519 shape of the sudoers_and_keys pattern, held equal to its entry there by a test.
+# The step key is an ed25519 key, so no other type is accepted.
+ci_step_login_key_shape: 'ssh-ed25519 [A-Za-z0-9+/]{68}'
+# One public key on one line: the type, a body of its length, an optional comment of printable
+# ASCII, and nothing in front. \Z, not $, so a trailing line break does not pass.
+ci_step_login_key_pattern: '^({{ ci_step_login_key_shape }})( [ -~]*)?\Z'
+
+# One source address: a dotted IPv4 address, or a range of at least 256 addresses (a /24 to
+# a /32). No wildcard, no negation, no name and no wider range, so the option cannot be
+# widened to any address by an owner value. \Z, not $.
+ci_step_login_octet: '(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+ci_step_login_address_pattern: '^{{ ci_step_login_octet }}(\.{{ ci_step_login_octet }}){3}(/(2[4-9]|3[0-2]))?\Z'

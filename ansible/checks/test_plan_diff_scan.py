@@ -14,6 +14,7 @@ import tempfile
 import unittest
 from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 from check_pins import load_yaml
 
@@ -43,9 +44,19 @@ RETIRED_MATCHES: dict[str, str] = {}
 # that file. This is a copy of the `allowances` array of the ssh-check-hosts action in
 # github-workflows, which the code owners approve; a new entry is a reviewed change to both. A line
 # is let through only when its text, trimmed, is exactly the entry's and its file is the entry's.
-SCAN_ALLOWANCES: tuple[tuple[str, str], ...] = (
-    ("hetzner/provision/branchleft-verify-image", "export GH_TOKEN=placeholder-not-a-credential"),
+#
+# There is none today. The one entry was the placeholder line of the deploy verifier when it was a
+# shell program (hetzner/provision/branchleft-verify-image); the verifier is now a Python program in
+# the deploy_verifier role, none of whose lines the scan matches (RealTreeCase holds that), so it
+# needs no entry. The action's own array still lists the retired shell path, which names no file
+# any more and passes nothing; it is dropped there in its own reviewed change. The mechanism is
+# kept, and its tests run against EXAMPLE_ALLOWANCE, which is never a real entry.
+SCAN_ALLOWANCES: tuple[tuple[str, str], ...] = ()
+EXAMPLE_ALLOWANCE = (
+    "ansible/roles/example/files/program.sh",
+    "export GH_TOKEN=placeholder-not-a-credential",
 )
+with_example_allowance = mock.patch(f"{__name__}.SCAN_ALLOWANCES", (EXAMPLE_ALLOWANCE,))
 # An assignment whose name is an expanded variable (`export "$NAME=$VALUE"`): the name and the value
 # are on the line as two variables, so the line-by-line scan reads neither as a credential. It is
 # the shape that held a name apart from its value; the allowance above replaces it.
@@ -428,9 +439,10 @@ class RegexCase(unittest.TestCase):
                     f"{path}: the checkout still has a matching line, so it is not retired text",
                 )
 
+    @with_example_allowance
     def test_the_named_allowance_passes_its_line_in_its_file_and_nothing_else(self) -> None:
         """The allowed line passes only as the whole line, in the file the entry names."""
-        path, line = SCAN_ALLOWANCES[0]
+        path, line = EXAMPLE_ALLOWANCE
         self.assertTrue(CREDENTIAL_ASSIGNMENT.search(line), "the entry is not needed")
         for text in (line, f"    {line}", f"{line}\r"):
             self.assertEqual(matching_lines(text + "\n", path), [])
@@ -606,9 +618,10 @@ class TreeCase(unittest.TestCase):
         self.assertEqual(len(found), 1)
         self.assertIn("hetzner/provision/p.py", found[0])
 
+    @with_example_allowance
     def test_the_allowed_line_in_its_file_needs_no_diff_false_and_elsewhere_does(self) -> None:
         """A copy of the allowed file passes shown; the same text under another name is found."""
-        path, line = SCAN_ALLOWANCES[0]
+        path, line = EXAMPLE_ALLOWANCE
         copy = (
             "- name: a\n  ansible.builtin.copy:\n    src: '{{ role_path }}/files/%s'\n"
             "    dest: /x\n"
@@ -781,6 +794,13 @@ class RealTreeCase(unittest.TestCase):
         # Every named allowance is for a file the walk reaches, or the entry guards nothing.
         for path, _line in SCAN_ALLOWANCES:
             self.assertTrue(any(s.endswith(path) for s in scanned), path)
+        # The deploy verifier is copied shown, with no diff: false and no allowance, so none of
+        # its lines may match the scan and it must not assign through an expanded name.
+        verifier = "ansible/roles/deploy_verifier/files/branchleft-verify-image.py"
+        self.assertTrue(any(s.endswith(verifier) for s in scanned), verifier)
+        text = (ROOT / verifier).read_text(encoding="utf-8")
+        self.assertEqual(matching_lines(text, verifier), [])
+        self.assertEqual(held_apart_lines(text), [])
         # The loops that are made while a role runs, or split into a hidden task and a visible
         # one, must be resolved to their files, or the files they copy were never read.
         for tail in (

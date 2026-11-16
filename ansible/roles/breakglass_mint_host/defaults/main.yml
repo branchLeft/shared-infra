@@ -4,4 +4,4 @@
 # bytes come from. The Node image is not an input: it is a constant in
 # vars/main.yml, and it must equal the grant role's, which carries the same
 # digest in its wrapper and expire unit.
-breakglass_mint_host_source_commit: e9851d16a4422b4a99f834a3ca6c43aea05699c7
+breakglass_mint_host_source_commit: c23ffbd4609e37a55cb9a49cf907cda3de3c84d2

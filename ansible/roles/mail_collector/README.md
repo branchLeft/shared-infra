@@ -212,6 +212,10 @@ It restarts whatever the exit (`Restart=always`, ten seconds between tries) and 
 collector that stays stopped is a host whose mail is never collected, so a limit that left it failed
 after a burst would be the silent failure the unit is built against.
 
+The unit's own `Environment=DOCKER_CONFIG=/etc/branchleft/registry/docker` points the docker
+client at the registry read key the owner places there; a host without it pulls anonymously.
+`ansible/checks/test_registry_key_callers.py` holds the line to `deploy_verifier`'s constant.
+
 ## How to test it
 
 From the repository root, with the pinned tools installed as `ansible/README.md` describes:

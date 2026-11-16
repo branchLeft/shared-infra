@@ -437,10 +437,12 @@ anyway.
 A hostname the edge answers directly with a fixed page, never proxying anywhere -- see
 `StaticSite`'s own doc comment in `siteTypes.ts` for what belongs in an entry, and
 `STATIC_SITE_CONTENT` in `render.ts` for where an entry's page text is registered.
-No static site is registered today: `publicpress.co.uk`, the only one, is now a
-proxied site (`publicpress-website` in `sites.ts`), and the renderer for this block
-is kept, unexercised, for the next fixed page. The paragraph below describes the
-block as it was rendered for that holding page.
+No fixed-page site is registered today: `publicpress.co.uk`, the only one, is now a
+proxied site (`publicpress-website` in `sites.ts`), and the page renderer in this block
+is kept, unexercised, for the next fixed page. The one registered static site,
+`sites.publicpress.co.uk`, answers with fixed text files, and `staticBlock` dispatches it
+to `staticFilesBlock` below before it looks for a page. The paragraph below describes the
+block as it was rendered for the holding page.
 
 Carries the same TLS and throttle posture as a proxied site block (`siteBlock` above): a
 browser or a scanner cannot tell this has a simpler backend and must not be given a
@@ -451,6 +453,26 @@ the page ships no external resource of any kind, only its own inline stylesheet 
 which is not true of every site this edge serves.
 
 No members-magic-link matcher: that route is Ghost's, and nothing here is Ghost.
+
+## `staticFilesBlock`
+
+The same posture as `staticBlock`, for a hostname that answers with a small set of fixed
+text files instead of a page: `sites.publicpress.co.uk`, whose files are in
+`hetzner/edge/sharedTenantFiles.ts`. The files are picked by the entry's `name`, and
+`staticBlock` dispatches to this block before it looks for a page.
+
+Each file is one literal path with a `@file_N path` matcher, its own `Content-Type`, and a
+`respond` with its body as a Caddy heredoc (`<<SHARED_TENANT_FILE_EOF`). The heredoc is
+used because a `security.txt` has several fields on separate lines, and a quoted one-line
+body cannot carry them. Heredoc bodies are not indented, so the renderer writes each body
+line at column 0, and only the `respond` line carries the block's indentation. The
+renderer refuses a path that is not a plain literal, a body without a trailing newline,
+and a body with a line equal to the marker. Every other path gets `respond 404`.
+
+The heredoc is not checked by a local Caddy binary: this repository's CI `caddy validate`
+over `stack/caddy/Caddyfile` is the check that the syntax is accepted.
+
+The CSP is `staticSiteCsp('')`, the strictest form, since a text file runs nothing.
 
 ## `probeBlock`
 
@@ -527,8 +549,8 @@ confined to a client that is both flooding and attacking: it is answered 429 rat
 
 `protectionChain` is called by four block builders, so the one `rateLimit` posture
 field throttles all four: `siteBlock` (zone `<site>_per_ip`), `redirectBlock` (zone
-`<site>_redirect_per_ip`), `staticBlock` (zone `<site>_per_ip`; none registered
-today) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
+`<site>_redirect_per_ip`), `staticBlock` (zone `<site>_per_ip`, its file-serving
+form included) and `probeBlock` (zones `probe_host_per_ip` and `probe_per_ip`, the two
 loopback probes). Only the `:9091` metrics listener is exempt: `metricsBlock` never calls
 `protectionChain`. Under the committed posture that is one general `rate_limit` directive
 per throttled block, each in its own zone, and `render.test.ts` counts them per kind

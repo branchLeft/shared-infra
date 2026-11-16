@@ -81,6 +81,12 @@ RING_CONTROLLER_TEXT_KEYS = frozenset(
         "ring_controller_host_bundle_url",
     )
 )
+# The two inputs of the ci_step_login role, which only ops1 applies: the step key's public half
+# and the source addresses it may connect from. The role holds the shapes (key type and length,
+# an address or a /24 to /32 range), so only the types are read here.
+STEP_LOGIN_KEY = "ci_step_login_key"
+STEP_LOGIN_FROM = "ci_step_login_from"
+STEP_LOGIN_VARS = frozenset((STEP_LOGIN_KEY, STEP_LOGIN_FROM))
 # The two host ports of the sweego_receiver role, whole numbers the owner names. The role holds the
 # range and the difference between them (its _inputs.yml), so only the type is read here. edge1
 # only: the role refuses any other host, and the playbook lists it there alone.
@@ -88,6 +94,7 @@ SWEEGO_RECEIVER_PORT_KEYS = frozenset(("sweego_receiver_port", "sweego_receiver_
 _BASE_OWNER_KEYS = {
     "edge1": CI_LOGIN_VARS | SWEEGO_RECEIVER_PORT_KEYS,
     "ops1": frozenset(("pull_trigger_steps", APPS_IMAGE_KEY, CONTROL_PLANE_IMAGE_KEY))
+    | STEP_LOGIN_VARS
     | RING_CONTROLLER_TEXT_KEYS,
 }
 OWNER_VARS_KEYS = {
@@ -789,6 +796,19 @@ def _jump_key_problems(doc: dict[str, object]) -> list[str]:
     return problems
 
 
+def _step_login_problems(doc: dict[str, object]) -> list[str]:
+    """The types of the ci_step_login values. What a key or an address may look like is the
+    role's rule alone (vars/main.yml), so only the types are read here."""
+    problems: list[str] = []
+    if STEP_LOGIN_KEY in doc and not isinstance(doc[STEP_LOGIN_KEY], str):
+        problems.append(f"{STEP_LOGIN_KEY} must be text")
+    if STEP_LOGIN_FROM in doc:
+        addresses = doc[STEP_LOGIN_FROM]
+        if not isinstance(addresses, list) or not all(isinstance(item, str) for item in addresses):
+            problems.append(f"{STEP_LOGIN_FROM} must be a list of text entries")
+    return problems
+
+
 def _owner_key_problems(doc: dict[str, object]) -> list[str]:
     """What is wrong with the values of an owner_vars file, by key. A missing key is reported
     by the caller, which compares the key set."""
@@ -812,6 +832,7 @@ def _owner_key_problems(doc: dict[str, object]) -> list[str]:
         for key in sorted(SWEEGO_RECEIVER_PORT_KEYS)
         if key in doc and (isinstance(doc[key], bool) or not isinstance(doc[key], int))
     )
+    problems.extend(_step_login_problems(doc))
     problems.extend(_jump_key_problems(doc))
     if "ci_login_manage_keys" in doc and not isinstance(doc["ci_login_manage_keys"], bool):
         problems.append("ci_login_manage_keys must be a bool")

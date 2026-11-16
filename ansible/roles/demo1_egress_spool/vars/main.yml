@@ -19,11 +19,11 @@ demo1_egress_spool_sbin_dir: /usr/local/sbin
 demo1_egress_spool_vendored_root: '{{ role_path }}/files/ghost-platform'
 
 # What is pinned (paths from the root of the ghost-platform commit).
-demo1_egress_spool_egress_script_src: demo-host/provision/branchleft_demo_egress.sh
+demo1_egress_spool_egress_script_src: demo-host/provision/branchleft_demo_egress.py
 demo1_egress_spool_egress_unit_src: demo-host/provision/branchleft-demo-egress.service
 demo1_egress_spool_compose_src: render-core/test/golden/mail-spool-compose.demo1.yml
 demo1_egress_spool_required_paths:
-  - demo-host/provision/branchleft_demo_egress.sh
+  - demo-host/provision/branchleft_demo_egress.py
   - demo-host/provision/branchleft-demo-egress.service
   - render-core/test/golden/mail-spool-compose.demo1.yml
 

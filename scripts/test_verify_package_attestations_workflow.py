@@ -19,8 +19,8 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 VERIFY_YML = WORKFLOWS / "verify-package-attestations.yml"
 
 ACTION = "branchLeft/github-workflows/.github/actions/verify-package-attestations"
-ACTION_SHA = "2c34b90b367fd160bb01d311d29224d250460086"
-ACTION_TAG = "v1.2.1"
+ACTION_SHA = "231e592397f4c94668c64646c14160d9d497bdde"
+ACTION_TAG = "v1.2.2"
 JOB_PERMISSIONS = {"contents": "read", "packages": "read"}
 USES_LINE = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$", re.MULTILINE)
 PINNED = re.compile(r"^[\w.-]+/[\w./-]+@[0-9a-f]{40}$")

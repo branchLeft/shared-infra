@@ -3,8 +3,9 @@
 The role is the only owner of the egress program, its unit, the mail spool's Compose file, its
 image pin file and the drain token path. The slot networks it lets the spool join are the slot
 table of demo1_build, written separately. The playbook that applies the role does not apply
-egress_nat to the demo host, whose containers must not reach the network, nor host_baseline or
-broker_deploy, which are the host's own steps. The cross-role
+egress_nat to the demo host, whose containers must not reach the network, nor host_baseline,
+which is the host's own step. It applies broker_deploy first, because demo1_build reads what that
+role leaves behind. The cross-role
 references are not allowed (ANS-12), so each copy stays and this test keeps them in step.
 """
 
@@ -42,14 +43,14 @@ OWNED = (
 )
 NAT_ROLE = "egress_nat"
 # The roles demo1's playbook must not apply, with the reason each is held off. The list in
-# checks/host_roles/demo1.yml holds the same three off a pushed playbook (R2); this keeps the
+# checks/host_roles/demo1.yml holds the same two off a pushed playbook (R2); this keeps the
 # reasons.
 EXCLUDED = {
     NAT_ROLE: "which would give the demo containers a route out",
     "host_baseline": "which is the host's own step, under its own enrolment decision",
-    "broker_deploy": "which would repoint a broker the owner installed by hand",
 }
-ORDER = (BUILD, ROLE)
+BROKER = "broker_deploy"
+ORDER = (BROKER, BUILD, ROLE)
 # What the role README says about the spool's image reaching the host.
 UNDECIDED = re.compile(r"is not decided yet", re.IGNORECASE)
 ROUTE_HEADING = "How the spool's image gets onto the host"
@@ -281,7 +282,7 @@ class SpoolAgreeTest(unittest.TestCase):
 
     def test_an_egress_pin_in_demo1_build_is_named(self) -> None:
         base = facts()
-        for marker in ("branchleft_demo_egress.sh", "branchleft-demo-egress.service"):
+        for marker in ("branchleft_demo_egress.py", "branchleft-demo-egress.service"):
             with self.subTest(marker=marker):
                 others = dict(cast("dict[str, str]", base["others"]))
                 others[BUILD] += f"\n  - path: demo-host/provision/{marker}\n"
@@ -319,6 +320,8 @@ class SpoolAgreeTest(unittest.TestCase):
         base = facts()
         for roles in (
             [ROLE, BUILD],
+            [BUILD, BROKER, ROLE],
+            [BUILD, ROLE],
             [BUILD],
             [ROLE],
             [BUILD, ROLE, ROLE],

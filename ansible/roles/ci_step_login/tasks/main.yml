@@ -1,0 +1,9 @@
+---
+- name: Make sure the step account exists, locked, with a real shell
+  ansible.builtin.import_tasks: _account.yml
+
+- name: Install the sudoers file of the step account
+  ansible.builtin.import_tasks: _sudoers.yml
+
+- name: Keep the one key line of the step account
+  ansible.builtin.import_tasks: _keys.yml

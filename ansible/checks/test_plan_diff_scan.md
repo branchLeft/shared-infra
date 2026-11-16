@@ -18,11 +18,16 @@ and one whole line, in the `allowances` array of the `ssh-check-hosts` action in
 which the code owners approve, so a new entry is a reviewed change there. The scan passes that line
 only in that file and only as the whole line; the diff of the file is still shown to the approver in
 full. `SCAN_ALLOWANCES` in the test is a copy of the array, so the test passes the same line. Today it
-holds one entry, the `GH_TOKEN` placeholder line of `hetzner/provision/branchleft-verify-image`, so
-that file needs no `diff: false`. An entry is added in both places in one change. The test fails an
+holds no entry. Its one entry was the `GH_TOKEN` placeholder line of the shell verifier,
+`hetzner/provision/branchleft-verify-image`; the verifier is now a Python program in the
+`deploy_verifier` role, none of whose lines the scan matches, so it is copied shown with neither an
+entry nor `diff: false`, and the test fails if a line of it ever does match. The action's array still
+names the retired shell path, which passes nothing now; dropping it is a change in `github-workflows`.
+An entry is added in both places in one change. The test fails an
 entry whose line is not on one line of its file, so a name held apart from its value cannot stand in
 for it, and fails a shown file that assigns through an expanded name (`export "$NAME=$VALUE"`), the
-shape that was used to hold a name apart. That second test reads one shape and is not a proof that no
+shape that was used to hold a name apart. The mechanism is tested against a made-up entry that is
+never in the real tuple. That second test reads one shape and is not a proof that no
 other split exists: the scan reads a line at a time, and the review of a copied file is the rest.
 
 What the test enforces, over every `copy` and `template` task of the roles the playbooks list:

@@ -149,6 +149,11 @@
         edge_stack_apply_fix_modes: >-
           {{ [{'path': edge_stack_project_dir ~ '/' ~ edge_stack_caddy_file, 'mode': '0644'}]
           if edge_stack_caddyfile_stat.stat.exists else [] }}
+      # The module validates the candidate Caddyfile with `docker run` of the pinned image, which a
+      # private registry answers only to the host's read key, so docker is told where it is. The
+      # restart of the unit goes through branchleft-compose@.service, which sets it itself.
+      environment:
+        DOCKER_CONFIG: '{{ edge_stack_registry_docker_config }}'
       register: edge_stack_locked
       failed_when: false
       diff: false

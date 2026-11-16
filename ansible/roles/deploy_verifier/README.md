@@ -6,7 +6,7 @@ check is in `hetzner/provision/branchleft_deploy.py`, `verify_attestation`.
 
 ## What it installs
 
-- `/usr/local/sbin/branchleft-verify-image`, root, 0755: copied from `hetzner/provision/`, the single home. The role holds no copy.
+- `/usr/local/sbin/branchleft-verify-image`, root, 0755: a Python program, copied from `files/branchleft-verify-image.py`, the single home. It runs with no shell; gh is started from an argument list. Its tests are in `tests/unit/`.
 - `/usr/local/libexec/branchleft-verifier/gh`, root, 0755: gh 2.103.3, the release named in `vars/main.yml`, installed from its tarball.
 - `/var/lib/branchleft/verifier-home`, root, 0700: empty. The wrapper points `HOME`, `GH_CONFIG_DIR` and `XDG_CONFIG_HOME` here.
 
@@ -61,6 +61,11 @@ The role is applied on every host that runs the wrapper, so all five (`app1`, `d
 `ops1`) are checked. `app1` pulls no private image yet, so for it the check is harmless and an
 absent key stays anonymous.
 
+The directory is one constant here, `deploy_verifier_registry_docker_dir`. Every other task or
+program that pulls or runs an image directly takes it too, from its own pinned copy, and
+`ansible/checks/test_registry_key_callers.py` finds each caller by scanning and fails when one lacks
+it or its copy differs.
+
 ## Where it runs
 
 The role is applied by the playbooks of every host that runs the deploy wrapper: `edge1` and `app1`
@@ -80,9 +85,10 @@ them, because check mode fetches and extracts nothing (ANS-10).
 
 ## Tests
 
+- `tests/unit/test_branchleft_verify_image.py`: runs the installed program as a subprocess against a stub gh, for the token gate, the refusals and the usage exit. Run by `run_role_unit_tests.py`.
 - `molecule/default`: converges the role on a container. It downloads the pinned gh tarball, so
   the digest check runs for real in CI, and `verify.yml` checks the installed files against the
-  repository's copy and the version against `vars/main.yml`.
+  role's own `files/` and the version against `vars/main.yml`.
 - `molecule/default/tasks/case_registry_key.yml`, run once per case from `verify.yml`: no key,
   a good key, a directory or file open to others, a directory with no file, two registries, the
   wrong registry, an entry with no auth, a credential helper, a file that is not JSON, and JSON
