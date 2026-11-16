@@ -98,6 +98,13 @@ that bind-mounts a file keeps the inode it started with. The role then recreates
 containers, checks that every service in the Compose file is running, and asks
 `/health` from the host, retrying until the wait timeout. Only a `200` writes the stamp.
 
+A plan (check mode) brings nothing up, so when a bring-up is due the running stack still holds
+the content of the last apply. The plan then does not ask `/health`, and prints that it did not
+and why: asking would judge the old content at the address the new content publishes, and a
+plan that moves the listen address would fail although the apply brings the stack up first.
+When no bring-up is due, the plan asks, so a page that is down still fails the plan. An apply
+always asks.
+
 ## Run the test
 
 From the repository root, with the tools installed as `ansible/README.md` describes:
@@ -111,8 +118,10 @@ scenario in `molecule/default/` replaces `docker` with a stand-in that records i
 runs no container, and replaces the page with a small web server that answers `/health`. It
 proves the files, the arguments of every Compose call, that nothing removes data, the
 refusal of a wide bind, a digest-less image and an override file, that a page which does not
-answer leaves no stamp, that a container reporting `unhealthy` is refused, and that a health delay
-of 0 completes. It does not prove that Gatus accepts the configuration or
+answer leaves no stamp, that a container reporting `unhealthy` is refused, that a health delay
+of 0 completes, and, in two `ansible-playbook --check` runs of `plan.yml`, that a plan with a
+bring-up due passes without asking the page while one with none due still refuses a page that
+does not answer. It does not prove that Gatus accepts the configuration or
 probes anything; the first live apply does.
 
 The listen-address refusal is the safety-class case. To see it red, remove the `choices` from

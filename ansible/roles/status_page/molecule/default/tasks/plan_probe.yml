@@ -1,0 +1,128 @@
+---
+# The plan asks the page for its health only when the stack is not due to be brought up.
+#
+# Due: the page answers on loopback, as a stack applied with the old content does, while the
+# plan renders the role's default, the private address, where nothing listens. The compose file
+# differs, so a bring-up is due, and an apply would bring the stack up before it asks. The plan
+# must pass, say why it did not ask, and change nothing.
+#
+# Not due: the plan renders loopback, the content the stack was brought up with, so no bring-up
+# is due, and the page is made to stop answering. The plan must still refuse it, so a page that
+# is down is not hidden from the plan.
+- name: Read the compose file and the stamp before the plans
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - /opt/branchleft/status/compose.yml
+    - /opt/branchleft/status/.status_page_stamp
+  register: status_page_plan_before
+
+- name: Count the real up calls before the plans
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/status_page_standin/argv.log]
+  register: status_page_plan_ups_before
+  changed_when: false
+  failed_when: status_page_plan_ups_before.rc > 1
+
+- name: Plan the role on the private address while the page answers only on loopback
+  ansible.builtin.command:
+    argv:
+      - ansible-playbook
+      - --check
+      - --diff
+      - --inventory
+      - '{{ inventory_dir }}'
+      - --extra-vars
+      - '{"status_page_wait_timeout": 2}'
+      - '{{ playbook_dir }}/plan.yml'
+  delegate_to: localhost
+  register: status_page_plan_due
+  changed_when: false
+  failed_when: false
+
+- name: Assert the plan passed and said why it did not ask the page
+  ansible.builtin.assert:
+    that:
+      - status_page_plan_due.rc == 0
+      - "'is due to be brought up with new content' in status_page_plan_due.stdout"
+      - "'did not answer 200 on' not in (status_page_plan_due.stdout ~ status_page_plan_due.stderr)"
+    quiet: true
+    fail_msg: >-
+      A plan whose stack is due to be brought up must not ask the page, which still runs the old
+      content (exit status {{ status_page_plan_due.rc }}). Its output ends:
+      {{ status_page_plan_due.stdout_lines[-25:] | ansible.builtin.join('\n') }}
+
+- name: Refuse a page that is down when no bring-up is due
+  block:
+    - name: Take the health answer away
+      ansible.builtin.file:
+        path: /var/lib/status_page_standin/www/health
+        state: absent
+
+    - name: Plan the role on loopback, the content the stack runs
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - --check
+          - --diff
+          - --inventory
+          - '{{ inventory_dir }}'
+          - --extra-vars
+          - '{"status_page_listen_address": "127.0.0.1", "status_page_wait_timeout": 2}'
+          - '{{ playbook_dir }}/plan.yml'
+      delegate_to: localhost
+      register: status_page_plan_not_due
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the plan refused the page with the health check
+      ansible.builtin.assert:
+        that:
+          - status_page_plan_not_due.rc != 0
+          # ansible-core prints a failed task's message on stderr.
+          - "'did not answer 200 on' in status_page_plan_not_due.stderr"
+          - "'is due to be brought up with new content' not in status_page_plan_not_due.stdout"
+        quiet: true
+        fail_msg: >-
+          A plan with no bring-up due must still refuse a page that does not answer (exit
+          status {{ status_page_plan_not_due.rc }}). Its output ends:
+          {{ status_page_plan_not_due.stdout_lines[-25:] | ansible.builtin.join('\n') }}
+          Its errors: {{ status_page_plan_not_due.stderr_lines[-10:] | ansible.builtin.join('\n') }}
+  always:
+    - name: Give the page its health answer back
+      ansible.builtin.copy:
+        content: |
+          {"status":"UP"}
+        dest: /var/lib/status_page_standin/www/health
+        owner: root
+        group: root
+        mode: '0644'
+
+- name: Read the compose file and the stamp after the plans
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - /opt/branchleft/status/compose.yml
+    - /opt/branchleft/status/.status_page_stamp
+  register: status_page_plan_after
+
+- name: Count the real up calls after the plans
+  ansible.builtin.command:
+    argv: [grep, --count, --fixed-strings, ' up --detach', /var/lib/status_page_standin/argv.log]
+  register: status_page_plan_ups_after
+  changed_when: false
+  failed_when: status_page_plan_ups_after.rc > 1
+
+- name: Assert the plans changed nothing and brought nothing up
+  ansible.builtin.assert:
+    that:
+      - >-
+        status_page_plan_after.results | ansible.builtin.map(attribute='stat.checksum') | ansible.builtin.list
+        == status_page_plan_before.results | ansible.builtin.map(attribute='stat.checksum') | ansible.builtin.list
+      - status_page_plan_ups_after.stdout == status_page_plan_ups_before.stdout
+    quiet: true
+    fail_msg: >-
+      A plan wrote to the project directory or brought the stack up. Up calls:
+      {{ status_page_plan_ups_before.stdout }} before, {{ status_page_plan_ups_after.stdout }} after.
