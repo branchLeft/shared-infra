@@ -476,7 +476,9 @@ class RoleReadsNoSecretAndWritesNoSecret(unittest.TestCase):
         )
         stat, say, end, refuse = steps
         self.assertEqual(end["ansible.builtin.meta"], "end_role")
-        none_placed = "sweego_receiver_secret_stats.results | selectattr('stat.exists') | list | length == 0"
+        none_placed = (
+            "sweego_receiver_secret_stats.results | selectattr('stat.exists') | list | length == 0"
+        )
         self.assertEqual(say["when"], none_placed)
         self.assertEqual(end["when"], none_placed)
         self.assertEqual(stat["register"], "sweego_receiver_secret_stats")
