@@ -6,6 +6,27 @@
 # link among them. A release that is missing a file, has an extra one, has a changed byte,
 # or holds a link stops the run here with nothing written. Reading is not a change, so this
 # runs in check mode too.
+
+# Until a release is carried, the role is not set up yet, which is not a fault: it says so and
+# ends here, with nothing read from the host or written to it, and the rest of the host's pull
+# goes on. It runs in full on the first pull after a version and its pins are carried. Once
+# either is set, the checks below hold, so a release that is only half carried (a version with
+# no pins, or pins with no version) is still refused. The wait holds in a plan too, which is
+# the point of it: a plan needs every host clean or drifted, so a refusal here would fail the
+# host's plan, and with it every delivery, for something that is no fault. The debug task
+# says why, as ANS-10 asks of a role that skips work.
+- name: Say the role waits until a release is carried
+  ansible.builtin.debug:
+    msg: >-
+      The role carries no release yet (broker_deploy_release_version and broker_deploy_release_pins
+      are both empty). It waits here and changes nothing, and reads nothing from the host; it runs
+      in full on the first pull after a release and its pins are carried.
+  when: broker_deploy_release_version == '' and broker_deploy_release_pins | length == 0
+
+- name: End the role until a release is carried
+  ansible.builtin.meta: end_role
+  when: broker_deploy_release_version == '' and broker_deploy_release_pins | length == 0
+
 - name: Refuse a release version that is not MAJOR.MINOR.PATCH or has no pinned files
   ansible.builtin.assert:
     that:

@@ -441,7 +441,18 @@ class RoleAgrees(Lab):
     """What the tool writes is accepted, byte for byte, by the role's own pin check."""
 
     def play(self, directory: Path) -> Outcome:
-        """Run the real pin check against the carried release with the written defaults."""
+        """Run the real pin check against the carried release with the written defaults.
+
+        The pin check runs inside a scratch role, because it can end the role (a role that
+        carries no release waits) and a play cannot run `end_role` outside one.
+        """
+        roles = self.root / "roles"
+        scratch_tasks = roles / "pin_probe" / "tasks"
+        scratch_tasks.mkdir(parents=True, exist_ok=True)
+        (scratch_tasks / "main.yml").write_text(
+            f"- ansible.builtin.include_tasks: {ROLE / 'tasks' / '_release_pin.yml'}\n",
+            encoding="utf-8",
+        )
         play = self.root / "play.yml"
         play.write_text(
             "- hosts: localhost\n"
@@ -450,7 +461,8 @@ class RoleAgrees(Lab):
             "  vars_files:\n"
             f"    - {self.defaults}\n"
             "  tasks:\n"
-            f"    - ansible.builtin.include_tasks: {ROLE / 'tasks' / '_release_pin.yml'}\n",
+            "    - ansible.builtin.include_role:\n"
+            "        name: pin_probe\n",
             encoding="utf-8",
         )
         environment = {
@@ -459,6 +471,7 @@ class RoleAgrees(Lab):
             "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
             "ANSIBLE_NOCOLOR": "1",
             "ANSIBLE_HOME": str(self.root / "ansible-home"),
+            "ANSIBLE_ROLES_PATH": str(roles),
         }
         done = subprocess.run(  # noqa: S603
             [
@@ -490,11 +503,11 @@ class RoleAgrees(Lab):
         self.assertNotEqual(0, refused.code)
         self.assertIn("does not have its pinned sha256", refused.output)
 
-    def test_the_role_refuses_the_defaults_before_the_tool_ran(self) -> None:
-        """Before a release is carried the role stops, which is the state the tool starts from."""
-        refused = self.play(self.role / "files" / "releases")
-        self.assertNotEqual(0, refused.code)
-        self.assertIn("No release is carried in the role", refused.output)
+    def test_the_role_waits_on_the_defaults_before_the_tool_ran(self) -> None:
+        """Before a release is carried the role waits, which is the state the tool starts from."""
+        waiting = self.play(self.role / "files" / "releases")
+        self.assertEqual(0, waiting.code, waiting.output)
+        self.assertIn("carries no release yet", waiting.output)
 
 
 if __name__ == "__main__":

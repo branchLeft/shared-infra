@@ -12,8 +12,9 @@
 #
 # broker_deploy comes first of the host's own roles, because demo1_build reads, and refuses the
 # host unless, what broker_deploy left behind. It carries its release and its request-signing
-# public key as pinned files and refuses before it writes anything until both are carried: with
-# no release pinned this playbook stops at that role and changes nothing on the host. Its inputs
+# public key as pinned files. While no release is carried it waits and changes nothing on the
+# host, and the roles after it go on; a release that is only half carried is refused before
+# anything is written. Its inputs
 # are role defaults, because a playbook entry carries no variables (R2). Its Node runtime is
 # fetched from nodejs.org, pinned by its sha256: the one download the no-fetch test above lets
 # through. That test holds the roles' text to this one host; it does not read or set the host's

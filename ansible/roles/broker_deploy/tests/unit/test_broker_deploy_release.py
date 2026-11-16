@@ -1,8 +1,10 @@
 """Behaviour of the release tasks of broker_deploy, run for real with ansible-playbook on localhost.
 
 The pin check and the release delivery are task files, so they are run, not read: a small play
-in a scratch directory includes them with every path of the role moved into the scratch tree and
-the owner set to the account that runs the test. Nothing here touches a host or a container. They
+in a scratch directory includes a scratch role that includes them, with every path of the role
+moved into the scratch tree and the owner set to the account that runs the test. They run inside
+a role because the pin check can end the role (a role that carries no release waits), and a play
+cannot run `end_role` outside one. Nothing here touches a host or a container. They
 prove what a read of the YAML cannot: that a release whose files are not exactly the pinned ones
 stops the run before anything is written, that a plan writes nothing, that an apply delivers the
 files once and links the release, and that the next run changes nothing.
@@ -87,6 +89,14 @@ class Lab(unittest.TestCase):
         self.releases = self.root / "opt" / "releases"
         self.current = self.root / "opt" / "current"
         self.pins = {VERSION: pins_of(self.carried)}
+        self.roles = self.root / "roles"
+        scratch_tasks = self.roles / "release_probe" / "tasks"
+        scratch_tasks.mkdir(parents=True)
+        (scratch_tasks / "main.yml").write_text(
+            f"- ansible.builtin.include_tasks: {ROLE / 'tasks' / '_release_pin.yml'}\n"
+            f"- ansible.builtin.include_tasks: {ROLE / 'tasks' / '_release.yml'}\n",
+            encoding="utf-8",
+        )
         self.play = self.root / "play.yml"
         self.play.write_text(
             "- hosts: localhost\n"
@@ -96,8 +106,8 @@ class Lab(unittest.TestCase):
             f"    - {ROLE / 'defaults' / 'main.yml'}\n"
             f"    - {ROLE / 'vars' / 'main.yml'}\n"
             "  tasks:\n"
-            f"    - ansible.builtin.include_tasks: {ROLE / 'tasks' / '_release_pin.yml'}\n"
-            f"    - ansible.builtin.include_tasks: {ROLE / 'tasks' / '_release.yml'}\n",
+            "    - ansible.builtin.include_role:\n"
+            "        name: release_probe\n",
             encoding="utf-8",
         )
 
@@ -131,6 +141,7 @@ class Lab(unittest.TestCase):
             "ANSIBLE_INVENTORY_UNPARSED_WARNING": "False",
             "ANSIBLE_NOCOLOR": "1",
             "ANSIBLE_HOME": str(self.root / "ansible-home"),
+            "ANSIBLE_ROLES_PATH": str(self.roles),
         }
         # The command is built here from fixed paths and the scratch tree.
         done = subprocess.run(  # noqa: S603
