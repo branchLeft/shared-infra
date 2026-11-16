@@ -31,12 +31,13 @@
 # ----- The verifier -----
 
 # A link at the verifier path is refused, never written through or replaced. The programs run as
-# root, and a write through a link would change whatever it points at.
+# root, and a write through a link would change whatever it points at. Its sha256 tells the plan
+# whether the host still holds the retired shell verifier (below).
 - name: Look at the verifier path before it is written
   ansible.builtin.stat:
     path: '{{ deploy_verifier_verifier_path }}'
     follow: false
-    get_checksum: false
+    checksum_algorithm: sha256
     get_mime: false
     get_attributes: false
   register: deploy_verifier_verifier_before
@@ -55,13 +56,34 @@
 # The program is files/branchleft-verify-image.py, the one copy of it, so the bytes installed are
 # the bytes of that file. It is root's, 0755, and not writable by any other account, because the
 # wrapper runs it as root. It is installed under the name the wrapper calls, without the .py.
-- name: Install the verifier from the role's files, the one home of the program
-  ansible.builtin.copy:
-    src: branchleft-verify-image.py
-    dest: '{{ deploy_verifier_verifier_path }}'
-    owner: root
-    group: root
-    mode: '0755'
+#
+# Before it was Python the verifier was a shell program, and a host that has not yet applied the
+# Python one still holds it. That program gave gh a placeholder token on one line, which the plan's
+# secret scan reads as a credential, so a plan printing the replacement's diff would show that line
+# as removed and the whole host would be withheld. For that one program, named by its sha256, the
+# diff is hidden and the plan says what it replaces; any other content at the path is shown.
+- name: Replace the verifier, hiding only the lines of the retired shell program
+  vars:
+    # The retired shell verifier as last delivered, at shared-infra commit c1d37372.
+    deploy_verifier_retired_shell_sha256: 4739d9e574c5448ce5720e28668c9b03b978f19c2a3a2ef0caec25438ce30fa5
+  block:
+    - name: Say the plan replaces the retired shell verifier without showing its lines
+      ansible.builtin.debug:
+        msg: >-
+          {{ deploy_verifier_verifier_path }} holds the retired shell verifier (sha256
+          {{ deploy_verifier_retired_shell_sha256 }}). It is replaced by this commit's
+          files/branchleft-verify-image.py. Its diff is not shown, because one removed line, the
+          placeholder the retired program gave gh, reads as a credential to the plan's scan.
+      when: deploy_verifier_verifier_before.stat.checksum | default('') == deploy_verifier_retired_shell_sha256
+
+    - name: Install the verifier from the role's files, the one home of the program
+      ansible.builtin.copy:
+        src: branchleft-verify-image.py
+        dest: '{{ deploy_verifier_verifier_path }}'
+        owner: root
+        group: root
+        mode: '0755'
+      diff: "{{ deploy_verifier_verifier_before.stat.checksum | default('') != deploy_verifier_retired_shell_sha256 }}"
 
 # Read back after the write, so a file that is not root's, is not 0755, or is a link is a failure
 # of this run rather than something the wrapper finds later. Skipped in check mode, which wrote

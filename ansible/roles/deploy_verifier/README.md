@@ -83,6 +83,12 @@ The reads (the pins, the gh version, the credential check) run under `--check`. 
 reported, not made. The download and the install are skipped in check mode with that reason beside
 them, because check mode fetches and extracts nothing (ANS-10).
 
+A host that still holds the retired shell verifier, named by its sha256 in `tasks/main.yml`, has
+the replacement's diff hidden in the plan. The plan says what it replaces instead. The retired
+program gave gh a placeholder token on one line, which the plan's secret scan reads as a
+credential, so showing it removed would withhold the whole host. Any other content at the path is
+shown. Once every host has applied the Python program, the condition matches nothing.
+
 ## Tests
 
 - `tests/unit/test_branchleft_verify_image.py`: runs the installed program as a subprocess against a stub gh, for the token gate, the refusals and the usage exit. Run by `run_role_unit_tests.py`.
@@ -93,6 +99,11 @@ them, because check mode fetches and extracts nothing (ANS-10).
   a good key, a directory or file open to others, a directory with no file, two registries, the
   wrong registry, an entry with no auth, a credential helper, a file that is not JSON, and JSON
   that is not an object. Each case names the rule the refusal must contain.
+- `molecule/default/tasks/plan_retired_verifier.yml`, run last from `verify.yml`: plans
+  `molecule/default/plan.yml` with `ansible-playbook --check --diff` over a stand-in of the retired
+  program. Pinned as retired, its lines must not be printed and the plan must say what it
+  replaces; not pinned, the diff is shown. `tests/unit/test_retired_verifier_diff.py` pins the
+  condition, the digest and the report.
 - `ansible/checks/test_deploy_verifier_coverage.py`: the wrapper's paths agree with these vars, the
   pins agree and sit in vars, every wrapper-calling role is in the table, and every playbook applies
   this role before them.

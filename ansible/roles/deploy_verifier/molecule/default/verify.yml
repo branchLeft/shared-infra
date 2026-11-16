@@ -10,6 +10,7 @@
     - ../../vars/main.yml
   vars:
     verify_program_src: '{{ playbook_dir }}/../../files/branchleft-verify-image.py'
+    verify_program_path: /usr/local/sbin/branchleft-verify-image
   tasks:
     - name: Read the installed verifier, its home and the gh directory
       ansible.builtin.stat:
@@ -130,3 +131,6 @@
           expect: registry key content
       loop_control:
         label: '{{ item.name }}'
+
+    - name: Plan a host that still holds the retired shell verifier
+      ansible.builtin.include_tasks: tasks/plan_retired_verifier.yml
