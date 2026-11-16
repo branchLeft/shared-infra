@@ -318,10 +318,27 @@
       | ansible.builtin.map(attribute='Service') | ansible.builtin.list }}
   when: status_page_compose_file_stat.stat.exists
 
+# In a plan, a stack that is due to be brought up is still running the content of the
+# last apply, because check mode brings nothing up. Asking it for its health then judges
+# that old content at the address the new content would publish: a plan that moves the
+# listen address finds nothing listening there and fails, although the apply would bring
+# the stack up first. So a plan asks only when no bring-up is due, and otherwise says why
+# it did not ask (ANS-10). An apply always asks.
+- name: Say the plan does not ask a stack that is due to be brought up
+  ansible.builtin.debug:
+    msg: >-
+      The status page stack is due to be brought up with new content, which a plan does not do,
+      so the plan does not ask http://{{ status_page_listen_address }}:{{ status_page_port }}/health.
+      The apply brings the stack up and then refuses a page that does not answer 200 there.
+  when:
+    - status_page_compose_file_stat.stat.exists
+    - ansible_check_mode
+    - status_page_up_needed | ansible.builtin.bool
+
 # The image is a scratch image: it has no shell, so Compose cannot carry a
 # healthcheck for it, and the page is checked from the host. A read that changes
-# nothing, so it runs in check mode as well. A failed request is kept as a
-# result and judged by the assert below, which names the problem.
+# nothing, so it runs in a plan as well, unless a bring-up is due (above). A failed
+# request is kept as a result and judged by the assert below, which names the problem.
 - name: Ask the page whether it is healthy
   ansible.builtin.uri:
     url: 'http://{{ status_page_listen_address }}:{{ status_page_port }}/health'
@@ -338,7 +355,9 @@
   failed_when: false
   changed_when: false
   check_mode: false
-  when: status_page_compose_file_stat.stat.exists
+  when:
+    - status_page_compose_file_stat.stat.exists
+    - not (ansible_check_mode and (status_page_up_needed | ansible.builtin.bool))
 
 - name: Refuse a page that does not answer 200 on /health
   ansible.builtin.assert:
@@ -349,7 +368,9 @@
       The status page did not answer 200 on http://{{ status_page_listen_address }}:{{ status_page_port }}/health
       (status {{ status_page_health.status | ansible.builtin.default(-1) }}). Nothing is recorded
       as healthy, so the next run brings the stack up again.
-  when: status_page_compose_file_stat.stat.exists
+  when:
+    - status_page_compose_file_stat.stat.exists
+    - not (ansible_check_mode and (status_page_up_needed | ansible.builtin.bool))
 
 # Last, and only reached if the stack came up and the page answered: a run that
 # fails anywhere above leaves the old stamp, so the next run brings the stack up
