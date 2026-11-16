@@ -21,7 +21,8 @@ argument_specs:
           The broker release to run, as MAJOR.MINOR.PATCH. It names the release
           directory under the releases directory and the directory of the
           release's files under the release directory of the role. Empty until a
-          release is carried; the role refuses an empty version.
+          release is carried; while it and the pins are both empty the role waits and
+          changes nothing, and pins with an empty version are refused.
         default: ''
       broker_deploy_release_pins:
         type: dict

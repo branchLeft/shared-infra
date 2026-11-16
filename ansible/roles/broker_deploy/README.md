@@ -52,8 +52,14 @@ runbook describes, and the tarball unpacked. The role does not verify an attesta
 pin proves the bytes did not change since it was chosen, not that CI built them.
 
 No release is carried yet: `broker_deploy_release_version` is empty and
-`broker_deploy_release_pins` is empty, and the role refuses before it writes anything. The
-step that carries the first release sets the version, the pins and the files in one change. That
+`broker_deploy_release_pins` is empty, so the role waits. It says so (a debug task, ANS-10) and
+ends with `meta: end_role`, first of `tasks/_release_pin.yml`, with nothing read from the host
+or written to it, in a plan and in an apply; the verify key check and every task after it are
+skipped with it, and the rest of the host's play goes on. A run does the whole role from the
+first pull after a version and its pins are carried. A release that is only half carried, a
+version with no pins or pins with no version, is not a wait: it is refused below, as are all
+the other refusals. The step that carries the first release sets the version, the pins and the
+files in one change. That
 step is made by `ansible/tools/carry_broker_release.py` (see `ansible/tools/README.md`) from the
 tarball the owner has verified, so the files and pins are not typed by hand.
 
@@ -80,8 +86,8 @@ nothing).
 ## Inputs
 
 Every input has a default, because a playbook entry for this role carries no variables. The
-release stays empty until the owner carries one, and the role refuses before it writes anything
-while it is.
+release stays empty until the owner carries one, and the role waits and changes nothing while
+it is (see above).
 
 - The release is `broker_deploy_release_version` (empty until one is carried), its digests are
   in `broker_deploy_release_pins`, and the files are in `broker_deploy_release_dir`.
@@ -116,7 +122,8 @@ These stay with an owner, as the runbook already says:
 
 - Cutting a release: that is the broker's release workflow, on a signed tag.
 - Adding a release's files to `files/releases/VERSION/` and their pins, after the attestation
-  was verified. A version whose files are not carried stops the role.
+  was verified. A version whose files are not carried stops the role; no version at
+  all makes it wait.
 - Making the request-signing key pair, and saving the private half in the
   owner's password manager.
 - Installing the slot wrapper program itself, which the sudoers grant names.
@@ -144,7 +151,13 @@ plan writes nothing, an apply delivers and links once, the next run and the next
 nothing, and a byte changed on the host shows in a plan and is put back. A contract test holds
 the pins' shape, the stand-in release to its pins, the carried key file to the owner's key (as
 hex, with no binary file left in the role), the stand-in key to its pin, the readiness port to
-the environment file's, and both pin checks ahead of any write.
+the environment file's, and both pin checks ahead of any write. The wait test holds the wait's
+condition and its place, first in `_release_pin.yml`, and runs the real pin check in a scratch
+role for the three outcomes: nothing carried ends the role, a version with no pins or pins with
+no version is refused, and a carried release goes on. The pin check runs inside a role in
+every test because a play cannot run `end_role` outside one. The Molecule verify runs the role
+from its defaults against the instance, as an apply and as a plan, and compares what the role
+writes before and after.
 
 The same tests run the two verify key task files: the host gets the pinned bytes of the carried
 key, which are not text, and every byte value from 0 to 255 comes out as it went in; the key

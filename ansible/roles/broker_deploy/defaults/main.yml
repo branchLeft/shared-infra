@@ -12,8 +12,8 @@ broker_deploy_node_base_url: https://nodejs.org/dist
 # broker_deploy_release_dir/VERSION/ and held to the sha256 pinned for each of them below.
 # No release is pinned until one is carried: the files of a release are added with their
 # pins after the release's attestation has been verified (the README says how), and until
-# then the role refuses before it writes anything. A release is never replaced; a new
-# version is a new pin.
+# then the role waits: it says so and changes nothing. A version with no pins, or pins with no
+# version, is still refused. A release is never replaced; a new version is a new pin.
 broker_deploy_release_version: ''
 broker_deploy_release_pins: {}
 # Where the releases are, on the machine that runs the role. Nothing is fetched.
