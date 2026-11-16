@@ -12,7 +12,7 @@ import re
 import unittest
 from pathlib import Path
 
-import yaml
+import yaml  # type: ignore[import-untyped,unused-ignore]
 
 ROLE = Path(__file__).resolve().parents[2]
 TASKS = ROLE / "tasks" / "main.yml"
