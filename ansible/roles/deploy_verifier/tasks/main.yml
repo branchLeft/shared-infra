@@ -64,7 +64,7 @@
 # diff is hidden and the plan says what it replaces; any other content at the path is shown.
 - name: Replace the verifier, hiding only the lines of the retired shell program
   vars:
-    # hetzner/provision/branchleft-verify-image as last delivered, at shared-infra c1d37372.
+    # The retired shell verifier as last delivered, at shared-infra commit c1d37372.
     deploy_verifier_retired_shell_sha256: 4739d9e574c5448ce5720e28668c9b03b978f19c2a3a2ef0caec25438ce30fa5
   block:
     - name: Say the plan replaces the retired shell verifier without showing its lines
