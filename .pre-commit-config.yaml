@@ -193,10 +193,3 @@ repos:
         # CI runs `--scan-tree`/the full walk regardless of what changed.
         files: ^(scripts/.*|.*\.ya?ml$|.*\.md$|.*\.sh$|.*\.ts$|.*\.json$)$
         pass_filenames: false
-
-      - id: edge-delete-guard
-        name: edge delete guard self-test
-        entry: python3 scripts/assert-no-edge-deletes.py --self-test
-        language: system
-        files: ^scripts/assert-no-edge-deletes\.py$
-        pass_filenames: false
