@@ -956,6 +956,29 @@ MAIN_ONLY: dict[str, object] = {
     "branch_policies": [{"id": 1, "name": "main", "type": "branch"}],
 }
 NOT_FOUND: dict[str, object] = {"message": "Not Found", "status": "404"}
+
+
+def protection_rules(
+    *, slug: str = "branchleft-reviewer", enabled: bool = True
+) -> dict[str, object]:
+    """Return a /deployment_protection_rules answer shaped like the live one (one custom rule)."""
+    return {
+        "total_count": 1,
+        "custom_deployment_protection_rules": [
+            {
+                "id": 72770380,
+                "node_id": "GA_kwDOT7mg5M4EVmNM",
+                "app": {"id": 5090756, "slug": slug, "node_id": "A_x"},
+                "enabled": enabled,
+            }
+        ],
+    }
+
+
+NO_PROTECTION_RULES: dict[str, object] = {
+    "total_count": 0,
+    "custom_deployment_protection_rules": [],
+}
 WITH_KEY: dict[str, object] = {
     "total_count": 2,
     "secrets": [{"name": "SSH_APPLY_KEY"}, {"name": "SSH_HOST_APPLY_KEYS"}],
@@ -1071,8 +1094,17 @@ class EnvironmentTests(unittest.TestCase):
         described: object,
         policies: object = MAIN_ONLY,
         secrets: object | None = WITH_KEY,
+        rules: object | None = None,
     ) -> list[str]:
-        return check_delivery.environment_findings("ansible-hosts", described, policies, secrets)
+        return check_delivery.environment_findings(
+            "ansible-hosts", described, policies, secrets, rules
+        )
+
+    def app_only(self) -> dict[str, object]:
+        """Return the environment as it is ruled now: the reviewers rule off, the branch rule on."""
+        described = environment()
+        described["protection_rules"] = [{"id": 2, "type": "branch_policy"}]
+        return described
 
     def assert_names(self, findings: list[str], mechanism: str) -> None:
         self.assertTrue(
@@ -1169,6 +1201,54 @@ class EnvironmentTests(unittest.TestCase):
         described = environment()
         described["protection_rules"] = [{"id": 2, "type": "branch_policy"}]
         self.assert_names(self.judge(described), "no required reviewers rule")
+
+    def test_neither_rule_is_not_ready_even_with_the_rules_listed(self) -> None:
+        # Both absent: the apply would not wait, so the probe stays red.
+        findings = self.judge(self.app_only(), rules=NO_PROTECTION_RULES)
+        self.assert_names(findings, "the apply would not wait")
+
+    def test_the_app_rule_alone_is_ready(self) -> None:
+        # The ruled state of 14 and 17 Nov: Required reviewers off, the App's rule on.
+        self.assertEqual([], self.judge(self.app_only(), rules=protection_rules()))
+
+    def test_the_app_rule_is_not_read_when_the_call_was_not_made(self) -> None:
+        # Fails closed: an unlisted answer is not the rule.
+        self.assert_names(self.judge(self.app_only(), rules=None), "the apply would not wait")
+
+    def test_a_disabled_or_foreign_app_rule_is_not_ready(self) -> None:
+        odd_answers: list[object] = [
+            protection_rules(enabled=False),
+            protection_rules(slug="another-app"),
+            {"custom_deployment_protection_rules": [{"app": {"slug": "branchleft-reviewer"}}]},
+            {"custom_deployment_protection_rules": [{"enabled": "true", "app": {}}]},
+            {"custom_deployment_protection_rules": "branchleft-reviewer"},
+            NOT_FOUND,
+            [],
+            "ok",
+        ]
+        for rules in odd_answers:
+            with self.subTest(rules=rules):
+                self.assert_names(
+                    self.judge(self.app_only(), rules=rules), "the apply would not wait"
+                )
+
+    def test_the_app_rule_does_not_excuse_the_other_protections(self) -> None:
+        # The App's rule answers only whether the apply waits; the branch rules still judge.
+        described = self.app_only()
+        described["can_admins_bypass"] = False
+        self.assert_names(
+            self.judge(described, rules=protection_rules()), "does not let administrators bypass"
+        )
+        self.assert_names(
+            self.judge(self.app_only(), policies=NOT_FOUND, rules=protection_rules()),
+            "no branch policy list",
+        )
+
+    def test_a_reviewers_rule_still_judged_beside_the_app_rule(self) -> None:
+        described = environment(reviewers=[reviewer("User", "x")])
+        self.assert_names(
+            self.judge(described, rules=protection_rules()), "only the branchleft-admin team may"
+        )
 
     def test_an_empty_reviewer_list_is_not_ready(self) -> None:
         self.assert_names(self.judge(environment(reviewers=[])), "lists no reviewer")
@@ -1273,6 +1353,46 @@ class CommandLineTests(unittest.TestCase):
             status, output = self.run_main(args)
         self.assertEqual(0, status)
         self.assertIn("0 finding(s)", output)
+
+    def environment_args(self, where: Path, rules: object | None) -> list[str]:
+        """Return the arguments for the environment as ruled now: reviewers rule off."""
+        described = environment()
+        described["protection_rules"] = [{"id": 2, "type": "branch_policy"}]
+        args = [
+            "environment",
+            "--environment",
+            str(self.write(where, "e.json", described)),
+            "--policies",
+            str(self.write(where, "p.json", MAIN_ONLY)),
+            "--secrets",
+            str(self.write(where, "s.json", WITH_KEY)),
+        ]
+        if rules is not None:
+            args += ["--protection-rules", str(self.write(where, "r.json", rules))]
+        return args
+
+    def test_the_app_rule_alone_passes_from_the_command_line(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            status, output = self.run_main(
+                self.environment_args(Path(directory), protection_rules())
+            )
+        self.assertEqual(0, status, output)
+        self.assertIn("0 finding(s)", output)
+
+    def test_no_rule_at_all_fails_from_the_command_line(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            status, output = self.run_main(
+                self.environment_args(Path(directory), NO_PROTECTION_RULES)
+            )
+        self.assertEqual(1, status)
+        self.assertIn("the apply would not wait", output)
+
+    def test_unlisted_protection_rules_fail_and_say_so(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            status, output = self.run_main(self.environment_args(Path(directory), None))
+        self.assertEqual(1, status)
+        self.assertIn("the apply would not wait", output)
+        self.assertIn("the protection rules were not listed", output)
 
     def test_a_missing_environment_fails_and_says_so(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -4,7 +4,7 @@
 would let a pull request, a schedule or a manual run reach a host, float on a moved
 workflow, hand the call any secret but the twelve it names, pass a push playbook other than the
 one fixed here, share an approval with the Pulumi applies, or widen the token. ``environment``
-reads the answers of three read-only GitHub calls and fails unless the deployment environment
+reads the answers of up to four read-only GitHub calls and fails unless the deployment environment
 is protected as the reusable workflow assumes, because that workflow cannot read the protection
 itself and a missing environment is created unprotected by the first run that names it.
 """
@@ -183,6 +183,10 @@ WHY = {
 # approver of this environment. The probe does not read a team's members, so membership of the
 # team is not checked here.
 OWNER_REVIEWERS = frozenset({("Team", "branchleft-admin")})
+# The other way the apply waits: the custom deployment protection rule of the reviewer App
+# (owner rulings of 14 and 17 Nov 2026). The environment's own answer does not list a custom
+# rule among its protection_rules, so it is read from the /deployment_protection_rules call.
+PROTECTION_RULE_APP = "branchleft-reviewer"
 BRANCH = "main"
 
 
@@ -541,14 +545,42 @@ def check_caller(root: Path) -> list[str]:
     return [*findings, *caller_findings(document, others)]
 
 
+def app_rule_present(protection_rules: object | None) -> bool:
+    """Return True when the answer lists an enabled protection rule of the reviewer App.
+
+    Fails closed: None (the call was not made), an answer of another shape, a rule that is not
+    exactly enabled, or a rule of any other app is not the rule.
+    """
+    listed = as_mapping(protection_rules)
+    entries = listed.get("custom_deployment_protection_rules") if listed is not None else None
+    for item in entries if isinstance(entries, list) else []:
+        rule = as_mapping(item)
+        app = as_mapping(rule.get("app")) if rule is not None else None
+        if (
+            rule is not None
+            and app is not None
+            and rule.get("enabled") is True
+            and app.get("slug") == PROTECTION_RULE_APP
+        ):
+            return True
+    return False
+
+
 def environment_findings(
-    name: str, environment: object, policies: object, secrets: object | None
+    name: str,
+    environment: object,
+    policies: object,
+    secrets: object | None,
+    protection_rules: object | None = None,
 ) -> list[str]:
-    """Judge the answers of the environment, branch-policy and secret-list calls.
+    """Judge the answers of the environment, branch-policy, secret-list and protection-rule calls.
 
     A missing environment answers with a body that has no name, and the same goes for a
     branch-policy list of an environment with no branch policy, so a 404 is a finding and
-    not a pass. ``secrets`` is None when the caller could not list the secrets.
+    not a pass. ``secrets`` is None when the caller could not list the secrets. The apply waits
+    when the environment has a required reviewers rule or an enabled custom protection rule of
+    the reviewer App; ``protection_rules`` is None when that call was not made, and then only
+    the reviewers rule counts.
     """
     described = as_mapping(environment)
     if described is None or described.get("name") != name:
@@ -572,9 +604,10 @@ def environment_findings(
         for rule in (as_mapping(item) for item in (rules if isinstance(rules, list) else []))
         if rule is not None and rule.get("type") == "required_reviewers"
     ]
-    if not reviewer_rules:
+    if not reviewer_rules and not app_rule_present(protection_rules):
         findings.append(
-            f"environment {name} has no required reviewers rule: the apply would not wait"
+            f"environment {name} has no required reviewers rule and no enabled protection rule "
+            f"of the {PROTECTION_RULE_APP} app: the apply would not wait"
         )
     for rule in reviewer_rules:
         # The owner keeps Prevent self-review on for this environment, so a person who merged a
@@ -667,6 +700,7 @@ def main(argv: Sequence[str]) -> int:
     environment.add_argument("--environment", type=Path, required=True, dest="described")
     environment.add_argument("--policies", type=Path, required=True)
     environment.add_argument("--secrets", type=Path, default=None)
+    environment.add_argument("--protection-rules", type=Path, default=None)
     args = parser.parse_args(argv)
     notes: list[str] = []
     if args.command == "caller":
@@ -674,7 +708,7 @@ def main(argv: Sequence[str]) -> int:
     else:
         findings = []
         answers: list[object] = []
-        for path in (args.described, args.policies, args.secrets):
+        for path in (args.described, args.policies, args.secrets, args.protection_rules):
             if path is None:
                 answers.append(None)
                 continue
@@ -687,7 +721,14 @@ def main(argv: Sequence[str]) -> int:
                 f"the secrets were not listed, so {APPLY_KEY} and {HOST_APPLY_KEYS} were "
                 "not checked"
             )
-        findings.extend(environment_findings(args.name, answers[0], answers[1], answers[2]))
+        if args.protection_rules is None:
+            notes.append(
+                "the protection rules were not listed, so only a required reviewers rule "
+                f"counts, not a rule of the {PROTECTION_RULE_APP} app"
+            )
+        findings.extend(
+            environment_findings(args.name, answers[0], answers[1], answers[2], answers[3])
+        )
     for finding in findings:
         print(f"FAIL {finding}")
     for note in notes:

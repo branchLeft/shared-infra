@@ -6,8 +6,10 @@ name: Ansible environment probe
 # environment is created unprotected by the first run that names it, so this is the one
 # place that notices a reviewer rule, the branch policy or the administrator bypass
 # changing. It judges with `ansible/checks/check_delivery.py environment`, from the
-# answers of two read-only GitHub calls (the environment and its deployment branch
-# policies).
+# answers of three read-only GitHub calls (the environment, its deployment branch
+# policies and its custom deployment protection rules). The apply waits when the
+# environment has a Required reviewers rule or an enabled protection rule of the
+# branchleft-reviewer App; with neither, the run is red.
 #
 # Scheduled rather than a pull-request gate: the environment is a repository setting, not
 # a file, so no pull request changes it and no pull request can be made to wait for it.
@@ -55,6 +57,7 @@ jobs:
           set -euo pipefail
           gh api "repos/$REPOSITORY/environments/ansible-hosts" > "$RUNNER_TEMP/environment.json"
           gh api "repos/$REPOSITORY/environments/ansible-hosts/deployment-branch-policies" > "$RUNNER_TEMP/policies.json"
+          gh api "repos/$REPOSITORY/environments/ansible-hosts/deployment_protection_rules" > "$RUNNER_TEMP/protection-rules.json"
 
       - name: Create the tool environment
         run: python3 -m venv "$RUNNER_TEMP/ansible-venv"
@@ -73,3 +76,4 @@ jobs:
           "$RUNNER_TEMP/ansible-venv/bin/python" ansible/checks/check_delivery.py environment
           --environment "$RUNNER_TEMP/environment.json"
           --policies "$RUNNER_TEMP/policies.json"
+          --protection-rules "$RUNNER_TEMP/protection-rules.json"

@@ -766,6 +766,8 @@ class EnvironmentProbeTest(unittest.TestCase):
         text = " ".join(script(only_job(self.workflow)).split())
         self.assertIn("check_delivery.py environment", text)
         self.assertIn("environments/ansible-hosts/deployment-branch-policies", text)
+        self.assertIn("environments/ansible-hosts/deployment_protection_rules", text)
+        self.assertIn('--protection-rules "$RUNNER_TEMP/protection-rules.json"', text)
 
 
 class DependabotCadenceTest(unittest.TestCase):
