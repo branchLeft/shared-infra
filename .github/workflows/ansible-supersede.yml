@@ -1,0 +1,45 @@
+name: Ansible supersede
+
+# Cancels an older Ansible delivery that is waiting for approval when a newer commit lands
+# on main. The apply of ansible-delivery.yml holds a concurrency group that never cancels a
+# run in progress, so an older run paused on the ansible-hosts approval would keep the newer
+# run's apply queued behind it, with nothing red, until someone approved or cancelled it by
+# hand. This runs on the same push, reads the older waiting runs of ansible-delivery.yml and
+# cancels each whose commit is an ancestor of this one and whose apply has not started
+# (scripts/cancel-superseded-ansible-delivery.py holds the rule). It names every run it
+# cancelled or kept in its log. It reaches no host and no secret, and it is not a gate: a
+# kept run stays waiting, as before.
+#
+# It is its own workflow, not a job of ansible-delivery.yml, because that caller is held to
+# exactly three jobs and a read-only token by ansible/checks/check_delivery.py, and the cancel
+# call needs actions: write. The job holds it alone; the workflow default is read-only.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  supersede:
+    name: Cancel older Ansible deliveries still waiting for approval
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Cancel the older runs this push supersedes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/cancel-superseded-ansible-delivery.py --repo "$REPO" --sha "$SHA" | tee -a "$GITHUB_STEP_SUMMARY"
