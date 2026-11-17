@@ -105,6 +105,9 @@ JOB_KEYS = frozenset({"uses", "with", "secrets", "needs"})
 SKIP_INPUT = "skip-rerun-after-merge-group"
 CHECK_NAME_INPUT = "merge-group-check-name"
 PUSH_PLAYBOOK_INPUT = "push-playbook"
+# The one value this input may carry is the boolean true (owner's per-host apply, Desk answer
+# ws2857-per-host-apply). A host that fails its plan is then left out, and the others are delivered.
+SKIP_FAILED_INPUT = "skip-failed-hosts"
 INPUT_KEYS = frozenset(
     {
         "environment",
@@ -115,6 +118,7 @@ INPUT_KEYS = frozenset(
         CHECK_NAME_INPUT,
         "shard-timeout-minutes",
         PUSH_PLAYBOOK_INPUT,
+        SKIP_FAILED_INPUT,
     }
 )
 # The delivery skips its lint and Molecule re-run only when both are true: the select job
@@ -265,6 +269,12 @@ def input_findings(inputs: object, other_environments: frozenset[str]) -> list[s
         findings.append(
             f"with.{PUSH_PLAYBOOK_INPUT} must be {PUSH_PLAYBOOK!r}, the playbook the receiver of "
             f"a pushed host runs, got {given.get(PUSH_PLAYBOOK_INPUT)!r}"
+        )
+    # `is not True` also refuses 1 and "true": only the boolean true passes. Absent means false.
+    if SKIP_FAILED_INPUT in given and given[SKIP_FAILED_INPUT] is not True:
+        findings.append(
+            f"with.{SKIP_FAILED_INPUT} may only be the boolean true, got "
+            f"{given[SKIP_FAILED_INPUT]!r}"
         )
     return findings
 
