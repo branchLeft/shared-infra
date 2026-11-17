@@ -194,6 +194,23 @@ class CallerTests(unittest.TestCase):
     def test_the_caller_as_committed_has_no_finding(self) -> None:
         self.assertEqual([], check_delivery.check_caller(ROOT))
 
+    def test_skip_failed_hosts_passes_only_as_the_boolean_true(self) -> None:
+        def set_value(document: dict[str, object], value: object) -> None:
+            mutable(job_of(document)["with"])[check_delivery.SKIP_FAILED_INPUT] = value
+
+        values: list[object] = [False, "true", "false", 1, 0, None, "", [], {}]
+        for value in values:
+
+            def change(document: dict[str, object], value: object = value) -> None:
+                set_value(document, value)
+
+            self.assert_names(self.weakened(change), check_delivery.SKIP_FAILED_INPUT)
+
+        def set_true(document: dict[str, object]) -> None:
+            set_value(document, True)
+
+        self.assertEqual([], self.weakened(set_true))
+
     def test_the_other_environments_are_read_from_the_other_workflows(self) -> None:
         self.assertIn("production", self.others)
         self.assertNotIn(check_delivery.ENVIRONMENT, self.others)
