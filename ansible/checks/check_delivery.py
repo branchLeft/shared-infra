@@ -180,9 +180,8 @@ WHY = {
 # team is not checked here.
 OWNER_REVIEWERS = frozenset({("Team", "branchleft-admin")})
 # The other way the apply waits: the custom deployment protection rule of the reviewer App
-# (owner rulings of 14 and 17 Nov 2026, recorded on branchLeft/workspace#3628). The environment's
-# own answer does not list a custom rule among its protection_rules, so it is read from the
-# /deployment_protection_rules call.
+# (owner rulings of 14 and 17 Nov 2026). The environment's own answer does not list a custom
+# rule among its protection_rules, so it is read from the /deployment_protection_rules call.
 PROTECTION_RULE_APP = "branchleft-reviewer"
 BRANCH = "main"
 
