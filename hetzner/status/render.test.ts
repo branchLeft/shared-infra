@@ -9,12 +9,14 @@ import type { EdgeSite } from '../../siteTypes';
 import { blackboxTargets } from '../monitoring/render';
 import { STATUS_TEST_COMPONENT } from '../monitoring/statusIncidents';
 import {
+  CONNECTED_CONDITION,
   GATUS_CONTAINER_PORT,
-  PASS_CONDITION,
+  PASS_CONDITIONS,
   PROBE_INTERVAL,
   PROBE_TIMEOUT,
   renderStatusConfig,
   renderTargetConfig,
+  STATUS_CONDITION,
   STATUS_TEST_TARGET_COMPONENT,
   TEST_TARGET_SERVICE,
 } from './render';
@@ -43,6 +45,10 @@ const probeBlocks = (config: string): string[] =>
     .split('\nendpoints:\n')[1]!
     .split(/^(?= {2}- name: )/m)
     .filter((block) => block.length > 0);
+
+/** The condition lines of a probe, in order, as they stand in the file. */
+const conditionsOf = (block: string): string[] =>
+  [...block.matchAll(/^ {6}- '(.*)'$/gm)].map((match) => match[1]!);
 
 const field = (block: string, key: string): string | undefined =>
   block.match(new RegExp(`^ +(?:- )?${key}: (.*)$`, 'm'))?.[1];
@@ -77,13 +83,26 @@ describe('renderStatusConfig', () => {
     expect(STATUS_TEST_TARGET_COMPONENT.probeUrl).not.toBe(STATUS_TEST_COMPONENT.probeUrl);
   });
 
-  it('gives every probe the one interval, a timeout and the 2xx rule', () => {
+  it('gives every probe the one interval, a timeout and the connected-and-2xx rule', () => {
     for (const block of probeBlocks(renderStatusConfig(sites))) {
       expect(field(block, 'interval')).toBe(PROBE_INTERVAL);
       expect(field(block, 'timeout')).toBe(PROBE_TIMEOUT);
-      expect(block).toContain(`- '${PASS_CONDITION}'`);
+      expect(conditionsOf(block)).toEqual([...PASS_CONDITIONS]);
     }
+    expect(PASS_CONDITIONS).toEqual(['[CONNECTED] == true', STATUS_CONDITION]);
     expect(PROBE_INTERVAL).toBe('60s');
+  });
+
+  it('requires a connection on every probe, so a probe that cannot connect never passes', () => {
+    // Gatus gives a probe that cannot connect the status 0, which `[STATUS] < 300` alone passes.
+    for (const config of [renderStatusConfig(sites), renderTargetConfig()]) {
+      const blocks = probeBlocks(config);
+      expect(blocks.length).toBeGreaterThan(0);
+      for (const block of blocks) {
+        expect(conditionsOf(block)).toContain(CONNECTED_CONDITION);
+      }
+    }
+    expect(CONNECTED_CONDITION).toBe('[CONNECTED] == true');
   });
 
   it('keeps each probe name unique within its group', () => {
