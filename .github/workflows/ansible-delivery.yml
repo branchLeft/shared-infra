@@ -132,6 +132,7 @@ jobs:
       skip-rerun-after-merge-group: ${{ needs.select.outputs.shards == 'false' && needs.queue-proof.outputs.tested == 'true' }}
       merge-group-check-name: Lint and test the Ansible roles
       shard-timeout-minutes: 45 # the edge_stack Molecule shard takes up to 39 minutes
+      skip-failed-hosts: true
     secrets:
       ssh_hosts: ${{ secrets.ANSIBLE_HOSTS }}
       ssh_known_hosts: ${{ secrets.ANSIBLE_KNOWN_HOSTS }}
