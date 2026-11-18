@@ -157,3 +157,10 @@ does two things:
 
 Theme assets, the admin and `/content/public/` are untouched. An `other` site
 changes in no way.
+
+A `ghost` entry may also carry `media`, its object-storage host and bucket
+(`branchleft-media-<slug>`, copied from the tenant stack like the port). The
+edge then answers those three upload paths itself by reading the bucket, so a
+reader's browser need not contact the storage host: `hetzner/edge/render.md`,
+"Tenant media". The renderer refuses a bucket that is not a tenant media
+bucket name, so an entry cannot point the edge at a state or backup bucket.
