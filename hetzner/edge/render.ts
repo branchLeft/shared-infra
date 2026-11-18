@@ -532,6 +532,35 @@ function uploadGuard(): string[] {
 }
 
 /**
+ * Ghost's front-end widgets (Portal, search, comments, the announcement bar,
+ * the signup form, the admin toolbar), served from the tenant's own hostname so
+ * a reader's browser contacts no CDN. The files are the pinned bundles of
+ * `branchLeft/ghost-platform`'s `widgets/dist/`, baked into the edge image at
+ * `/srv/bl-assets/` by `hetzner/edge/Dockerfile`; the tenant environment names
+ * them as `<siteUrl>/bl-assets/<file>`. A name the image does not hold is a
+ * 404 from here, never passed to Ghost. The cache is an hour, not a year: the
+ * names are not content-addressed, and a re-pin replaces the bytes under them.
+ * Why each line: `render.md`, "Widget assets".
+ */
+export const WIDGET_ASSET_PATH = '/bl-assets/';
+export const WIDGET_ASSET_ROOT = '/srv';
+const WIDGET_ASSET_CACHE_CONTROL = 'public, max-age=3600';
+
+function widgetAssets(): string[] {
+  return [
+    '@widget_assets {',
+    '\tmethod GET HEAD',
+    `\tpath ${WIDGET_ASSET_PATH}*`,
+    '}',
+    'encode @widget_assets zstd gzip',
+    `header @widget_assets Cache-Control "${WIDGET_ASSET_CACHE_CONTROL}"`,
+    'file_server @widget_assets {',
+    `\troot ${WIDGET_ASSET_ROOT}`,
+    '}',
+  ];
+}
+
+/**
  * `nosniff` on every response of a Ghost-backed site, deferred (`>`) so it
  * replaces Ghost's own copy instead of doubling it. The extension refusal
  * cannot list every type Ghost accepts (`.txt`, `.md`, `.json`, `.pdf`, `.zip`,
@@ -893,6 +922,7 @@ function siteBlock(site: EdgeSite, hostnames: string[], posture: EdgePosture): B
     }).map((line) => `\t${line}`),
     `\t${ghostSetupRefusal()}`,
     ...(isGhost ? uploadGuard().map((line) => `\t${line}`) : []),
+    ...(isGhost ? widgetAssets().map((line) => `\t${line}`) : []),
     `\treverse_proxy ${address}`,
     '}'
   );

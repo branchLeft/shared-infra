@@ -1542,6 +1542,18 @@ const UPLOAD_GUARD_ROUTE_LINES = `
 		}
 		respond @active_upload_by_pattern 403`;
 
+/** The widget-file route exactly as the Ghost-backed blog's route carries it. */
+const WIDGET_ASSET_ROUTE_LINES = `
+		@widget_assets {
+			method GET HEAD
+			path /bl-assets/*
+		}
+		encode @widget_assets zstd gzip
+		header @widget_assets Cache-Control "public, max-age=3600"
+		file_server @widget_assets {
+			root /srv
+		}`;
+
 /**
  * The blog's site block exactly as it was served before the portal hostnames
  * existed, plus the verified staff session (render.md, "Verified sessions").
@@ -1626,7 +1638,7 @@ const BLOG_BLOCK = `
 		}
 		crowdsec @edge_untrusted
 		appsec @inspected
-		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}
+		respond @ghost_setup 403${UPLOAD_GUARD_ROUTE_LINES}${WIDGET_ASSET_ROUTE_LINES}
 		reverse_proxy 10.20.1.100:8101
 	}
 	handle_errors {
