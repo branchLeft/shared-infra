@@ -362,39 +362,24 @@
         fail_msg: 'the later commit was refused: {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
         success_msg: the later commit was applied
 
-    # The named limit, shown by running it. A commit signed by the trusted key that is on no
-    # branch of main, newer than the floor, IS applied; afterwards the real next commit of main
-    # is refused as a rollback, never applied. Only a reset of the floor, a runbook step, ends it.
-    - name: Apply a commit that is signed by the trusted key and is not on main
+    # The commit must be behind the tip of main the bundle carries. A commit signed by the trusted
+    # key that is on no branch of main, sent beside the real tip of main, is refused and never
+    # applied; the real next commit of main, sent beside itself as the tip, then applies.
+    - name: Ask for a commit that is signed by the trusted key and is not on main
       ansible.builtin.include_tasks: tasks/request.yml
       vars:
-        request_name: a merge-signed commit that is not on main
+        request_name: a merge-signed commit that is not behind the tip of main
         request_text: 'apply {{ pull_trigger_pr_commits.fork }} {{ pull_trigger_pr_playbook }}'
         request_config: '{{ verify_installed_config }}'
-        request_input: '{{ pull_trigger_pr_bundles }}/fork.bundle'
+        request_input: '{{ pull_trigger_pr_bundles }}/fork_under_main.bundle'
 
-    - name: It is applied, because the receiver cannot tell where a validly signed commit came from
-      ansible.builtin.assert:
-        that:
-          - pull_trigger_pr_result.rc == 10
-        fail_msg: 'the limit is not as documented: {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
-        success_msg: the named limit is as documented
-
-    - name: Ask for the real next commit of main
-      ansible.builtin.include_tasks: tasks/request.yml
-      vars:
-        request_name: the real next commit of main, after the floor left main
-        request_text: 'apply {{ pull_trigger_pr_commits.main_next }} {{ pull_trigger_pr_playbook }}'
-        request_config: '{{ verify_installed_config }}'
-        request_input: '{{ pull_trigger_pr_bundles }}/main_next.bundle'
-
-    - name: The real commit of main is refused as a rollback and is never applied
+    - name: It is refused as not on main, and is never applied
       ansible.builtin.assert:
         that:
           - pull_trigger_pr_result.rc == 20
-          - "'reason=rollback' in pull_trigger_pr_result.stdout"
-        fail_msg: 'main_next was not refused: {{ pull_trigger_pr_result.stdout }}'
-        success_msg: a refusal, never a silent apply
+          - "'reason=not-on-main' in pull_trigger_pr_result.stdout"
+        fail_msg: 'the fork commit was not refused: {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: a commit that is not on main is refused
 
     - name: Read the marker after the refusal
       ansible.builtin.slurp:
@@ -404,9 +389,24 @@
     - name: The playbook of the refused commit did not run
       ansible.builtin.assert:
         that:
-          - (pull_trigger_pr_marker_after.content | ansible.builtin.b64decode) == "FORK\n"
+          - (pull_trigger_pr_marker_after.content | ansible.builtin.b64decode) == "C2\n"
         fail_msg: the refused commit's playbook ran
-        success_msg: only the fork's playbook ran
+        success_msg: only the playbook of the commit applied before ran
+
+    - name: Ask for the real next commit of main
+      ansible.builtin.include_tasks: tasks/request.yml
+      vars:
+        request_name: the real next commit of main, after a fork commit was refused
+        request_text: 'apply {{ pull_trigger_pr_commits.main_next }} {{ pull_trigger_pr_playbook }}'
+        request_config: '{{ verify_installed_config }}'
+        request_input: '{{ pull_trigger_pr_bundles }}/main_next.bundle'
+
+    - name: The real commit of main is applied, because the refusal moved nothing
+      ansible.builtin.assert:
+        that:
+          - pull_trigger_pr_result.rc == 10
+        fail_msg: 'the real commit of main was refused: {{ pull_trigger_pr_result.stdout }} {{ pull_trigger_pr_result.stderr }}'
+        success_msg: the real commit of main was applied
 
     # -------------------------------------------------- refusals, each
     - name: Refuse every request that must not run, each leaving the host byte for byte as it was
@@ -464,6 +464,22 @@
           rc: 20
           reason: bad-signature
           commit: '{{ pull_trigger_pr_commits.tampered }}'
+        - name: a signed commit that is not behind the tip of main the bundle carries
+          text: 'apply {{ pull_trigger_pr_commits.fork }} {{ pull_trigger_pr_playbook }}'
+          floor: '{{ pull_trigger_pr_commits.c2 }}'
+          bundle: fork_under_main
+          rc: 20
+          reason: not-on-main
+          commit: '{{ pull_trigger_pr_commits.fork }}'
+          detail: the commit is not an ancestor of the tip of main
+        - name: a commit of main in a bundle that carries no tip of main
+          text: 'apply {{ pull_trigger_pr_commits.c2 }} {{ pull_trigger_pr_playbook }}'
+          floor: '{{ pull_trigger_pr_commits.c1 }}'
+          bundle: c2_no_main
+          rc: 20
+          reason: not-on-main
+          commit: '{{ pull_trigger_pr_commits.c2 }}'
+          detail: there is no tip of main to compare the commit with
         - name: a commit older than the floor
           text: 'apply {{ pull_trigger_pr_commits.c1 }} {{ pull_trigger_pr_playbook }}'
           floor: '{{ pull_trigger_pr_commits.c2 }}'
@@ -794,6 +810,38 @@
           rc: 10
           not_reason: bad-bundle
           floor_after: '{{ pull_trigger_pr_commits.c1 }}'
+
+    - name: Cut out the test that the commit is behind the tip of main the bundle carries
+      ansible.builtin.include_tasks: tasks/sabotage.yml
+      vars:
+        sabotage_name: no-main-ancestry
+        sabotage_edits:
+          - regexp: '^(\s+)quarantine\.require_ancestor_of_main\(commit\)$'
+            replace: '\1pass'
+
+    - name: Without the test a signed commit that is not behind main is applied
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: a fork commit beside the real tip of main, no test
+          text: 'apply {{ pull_trigger_pr_commits.fork }} {{ pull_trigger_pr_playbook }}'
+          bundle: fork_under_main
+          program: /var/tmp/ptt/mut/no-main-ancestry
+          rc: 10
+          not_reason: not-on-main
+          floor_after: '{{ pull_trigger_pr_commits.fork }}'
+
+    - name: Without the test a bundle that carries no tip of main is applied
+      ansible.builtin.include_tasks: tasks/red.yml
+      vars:
+        case:
+          name: a bundle with no tip of main, no test
+          text: 'apply {{ pull_trigger_pr_commits.c2 }} {{ pull_trigger_pr_playbook }}'
+          bundle: c2_no_main
+          program: /var/tmp/ptt/mut/no-main-ancestry
+          rc: 10
+          not_reason: not-on-main
+          floor_after: '{{ pull_trigger_pr_commits.c2 }}'
 
     - name: Cut out git's object check, both the setting and the explicit one
       ansible.builtin.include_tasks: tasks/sabotage.yml

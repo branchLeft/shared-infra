@@ -51,6 +51,8 @@ PUSH_LINE = re.compile(
     r"commit=([0-9a-f]{40}) playbook=[A-Za-z0-9_./-]+ changed=([0-9]+)$"
 )
 WATCHDOG_SECONDS = 20
+# The default tip of main in a bundle: the commit the bundle is of (see ``BundleTests.bundle``).
+SELF = "<the commit itself>"
 
 
 def binary_run(argv: Sequence[str | Path], cwd: Path, stdin: bytes) -> str:
@@ -128,13 +130,27 @@ class BundleHistory:
         argv = git_command(self.web_flow) + ["commit-tree", "-S", "-p", parent, "-m", "m", bad_tree]
         return run(argv, cwd=work, extra={"GNUPGHOME": str(self.web_flow.home)})
 
-    def bundle(self, name: str, directory: Path) -> Path:
-        """Return a bundle of the named commit, made the way the pushing workflow makes it."""
+    def bundle(self, name: str, directory: Path, main: str | None) -> Path:
+        """Return a bundle of the named commit, made the way the pushing workflow makes it.
+
+        The bundle holds HEAD and, when ``main`` names a commit, ``refs/remotes/origin/main`` at
+        that commit: the tip of main as the workflow's checkout knows it. ``None`` makes a bundle
+        of HEAD alone, which is what the workflow made before it carried main.
+        """
         sha = self.commits[name]
         work = self.remote.work
         run([*git_command(), "update-ref", "--no-deref", "HEAD", sha], cwd=work)
-        path = directory / f"{name}.bundle"
-        run([*git_command(), "bundle", "create", path, "HEAD"], cwd=work)
+        refs = ["HEAD"]
+        if main is not None:
+            run(
+                [*git_command(), "update-ref", trigger.BUNDLE_MAIN_REF, self.commits[main]],
+                cwd=work,
+            )
+            refs.append(trigger.BUNDLE_MAIN_REF)
+        path = directory / f"{name}-{main}.bundle"
+        run([*git_command(), "bundle", "create", path, *refs], cwd=work)
+        if main is not None:
+            run([*git_command(), "update-ref", "-d", trigger.BUNDLE_MAIN_REF], cwd=work)
         return path
 
     def forget(self) -> None:
@@ -217,11 +233,18 @@ class BundleTests(unittest.TestCase):
         cls.history.forget()
         shutil.rmtree(cls.root, ignore_errors=True)
 
-    def bundle(self, name: str) -> Path:
-        """Return the bundle of a named commit, made once."""
-        if name not in self.made:
-            self.made[name] = self.history.bundle(name, self.bundles)
-        return self.made[name]
+    def bundle(self, name: str, main: str | None = SELF) -> Path:
+        """Return the bundle of a named commit, made once.
+
+        By default main is the commit itself, so a case that is about something else than where
+        the commit sits is not stopped by the ancestry test before it reaches its own check. A
+        case about that test names the tip of main, or ``None`` for a bundle that carries none.
+        """
+        tip = name if main == SELF else main
+        key = f"{name}-{tip}"
+        if key not in self.made:
+            self.made[key] = self.history.bundle(name, self.bundles, tip)
+        return self.made[key]
 
     def commit(self, name: str) -> str:
         """Return a named commit's id."""
@@ -880,15 +903,93 @@ class BundleTests(unittest.TestCase):
         self.assertEqual(20, code)
         self.assertIn("reason=bad-request", (host.logs / "pull-trigger.log").read_text("utf-8"))
 
-    # ----------------------------------------- the named limit, shown by running it
+    # ------------------------------------------------------- the commit is on main
 
-    def test_a_merge_signed_commit_that_is_not_on_main_is_accepted_and_main_is_then_refused(
-        self,
-    ) -> None:
+    def refuse_off_main(self, name: str, main: str | None, mode: str = "apply") -> Run:
+        """Assert that the commit is refused as not on main, with nothing run and nothing left."""
         host = self.make_host()
         host.seed(self.commit("c2"))
-        # "fork" stands for a web-editor commit on a fork: validly signed, newer than the floor,
-        # and on no branch of main. The receiver cannot tell, and applies it.
+        with self.untouched(host):
+            result = self.push(
+                host, self.commit(name), mode=mode, bundle=self.bundle(name, main=main)
+            )
+        self.assert_refused(result, "not-on-main")
+        self.assertEqual([], host.applied())
+        self.assert_nothing_left(host)
+        self.assertFalse((host.state / "current").exists())
+        return result
+
+    def test_a_signed_commit_that_is_not_behind_the_tip_of_main_is_refused(self) -> None:
+        # "fork" stands for a web-editor commit on a fork: signed by the trusted key, newer than
+        # the floor, and not behind main. The bundle carries the real tip of main beside it.
+        for mode in ("apply", "check"):
+            with self.subTest(mode):
+                result = self.refuse_off_main("fork", "main_next", mode)
+                self.assertIn(trigger.Why.COMMIT_NOT_ANCESTOR.value, result.errors)
+
+    def test_a_bundle_with_no_tip_of_main_is_refused_even_for_a_commit_on_main(self) -> None:
+        for name in ("fork", "c2"):
+            with self.subTest(name):
+                result = self.refuse_off_main(name, None)
+                self.assertIn(trigger.Why.MAIN_ABSENT.value, result.errors)
+
+    def test_a_commit_behind_the_tip_of_main_the_bundle_carries_is_applied(self) -> None:
+        host = self.make_host()
+        host.seed(self.commit("c0"))
+        for name, main in (("c1", "main_next"), ("c2", "main_next"), ("main_next", "main_next")):
+            with self.subTest(name=name):
+                result = self.push(host, self.commit(name), bundle=self.bundle(name, main=main))
+                self.assertEqual(10, result.code, result.summary + result.errors)
+                self.assert_line_matches(result)
+
+    def test_a_tip_of_main_that_is_not_a_commit_is_refused(self) -> None:
+        work = self.history.remote.work
+        blob = run([*git_command(), "hash-object", "-w", "--stdin"], cwd=work, stdin="not a commit")
+        run(
+            [*git_command(), "update-ref", "--no-deref", "HEAD", self.commit("c1")],
+            cwd=work,
+        )
+        run([*git_command(), "update-ref", trigger.BUNDLE_MAIN_REF, blob], cwd=work)
+        odd = self.bundles / "odd-main.bundle"
+        run([*git_command(), "bundle", "create", odd, "HEAD", trigger.BUNDLE_MAIN_REF], cwd=work)
+        run([*git_command(), "update-ref", "-d", trigger.BUNDLE_MAIN_REF], cwd=work)
+        host = self.make_host()
+        host.seed(self.commit("c0"))
+        with self.untouched(host):
+            result = self.push(host, self.commit("c1"), bundle=odd)
+        self.assertEqual(20, result.code, result.summary + result.errors)
+        self.assert_line_matches(result)
+        self.assertEqual([], host.applied())
+
+    def test_the_ancestry_test_is_asked_before_the_signature(self) -> None:
+        # The pull route asks it before the signature too: an unsigned commit off main is told it
+        # is off main, and nothing about its signature is read.
+        self.refuse_off_main("unsigned", "main_next")
+
+    def test_both_sources_ask_the_ancestry_question_with_one_method(self) -> None:
+        self.assertIs(
+            trigger.Cache.require_ancestor_of_main, trigger.Repository.require_ancestor_of_main
+        )
+        self.assertIs(
+            trigger.Quarantine.require_ancestor_of_main,
+            trigger.Repository.require_ancestor_of_main,
+        )
+
+    # ------------------------------------------- the named limit, shown by running it
+
+    def test_a_bundle_that_names_a_fork_commit_as_main_is_accepted_and_main_is_then_refused(
+        self,
+    ) -> None:
+        """The host has no main of its own, so it believes the tip the bundle carries.
+
+        A sender that builds its own bundle can name the fork commit as the tip of main, and
+        the receiver cannot tell. The test is of a mistake in the pushing workflow, and of a
+        bundle with no tip; it is not a proof against a holder of the key. That the limit still
+        stands is shown by running it, so a change that closes it fails here and the README is
+        written again with it.
+        """
+        host = self.make_host()
+        host.seed(self.commit("c2"))
         first = self.push(host, self.commit("fork"), bundle=self.bundle("fork"))
         self.assertEqual(10, first.code, first.summary + first.errors)
         # The floor now sits off main, so the real next commit of main is refused, never applied.
@@ -910,6 +1011,8 @@ class BundleTests(unittest.TestCase):
             ("c1", "apply", b"junk", "apply", "c1"),
             ("c1", "apply", self.bundle("c2"), "apply", "c1"),
             ("no_playbook", "apply", self.bundle("no_playbook"), "apply", "no_playbook"),
+            ("fork", "apply", self.bundle("fork", main="main_next"), "apply", "fork"),
+            ("c2", "apply", self.bundle("c2", main=None), "apply", "c2"),
         ]
         for name, word, bundle, mode, _ in cases:
             with self.subTest(name=name, word=word, mode=mode):
