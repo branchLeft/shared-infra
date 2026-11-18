@@ -13,6 +13,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: www.branchleft.co.uk
     group: sites
@@ -21,6 +22,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: blog.branchleft.co.uk
     group: sites
@@ -29,6 +31,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: cloud.branchleft.co.uk
     group: sites
@@ -37,6 +40,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: book.branchleft.co.uk
     group: sites
@@ -45,6 +49,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: portal.publicpress.co.uk
     group: sites
@@ -53,6 +58,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: console.branchleft.co.uk
     group: sites
@@ -61,6 +67,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: id.publicpress.co.uk
     group: sites
@@ -69,6 +76,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: ntfy.branchleft.co.uk
     group: sites
@@ -77,6 +85,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: publicpress.co.uk
     group: sites
@@ -85,6 +94,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: status.branchleft.co.uk
     group: sites
@@ -93,6 +103,7 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
   - name: TEST
     group: TEST
@@ -101,4 +112,5 @@ endpoints:
     client:
       timeout: 10s
     conditions:
+      - '[CONNECTED] == true'
       - '[STATUS] < 300'
