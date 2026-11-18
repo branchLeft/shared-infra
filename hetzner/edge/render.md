@@ -240,6 +240,32 @@ glob matcher needs a nested `route`: two `path` lines in one matcher are an OR, 
 and the extension are an AND only across the two matchers. After the protection chain, before
 `reverse_proxy`, for the same reason as the setup refusal.
 
+## `siteBlock`: Widget assets
+
+Ghost loads Portal, search, comments, the announcement bar, the signup form and the admin
+toolbar from jsDelivr unless its configuration names other addresses. A tenant rendered with
+`render-core`'s `widgets: 'own-origin'` names `<siteUrl>/bl-assets/<file>`, so every `backend:
+'ghost'` site answers that path itself and a reader's browser contacts no CDN.
+
+- **Where the files come from.** The seven files of `branchLeft/ghost-platform`'s
+  `widgets/pins.json`, copied into the edge image at `/srv/bl-assets/` by
+  `hetzner/edge/Dockerfile` (`ADD --checksum`, one commit, one sha256 per file), so the build
+  fails on a changed byte. No new delivery class: the image is the one the edge already pins and
+  `branchleft-deploy` already rolls. `widgetAssets.test.ts` binds the Dockerfile's list to this
+  route's root.
+- **The route.** `GET` and `HEAD` of `/bl-assets/*`, compressed (`encode`: the bundle is 2.5 MB
+  and Ghost's own responses are compressed upstream), `Cache-Control: public, max-age=3600`,
+  served by `file_server` rooted at `/srv`. A name the image does not hold is a 404 from the
+  edge, never passed to Ghost. An hour and not a year: the names are not content-addressed, and a
+  re-pin replaces the bytes under them. After the protection chain and the upload refusal,
+  before `reverse_proxy`, so a probe is throttled and seen by CrowdSec.
+- **Order of rollout.** The image carrying the files, then this route (a Caddyfile delivery),
+  then a tenant rendered `own-origin`. The route without the image answers 404 on a path nobody
+  requests yet, so either of the first two may land first; a tenant rendered before both would
+  lose Portal and search.
+- **Not here.** The demo edge (`ghost-platform`'s `demo-host`, vendored under
+  `ansible/roles/demo1_build`) refuses a `file_server` outright and is a separate change.
+
 ## `logDirective`: retention and rotation
 
 Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owner's ruling of

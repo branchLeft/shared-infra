@@ -198,6 +198,15 @@ blog.branchleft.co.uk {
 			path_regexp (?i)^/+content/+(?:files|images|media)/.*\.(?:js|mjs|cjs|html|htm|shtml|xhtml|xht|xml|xsl|xslt|css|svg|svgz|kml|gpx)/*$
 		}
 		respond @active_upload_by_pattern 403
+		@widget_assets {
+			method GET HEAD
+			path /bl-assets/*
+		}
+		encode @widget_assets zstd gzip
+		header @widget_assets Cache-Control "public, max-age=3600"
+		file_server @widget_assets {
+			root /srv
+		}
 		reverse_proxy 10.20.1.100:8101
 	}
 	handle_errors {
