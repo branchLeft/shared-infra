@@ -130,6 +130,30 @@ because the role accepts `0.0.0.0`. With both restored it passes.
 
 The renderer has its own test, run from `hetzner/` with `pnpm test`.
 
+## The 90-day uptime
+
+Gatus v5.37.0 does not show uptime for 90 days. It keeps hourly uptime rows for 30 days and
+deletes anything older than 32 days, and its uptime API and badges accept `30d`, `7d`, `24h`
+and `1h` only (its README, "Uptime", and `storage/store/sql` at that tag). So the figure is
+made from samples this role's program records itself:
+[`files/branchleft_status_uptime.py`](files/branchleft_status_uptime.py).
+
+- `collect` reads the page's latest results (the last 100 per endpoint, one a minute) and
+  records each probe once in a SQLite file, keyed by endpoint and instant. It must run at least
+  every 100 minutes to miss none.
+- `report` prints, per endpoint, the samples in the last 90 days, how many passed, the uptime
+  that gives, and `coverage_percent`, the share of the window's expected probes that were
+  recorded. A stretch with no sample lowers the coverage and leaves the uptime alone: it is
+  never read as an outage or as a pass.
+
+`tests/unit/test_status_page_uptime.py` checks the figure against a count made by a separate
+loop over the same samples, and a seeded outage of 90 failed probes in 90 days against its
+hand-worked 99.9306%. To see them red, change `WINDOW_DAYS` to 30, make the query count a failed
+probe as a pass, or move the window start from `>` to `>=`: each turns tests red.
+
+The program is not installed on ops1 and is not scheduled yet, and no page shows its figure:
+Gatus cannot show it, so the route that shows it is a separate change.
+
 ## How it is delivered
 
 The role is listed in the playbook of the control-plane host, after the roles that bring
