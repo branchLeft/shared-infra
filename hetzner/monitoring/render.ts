@@ -5,6 +5,7 @@ import {
   PAGE_RECEIVER_NAME,
   PAGE_REGISTER,
   renderPageReceiverBlock,
+  renderOwnedEdgeBanRoute,
   renderPageRoute,
   type PageRegisterEntry,
 } from './pageRegister';
@@ -98,6 +99,14 @@ export function replicaDeadlineEpoch(deadline: unknown): number {
 }
 
 const REPLICA_SELECTOR = `job="${REPLICA_TUNNEL_JOB}", expected_up="true"`;
+
+// One expression for the classifier's two ways of going quiet, used by the
+// stale alert and by the page-everything fallback: a last-run time more than
+// 900 seconds old (three timer periods), or no such series at all. `max`
+// drops the series' own labels so both branches are the same unlabelled
+// alert and a series appearing or vanishing does not restart `for`.
+const EDGE_BAN_CLASSIFIER_STALE =
+  '(max(time() - edge_ban_owner_last_run_timestamp_seconds) > 900) or absent(edge_ban_owner_last_run_timestamp_seconds)';
 
 /**
  * db1's own backup freshness rules select on the `host` label its node
@@ -522,18 +531,25 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            varies between 172.17 and 172.18, hence the whole /12 rather',
     '            than the literal address.',
     '',
-    // Every ban the edge makes reaches the owner's phone, with the scenario
-    // that made it and never an address: CrowdSec's decision gauge carries no
-    // per-address label. A ban costs the person banned every site on the
-    // edge, the pager's own public name and the sign-in service included, so
-    // it cannot wait for the digest; the page route posts to ntfy over the
-    // stack's own network, not through the edge. One alert per scenario: a
-    // second ban by a scenario already firing raises the count in the next
-    // repeat, not a new page. Watch-only scenarios' simulated decisions are
-    // not in the gauge (test_crowdsec_replay.py asserts it), so a would-be
-    // ban never pages. Why: hetzner/edge/render.md, "Being told about a ban".
+    // A ban of one of the owner's own addresses pages the phone; a ban of any
+    // other address goes to email only (EdgeBanUnowned). The edge_ban_owner
+    // timer on edge1 decides which is which, every five minutes, and writes
+    // one `owned` sample per ban: a ban pages up to five minutes after
+    // CrowdSec makes it, plus a scrape. A ban costs the person banned every
+    // site on the edge, the pager's own public name and the sign-in service
+    // included, so an owned one cannot wait for the digest; the page route
+    // posts to ntfy over the stack's own network, not through the edge.
+    // Neither the gauge nor the classifier's file carries an address, so no
+    // alert text can name one. While the classifier is stale (no run in 15
+    // minutes, or no file at all) nothing says which bans are owned, so the
+    // second branch pages every ban from CrowdSec's own gauge, and
+    // EdgeBanOwnerStale pages on its own, held for 5 minutes so that a
+    // node-exporter restart is not a page. Watch-only scenarios' simulated
+    // decisions are not in the gauge (test_crowdsec_replay.py asserts it),
+    // so a would-be ban never pages. Why: hetzner/edge/render.md, "Being
+    // told about a ban".
     '      - alert: EdgeBanIssued',
-    '        expr: sum by (reason) (cs_active_decisions{action="ban"}) > 0',
+    `        expr: (sum by (reason) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() (${EDGE_BAN_CLASSIFIER_STALE}))`,
     '        labels:',
     '          severity: page',
     '        annotations:',
@@ -541,11 +557,46 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '          description: >-',
     '            A banned address gets 403 from every site on edge1 until the ban',
     '            ends (10 minutes for a first ban, up to 4 hours for a repeat).',
-    '            If it is you: from a network that is not banned, or over SSH to',
-    '            edge1, `cscli decisions list` shows the ban and',
+    '            This page means the address is one of yours: one that made a',
+    '            verified Ghost staff request through the edge in the last 30',
+    '            days, or a range holding one. It also pages for every ban while',
+    '            EdgeBanOwnerStale is firing, when nothing says whose they are.',
+    '            From a network that is not banned, or over SSH to edge1,',
+    '            `cscli decisions list` shows the ban and',
     '            `cscli decisions delete --ip ADDRESS` lifts it. The reason is the',
     '            CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says',
     '            what each one reads.',
+    '',
+    // Not a page: a scanner the edge refused is the system working. Email
+    // reaches the off-host mailbox through the owner_action route and the
+    // on-host one through the warning route; neither is ntfy.
+    '      - alert: EdgeBanUnowned',
+    '        expr: sum by (reason) (edge_ban_owned{owned="false"}) > 0',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "The edge is banning {{ $value }} other address(es), by {{ $labels.reason }}."',
+    '          description: >-',
+    '            None of them is an address that made a verified Ghost staff',
+    '            request through the edge in the last 30 days, so this is email',
+    '            only. If one is yours, `cscli decisions list` on edge1 shows the',
+    '            ban and `cscli decisions delete --ip ADDRESS` lifts it. The',
+    '            reason is the CrowdSec scenario that decided.',
+    '',
+    '      - alert: EdgeBanOwnerStale',
+    `        expr: ${EDGE_BAN_CLASSIFIER_STALE}`,
+    '        for: 5m',
+    '        labels:',
+    '          severity: page',
+    '        annotations:',
+    '          summary: "The edge ban classifier has not reported for over 15 minutes."',
+    '          description: >-',
+    '            Until it runs again every ban pages, owned or not. On edge1,',
+    '            `systemctl status branchleft-edge-ban-owner.timer` and',
+    '            `journalctl -u branchleft-edge-ban-owner` say why. A failed',
+    '            `cscli` query leaves the last file in place, so three missed',
+    '            runs raise this.',
     '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',
@@ -1473,6 +1524,7 @@ export function renderAlertmanagerTemplate(
   register: readonly PageRegisterEntry[] = PAGE_REGISTER
 ): string {
   const pageRoute = renderPageRoute(register);
+  const ownedEdgeBanRoute = renderOwnedEdgeBanRoute(register);
   return `${[
     ...GENERATED_BANNER,
     '# Rendered into alertmanager.yml at container start by',
@@ -1575,6 +1627,10 @@ export function renderAlertmanagerTemplate(
     // `pageRegister.ts`. Empty when the register names no alertname to
     // route (every entry dormant or none delivered by Alertmanager), so no
     // stray route sits in the tree matching nothing.
+    // The owned-ban child comes first and does not continue: the generic
+    // route below still lists EdgeBanIssued, so removing the child leaves
+    // the page in place with the old grouping rather than silencing it.
+    ...(ownedEdgeBanRoute ? [ownedEdgeBanRoute] : []),
     ...(pageRoute ? [pageRoute] : []),
     '',
     // An alert whose cause is already firing adds nothing but another

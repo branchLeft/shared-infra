@@ -889,6 +889,7 @@ describe('the owner_action="true" label', () => {
       .filter((rule) => /\n\s+owner_action: "true"(\n|$)/.test(rule.split(/\n\s+annotations:/)[0]))
       .map((rule) => rule.split('\n')[0]);
     expect(labelled).toEqual([
+      'EdgeBanUnowned',
       'HostMemoryPressure',
       'HostCPUSaturated',
       'HostDiskSpaceLow',

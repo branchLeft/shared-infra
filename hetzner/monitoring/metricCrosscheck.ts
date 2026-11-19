@@ -288,6 +288,15 @@ export const EXTERNAL_METRICS: Readonly<Record<string, string>> = {
     'dump_nightly.py, in branchLeft/ghost-platform db/provision, on db1',
   db_binlog_ship_last_success_timestamp_seconds:
     'ship_binlogs.py, in branchLeft/ghost-platform db/provision, on db1',
+  // The edge ban classifier's two textfile metrics, written on edge1 by the program the
+  // edge_ban_owner Ansible role installs (ansible/roles/edge_ban_owner/files): one `owned`
+  // sample per ban, labelled with the scenario and never an address, and the time of its last
+  // run. The program lives outside this directory, so nothing here can scan it; a unit test in
+  // the role pins both names to the rules' expressions in alerts.yml.
+  edge_ban_owned:
+    "the edge_ban_owner Ansible role's program (branchleft_edge_ban_owner.py), a textfile gauge on edge1",
+  edge_ban_owner_last_run_timestamp_seconds:
+    "the edge_ban_owner Ansible role's program (branchleft_edge_ban_owner.py), a textfile gauge on edge1",
   // The control-plane backup's two textfile gauges, written on ops1 by the program the
   // control_plane_backup Ansible role installs (ansible/roles/control_plane_backup/files): the success
   // times by its `run`, the failure time by its `mark-failed`, which the service's OnFailure= starts.
