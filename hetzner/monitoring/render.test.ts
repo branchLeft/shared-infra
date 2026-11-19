@@ -12,6 +12,7 @@ import {
   DB_BINLOG_STALE_SECONDS,
   DB_DUMP_ABSENT_FOR,
   DB_DUMP_STALE_SECONDS,
+  EDGE_BAN_OWNER_ENABLED,
   MONITORED_MYSQLD_HOST,
   MONITORED_NODE_HOSTS,
   MONITORED_REPLICA_HOST,
@@ -27,6 +28,7 @@ import {
   renderPrometheusConfig,
 } from './render';
 import { HOST_IPS } from '@branchleft/hetzner-host';
+import { PAGE_REGISTER } from './pageRegister';
 
 /**
  * The file-snapshot assertions at the bottom are not snapshots in the usual
@@ -1042,6 +1044,45 @@ describe('the Alertmanager template', () => {
     const receiverSection = rendered.slice(rendered.indexOf('name: mailhost-deadman'));
     expect(receiverSection).toContain("url: '__MAILHOST_PING_URL__'");
     expect(receiverSection).toContain('send_resolved: false');
+  });
+});
+
+describe('the edge ban classifier toggle', () => {
+  const defaultsPath = join(
+    __dirname,
+    '..',
+    '..',
+    'ansible',
+    'roles',
+    'edge_ban_owner',
+    'defaults',
+    'main.yml'
+  );
+
+  it('equals edge_ban_owner_enabled in the role defaults', () => {
+    const found = /^edge_ban_owner_enabled:[ \t]*(true|false)[ \t]*(?:#.*)?$/m.exec(
+      readFileSync(defaultsPath, 'utf8')
+    );
+    expect(
+      found,
+      'ansible/roles/edge_ban_owner/defaults/main.yml must set edge_ban_owner_enabled to true or false'
+    ).not.toBeNull();
+    expect(
+      EDGE_BAN_OWNER_ENABLED,
+      'EDGE_BAN_OWNER_ENABLED in hetzner/monitoring/render.ts must equal ' +
+        `edge_ban_owner_enabled in ansible/roles/edge_ban_owner/defaults/main.yml (${found?.[1]})`
+    ).toBe(found?.[1] === 'true');
+  });
+
+  it('is the mode the committed template is rendered in', () => {
+    expect(renderAlertmanagerTemplate()).toBe(
+      renderAlertmanagerTemplate(PAGE_REGISTER, EDGE_BAN_OWNER_ENABLED)
+    );
+  });
+
+  it('changes the template: the discard route and receiver exist only while the classifier is off', () => {
+    expect(renderAlertmanagerTemplate(PAGE_REGISTER, false)).toContain('receiver: discard');
+    expect(renderAlertmanagerTemplate(PAGE_REGISTER, true)).not.toContain('discard');
   });
 });
 
