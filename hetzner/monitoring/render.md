@@ -435,3 +435,23 @@ against hand-typed series: `alert_rule_test` never reads the rendered scrape
 config, and the mismatch reads at the API as `inactive`, identical to healthy.
 The test in `render.test.ts` reads both sides of the join from the two render
 functions themselves, not a retyped copy of either.
+
+## Tunnelled tenant node targets
+
+`tenantTunnel.ts` lists the tenant hosts whose node_exporter `edge1` reads
+through an SSH tunnel to `edge-t`, rather than directly on the tenants
+network. Each tunnel is a fixed local port on `edge1`'s private address
+(`TENANT_TUNNEL_TARGETS`: `db-t1` 19100, `app-t1` 19101, `edge-t` 19102).
+They are listed in the `node` job as targets with `expectedUp: false`, and
+one `relabel_configs` rule per tunnel sets `instance` back to the tenant's
+own `address:9100`, so an alert sees the same series a direct scrape would.
+
+The tunnel rows must agree with the direct rows. `hostsScrapedDirectly`
+drops any direct row whose name is tunnelled, so no host is scraped twice,
+and it throws `TunnelRowMismatchError` when that direct row's address or
+`expectedUp` differs from the tunnel row. A host is flipped by editing both
+rows; the render refuses one without the other.
+
+The local ports must stay clear of every `*_PORT` constant here, every port
+in `stack/compose.yml`, and the sweego receiver ports in
+`ansible/owner_vars/edge1.yml`; `tenantTunnel.test.ts` checks each one.
