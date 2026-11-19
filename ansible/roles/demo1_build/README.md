@@ -306,7 +306,10 @@ caddyfile --config -`, the candidate on standard input. Nothing is pulled, start
    run. It accepts only: the admin endpoint off; the `http` and `tls` apps and no
    other (`pki` is where `skip_install_trust` shows); one server, listening on `:443`
    alone (a plain-HTTP site is a server on `:80`), with one route whose host matcher
-   is `*.<base>` and no other key (`auto_https` options show as keys); one TLS
+   is `*.<base>` and no other key (`auto_https` options show as keys), except an `errors`
+   key that is exactly the renderer's one header-only route, the `nosniff` header of the
+   site-level `handle_errors` block, and nothing else, since `errors` is
+   a second route table Caddy serves on an error response (`server-errors`); one TLS
    automation policy, for the subject `*.<base>` alone, with one issuer that is ACME
    with exactly the DNS-01 provider `hetzner` and the token file reference
    `{file.<token path>}`; no `internal` issuer anywhere in the JSON; and no other
