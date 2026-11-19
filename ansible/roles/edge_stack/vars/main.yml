@@ -55,6 +55,7 @@ edge_stack_crowdsec_files:
   - crowdsec/parsers/edge-trusted-session.yaml
   - crowdsec/parsers/nextcloud-profile.yaml
   - crowdsec/scenarios/ghost-admin-login-bruteforce.yaml
+  - crowdsec/scenarios/http-admin-interface-probing.yaml
   - crowdsec/remediation/profiles.yaml
   - crowdsec/remediation/simulation.yaml
 # Every regular file directly in this directory is CrowdSec's. It is the one

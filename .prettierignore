@@ -30,6 +30,7 @@ hetzner/edge/stack/crowdsec/parsers/nextcloud-profile.yaml
 hetzner/edge/stack/crowdsec/remediation/profiles.yaml
 hetzner/edge/stack/crowdsec/remediation/simulation.yaml
 hetzner/edge/stack/crowdsec/scenarios/ghost-admin-login-bruteforce.yaml
+hetzner/edge/stack/crowdsec/scenarios/http-admin-interface-probing.yaml
 hetzner/edge/validation/Caddyfile.enforcing
 hetzner/edge/validation/Caddyfile.authoring
 hetzner/edge/validation/Caddyfile.trusted-session

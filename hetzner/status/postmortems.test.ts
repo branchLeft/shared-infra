@@ -93,6 +93,11 @@ describe('renderAnnouncements', () => {
 
 describe('loadPostmortems', () => {
   let repo: string;
+  // Run under a git hook, the environment names the outer repository's index and
+  // directory (GIT_INDEX_FILE, GIT_DIR), and every git command here, the loader's
+  // included, would read and write that index instead of this throwaway
+  // repository's. They are taken out of the environment for each test and put back.
+  let outerGitEnv: [string, string][] = [];
   const run = (...args: string[]): void => {
     execFileSync(
       'git',
@@ -116,10 +121,17 @@ describe('loadPostmortems', () => {
   };
 
   beforeEach(() => {
+    outerGitEnv = Object.entries(process.env).filter(
+      (entry): entry is [string, string] => entry[0].startsWith('GIT_') && entry[1] !== undefined
+    );
+    for (const [name] of outerGitEnv) delete process.env[name];
     repo = mkdtempSync(path.join(tmpdir(), 'postmortems-'));
     run('init', '-q');
   });
-  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+    for (const [name, value] of outerGitEnv) process.env[name] = value;
+  });
 
   it('shows a merged post-mortem of a resolved incident', () => {
     put('edge-outage.md', doc('Edge outage', '2026-12-01T10:42:00Z'));

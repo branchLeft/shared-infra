@@ -201,7 +201,8 @@ const GHOST_ADMIN_API_PREFIX = '/ghost/api/admin/';
 /**
  * Our own scenario that bans an address for repeated failed Ghost admin
  * sign-ins and admin API key failures. Its name is deliberately not
- * `ADMIN_PROBING_SCENARIO`, so the post-overflow above never drops it. Why, and
+ * `HUB_ADMIN_PROBING_SCENARIO`, so the post-overflow that silences that one
+ * never drops it. Why, and
  * what each number is: `render.md`, "Ghost admin brute force".
  */
 const GHOST_BRUTE_FORCE_SCENARIO = 'branchleft/ghost-admin-login-bruteforce';
@@ -222,8 +223,19 @@ const GHOST_BRUTE_FORCE_LEAKSPEED = '30s';
  */
 const GHOST_FAILED_SIGNIN_STATUSES = [401, 404, 422, 429] as const;
 
-/** The hub scenario that reads a 403 or 404 on any path containing `/admin` as a probe. */
-const ADMIN_PROBING_SCENARIO = 'crowdsecurity/http-admin-interface-probing';
+/**
+ * The hub scenario that reads a 403 or 404 on any path containing `/admin` as a
+ * probe. Ours below reads the same requests; this one is silenced so that only
+ * ours bans.
+ */
+const HUB_ADMIN_PROBING_SCENARIO = 'crowdsecurity/http-admin-interface-probing';
+
+/**
+ * Our copy of the hub's admin-interface probing scenario, which does not count
+ * Ghost's own admin API on a Ghost hostname. The only admin-probing scenario
+ * that bans. Why: `render.md`, "Ghost admin API and admin-interface probing".
+ */
+const ADMIN_PROBING_SCENARIO = 'branchleft/http-admin-interface-probing';
 
 /**
  * The Caddy variable a verified session sets, and the top-level access-log
@@ -1358,30 +1370,71 @@ export function renderGhostAdminAppsecConfig(entries: EdgeSite[]): string {
 }
 
 /**
- * The post-overflow whitelist that stops `ADMIN_PROBING_SCENARIO` banning for
- * Ghost's own admin API on our Ghost hostnames. It drops an overflow of that
- * one scenario only when every event in it is a request to the admin API
- * prefix on a Ghost hostname, with no dot segment, encoded or not. Why, and
- * the limit it carries: `render.md`, "Ghost admin API and admin-interface
- * probing".
+ * The post-overflow whitelist that drops every overflow of the hub's
+ * admin-interface probing scenario, so that `renderAdminProbingScenario`, which
+ * reads the same requests, is the only one that bans. The hub item stays
+ * installed and untouched, so its upgrades are unaffected. The file keeps the
+ * name `ghost-admin-api-postoverflow.yaml` from when it did something narrower:
+ * the lists the edge stack is applied from carry that path. Why:
+ * `render.md`, "Ghost admin API and admin-interface probing".
  */
-export function renderGhostAdminPostoverflow(entries: EdgeSite[]): string {
+export function renderHubAdminProbingPostoverflow(): string {
+  return `${[
+    ...GENERATED_BANNER,
+    'name: branchleft/hub-admin-interface-probing-is-silenced',
+    'description: The hub admin-interface probing scenario never bans; branchleft/http-admin-interface-probing does',
+    'whitelist:',
+    `  reason: replaced by ${ADMIN_PROBING_SCENARIO}`,
+    '  expression:',
+    `    - evt.Overflow.Alert.GetScenario() == '${HUB_ADMIN_PROBING_SCENARIO}'`,
+  ].join('\n')}\n`;
+}
+
+/**
+ * The admin-interface probing scenario: the hub's, line for line, but a 403 or
+ * 404 on Ghost's own admin API prefix, on a Ghost hostname and with no dot
+ * segment (literal or percent-encoded), is not counted at all. Not pouring those
+ * requests into the bucket is the point: a post-overflow that drops an overflow
+ * after the fact leaves the scenario's blackhole running, and the blackhole is
+ * kept per address across every host, so three admin API answers would mute the
+ * scenario for that address everywhere for a minute. Why, and what the copy
+ * costs: `render.md`, "Ghost admin API and admin-interface probing".
+ */
+export function renderAdminProbingScenario(entries: EdgeSite[]): string {
   const hosts = ghostHostnames(entries);
   return `${[
     ...GENERATED_BANNER,
-    'name: branchleft/ghost-admin-api-is-not-admin-probing',
-    'description: Ghost admin API answers on our Ghost hostnames are not admin-interface probing',
-    'whitelist:',
-    '  reason: Ghost admin API on a Ghost hostname',
-    '  expression:',
-    '    - >-',
-    `      evt.Overflow.Alert.GetScenario() == '${ADMIN_PROBING_SCENARIO}' &&`,
-    '      len(evt.Overflow.Alert.Events) > 0 &&',
-    '      all(evt.Overflow.Alert.Events, {',
-    `        .GetMeta('target_fqdn') in ${quotedList(hosts)} &&`,
-    `        .GetMeta('http_path') startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
-    "        not (.GetMeta('http_path') matches '(?i)[.][.]|%2e')",
-    '      })',
+    'type: leaky',
+    `name: ${ADMIN_PROBING_SCENARIO}`,
+    'description: Generic HTTP admin interface probing, not counting the Ghost admin API on a Ghost hostname',
+    'filter: >-',
+    "  evt.Meta.service == 'http' &&",
+    "  evt.Meta.log_type in ['http_access-log', 'http_error-log'] &&",
+    "  evt.Meta.http_status in ['404', '403'] &&",
+    '  any(File("admin_interfaces.txt"), { Lower(evt.Meta.http_path) contains # }) &&',
+    '  not (',
+    `    evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
+    `    evt.Meta.http_path startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
+    "    not (evt.Meta.http_path matches '(?i)[.][.]|%2e')",
+    '  )',
+    'groupby: evt.Meta.source_ip',
+    'distinct: evt.Meta.http_path',
+    'data:',
+    '  - source_url: https://hub-data.crowdsec.net/web/admin_interfaces.txt',
+    '    dest_file: admin_interfaces.txt',
+    '    type: string',
+    'capacity: 2',
+    'leakspeed: 10s',
+    'blackhole: 1m',
+    'labels:',
+    '  confidence: 3',
+    '  spoofable: 0',
+    '  classification:',
+    '    - attack.T1595',
+    '  behavior: "http:scan"',
+    '  label: "HTTP Admin Interface Probing"',
+    '  service: http',
+    '  remediation: true',
   ].join('\n')}\n`;
 }
 
@@ -1410,7 +1463,8 @@ export function renderTrustedSessionWhitelist(): string {
  * The scenario that bans an address after repeated failed Ghost admin sign-ins
  * or admin API 401s (a bad or unknown Admin API key, a wrong sign-in
  * verification code) on our Ghost hostnames. Separate from the hub's admin
- * probing scenario so the post-overflow above cannot drop it. Why, and the
+ * probing scenario so the post-overflow that silences that one cannot drop it,
+ * and from ours, which does not count these paths at all. Why, and the
  * limits it carries: `render.md`, "Ghost admin brute force".
  */
 export function renderGhostBruteForceScenario(entries: EdgeSite[]): string {

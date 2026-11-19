@@ -622,8 +622,13 @@ the header.
 
 ## Ghost admin API and admin-interface probing
 
-`renderGhostAdminPostoverflow` writes
-`stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml`, a post-overflow whitelist.
+Two files: `renderAdminProbingScenario` writes
+`stack/crowdsec/scenarios/http-admin-interface-probing.yaml`, the scenario
+`branchleft/http-admin-interface-probing`, and `renderHubAdminProbingPostoverflow`
+writes `stack/crowdsec/postoverflows/ghost-admin-api-postoverflow.yaml`, a
+post-overflow whitelist that silences the hub's scenario of the same kind. (The
+post-overflow file keeps the name it had when it did something narrower: the
+edge stack's file lists, and the stack directory on the host, carry that path.)
 
 What it is for. The hub scenario `crowdsecurity/http-admin-interface-probing`
 reads a 403 or 404 on any path containing one of its entries as a probe, and
@@ -634,19 +639,51 @@ session or a device check and 404 for a missing resource, and the bouncer
 answers 403 to an address already banned, which is how the owner's second ban
 followed the first at 00:50:54Z.
 
-What it narrows. An overflow of that one scenario is dropped only when every
-event in it is a request to `/ghost/api/admin/` on a Ghost hostname with no dot
-segment, literal or percent-encoded. A probe for `/wp-admin`, `/phpmyadmin`,
-`/admin` or any other entry still bans on a Ghost host, any mix of those with
-admin API paths still bans, and admin API paths on any other host still ban.
-Every other scenario still reads every one of these requests.
+What it narrows. Our scenario has the hub's filter, thresholds, data file,
+grouping and one-minute blackhole, with one more condition: a request is not
+counted when it is to `/ghost/api/admin/` on a Ghost hostname with no dot
+segment, literal or percent-encoded. Such a request does not enter the bucket
+at all. A probe for `/wp-admin`, `/phpmyadmin`, `/admin` or any other entry
+still bans on a Ghost host (three of them are needed: admin API paths mixed in
+neither count nor reset them), and admin API paths on any other host still ban.
+A path that leaves the prefix by a dot segment is counted, so
+`/ghost/api/admin/../../phpmyadmin/` is a probe. Every other scenario still
+reads every one of these requests.
 
-The limit it carries. A whitelisted overflow still arms the scenario's one-minute
-blackhole for that address, so three admin API 403s on a Ghost host mute this
-one scenario for that address for a minute. The other HTTP scenarios are not
-muted. The alternatives were worse: a parser whitelist would hide these
-requests from every scenario, and replacing the hub scenario with a copy would
-taint the `crowdsecurity/caddy` collection and stop its hub upgrades.
+Why a scenario and not a post-overflow. The first version dropped, after the
+fact, an overflow made only of admin API requests on a Ghost host. CrowdSec
+applies a scenario's blackhole when the bucket overflows, before any
+post-overflow runs, and keeps it per address across every host. So three admin
+API answers on the Ghost host began a one-minute blackhole that muted the whole
+scenario for that address everywhere, and an attacker could keep it muted by
+repeating them while probing another site. Not pouring those requests into the
+bucket arms nothing. The replay's "admin interfaces on another host right after
+Ghost admin API answers" case is that attack: it was not banned before this
+change, and is now.
+
+Why the hub's scenario is silenced and not replaced. The hub's scenario stays
+installed and untouched, so the `crowdsecurity/caddy` collection is not tainted
+and its hub upgrades continue. Its overflows are all dropped by the
+post-overflow, by name, so it never bans; if one got through, an address would
+be banned twice and counted twice on the ban ladder. The replay fails if the hub's
+scenario raises any alert. Other scenarios (`http-probing`, the CVE ones, the Core
+Rule Set) are not affected by either file.
+
+What the copy costs. Our filter is a copy of the hub's: if the hub changes its
+scenario's filter, ours does not follow. The list of entries does follow, because
+ours reads the same data file (`admin_interfaces.txt`, downloaded from the same
+address when CrowdSec starts). The hub's scenario is pinned by neither the image
+nor this repository (`hub_branch: master`), so compare the two filters when the
+CrowdSec image pin is bumped. A bucket that sees fewer requests than before can
+only ban less: the exempt requests no longer count toward the third distinct
+path, so two probes and any number of admin API answers do not ban.
+
+Proved by `test_crowdsec_replay.py`, which names the scenario each probe must
+reach and not only that the address was banned. The dot-segment case needs this:
+the Apache path traversal scenario (`http-cve-2021-41773`) bans the same three
+requests, so a test that only asks whether an address was banned stays green with
+the dot-segment condition removed. Asking for `branchleft/http-admin-interface-probing`
+among the address's alerts does not.
 
 ## Verified sessions
 
@@ -724,9 +761,9 @@ image and CrowdSec, and `render.test.ts` pins the rendered lines.
 `renderGhostBruteForceScenario` writes
 `stack/crowdsec/scenarios/ghost-admin-login-bruteforce.yaml`, the scenario
 `branchleft/ghost-admin-login-bruteforce`. No hub scenario counts failed Ghost
-sign-ins, and the post-overflow above drops the hub's admin-probing overflows
-on Ghost admin API paths, so before this nothing at the edge banned an address
-for guessing a password or an Admin API key.
+sign-ins, and the admin-probing scenario above does not count Ghost admin API
+paths, so nothing at the edge banned an address for guessing a password or an
+Admin API key until this one.
 
 What Ghost already does, read from its source (v6.55): `POST
 /ghost/api/admin/session/` runs `brute.globalBlock` (per route per address,
@@ -767,8 +804,9 @@ lock covers the sign-in and nothing covers the key, which is the limit it
 carries. The ban follows the ladder in "Ban length and watch-only scenarios"
 below: ten minutes first, longer on repeats.
 
-Why it is a separate scenario: the post-overflow above matches one scenario by
-name, so this one is never dropped by it. The replay in
+Why it is a separate scenario: the post-overflow above matches the hub's
+admin-probing scenario by name, so this one is never dropped by it, and our
+admin-probing scenario excludes these paths from its own count. The replay in
 `test_crowdsec_replay.py` proves a burst of sign-in failures and of key
 failures is banned, and that the owner's mistyped passwords, new-device
 sign-in and admin use are not.
