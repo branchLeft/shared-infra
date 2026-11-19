@@ -60,6 +60,14 @@
 
           [Install]
           WantedBy=timers.target
+      - path: /etc/systemd/journald.conf.d/50-branchleft-retention.conf
+        content: |
+          # Written by the host_baseline role of branchLeft/shared-infra. A change made on the host is
+          # overwritten by the next run. The journal keeps an entry for at most 30 days and
+          # never grows past 500M; whichever comes first deletes the oldest.
+          [Journal]
+          MaxRetentionSec=30day
+          SystemMaxUse=500M
   tasks:
     - name: Read the role's constants
       ansible.builtin.include_vars:

@@ -105,3 +105,31 @@ db_t1_secret_file_mode: '0600'
 # tasks can run as an ordinary user in a scratch tree.
 db_t1_root_user_id: 0
 db_t1_root_group_id: 0
+
+# ----- The metrics exporter (branchLeft/workspace#1810) -----
+
+# The MySQL exporter that runs beside the database, the same attested image db1 runs
+# (db1_stack_exporter_image), pinned by digest because nothing else writes it. The deploy program
+# verifies a literal sidecar image like the pin, so the name must be in its register
+# (ATTESTED_IMAGES, hetzner/provision/branchleft_deploy.py); a bump is a human-reviewed change
+# here, together with db1's. A test holds the shape.
+db_t1_exporter_image: ghcr.io/branchleft/mysqld-exporter@sha256:25d73600fb442f5f50fa772a9201d0a5a5bdc90d82dbbb6c75e83c1656329290
+
+# Loopback, never the private address or 0.0.0.0. Nothing on the tenants network reads it
+# directly: db1's replica tunnel forwards its own port 9105 to this one (the `-L` of
+# hetzner/provision/branchleft-db-tunnel.service, scraped by hetzner/monitoring/render.ts as
+# REPLICA_TUNNEL_METRICS_PORT), and the database itself listens on loopback only.
+db_t1_exporter_listen_address: 127.0.0.1
+db_t1_exporter_metrics_port: 9104
+
+# The credentials file the owner places before the first deploy, read by the exporter through a
+# bind mount, never written, read or checked by this role. The exporter image runs as the user
+# nobody (65534), so the file is owned by that uid with mode 0400; the password is in a file
+# and not an environment variable because `docker inspect` would show every variable to anyone
+# who can reach the Docker socket.
+db_t1_exporter_cnf_path: /etc/branchleft/dbt1-exporter.my.cnf
+
+# What the container's log driver keeps of each service: three files of 10 MB, rotated, whatever
+# the age. Docker's default is one file that grows without bound.
+db_t1_log_max_size: 10m
+db_t1_log_max_file: '3'

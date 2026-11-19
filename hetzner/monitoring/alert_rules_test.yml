@@ -2393,4 +2393,97 @@ tests:
     promql_expr_test:
       - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
         eval_time: 5m
+
+  # The tenant hosts' node_exporters (ws#1810): db-t1, app-t1 and edge-t. The
+  # three carry expected_up="false" today (render.ts, MONITORED_NODE_HOSTS), and
+  # these series carry it too, to prove the disk and memory rules do not wait on
+  # the flip: neither selects on expected_up or host, so the moment a target
+  # answers the rule evaluates. Labels are the ones a node target carries
+  # (job, instance, host, expected_up) plus the filesystem's own. render.test.ts
+  # holds that every tenant host's address appears in this file, so a host added
+  # to the list without a case here fails there.
+  #
+  # Filesystem: 80% used on every host, held past the 15m `for`.
+  - interval: 30s
+    input_series:
+      - series: 'node_filesystem_avail_bytes{job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+        values: '20x40'
+      - series: 'node_filesystem_size_bytes{job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+        values: '100x40'
+      - series: 'node_filesystem_avail_bytes{job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+        values: '20x40'
+      - series: 'node_filesystem_size_bytes{job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+        values: '100x40'
+      - series: 'node_filesystem_avail_bytes{job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+        values: '20x40'
+      - series: 'node_filesystem_size_bytes{job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+        values: '100x40'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostDiskSpaceLow", alertstate="firing"}
+        eval_time: 10m
+        exp_samples: []
+      - expr: ALERTS{alertname="HostDiskSpaceLow", alertstate="firing"}
+        eval_time: 16m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostDiskSpaceLow", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+            value: 1
+          - labels: 'ALERTS{alertname="HostDiskSpaceLow", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+            value: 1
+          - labels: 'ALERTS{alertname="HostDiskSpaceLow", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
+            value: 1
+
+  # Host down, the control case of ws#1810: the exporter on one tenant host
+  # stops once the host is enrolled (expected_up="true", as the flip will set
+  # it), and the alert fires after its stated 5m window -- not at 4m, firing at
+  # 5m30s. The two hosts still answering stay quiet.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="true"}'
+        values: '1 1 1 1 0x30'
+      - series: 'up{job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="true"}'
+        values: '1x34'
+      - series: 'up{job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="true"}'
+        values: '1x34'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing"}
+        eval_time: 6m
+        exp_samples: []
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing"}
+        eval_time: 8m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostOrServiceDown", alertstate="firing", severity="critical", job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="true"}'
+            value: 1
+
+  # And the other two: app-t1 and edge-t stop, db-t1 keeps answering. Together
+  # with the case above, each of the three hosts is shown to page on its own.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="true"}'
+        values: '1x34'
+      - series: 'up{job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="true"}'
+        values: '1 1 1 1 0x30'
+      - series: 'up{job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="true"}'
+        values: '1 1 1 1 0x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing"}
+        eval_time: 8m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HostOrServiceDown", alertstate="firing", severity="critical", job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="true"}'
+            value: 1
+          - labels: 'ALERTS{alertname="HostOrServiceDown", alertstate="firing", severity="critical", job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="true"}'
+            value: 1
+
+  # The same outage on each tenant host while it is still expected_up="false"
+  # (today): nothing pages, because a host not yet enrolled has never been up.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="node", instance="10.20.1.200:9100", host="db-t1", expected_up="false"}'
+        values: '0x30'
+      - series: 'up{job="node", instance="10.20.1.201:9100", host="app-t1", expected_up="false"}'
+        values: '0x30'
+      - series: 'up{job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false"}'
+        values: '0x30'
+    promql_expr_test:
+      - expr: ALERTS{alertname="HostOrServiceDown", alertstate="firing"}
+        eval_time: 12m
         exp_samples: []

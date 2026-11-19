@@ -48,6 +48,12 @@ scrape_configs:
         labels: {host: db1, expected_up: 'true'}
       - targets: ['10.20.1.50:9100']
         labels: {host: ops1, expected_up: 'true'}
+      - targets: ['10.20.1.200:9100']
+        labels: {host: db-t1, expected_up: 'false'}
+      - targets: ['10.20.1.201:9100']
+        labels: {host: app-t1, expected_up: 'false'}
+      - targets: ['10.20.1.210:9100']
+        labels: {host: edge-t, expected_up: 'false'}
 
   - job_name: mysqld
     static_configs:

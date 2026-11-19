@@ -1147,6 +1147,48 @@ ssh -i ~/.ssh/id_ed25519_hetzner -o ProxyCommand="$JUMP" root@"$HOST_PRIVATE_IP"
 
 Confirm 15d's query returns `1` again.
 
+### 15f. The tenant hosts: db-t1, app-t1 and edge-t (branchLeft/workspace#1810)
+
+The three tenants-project hosts apply the same `node_exporter` role (`ansible/playbooks/dbt1.yml`,
+`appt1.yml`, `edget.yml`) and are in `MONITORED_NODE_HOSTS` as `expectedUp: false`, on the tenants
+network's addresses (`TENANTS_HOST_IPS`). They page nobody until each is enrolled and flipped, the
+same rule as every host above. Three things are true of them that are not true of `ops1`.
+
+**The tenants network is not the estate's network.** A network does not span hcloud projects and the
+tenants project reuses the estate's address range, so `10.20.1.200`, `.201` and `.210` mean nothing
+to the Prometheus on edge1: its scrape of them fails, quietly, until a path across the two projects
+exists. That path is a separate decision (branchLeft/workspace#1810 follow-up), and no flip below is
+made before it is in place and a query for the host returns `1`. Until then the disk, memory and
+host-down alerts are proven by promtool only (`alert_rules_test.yml` and `alert_rules_memory_test.yml`,
+grep the host's address): the rules do not select on `host` or `expected_up`, so they evaluate for a
+tenant host the moment its series arrive, and `HostOrServiceDown` waits for the flip.
+
+**Stated local log retention, per host.** Each host's journal keeps an entry for at most 30 days and
+at most 500M (`host_baseline_journal_retention_days: 30` in the host's playbook), inside the 90 days
+the website's privacy notice states for server logs. `db-t1` also bounds each container's log to three
+files of 10 MB. `edge-t`'s Caddy log, when its edge stack lands, follows the edge's own 30 days
+(`hetzner/edge/render.md`, `logDirective`). The privacy notice is the owner's: if its figure moves
+below 30 days, these move with it, and `checks/test_tenant_host_monitoring.py` holds the ceiling.
+
+**No metrics port is public.** Every exporter binds a private or loopback address (node_exporter the
+host's tenants-network address, the MySQL exporter `127.0.0.1`), no tenant firewall has a rule for an
+exporter's port (`hetzner/tenants.metricsPorts.test.ts`), and `db-t1` and `app-t1` have no public
+address at all. The one public host is `edge-t`. After its first apply, from a machine outside the
+tenants project, with `EDGE_T_IPV4` read in (`read -r EDGE_T_IPV4`):
+
+```bash
+for port in 9100 9104 9105; do nc -zv -w 5 "$EDGE_T_IPV4" "$port"; done
+```
+
+Expect each to time out or be refused. Any `succeeded` is a finding: stop and report it.
+
+**Enrolling a host.** Once the host's exporter is installed by the gated apply and a path from edge1
+exists, read it back with 15d's query with `host="db-t1"` (or `app-t1`, `edge-t`); expect one series,
+value `1`. Then flip that host's `expectedUp` to `true` in `render.ts`, regenerate with `pnpm run
+render`, and run 15e's second half against it: stop `node_exporter.service` on the host, wait 5
+minutes, and the `HostOrServiceDown` email for that host arrives; start it again and the query reads
+`1`.
+
 ## 16. The page register
 
 `hetzner/monitoring/pageRegister.ts` is the single committed list of what

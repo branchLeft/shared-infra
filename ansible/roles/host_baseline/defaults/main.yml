@@ -10,3 +10,10 @@ host_baseline_fail2ban_ignoreip: 127.0.0.1/8 ::1 10.20.1.10
 # carries no ignoreip line, and host_baseline_fail2ban_ignoreip is still checked (it must hold
 # a value), so an empty input refuses on every host.
 host_baseline_fail2ban_ignoreip_none: false
+
+# The opt-in journal bound (branchLeft/workspace#1810). 0, the default, writes nothing: a host
+# that does not ask keeps the journal as it has it. A number of days, at most 90 (the ceiling the
+# website's privacy notice states for server logs), writes a journald drop-in that keeps an entry
+# for at most that long, and caps the journal at host_baseline_journal_max_use.
+host_baseline_journal_retention_days: 0
+host_baseline_journal_max_use: 500M

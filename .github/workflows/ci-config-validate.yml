@@ -212,6 +212,7 @@ jobs:
         run: |
           chmod a+r hetzner/monitoring/alert_rules_test.yml \
             hetzner/monitoring/alert_rules_deadline_test.yml \
+            hetzner/monitoring/alert_rules_memory_test.yml \
             hetzner/monitoring/stack/prometheus/alerts.yml
           docker run --rm \
             -v "$PWD/hetzner/monitoring/alert_rules_test.yml:/etc/prometheus-tests/alert_rules_test.yml:ro" \
@@ -230,6 +231,15 @@ jobs:
             --entrypoint /bin/promtool \
             docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
             test rules alert_rules_deadline_test.yml
+          # Its own invocation for the same reason: the memory rule holds for 24h,
+          # so this file evaluates every 5m to reach it in a few hundred steps.
+          docker run --rm \
+            -v "$PWD/hetzner/monitoring/alert_rules_memory_test.yml:/etc/prometheus-tests/alert_rules_memory_test.yml:ro" \
+            -v "$PWD/hetzner/monitoring/stack/prometheus/alerts.yml:/etc/prometheus-tests/stack/prometheus/alerts.yml:ro" \
+            --workdir /etc/prometheus-tests \
+            --entrypoint /bin/promtool \
+            docker.io/prom/prometheus:v3.14.0@sha256:e906cef998316bbe319f98711e1b4d8613ad37e14b08ff831d7036e77b7464f9 \
+            test rules alert_rules_memory_test.yml
 
       - name: Render the Alertmanager config with placeholder secrets
         if: steps.skip.outputs.run != 'false'
