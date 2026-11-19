@@ -159,6 +159,49 @@
       control_plane[image-not-pinned]: the image '{{ control_plane_effective_image }}' is not NAME@sha256:
       followed by 64 lower-case hex digits, which the deploy wrapper requires. Nothing was written.
 
+# ----- The provisioning API, settled before anything is written -----
+# Enabling it points the portal and the console at a service that must start with the stack, so
+# the run stops here, with nothing written, if what it needs is not there. The files are the
+# owner's: the role refuses without them and never makes, reads or prints one. The image must be
+# given because the one the stack runs now may predate the service, and a service that cannot
+# start fails the whole stack's start. Off, none of this runs.
+- name: Look at the provisioning API's input files before anything is written
+  ansible.builtin.stat:
+    path: '{{ item.path }}'
+    get_checksum: false
+  loop: '{{ control_plane_provisioning_input_files }}'
+  register: control_plane_provisioning_input_stats
+  loop_control:
+    label: '{{ item.path }}'
+  when: control_plane_provisioning_enabled | ansible.builtin.bool
+
+- name: Refuse enabling the provisioning API while an input file is absent or empty
+  ansible.builtin.assert:
+    that:
+      - item.stat.exists
+      - item.stat.size > 0
+    quiet: true
+    fail_msg: >-
+      control_plane[provisioning-input-missing]: control_plane_provisioning_enabled is set but
+      {{ item.item.path }} is absent or empty on this host. Nothing was written. The owner
+      places this file before enabling the API; the role never makes it.
+  loop: '{{ control_plane_provisioning_input_stats.results }}'
+  loop_control:
+    label: '{{ item.item.path }}'
+  when: control_plane_provisioning_enabled | ansible.builtin.bool
+
+- name: Refuse enabling the provisioning API with no image pin given
+  ansible.builtin.assert:
+    that:
+      - control_plane_image_given | ansible.builtin.bool
+    quiet: true
+    fail_msg: >-
+      control_plane[provisioning-image-missing]: control_plane_provisioning_enabled is set but
+      control_plane_app_image was not given. Nothing was written. The image the stack runs may
+      predate the provisioning service, so enabling it and pinning the image that carries it
+      travel together.
+  when: control_plane_provisioning_enabled | ansible.builtin.bool
+
 - name: Create the host configuration directories of the control plane
   ansible.builtin.file:
     path: '{{ item.path }}'
@@ -307,6 +350,33 @@
     group: root
     mode: '0644'
   loop: '{{ control_plane_stack_files | difference(control_plane_stack_files_hidden) | difference(control_plane_stack_files_in_block) }}'
+
+# Compose reads this file from the project directory. It sets whether the provisioning API runs
+# and where the portal and the console find it, from the one switch, and holds no secret, so the
+# plan shows its diff. It is written after the compose file it is read with and before the unit
+# starts the stack.
+- name: Write the stack's interpolation file from whether the provisioning API is enabled
+  ansible.builtin.copy:
+    content: '{{ control_plane_project_env_enabled if (control_plane_provisioning_enabled | ansible.builtin.bool) else control_plane_project_env_disabled }}'
+    dest: '{{ control_plane_project_env_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+
+# The owner places the three files; the role puts their owner, group and mode right on every run so
+# a file placed as root alone is readable by the container user and never writable. Attributes
+# only, never content. Enabled alone: a host that has not enabled the API has none to set.
+- name: Set the owner, group and mode of the provisioning API's input files
+  ansible.builtin.file:
+    path: '{{ item.path }}'
+    state: file
+    owner: '{{ item.owner }}'
+    group: '{{ item.group }}'
+    mode: '{{ item.mode }}'
+  loop: '{{ control_plane_provisioning_input_files }}'
+  loop_control:
+    label: '{{ item.path }}'
+  when: control_plane_provisioning_enabled | ansible.builtin.bool
 
 # The access rules are delivered inside a block, with the steps that follow them: the
 # bring-up, the deploy wrapper, the unit check and the reload. The copy keeps the file it

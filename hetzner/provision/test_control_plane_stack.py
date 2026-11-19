@@ -56,7 +56,7 @@ HOST_AVAILABLE_MB = 3009
 # reached its limit at once. A third of the available memory.
 REQUIRED_MARGIN_MB = 1000
 
-SERVICES = {"db", "zitadel", "portal", "console"}
+SERVICES = {"db", "zitadel", "portal", "console", "provisioning"}
 APPLICATION_SERVICES = {"portal", "console"}
 
 
