@@ -220,8 +220,9 @@ describe('renderPageReceiverBlock', () => {
     expect(block).not.toMatch(/tk_[a-z0-9]{29}/);
   });
 
-  it('does not send a resolved notice -- a page that clears itself is not a second page', () => {
-    expect(renderPageReceiverBlock()).toContain('send_resolved: false');
+  it('sends the resolved notice to the phone, so a cleared page reads as cleared', () => {
+    expect(renderPageReceiverBlock()).toContain('send_resolved: true');
+    expect(renderPageReceiverBlock()).not.toContain('send_resolved: false');
   });
 
   it('is no longer the placeholder receiver', () => {
