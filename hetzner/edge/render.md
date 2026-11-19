@@ -368,6 +368,35 @@ Not covered, by decision:
   as malformed) and a name hidden inside another parameter's value. They are forwarded
   as sent, and the first two are redacted in the log.
 
+## `defaultLogDirective`: the error and no-site lines
+
+The site `log` blocks above cover the access log only. Caddy's default logger is a second
+path, and it writes to stderr, so to the edge container's log. Measured against Caddy
+v2.11.4 with no default logger configured, two lines reach it with the token in clear:
+
+- the `http.log.error` line written when a handler fails (a 502 from a refused upstream).
+  It carries the whole request, `request.uri` and `request.headers.Referer` included;
+- the line for a request whose Host matches no site block, which carries the same request.
+
+The token stays valid for its full 600 s, and for as long as a hung upstream keeps the
+request open, so a reader of the container log could use it.
+
+**Fix.** `globalOptions` carries a `log { output stderr; format filter { wrap json ... } }`
+block, written by `defaultLogDirective`. It uses the same `redactingFormat` as every site
+log, so the encoder, the three fields and the pattern have one source. The block names no
+logger, which in Caddy is the default one. Caddy's own default is JSON on stderr when no
+terminal is attached, so a line with no token is unchanged.
+
+`breakGlassToken.test.ts` starts a real Caddy in front of a dead upstream, sends the token
+in every spelling the access-log rows use to a served site and to a host with no site,
+and reads `docker logs`. With the global block removed from the renderer both paths leak
+and the rows fail; with it, nothing matches `FAKE_`. `render.test.ts` pins the block, its
+filter lines and their equality with the site logs.
+
+Not covered: request headers other than `Referer` are written as sent in the error line
+(for example `Cookie`). They carry no break-glass token, and redacting them is a separate
+decision.
+
 ## `siteBlock`: discard route
 
 `EdgeSite.discardRoute` is one literal path the edge answers itself: `POST` gets an empty
