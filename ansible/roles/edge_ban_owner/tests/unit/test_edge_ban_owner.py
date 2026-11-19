@@ -13,6 +13,7 @@ import functools
 import gzip
 import io
 import ipaddress
+import itertools
 import json
 import os
 import re
@@ -43,7 +44,10 @@ RANGE_NETWORK = "203.0.113.0/24"
 RANGE_MEMBER = "203.0.113.25"
 IPV4_LITERAL = re.compile(r"\d{1,3}(?:\.\d{1,3}){3}")
 ADDRESS_CANDIDATE = re.compile(r"[0-9A-Fa-f:.]{2,}")
-SAMPLE = re.compile(r'^edge_ban_owned\{reason="([^"]*)",owned="(true|false)"\} (\d+)$')
+SAMPLE = re.compile(
+    r'^edge_ban_owned\{reason="([^"]*)",owned="(true|false)"(?:,decision_id="([^"]*)")?\} (\d+)$'
+)
+DECISION_IDS = itertools.count(1000)
 
 
 def access_line(address: str, *, trusted: object = "1", seen: float = NOW - 3600) -> bytes:
@@ -71,10 +75,12 @@ def decision(
     scope: str = "Ip",
     scenario: str | None = SCENARIO,
     kind: str = "ban",
-    simulated: bool = False,
+    simulated: object = False,
+    ident: object = None,
 ) -> dict[str, object]:
+    """A decision; without `ident` it gets the next number, so each one is a different ban."""
     found: dict[str, object] = {
-        "id": 1,
+        "id": next(DECISION_IDS) if ident is None else ident,
         "origin": "crowdsec",
         "scope": scope,
         "value": value,
@@ -95,12 +101,24 @@ def cscli_text(*alerts: dict[str, object]) -> str:
     return json.dumps(list(alerts))
 
 
-def samples(text: str) -> dict[tuple[str, str], int]:
-    found: dict[tuple[str, str], int] = {}
+def samples(text: str) -> dict[tuple[str, str, str | None], int]:
+    """Every edge_ban_owned sample as (reason, owned, decision id or None) to its value."""
+    found: dict[tuple[str, str, str | None], int] = {}
     for line in text.splitlines():
         match = SAMPLE.match(line)
         if match is not None:
-            found[(match[1], match[2])] = int(match[3])
+            key = (match[1], match[2], match[3])
+            if key in found:
+                raise AssertionError(f"duplicate series: {line}")
+            found[key] = int(match[4])
+    return found
+
+
+def totals(text: str) -> dict[tuple[str, str], int]:
+    """The samples summed per scenario and owned flag, whichever ids they carry."""
+    found: dict[tuple[str, str], int] = {}
+    for (reason, owned, _), count in samples(text).items():
+        found[(reason, owned)] = found.get((reason, owned), 0) + count
     return found
 
 
@@ -196,8 +214,11 @@ class RuntimeTestCase(unittest.TestCase):
             status = program.main(self.options(extra), runtime, lambda: NOW, lambda: 0.0)
         return status, errors.getvalue()
 
-    def textfile_samples(self) -> dict[tuple[str, str], int]:
+    def textfile_samples(self) -> dict[tuple[str, str, str | None], int]:
         return samples(self.textfile.read_text())
+
+    def textfile_totals(self) -> dict[tuple[str, str], int]:
+        return totals(self.textfile.read_text())
 
     def write_state(self, addresses: dict[str, float], generated_at: float = NOW - 300) -> None:
         document = {
@@ -220,7 +241,7 @@ class ClassificationTests(RuntimeTestCase):
         )
         status, _ = self.invoke(runtime)
         self.assertEqual(status, 0)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 1})
 
     def test_address_outside_trusted_set_is_owned_false(self) -> None:
         runtime = FakeRuntime(
@@ -229,7 +250,7 @@ class ClassificationTests(RuntimeTestCase):
         )
         status, _ = self.invoke(runtime)
         self.assertEqual(status, 0)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "false"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "false"): 1})
 
     def test_range_decision_containing_owned_address_is_owned_true(self) -> None:
         runtime = FakeRuntime(
@@ -238,7 +259,7 @@ class ClassificationTests(RuntimeTestCase):
         )
         status, _ = self.invoke(runtime)
         self.assertEqual(status, 0)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 1})
 
     def test_range_decision_without_owned_address_is_owned_false(self) -> None:
         runtime = FakeRuntime(
@@ -246,7 +267,7 @@ class ClassificationTests(RuntimeTestCase):
             cscli=cscli_text(alert(decision(RANGE_NETWORK, scope="Range"))),
         )
         self.invoke(runtime)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "false"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "false"): 1})
 
     def test_ipv6_range_contains_ipv6_owner_and_never_matches_ipv4(self) -> None:
         runtime = FakeRuntime(
@@ -260,7 +281,7 @@ class ClassificationTests(RuntimeTestCase):
             ),
         )
         self.invoke(runtime)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 2, (SCENARIO, "false"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 2, (SCENARIO, "false"): 1})
 
     def test_ipv4_mapped_ipv6_matches_ipv4(self) -> None:
         runtime = FakeRuntime(
@@ -268,7 +289,7 @@ class ClassificationTests(RuntimeTestCase):
             cscli=cscli_text(alert(decision(OWNER_ADDRESS))),
         )
         self.invoke(runtime)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 1})
 
     def test_unparseable_value_and_other_scopes_are_owned(self) -> None:
         runtime = FakeRuntime(
@@ -282,7 +303,35 @@ class ClassificationTests(RuntimeTestCase):
             ),
         )
         self.invoke(runtime)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 3})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 3})
+
+    def test_a_simulated_flag_that_is_any_truthy_value_skips_the_decision(self) -> None:
+        simulated: list[object] = [True, "true", "True", " TRUE ", "yes", 1, "1", [1], {"a": 1}]
+        real: list[object] = [False, None, 0, "", "false", "False", "0", "no", "off", [], {}]
+        for flag in simulated:
+            with self.subTest(simulated=flag):
+                self.invoke(
+                    FakeRuntime(
+                        files=self.owner_log(OWNER_ADDRESS),
+                        cscli=cscli_text(alert(decision(SCANNER_ADDRESS, simulated=flag))),
+                    )
+                )
+                self.assertEqual(self.textfile_totals(), {})
+        for flag in real:
+            with self.subTest(simulated=flag):
+                self.invoke(
+                    FakeRuntime(
+                        files=self.owner_log(OWNER_ADDRESS),
+                        cscli=cscli_text(alert(decision(SCANNER_ADDRESS, simulated=flag))),
+                    )
+                )
+                self.assertEqual(self.textfile_totals(), {(SCENARIO, "false"): 1})
+
+    def test_decision_without_a_simulated_field_is_a_real_ban(self) -> None:
+        bare = decision(SCANNER_ADDRESS)
+        del bare["simulated"]
+        self.invoke(FakeRuntime(files=self.owner_log(OWNER_ADDRESS), cscli=cscli_text(alert(bare))))
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "false"): 1})
 
     def test_simulated_and_non_ban_decisions_are_skipped(self) -> None:
         runtime = FakeRuntime(
@@ -296,7 +345,7 @@ class ClassificationTests(RuntimeTestCase):
             ),
         )
         self.invoke(runtime)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "false"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "false"): 1})
 
     def test_alert_nested_flat_empty_and_null_cscli_output(self) -> None:
         flat = json.dumps([decision(SCANNER_ADDRESS)])
@@ -311,7 +360,7 @@ class ClassificationTests(RuntimeTestCase):
         ]:
             with self.subTest(text=text):
                 self.invoke(FakeRuntime(files=self.owner_log(OWNER_ADDRESS), cscli=text))
-                self.assertEqual(self.textfile_samples(), expected)
+                self.assertEqual(self.textfile_totals(), expected)
 
     def test_reason_comes_from_the_decision_then_the_alert_then_unknown(self) -> None:
         bare = {"id": 3, "decisions": [decision("198.51.100.9", scenario=None)]}
@@ -325,7 +374,7 @@ class ClassificationTests(RuntimeTestCase):
         )
         self.invoke(runtime)
         self.assertEqual(
-            self.textfile_samples(),
+            self.textfile_totals(),
             {
                 ("crowdsecurity/ssh-bf", "false"): 1,
                 ("crowdsecurity/nginx-dos", "false"): 1,
@@ -346,9 +395,114 @@ class ClassificationTests(RuntimeTestCase):
         )
         self.invoke(runtime)
         text = self.textfile.read_text()
-        self.assertEqual(samples(text), {(SCENARIO, "false"): 2, (SCENARIO, "true"): 1})
+        self.assertEqual(totals(text), {(SCENARIO, "false"): 2, (SCENARIO, "true"): 1})
         series = [line.rsplit(" ", 1)[0] for line in text.splitlines() if line.startswith("edge_")]
         self.assertEqual(len(series), len(set(series)))
+
+    def test_second_owned_ban_of_the_same_scenario_gets_its_own_sample(self) -> None:
+        first = decision(OWNER_ADDRESS, ident=41)
+        second = decision(OWNER_ADDRESS, ident=42)
+        log = self.owner_log(OWNER_ADDRESS)
+        self.invoke(FakeRuntime(files=log, cscli=cscli_text(alert(first))))
+        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true", "41"): 1})
+        self.invoke(FakeRuntime(files=log, cscli=cscli_text(alert(first), alert(second))))
+        self.assertEqual(
+            self.textfile_samples(),
+            {(SCENARIO, "true", "41"): 1, (SCENARIO, "true", "42"): 1},
+        )
+
+    def test_owned_decision_without_usable_id_is_aggregated(self) -> None:
+        bare_one = decision(OWNER_ADDRESS)
+        bare_two = decision("2001:db8::10")
+        del bare_one["id"]
+        bare_two["id"] = None
+        self.invoke(
+            FakeRuntime(
+                files=self.owner_log(OWNER_ADDRESS, "2001:db8::10"),
+                cscli=cscli_text(alert(bare_one, bare_two, decision(OWNER_ADDRESS, ident=43))),
+            )
+        )
+        self.assertEqual(
+            self.textfile_samples(), {(SCENARIO, "true", None): 2, (SCENARIO, "true", "43"): 1}
+        )
+
+    def test_the_alert_id_is_never_used_for_its_decisions(self) -> None:
+        bare = decision(OWNER_ADDRESS)
+        del bare["id"]
+        self.invoke(FakeRuntime(files=self.owner_log(OWNER_ADDRESS), cscli=cscli_text(alert(bare))))
+        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true", None): 1})
+
+    def test_decision_id_label_is_digits_only(self) -> None:
+        rejected: list[object] = [
+            -5,
+            3.0,
+            1.5,
+            "192.0.2.4",
+            "abc12",
+            "12\n",
+            "١٢",
+            "",
+            True,
+            False,
+            10**18,
+            "1000000000000000000",
+            [4],
+        ]
+        accepted: list[object] = [0, "007", "123", 10**18 - 1]
+        decisions = [decision(OWNER_ADDRESS, ident=value) for value in [*accepted, *rejected]]
+        null_id = decision(OWNER_ADDRESS)
+        null_id["id"] = None
+        decisions.append(null_id)
+        self.invoke(
+            FakeRuntime(files=self.owner_log(OWNER_ADDRESS), cscli=cscli_text(alert(*decisions)))
+        )
+        self.assertEqual(
+            self.textfile_samples(),
+            {
+                (SCENARIO, "true", "0"): 1,
+                (SCENARIO, "true", "007"): 1,
+                (SCENARIO, "true", "123"): 1,
+                (SCENARIO, "true", str(10**18 - 1)): 1,
+                (SCENARIO, "true", None): len(rejected) + 1,
+            },
+        )
+
+    def test_decision_id_is_read_from_a_flat_decision_too(self) -> None:
+        flat = json.dumps([decision(OWNER_ADDRESS, ident=44), decision(OWNER_ADDRESS, ident="45")])
+        self.invoke(FakeRuntime(files=self.owner_log(OWNER_ADDRESS), cscli=flat))
+        self.assertEqual(
+            self.textfile_samples(),
+            {(SCENARIO, "true", "44"): 1, (SCENARIO, "true", "45"): 1},
+        )
+
+    def test_the_same_decision_listed_twice_is_one_sample_with_a_count(self) -> None:
+        twice = decision(OWNER_ADDRESS, ident=46)
+        self.invoke(
+            FakeRuntime(
+                files=self.owner_log(OWNER_ADDRESS), cscli=cscli_text(alert(twice), alert(twice))
+            )
+        )
+        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true", "46"): 2})
+
+    def test_unowned_bans_stay_aggregated(self) -> None:
+        self.invoke(
+            FakeRuntime(
+                files=self.owner_log(OWNER_ADDRESS),
+                cscli=cscli_text(
+                    alert(
+                        decision(SCANNER_ADDRESS, ident=47),
+                        decision("198.51.100.8", ident=48),
+                        decision(RANGE_NETWORK, scope="Range", ident=49),
+                    )
+                ),
+            )
+        )
+        self.assertEqual(self.textfile_samples(), {(SCENARIO, "false", None): 3})
+        unowned_lines = [
+            line for line in self.textfile.read_text().splitlines() if 'owned="false"' in line
+        ]
+        self.assertEqual(len(unowned_lines), 1)
+        self.assertNotIn("decision_id", unowned_lines[0])
 
     def test_reason_that_could_hold_an_address_becomes_unknown(self) -> None:
         runtime = FakeRuntime(
@@ -364,7 +518,7 @@ class ClassificationTests(RuntimeTestCase):
         )
         self.invoke(runtime)
         self.assertEqual(
-            self.textfile_samples(),
+            self.textfile_totals(),
             {("unknown", "false"): 3, ("crowdsecurity/with-1.2.3-version", "false"): 1},
         )
         self.assertEqual(address_literals(self.textfile.read_text()), [])
@@ -377,7 +531,26 @@ class FailClosedTests(RuntimeTestCase):
     def assert_every_ban_owned(self, runtime: FakeRuntime) -> None:
         status, _ = self.invoke(runtime)
         self.assertEqual(status, 0)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 1})
+
+    def test_fail_closed_output_labels_each_ban_with_its_decision_id(self) -> None:
+        runtime = FakeRuntime(
+            files={},
+            cscli=cscli_text(
+                alert(
+                    decision(SCANNER_ADDRESS, ident=51),
+                    decision("198.51.100.8", ident=52),
+                    decision(RANGE_NETWORK, scope="Range", ident=53),
+                )
+            ),
+        )
+        status, _ = self.invoke(runtime)
+        self.assertEqual(status, 0)
+        self.assertEqual(
+            self.textfile_samples(),
+            {(SCENARIO, "true", "51"): 1, (SCENARIO, "true", "52"): 1, (SCENARIO, "true", "53"): 1},
+        )
+        self.assertEqual(address_literals(self.textfile.read_text()), [])
 
     def test_no_log_file_marks_every_ban_owned(self) -> None:
         self.assert_every_ban_owned(FakeRuntime(files={}, cscli=self.ban()))
@@ -425,7 +598,7 @@ class FailClosedTests(RuntimeTestCase):
         status, _ = self.invoke(runtime)
         self.assertEqual(status, 0)
         self.assertEqual(runtime.listings, 2)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "false"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "false"): 1})
 
     def test_a_failure_of_the_retry_too_is_fail_closed(self) -> None:
         runtime = FakeRuntime(
@@ -444,7 +617,7 @@ class FailClosedTests(RuntimeTestCase):
         with contextlib.redirect_stderr(errors):
             status = program.main(self.options(), runtime, lambda: NOW, lambda: next(ticks, late))
         self.assertEqual(status, 0)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 1})
         self.assertIn("deadline", errors.getvalue())
 
 
@@ -576,7 +749,7 @@ class LogFileSelectionTests(RuntimeTestCase):
         runtime = FakeRuntime(files=files, cscli=cscli_text(alert(decision(OWNER_ADDRESS))))
         self.invoke(runtime)
         self.assertIn(name, runtime.opened)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 1})
 
     def test_uncompressed_roll_and_size_suffix_are_read(self) -> None:
         names = [
@@ -599,7 +772,7 @@ class LogFileSelectionTests(RuntimeTestCase):
         runtime = FakeRuntime(files=files, cscli=cscli_text(alert(decision(SCANNER_ADDRESS))))
         self.invoke(runtime)
         self.assertEqual(runtime.opened, ["access.log"])
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "false"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "false"): 1})
 
     def test_only_the_access_stem_is_ever_opened(self) -> None:
         files = {
@@ -781,12 +954,12 @@ class TextfileTests(RuntimeTestCase):
             },
             cscli=cscli_text(
                 alert(
-                    decision(OWNER_ADDRESS),
-                    decision(SCANNER_ADDRESS),
-                    decision("2001:db8::10"),
-                    decision("2001:db8:ffff::1"),
-                    decision(RANGE_NETWORK, scope="Range"),
-                    decision("2001:db8:ffff::/48", scope="Range"),
+                    decision(OWNER_ADDRESS, ident=11),
+                    decision(SCANNER_ADDRESS, ident=12),
+                    decision("2001:db8::10", ident=13),
+                    decision("2001:db8:ffff::1", ident=14),
+                    decision(RANGE_NETWORK, scope="Range", ident="15"),
+                    decision("2001:db8:ffff::/48", scope="Range", ident=16),
                 )
             ),
         )
@@ -797,7 +970,7 @@ class TextfileTests(RuntimeTestCase):
         text = self.textfile.read_text()
         self.assertEqual(address_literals(text), [])
         self.assertEqual(address_literals(errors), [])
-        self.assertEqual(sum(samples(text).values()), 6)
+        self.assertEqual(sum(totals(text).values()), 6)
         self.assertNotIn("192.0.2", text + errors)
 
     def test_the_address_scan_itself_finds_addresses(self) -> None:
@@ -810,16 +983,24 @@ class TextfileTests(RuntimeTestCase):
         names = [line.split()[2] for line in lines if line.startswith("# TYPE")]
         self.assertEqual(names, [program.OWNED_METRIC, program.LAST_RUN_METRIC])
         self.assertEqual(lines[-1], f"{program.LAST_RUN_METRIC} {int(NOW)}")
-        self.assertIn(f'{program.OWNED_METRIC}{{reason="{SCENARIO}",owned="false"}} 3', lines)
-        self.assertIn(f'{program.OWNED_METRIC}{{reason="{SCENARIO}",owned="true"}} 3', lines)
-        owned_samples = [line for line in lines if line.startswith(program.OWNED_METRIC + "{")]
-        self.assertEqual(owned_samples, sorted(owned_samples))
+        prefix = f'{program.OWNED_METRIC}{{reason="{SCENARIO}"'
+        self.assertEqual(
+            [line for line in lines if line.startswith(program.OWNED_METRIC + "{")],
+            [
+                f'{prefix},owned="false"}} 3',
+                f'{prefix},owned="true",decision_id="11"}} 1',
+                f'{prefix},owned="true",decision_id="13"}} 1',
+                f'{prefix},owned="true",decision_id="15"}} 1',
+            ],
+        )
+        help_line = next(line for line in lines if line.startswith("# HELP edge_ban_owned "))
+        self.assertIn("One sample per owned ban", help_line)
 
     def test_no_bans_still_writes_the_timestamp(self) -> None:
         runtime = FakeRuntime(files={"access.log": access_line(OWNER_ADDRESS)}, cscli="null")
         self.invoke(runtime)
         text = self.textfile.read_text()
-        self.assertEqual(samples(text), {})
+        self.assertEqual(totals(text), {})
         self.assertIn(f"{program.LAST_RUN_METRIC} {int(NOW)}\n", text)
 
     def test_textfile_target_symlink_is_refused(self) -> None:
@@ -1203,7 +1384,7 @@ class DockerCommandRuntimeTests(RuntimeTestCase):
                 self.options(self.docker_options()), None, lambda: NOW, lambda: 0.0
             )
         self.assertEqual(status, 0, errors.getvalue())
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 1, (SCENARIO, "false"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 1, (SCENARIO, "false"): 1})
         addresses = json.loads(self.state_file.read_text())["addresses"]
         self.assertEqual(sorted(addresses), sorted([OWNER_ADDRESS, "192.0.2.12"]))
 
@@ -1224,7 +1405,7 @@ class DockerCommandRuntimeTests(RuntimeTestCase):
                 self.options(self.docker_options()), None, lambda: NOW, lambda: 0.0
             )
         self.assertEqual(status, 0)
-        self.assertEqual(self.textfile_samples(), {(SCENARIO, "true"): 1})
+        self.assertEqual(self.textfile_totals(), {(SCENARIO, "true"): 1})
 
     def test_runtime_methods_raise_container_runtime_error(self) -> None:
         runtime = program.DockerCommandRuntime(self.docker)
@@ -1333,6 +1514,7 @@ class RuleCoherenceTests(unittest.TestCase):
         self.assertIn(f'{program.OWNED_METRIC}{{owned="false"}}', rules)
         self.assertIn(program.LAST_RUN_METRIC, rules)
         self.assertIn("by (reason)", rules)
+        self.assertIn("by (reason, decision_id)", rules)
 
     def test_the_textfile_default_is_a_name_no_other_role_writes(self) -> None:
         name = program.DEFAULT_TEXTFILE.name

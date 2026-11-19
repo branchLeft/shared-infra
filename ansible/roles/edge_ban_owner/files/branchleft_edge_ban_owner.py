@@ -7,11 +7,13 @@ address is the owner's when a request from it reached Ghost's staff session chec
 answered 2xx (Caddy marks that line `edge_trusted` 1) inside the window. Those addresses are
 kept in a root-only state file. A ban on one of them, or on a range holding one, is owned.
 
-Writes a node_exporter textfile with one count per scenario and owned flag, and the time of the
-run. No address is ever written to it, to stderr or to the journal; only the state file holds
-addresses. When the log is missing, unreadable or shows no owner address, every ban is written
-as owned, so it pages: failing closed costs extra pages, failing open would silence the phone.
-When cscli fails nothing is written, so the textfile ages and the staleness alert fires.
+Writes a node_exporter textfile with one sample per owned ban, labelled by CrowdSec's numeric
+decision id so a repeat ban is a new series, a count per scenario for the bans that are not
+owned, and the time of the run. No address is ever written to it, to stderr or to the journal;
+only the state file holds addresses. When the log is missing, unreadable or shows no owner
+address, every ban is written as owned, so it pages: failing closed costs extra pages, failing
+open would silence the phone. When cscli fails nothing is written, so the textfile ages and the
+staleness alert fires.
 
 Exit 0 written, 2 usage, 3 cscli failed (nothing written), 4 a path was unsafe or a write failed.
 Reasoning, layout and the controls: the role README.
@@ -83,8 +85,13 @@ LOG_STEM = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_-]{0,62}\Z")
 # nothing shaped like a dotted quad.
 SAFE_REASON = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9_./-]{0,127}\Z")
 DOTTED_QUAD = re.compile(r"\d+\.\d+\.\d+\.\d+")
+# CrowdSec's decision id is a database row number; written only as digits, it holds no address.
+DECISION_ID = re.compile(r"\A[0-9]{1,18}\Z")
+FALSE_SPELLINGS = frozenset({"false", "0", "no", "off"})
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
+# A sample of the textfile: scenario, owned flag, and the decision id when the sample is one ban.
+SampleKey = tuple[str, str, str | None]
 Clock = Callable[[], float]
 
 
@@ -768,11 +775,12 @@ def collect_trusted(
 
 @dataclasses.dataclass(frozen=True)
 class Ban:
-    """One active ban: the scenario that raised it and what it covers."""
+    """One active ban: the scenario that raised it, what it covers and CrowdSec's id for it."""
 
     reason: str
     scope: str
     value: str
+    decision_id: str | None
 
 
 def sanitise_reason(candidate: object) -> str | None:
@@ -784,6 +792,27 @@ def sanitise_reason(candidate: object) -> str | None:
     return candidate
 
 
+def usable_decision_id(candidate: object) -> str | None:
+    """The decision id as digits when it is a JSON integer or a digit string; None otherwise."""
+    if isinstance(candidate, bool):
+        return None
+    text = str(candidate) if isinstance(candidate, int) else candidate
+    if not isinstance(text, str) or DECISION_ID.fullmatch(text) is None:
+        return None
+    return text
+
+
+def is_simulated(flag: object) -> bool:
+    """Whether a decision's `simulated` field marks it as simulated.
+
+    CrowdSec writes a JSON boolean. Anything else that is truthy counts as simulated too, apart
+    from a string that spells false, so an odd encoding of true never pages as a real ban.
+    """
+    if isinstance(flag, str) and flag.strip().casefold() in FALSE_SPELLINGS:
+        return False
+    return bool(flag)
+
+
 def ban_from_decision(decision: object, alert_scenario: object) -> Ban | None:
     """The ban a decision stands for; None when it is simulated or not a ban.
 
@@ -793,7 +822,9 @@ def ban_from_decision(decision: object, alert_scenario: object) -> Ban | None:
     if not isinstance(decision, dict):
         raise CrowdSecQueryError(Problem.DECISION_NOT_OBJECT)
     kind = decision.get("type")
-    if decision.get("simulated") is True or not isinstance(kind, str) or kind.casefold() != "ban":
+    if is_simulated(decision.get("simulated")) or not isinstance(kind, str):
+        return None
+    if kind.casefold() != "ban":
         return None
     reason = sanitise_reason(decision.get("scenario")) or sanitise_reason(alert_scenario)
     scope = decision.get("scope")
@@ -802,6 +833,7 @@ def ban_from_decision(decision: object, alert_scenario: object) -> Ban | None:
         reason or UNKNOWN_REASON,
         scope if isinstance(scope, str) else "",
         value if isinstance(value, str) else "",
+        usable_decision_id(decision.get("id")),
     )
 
 
@@ -857,26 +889,36 @@ def is_owned(ban: Ban, trusted: Mapping[Address, int]) -> bool:
     return True
 
 
-def classify(
-    bans: Sequence[Ban], trusted: Mapping[Address, int] | None
-) -> Counter[tuple[str, str]]:
-    """Counts of bans per scenario and owned flag; with no usable signal every ban is owned."""
-    counts: Counter[tuple[str, str]] = Counter()
+def classify(bans: Sequence[Ban], trusted: Mapping[Address, int] | None) -> Counter[SampleKey]:
+    """Counts per sample: an owned ban with a usable id is its own sample, the rest aggregate.
+
+    Owned bans without a usable id are counted per scenario, and so are all unowned bans. With no
+    usable signal every ban is owned.
+    """
+    counts: Counter[SampleKey] = Counter()
     for ban in bans:
-        owned = trusted is None or is_owned(ban, trusted)
-        counts[(ban.reason, "true" if owned else "false")] += 1
+        if trusted is None or is_owned(ban, trusted):
+            counts[(ban.reason, "true", ban.decision_id)] += 1
+        else:
+            counts[(ban.reason, "false", None)] += 1
     return counts
 
 
-def render_textfile(counts: Mapping[tuple[str, str], int], now: int) -> bytes:
-    """The node_exporter textfile: one sample per scenario and owned flag, then the run time."""
+def render_textfile(counts: Mapping[SampleKey, int], now: int) -> bytes:
+    """The node_exporter textfile: the ban samples in sorted order, then the run time."""
     lines = [
         f"# HELP {OWNED_METRIC} Active CrowdSec bans by scenario, and whether the banned address"
-        " is one of the owner's.",
+        " is one of the owner's. One sample per owned ban, labelled with its CrowdSec decision id,"
+        " and a count per scenario for the rest.",
         f"# TYPE {OWNED_METRIC} gauge",
     ]
-    for (reason, owned), count in sorted(counts.items()):
-        lines.append(f'{OWNED_METRIC}{{reason="{reason}",owned="{owned}"}} {count}')
+    samples = []
+    for (reason, owned, decision_id), count in counts.items():
+        labels = f'reason="{reason}",owned="{owned}"'
+        if decision_id is not None:
+            labels += f',decision_id="{decision_id}"'
+        samples.append(f"{OWNED_METRIC}{{{labels}}} {count}")
+    lines += sorted(samples)
     lines += [
         f"# HELP {LAST_RUN_METRIC} Unix time of the last completed classification.",
         f"# TYPE {LAST_RUN_METRIC} gauge",
