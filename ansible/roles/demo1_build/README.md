@@ -427,7 +427,7 @@ it. The image is not run by the role beyond `caddy adapt`, which fails on such a
 
 ### The pin
 
-The commit is `595bcce0ee2bb1c7f8de565cf008060ea43122cf`, which is at or after
+The commit is `5e20991adefcdb9edde4157c6a56d2796ec1da6c`, which is at or after
 `0a23634b652a37260d77e656ded3c37ff24d62ec`, the ghost-platform commit that moved the
 drain flags out of the slot directory to
 `/var/lib/branchleft-broker/drain-flags`. A pin older than that commit puts flags
