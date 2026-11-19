@@ -286,6 +286,8 @@ BOOTSTRAP_GUARD_PATHS = [
     "ansible/tools/fixtures/docker-inspect-absent.json",
 ]
 
+# promote_host places the one key the host applier trusts to sign what it moves, and installs the root
+# timer that acts on it, so the whole role is the owner's as well.
 # safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
 # whole role is the owner's, its module, units, environment template and the tests that hold them
 # included. The ring controller role also installs the unit that hands its root-only key to a
@@ -295,6 +297,16 @@ BOOTSTRAP_GUARD_PATHS = [
 # writes its client configuration, and spool_path_account makes the far-host account and the key
 # line that bounds what that key may open.
 KEY_ROLE_PATHS = [
+    "ansible/roles/promote_host/tasks/main.yml",
+    "ansible/roles/promote_host/vars/main.yml",
+    "ansible/roles/promote_host/meta/argument_specs.yml",
+    "ansible/roles/promote_host/files/branchleft-promote.service",
+    "ansible/roles/promote_host/files/branchleft-promote.timer",
+    "ansible/roles/promote_host/templates/allowed_signers.j2",
+    "ansible/roles/promote_host/templates/slots.json.j2",
+    "ansible/roles/promote_host/templates/promote.env.j2",
+    "ansible/roles/promote_host/tests/unit/test_promote_host.py",
+    "ansible/roles/promote_host/molecule/configured/verify.yml",
     "ansible/roles/safety_channel_key/tasks/main.yml",
     "ansible/roles/safety_channel_key/library/safety_channel_key.py",
     "ansible/roles/ring_controller_host/tasks/main.yml",
