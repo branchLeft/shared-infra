@@ -1,0 +1,11 @@
+---
+# The two inputs, both reaching ops1 through host_inputs as optional keys. Both empty
+# leaves the tunnel unconfigured: the role installs the unit and its directory and
+# says the tunnel is NOT configured. One set without the other is refused.
+#
+# demo1's public IPv4 address, which ops1 dials (leaving through edge1's NAT, the
+# one source demo1's firewall lets reach port 22).
+broker_tunnel_client_demo1_address: ''
+# demo1's ed25519 host key, `ssh-ed25519 <base64>`, pinned: a changed key stops the
+# tunnel rather than being trusted.
+broker_tunnel_client_demo1_host_key: ''

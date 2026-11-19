@@ -1,0 +1,134 @@
+---
+# ops1's half of the broker tunnel (owner ruling control=a): one supervised ssh -L from
+# 127.0.0.1:18090 on ops1 to the broker on demo1's 127.0.0.1:8090. demo1's half is the
+# demo1_build role. The private key is the owner's and is never touched here.
+#
+# demo1's address is a private input: every task that reads or renders it has no_log,
+# and the one that renders it into a file also diff: false (ANS-16). No message names
+# a value.
+- name: Refuse one of the two inputs without the other
+  ansible.builtin.assert:
+    that:
+      - (broker_tunnel_client_demo1_address | length > 0) == (broker_tunnel_client_demo1_host_key | length > 0)
+    quiet: true
+    fail_msg: >-
+      broker_tunnel_client_demo1_address and broker_tunnel_client_demo1_host_key are set
+      together or not at all.
+
+- name: Hold whether the tunnel is configured
+  ansible.builtin.set_fact:
+    broker_tunnel_client_configured: '{{ broker_tunnel_client_demo1_address | length > 0 }}'
+  no_log: true
+
+- name: Refuse a demo1 address that is not one public IPv4 address
+  ansible.builtin.assert:
+    that:
+      - broker_tunnel_client_demo1_address is match(broker_tunnel_client_ipv4_pattern)
+      - not (broker_tunnel_client_demo1_address is match(broker_tunnel_client_non_public_pattern))
+    quiet: true
+    fail_msg: broker_tunnel_client_demo1_address must be demo1's public IPv4 address. It is not shown here.
+  when: broker_tunnel_client_configured
+
+- name: Refuse a demo1 host key that is not one ed25519 key
+  ansible.builtin.assert:
+    that:
+      - broker_tunnel_client_demo1_host_key is match(broker_tunnel_client_host_key_pattern)
+    quiet: true
+    fail_msg: broker_tunnel_client_demo1_host_key must be 'ssh-ed25519 <base64>', one line, no comment.
+  when: broker_tunnel_client_configured
+
+- name: Look at /etc/branchleft
+  ansible.builtin.stat:
+    path: /etc/branchleft
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: broker_tunnel_client_parent
+  check_mode: false
+
+# host_inputs makes it, first in the play; this role never does.
+- name: Refuse an /etc/branchleft that is missing or that someone else can change
+  ansible.builtin.assert:
+    that:
+      - broker_tunnel_client_parent.stat.isdir | default(false)
+      - not (broker_tunnel_client_parent.stat.islnk | default(true))
+      - broker_tunnel_client_parent.stat.uid == 0
+      - not broker_tunnel_client_parent.stat.wgrp
+      - not broker_tunnel_client_parent.stat.woth
+    quiet: true
+    fail_msg: /etc/branchleft must be a directory, not a link, root's, and writable by no one else.
+
+- name: Make the broker tunnel's directory, root's only
+  ansible.builtin.file:
+    path: '{{ broker_tunnel_client_dir }}'
+    state: directory
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Install the broker tunnel unit
+  ansible.builtin.copy:
+    src: branchleft-broker-tunnel.service
+    dest: '{{ broker_tunnel_client_unit_path }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify:
+    - Reload systemd manager
+    - Restart the broker tunnel
+
+- name: Load the unit before it is handled
+  ansible.builtin.meta: flush_handlers
+
+# In a check run on a fresh host the unit file is not there, so there is nothing to
+# enable; the copy above shows that it would be installed.
+- name: Look at the installed unit
+  ansible.builtin.stat:
+    path: '{{ broker_tunnel_client_unit_path }}'
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: broker_tunnel_client_unit_stat
+
+- name: Say that the broker tunnel is NOT configured while its inputs are unset
+  ansible.builtin.debug:
+    msg: >-
+      Broker tunnel NOT configured: broker_tunnel_client_demo1_address and
+      broker_tunnel_client_demo1_host_key are unset. The unit is installed and stays inactive.
+      This is a stated skip, not a pass.
+  when: not broker_tunnel_client_configured
+
+- name: Write the ssh client configuration of the broker tunnel
+  ansible.builtin.template:
+    src: demo1.conf.j2
+    dest: '{{ broker_tunnel_client_config_file }}'
+    owner: root
+    group: root
+    mode: '0600'
+  notify: Restart the broker tunnel
+  when: broker_tunnel_client_configured
+  no_log: true
+  diff: false
+
+- name: Pin demo1's host key
+  ansible.builtin.template:
+    src: known_hosts.j2
+    dest: '{{ broker_tunnel_client_known_hosts_file }}'
+    owner: root
+    group: root
+    mode: '0644'
+  notify: Restart the broker tunnel
+  when: broker_tunnel_client_configured
+
+# Enabled and started either way: the unit's conditions keep it inactive, not failed,
+# until the configuration and the owner's key are both there.
+- name: Enable and start the broker tunnel
+  ansible.builtin.systemd_service:
+    name: '{{ broker_tunnel_client_unit_name }}'
+    enabled: true
+    state: started
+  when: broker_tunnel_client_unit_stat.stat.exists
+
+- name: Run a pending restart now, so a failure shows in this run
+  ansible.builtin.meta: flush_handlers

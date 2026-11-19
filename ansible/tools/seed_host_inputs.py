@@ -107,6 +107,8 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
         "backup_restore_state_copy_tenant_endpoint",
         "backup_restore_state_copy_tenant_region",
         "backup_restore_state_copy_tenant_access_key_id",
+        "broker_tunnel_client_demo1_address",
+        "broker_tunnel_client_demo1_host_key",
     ),
     "app1": (
         "website_app1_smtp_host",
@@ -122,6 +124,12 @@ HOSTS: Final[dict[str, tuple[str, ...]]] = {
 # key, `--host` never seeds it and `--set` refuses it. A test fails once a row holds a key that is
 # still listed here, so the list only shrinks.
 NOT_YET_ROUTED: Final = frozenset({STACKS_KEY})
+
+# Optional inputs (host_inputs_optional_by_host) that the fill never asks for: each is added on
+# its own with --set once the owner turns its role on, and a file without it is complete.
+SET_ONLY: Final = frozenset(
+    {"broker_tunnel_client_demo1_address", "broker_tunnel_client_demo1_host_key"}
+)
 
 # The one table of live homes, by input: the files are in CONFIG_DIR and are tried in order. The
 # pager keys look in the pager's own file first (the unit loads it later, so it wins), then in
@@ -203,6 +211,9 @@ SOURCES: Final[dict[str, tuple[Source, ...]]] = {
     STACKS_KEY: (Source(STACKS, VOLUME_PROGRAM),),
     "deploy_slot_keys_slots": (Source(SLOTS, ""),),
     "ci_jump_user": (Source(TYPED, ""),),
+    # The broker tunnel's two inputs have no live file: the owner types each once with --set.
+    "broker_tunnel_client_demo1_address": (Source(TYPED, ""),),
+    "broker_tunnel_client_demo1_host_key": (Source(TYPED, ""),),
 }
 
 # Fixed texts. Nothing here ever holds a value: an error is a code, and a code is one of these.
@@ -666,6 +677,8 @@ def collect(ctx: Context, host: str) -> Collected:
     from_live: list[str] = []
     pending: list[str] = []
     for key in HOSTS[host]:
+        if key in SET_ONLY:
+            continue
         for source in SOURCES[key]:
             if source.kind in (SLOTS, TYPED):
                 break

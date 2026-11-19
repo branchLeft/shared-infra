@@ -1,0 +1,25 @@
+# Written by the broker_tunnel_client role. The ssh client configuration of the broker
+# tunnel: one hop to demo1, one local forward to the broker, the owner's key only.
+Host demo1
+    HostName {{ broker_tunnel_client_demo1_address }}
+    Port 22
+    User {{ broker_tunnel_client_remote_user }}
+    IdentityFile {{ broker_tunnel_client_key_file }}
+    IdentitiesOnly yes
+    IdentityAgent none
+    PreferredAuthentications publickey
+    PasswordAuthentication no
+    KbdInteractiveAuthentication no
+    BatchMode yes
+    StrictHostKeyChecking yes
+    UserKnownHostsFile {{ broker_tunnel_client_known_hosts_file }}
+    GlobalKnownHostsFile /dev/null
+    HostKeyAlias demo1
+    ForwardAgent no
+    ForwardX11 no
+    RequestTTY no
+    ExitOnForwardFailure yes
+    ServerAliveInterval 10
+    ServerAliveCountMax 3
+    ConnectTimeout 15
+    LocalForward {{ broker_tunnel_client_local_end }} {{ broker_tunnel_client_broker_open }}

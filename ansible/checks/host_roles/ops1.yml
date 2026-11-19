@@ -18,3 +18,4 @@
 - mail_collector
 - spool_paths
 - ring_controller_host
+- broker_tunnel_client
