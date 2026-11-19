@@ -3,8 +3,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { type Created, installTenantsMocks, ofType, settle, TYPES } from './tenants.fixtures';
 
 /**
- * No metrics port is reachable from the public internet on any tenant host
- * (branchLeft/workspace#1810). A Hetzner Cloud firewall filters the public
+ * No metrics port is reachable from the public internet on any tenant host.
+ * A Hetzner Cloud firewall filters the public
  * interface only, so the control that matters here is that no firewall the
  * tenants program declares has a rule for an exporter's port, from any source.
  * The exporters' own binds (the node exporter on the private address, the MySQL

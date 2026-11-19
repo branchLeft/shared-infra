@@ -53,7 +53,7 @@ follows the order the standard sets for a role README (ANS-14).
    `systemd-journald` when the file changed. The default is 0, which writes nothing, so a host
    that does not ask is unchanged. 90 is the ceiling the website's privacy notice states for
    server logs. The three tenant hosts (`dbt1`, `appt1`, `edget`) set 30 in their playbooks
-   (branchLeft/workspace#1810), the same figure the edge keeps its logs for; the live hosts do
+   (ws#1810), the same figure the edge keeps its logs for; the live hosts do
    not set it. Container logs are bounded by each stack's own compose file, not here.
 
 It does not set up host egress, install the deploy tooling, configure the

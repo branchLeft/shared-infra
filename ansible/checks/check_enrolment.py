@@ -188,7 +188,7 @@ HOST_PLAY_VARS: dict[str, dict[str, str | bool | int]] = {
     "app1": {"deploy_tooling_host_class": "app", "deploy_tooling_policy_variant": "standard"},
     "ops1": {"deploy_tooling_host_class": "internal"},
     "db1": {"deploy_tooling_host_class": "internal"},
-    # The three tenant hosts keep their journal for 30 days (ws#1810), inside the 90 days the privacy
+    # The three tenant hosts keep their journal for 30 days, inside the 90 days the privacy
     # notice states for server logs; test_tenant_host_monitoring.py holds the figure and the ceiling.
     "dbt1": {"deploy_tooling_host_class": "internal", "host_baseline_journal_retention_days": 30},
     "appt1": {"deploy_tooling_host_class": "internal", "host_baseline_journal_retention_days": 30},

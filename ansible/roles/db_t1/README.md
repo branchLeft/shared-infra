@@ -102,7 +102,7 @@ Decisions a reviewer should know the reasons for:
   and reads back the settings above. A configuration file that was not read fails it, and
   a failed health check rolls the deploy back or refuses it. The root value reaches the
   client through the container's environment, never through the compose file.
-- **The metrics exporter (branchLeft/workspace#1810).** A second service, the same attested
+- **The metrics exporter (ws#1810).** A second service, the same attested
   `ghcr.io/branchleft/mysqld-exporter` image db1 runs, pinned by digest in `vars/main.yml`
   (`db_t1_exporter_image`). It uses the host network and listens on `127.0.0.1:9104`, never on
   the private address and never on a published port, because the database listens on loopback
@@ -260,7 +260,7 @@ register (branchLeft/shared-infra#944, an owner merge), so that change lands fir
   health check and the `ReplicaStatusMissing` alert both see.
 - The exporter reaches Prometheus only through db1's replica tunnel, which is for the
   migration. When the tunnel is torn down, the path to this host's database metrics is a
-  separate change (branchLeft/workspace#1810 follow-up).
+  separate change (ws#1810 follow-up).
 - Backup, replication and tenant provisioning are not here.
 
 ## Clauses this role exercises

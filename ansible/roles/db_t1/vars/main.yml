@@ -106,7 +106,7 @@ db_t1_secret_file_mode: '0600'
 db_t1_root_user_id: 0
 db_t1_root_group_id: 0
 
-# ----- The metrics exporter (branchLeft/workspace#1810) -----
+# ----- The metrics exporter -----
 
 # The MySQL exporter that runs beside the database, the same attested image db1 runs
 # (db1_stack_exporter_image), pinned by digest because nothing else writes it. The deploy program

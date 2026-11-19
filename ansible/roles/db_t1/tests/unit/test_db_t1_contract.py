@@ -284,7 +284,7 @@ TUNNEL_UNIT = ROOT / "hetzner" / "provision" / "branchleft-db-tunnel.service"
 
 
 class ExporterContract(unittest.TestCase):
-    """The metrics exporter beside the database (branchLeft/workspace#1810)."""
+    """The metrics exporter beside the database."""
 
     def test_the_image_is_the_attested_one_pinned_by_digest(self) -> None:
         self.assertEqual(exporter_service()["image"], VARS["db_t1_exporter_image"])

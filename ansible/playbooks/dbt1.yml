@@ -21,7 +21,7 @@
   vars:
     enrolled_host: dbt1
     deploy_tooling_host_class: internal
-    # The host's journal keeps an entry for at most 30 days (ws#1810), inside the 90 days the
+    # The host's journal keeps an entry for at most 30 days, inside the 90 days the
     # website's privacy notice states for server logs. Pinned by checks/test_tenant_host_monitoring.py.
     host_baseline_journal_retention_days: 30
   vars_files:

@@ -1,5 +1,5 @@
 ---
-# Bounds how long the host's own journal keeps an entry (branchLeft/workspace#1810). It is opt-in:
+# Bounds how long the host's own journal keeps an entry. It is opt-in:
 # the default, 0, writes nothing and leaves the journal as the host has it, so a host that does not
 # ask is unchanged. A host that sets a number of days gets a journald drop-in that deletes anything
 # older and caps the journal's size, so a full disk never has the journal as its cause. The figure

@@ -2394,7 +2394,7 @@ tests:
       - expr: ALERTS{alertname="ControlPlaneBackupRunFailed", alertstate="firing"}
         eval_time: 5m
 
-  # The tenant hosts' node_exporters (ws#1810): db-t1, app-t1 and edge-t. The
+  # The tenant hosts' node_exporters: db-t1, app-t1 and edge-t. The
   # three carry expected_up="false" today (render.ts, MONITORED_NODE_HOSTS), and
   # these series carry it too, to prove the disk and memory rules do not wait on
   # the flip: neither selects on expected_up or host, so the moment a target
@@ -2432,7 +2432,7 @@ tests:
           - labels: 'ALERTS{alertname="HostDiskSpaceLow", alertstate="firing", severity="warning", owner_action="true", job="node", instance="10.20.1.210:9100", host="edge-t", expected_up="false", fstype="ext4", mountpoint="/", device="/dev/sda1"}'
             value: 1
 
-  # Host down, the control case of ws#1810: the exporter on one tenant host
+  # Host down, the control case: the exporter on one tenant host
   # stops once the host is enrolled (expected_up="true", as the flip will set
   # it), and the alert fires after its stated 5m window -- not at 4m, firing at
   # 5m30s. The two hosts still answering stay quiet.

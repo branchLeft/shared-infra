@@ -1,6 +1,6 @@
 # test_tenant_host_monitoring.py: the tenant hosts' exporter, its bind and its log retention
 
-`branchLeft/workspace#1810` puts the tenants project's three hosts (`db-t1`, `app-t1`, `edge-t`)
+`ws#1810` puts the tenants project's three hosts (`db-t1`, `app-t1`, `edge-t`)
 under the monitoring. The Prometheus side is held in `hetzner/monitoring/render.test.ts` and the
 promtool files beside it; this test holds the Ansible side to the same statement.
 

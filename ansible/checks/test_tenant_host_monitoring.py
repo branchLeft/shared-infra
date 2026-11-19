@@ -1,4 +1,4 @@
-"""Check that the tenant hosts are monitored the way ws#1810 states, and no metrics port is public.
+"""Check that the tenant hosts are monitored the way the monitoring runbook states, and no metrics port is public.
 
 Full reasoning: `test_tenant_host_monitoring.md`.
 """
@@ -79,7 +79,7 @@ class TenantHostsRunTheExporter(unittest.TestCase):
                 row: object = yaml.safe_load(
                     (ANSIBLE / "checks" / "host_roles" / f"{host}.yml").read_text(encoding="utf-8")
                 )
-                self.assertIsInstance(row, list)
+                assert isinstance(row, list)  # noqa: S101 - narrows the type
                 self.assertIn(EXPORTER, row)
 
     def test_no_tenant_playbook_moves_the_exporters_subnet_prefix(self) -> None:

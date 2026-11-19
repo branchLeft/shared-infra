@@ -1,4 +1,4 @@
-# Memory cases for the tenant hosts (ws#1810), kept apart from
+# Memory cases for the tenant hosts, kept apart from
 # alert_rules_test.yml because HostMemoryPressure holds for 24h: the evaluation
 # interval here is 5m so reaching it costs a few hundred evaluations, not
 # thousands, the same reason alert_rules_deadline_test.yml is its own file. The
