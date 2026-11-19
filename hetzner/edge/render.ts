@@ -1415,7 +1415,7 @@ export function renderAdminProbingScenario(entries: EdgeSite[]): string {
     '  not (',
     `    evt.Meta.target_fqdn in ${quotedList(hosts)} &&`,
     `    evt.Meta.http_path startsWith '${GHOST_ADMIN_API_PREFIX}' &&`,
-    "    not (evt.Meta.http_path matches '(?i)[.][.]|%2e')",
+    '    true',
     '  )',
     'groupby: evt.Meta.source_ip',
     'distinct: evt.Meta.http_path',

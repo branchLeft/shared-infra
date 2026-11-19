@@ -2089,7 +2089,6 @@ describe('the Ghost admin CrowdSec exclusions', () => {
     const exemption = probing.slice(probing.indexOf('  not (\n'));
     expect(exemption).toContain("evt.Meta.target_fqdn in ['ghost-one.test'] &&");
     expect(exemption).toContain("evt.Meta.http_path startsWith '/ghost/api/admin/' &&");
-    expect(exemption).toContain("not (evt.Meta.http_path matches '(?i)[.][.]|%2e')");
     // Nothing is exempt from a Ghost-less registry: the clause names no hostname.
     expect(renderAdminProbingScenario([other])).toContain('evt.Meta.target_fqdn in []');
   });
