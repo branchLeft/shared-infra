@@ -1237,6 +1237,15 @@ describe("the committed posture's IP-decision handler", () => {
       expect(globalBlock).not.toMatch(/hard_fail/);
     });
 
+    it('serves the bouncer counters that say a request was let through unchecked', () => {
+      // Without this flag the bouncer registers none of its counters in Caddy's
+      // registry, so `crowdsec_appsec_lapi_requests_failures_total` never
+      // reaches the metrics listener and AppSecFailingOpen, in
+      // hetzner/monitoring, reads an absent series: silent, like a healthy
+      // edge. A bare flag: the parser rejects an argument.
+      expect(globalBlock).toMatch(/^\t\tenable_caddy_metrics$/m);
+    });
+
     it('polls decisions on an interval, so the handler answers from its cache', () => {
       expect(globalBlock).toMatch(/^\t\tticker_interval \d+s$/m);
     });

@@ -662,6 +662,23 @@ zone-aggregate series and the Docker bridge range. Only `AlertEmailDeliveryFaili
 is an ordinary `warning`, which routes to the on-host mailbox only (see "Alerts
 that stay on mx1" below), unrelated to the mx1 circularity this PR closes.
 
+`AppSecFailingOpen` says the edge is serving requests the AppSec checker did not
+inspect (`appsec_fail_open`, `RUNBOOK-edge.md` section 10b). It reads
+`crowdsec_appsec_lapi_requests_failures_total` from the `caddy` job: the Caddy
+bouncer counts every AppSec call that errored or timed out, and serves the
+counter once the rendered Caddyfile sets `enable_caddy_metrics`. CrowdSec's own
+metrics cannot carry this signal -- a stopped CrowdSec has no metrics port, so
+`up{job="crowdsec"}` says the process is gone but not how much traffic went
+through uninspected -- and a log-derived counter would need a log shipper this
+stack does not have. The rule is `increase(...[5m]) > 5` held `for: 10m`, so it
+fires about 15 minutes after the checker stopped and stays silent for a restart
+or a stall under five minutes. It routes as `owner_action` (warning to the
+off-host mailbox), not as a page: the edge is serving and the ban list and
+throttle still hold. It does not count a checker that answers 401 or 500 (also
+fail-open, not a transport failure). Not yet proven in the lab with CrowdSec
+stopped on a running edge: `alert_rules_test.yml` proves the rule, the lab run
+proves the counter moves.
+
 `RateLimitDeclinesSustained` fires only when one key has kept being declined for
 30 minutes running (`increase(...[10m]) > 0` held `for: 30m`, so a burst has to
 last more than 20 minutes). An internet scanner that trips the throttle is the

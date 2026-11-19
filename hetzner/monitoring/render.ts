@@ -547,6 +547,61 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            CrowdSec scenario that decided; RUNBOOK-edge.md section 10b says',
     '            what each one reads.',
     '',
+    // The edge lets a request through uninspected when its AppSec checker is
+    // slow or down (`appsec_timeout 1s`, then `appsec_fail_open`: posture.md,
+    // RUNBOOK-edge.md section 10b). The signal is Caddy's own, not CrowdSec's:
+    // the bouncer counts every AppSec call that errored (a refused connection
+    // or the one-second timeout) in `crowdsec_appsec_lapi_requests_failures_total`,
+    // served on the same listener as the `caddy` job once the rendered
+    // Caddyfile sets `enable_caddy_metrics`. CrowdSec cannot report its own
+    // absence: with it stopped its metrics port is simply gone, and `up` for
+    // the crowdsec job says the process is down, not that traffic is passing
+    // uninspected, nor how much. A log-derived counter was the other
+    // candidate and was rejected: nothing in the monitoring stack ships logs,
+    // and a log shipper would be a new service for one counter that the
+    // bouncer already keeps.
+    //
+    // The counter moves only on a transport failure. A checker that answers
+    // 401 or 500 also fails open and is not counted; that is a
+    // misconfiguration the first request shows, not an outage, and a stopped
+    // or stalled checker, the case this exists for, is counted on every
+    // request. Absent series (no failure since Caddy started) never fires.
+    //
+    // More than 5 failures in a 5-minute window, held for 10 minutes. The
+    // expression stays true for the 5-minute window after the last failure,
+    // so it holds for an outage's own length plus 5 minutes (the same shape
+    // RateLimitDeclinesSustained works around): a 10-minute `for:` fires only
+    // for an outage of 5 minutes or more. A CrowdSec restart or a deploy
+    // (seconds to a few minutes) stays silent; a stopped or wedged checker,
+    // which fails every request, fires about 15 minutes after it stopped.
+    // owner_action routes it to the off-host mailbox: the response (bring
+    // CrowdSec back, read its log) is the owner's, and it is not a page
+    // because the edge is serving and every other protection (the IP ban
+    // list, the throttle) still holds.
+    '      - alert: AppSecFailingOpen',
+    '        expr: increase(crowdsec_appsec_lapi_requests_failures_total[5m]) > 5',
+    '        for: 10m',
+    '        labels:',
+    '          severity: warning',
+    '          owner_action: "true"',
+    '        annotations:',
+    '          summary: "The edge is letting requests through uninspected: its AppSec checker has kept failing for over 5 minutes."',
+    '          description: >-',
+    '            Caddy asked the CrowdSec AppSec checker to inspect a request,',
+    '            got no answer inside one second, and served the request',
+    '            anyway (appsec_fail_open). This is designed behaviour, so',
+    '            nothing is down for visitors, but every site on edge1 is',
+    '            running without WAF inspection while it lasts. On edge1,',
+    '            `docker ps` shows whether the crowdsec container is running',
+    '            and `docker logs --since 15m` on it says why it is not',
+    '            answering; RUNBOOK-edge.md section 10b describes the',
+    '            fail-open behaviour. The alert clears 5 minutes after the',
+    '            last failure,',
+    '            once the 5-minute window holds none. The counter is',
+    '            crowdsec_appsec_lapi_requests_failures_total on the caddy',
+    '            scrape job; it counts refused connections and timeouts, not',
+    '            a checker that answers 401 or 500.',
+    '',
     '      - alert: HostMemoryPressure',
     '        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.75',
     '        for: 24h',

@@ -1134,6 +1134,14 @@ function globalOptions(): string[] {
     // so a CrowdSec restart would answer 500 for every request on every site,
     // including in the posture that is supposed to be unable to affect one.
     '\t\tappsec_fail_open',
+    // A bare flag. Without it the bouncer counts nothing: its own counters of
+    // AppSec calls and failed calls (`crowdsec_appsec_lapi_requests_total`,
+    // `crowdsec_appsec_lapi_requests_failures_total`) are only registered in
+    // Caddy's registry, and so served by the `metrics` listener, when it is on.
+    // The failure counter is the one signal of a request that was let through
+    // uninspected, and it is what AppSecFailOpenSustained in
+    // hetzner/monitoring/render.ts reads.
+    '\t\tenable_caddy_metrics',
     '\t}',
     '}',
   ];
