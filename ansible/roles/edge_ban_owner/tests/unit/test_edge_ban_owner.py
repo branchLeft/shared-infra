@@ -559,10 +559,10 @@ class TrustedLineTests(RuntimeTestCase):
             access_line("192.0.2.1", seen=NOW - 9000)
             + access_line("192.0.2.1", seen=NOW - 100)
             + access_line("192.0.2.1", seen=NOW - 5000)
-            + access_line("fe80::1%eth0", seen=NOW - 50)
+            + access_line("2001:db8::1%eth0", seen=NOW - 50)
         )
         self.assertEqual(
-            self.trusted_after(log), {"192.0.2.1": int(NOW - 100), "fe80::1": int(NOW - 50)}
+            self.trusted_after(log), {"192.0.2.1": int(NOW - 100), "2001:db8::1": int(NOW - 50)}
         )
 
 

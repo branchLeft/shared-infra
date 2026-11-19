@@ -212,14 +212,11 @@ const OWNED_EDGE_BAN_ALERT_NAME = 'EdgeBanIssued';
 
 /**
  * The child route that pages an owned edge ban, rendered from `register`.
- * The generic page route groups on `tenant`, which `EdgeBanIssued` does not
- * carry, so every ban would share one group and a second scenario's ban would
- * wait out the root's one-hour `group_interval`. Grouping on the scenario
- * makes a second scenario a new group that notifies after `group_wait`;
- * `group_interval: 5m` bounds any later change to a group. Tenant-scoped
- * pages never match this route, so theirs are untouched. It must sit before
- * the generic route and must not `continue`, or the same alert would page
- * twice. Empty unless a live entry names the alert, as `renderPageRoute` is.
+ * It groups on the scenario, not `tenant` (which `EdgeBanIssued` lacks), so a
+ * second scenario's ban is a new group that notifies after `group_wait`, not
+ * after the root's one hour. Tenant-scoped pages never match it. It must sit
+ * before the generic route and must not `continue`, or the alert pages twice.
+ * Empty unless a live entry names the alert.
  */
 export function renderOwnedEdgeBanRoute(register: readonly PageRegisterEntry[]): string {
   if (!pageAlertNames(register).includes(OWNED_EDGE_BAN_ALERT_NAME)) return '';

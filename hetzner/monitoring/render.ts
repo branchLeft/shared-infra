@@ -531,23 +531,11 @@ export function renderAlertRulesWithDeadline(replicaDeadline: unknown): string {
     '            varies between 172.17 and 172.18, hence the whole /12 rather',
     '            than the literal address.',
     '',
-    // A ban of one of the owner's own addresses pages the phone; a ban of any
-    // other address goes to email only (EdgeBanUnowned). The edge_ban_owner
-    // timer on edge1 decides which is which, every five minutes, and writes
-    // one `owned` sample per ban: a ban pages up to five minutes after
-    // CrowdSec makes it, plus a scrape. A ban costs the person banned every
-    // site on the edge, the pager's own public name and the sign-in service
-    // included, so an owned one cannot wait for the digest; the page route
-    // posts to ntfy over the stack's own network, not through the edge.
-    // Neither the gauge nor the classifier's file carries an address, so no
-    // alert text can name one. While the classifier is stale (no run in 15
-    // minutes, or no file at all) nothing says which bans are owned, so the
-    // second branch pages every ban from CrowdSec's own gauge, and
-    // EdgeBanOwnerStale pages on its own, held for 5 minutes so that a
-    // node-exporter restart is not a page. Watch-only scenarios' simulated
-    // decisions are not in the gauge (test_crowdsec_replay.py asserts it),
-    // so a would-be ban never pages. Why: hetzner/edge/render.md, "Being
-    // told about a ban".
+    // An owned ban pages after the classifier's next run, up to ~5 minutes;
+    // other bans go to email (EdgeBanUnowned). A stale or missing classifier
+    // makes every ban page via the fallback branch, and EdgeBanOwnerStale pages
+    // on its own. Text and labels never carry an address. Why, and the rest:
+    // hetzner/edge/render.md, "Being told about a ban".
     '      - alert: EdgeBanIssued',
     `        expr: (sum by (reason) (edge_ban_owned{owned="true"}) > 0) or ((sum by (reason) (cs_active_decisions{action="ban"}) > 0) and on() (${EDGE_BAN_CLASSIFIER_STALE}))`,
     '        labels:',

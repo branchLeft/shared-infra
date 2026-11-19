@@ -1,20 +1,11 @@
 ---
-# The role is converged with the docker command line replaced by a stand-in that answers from
-# files (molecule.yml, prepare.yml). Each case here writes an access log and a cscli answer,
-# starts the real service unit and reads what it left. The timestamps in the access log are
-# counted back from the time this play starts, so the 30-day window is the program's own.
-# Every address is from RFC 5737 or RFC 3849.
-#
-# A case has:
-#   name                  what the case is
-#   log                   the access log's lines (ip, age_days, and trusted when the line has
-#                         the edge_trusted field), or null for a Caddy directory with no log file
-#   cscli                 what `cscli decisions list -o json` prints: alerts with their decisions
-#   cscli_status          cscli's exit status, default 0
-#   expect                the edge_ban_owned samples the textfile must hold, and no others
-#   expect_state          the addresses the state file must hold, when the case checks it
-#   expect_unit_ok        false when the service must fail
-#   keep_previous_output  true to keep the textfile and the state file of the case before
+# Converged with docker swapped for a stand-in that answers from files (molecule.yml,
+# prepare.yml). Each case writes an access log and a cscli answer, starts the real unit and
+# reads what it left. Log timestamps count back from this play's start.
+# Case keys: name; log (ip, age_days, optional trusted; null for no file); cscli;
+# cscli_status (default 0); expect (edge_ban_owned samples, and no others); expect_state;
+# expect_unit_ok (false if the unit must fail); keep_previous_output.
+# Addresses are RFC 5737 or RFC 3849 only.
 - name: Verify
   hosts: all
   gather_facts: false
