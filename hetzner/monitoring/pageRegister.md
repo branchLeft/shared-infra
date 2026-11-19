@@ -65,8 +65,13 @@ Healthchecks-delivered entries are not checked. `pageRegister.test.ts` runs it
 against the real register and the real rendered rules, and against the reaper
 entry flipped to live with no rule, which must report it.
 
-One `severity: page` rule exists, `EdgeBanIssued`, raised from CrowdSec's decision gauge on edge1, and its entry carries no exemption. Each of the other
-three live Alertmanager entries carries a `ruleExemption`: the tier-two safety
+Two `severity: page` rules come from the edge's ban classifier on edge1, and their
+entries carry no exemption. `EdgeBanIssued` pages for a ban on an owned address only
+(`edge_ban_owned{owned="true"}`); `EdgeBanOwnerStale` pages when the classifier has not
+run for over 15 minutes. While the classifier is stale, `EdgeBanIssued` also pages every
+ban. A ban on any other address is `EdgeBanUnowned`, a warning that goes to email and is
+not registered. Each of the other three live Alertmanager entries carries a
+`ruleExemption`: the tier-two safety
 match and the failed-unsafe tenant are raised by the platform itself, and the
 reader-facing probe's page is per tenant, which this stack's instance-labelled
 blackbox probes cannot express. When a rule that raises one of them lands, drop

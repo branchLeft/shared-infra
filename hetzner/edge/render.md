@@ -274,8 +274,8 @@ Every edge log keeps its entries for 30 days (`LOG_RETENTION = '720h'`, the owne
 
 `roll_keep_for` only prunes files that have already been rolled, so a file must also roll on
 a clock. `roll_at 00:00` rolls every log daily at midnight UTC, even with no writes. Caddy
-v2.11.4 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
-`github.com/DeRuina/timberjack` v1.4.2 on a background timer). `roll_interval` exists in the
+v2.11.9 accepts it (`roll_at`, parsed in `modules/logging/filewriter.go`, rotated by
+`github.com/DeRuina/timberjack` v1.4.8 on a background timer). `roll_interval` exists in the
 same module but rolls only on the next write, so it would not bound a quiet edge, and it is
 not used.
 
@@ -873,9 +873,25 @@ known exploits on the same hostname, and requires each to ban.
 
 ## Being told about a ban
 
-Every ban pages the owner. `EdgeBanIssued` in `hetzner/monitoring/render.ts`
-reads CrowdSec's `cs_active_decisions{action="ban"}` by `reason` (the
-scenario), which the monitoring stack already scrapes from edge1, and its page
-register entry (`edge-ban`) routes it to ntfy. The gauge has no address label,
-so the page names the scenario and never an address. A simulated decision is
-not in the gauge, so a watch-only scenario never pages; the replay asserts it.
+A ban pages the owner only when the banned address is owned. An address is
+owned when it made a verified Ghost staff request through the edge in the last
+30 days (the access log's `edge_trusted` is `1`), or when it sits inside a
+banned range that contains such an address. `EdgeBanIssued` in
+`hetzner/monitoring/render.ts` pages for owned bans, through ntfy (page register
+entry `edge-ban`). Any other ban raises `EdgeBanUnowned`, a warning that goes to
+email only and never to ntfy.
+
+A systemd timer on edge1 (role `edge_ban_owner`) classifies every ban every 5
+minutes. It reads only the edge's own access log, through the Caddy container,
+and keeps the addresses only in a root-only state file on edge1. The alert text
+and the metric carry no address. So an owned ban pages up to about 5 minutes
+after it fires, plus the scrape interval. A second owned ban of a different
+scenario reaches the phone within about 5 minutes. A repeat ban of the same
+scenario while that scenario's alert is still firing does not page again until
+the 24-hour repeat interval.
+
+If the classifier is missing, cannot read the log, or is stale (no run for over
+15 minutes), every ban pages. A stale classifier also raises `EdgeBanOwnerStale`,
+a page of its own, once the staleness has lasted 5 minutes. The simulated
+decisions of a watch-only scenario are not classified, so they never page; the
+replay asserts that the gauge leaves them out.

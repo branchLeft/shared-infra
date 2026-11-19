@@ -889,10 +889,20 @@ scenario reads them, and the throttle allows 1200 requests a minute
 and a desktop sync that must not ban, and attacks on the same hostname that
 must.
 
-**Every ban pages.** The `EdgeBanIssued` page (`hetzner/monitoring/render.ts`)
-reaches the phone through ntfy within about two minutes of a ban, naming the
-scenario. It names no address: read it with the `cscli decisions list` command
-above, and clear a false alarm with the `cscli decisions delete --ip` command.
+**Only an owned ban pages.** The `EdgeBanIssued` page (`hetzner/monitoring/render.ts`)
+reaches the phone through ntfy for a ban on an owned address, within about five
+minutes of the ban plus the scrape interval, naming the scenario. A ban on any
+other address raises `EdgeBanUnowned` and goes to email only. If the classifier
+is stale or missing, every ban pages and `EdgeBanOwnerStale` pages too
+(`hetzner/edge/render.md`, "Being told about a ban"). The page names no address:
+read it with the `cscli decisions list` command above, and clear a false alarm
+with the `cscli decisions delete --ip` command.
+
+To see why a ban was classified unowned, on edge1 run
+`systemctl status branchleft-edge-ban-owner.timer` and
+`journalctl -u branchleft-edge-ban-owner`. The addresses the classifier trusts
+are in `/var/lib/branchleft/edge-ban-owner/trusted.json`, root-only. Do not
+print that file into a ticket, a PR or a log: it holds addresses.
 
 ## 11. Adding a site to the edge
 
