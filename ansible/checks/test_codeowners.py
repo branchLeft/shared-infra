@@ -286,8 +286,8 @@ BOOTSTRAP_GUARD_PATHS = [
     "ansible/tools/fixtures/docker-inspect-absent.json",
 ]
 
-# promote_host places the one key the host applier trusts to sign what it moves, and installs the root
-# timer that acts on it, so the whole role is the owner's as well.
+# promote_host places the one key the host applier trusts to sign what it moves, and installs the
+# root timer that acts on it, so the whole role is the owner's as well.
 # safety_channel_key and ring_controller_host each generate a signing key on ops1 as root, so each
 # whole role is the owner's, its module, units, environment template and the tests that hold them
 # included. The ring controller role also installs the unit that hands its root-only key to a

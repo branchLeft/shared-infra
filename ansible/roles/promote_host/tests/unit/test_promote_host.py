@@ -412,6 +412,24 @@ class SignerTests(unittest.TestCase):
         self.assertIsNotNone(self.verify(body, sign(self.private, "git", body)))
         self.assertIsNotNone(self.verify(body, sign(self.private, "file", body)))
 
+    def test_the_signer_file_itself_refuses_the_key_for_any_other_namespace(self) -> None:
+        # Asked about another namespace, the file refuses the key whatever the signature says, so
+        # a verifier that is ever pointed at this file with a different namespace still refuses.
+        body = self.scratch / "other-body"
+        body.write_bytes(b"x")
+        signature = self.scratch / "other-body.sig"
+        signature.write_bytes(sign(self.private, "git", b"x"))
+        for namespace, accepted in ((BP.NAMESPACE, False), ("git", False)):
+            asked = subprocess.run(  # noqa: S603 - the host's own tool, over a scratch directory
+                [SSH_KEYGEN, "-Y", "verify", "-f", str(self.signers), "-I", BP.SIGNER_IDENTITY]
+                + ["-n", namespace, "-s", str(signature)],
+                input=b"x",
+                capture_output=True,
+                check=False,
+            )
+            with self.subTest(namespace=namespace):
+                self.assertEqual(asked.returncode == 0, accepted)
+
     def test_a_body_changed_after_signing_is_refused(self) -> None:
         signature = sign(self.private, BP.NAMESPACE, b'{"v":1}')
         self.assertIsNotNone(self.verify(b'{"v":2}', signature))

@@ -78,8 +78,9 @@ TRIGGER_ENTRY = "    - role: ../roles/pull_trigger # noqa: role-name[path]\n"
 # host_baseline, breakglass_grant_host, website_app1 and publicpress_website_app1 (both after
 # host_baseline has installed Docker), then app1's deploy_tooling and deploy_slot_keys (in that
 # order: the slot keys need the wrapper the tooling installs), app1's promote_host (the host applier
-# of the signed-image route, which hands each move to that wrapper), app1's tenant_onboarding, and app1's
-# export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else back),
+# of the signed-image route, which hands each move to that wrapper), app1's tenant_onboarding, and
+# app1's export_bundler, then the node exporter (last of all, so a disk refusal holds nothing else
+# back),
 # db1's host_baseline, db1_stack, db1_backup_timers and db1_grants (after the loader, which goes
 # first; db1_grants follows the timers that deliver the dump programs it checks), ops1's host_inputs
 # (first), ci_step_login right after host_baseline, control_plane, then the status page (it binds
@@ -334,8 +335,9 @@ class HostRoleLists(unittest.TestCase):
         self._list_file("ops1", text.replace("- ring_controller_host\n", "", 1))
         self._assert_refused("ops1", "role ring_controller_host is not on ops1's list")
 
-    # Safety class: promote_host installs the applier that moves a tenant stack to the image a signed
-    # ledger names, with the one signer it trusts, so it is on app1's list and on no other host's.
+    # Safety class: promote_host installs the applier that moves a tenant stack to the image a
+    # signed ledger names, with the one signer it trusts, so it is on app1's list and on no other
+    # host's.
     # The control is the list, which is the owner's merge. Green first: the real tree passes and
     # the role is on exactly one list. Red when the role is added to another host's list and that
     # host's playbook applies it, and red when it is dropped from app1's list.
