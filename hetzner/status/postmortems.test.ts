@@ -115,11 +115,23 @@ describe('loadPostmortems', () => {
     writeFileSync(path.join(repo, POSTMORTEM_DIR, file), text);
   };
 
+  // A commit hook runs this with GIT_INDEX_FILE (and the like) set to the committer's own
+  // index, which is locked: neither the scratch repository nor the loader may see it.
+  const gitEnvironment = Object.entries(process.env).filter(([name]) => name.startsWith('GIT_'));
+
   beforeEach(() => {
+    for (const [name] of gitEnvironment) {
+      delete process.env[name];
+    }
     repo = mkdtempSync(path.join(tmpdir(), 'postmortems-'));
     run('init', '-q');
   });
-  afterEach(() => rmSync(repo, { recursive: true, force: true }));
+  afterEach(() => {
+    rmSync(repo, { recursive: true, force: true });
+    for (const [name, value] of gitEnvironment) {
+      process.env[name] = value;
+    }
+  });
 
   it('shows a merged post-mortem of a resolved incident', () => {
     put('edge-outage.md', doc('Edge outage', '2026-12-01T10:42:00Z'));

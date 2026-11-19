@@ -979,6 +979,50 @@ class ExitCodeContract(TreeCase):
         )
 
 
+# What the tenant profile's CrowdSec read-back is: the files of hetzner/edge-t/stack, which has
+# neither parser. The role passes them as `crowdsec_files`; the estate's run passes none, and the
+# module then reads back every file it knows.
+TENANT_READBACK = [
+    "config.yaml.local",
+    "appsec-configs/ghost-admin-previews.yaml",
+    "postoverflows/ghost-admin-api-postoverflow.yaml",
+    "scenarios/ghost-admin-login-bruteforce.yaml",
+    "remediation/profiles.yaml",
+    "remediation/simulation.yaml",
+]
+
+
+class CrowdsecReadbackFollowsTheProfile(TreeCase):
+    def drop_the_parsers(self) -> None:
+        """Make the host a tenant edge's: neither parser file is there."""
+        for name in ("edge-trusted-session.yaml", "nextcloud-profile.yaml"):
+            (self.tree.project / "crowdsec" / "parsers" / name).unlink()
+
+    def test_the_tenant_files_are_read_back_and_no_parser_is_asked_for(self) -> None:
+        self.drop_the_parsers()
+        result = self.tree.run(
+            passing_params(self.tree) | {"crowdsec_files": TENANT_READBACK},
+            context=FakeClock().context(),
+        )
+        self.assertIsNone(result.error, result.error and result.error.message)
+        self.assertIn("crowdsec-restarted", result.report.markers)
+        # The six files, then a.yaml in acquis.d.
+        self.assertEqual(7, result.kinds.count("sha-crowdsec"))
+
+    def test_control_without_the_list_a_host_with_no_parsers_fails_the_read_back(self) -> None:
+        self.drop_the_parsers()
+        result = self.tree.run(passing_params(self.tree), context=FakeClock().context())
+        self.assertIsNotNone(result.error, "the estate's set of files cannot be read back here")
+        self.assertNotIn("crowdsec-restarted", result.report.markers)
+
+    def test_a_file_the_module_has_no_container_path_for_is_refused_before_anything_is_done(
+        self,
+    ) -> None:
+        with self.assertRaises(module.SettingsError):
+            module.settings_from(self.tree.params(crowdsec_files=["parsers/not-a-file.yaml"]))
+        self.assertEqual([], self.tree.calls())
+
+
 class Placement(TreeCase):
     def test_a_refused_candidate_leaves_the_host_as_it_was(self) -> None:
         self.tree.stub(fail={"validate-compose": 1})

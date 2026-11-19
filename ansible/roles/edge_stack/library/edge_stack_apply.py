@@ -110,6 +110,14 @@ options:
     description: Restart the CrowdSec container and read its files back.
     type: bool
     default: false
+  crowdsec_files:
+    description:
+      - The CrowdSec files the restart reads back, each by its path under the stack's C(crowdsec/)
+        directory. Each must be one the module knows the container path of. When empty, every one
+        it knows is read back, which is the estate edge's set.
+    type: list
+    elements: str
+    default: []
   wait_tries:
     description: Times CrowdSec's Local API is asked before the read-back fails.
     type: int
@@ -411,6 +419,7 @@ class Settings:
     remove: tuple[str, ...]
     fix_modes: tuple[tuple[str, int], ...]
     daemon_reload_needed: bool
+    crowdsec_files: tuple[str, ...] = ()
 
     @property
     def has_actions(self) -> bool:
@@ -869,8 +878,14 @@ def restart_crowdsec(settings: Settings, report: Report, context: Context) -> No
             )
         context.sleep(settings.wait_interval)
     crowdsec_dir = f"{settings.project_dir}/crowdsec"
-    for name, inside in CROWDSEC_FILES_INSIDE.items():
-        same_inside(settings, "crowdsec", inside, f"{crowdsec_dir}/{name}", Code.CROWDSEC_READBACK)
+    for name in settings.crowdsec_files or tuple(CROWDSEC_FILES_INSIDE):
+        same_inside(
+            settings,
+            "crowdsec",
+            CROWDSEC_FILES_INSIDE[name],
+            f"{crowdsec_dir}/{name}",
+            Code.CROWDSEC_READBACK,
+        )
     host_names = visible_names(f"{crowdsec_dir}/acquis.d")
     for name in host_names:
         host_path = f"{crowdsec_dir}/acquis.d/{name}"
@@ -1048,6 +1063,11 @@ def settings_from(params: Mapping[str, object]) -> Settings:
     entries = cast("list[Mapping[str, object]]", params.get("files") or [])
     fixes = cast("list[Mapping[str, object]]", params.get("fix_modes") or [])
     stamps = cast("list[str]", params.get("pending_stamps") or [])
+    readback = tuple(str(item) for item in cast("list[str]", params.get("crowdsec_files") or []))
+    unknown = [name for name in readback if name not in CROWDSEC_FILES_INSIDE]
+    if unknown:
+        message = f"crowdsec_files names files the module has no container path for: {unknown}"
+        raise SettingsError(message)
     return Settings(
         project_dir=str(params["project_dir"]),
         image_env=str(params["image_env"]),
@@ -1076,6 +1096,7 @@ def settings_from(params: Mapping[str, object]) -> Settings:
             for entry in fixes
         ),
         daemon_reload_needed=bool(params["daemon_reload_needed"]),
+        crowdsec_files=readback,
     )
 
 
@@ -1093,6 +1114,7 @@ ARGUMENT_SPEC: dict[str, dict[str, object]] = {
     "caddy_reload": {"type": "bool", "default": False},
     "compose_restart": {"type": "bool", "default": False},
     "crowdsec_restart": {"type": "bool", "default": False},
+    "crowdsec_files": {"type": "list", "elements": "str", "default": []},
     "wait_tries": {"type": "int", "default": 24},
     "wait_interval": {"type": "float", "default": 5},
     "owner": {"type": "str", "default": "root"},

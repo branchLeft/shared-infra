@@ -648,6 +648,27 @@ muted. The alternatives were worse: a parser whitelist would hide these
 requests from every scenario, and replacing the hub scenario with a copy would
 taint the `crowdsecurity/caddy` collection and stop its hub upgrades.
 
+## Host scope of the Ghost files
+
+The three Ghost files (the admin preview exclusion, the admin API post-overflow
+whitelist and the brute-force scenario) each narrow to "our Ghost hostnames". The
+estate's edge also serves Nextcloud, the portal and static pages, so there the
+narrowing is real: each file carries the registry's Ghost hostnames.
+
+`EVERY_HOST` is the other scope. It leaves the hostname condition out of the file.
+It is for an edge on which every site is a tenant's Ghost and the names are data the
+repository does not hold: the tenant edge, `hetzner/edge-t/`. A file rendered that way
+names no hostname, so no name of the estate can be written into it. The estate's own
+call sites pass the registry and never `EVERY_HOST`, and the committed estate files
+are unchanged by the existence of the second scope (the snapshot test in
+`render.test.ts` is what shows it).
+
+What `EVERY_HOST` widens: on the tenant edge the preview exclusion applies to a
+matching request on any name that edge answers, not to a list of names. The exclusion
+is out-of-band only, a bodiless `POST` to `/` with the preview's exact content type
+and header, and it removes two rules by id, so the widening gives a request nothing
+that the narrow conditions did not already allow on a Ghost site.
+
 ## Verified sessions
 
 `EdgeSite.trustedSession`, `sessionVerification`, `sessionVerificationMatchers`
