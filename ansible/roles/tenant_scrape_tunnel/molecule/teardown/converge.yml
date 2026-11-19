@@ -45,17 +45,10 @@
     - name: Read the host
       when: not ansible_check_mode
       block:
-        # The scraper host's unit was started before the target host's half installed the key, so
-        # it retries: a forward that listens shows a connection is open, which is what the removal
-        # of the target host's account must end.
-        - name: Wait for each forward to listen on the private address
-          ansible.builtin.wait_for:
-            host: '{{ scenario_bind_address }}'
-            port: '{{ item.local_port }}'
-            timeout: 120
-          loop: '{{ scenario_forwards }}'
-          loop_control:
-            label: '{{ item.local_port }}'
+        # A forward that listens shows a connection is open, which is what the removal of the
+        # target host's account must end. The wait is the default scenario's own.
+        - name: Wait for the tunnel's forwards to listen on the private address
+          ansible.builtin.include_tasks: ../default/tasks/wait_for_forwards.yml
 
         - name: Look for what the enabled host holds
           ansible.builtin.stat:

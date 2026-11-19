@@ -197,6 +197,17 @@ host, apart from the parent directories above the role's own.
   mode and shows the host unchanged, runs the removal for real while the tunnel's connection is open,
   runs it once more in check mode, and reads back that the unit, the key, the account, the authorized
   keys and the drop-in are gone and that sshd still passes its check.
+- What the container scenarios do not prove: the unit's seccomp options (`PrivateDevices`,
+  `ProtectKernelTunables`, `ProtectKernelModules`, `RestrictNamespaces`, `LockPersonality`,
+  `MemoryDenyWriteExecute`, `SystemCallArchitectures`, `RestrictAddressFamilies`). An unprivileged
+  container cannot keep `CAP_SYS_ADMIN` while systemd drops to the unit's user, so with them the unit
+  dies with status `217/USER` and never dials. `prepare.yml` turns exactly those off in a runtime
+  drop-in under `/run`, and `verify.yml` reads the options that stay (`NoNewPrivileges`,
+  `ProtectSystem`, `ProtectHome`, `PrivateTmp`, `ProtectControlGroups`, the empty
+  `CapabilityBoundingSet`, the user) back from systemd. The seccomp options are held to the unit file
+  by `tests/unit/` and are first exercised by the live apply.
+- A forward that does not listen, or a unit that is not running, fails the scenario with the unit's
+  status and journal and the test sshd's last lines in the failure message.
 - The teardown triggers are variables in `vars/main.yml`, and the unit tests judge them over every
   combination of the values and of what is installed.
 

@@ -60,6 +60,8 @@
       - --kill-after=5
       - '{{ "20" if attempt_expect == "no_remote_forward" else "60" }}'
       - ssh
+      - -b
+      - '{{ scenario_attempt_source }}'
       - -o
       - ConnectTimeout=10
       - -i

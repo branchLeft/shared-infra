@@ -105,10 +105,13 @@ provisioner:
         scenario_client_key_dir: /root/scrape-test-keys
         scenario_marker_file: /tmp/EXAMPLE_MARKER
         scenario_remote_port: 29100
-        # The two lines of the test sshd's log that say how a connection ended. A login the
-        # scenario makes comes from 127.0.0.1; the tunnel's own comes from the endpoint.
+        # The two lines of the test sshd's log that say how a connection ended. The tunnel's own
+        # login is logged as coming from 127.0.0.1, so the logins the scenario makes bind to
+        # scenario_attempt_source and are told apart by it: a retry of the tunnel between two
+        # reads of the log cannot be counted as one of the scenario's.
         scenario_denied_pattern: but the request was denied
-        scenario_accepted_pattern: 'Accepted publickey for [^ ]+ from 127[.]0[.]0[.]1 '
+        scenario_attempt_source: 127.0.0.9
+        scenario_accepted_pattern: 'Accepted publickey for [^ ]+ from 127[.]0[.]0[.]9 '
         scenario_log_path: "{{ lookup('ansible.builtin.env', 'MOLECULE_EPHEMERAL_DIRECTORY') }}/ansible.log"
 verifier:
   name: ansible

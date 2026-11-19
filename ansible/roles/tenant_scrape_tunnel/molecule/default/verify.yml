@@ -200,6 +200,11 @@
           - tenant_scrape_tunnel_verify_unit.stat.checksum == tenant_scrape_tunnel_verify_constants.tenant_scrape_tunnel_unit_sha256
         quiet: true
 
+    # The forwards listen only once a connection to the target is made, so they are waited for
+    # before the unit's state is read: a unit between two retries is not yet the tunnel.
+    - name: Wait for the tunnel's forwards to listen on the private address
+      ansible.builtin.include_tasks: tasks/wait_for_forwards.yml
+
     - name: Read how systemd sees the unit
       ansible.builtin.command:
         argv:
@@ -209,29 +214,45 @@
           - --property=LoadState
           - --property=UnitFileState
           - --property=ActiveState
+          - --property=SubState
+          - --property=Result
+          - --property=User
+          - --property=NoNewPrivileges
+          - --property=ProtectSystem
+          - --property=ProtectHome
+          - --property=PrivateTmp
+          - --property=ProtectControlGroups
+          - --property=CapabilityBoundingSet
       register: tenant_scrape_tunnel_verify_unit_state
       changed_when: false
 
-    - name: Assert systemd loaded the unit, it is enabled and it is running
-      ansible.builtin.assert:
-        that:
-          - "'LoadState=loaded' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
-          - "'UnitFileState=enabled' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
-          - "'ActiveState=active' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
-        quiet: true
-
-    # The unit was started before the target host's half had installed the key, so it has been
-    # retrying: the forwards come up once a connection is made, which is the retry the design
-    # relies on. A listener answering on the private address shows the key line let the tunnel's
-    # own key in, the pinned host key matched, and the bind address was honoured.
-    - name: Wait for each forward to listen on the private address
-      ansible.builtin.wait_for:
-        host: '{{ scenario_bind_address }}'
-        port: '{{ item.local_port }}'
-        timeout: 120
-      loop: '{{ scenario_forwards }}'
-      loop_control:
-        label: '{{ item.local_port }}'
+    # Running is what the forwards' listeners already showed; the other lines read back what the
+    # container's drop-in (prepare.yml) left of the unit's sandbox, so it cannot have turned off
+    # more than the seccomp options it names.
+    - name: Assert systemd loaded the unit, it is enabled and running, and its sandbox is as shipped bar the seccomp options
+      block:
+        - name: Assert the unit's state and the options of its sandbox that a container can hold
+          ansible.builtin.assert:
+            that:
+              - "'LoadState=loaded' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'UnitFileState=enabled' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'ActiveState=active' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'SubState=running' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'Result=success' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "('User=' ~ scenario_user) in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'NoNewPrivileges=yes' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'ProtectSystem=strict' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'ProtectHome=yes' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'PrivateTmp=yes' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'ProtectControlGroups=yes' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+              - "'CapabilityBoundingSet=' in tenant_scrape_tunnel_verify_unit_state.stdout_lines"
+            quiet: true
+      rescue:
+        - name: Fail with the unit's status and journal
+          ansible.builtin.include_tasks: tasks/unit_diagnostics.yml
+          vars:
+            diagnose_reason: >-
+              The unit is not loaded, enabled and running as it should be: {{ tenant_scrape_tunnel_verify_unit_state.stdout_lines | join(', ') }}
 
     - name: Assert nothing listens on the same ports of the loopback address
       ansible.builtin.wait_for:
@@ -242,6 +263,41 @@
       loop: '{{ scenario_forwards }}'
       loop_control:
         label: '{{ item.local_port }}'
+
+    # Nothing in the container answers on a destination address, so a connection through a
+    # forward ends at sshd's own dial of it: sshd logs that line only for a destination its
+    # PermitOpen allowed (a refused one is logged as denied). The listeners above were connected
+    # to once, and each forward leads to its own destination, so each address must have its line.
+    - name: Read what sshd logged of the connections the forwards carried
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - --unit
+          - ssh
+          - --output
+          - cat
+          - --no-pager
+          - --grep
+          - 'connect_to [0-9.]+ port {{ scenario_target_port }}: failed'
+      register: tenant_scrape_tunnel_verify_carried
+      changed_when: false
+      failed_when: tenant_scrape_tunnel_verify_carried.rc not in [0, 1]
+      until: >-
+        scenario_forwards | map(attribute='address')
+        | reject('in', tenant_scrape_tunnel_verify_carried.stdout | default(''))
+        | list | length == 0
+      retries: 10
+      delay: 1
+
+    - name: Assert each forward carried a connection to its own destination
+      ansible.builtin.assert:
+        that:
+          - tenant_scrape_tunnel_verify_carried.stdout_lines | select('search', 'connect_to ' ~ item.address ~ ' port ') | list | length > 0
+        quiet: true
+        fail_msg: 'sshd logged no dial of {{ item.address }} for the forward on {{ item.local_port }}: the tunnel did not carry a connection to it.'
+      loop: '{{ scenario_forwards }}'
+      loop_control:
+        label: '{{ item.address }}'
 
     # ---- What the real sshd evaluates -----------------------------------------
     - name: Read the effective sshd settings for the tunnel account
