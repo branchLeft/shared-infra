@@ -11,7 +11,7 @@ filter: >-
   not (
     evt.Meta.target_fqdn in ['blog.branchleft.co.uk'] &&
     evt.Meta.http_path startsWith '/ghost/api/admin/' &&
-    true
+    not (evt.Meta.http_path matches '(?i)[.][.]|%2e')
   )
 groupby: evt.Meta.source_ip
 distinct: evt.Meta.http_path
