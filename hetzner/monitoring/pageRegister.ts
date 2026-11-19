@@ -195,15 +195,16 @@ export function renderPageRoute(register: readonly PageRegisterEntry[]): string 
 
 /**
  * The page receiver: a webhook to the stack's own ntfy, authenticated with
- * the publisher's bearer token. `send_resolved: false` -- a page that clears
- * itself is not a second page.
+ * the publisher's bearer token. `send_resolved: true` -- ntfy's alertmanager
+ * template renders a resolved alert as "Alert resolved", so the owner sees
+ * that an outage cleared rather than reading a stale open page.
  */
 export function renderPageReceiverBlock(): string {
   return [
     `  - name: ${PAGE_RECEIVER_NAME}`,
     '    webhook_configs:',
     `      - url: '${NTFY_PAGE_URL}'`,
-    '        send_resolved: false',
+    '        send_resolved: true',
     '        http_config:',
     '          authorization:',
     '            type: Bearer',
