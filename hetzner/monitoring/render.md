@@ -221,7 +221,7 @@ expressions.
 
 Two warnings on the compose template's own units
 (`hetzner/provision/branchleft-compose@.service`), added with the one-hour start
-limit of branchLeft/workspace#3456. A stack that hangs to the template's 600 second
+limit. A stack that hangs to the template's 600 second
 start timeout fails about every ten minutes; with the old 900 second window the
 start limit never tripped and the unit retried for ever with no alert. The limit now
 trips after five starts (2520 seconds in), and these two rules are how the owner

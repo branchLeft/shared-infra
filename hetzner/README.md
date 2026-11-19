@@ -481,7 +481,7 @@ that hangs runs to the 600 second `TimeoutStartSec` before it fails, and the
 retry follows 30 seconds later, so the starts of a hung stack are 630 seconds
 apart. Five of them are 4 x 630 = 2520 seconds from the first to the fifth, which
 the old 900 second window never held: such a unit retried about every ten minutes
-with no end and no alert (branchLeft/workspace#3456). Inside an hour the fifth
+with no end and no alert. Inside an hour the fifth
 start is 2520 seconds in, so the limit trips, the unit ends `failed` with
 `start-limit-hit`, and `ComposeUnitRestartLoop` and `ComposeUnitFailed` (below)
 tell the owner by email. `StartLimitBurst` cannot go above six with these
@@ -501,8 +501,8 @@ node exporter's systemd collector, which `node-exporter.service` limits to
 the native one; edge1's exporter is the Compose container, which has no systemd
 bus, so an edge1 stack in the loop is not seen by these alerts. A rollback
 restart after `start-limit-hit` is refused as repeated too quickly until
-`systemctl reset-failed` runs; `branchLeft/workspace#3455` is the change that has
-the deploy wrapper run it.
+`systemctl reset-failed` runs; having the deploy wrapper run it is a separate change
+to `branchleft_deploy.py`, which is owner-held.
 
 The new unit applies to a host when the `deploy_tooling` role next runs
 there; until then the host keeps the unit it has.

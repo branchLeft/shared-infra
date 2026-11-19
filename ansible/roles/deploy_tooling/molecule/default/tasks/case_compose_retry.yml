@@ -48,7 +48,7 @@
 
 # A start that hangs runs to its timeout and the retry follows one pause later, so the
 # burst-th start is (burst - 1) x (timeout + pause) after the first. If that is not under
-# the window the limit never trips and the unit retries for ever (branchLeft/workspace#3456).
+# the window the limit never trips and the unit retries for ever.
 # The scenarios below fail at once and cannot show it with the unit's real 600 s timeout, so
 # the installed unit's own three values, as systemd reports them, are held to the relation.
 # systemd-analyze turns each span systemd prints into microseconds.

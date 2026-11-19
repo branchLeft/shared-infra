@@ -189,7 +189,7 @@ undoes the other if it drifts.
     burst of 1000, or a timeout and pause longer than the interval allows for, the
     starts never pile up inside one interval and the retry never stops, while
     every directive above still passes on its own. That was the unit's own state
-    until branchLeft/workspace#3456: 5, 30 seconds and 900 seconds look like 120
+    until the window was lengthened: 5, 30 seconds and 900 seconds look like 120
     seconds against 900 for a start that fails at once, but a hung start is 4 x
     630 = 2520 seconds against 900, and the unit retried about every ten minutes
     for ever. The unit's own 5, 600 + 30 seconds and 3600 seconds give 2520

@@ -27,7 +27,7 @@ EnvironmentFile=/etc/default/node-exporter
 # The systemd collector is limited to the compose template's instances and counts their
 # restarts: ComposeUnitRestartLoop and ComposeUnitFailed (hetzner/monitoring/render.ts) read
 # node_systemd_unit_state and node_systemd_service_restart_total for them, so a stack that
-# hangs to its start timeout and retries is seen (branchLeft/workspace#3456). The pattern has
+# hangs to its start timeout and retries is seen. The pattern has
 # no backslash because ExecStart= reads escapes: [.] is the literal dot. It is anchored by
 # the exporter, so it names no other unit. The exporter reads the system bus as its own
 # unprivileged user, which systemd allows for these read-only queries.

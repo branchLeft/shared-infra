@@ -2395,7 +2395,7 @@ tests:
         eval_time: 5m
         exp_samples: []
 
-  # ComposeUnitRestartLoop (branchLeft/workspace#3456): a compose unit whose start hangs to its
+  # ComposeUnitRestartLoop: a compose unit whose start hangs to its
   # 600 s timeout is restarted by systemd about every ten minutes. tenant-a restarts at 10 min and
   # at 20 min, and so is a loop from the second restart on. blog has a single retry (a
   # containerd restart, a slow start), which must not alert. publicpress-website is on a host not yet expected
