@@ -1,0 +1,219 @@
+---
+# The role is converged with the docker command line replaced by a stand-in that answers from
+# files (molecule.yml, prepare.yml). Each case here writes an access log and a cscli answer,
+# starts the real service unit and reads what it left. The timestamps in the access log are
+# counted back from the time this play starts, so the 30-day window is the program's own.
+# Every address is from RFC 5737 or RFC 3849.
+#
+# A case has:
+#   name                  what the case is
+#   log                   the access log's lines (ip, age_days, and trusted when the line has
+#                         the edge_trusted field), or null for a Caddy directory with no log file
+#   cscli                 what `cscli decisions list -o json` prints: alerts with their decisions
+#   cscli_status          cscli's exit status, default 0
+#   expect                the edge_ban_owned samples the textfile must hold, and no others
+#   expect_state          the addresses the state file must hold, when the case checks it
+#   expect_unit_ok        false when the service must fail
+#   keep_previous_output  true to keep the textfile and the state file of the case before
+- name: Verify
+  hosts: all
+  gather_facts: false
+  vars:
+    verify_fake_root: '{{ edge_ban_owner_test_dir }}/fake-root'
+    verify_unit: '{{ edge_ban_owner_test_unit }}.service'
+    verify_timer: '{{ edge_ban_owner_test_unit }}.timer'
+    verify_state_dir: /var/lib/branchleft/edge-ban-owner
+    verify_state_file: /var/lib/branchleft/edge-ban-owner/trusted.json
+    verify_textfile: /var/lib/branchleft/snds-exporter/edge_ban_owner.prom
+    verify_ipv4_pattern: '(?<![0-9])[0-9]{1,3}([.][0-9]{1,3}){3}(?![0-9])'
+    verify_ipv6_pattern: '(?i)(?<![0-9a-z:])[0-9a-f]{0,4}(:[0-9a-f]{0,4}){2,7}(?![0-9a-z:])'
+    verify_literals:
+      - 192.0.2.10
+      - 192.0.2.11
+      - 198.51.100.7
+      - 203.0.113.20
+      - 2001:db8::10
+    verify_cases:
+      - name: owned
+        log:
+          - {ip: '192.0.2.10', age_days: 1, trusted: '1'}
+          - {ip: '2001:db8::10', age_days: 2, trusted: 1}
+          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - {type: ban, scope: Ip, value: '192.0.2.10', scenario: crowdsecurity/http-probing, simulated: false}
+          - scenario: crowdsecurity/ssh-bf
+            decisions:
+              - {type: ban, scope: Ip, value: '2001:db8::10', scenario: crowdsecurity/ssh-bf, simulated: false}
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/ssh-bf",owned="true"} 1'
+        expect_state: ['192.0.2.10', '2001:db8::10']
+
+      # The state file from the case above is still there, and it trusts 192.0.2.10. With no log
+      # file the signal is missing, and an address the state does not know must page as well.
+      - name: missing signal, with a state file from an earlier run
+        keep_previous_output: true
+        log: null
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 1'
+
+      - name: unowned
+        log:
+          - {ip: '192.0.2.10', age_days: 1, trusted: '1'}
+          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+          - {ip: '198.51.100.7', age_days: 1}
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="false"} 1'
+        expect_state: ['192.0.2.10']
+
+      - name: range that contains an owned address, and one that does not
+        log:
+          - {ip: '203.0.113.20', age_days: 3, trusted: '1'}
+          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - {type: ban, scope: Range, value: '203.0.113.0/24', scenario: crowdsecurity/http-probing, simulated: false}
+          - scenario: crowdsecurity/ssh-bf
+            decisions:
+              - {type: ban, scope: Range, value: '198.51.100.0/24', scenario: crowdsecurity/ssh-bf, simulated: false}
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/ssh-bf",owned="false"} 1'
+
+      # Two owned bans and one unowned ban of one scenario give one sample per pair. A simulated
+      # decision and a decision that is not a ban are not counted.
+      - name: bans of one scenario, owned and not, with decisions that do not count
+        log:
+          - {ip: '192.0.2.10', age_days: 1, trusted: '1'}
+          - {ip: '192.0.2.11', age_days: 1, trusted: '1'}
+          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - {type: ban, scope: Ip, value: '192.0.2.10', scenario: crowdsecurity/http-probing, simulated: false}
+              - {type: ban, scope: Ip, value: '192.0.2.11', scenario: crowdsecurity/http-probing, simulated: false}
+              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
+              - {type: ban, scope: Ip, value: '198.51.100.8', scenario: crowdsecurity/http-probing, simulated: true}
+              - {type: captcha, scope: Ip, value: '198.51.100.9', scenario: crowdsecurity/http-probing, simulated: false}
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="false"} 1'
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 2'
+
+      # The case before left a textfile and a state file. A failed cscli must leave both exactly as
+      # they are, and the answer it would have printed must not show up in them.
+      - name: cscli failure
+        keep_previous_output: true
+        expect_unit_ok: false
+        cscli_status: 1
+        log:
+          - {ip: '192.0.2.10', age_days: 1, trusted: '1'}
+        cscli:
+          - scenario: crowdsecurity/ssh-bf
+            decisions:
+              - {type: ban, scope: Ip, value: '192.0.2.10', scenario: crowdsecurity/ssh-bf, simulated: false}
+        expect: []
+
+      - name: missing signal, no log file
+        log: null
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 1'
+
+      # The only trusted line is 60 days old, past the 30-day window, and the log has a recent line
+      # that is not trusted: the log is readable but holds no usable signal.
+      - name: stale signal, trusted lines older than the window
+        log:
+          - {ip: '192.0.2.10', age_days: 60, trusted: '1'}
+          - {ip: '198.51.100.7', age_days: 1, trusted: '0'}
+        cscli:
+          - scenario: crowdsecurity/http-probing
+            decisions:
+              - {type: ban, scope: Ip, value: '198.51.100.7', scenario: crowdsecurity/http-probing, simulated: false}
+              - {type: ban, scope: Ip, value: '192.0.2.10', scenario: crowdsecurity/http-probing, simulated: false}
+        expect:
+          - 'edge_ban_owned{reason="crowdsecurity/http-probing",owned="true"} 2'
+
+  tasks:
+    # The clock of the instance, the one the program reads, as whole seconds.
+    - name: Read the time on the instance
+      ansible.builtin.command:
+        argv: [date, +%s]
+      register: edge_ban_owner_verify_clock
+      changed_when: false
+
+    - name: Keep the time the access logs are counted back from
+      ansible.builtin.set_fact:
+        edge_ban_owner_verify_now_seconds: '{{ edge_ban_owner_verify_clock.stdout | trim }}'
+
+    # The prepare play switched two options off for this container. What the role ships must
+    # still ask for them, so the run below is the shipped unit less those two options only.
+    - name: Read the service unit the role installed
+      ansible.builtin.slurp:
+        src: '/etc/systemd/system/{{ verify_unit }}'
+      register: edge_ban_owner_verify_unit_file
+
+    - name: Assert the shipped unit keeps its sandbox options and runs as root
+      ansible.builtin.assert:
+        that:
+          - verify_unit_text is search('(?m)^NoNewPrivileges=true$')
+          - verify_unit_text is search('(?m)^PrivateTmp=true$')
+          - verify_unit_text is search('(?m)^ProtectSystem=strict$')
+          - verify_unit_text is search('(?m)^ReadWritePaths=' ~ verify_state_dir ~ ' ' ~ (verify_textfile | dirname) ~ '$')
+          - verify_unit_text is search('(?m)^User=root$')
+        quiet: true
+        fail_msg: The installed service unit lost one of its sandbox options or its read-write paths.
+      vars:
+        verify_unit_text: '{{ edge_ban_owner_verify_unit_file.content | b64decode }}'
+
+    - name: Ask systemd for the timer
+      ansible.builtin.systemd_service:
+        name: '{{ verify_timer }}'
+      register: edge_ban_owner_verify_timer_state
+
+    - name: Assert the timer is active and enabled
+      ansible.builtin.assert:
+        that:
+          - edge_ban_owner_verify_timer_state.status.ActiveState == 'active'
+          - edge_ban_owner_verify_timer_state.status.UnitFileState == 'enabled'
+        quiet: true
+        fail_msg: The classifier timer is not active and enabled.
+
+    - name: Run each case against the real service unit
+      ansible.builtin.include_tasks: '{{ playbook_dir }}/tasks/case.yml'
+      loop: '{{ verify_cases }}'
+      loop_control:
+        loop_var: verify_case
+        label: '{{ verify_case.name }}'
+
+    # The journal of the unit holds what the program and systemd said about every run above,
+    # the failed run included. The output format keeps the message only, so a time of day in the
+    # log line cannot look like an address.
+    - name: Read the journal of the service unit
+      ansible.builtin.command:
+        argv: [journalctl, --unit, '{{ verify_unit }}', --no-pager, --output=cat]
+      register: edge_ban_owner_verify_journal
+      changed_when: false
+
+    - name: Assert the journal has entries and holds no address
+      ansible.builtin.assert:
+        that:
+          - edge_ban_owner_verify_journal.stdout | length > 0
+          - edge_ban_owner_verify_journal.stdout is not search(verify_ipv4_pattern)
+          - edge_ban_owner_verify_journal.stdout is not search(verify_ipv6_pattern)
+          - verify_literals | select('in', edge_ban_owner_verify_journal.stdout) | list | length == 0
+        quiet: true
+        fail_msg: The journal of the service unit is empty, or it holds an address.

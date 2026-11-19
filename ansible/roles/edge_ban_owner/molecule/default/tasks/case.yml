@@ -1,0 +1,207 @@
+---
+# One case: put the case's access log and cscli answer where the stand-in finds them, run the real
+# service unit once, and judge what it left. The case is `verify_case` (see verify.yml for the
+# keys). A case that expects a failed unit also judges that the previous files were not touched.
+- name: Remove the access log directory of the previous case
+  ansible.builtin.file:
+    path: '{{ verify_fake_root }}/var/log/caddy'
+    state: absent
+
+- name: Create the access log directory, empty
+  ansible.builtin.file:
+    path: '{{ verify_fake_root }}/var/log/caddy'
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+# A case with no log list has no log file at all, the directory stays empty.
+- name: Write the case's access log
+  ansible.builtin.template:
+    src: '{{ playbook_dir }}/templates/access.log.j2'
+    dest: '{{ verify_fake_root }}/var/log/caddy/access.log'
+    owner: root
+    group: root
+    mode: '0644'
+  when: verify_case.log is not none
+
+- name: Write what cscli prints, and its exit status
+  ansible.builtin.copy:
+    content: '{{ item.content }}'
+    dest: '{{ verify_fake_root }}/{{ item.name }}'
+    owner: root
+    group: root
+    mode: '0644'
+  loop:
+    - name: cscli.json
+      content: '{{ verify_case.cscli | to_json }}'
+    - name: cscli.rc
+      content: '{{ verify_case.cscli_status | default(0) }}'
+  loop_control:
+    label: '{{ item.name }}'
+
+# The previous case's output must not be able to satisfy this case, so each case starts without
+# the textfile, and without the state file unless the case is about what a prior state does.
+- name: Remove the files the previous case left
+  ansible.builtin.file:
+    path: '{{ item }}'
+    state: absent
+  loop:
+    - '{{ verify_textfile }}'
+    - '{{ verify_state_file }}'
+  when: not (verify_case.keep_previous_output | default(false))
+
+- name: Read the files the previous case left, for a case that must not change them
+  ansible.builtin.stat:
+    path: '{{ item }}'
+    checksum_algorithm: sha256
+  loop:
+    - '{{ verify_textfile }}'
+    - '{{ verify_state_file }}'
+  register: edge_ban_owner_verify_before
+  when: verify_case.keep_previous_output | default(false)
+
+# reset-failed also clears systemd's start rate limit, so a run of cases cannot trip it.
+- name: Clear the unit's failed state and start counter
+  ansible.builtin.command:
+    argv: [systemctl, reset-failed, '{{ verify_unit }}']
+  changed_when: false
+
+# A oneshot service: systemctl start returns when the program has exited, and fails when it did.
+- name: Run the real service unit once
+  ansible.builtin.command:
+    argv: [systemctl, start, '{{ verify_unit }}']
+  register: edge_ban_owner_verify_run
+  changed_when: false
+  failed_when: false
+
+- name: Ask systemd how the run ended
+  ansible.builtin.command:
+    argv: [systemctl, show, '--property=Result,ExecMainStatus', '{{ verify_unit }}']
+  register: edge_ban_owner_verify_result
+  changed_when: false
+
+- name: Assert a run the case expects to succeed did, and that systemd agrees
+  ansible.builtin.assert:
+    that:
+      - edge_ban_owner_verify_run.rc == 0
+      - "'Result=success' in edge_ban_owner_verify_result.stdout_lines"
+    quiet: true
+    fail_msg: >-
+      Case {{ verify_case.name }}: the service run failed with status {{ edge_ban_owner_verify_run.rc }}
+      ({{ edge_ban_owner_verify_result.stdout_lines | join(' ') }}) and the case expects it to succeed.
+  when: verify_case.expect_unit_ok | default(true)
+
+# The program's exit status 3 is its answer for a failed cscli query.
+- name: Assert a run the case expects to fail failed with the program's cscli exit status
+  ansible.builtin.assert:
+    that:
+      - edge_ban_owner_verify_run.rc != 0
+      - "'Result=exit-code' in edge_ban_owner_verify_result.stdout_lines"
+      - "'ExecMainStatus=3' in edge_ban_owner_verify_result.stdout_lines"
+    quiet: true
+    fail_msg: >-
+      Case {{ verify_case.name }}: the service run ended with status {{ edge_ban_owner_verify_run.rc }}
+      ({{ edge_ban_owner_verify_result.stdout_lines | join(' ') }}) and the case expects the exit status 3.
+  when: not (verify_case.expect_unit_ok | default(true))
+
+- name: Judge a run that produced output
+  when: verify_case.expect_unit_ok | default(true)
+  block:
+    - name: Read the textfile
+      ansible.builtin.slurp:
+        src: '{{ verify_textfile }}'
+      register: edge_ban_owner_verify_textfile_content
+
+    - name: Read the textfile's file, the state file and the state directory
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        get_checksum: false
+      loop:
+        - '{{ verify_textfile }}'
+        - '{{ verify_state_file }}'
+        - '{{ verify_state_dir }}'
+      register: edge_ban_owner_verify_modes
+
+    - name: Assert the textfile has the expected samples, a fresh run time, and nothing else
+      ansible.builtin.assert:
+        that:
+          - verify_lines | select('match', '# TYPE edge_ban_owned gauge$') | list | length == 1
+          - verify_lines | select('match', '# TYPE edge_ban_owner_last_run_timestamp_seconds gauge$') | list | length == 1
+          - verify_samples | sort == verify_case.expect | sort
+          - verify_last_run | length == 1
+          - (verify_last_run | first).split(' ') | last | int >= edge_ban_owner_verify_now_seconds | int
+        quiet: true
+        fail_msg: >-
+          Case {{ verify_case.name }}: the textfile does not hold what the design says.
+          Samples found: {{ verify_samples | join(' ') }}. Last run lines: {{ verify_last_run | join(' ') }}.
+      vars:
+        verify_lines: '{{ (edge_ban_owner_verify_textfile_content.content | b64decode).splitlines() }}'
+        verify_samples: '{{ verify_lines | select("match", "edge_ban_owned[{]") | list }}'
+        verify_last_run: '{{ verify_lines | select("match", "edge_ban_owner_last_run_timestamp_seconds [0-9]+$") | list }}'
+
+    - name: Assert the textfile holds no address, by pattern and by the fixture addresses
+      ansible.builtin.assert:
+        that:
+          - verify_text is not search(verify_ipv4_pattern)
+          - verify_text is not search(verify_ipv6_pattern)
+          - verify_literals | select('in', verify_text) | list | length == 0
+        quiet: true
+        fail_msg: 'Case {{ verify_case.name }}: the textfile holds an address.'
+      vars:
+        verify_text: '{{ edge_ban_owner_verify_textfile_content.content | b64decode }}'
+
+    - name: Assert the textfile is root-owned and mode 0644, the state file 0600, the state directory 0700
+      ansible.builtin.assert:
+        that:
+          - edge_ban_owner_verify_modes.results[0].stat.pw_name == 'root'
+          - edge_ban_owner_verify_modes.results[0].stat.mode == '0644'
+          - not edge_ban_owner_verify_modes.results[1].stat.exists or edge_ban_owner_verify_modes.results[1].stat.pw_name == 'root'
+          - not edge_ban_owner_verify_modes.results[1].stat.exists or edge_ban_owner_verify_modes.results[1].stat.mode == '0600'
+          - edge_ban_owner_verify_modes.results[2].stat.pw_name == 'root'
+          - edge_ban_owner_verify_modes.results[2].stat.mode == '0700'
+        quiet: true
+        fail_msg: 'Case {{ verify_case.name }}: the textfile, the state file or the state directory has the wrong owner or mode.'
+
+    - name: Read the state file for a case that names the addresses it must hold
+      ansible.builtin.slurp:
+        src: '{{ verify_state_file }}'
+      register: edge_ban_owner_verify_state_content
+      when: verify_case.expect_state is defined
+
+    - name: Assert the state file holds the trusted addresses and no other
+      ansible.builtin.assert:
+        that:
+          - (edge_ban_owner_verify_state_content.content | b64decode | from_json).schema_version == 1
+          - (edge_ban_owner_verify_state_content.content | b64decode | from_json).addresses.keys() | sort | list == verify_case.expect_state | sort
+        quiet: true
+        fail_msg: 'Case {{ verify_case.name }}: the state file does not hold the addresses the case trusts.'
+      when: verify_case.expect_state is defined
+
+- name: Judge a run that failed, the previous output must be untouched
+  when: not (verify_case.expect_unit_ok | default(true))
+  block:
+    - name: Read the files after the failed run
+      ansible.builtin.stat:
+        path: '{{ item }}'
+        checksum_algorithm: sha256
+      loop:
+        - '{{ verify_textfile }}'
+        - '{{ verify_state_file }}'
+      register: edge_ban_owner_verify_after
+
+    # The inode changes when a file is replaced by a rename, and the checksum when its content
+    # changes, so a rewrite that happens to print the same bytes is still seen.
+    - name: Assert the textfile and the state file are as the last good run left them
+      ansible.builtin.assert:
+        that:
+          - verify_old | map(attribute='exists') | list == [true, true]
+          - verify_new | map(attribute='exists') | list == [true, true]
+          - verify_new | map(attribute='checksum') | list == verify_old | map(attribute='checksum') | list
+          - verify_new | map(attribute='inode') | list == verify_old | map(attribute='inode') | list
+          - verify_new | map(attribute='mtime') | list == verify_old | map(attribute='mtime') | list
+        quiet: true
+        fail_msg: 'Case {{ verify_case.name }}: a failed cscli run changed or removed the textfile or the state file.'
+      vars:
+        verify_old: '{{ edge_ban_owner_verify_before.results | map(attribute="stat") | list }}'
+        verify_new: '{{ edge_ban_owner_verify_after.results | map(attribute="stat") | list }}'

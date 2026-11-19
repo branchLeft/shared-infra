@@ -1,0 +1,50 @@
+---
+# The role's container-only test (ANS-15). The harness in ansible/harness sets
+# ROLE_TEST_RUN_ID, so the instance name is unique to one run and a destroy can only
+# remove this run's container. When the variable is unset the name falls back to one the
+# Docker daemon rejects, so the run fails at create instead of sharing a name.
+dependency:
+  name: galaxy
+  # The harness installs the pinned collections before it starts Molecule.
+  enabled: false
+driver:
+  name: docker
+platforms:
+  - name: 'role-test-${ROLE_TEST_RUN_ID:-unset/use-the-harness}'
+    # The same systemd test base as exporters_and_collectors, on Debian 13, trusted by digest.
+    # The role installs a systemd service and timer and the verify play starts the service, so
+    # the platform runs systemd as PID 1, a platform the author justifies here, per ANS-15.
+    image: geerlingguy/docker-debian13-ansible:latest@sha256:979c0d5e12b0035fff1c46bd4dfd00d67cd82fa48035194f14f32e01c8c02372
+    pre_build_image: true
+    keep_volumes: false
+    # No privileged mode and no added capabilities. The host cgroup namespace is a stated
+    # exception (ANS-15): on a cgroup v2 host a private namespace over the read-write cgroup
+    # mount makes systemd exit at once. The host namespace is the least privilege that works.
+    cgroupns_mode: host
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs:
+      - /run
+      - /run/lock
+    command: /lib/systemd/systemd
+    labels:
+      branchleft.role-test-run: '${ROLE_TEST_RUN_ID}'
+provisioner:
+  name: ansible
+  inventory:
+    # The values the role runs with, read by the prepare, converge and verify plays as well.
+    group_vars:
+      all:
+        # The role calls this program in place of the docker command line. It is a copy of the
+        # unit tests' stand-in (tests/unit/fake_docker.py), which prepare puts on the instance
+        # with the directory of files it answers from.
+        edge_ban_owner_docker_binary: /opt/edge-ban-owner-test/docker
+        # A time that never comes during a test run, so the timer never starts the service:
+        # every run of the service in the test is one the verify play started.
+        edge_ban_owner_timer_calendar: '2099-12-31 23:59:59'
+        # Where the scenario puts the stand-in, and the unit name the role installs (the
+        # role's edge_ban_owner_unit_name default; the role is not loaded in the prepare play).
+        edge_ban_owner_test_dir: /opt/edge-ban-owner-test
+        edge_ban_owner_test_unit: branchleft-edge-ban-owner
+verifier:
+  name: ansible
