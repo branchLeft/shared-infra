@@ -2060,6 +2060,15 @@ class TenantsStructureTests(unittest.TestCase):
     def test_the_tenants_apply_is_the_literal_production(self):
         self.assertEqual(environment_of(job_block(self.text, TENANTS_APPLY)), "production")
 
+    def test_the_shared_no_op_gate_check_covers_the_tenants_pair(self):
+        # scripts-tests runs the shared action's contract check over every
+        # plan/apply pair; a pair left out of its list is a pair never checked.
+        check = step(job_block(self.text, "scripts-tests"), "Check the no-op gate contract")
+        pairs = re.search(r"^          pairs: (.+)$", check, re.M).group(1).split()
+        self.assertEqual(
+            sorted(pairs), sorted(f"{PLAN_OF_APPLY[a]}:{a}" for a in APPLY_JOBS)
+        )
+
     def test_the_tenants_plan_publishes_has_changes_and_no_route(self):
         plan = job_block(self.text, TENANTS_PLAN)
         self.assertIn("      has_changes: ${{ steps.noop.outputs.has_changes }}\n", plan)

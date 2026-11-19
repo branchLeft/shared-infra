@@ -533,7 +533,7 @@ jobs:
         uses: branchLeft/github-workflows/.github/actions/check-apply-gate@231e592397f4c94668c64646c14160d9d497bdde # v1.2.2
         with:
           workflow: .github/workflows/ci.yml
-          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply hetzner-dns-plan:hetzner-dns-apply
+          pairs: mail-plan:mail-apply hetzner-network-plan:hetzner-network-apply hetzner-estate-plan:hetzner-estate-apply hetzner-dns-plan:hetzner-dns-apply hetzner-tenants-plan:hetzner-tenants-apply
           verdict-step: noop
           summary-step: Write the plan to the job summary
           plan-file: preview-plan.json
