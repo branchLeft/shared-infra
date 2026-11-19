@@ -1,4 +1,4 @@
-"""demo1 receives the owner's due-diligence address from its host inputs file (workspace#1825).
+"""demo1 receives the owner's due-diligence address from its host inputs file.
 
 The address is never in this repository. demo1 takes it the way the other hosts take their
 private values: a row of the host_inputs loader, listed as optional (so the pull is not stopped
