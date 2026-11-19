@@ -476,6 +476,19 @@ class ReleaseTagTests(unittest.TestCase):
                 host, result = self.send(source, self.commit("c1"), [("a", outer)])
                 self.assert_refused(host, result, "release-tag-missing")
 
+    def test_a_tag_names_a_commit_directly_only_if_its_own_lines_say_so(self) -> None:
+        # Newer gits peel a tag of a tag through to its commit in ``for-each-ref``, so the
+        # listing alone would pass it; the tag's own ``object`` line is what is read.
+        inner = self.fixture.tag(self.commit("c1"), self.fixture.release_ssh)
+        outer = self.fixture.tag_of_tag(inner, self.fixture.release_ssh)
+        home = Path(tempfile.mkdtemp(prefix="ph", dir="/tmp"))  # noqa: S108
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        git = trigger.Git(self.tools(), self.fixture.remote.work / ".git", home)
+        repository = trigger.Repository(git)
+        self.assertTrue(repository._tag_names_directly(inner, self.commit("c1")))  # noqa: SLF001
+        self.assertFalse(repository._tag_names_directly(outer, self.commit("c1")))  # noqa: SLF001
+        self.assertFalse(repository._tag_names_directly(inner, self.commit("c0")))  # noqa: SLF001
+
     def test_a_signed_tag_with_a_name_outside_the_release_shape_is_refused(self) -> None:
         for name in (
             "other/20261114.1",

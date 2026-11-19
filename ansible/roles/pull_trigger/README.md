@@ -866,18 +866,18 @@ design's open spike question and is not enforced here. Until those are done and 
 signed a release, nothing may set `require_release_tag`, because the host would refuse every
 push.
 
-| Control                                                  | Broken by                                           | Fails in                                                                           |
-| -------------------------------------------------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| R1 a host that requires a tag refuses a commit with none | skipping the tag check                              | `test_a_commit_with_no_tag_is_refused...`, and every refusal case                  |
-| R2 only a release key's signature counts                 | accepting the commit signers, or any good signature | `test_a_tag_signed_by_a_key_that_is_not_a_release_key_is_refused`                  |
-| R3 the signature is read from the tag, not the commit    | reading the commit's signature                      | `test_a_commit_signed_by_a_release_key_with_no_tag_is_refused`                     |
-| R4 the tag names exactly this commit, directly           | dropping the object test                            | `test_a_tag_that_names_another_commit...`, `test_a_signed_tag_of_a_tag_is_refused` |
-| R5 the name in the signed text has the release shape     | dropping the name test                              | `test_a_signed_tag_with_a_name_outside_the_release_shape_is_refused`               |
-| R6 an SSH signature is bound to the namespace `git`      | `check-novalidate` with another namespace           | `test_a_signature_made_under_another_ssh_namespace_is_refused`                     |
-| R7 a tag changed after signing is refused                | not checking the signature                          | `test_a_tag_whose_message_was_changed_after_signing_is_refused`                    |
-| R8 more than 64 candidates is its own refusal            | cutting the list in place of refusing               | `test_more_tags_than_the_limit_are_refused_as_their_own_reason...`                 |
-| R9 a withdrawn tag is gone on the next fetch             | not emptying the namespace                          | `test_a_tag_withdrawn_at_the_remote_is_gone_on_the_next_request`                   |
-| R10 a host not told to require a tag is unchanged        | reading tags without the flag                       | `test_a_host_that_is_not_told_to_require_a_tag_ignores_tags_and_reads_the_commit`  |
+| Control                                                  | Broken by                                           | Fails in                                                                                                     |
+| -------------------------------------------------------- | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| R1 a host that requires a tag refuses a commit with none | skipping the tag check                              | `test_a_commit_with_no_tag_is_refused...`, and every refusal case                                            |
+| R2 only a release key's signature counts                 | accepting the commit signers, or any good signature | `test_a_tag_signed_by_a_key_that_is_not_a_release_key_is_refused`                                            |
+| R3 the signature is read from the tag, not the commit    | reading the commit's signature                      | `test_a_commit_signed_by_a_release_key_with_no_tag_is_refused`                                               |
+| R4 the tag names exactly this commit, directly           | dropping the header test                            | `test_a_tag_that_names_another_commit...`, `test_a_tag_names_a_commit_directly_only_if_its_own_lines_say_so` |
+| R5 the name in the signed text has the release shape     | dropping the name test                              | `test_a_signed_tag_with_a_name_outside_the_release_shape_is_refused`                                         |
+| R6 an SSH signature is bound to the namespace `git`      | `check-novalidate` with another namespace           | `test_a_signature_made_under_another_ssh_namespace_is_refused`                                               |
+| R7 a tag changed after signing is refused                | not checking the signature                          | `test_a_tag_whose_message_was_changed_after_signing_is_refused`                                              |
+| R8 more than 64 candidates is its own refusal            | cutting the list in place of refusing               | `test_more_tags_than_the_limit_are_refused_as_their_own_reason...`                                           |
+| R9 a withdrawn tag is gone on the next fetch             | not emptying the namespace                          | `test_a_tag_withdrawn_at_the_remote_is_gone_on_the_next_request`                                             |
+| R10 a host not told to require a tag is unchanged        | reading tags without the flag                       | `test_a_host_that_is_not_told_to_require_a_tag_ignores_tags_and_reads_the_commit`                            |
 
 These are unit cases on real git, real tags and real SSH and OpenPGP signatures, on both
 sources. There is no Molecule scenario for this route yet, because no installed host takes the

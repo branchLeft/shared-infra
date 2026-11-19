@@ -1200,14 +1200,16 @@ class Repository:
         Only what is under ``RELEASE_REF_PREFIX`` is read. A ref is dropped unless it is a tag
         object (so a lightweight tag is dropped), whose own text names this commit directly (so a
         tag of a tag is dropped) and has a name of the fixed shape in its own text, whatever the
-        ref is called. Nothing here reads a signature.
+        ref is called. The listing's dereferenced fields are only a first cut: newer gits peel a
+        tag of a tag through to its commit, so the tag's own first header lines are read as well.
+        Nothing here reads a signature.
 
         Raises:
             GitError: git cannot list the refs.
         """
         fields = "%(objectname)%00%(objecttype)%00%(tag)%00%(*objecttype)%00%(*objectname)"
         listing = self._git.output("for-each-ref", f"--format={fields}", RELEASE_REF_PREFIX)
-        found: set[str] = set()
+        candidates: set[str] = set()
         for line in listing.split("\n"):
             parts = line.split("\x00")
             if len(parts) != len(fields.split("%00")):
@@ -1219,8 +1221,17 @@ class Repository:
                 and target == commit
                 and RELEASE_NAME.fullmatch(name) is not None
             ):
-                found.add(tag_id)
-        return sorted(found)
+                candidates.add(tag_id)
+        return sorted(tag for tag in candidates if self._tag_names_directly(tag, commit))
+
+    def _tag_names_directly(self, tag_id: str, commit: str) -> bool:
+        """Say whether the tag object's own ``object`` and ``type`` lines name this commit.
+
+        Raises:
+            GitError: git cannot read the object.
+        """
+        head = self._git.object_bytes("tag", tag_id).split(b"\n", 2)
+        return head[:2] == [f"object {commit}".encode(), b"type commit"]
 
 
 class Cache(Repository):
