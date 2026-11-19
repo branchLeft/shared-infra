@@ -32,7 +32,8 @@ The role:
    holds demo1's address) and `known_hosts` (demo1's pinned key under the alias `demo1`). With both
    unset it writes neither and says "Broker tunnel NOT configured" in a visible line: a stated skip
    (ANS-10), not a pass.
-5. Enables and starts the unit, and restarts it when the unit or either file changed.
+5. Enables the unit, starts it once the owner's key is there (it looks for the file and never
+   reads it), and restarts it when the unit or either file changed.
 
 What it does not do, each on purpose:
 
@@ -44,13 +45,14 @@ What it does not do, each on purpose:
 ## Interface
 
 [`meta/argument_specs.yml`](meta/argument_specs.yml) declares the two inputs. On ops1 both come
-from `host_inputs` as optional keys: absent from `/etc/branchleft/host-inputs.json`, they are unset
-and the tunnel stays unconfigured.
+from `host_inputs` as optional keys, with no default (ANS-16): absent from
+`/etc/branchleft/host-inputs.json`, they are unset, which the role reads as empty, and the tunnel
+stays unconfigured.
 
 | Variable                              | Default | Meaning                                             |
 | ------------------------------------- | ------- | --------------------------------------------------- |
-| `broker_tunnel_client_demo1_address`  | empty   | demo1's public IPv4 address. Private: never logged  |
-| `broker_tunnel_client_demo1_host_key` | empty   | demo1's `ssh-ed25519 <base64>` host key, no comment |
+| `broker_tunnel_client_demo1_address`  | none    | demo1's public IPv4 address. Private: never logged  |
+| `broker_tunnel_client_demo1_host_key` | none    | demo1's `ssh-ed25519 <base64>` host key, no comment |
 
 The paths, the remote account, the destination and the local end are constants in `vars/main.yml`
 and the unit file, not inputs: an inventory value cannot move them.

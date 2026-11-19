@@ -1,7 +1,7 @@
 # Written by the broker_tunnel_client role. The ssh client configuration of the broker
 # tunnel: one hop to demo1, one local forward to the broker, the owner's key only.
 Host demo1
-    HostName {{ broker_tunnel_client_demo1_address }}
+    HostName {{ broker_tunnel_client_address_in }}
     Port 22
     User {{ broker_tunnel_client_remote_user }}
     IdentityFile {{ broker_tunnel_client_key_file }}

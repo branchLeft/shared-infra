@@ -10,9 +10,12 @@ argument_specs:
     options:
       broker_tunnel_client_demo1_address:
         type: str
-        description: demo1's public IPv4 address. Private input, from host_inputs. Set together with the host key.
-        default: ''
+        no_log: true
+        description: >-
+          demo1's public IPv4 address. Private input, from host_inputs, with no default and not
+          required: unset leaves the tunnel unconfigured. Set together with the host key.
       broker_tunnel_client_demo1_host_key:
         type: str
-        description: demo1's host key, 'ssh-ed25519 <base64>', pinned under the alias demo1. Set together with the address.
-        default: ''
+        description: >-
+          demo1's host key, 'ssh-ed25519 <base64>', pinned under the alias demo1. From host_inputs,
+          with no default and not required. Set together with the address.

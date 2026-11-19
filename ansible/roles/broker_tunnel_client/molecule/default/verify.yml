@@ -83,20 +83,17 @@
           - branchleft-broker-tunnel.service
           - --property=UnitFileState
           - --property=ActiveState
-          - --property=ConditionResult
           - --property=LoadState
       register: broker_tunnel_client_show
       changed_when: false
 
-    # The owner's key is not placed, so the unit is enabled and loaded, and its
-    # condition keeps it inactive rather than failed.
+    # The owner's key is not placed, so the unit is enabled and loaded, and not started.
     - name: Assert the unit is enabled, loaded and inactive without the owner's key
       ansible.builtin.assert:
         that:
           - "'UnitFileState=enabled' in broker_tunnel_client_show.stdout_lines"
           - "'LoadState=loaded' in broker_tunnel_client_show.stdout_lines"
           - "'ActiveState=inactive' in broker_tunnel_client_show.stdout_lines"
-          - "'ConditionResult=no' in broker_tunnel_client_show.stdout_lines"
 
     - name: Run each refusal case
       ansible.builtin.include_tasks: tasks/refused.yml

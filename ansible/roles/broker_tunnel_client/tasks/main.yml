@@ -6,10 +6,18 @@
 # demo1's address is a private input: every task that reads or renders it has no_log,
 # and the one that renders it into a file also diff: false (ANS-16). No message names
 # a value.
+# The inputs as the role reads them: unset (absent from the host's file) is the same as
+# empty, and both mean "not configured".
+- name: Read the two inputs, unset as empty
+  ansible.builtin.set_fact:
+    broker_tunnel_client_address_in: "{{ broker_tunnel_client_demo1_address | default('') }}"
+    broker_tunnel_client_host_key_in: "{{ broker_tunnel_client_demo1_host_key | default('') }}"
+  no_log: true
+
 - name: Refuse one of the two inputs without the other
   ansible.builtin.assert:
     that:
-      - (broker_tunnel_client_demo1_address | length > 0) == (broker_tunnel_client_demo1_host_key | length > 0)
+      - (broker_tunnel_client_address_in | length > 0) == (broker_tunnel_client_host_key_in | length > 0)
     quiet: true
     fail_msg: >-
       broker_tunnel_client_demo1_address and broker_tunnel_client_demo1_host_key are set
@@ -17,14 +25,14 @@
 
 - name: Hold whether the tunnel is configured
   ansible.builtin.set_fact:
-    broker_tunnel_client_configured: '{{ broker_tunnel_client_demo1_address | length > 0 }}'
+    broker_tunnel_client_configured: '{{ broker_tunnel_client_address_in | length > 0 }}'
   no_log: true
 
 - name: Refuse a demo1 address that is not one public IPv4 address
   ansible.builtin.assert:
     that:
-      - broker_tunnel_client_demo1_address is match(broker_tunnel_client_ipv4_pattern)
-      - not (broker_tunnel_client_demo1_address is match(broker_tunnel_client_non_public_pattern))
+      - broker_tunnel_client_address_in is match(broker_tunnel_client_ipv4_pattern)
+      - not (broker_tunnel_client_address_in is match(broker_tunnel_client_non_public_pattern))
     quiet: true
     fail_msg: broker_tunnel_client_demo1_address must be demo1's public IPv4 address. It is not shown here.
   when: broker_tunnel_client_configured
@@ -32,7 +40,7 @@
 - name: Refuse a demo1 host key that is not one ed25519 key
   ansible.builtin.assert:
     that:
-      - broker_tunnel_client_demo1_host_key is match(broker_tunnel_client_host_key_pattern)
+      - broker_tunnel_client_host_key_in is match(broker_tunnel_client_host_key_pattern)
     quiet: true
     fail_msg: broker_tunnel_client_demo1_host_key must be 'ssh-ed25519 <base64>', one line, no comment.
   when: broker_tunnel_client_configured
@@ -121,14 +129,34 @@
   notify: Restart the broker tunnel
   when: broker_tunnel_client_configured
 
-# Enabled and started either way: the unit's conditions keep it inactive, not failed,
-# until the configuration and the owner's key are both there.
-- name: Enable and start the broker tunnel
+# Enabled either way: the unit's conditions keep it inactive, not failed, until the
+# configuration and the owner's key are both there.
+- name: Enable the broker tunnel
   ansible.builtin.systemd_service:
     name: '{{ broker_tunnel_client_unit_name }}'
     enabled: true
-    state: started
   when: broker_tunnel_client_unit_stat.stat.exists
+
+# Whether the owner's key is there, by its type only: never read and never hashed.
+- name: Look for the owner's private key
+  ansible.builtin.stat:
+    path: '{{ broker_tunnel_client_key_file }}'
+    follow: false
+    get_checksum: false
+    get_mime: false
+    get_attributes: false
+  register: broker_tunnel_client_key_stat
+
+# Started only when it can run: a start of a unit whose conditions fail leaves it
+# inactive and reports a change on every run.
+- name: Start the broker tunnel once its configuration and the owner's key are there
+  ansible.builtin.systemd_service:
+    name: '{{ broker_tunnel_client_unit_name }}'
+    state: started
+  when:
+    - broker_tunnel_client_unit_stat.stat.exists
+    - broker_tunnel_client_configured
+    - broker_tunnel_client_key_stat.stat.isreg | default(false)
 
 - name: Run a pending restart now, so a failure shows in this run
   ansible.builtin.meta: flush_handlers

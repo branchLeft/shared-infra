@@ -92,13 +92,13 @@ host_inputs_required_by_host:
 # Left out of the file the input is simply not set; present, it must hold a usable value like
 # any other, and a name outside the row is refused as ever.
 host_inputs_optional_by_host:
+  ops1:
+    - broker_tunnel_client_demo1_address
+    - broker_tunnel_client_demo1_host_key
   edge1:
     - ci_jump_user
   edget:
     - ci_jump_user
-  ops1:
-    - broker_tunnel_client_demo1_address
-    - broker_tunnel_client_demo1_host_key
 
 # A value that is only white space counts as empty. Matched from the start, so
 # \s*\Z holds for the empty string and for blanks and nothing else.
